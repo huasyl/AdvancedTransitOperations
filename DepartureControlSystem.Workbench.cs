@@ -383,6 +383,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, WorkbenchRealtimeVehicleRecord> m_WorkbenchRealtimeVehicles = new Dictionary<Entity, WorkbenchRealtimeVehicleRecord>();
         private ulong m_WorkbenchSnapshotVersion = 1;
         private string m_LastWorkbenchSnapshotLogKey = string.Empty;
+        private string m_LastAppliedWorkbenchInspectLogKey = string.Empty;
         private string m_WorkbenchPreferredLineId = string.Empty;
         private bool m_WorkbenchPersistenceLoaded = false;
         private bool m_AppliedWorkbenchPersistenceLoaded = false;
@@ -1423,6 +1424,55 @@ namespace RapidTransitMod
             }
 
             return state.DepartureMinutesCache;
+        }
+
+        private void LogAppliedWorkbenchLineState(Entity line, int nowMin, int nextSlot)
+        {
+            EnsureAppliedWorkbenchPersistenceLoaded();
+            if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
+                return;
+
+            string lineKey = GetDraftKey(line.Index.ToString());
+            if (!m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState state))
+                return;
+
+            string staged = state.StagedRows != null && state.StagedRows.Count > 0
+                ? string.Join(", ", state.StagedRows.Select(row =>
+                    (row?.time ?? "-")
+                    + "/"
+                    + (string.IsNullOrEmpty(row?.kind) ? "-" : row.kind)
+                    + "/"
+                    + (string.IsNullOrEmpty(row?.source) ? "-" : row.source)))
+                : "-";
+            string cache = state.DepartureMinutesCache != null && state.DepartureMinutesCache.Length > 0
+                ? string.Join(", ", state.DepartureMinutesCache.Select(MinutesToSlotString))
+                : "-";
+            string key =
+                line.Index.ToString()
+                + "|"
+                + nowMin.ToString()
+                + "|"
+                + nextSlot.ToString()
+                + "|"
+                + staged
+                + "|"
+                + cache;
+            if (string.Equals(key, m_LastAppliedWorkbenchInspectLogKey, StringComparison.Ordinal))
+                return;
+
+            m_LastAppliedWorkbenchInspectLogKey = key;
+            Mod.log.Info(
+                "[AppliedWorkbenchInspect] line="
+                + line.Index.ToString()
+                + " now="
+                + SlotStr(nowMin)
+                + " next="
+                + (nextSlot >= 0 ? SlotStr(nextSlot) : "-")
+                + " cache=["
+                + cache
+                + "] staged=["
+                + staged
+                + "]");
         }
 
         private string GetAppliedWorkbenchLineServiceKind(Entity line)

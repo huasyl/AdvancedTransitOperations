@@ -72,6 +72,7 @@ namespace RapidTransitMod
         }
 
         private const float STATION_ANCHOR_MERGE_DISTANCE = 12f;
+        private const float STATION_VEHICLE_ATTACH_DISTANCE = 1.25f;
 
         private readonly struct SharedPhysicalCorridorAuditEntry
         {
@@ -402,6 +403,15 @@ namespace RapidTransitMod
             List<int> referenceSequence = BuildRunLaneSequence(referenceChain, reference.StartAtomIndex, reference.EndAtomIndexExclusive);
 
             ResolveRunBoundaryLabels(referenceChain, reference.StartAtomIndex, reference.EndAtomIndexExclusive, out string startLabel, out string endLabel);
+            if (TryResolveSyntheticLoopClosureEndLabel(
+                referenceWaypoints,
+                referenceChain,
+                reference.StartAtomIndex,
+                reference.EndAtomIndexExclusive,
+                out string syntheticEndLabel))
+            {
+                endLabel = syntheticEndLabel;
+            }
             string corridorLabel = startLabel + " -> " + endLabel;
             List<TrackModelSequenceItem> items = new List<TrackModelSequenceItem>(group.Count * 6 + 8);
             items.Add(new TrackModelSequenceItem(0f, 0, startLabel));
@@ -461,7 +471,7 @@ namespace RapidTransitMod
                             items.Add(new TrackModelSequenceItem(
                                 boardingStationPosition,
                                 1,
-                                FormatCompactSharedMapVehicleLabel(vehicle, boardingStationPosition)));
+                                FormatCompactSharedMapVehicleLabel(vehicle, state)));
                             continue;
                         }
 
@@ -494,7 +504,7 @@ namespace RapidTransitMod
                             items.Add(new TrackModelSequenceItem(
                                 boardingStationPosition,
                                 1,
-                                FormatCompactSharedMapVehicleLabel(vehicle, boardingStationPosition)));
+                                FormatCompactSharedMapVehicleLabel(vehicle, state)));
                             continue;
                         }
 
@@ -527,7 +537,7 @@ namespace RapidTransitMod
                             items.Add(new TrackModelSequenceItem(
                                 boardingStationPosition,
                                 1,
-                                FormatCompactSharedMapVehicleLabel(vehicle, boardingStationPosition)));
+                                FormatCompactSharedMapVehicleLabel(vehicle, state)));
                             continue;
                         }
 
@@ -550,6 +560,8 @@ namespace RapidTransitMod
                         : localPosition;
                     if (boarding && TryGetBoardingStationAnchorPosition(vehicle, waypoints, stationAnchors, out float boardingInsidePosition))
                         mappedPosition = boardingInsidePosition;
+                    else if (TrySnapVehicleToNearbyStationAnchor(mappedPosition, stationAnchors, out float snappedStationPosition))
+                        mappedPosition = snappedStationPosition;
                     auditRows.Add(FormatSharedPhysicalCorridorAudit(new SharedPhysicalCorridorAuditEntry(
                         corridorLabel,
                         FormatReadableLineLabel(corridorRef.LineEntity),
@@ -561,8 +573,8 @@ namespace RapidTransitMod
                         cursor.AtomPosition01,
                         cursor.Confidence)));
                     string label = cursor.Confidence >= 0.6f
-                        ? FormatCompactSharedMapVehicleLabel(vehicle, mappedPosition)
-                        : FormatCompactSharedMapUnknownVehicleLabel(vehicle);
+                        ? FormatCompactSharedMapVehicleLabel(vehicle, state)
+                        : FormatCompactSharedMapUnknownVehicleLabel(vehicle, state);
                     items.Add(new TrackModelSequenceItem(
                         cursor.Confidence >= 0.6f ? mappedPosition : float.MaxValue,
                         cursor.Confidence >= 0.6f ? 1 : 2,
@@ -585,11 +597,43 @@ namespace RapidTransitMod
             });
 
             StringBuilder seqBuilder = new StringBuilder();
-            for (int i = 0; i < items.Count; i++)
+            for (int i = 0; i < items.Count; )
             {
-                if (i > 0)
+                if (seqBuilder.Length > 0)
                     seqBuilder.Append(" -> ");
-                seqBuilder.Append(items[i].Label);
+
+                TrackModelSequenceItem item = items[i];
+                if (item.KindOrder == 0)
+                {
+                    List<string> anchoredVehicles = new List<string>();
+                    int j = i + 1;
+                    while (j < items.Count
+                        && items[j].KindOrder > 0
+                        && math.abs(items[j].DistanceMeters - item.DistanceMeters) <= STATION_VEHICLE_ATTACH_DISTANCE)
+                    {
+                        anchoredVehicles.Add(items[j].Label);
+                        j++;
+                    }
+
+                    seqBuilder.Append(item.Label);
+                    if (anchoredVehicles.Count > 0)
+                    {
+                        seqBuilder.Append("[");
+                        for (int k = 0; k < anchoredVehicles.Count; k++)
+                        {
+                            if (k > 0)
+                                seqBuilder.Append(", ");
+                            seqBuilder.Append(anchoredVehicles[k]);
+                        }
+                        seqBuilder.Append("]");
+                    }
+
+                    i = j;
+                    continue;
+                }
+
+                seqBuilder.Append(item.Label);
+                i++;
             }
 
             row = seqBuilder.ToString();
@@ -719,15 +763,18 @@ namespace RapidTransitMod
             for (int i = 0; i < orderedAnchors.Count; i++)
             {
                 string label = FormatSharedCorridorStationAnchorLabel(orderedAnchors[i]);
+                float clampedPosition = math.clamp(orderedAnchors[i].Position, 0f, displayLength);
+                bool nearStart = clampedPosition <= STATION_ANCHOR_MERGE_DISTANCE;
+                bool nearEnd = (displayLength - clampedPosition) <= STATION_ANCHOR_MERGE_DISTANCE;
                 if (string.IsNullOrEmpty(label)
-                    || string.Equals(label, startLabel, System.StringComparison.Ordinal)
-                    || string.Equals(label, endLabel, System.StringComparison.Ordinal))
+                    || (nearStart && string.Equals(label, startLabel, System.StringComparison.Ordinal))
+                    || (nearEnd && string.Equals(label, endLabel, System.StringComparison.Ordinal)))
                 {
                     continue;
                 }
 
                 items.Add(new TrackModelSequenceItem(
-                    math.clamp(orderedAnchors[i].Position, 0f, displayLength),
+                    clampedPosition,
                     0,
                     label));
             }
@@ -766,20 +813,26 @@ namespace RapidTransitMod
             return anchor.HasStopAnchor ? label : (label + "(过)");
         }
 
-        private static string FormatCompactSharedMapVehicleLabel(Entity vehicle, float distanceMeters)
-        {
-            string km = (distanceMeters / 1000f).ToString("0.00");
-            return FormatCompactSharedMapVehicleName(vehicle) + "@" + km + "km";
-        }
+        private static string FormatCompactSharedMapVehicleLabel(Entity vehicle, string state)
+            => FormatCompactSharedMapVehicleName(vehicle) + FormatCompactVehicleStateSuffix(state);
 
-        private static string FormatCompactSharedMapUnknownVehicleLabel(Entity vehicle)
-        {
-            return FormatCompactSharedMapVehicleName(vehicle) + "@?";
-        }
+        private static string FormatCompactSharedMapUnknownVehicleLabel(Entity vehicle, string state)
+            => FormatCompactSharedMapVehicleName(vehicle) + FormatCompactVehicleStateSuffix(state);
 
         private static string FormatCompactSharedMapVehicleName(Entity vehicle)
         {
             return "#" + vehicle.Index;
+        }
+
+        private static string FormatCompactVehicleStateSuffix(string state)
+        {
+            if (string.Equals(state, "Retiring", System.StringComparison.Ordinal))
+                return "(回)";
+            if (string.Equals(state, "Holding", System.StringComparison.Ordinal))
+                return "(停)";
+            if (string.Equals(state, "Preparing", System.StringComparison.Ordinal))
+                return "(备)";
+            return string.Empty;
         }
 
         private bool TryGetBoardingStationAnchorPosition(
@@ -810,6 +863,29 @@ namespace RapidTransitMod
             }
 
             return false;
+        }
+
+        private static bool TrySnapVehicleToNearbyStationAnchor(
+            float mappedPosition,
+            List<CorridorStationAnchor> anchors,
+            out float snappedPosition)
+        {
+            snappedPosition = 0f;
+            if (anchors == null || anchors.Count == 0)
+                return false;
+
+            float bestDistance = float.MaxValue;
+            for (int i = 0; i < anchors.Count; i++)
+            {
+                float distance = math.abs(anchors[i].Position - mappedPosition);
+                if (distance > STATION_VEHICLE_ATTACH_DISTANCE || distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                snappedPosition = anchors[i].Position;
+            }
+
+            return bestDistance < float.MaxValue;
         }
 
         private string FormatSharedPhysicalCorridorAudit(SharedPhysicalCorridorAuditEntry entry)
@@ -924,6 +1000,43 @@ namespace RapidTransitMod
             }
 
             return !string.IsNullOrEmpty(startLabel) || !string.IsNullOrEmpty(endLabel);
+        }
+
+        private bool TryResolveSyntheticLoopClosureEndLabel(
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            out string endLabel)
+        {
+            endLabel = string.Empty;
+            if (chain == null
+                || waypoints.Length < 2
+                || chain.ControlPoints.Count == 0
+                || chain.TrackAtoms.Count == 0)
+            {
+                return false;
+            }
+
+            Entity originBuilding = GetStationBuildingForWaypoint(waypoints, 0);
+            if (originBuilding == Entity.Null)
+                return false;
+
+            ControlPointMarker lastMarker = chain.ControlPoints[chain.ControlPoints.Count - 1];
+            if (lastMarker.Building == Entity.Null || lastMarker.Building == originBuilding)
+                return false;
+
+            int atomsAfterLastMarker = endAtomIndexExclusive - lastMarker.AtomIndex;
+            int tailAtomsOutsideSpan = chain.TrackAtoms.Count - endAtomIndexExclusive;
+            if (atomsAfterLastMarker < 8)
+                return false;
+            if (tailAtomsOutsideSpan > 12)
+                return false;
+            if (lastMarker.AtomIndex <= startAtomIndex)
+                return false;
+
+            endLabel = FormatSharedMapStationLabel(originBuilding);
+            return !string.IsNullOrEmpty(endLabel);
         }
 
         private static List<int> BuildRunLaneSequence(LineTrackChain chain, int startAtomIndex, int endAtomIndexExclusive)

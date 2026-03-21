@@ -487,7 +487,10 @@ export function useWorkbenchController() {
   }
 
   function handleAddManualToStaged(rowsForLine) {
-    const nextRows = validateManualRows(rowsForLine, t)
+    const nextRows = validateManualRows(
+      [...rowsForLine].sort((left, right) => (left.time || "").localeCompare(right.time || "")),
+      t
+    )
       .filter((row) => row.validation.status !== "error")
       .map((row) => ({
         id: `stage-manual-${row.lineId}-${row.id}`,
