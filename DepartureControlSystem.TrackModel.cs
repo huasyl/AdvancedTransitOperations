@@ -1,0 +1,2894 @@
+using System;
+using System.Collections.Generic;
+using System.Text;
+using Game.Common;
+using Game.Net;
+using Game.Pathfind;
+using Game.Routes;
+using Unity.Collections;
+using Unity.Entities;
+using Unity.Mathematics;
+
+namespace RapidTransitMod
+{
+    public partial class DepartureControlSystem
+    {
+        private enum TrackTraversalDir : byte
+        {
+            Unknown = 0,
+            Forward = 1,
+            Reverse = 2,
+        }
+
+        private enum TrackAtomClass : byte
+        {
+            Unknown = 0,
+            PrimaryLane = 1,
+            ConnectionHelper = 2,
+            FilteredNoise = 3,
+        }
+
+        private enum ControlPointKind : byte
+        {
+            Unknown = 0,
+            Stop = 1,
+            Bypass = 2,
+            Branch = 3,
+            Merge = 4,
+            SharedEntry = 5,
+            SharedExit = 6,
+        }
+
+        private readonly struct TrackAtomKey : IEquatable<TrackAtomKey>
+        {
+            public readonly Entity PhysicalLaneKey;
+            public readonly Entity PreviousTarget;
+            public readonly Entity NextTarget;
+
+            public TrackAtomKey(Entity physicalLaneKey, Entity previousTarget, Entity nextTarget)
+            {
+                PhysicalLaneKey = physicalLaneKey;
+                PreviousTarget = previousTarget;
+                NextTarget = nextTarget;
+            }
+
+            public bool Equals(TrackAtomKey other)
+            {
+                return PhysicalLaneKey == other.PhysicalLaneKey
+                    && PreviousTarget == other.PreviousTarget
+                    && NextTarget == other.NextTarget;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is TrackAtomKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hashCode = PhysicalLaneKey.GetHashCode();
+                    hashCode = (hashCode * 397) ^ PreviousTarget.GetHashCode();
+                    hashCode = (hashCode * 397) ^ NextTarget.GetHashCode();
+                    return hashCode;
+                }
+            }
+
+            public override string ToString()
+            {
+                string previous = PreviousTarget == Entity.Null ? "null" : PreviousTarget.Index.ToString();
+                string next = NextTarget == Entity.Null ? "null" : NextTarget.Index.ToString();
+                return previous + "->" + PhysicalLaneKey.Index + "->" + next;
+            }
+        }
+
+        private readonly struct TrackAtom
+        {
+            public readonly TrackAtomKey Key;
+            public readonly Entity SourceTarget;
+            public readonly PathElementFlags SourceFlags;
+            public readonly TrackAtomClass AtomClass;
+
+            public TrackAtom(
+                TrackAtomKey key,
+                Entity sourceTarget,
+                PathElementFlags sourceFlags,
+                TrackAtomClass atomClass)
+            {
+                Key = key;
+                SourceTarget = sourceTarget;
+                SourceFlags = sourceFlags;
+                AtomClass = atomClass;
+            }
+        }
+
+        private readonly struct TrackSegmentRange
+        {
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+
+            public TrackSegmentRange(int startAtomIndex, int endAtomIndexExclusive)
+            {
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+            }
+        }
+
+        private readonly struct ControlPointMarker
+        {
+            public readonly int AtomIndex;
+            public readonly int WaypointIndex;
+            public readonly Entity Building;
+            public readonly ControlPointKind Kind;
+
+            public ControlPointMarker(int atomIndex, int waypointIndex, Entity building, ControlPointKind kind)
+            {
+                AtomIndex = atomIndex;
+                WaypointIndex = waypointIndex;
+                Building = building;
+                Kind = kind;
+            }
+        }
+
+        private readonly struct ControlEdge
+        {
+            public readonly int StartControlPointIndex;
+            public readonly int EndControlPointIndex;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly float BaseFrames;
+
+            public ControlEdge(
+                int startControlPointIndex,
+                int endControlPointIndex,
+                int startAtomIndex,
+                int endAtomIndexExclusive,
+                float baseFrames)
+            {
+                StartControlPointIndex = startControlPointIndex;
+                EndControlPointIndex = endControlPointIndex;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                BaseFrames = baseFrames;
+            }
+        }
+
+        private sealed class LineTrackChain
+        {
+            public Entity LineEntity;
+            public ulong Signature;
+            public List<TrackAtom> TrackAtoms = new List<TrackAtom>();
+            public List<TrackSegmentRange> SegmentRanges = new List<TrackSegmentRange>();
+            public List<ControlPointMarker> ControlPoints = new List<ControlPointMarker>();
+            public List<ControlEdge> ControlEdges = new List<ControlEdge>();
+            public List<SharedTrackRun> SharedRuns = new List<SharedTrackRun>();
+            public List<ControlEdgeSharedSpan> ControlEdgeSharedSpans = new List<ControlEdgeSharedSpan>();
+            public List<BypassProtectedInterval> BypassProtectedIntervals = new List<BypassProtectedInterval>();
+            public List<ProtectedSharedInterval> ProtectedSharedIntervals = new List<ProtectedSharedInterval>();
+            public List<ProtectedIntervalSummary> ProtectedIntervalSummaries = new List<ProtectedIntervalSummary>();
+        }
+
+        private readonly struct SharedTrackRun
+        {
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly bool HasMirroredContext;
+            public readonly int SharedLineCount;
+
+            public SharedTrackRun(int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount)
+            {
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                HasMirroredContext = hasMirroredContext;
+                SharedLineCount = sharedLineCount;
+            }
+        }
+
+        private readonly struct ControlEdgeSharedSpan
+        {
+            public readonly int ControlEdgeIndex;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly bool HasMirroredContext;
+            public readonly int SharedLineCount;
+
+            public ControlEdgeSharedSpan(int controlEdgeIndex, int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount)
+            {
+                ControlEdgeIndex = controlEdgeIndex;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                HasMirroredContext = hasMirroredContext;
+                SharedLineCount = sharedLineCount;
+            }
+        }
+
+        private readonly struct BypassProtectedInterval
+        {
+            public readonly int StartControlPointIndex;
+            public readonly int EndControlPointIndex;
+            public readonly int StartControlEdgeIndex;
+            public readonly int EndControlEdgeIndexInclusive;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly float BaseFrames;
+
+            public BypassProtectedInterval(int startControlPointIndex, int endControlPointIndex, int startControlEdgeIndex, int endControlEdgeIndexInclusive, int startAtomIndex, int endAtomIndexExclusive, float baseFrames)
+            {
+                StartControlPointIndex = startControlPointIndex;
+                EndControlPointIndex = endControlPointIndex;
+                StartControlEdgeIndex = startControlEdgeIndex;
+                EndControlEdgeIndexInclusive = endControlEdgeIndexInclusive;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                BaseFrames = baseFrames;
+            }
+        }
+
+        private readonly struct ProtectedSharedInterval
+        {
+            public readonly int ProtectedIntervalIndex;
+            public readonly int ControlEdgeIndex;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly bool HasMirroredContext;
+            public readonly int SharedLineCount;
+            public readonly float EntryOffsetFrames;
+            public readonly float ClearOffsetFrames;
+
+            public ProtectedSharedInterval(int protectedIntervalIndex, int controlEdgeIndex, int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount, float entryOffsetFrames, float clearOffsetFrames)
+            {
+                ProtectedIntervalIndex = protectedIntervalIndex;
+                ControlEdgeIndex = controlEdgeIndex;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                HasMirroredContext = hasMirroredContext;
+                SharedLineCount = sharedLineCount;
+                EntryOffsetFrames = entryOffsetFrames;
+                ClearOffsetFrames = clearOffsetFrames;
+            }
+        }
+
+        private readonly struct ProtectedIntervalSummary
+        {
+            public readonly int ProtectedIntervalIndex;
+            public readonly int SharedSegmentCount;
+            public readonly int MaxSharedLineCount;
+            public readonly bool HasMirroredContext;
+            public readonly float MinEntryOffsetFrames;
+            public readonly float MaxClearOffsetFrames;
+
+            public ProtectedIntervalSummary(int protectedIntervalIndex, int sharedSegmentCount, int maxSharedLineCount, bool hasMirroredContext, float minEntryOffsetFrames, float maxClearOffsetFrames)
+            {
+                ProtectedIntervalIndex = protectedIntervalIndex;
+                SharedSegmentCount = sharedSegmentCount;
+                MaxSharedLineCount = maxSharedLineCount;
+                HasMirroredContext = hasMirroredContext;
+                MinEntryOffsetFrames = minEntryOffsetFrames;
+                MaxClearOffsetFrames = maxClearOffsetFrames;
+            }
+        }
+
+        private enum TrackModelRelativeToProtectedInterval : byte
+        {
+            Unknown = 0,
+            Before = 1,
+            Inside = 2,
+            After = 3,
+        }
+
+        private readonly struct TrackModelRuntimePosition
+        {
+            public readonly int CurrentControlEdgeIndex;
+            public readonly int CurrentAtomIndex;
+            public readonly float AtomPosition01;
+            public readonly TrackModelRelativeToProtectedInterval RelativeToProtectedInterval;
+            public readonly float Confidence;
+
+            public TrackModelRuntimePosition(
+                int currentControlEdgeIndex,
+                int currentAtomIndex,
+                float atomPosition01,
+                TrackModelRelativeToProtectedInterval relativeToProtectedInterval,
+                float confidence)
+            {
+                CurrentControlEdgeIndex = currentControlEdgeIndex;
+                CurrentAtomIndex = currentAtomIndex;
+                AtomPosition01 = atomPosition01;
+                RelativeToProtectedInterval = relativeToProtectedInterval;
+                Confidence = confidence;
+            }
+        }
+
+        private readonly struct BypassTrackModelShadowDecision
+        {
+            public readonly bool Available;
+            public readonly bool ShouldYield;
+            public readonly string ReasonCode;
+            public readonly int ProtectedIntervalIndex;
+            public readonly string Risk;
+            public readonly string Summary;
+            public readonly string LocalPosition;
+            public readonly string BlockerPosition;
+            public readonly string SequenceSummary;
+
+            public BypassTrackModelShadowDecision(
+                bool available,
+                bool shouldYield,
+                string reasonCode,
+                int protectedIntervalIndex,
+                string risk,
+                string summary,
+                string localPosition,
+                string blockerPosition,
+                string sequenceSummary)
+            {
+                Available = available;
+                ShouldYield = shouldYield;
+                ReasonCode = reasonCode;
+                ProtectedIntervalIndex = protectedIntervalIndex;
+                Risk = risk;
+                Summary = summary;
+                LocalPosition = localPosition;
+                BlockerPosition = blockerPosition;
+                SequenceSummary = sequenceSummary;
+            }
+        }
+
+        private readonly struct BypassTrackModelShadowEvaluation
+        {
+            public readonly bool Available;
+            public readonly int ProtectedIntervalIndex;
+            public readonly string Risk;
+            public readonly string Summary;
+
+            public BypassTrackModelShadowEvaluation(bool available, int protectedIntervalIndex, string risk, string summary)
+            {
+                Available = available;
+                ProtectedIntervalIndex = protectedIntervalIndex;
+                Risk = risk;
+                Summary = summary;
+            }
+        }
+
+        private readonly struct SharedTrackOccurrence
+        {
+            public readonly Entity LineEntity;
+            public readonly int AtomIndex;
+            public readonly int WaypointSegmentIndex;
+
+            public SharedTrackOccurrence(Entity lineEntity, int atomIndex, int waypointSegmentIndex)
+            {
+                LineEntity = lineEntity;
+                AtomIndex = atomIndex;
+                WaypointSegmentIndex = waypointSegmentIndex;
+            }
+        }
+
+        private readonly struct VehicleTrackCursor
+        {
+            public readonly Entity LineEntity;
+            public readonly ulong ChainSignature;
+            public readonly int SegmentIndex;
+            public readonly int AtomStartIndex;
+            public readonly int AtomEndIndexExclusive;
+            public readonly int AtomCursorIndex;
+            public readonly float AtomPosition01;
+            public readonly float Confidence;
+
+            public VehicleTrackCursor(
+                Entity lineEntity,
+                ulong chainSignature,
+                int segmentIndex,
+                int atomStartIndex,
+                int atomEndIndexExclusive,
+                int atomCursorIndex,
+                float atomPosition01,
+                float confidence)
+            {
+                LineEntity = lineEntity;
+                ChainSignature = chainSignature;
+                SegmentIndex = segmentIndex;
+                AtomStartIndex = atomStartIndex;
+                AtomEndIndexExclusive = atomEndIndexExclusive;
+                AtomCursorIndex = atomCursorIndex;
+                AtomPosition01 = atomPosition01;
+                Confidence = confidence;
+            }
+        }
+
+        private readonly struct ProtectedIntervalMatch
+        {
+            public readonly bool Found;
+            public readonly bool Ambiguous;
+            public readonly int ProtectedIntervalIndex;
+            public readonly int OverlapCount;
+
+            public ProtectedIntervalMatch(bool found, bool ambiguous, int protectedIntervalIndex, int overlapCount)
+            {
+                Found = found;
+                Ambiguous = ambiguous;
+                ProtectedIntervalIndex = protectedIntervalIndex;
+                OverlapCount = overlapCount;
+            }
+        }
+
+        private readonly struct TrackModelSequenceItem
+        {
+            public readonly float DistanceMeters;
+            public readonly int KindOrder;
+            public readonly string Label;
+
+            public TrackModelSequenceItem(float distanceMeters, int kindOrder, string label)
+            {
+                DistanceMeters = distanceMeters;
+                KindOrder = kindOrder;
+                Label = label;
+            }
+        }
+
+        private readonly Dictionary<Entity, LineTrackChain> m_LineTrackChains = new Dictionary<Entity, LineTrackChain>();
+        private readonly Dictionary<TrackAtomKey, List<SharedTrackOccurrence>> m_SharedTrackIndex = new Dictionary<TrackAtomKey, List<SharedTrackOccurrence>>();
+        private readonly Dictionary<Entity, VehicleTrackCursor> m_VehicleTrackCursorHints = new Dictionary<Entity, VehicleTrackCursor>();
+        private readonly Dictionary<Entity, string> m_BypassTrackModelShadowLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassTrackModelCompareLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_TrackModelSequenceLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, BypassTrackModelShadowEvaluation> m_BypassTrackModelShadowEvaluations = new Dictionary<Entity, BypassTrackModelShadowEvaluation>();
+        private readonly Dictionary<Entity, BypassTrackModelShadowDecision> m_BypassTrackModelShadowDecisions = new Dictionary<Entity, BypassTrackModelShadowDecision>();
+        private readonly HashSet<Entity> m_DirtyTrackLines = new HashSet<Entity>();
+        private bool m_SharedTrackIndexDirty = true;
+
+        private void InvalidateTrackModel(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_DirtyTrackLines.Add(line);
+            m_LineTrackChains.Remove(line);
+            m_SharedTrackIndexDirty = true;
+        }
+
+        private void InvalidateAllTrackModels()
+        {
+            m_DirtyTrackLines.Clear();
+            m_LineTrackChains.Clear();
+            m_SharedTrackIndex.Clear();
+            m_VehicleTrackCursorHints.Clear();
+            m_BypassTrackModelShadowLogCache.Clear();
+            m_BypassTrackModelCompareLogCache.Clear();
+            m_TrackModelSequenceLogCache.Clear();
+            m_BypassTrackModelShadowEvaluations.Clear();
+            m_BypassTrackModelShadowDecisions.Clear();
+            m_SharedTrackIndexDirty = true;
+        }
+
+        private ulong ComputeLineTrackChainSignature(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            DynamicBuffer<RouteSegment> segments)
+        {
+            ulong hash = 1469598103934665603UL;
+            hash = MixLineSignature(hash, line.Index);
+            hash = MixLineSignature(hash, waypoints.Length);
+            hash = MixLineSignature(hash, segments.Length);
+
+            for (int i = 0; i < waypoints.Length; i++)
+                hash = MixLineSignature(hash, waypoints[i].m_Waypoint.Index);
+
+            for (int i = 0; i < segments.Length; i++)
+            {
+                Entity segmentEntity = segments[i].m_Segment;
+                hash = MixLineSignature(hash, segmentEntity.Index);
+
+                if (!EntityManager.HasBuffer<PathElement>(segmentEntity))
+                    continue;
+
+                DynamicBuffer<PathElement> pathElements = EntityManager.GetBuffer<PathElement>(segmentEntity, true);
+                hash = MixLineSignature(hash, pathElements.Length);
+                for (int pathIndex = 0; pathIndex < pathElements.Length; pathIndex++)
+                {
+                    PathElement pathElement = pathElements[pathIndex];
+                    hash = MixLineSignature(hash, pathElement.m_Target.Index);
+                    hash = MixLineSignature(hash, (int)pathElement.m_Flags);
+                }
+            }
+
+            return hash;
+        }
+
+        private bool TryGetLineTrackChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain)
+        {
+            chain = null;
+            if (line == Entity.Null
+                || waypoints.Length == 0
+                || !EntityManager.HasBuffer<RouteSegment>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
+            if (segments.Length != waypoints.Length)
+                return false;
+
+            ulong signature = ComputeLineTrackChainSignature(line, waypoints, segments);
+            if (m_LineTrackChains.TryGetValue(line, out chain)
+                && chain != null
+                && chain.Signature == signature)
+            {
+                return chain.TrackAtoms.Count > 0;
+            }
+
+            chain = BuildLineTrackChain(line, waypoints, segments, signature);
+            if (chain == null || chain.TrackAtoms.Count == 0)
+                return false;
+
+            m_LineTrackChains[line] = chain;
+            m_DirtyTrackLines.Remove(line);
+            m_SharedTrackIndexDirty = true;
+            return true;
+        }
+
+        private LineTrackChain BuildLineTrackChain(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            DynamicBuffer<RouteSegment> segments,
+            ulong signature)
+        {
+            var chain = new LineTrackChain
+            {
+                LineEntity = line,
+                Signature = signature
+            };
+
+            for (int waypointIndex = 0; waypointIndex < segments.Length; waypointIndex++)
+            {
+                int startAtomIndex = chain.TrackAtoms.Count;
+                Entity segmentEntity = segments[waypointIndex].m_Segment;
+                if (EntityManager.HasBuffer<PathElement>(segmentEntity))
+                {
+                    DynamicBuffer<PathElement> pathElements = EntityManager.GetBuffer<PathElement>(segmentEntity, true);
+                    AppendSegmentTrackAtoms(chain.TrackAtoms, pathElements);
+                }
+
+                int endAtomIndexExclusive = chain.TrackAtoms.Count;
+                chain.SegmentRanges.Add(new TrackSegmentRange(startAtomIndex, endAtomIndexExclusive));
+                TryAppendControlPoint(chain.ControlPoints, waypoints, waypointIndex, startAtomIndex);
+            }
+
+            BuildControlEdges(chain, line, waypoints);
+            return chain;
+        }
+
+        private void AppendSegmentTrackAtoms(List<TrackAtom> atoms, DynamicBuffer<PathElement> pathElements)
+        {
+            if (pathElements.Length == 0)
+                return;
+
+            for (int pathIndex = 0; pathIndex < pathElements.Length; pathIndex++)
+            {
+                PathElement element = pathElements[pathIndex];
+                if (!TryClassifyTrackAtom(pathElements, pathIndex, out TrackAtom atom))
+                    continue;
+
+                if (atom.AtomClass == TrackAtomClass.FilteredNoise)
+                    continue;
+
+                atoms.Add(atom);
+            }
+        }
+
+        private bool TryClassifyTrackAtom(
+            DynamicBuffer<PathElement> pathElements,
+            int pathIndex,
+            out TrackAtom atom)
+        {
+            atom = default;
+            if (pathIndex < 0 || pathIndex >= pathElements.Length)
+                return false;
+
+            PathElement element = pathElements[pathIndex];
+            if (element.m_Target == Entity.Null)
+                return false;
+
+            TrackAtomClass atomClass = ClassifyPathElementTarget(element);
+            TrackTraversalDir traversalDir = ResolveTraversalDirection(pathElements, pathIndex);
+            Entity previousTarget = pathIndex > 0 ? pathElements[pathIndex - 1].m_Target : Entity.Null;
+            Entity nextTarget = pathIndex + 1 < pathElements.Length ? pathElements[pathIndex + 1].m_Target : Entity.Null;
+            TrackAtomKey key = new TrackAtomKey(element.m_Target, previousTarget, nextTarget);
+            atom = new TrackAtom(key, element.m_Target, element.m_Flags, atomClass);
+            return true;
+        }
+
+        private TrackAtomClass ClassifyPathElementTarget(PathElement element)
+        {
+            if ((element.m_Flags & (PathElementFlags.Action | PathElementFlags.WaitPosition | PathElementFlags.Hangaround)) != 0)
+                return TrackAtomClass.FilteredNoise;
+
+            if (EntityManager.HasComponent<TrackLane>(element.m_Target))
+                return TrackAtomClass.PrimaryLane;
+
+            if (EntityManager.HasComponent<ConnectionLane>(element.m_Target))
+            {
+                ConnectionLane connectionLane = EntityManager.GetComponentData<ConnectionLane>(element.m_Target);
+                if (connectionLane.m_TrackTypes != TrackTypes.None)
+                    return TrackAtomClass.ConnectionHelper;
+            }
+
+            if (EntityManager.HasComponent<EdgeLane>(element.m_Target))
+                return TrackAtomClass.ConnectionHelper;
+
+            if ((element.m_Flags & (PathElementFlags.Secondary | PathElementFlags.Return | PathElementFlags.Leader)) != 0)
+                return TrackAtomClass.ConnectionHelper;
+
+            return TrackAtomClass.PrimaryLane;
+        }
+
+        private TrackTraversalDir ResolveTraversalDirection(DynamicBuffer<PathElement> pathElements, int pathIndex)
+        {
+            PathElement current = pathElements[pathIndex];
+            if (current.m_Target == Entity.Null)
+                return TrackTraversalDir.Unknown;
+
+            bool reverseFlag = (current.m_Flags & PathElementFlags.Reverse) != 0;
+            if (EntityManager.HasComponent<EdgeLane>(current.m_Target))
+            {
+                EdgeLane edgeLane = EntityManager.GetComponentData<EdgeLane>(current.m_Target);
+                bool edgeForward = edgeLane.m_EdgeDelta.y >= edgeLane.m_EdgeDelta.x;
+                if (EntityManager.HasComponent<TrackLane>(current.m_Target))
+                {
+                    TrackLane trackLane = EntityManager.GetComponentData<TrackLane>(current.m_Target);
+                    if ((trackLane.m_Flags & TrackLaneFlags.Invert) != 0)
+                        edgeForward = !edgeForward;
+                }
+
+                if (reverseFlag)
+                    edgeForward = !edgeForward;
+
+                return edgeForward ? TrackTraversalDir.Forward : TrackTraversalDir.Reverse;
+            }
+
+            if (EntityManager.HasComponent<TrackLane>(current.m_Target))
+            {
+                TrackLane trackLane = EntityManager.GetComponentData<TrackLane>(current.m_Target);
+                bool forward = (trackLane.m_Flags & TrackLaneFlags.Invert) == 0;
+                if (reverseFlag)
+                    forward = !forward;
+                return forward ? TrackTraversalDir.Forward : TrackTraversalDir.Reverse;
+            }
+
+            if (pathElements.Length <= 1)
+                return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Unknown;
+
+            float laneProgress = current.m_TargetDelta.y - current.m_TargetDelta.x;
+            if (math.abs(laneProgress) > 0.0001f)
+            {
+                bool forwardByDelta = laneProgress >= 0f;
+                if (reverseFlag)
+                    forwardByDelta = !forwardByDelta;
+                return forwardByDelta ? TrackTraversalDir.Forward : TrackTraversalDir.Reverse;
+            }
+
+            if (pathIndex == 0 || pathIndex == pathElements.Length - 1)
+                return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Unknown;
+
+            PathElement previous = pathElements[pathIndex - 1];
+            PathElement next = pathElements[pathIndex + 1];
+            if (previous.m_Target != Entity.Null && previous.m_Target == next.m_Target)
+                return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Unknown;
+
+            return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Forward;
+        }
+
+        private string DescribeTraversalInputs(DynamicBuffer<PathElement> pathElements, int pathIndex)
+        {
+            if (pathIndex < 0 || pathIndex >= pathElements.Length)
+                return "ctx=invalid";
+
+            PathElement current = pathElements[pathIndex];
+            Entity previousTarget = pathIndex > 0 ? pathElements[pathIndex - 1].m_Target : Entity.Null;
+            Entity nextTarget = pathIndex + 1 < pathElements.Length ? pathElements[pathIndex + 1].m_Target : Entity.Null;
+            bool reverseFlag = (current.m_Flags & PathElementFlags.Reverse) != 0;
+
+            StringBuilder sb = new StringBuilder();
+            sb.Append(" prev=").Append(previousTarget == Entity.Null ? "null" : previousTarget.Index.ToString())
+              .Append(" curr=").Append(current.m_Target == Entity.Null ? "null" : current.m_Target.Index.ToString())
+              .Append(" next=").Append(nextTarget == Entity.Null ? "null" : nextTarget.Index.ToString())
+              .Append(" reverseFlag=").Append(reverseFlag ? "1" : "0");
+
+            if (EntityManager.HasComponent<TrackLane>(current.m_Target))
+            {
+                TrackLane trackLane = EntityManager.GetComponentData<TrackLane>(current.m_Target);
+                bool invert = (trackLane.m_Flags & TrackLaneFlags.Invert) != 0;
+                sb.Append(" invert=").Append(invert ? "1" : "0");
+            }
+
+            if (EntityManager.HasComponent<EdgeLane>(current.m_Target))
+            {
+                EdgeLane edgeLane = EntityManager.GetComponentData<EdgeLane>(current.m_Target);
+                bool edgeForward = edgeLane.m_EdgeDelta.y >= edgeLane.m_EdgeDelta.x;
+                sb.Append(" edgeForward=").Append(edgeForward ? "1" : "0")
+                  .Append(" edgeDelta=(")
+                  .Append(edgeLane.m_EdgeDelta.x.ToString("F2"))
+                  .Append(",")
+                  .Append(edgeLane.m_EdgeDelta.y.ToString("F2"))
+                  .Append(")");
+            }
+
+            float laneProgress = current.m_TargetDelta.y - current.m_TargetDelta.x;
+            sb.Append(" laneProgress=").Append(laneProgress.ToString("F2"));
+            return sb.ToString();
+        }
+
+        private string DescribePathElementTarget(Entity target)
+        {
+            if (target == Entity.Null || !EntityManager.Exists(target))
+                return "null";
+
+            StringBuilder sb = new StringBuilder();
+            sb.Append("target=").Append(target.Index);
+
+            if (EntityManager.HasComponent<TrackLane>(target))
+            {
+                TrackLane trackLane = EntityManager.GetComponentData<TrackLane>(target);
+                sb.Append(" TrackLane")
+                  .Append(" flags=").Append(trackLane.m_Flags)
+                  .Append(" speed=").Append(trackLane.m_SpeedLimit.ToString("F1"));
+            }
+
+            if (EntityManager.HasComponent<Lane>(target))
+                sb.Append(" Lane");
+
+            if (EntityManager.HasComponent<EdgeLane>(target))
+            {
+                EdgeLane edgeLane = EntityManager.GetComponentData<EdgeLane>(target);
+                sb.Append(" EdgeLane")
+                  .Append(" edgeDelta=(")
+                  .Append(edgeLane.m_EdgeDelta.x.ToString("F2"))
+                  .Append(",")
+                  .Append(edgeLane.m_EdgeDelta.y.ToString("F2"))
+                  .Append(")");
+            }
+
+            if (EntityManager.HasComponent<ConnectionLane>(target))
+            {
+                ConnectionLane connectionLane = EntityManager.GetComponentData<ConnectionLane>(target);
+                sb.Append(" ConnectionLane")
+                  .Append(" trackTypes=").Append(connectionLane.m_TrackTypes)
+                  .Append(" flags=").Append(connectionLane.m_Flags);
+            }
+
+            if (EntityManager.HasComponent<TrainTrack>(target))
+                sb.Append(" TrainTrack");
+            if (EntityManager.HasComponent<TramTrack>(target))
+                sb.Append(" TramTrack");
+            if (EntityManager.HasComponent<SubwayTrack>(target))
+                sb.Append(" SubwayTrack");
+
+            return sb.ToString();
+        }
+
+        private void LogRouteSegmentPathElementDiagnostics(Entity line, int waypointIndex, Entity segmentEntity)
+        {
+            if (segmentEntity == Entity.Null || !EntityManager.Exists(segmentEntity))
+            {
+                log.Info("[TrackModelRaw] line=" + line.Index + " wp=" + waypointIndex + " segment=null");
+                return;
+            }
+
+            if (!EntityManager.HasBuffer<PathElement>(segmentEntity))
+            {
+                log.Info("[TrackModelRaw] line=" + line.Index + " wp=" + waypointIndex + " segment=" + segmentEntity.Index + " pathElements=none");
+                return;
+            }
+
+            DynamicBuffer<PathElement> pathElements = EntityManager.GetBuffer<PathElement>(segmentEntity, true);
+            StringBuilder sb = new StringBuilder();
+            sb.Append("[TrackModelRaw] line=").Append(line.Index)
+              .Append(" wp=").Append(waypointIndex)
+              .Append(" segment=").Append(segmentEntity.Index)
+              .Append(" pathCount=").Append(pathElements.Length);
+
+            int limit = math.min(pathElements.Length, 16);
+            for (int pathIndex = 0; pathIndex < limit; pathIndex++)
+            {
+                PathElement element = pathElements[pathIndex];
+                TrackAtomClass atomClass = ClassifyPathElementTarget(element);
+                TrackTraversalDir traversalDir = ResolveTraversalDirection(pathElements, pathIndex);
+                sb.Append(" | ")
+                  .Append(pathIndex)
+                  .Append(":")
+                  .Append(DescribePathElementTarget(element.m_Target))
+                  .Append(" flags=").Append(element.m_Flags)
+                  .Append(" delta=(")
+                  .Append(element.m_TargetDelta.x.ToString("F2"))
+                  .Append(",")
+                  .Append(element.m_TargetDelta.y.ToString("F2"))
+                  .Append(")")
+                  .Append(" class=").Append(atomClass)
+                  .Append(" dir=").Append(traversalDir)
+                  .Append(" token=").Append(pathIndex > 0 ? pathElements[pathIndex - 1].m_Target.Index.ToString() : "null")
+                  .Append("->").Append(element.m_Target.Index)
+                  .Append("->").Append(pathIndex + 1 < pathElements.Length ? pathElements[pathIndex + 1].m_Target.Index.ToString() : "null")
+                  .Append(DescribeTraversalInputs(pathElements, pathIndex));
+            }
+
+            log.Info(sb.ToString());
+        }
+
+        private void LogSharedTrackIndexSummary()
+        {
+            EnsureSharedTrackIndexCurrent();
+
+            int sharedAtomKeys = 0;
+            int sharedOccurrences = 0;
+            var contextCountByPhysicalTarget = new Dictionary<Entity, int>();
+            var adjacencyByPhysicalTarget = new Dictionary<Entity, HashSet<string>>();
+            foreach (KeyValuePair<TrackAtomKey, List<SharedTrackOccurrence>> entry in m_SharedTrackIndex)
+            {
+                if (!contextCountByPhysicalTarget.TryGetValue(entry.Key.PhysicalLaneKey, out int contextCount))
+                    contextCount = 0;
+
+                contextCountByPhysicalTarget[entry.Key.PhysicalLaneKey] = contextCount + 1;
+
+                if (!adjacencyByPhysicalTarget.TryGetValue(entry.Key.PhysicalLaneKey, out HashSet<string> adjacencySet))
+                {
+                    adjacencySet = new HashSet<string>(StringComparer.Ordinal);
+                    adjacencyByPhysicalTarget[entry.Key.PhysicalLaneKey] = adjacencySet;
+                }
+
+                string previous = entry.Key.PreviousTarget == Entity.Null ? "null" : entry.Key.PreviousTarget.Index.ToString();
+                string next = entry.Key.NextTarget == Entity.Null ? "null" : entry.Key.NextTarget.Index.ToString();
+                adjacencySet.Add(previous + ">" + next);
+
+                if (entry.Value == null || entry.Value.Count <= 1)
+                    continue;
+
+                sharedAtomKeys++;
+                sharedOccurrences += entry.Value.Count;
+            }
+
+            int contextSplitTargets = 0;
+            int mirroredTargets = 0;
+            foreach (KeyValuePair<Entity, int> entry in contextCountByPhysicalTarget)
+            {
+                if (entry.Value > 1)
+                    contextSplitTargets++;
+            }
+
+            foreach (KeyValuePair<Entity, HashSet<string>> entry in adjacencyByPhysicalTarget)
+            {
+                bool hasMirror = false;
+                foreach (string pair in entry.Value)
+                {
+                    int separator = pair.IndexOf('>');
+                    if (separator < 0)
+                        continue;
+
+                    string previous = pair.Substring(0, separator);
+                    string next = pair.Substring(separator + 1);
+                    if (entry.Value.Contains(next + ">" + previous))
+                    {
+                        hasMirror = true;
+                        break;
+                    }
+                }
+
+                if (hasMirror)
+                    mirroredTargets++;
+            }
+
+            log.Info("[TrackModelShared] keys=" + m_SharedTrackIndex.Count
+                + " physicalTargets=" + contextCountByPhysicalTarget.Count
+                + " sharedKeys=" + sharedAtomKeys
+                + " sharedOccurrences=" + sharedOccurrences
+                + " contextSplitTargets=" + contextSplitTargets
+                + " mirroredTargets=" + mirroredTargets);
+        }
+
+        private void TryAppendControlPoint(
+            List<ControlPointMarker> controlPoints,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            int atomIndex)
+        {
+            Entity building = GetStationBuildingForWaypoint(waypoints, waypointIndex);
+            if (building == Entity.Null)
+                return;
+
+            ControlPointKind kind = ControlPointKind.Stop;
+            if (IsBypassStation(building))
+                kind = ControlPointKind.Bypass;
+
+            controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, kind));
+        }
+
+        private void BuildControlEdges(LineTrackChain chain, Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (chain.ControlPoints.Count < 2)
+                return;
+
+            float lineFrames = GetLineLoopFramesEstimate(line, waypoints);
+            int atomCount = math.max(1, chain.TrackAtoms.Count);
+
+            for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count - 1; controlPointIndex++)
+            {
+                ControlPointMarker start = chain.ControlPoints[controlPointIndex];
+                ControlPointMarker end = chain.ControlPoints[controlPointIndex + 1];
+                int startAtomIndex = math.clamp(start.AtomIndex, 0, atomCount - 1);
+                int endAtomIndexExclusive = math.clamp(math.max(startAtomIndex + 1, end.AtomIndex), 1, atomCount);
+                float ratio = (endAtomIndexExclusive - startAtomIndex) / (float)atomCount;
+                float baseFrames = lineFrames > 0f ? lineFrames * ratio : 0f;
+                chain.ControlEdges.Add(new ControlEdge(
+                    controlPointIndex,
+                    controlPointIndex + 1,
+                    startAtomIndex,
+                    endAtomIndexExclusive,
+                    baseFrames));
+            }
+        }
+
+        private void RebuildSharedTrackIndex()
+        {
+            m_SharedTrackIndex.Clear();
+
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                Entity line = entry.Value.LineEntity;
+                if (line == Entity.Null
+                    || !EntityManager.Exists(line)
+                    || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                {
+                    continue;
+                }
+
+                DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+                    continue;
+
+                for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+                {
+                    TrackAtom atom = chain.TrackAtoms[atomIndex];
+                    if (atom.AtomClass != TrackAtomClass.PrimaryLane)
+                        continue;
+
+                    if (!m_SharedTrackIndex.TryGetValue(atom.Key, out List<SharedTrackOccurrence> occurrences))
+                    {
+                        occurrences = new List<SharedTrackOccurrence>();
+                        m_SharedTrackIndex[atom.Key] = occurrences;
+                    }
+
+                    int waypointSegmentIndex = ResolveWaypointSegmentIndex(chain, atomIndex);
+                    occurrences.Add(new SharedTrackOccurrence(line, atomIndex, waypointSegmentIndex));
+                }
+            }
+
+            m_SharedTrackIndexDirty = false;
+        }
+
+        private void EnsureSharedTrackIndexCurrent()
+        {
+            if (!m_SharedTrackIndexDirty)
+                return;
+
+            RebuildSharedTrackIndex();
+        }
+
+        private static int ResolveWaypointSegmentIndex(LineTrackChain chain, int atomIndex)
+        {
+            for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
+            {
+                TrackSegmentRange range = chain.SegmentRanges[segmentIndex];
+                if (atomIndex >= range.StartAtomIndex && atomIndex < range.EndAtomIndexExclusive)
+                    return segmentIndex;
+            }
+
+            return -1;
+        }
+
+        private void RefreshSharedRuns(LineTrackChain chain)
+        {
+            chain.SharedRuns.Clear();
+            EnsureSharedTrackIndexCurrent();
+
+            int runStart = -1;
+            bool runMirrored = false;
+            int runSharedLineCount = 0;
+            for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                if (atom.AtomClass != TrackAtomClass.PrimaryLane
+                    || !TryGetSharedAtomContext(chain.LineEntity, atom.Key, out int sharedLineCount, out bool mirroredContext))
+                {
+                    if (runStart >= 0)
+                    {
+                        chain.SharedRuns.Add(new SharedTrackRun(runStart, atomIndex, runMirrored, runSharedLineCount));
+                        runStart = -1;
+                        runMirrored = false;
+                        runSharedLineCount = 0;
+                    }
+
+                    continue;
+                }
+
+                if (runStart < 0)
+                {
+                    runStart = atomIndex;
+                    runMirrored = mirroredContext;
+                    runSharedLineCount = sharedLineCount;
+                    continue;
+                }
+
+                runMirrored |= mirroredContext;
+                runSharedLineCount = math.max(runSharedLineCount, sharedLineCount);
+            }
+
+            if (runStart >= 0)
+                chain.SharedRuns.Add(new SharedTrackRun(runStart, chain.TrackAtoms.Count, runMirrored, runSharedLineCount));
+        }
+
+        private void RefreshControlEdgeSharedSpans(LineTrackChain chain)
+        {
+            chain.ControlEdgeSharedSpans.Clear();
+            if (chain.SharedRuns.Count == 0 || chain.ControlEdges.Count == 0)
+                return;
+
+            for (int controlEdgeIndex = 0; controlEdgeIndex < chain.ControlEdges.Count; controlEdgeIndex++)
+            {
+                ControlEdge edge = chain.ControlEdges[controlEdgeIndex];
+                for (int runIndex = 0; runIndex < chain.SharedRuns.Count; runIndex++)
+                {
+                    SharedTrackRun run = chain.SharedRuns[runIndex];
+                    int overlapStart = math.max(edge.StartAtomIndex, run.StartAtomIndex);
+                    int overlapEndExclusive = math.min(edge.EndAtomIndexExclusive, run.EndAtomIndexExclusive);
+                    if (overlapEndExclusive <= overlapStart)
+                        continue;
+
+                    chain.ControlEdgeSharedSpans.Add(new ControlEdgeSharedSpan(
+                        controlEdgeIndex,
+                        overlapStart,
+                        overlapEndExclusive,
+                        run.HasMirroredContext,
+                        run.SharedLineCount));
+                }
+            }
+        }
+
+        private void RefreshBypassProtectedIntervals(LineTrackChain chain)
+        {
+            chain.BypassProtectedIntervals.Clear();
+            if (chain.ControlPoints.Count < 2 || chain.ControlEdges.Count == 0)
+                return;
+
+            for (int startControlPointIndex = 0; startControlPointIndex < chain.ControlPoints.Count - 1; startControlPointIndex++)
+            {
+                ControlPointMarker start = chain.ControlPoints[startControlPointIndex];
+                if (start.Kind != ControlPointKind.Bypass)
+                    continue;
+
+                int endControlPointIndex = -1;
+                for (int candidateIndex = startControlPointIndex + 1; candidateIndex < chain.ControlPoints.Count; candidateIndex++)
+                {
+                    if (chain.ControlPoints[candidateIndex].Kind == ControlPointKind.Bypass)
+                    {
+                        endControlPointIndex = candidateIndex;
+                        break;
+                    }
+                }
+
+                if (endControlPointIndex <= startControlPointIndex)
+                    continue;
+
+                int startControlEdgeIndex = startControlPointIndex;
+                int endControlEdgeIndexInclusive = endControlPointIndex - 1;
+                if (startControlEdgeIndex < 0 || endControlEdgeIndexInclusive >= chain.ControlEdges.Count)
+                    continue;
+
+                int startAtomIndex = math.max(0, chain.ControlPoints[startControlPointIndex].AtomIndex);
+                int endAtomIndexExclusive = math.max(startAtomIndex + 1, chain.ControlPoints[endControlPointIndex].AtomIndex);
+                float baseFrames = 0f;
+                for (int controlEdgeIndex = startControlEdgeIndex; controlEdgeIndex <= endControlEdgeIndexInclusive; controlEdgeIndex++)
+                    baseFrames += chain.ControlEdges[controlEdgeIndex].BaseFrames;
+
+                chain.BypassProtectedIntervals.Add(new BypassProtectedInterval(
+                    startControlPointIndex,
+                    endControlPointIndex,
+                    startControlEdgeIndex,
+                    endControlEdgeIndexInclusive,
+                    startAtomIndex,
+                    endAtomIndexExclusive,
+                    baseFrames));
+            }
+        }
+
+        private void RefreshProtectedSharedIntervals(LineTrackChain chain)
+        {
+            chain.ProtectedSharedIntervals.Clear();
+            if (chain.BypassProtectedIntervals.Count == 0 || chain.ControlEdgeSharedSpans.Count == 0)
+                return;
+
+            for (int protectedIntervalIndex = 0; protectedIntervalIndex < chain.BypassProtectedIntervals.Count; protectedIntervalIndex++)
+            {
+                BypassProtectedInterval interval = chain.BypassProtectedIntervals[protectedIntervalIndex];
+                for (int spanIndex = 0; spanIndex < chain.ControlEdgeSharedSpans.Count; spanIndex++)
+                {
+                    ControlEdgeSharedSpan span = chain.ControlEdgeSharedSpans[spanIndex];
+                    if (span.ControlEdgeIndex < interval.StartControlEdgeIndex || span.ControlEdgeIndex > interval.EndControlEdgeIndexInclusive)
+                        continue;
+
+                    int overlapStart = math.max(interval.StartAtomIndex, span.StartAtomIndex);
+                    int overlapEndExclusive = math.min(interval.EndAtomIndexExclusive, span.EndAtomIndexExclusive);
+                    if (overlapEndExclusive <= overlapStart)
+                        continue;
+
+                    float entryOffsetFrames = EstimateFramesBetweenAtoms(chain, interval.StartControlEdgeIndex, span.ControlEdgeIndex, interval.StartAtomIndex, overlapStart);
+                    float clearOffsetFrames = EstimateFramesBetweenAtoms(chain, span.ControlEdgeIndex, interval.EndControlEdgeIndexInclusive, overlapEndExclusive, interval.EndAtomIndexExclusive);
+                    chain.ProtectedSharedIntervals.Add(new ProtectedSharedInterval(
+                        protectedIntervalIndex,
+                        span.ControlEdgeIndex,
+                        overlapStart,
+                        overlapEndExclusive,
+                        span.HasMirroredContext,
+                        span.SharedLineCount,
+                        entryOffsetFrames,
+                        clearOffsetFrames));
+                }
+            }
+        }
+
+        private void RefreshProtectedIntervalSummaries(LineTrackChain chain)
+        {
+            chain.ProtectedIntervalSummaries.Clear();
+            if (chain.BypassProtectedIntervals.Count == 0)
+                return;
+
+            for (int protectedIntervalIndex = 0; protectedIntervalIndex < chain.BypassProtectedIntervals.Count; protectedIntervalIndex++)
+            {
+                int sharedSegmentCount = 0;
+                int maxSharedLineCount = 0;
+                bool hasMirroredContext = false;
+                float minEntryOffsetFrames = float.MaxValue;
+                float maxClearOffsetFrames = 0f;
+
+                for (int i = 0; i < chain.ProtectedSharedIntervals.Count; i++)
+                {
+                    ProtectedSharedInterval interval = chain.ProtectedSharedIntervals[i];
+                    if (interval.ProtectedIntervalIndex != protectedIntervalIndex)
+                        continue;
+
+                    sharedSegmentCount++;
+                    maxSharedLineCount = math.max(maxSharedLineCount, interval.SharedLineCount);
+                    hasMirroredContext |= interval.HasMirroredContext;
+                    minEntryOffsetFrames = math.min(minEntryOffsetFrames, interval.EntryOffsetFrames);
+                    maxClearOffsetFrames = math.max(maxClearOffsetFrames, interval.ClearOffsetFrames);
+                }
+
+                if (sharedSegmentCount == 0)
+                {
+                    minEntryOffsetFrames = 0f;
+                    maxClearOffsetFrames = 0f;
+                }
+
+                chain.ProtectedIntervalSummaries.Add(new ProtectedIntervalSummary(
+                    protectedIntervalIndex,
+                    sharedSegmentCount,
+                    maxSharedLineCount,
+                    hasMirroredContext,
+                    minEntryOffsetFrames,
+                    maxClearOffsetFrames));
+            }
+        }
+
+        private float EstimateFramesBetweenAtoms(LineTrackChain chain, int startControlEdgeIndex, int endControlEdgeIndexInclusive, int fromAtomIndex, int toAtomIndexExclusive)
+        {
+            if (toAtomIndexExclusive <= fromAtomIndex
+                || startControlEdgeIndex < 0
+                || endControlEdgeIndexInclusive < startControlEdgeIndex
+                || endControlEdgeIndexInclusive >= chain.ControlEdges.Count)
+            {
+                return 0f;
+            }
+
+            float frames = 0f;
+            for (int controlEdgeIndex = startControlEdgeIndex; controlEdgeIndex <= endControlEdgeIndexInclusive; controlEdgeIndex++)
+            {
+                ControlEdge edge = chain.ControlEdges[controlEdgeIndex];
+                int overlapStart = math.max(edge.StartAtomIndex, fromAtomIndex);
+                int overlapEndExclusive = math.min(edge.EndAtomIndexExclusive, toAtomIndexExclusive);
+                if (overlapEndExclusive <= overlapStart)
+                    continue;
+
+                int edgeAtomLength = math.max(1, edge.EndAtomIndexExclusive - edge.StartAtomIndex);
+                int overlapAtomLength = overlapEndExclusive - overlapStart;
+                frames += edge.BaseFrames * (overlapAtomLength / (float)edgeAtomLength);
+            }
+
+            return frames;
+        }
+
+        private bool TryResolveBypassProtectedInterval(
+            LineTrackChain chain,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentWaypointIndex,
+            out int protectedIntervalIndex,
+            out BypassProtectedInterval protectedInterval)
+        {
+            protectedIntervalIndex = -1;
+            protectedInterval = default;
+            if (chain == null || waypoints.Length == 0)
+                return false;
+
+            if (!TryGetBypassWaypointContext(
+                    waypoints,
+                    currentWaypointIndex,
+                    out Entity currentBypassBuilding,
+                    out int nextBypassWaypointIndex,
+                    out Entity nextBypassBuilding))
+            {
+                return false;
+            }
+
+            int startControlPointIndex = FindControlPointIndex(chain, currentWaypointIndex, currentBypassBuilding, ControlPointKind.Bypass);
+            int endControlPointIndex = FindControlPointIndex(chain, nextBypassWaypointIndex, nextBypassBuilding, ControlPointKind.Bypass);
+            if (startControlPointIndex < 0 || endControlPointIndex <= startControlPointIndex)
+                return false;
+
+            for (int i = 0; i < chain.BypassProtectedIntervals.Count; i++)
+            {
+                BypassProtectedInterval candidate = chain.BypassProtectedIntervals[i];
+                if (candidate.StartControlPointIndex == startControlPointIndex
+                    && candidate.EndControlPointIndex == endControlPointIndex)
+                {
+                    protectedIntervalIndex = i;
+                    protectedInterval = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static int FindControlPointIndex(LineTrackChain chain, int waypointIndex, Entity building, ControlPointKind kind)
+        {
+            for (int i = 0; i < chain.ControlPoints.Count; i++)
+            {
+                ControlPointMarker marker = chain.ControlPoints[i];
+                if (marker.Kind == kind
+                    && marker.WaypointIndex == waypointIndex
+                    && marker.Building == building)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private int CountProtectedSharedIntervals(LineTrackChain chain, int protectedIntervalIndex, out bool hasMirroredContext)
+        {
+            hasMirroredContext = false;
+            if (protectedIntervalIndex < 0)
+                return 0;
+
+            int count = 0;
+            for (int i = 0; i < chain.ProtectedSharedIntervals.Count; i++)
+            {
+                ProtectedSharedInterval interval = chain.ProtectedSharedIntervals[i];
+                if (interval.ProtectedIntervalIndex != protectedIntervalIndex)
+                    continue;
+
+                count++;
+                hasMirroredContext |= interval.HasMirroredContext;
+            }
+
+            return count;
+        }
+
+        private static string FormatProtectedIntervalSummary(ProtectedIntervalSummary summary, BypassProtectedInterval interval)
+        {
+            return "trackModel[p=" + summary.ProtectedIntervalIndex
+                + " cp=" + interval.StartControlPointIndex + "->" + interval.EndControlPointIndex
+                + " edges=" + interval.StartControlEdgeIndex + ".." + interval.EndControlEdgeIndexInclusive
+                + " shared=" + summary.SharedSegmentCount
+                + " maxSharedLines=" + summary.MaxSharedLineCount
+                + " mirrored=" + (summary.HasMirroredContext ? "1" : "0")
+                + " minEntry=" + summary.MinEntryOffsetFrames.ToString("F1")
+                + " maxClear=" + summary.MaxClearOffsetFrames.ToString("F1")
+                + "]";
+        }
+
+        private static string ClassifyProtectedIntervalShadowRisk(ProtectedIntervalSummary summary)
+        {
+            if (summary.SharedSegmentCount <= 0)
+                return "none";
+
+            if (summary.HasMirroredContext)
+                return "mirrored-shared";
+
+            return "shared";
+        }
+
+        private bool TryProjectVehicleTrackCursor(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out VehicleTrackCursor cursor)
+        {
+            cursor = default;
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain.SegmentRanges.Count == 0)
+            {
+                return false;
+            }
+
+            bool trustedRouteProgress = TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition);
+            if (!trustedRouteProgress)
+            {
+                if (!m_CachedWpIdx.TryGetValue(vehicle, out nextWaypointIndex))
+                    return false;
+                segmentPosition = 0f;
+            }
+
+            nextWaypointIndex = math.clamp(nextWaypointIndex, 0, waypoints.Length - 1);
+            int segmentIndex = nextWaypointIndex == 0
+                ? math.max(0, chain.SegmentRanges.Count - 1)
+                : nextWaypointIndex - 1;
+            if (segmentIndex < 0 || segmentIndex >= chain.SegmentRanges.Count)
+                return false;
+
+            TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
+            if (segmentRange.EndAtomIndexExclusive <= segmentRange.StartAtomIndex)
+                return false;
+
+            int segmentAtomLength = math.max(1, segmentRange.EndAtomIndexExclusive - segmentRange.StartAtomIndex);
+            int approximateAtomIndex = segmentRange.StartAtomIndex
+                + math.min(segmentAtomLength - 1, (int)math.floor(segmentAtomLength * math.saturate(segmentPosition)));
+
+            float confidence = trustedRouteProgress ? 1f : 0.7f;
+            if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+                && hint.LineEntity == line
+                && hint.ChainSignature == chain.Signature)
+            {
+                if (hint.SegmentIndex == segmentIndex)
+                {
+                    approximateAtomIndex = math.max(approximateAtomIndex, hint.AtomCursorIndex);
+                }
+                else
+                {
+                    bool wrappedForward = hint.SegmentIndex >= chain.SegmentRanges.Count - 2 && segmentIndex <= 1;
+                    bool monotonicForward = segmentIndex >= hint.SegmentIndex || wrappedForward;
+                    if (!monotonicForward)
+                    {
+                        confidence *= 0.4f;
+                        approximateAtomIndex = math.max(segmentRange.StartAtomIndex, math.min(segmentRange.EndAtomIndexExclusive - 1, hint.AtomCursorIndex));
+                    }
+                }
+            }
+
+            approximateAtomIndex = math.clamp(approximateAtomIndex, segmentRange.StartAtomIndex, segmentRange.EndAtomIndexExclusive - 1);
+            cursor = new VehicleTrackCursor(
+                line,
+                chain.Signature,
+                segmentIndex,
+                segmentRange.StartAtomIndex,
+                segmentRange.EndAtomIndexExclusive,
+                approximateAtomIndex,
+                math.saturate(segmentPosition),
+                confidence);
+            m_VehicleTrackCursorHints[vehicle] = cursor;
+            return true;
+        }
+
+        private bool TryProjectTrackModelRuntimePosition(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            BypassProtectedInterval protectedInterval,
+            out TrackModelRuntimePosition runtimePosition)
+        {
+            runtimePosition = default;
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || !TryProjectVehicleTrackCursor(vehicle, line, waypoints, out VehicleTrackCursor cursor))
+            {
+                return false;
+            }
+
+            int currentControlEdgeIndex = ResolveControlEdgeIndexForAtom(chain, cursor.AtomCursorIndex);
+            TrackModelRelativeToProtectedInterval relative = ResolveRelativeToProtectedInterval(currentControlEdgeIndex, cursor.AtomCursorIndex, protectedInterval);
+            float confidence = currentControlEdgeIndex >= 0 ? cursor.Confidence : cursor.Confidence * 0.5f;
+            runtimePosition = new TrackModelRuntimePosition(currentControlEdgeIndex, cursor.AtomCursorIndex, cursor.AtomPosition01, relative, confidence);
+            return true;
+        }
+
+        private static float GetProtectedIntervalDisplayLength(BypassProtectedInterval interval)
+        {
+            return math.max(1f, interval.EndAtomIndexExclusive - interval.StartAtomIndex);
+        }
+
+        private static float MapRuntimePositionToOwnProtectedIntervalCoordinate(
+            TrackModelRuntimePosition runtimePosition,
+            BypassProtectedInterval interval,
+            bool includeApproachers,
+            out bool include)
+        {
+            include = true;
+            float intervalLength = GetProtectedIntervalDisplayLength(interval);
+            switch (runtimePosition.RelativeToProtectedInterval)
+            {
+                case TrackModelRelativeToProtectedInterval.Before:
+                    include = includeApproachers;
+                    return -0.5f;
+                case TrackModelRelativeToProtectedInterval.After:
+                    include = includeApproachers;
+                    return intervalLength + 0.5f;
+                case TrackModelRelativeToProtectedInterval.Inside:
+                {
+                    float atomOffset = math.clamp(runtimePosition.CurrentAtomIndex - interval.StartAtomIndex, 0, math.max(0, interval.EndAtomIndexExclusive - interval.StartAtomIndex - 1));
+                    return math.clamp(atomOffset + math.saturate(runtimePosition.AtomPosition01), 0f, intervalLength);
+                }
+                default:
+                    include = false;
+                    return 0f;
+            }
+        }
+
+        private static float MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+            TrackModelRuntimePosition runtimePosition,
+            BypassProtectedInterval sourceInterval,
+            float referenceLength,
+            bool includeApproachers,
+            out bool include)
+        {
+            include = true;
+            switch (runtimePosition.RelativeToProtectedInterval)
+            {
+                case TrackModelRelativeToProtectedInterval.Before:
+                    include = includeApproachers;
+                    return -0.5f;
+                case TrackModelRelativeToProtectedInterval.After:
+                    include = includeApproachers;
+                    return referenceLength + 0.5f;
+                case TrackModelRelativeToProtectedInterval.Inside:
+                {
+                    float sourceLength = GetProtectedIntervalDisplayLength(sourceInterval);
+                    float atomOffset = math.clamp(runtimePosition.CurrentAtomIndex - sourceInterval.StartAtomIndex, 0, math.max(0, sourceInterval.EndAtomIndexExclusive - sourceInterval.StartAtomIndex - 1));
+                    float sourceCoordinate = math.clamp(atomOffset + math.saturate(runtimePosition.AtomPosition01), 0f, sourceLength);
+                    float progress01 = math.saturate(sourceCoordinate / sourceLength);
+                    return progress01 * referenceLength;
+                }
+                default:
+                    include = false;
+                    return 0f;
+            }
+        }
+
+        private static float MapControlPointToProtectedIntervalCoordinate(LineTrackChain chain, BypassProtectedInterval interval, int controlPointIndex)
+        {
+            if (chain == null
+                || controlPointIndex < 0
+                || controlPointIndex >= chain.ControlPoints.Count)
+            {
+                return 0f;
+            }
+
+            float intervalLength = GetProtectedIntervalDisplayLength(interval);
+            int atomIndex = chain.ControlPoints[controlPointIndex].AtomIndex;
+            return math.clamp(atomIndex - interval.StartAtomIndex, 0f, intervalLength);
+        }
+
+        private static int ResolveControlEdgeIndexForAtom(LineTrackChain chain, int atomIndex)
+        {
+            for (int i = 0; i < chain.ControlEdges.Count; i++)
+            {
+                ControlEdge edge = chain.ControlEdges[i];
+                if (atomIndex >= edge.StartAtomIndex && atomIndex < edge.EndAtomIndexExclusive)
+                    return i;
+            }
+
+            return -1;
+        }
+
+        private static TrackModelRelativeToProtectedInterval ResolveRelativeToProtectedInterval(int currentControlEdgeIndex, int currentAtomIndex, BypassProtectedInterval protectedInterval)
+        {
+            if (currentControlEdgeIndex >= 0)
+            {
+                if (currentControlEdgeIndex < protectedInterval.StartControlEdgeIndex)
+                    return TrackModelRelativeToProtectedInterval.Before;
+                if (currentControlEdgeIndex > protectedInterval.EndControlEdgeIndexInclusive)
+                    return TrackModelRelativeToProtectedInterval.After;
+                return TrackModelRelativeToProtectedInterval.Inside;
+            }
+
+            if (currentAtomIndex < protectedInterval.StartAtomIndex)
+                return TrackModelRelativeToProtectedInterval.Before;
+            if (currentAtomIndex >= protectedInterval.EndAtomIndexExclusive)
+                return TrackModelRelativeToProtectedInterval.After;
+            if (currentAtomIndex >= protectedInterval.StartAtomIndex)
+                return TrackModelRelativeToProtectedInterval.Inside;
+
+            return TrackModelRelativeToProtectedInterval.Unknown;
+        }
+
+        private static string FormatRuntimePosition(TrackModelRuntimePosition runtimePosition)
+        {
+            return "pos[edge="
+                + runtimePosition.CurrentControlEdgeIndex
+                + " atom="
+                + runtimePosition.CurrentAtomIndex
+                + " p="
+                + runtimePosition.AtomPosition01.ToString("0.00")
+                + " rel="
+                + runtimePosition.RelativeToProtectedInterval
+                + " conf="
+                + runtimePosition.Confidence.ToString("0.00")
+                + "]";
+        }
+
+        private string FormatTrackModelStationLabel(Entity building, int waypointIndex)
+        {
+            string label = "wp" + waypointIndex;
+            if (building != Entity.Null)
+            {
+                label = "stop" + building.Index;
+            }
+
+            return label + "#" + waypointIndex;
+        }
+
+        private static string FormatTrackModelVehicleLabel(Entity vehicle, string state, float distanceMeters)
+        {
+            string km = (distanceMeters / 1000f).ToString("0.00");
+            return "vehicle" + vehicle.Index + "(" + state + ")@" + km + "km";
+        }
+
+        private string FormatTrackModelDisplayStationLabel(Entity building, int waypointIndex)
+        {
+            string label = "wp" + waypointIndex;
+            if (building != Entity.Null)
+            {
+                try
+                {
+                    string name = m_NameSystem.GetRenderedLabelName(building);
+                    label = !string.IsNullOrWhiteSpace(name)
+                        ? name
+                        : ("stop" + building.Index);
+                }
+                catch
+                {
+                    label = "stop" + building.Index;
+                }
+            }
+
+            return label + "#" + waypointIndex;
+        }
+
+        private string FormatReadableStationLabel(Entity building, int waypointIndex)
+        {
+            string label = "wp" + waypointIndex;
+            if (building != Entity.Null)
+            {
+                try
+                {
+                    string name = m_NameSystem.GetRenderedLabelName(building);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        label = name;
+                    else
+                        label = "stop" + building.Index;
+                }
+                catch
+                {
+                    label = "stop" + building.Index;
+                }
+            }
+
+            return label + "#" + waypointIndex;
+        }
+
+        private string FormatSharedMapStationLabel(Entity building)
+        {
+            if (building != Entity.Null)
+            {
+                try
+                {
+                    string name = m_NameSystem.GetRenderedLabelName(building);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        return name;
+                }
+                catch
+                {
+                }
+            }
+
+            return "stop";
+        }
+
+        private string FormatSharedMapVehicleNameLabel(Entity vehicle)
+        {
+            if (vehicle != Entity.Null)
+            {
+                try
+                {
+                    string name = m_NameSystem.GetRenderedLabelName(vehicle);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        return name;
+                }
+                catch
+                {
+                }
+            }
+
+            return "vehicle";
+        }
+
+        private string ResolveTrackModelLineLabel(Entity line, bool includeEntityFallback)
+        {
+            if (line == Entity.Null)
+                return includeEntityFallback ? "line" : string.Empty;
+
+            try
+            {
+                if (m_NameSystem.TryGetCustomName(line, out string customName)
+                    && !string.IsNullOrWhiteSpace(customName))
+                {
+                    return customName.Trim();
+                }
+            }
+            catch
+            {
+            }
+
+            if (EntityManager.Exists(line)
+                && EntityManager.HasComponent<RouteNumber>(line))
+            {
+                RouteNumber routeNumber = EntityManager.GetComponentData<RouteNumber>(line);
+                if (routeNumber.m_Number > 0)
+                    return "line" + routeNumber.m_Number;
+            }
+
+            try
+            {
+                string rendered = m_NameSystem.GetRenderedLabelName(line);
+                if (!string.IsNullOrWhiteSpace(rendered)
+                    && !rendered.Contains("Tool")
+                    && !rendered.Contains("Tool")
+                    && !rendered.Contains("Route Tool")
+                    && !rendered.Contains("Route Tool"))
+                {
+                    return rendered.Trim();
+                }
+            }
+            catch
+            {
+            }
+
+            return includeEntityFallback ? ("line" + line.Index) : "line";
+        }
+
+        private string FormatSharedMapLineLabel(Entity line)
+        {
+            return ResolveTrackModelLineLabel(line, includeEntityFallback: false);
+        }
+
+        private string FormatSharedMapVehicleLabel(Entity vehicle, Entity line, string state, float distanceMeters)
+        {
+            string km = (distanceMeters / 1000f).ToString("0.00");
+            return FormatSharedMapVehicleNameLabel(vehicle) + "[" + FormatSharedMapLineLabel(line) + "](" + state + ")@" + km + "km";
+        }
+
+        private string FormatSharedMapUnknownVehicleLabel(Entity vehicle, Entity line, string state)
+        {
+            return FormatSharedMapVehicleNameLabel(vehicle) + "[" + FormatSharedMapLineLabel(line) + "](" + state + ")@?";
+        }
+
+        private string FormatReadableVehicleLabel(Entity vehicle, Entity line, string state, float distanceMeters)
+        {
+            string km = (distanceMeters / 1000f).ToString("0.00");
+            return "vehicle" + vehicle.Index + "[" + FormatReadableLineLabel(line) + "](" + state + ")@" + km + "km";
+        }
+
+        private string FormatReadableUnknownVehicleLabel(Entity vehicle, Entity line, string state)
+        {
+            return "vehicle" + vehicle.Index + "[" + FormatReadableLineLabel(line) + "](" + state + ")@?";
+        }
+
+        private string FormatReadableLineLabel(Entity line)
+        {
+            if (line == Entity.Null)
+                return "-";
+
+            return ResolveTrackModelLineLabel(line, includeEntityFallback: true);
+        }
+
+        private static string FormatTrackModelDisplayVehicleLabel(Entity vehicle, string state, float distanceMeters)
+        {
+            string km = (distanceMeters / 1000f).ToString("0.00");
+            return "vehicle" + vehicle.Index + "(" + state + ")@" + km + "km";
+        }
+
+        private bool TryBuildTrackModelSequenceSummary(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out string summary)
+        {
+            summary = string.Empty;
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || !EntityManager.HasBuffer<RouteVehicle>(line))
+            {
+                return false;
+            }
+
+            if (!TryGetLineMileageModel(line, waypoints, out LineMileageModel model)
+                || model.TotalDistanceMeters <= 0f
+                || model.WaypointDistances.Length != waypoints.Length)
+            {
+                return false;
+            }
+
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            if (!routeVehicleBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> routeVehicles))
+                return false;
+
+            List<TrackModelSequenceItem> items = new List<TrackModelSequenceItem>(waypoints.Length + routeVehicles.Length);
+            for (int waypointIndex = 0; waypointIndex < waypoints.Length; waypointIndex++)
+            {
+                Entity building = GetStationBuildingForWaypoint(waypoints, waypointIndex);
+                items.Add(new TrackModelSequenceItem(
+                    model.WaypointDistances[waypointIndex],
+                    0,
+                    FormatReadableStationLabel(building, waypointIndex)));
+            }
+
+            for (int rvIndex = 0; rvIndex < routeVehicles.Length; rvIndex++)
+            {
+                Entity vehicle = routeVehicles[rvIndex].m_Vehicle;
+                if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                    continue;
+
+                string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                    ? vehicleState.ToString()
+                    : "Unknown";
+
+                if (TryProjectVehicleOntoLine(vehicle, line, waypoints, out LineDistanceProjection projection))
+                {
+                    items.Add(new TrackModelSequenceItem(
+                        projection.DistanceMeters,
+                        1,
+                        FormatReadableVehicleLabel(vehicle, line, state, projection.DistanceMeters)));
+                }
+                else
+                {
+                    items.Add(new TrackModelSequenceItem(
+                        float.MaxValue,
+                        1,
+                        "vehicle" + vehicle.Index + "(" + state + ")@?"));
+                }
+            }
+
+            if (items.Count == 0)
+                return false;
+
+            items.Sort((a, b) =>
+            {
+                int cmp = a.DistanceMeters.CompareTo(b.DistanceMeters);
+                if (cmp != 0)
+                    return cmp;
+
+                cmp = a.KindOrder.CompareTo(b.KindOrder);
+                if (cmp != 0)
+                    return cmp;
+
+                return string.CompareOrdinal(a.Label, b.Label);
+            });
+
+            StringBuilder sb = new StringBuilder();
+            sb.Append("seq=");
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (i > 0)
+                    sb.Append(" -> ");
+                sb.Append(items[i].Label);
+            }
+
+            summary = sb.ToString();
+            return true;
+        }
+
+        private bool TryBuildBypassDecisionSequenceSummary(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            BypassProtectedInterval localProtectedInterval,
+            out string summary)
+        {
+            summary = string.Empty;
+            if (localLine == Entity.Null
+                || !EntityManager.Exists(localLine)
+                || !TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain))
+            {
+                return false;
+            }
+
+            float intervalDisplayLength = GetProtectedIntervalDisplayLength(localProtectedInterval);
+
+            List<TrackModelSequenceItem> items = new List<TrackModelSequenceItem>(localWaypoints.Length + 8);
+            for (int controlPointIndex = localProtectedInterval.StartControlPointIndex; controlPointIndex <= localProtectedInterval.EndControlPointIndex; controlPointIndex++)
+            {
+                ControlPointMarker marker = localChain.ControlPoints[controlPointIndex];
+                items.Add(new TrackModelSequenceItem(
+                    MapControlPointToProtectedIntervalCoordinate(localChain, localProtectedInterval, controlPointIndex),
+                    0,
+                    FormatSharedMapStationLabel(marker.Building)));
+            }
+
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            if (routeVehicleBuffers.TryGetBuffer(localLine, out DynamicBuffer<RouteVehicle> localVehicles))
+            {
+                for (int rvIndex = 0; rvIndex < localVehicles.Length; rvIndex++)
+                {
+                    Entity vehicle = localVehicles[rvIndex].m_Vehicle;
+                    if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                        continue;
+
+                    string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                        ? vehicleState.ToString()
+                        : "Unknown";
+
+                    if (!TryProjectTrackModelRuntimePosition(vehicle, localLine, localWaypoints, localProtectedInterval, out TrackModelRuntimePosition runtimePosition))
+                        continue;
+                    if (runtimePosition.Confidence < 0.6f)
+                        continue;
+
+                    float coordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(runtimePosition, localProtectedInterval, includeApproachers: true, out bool include);
+                    if (!include)
+                        continue;
+
+                    items.Add(new TrackModelSequenceItem(
+                        coordinate,
+                        1,
+                        FormatSharedMapVehicleLabel(vehicle, localLine, state, coordinate)));
+                }
+            }
+
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                Entity expressLine = entry.Value.LineEntity;
+                if (expressLine == Entity.Null
+                    || expressLine == localLine
+                    || !EntityManager.Exists(expressLine)
+                    || !EntityManager.HasComponent<TransportLine>(expressLine)
+                    || !IsAppliedWorkbenchExpressLine(expressLine)
+                    || !routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
+                    || !routeVehicleBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteVehicle> expressVehicles)
+                    || !TryGetLineTrackChain(expressLine, expressWaypoints, out LineTrackChain expressChain))
+                {
+                    continue;
+                }
+
+                RefreshBypassProtectedIntervals(expressChain);
+                ProtectedIntervalMatch expressMatch = FindBestMatchingProtectedInterval(localChain, localProtectedInterval, expressChain);
+                if (!expressMatch.Found || expressMatch.Ambiguous)
+                    continue;
+
+                int expressProtectedIntervalIndex = expressMatch.ProtectedIntervalIndex;
+                if (expressProtectedIntervalIndex < 0 || expressProtectedIntervalIndex >= expressChain.BypassProtectedIntervals.Count)
+                    continue;
+
+                BypassProtectedInterval expressProtectedInterval = expressChain.BypassProtectedIntervals[expressProtectedIntervalIndex];
+                for (int rvIndex = 0; rvIndex < expressVehicles.Length; rvIndex++)
+                {
+                    Entity expressVehicle = expressVehicles[rvIndex].m_Vehicle;
+                    if (expressVehicle == Entity.Null || expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
+                        continue;
+
+                    string state = m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState)
+                        ? expressState.ToString()
+                        : "Unknown";
+
+                    if (!TryProjectTrackModelRuntimePosition(expressVehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition))
+                        continue;
+                    if (expressPosition.Confidence < 0.6f)
+                        continue;
+
+                    float mappedMeters = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+                        expressPosition,
+                        expressProtectedInterval,
+                        intervalDisplayLength,
+                        includeApproachers: true,
+                        out bool include);
+                    if (!include)
+                        continue;
+
+                    items.Add(new TrackModelSequenceItem(
+                        mappedMeters,
+                        1,
+                        FormatSharedMapVehicleLabel(expressVehicle, expressLine, state, mappedMeters)));
+                }
+            }
+
+            if (items.Count == 0)
+                return false;
+
+            items.Sort((a, b) =>
+            {
+                int cmp = a.DistanceMeters.CompareTo(b.DistanceMeters);
+                if (cmp != 0)
+                    return cmp;
+
+                cmp = a.KindOrder.CompareTo(b.KindOrder);
+                if (cmp != 0)
+                    return cmp;
+
+                return string.CompareOrdinal(a.Label, b.Label);
+            });
+
+            StringBuilder sb = new StringBuilder();
+            sb.Append("seq=");
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (i > 0)
+                    sb.Append(" -> ");
+                sb.Append(items[i].Label);
+            }
+
+            summary = sb.ToString();
+            return true;
+        }
+
+        private static float MapExpressPositionToLocalProtectedInterval(
+            TrackModelRuntimePosition expressPosition,
+            BypassProtectedInterval expressProtectedInterval,
+            float localStartMeters,
+            float localEndMeters)
+        {
+            const float epsilonMeters = 1f;
+            switch (expressPosition.RelativeToProtectedInterval)
+            {
+                case TrackModelRelativeToProtectedInterval.Before:
+                    return math.max(0f, localStartMeters - epsilonMeters);
+                case TrackModelRelativeToProtectedInterval.After:
+                    return localEndMeters + epsilonMeters;
+                case TrackModelRelativeToProtectedInterval.Inside:
+                {
+                    int atomSpan = math.max(1, expressProtectedInterval.EndAtomIndexExclusive - expressProtectedInterval.StartAtomIndex);
+                    float progress01 = math.saturate((expressPosition.CurrentAtomIndex - expressProtectedInterval.StartAtomIndex) / (float)atomSpan);
+                    return math.lerp(localStartMeters, localEndMeters, progress01);
+                }
+                default:
+                    return localEndMeters + epsilonMeters * 2f;
+            }
+        }
+
+        private static float ResolveWaypointDistanceForControlPoint(LineMileageModel model, LineTrackChain chain, int controlPointIndex)
+        {
+            if (model == null
+                || chain == null
+                || controlPointIndex < 0
+                || controlPointIndex >= chain.ControlPoints.Count)
+            {
+                return 0f;
+            }
+
+            int waypointIndex = chain.ControlPoints[controlPointIndex].WaypointIndex;
+            if (waypointIndex < 0 || waypointIndex >= model.WaypointDistances.Length)
+                return 0f;
+
+            return model.WaypointDistances[waypointIndex];
+        }
+
+        public void RequestDumpTrackModelSnapshot()
+        {
+            var lines = m_LineQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                LogIndependentSharedPhysicalCorridorDump(lines);
+            }
+            finally
+            {
+                lines.Dispose();
+            }
+        }
+
+        private bool TryBuildSharedCorridorDumpRow(
+            Entity referenceLine,
+            DynamicBuffer<RouteWaypoint> referenceWaypoints,
+            LineTrackChain referenceChain,
+            BypassProtectedInterval referenceInterval,
+            out string dedupeKey,
+            out string row)
+        {
+            dedupeKey = string.Empty;
+            row = string.Empty;
+            if (referenceChain == null)
+                return false;
+
+            Entity startBuilding = referenceChain.ControlPoints[referenceInterval.StartControlPointIndex].Building;
+            Entity endBuilding = referenceChain.ControlPoints[referenceInterval.EndControlPointIndex].Building;
+            if (startBuilding == Entity.Null || endBuilding == Entity.Null)
+                return false;
+
+            List<Entity> corridorLines = new List<Entity> { referenceLine };
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            var allLines = m_LineQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < allLines.Length; i++)
+                {
+                    Entity otherLine = allLines[i];
+                    if (otherLine == Entity.Null || otherLine == referenceLine || !EntityManager.Exists(otherLine))
+                        continue;
+                    if (!routeWaypointBuffers.TryGetBuffer(otherLine, out DynamicBuffer<RouteWaypoint> otherWaypoints))
+                        continue;
+                    if (!TryGetLineTrackChain(otherLine, otherWaypoints, out LineTrackChain otherChain))
+                        continue;
+
+                    RefreshBypassProtectedIntervals(otherChain);
+                    ProtectedIntervalMatch otherMatch = FindBestMatchingProtectedInterval(referenceChain, referenceInterval, otherChain);
+                    if (otherMatch.Found)
+                        corridorLines.Add(otherLine);
+                }
+
+                corridorLines.Sort((a, b) =>
+                {
+                    int cmp = string.CompareOrdinal(FormatSharedMapLineLabel(a), FormatSharedMapLineLabel(b));
+                    if (cmp != 0)
+                        return cmp;
+                    return a.Index.CompareTo(b.Index);
+                });
+                StringBuilder keyBuilder = new StringBuilder();
+                ulong intervalSignature = ComputeProtectedIntervalAtomSignature(referenceChain, referenceInterval);
+                keyBuilder.Append(intervalSignature).Append("|");
+                for (int i = 0; i < corridorLines.Count; i++)
+                {
+                    if (i > 0)
+                        keyBuilder.Append(",");
+                    keyBuilder.Append(corridorLines[i].Index);
+                }
+                dedupeKey = keyBuilder.ToString();
+
+                float intervalDisplayLength = GetProtectedIntervalDisplayLength(referenceInterval);
+
+                List<TrackModelSequenceItem> items = new List<TrackModelSequenceItem>(referenceWaypoints.Length + 16);
+                for (int controlPointIndex = referenceInterval.StartControlPointIndex; controlPointIndex <= referenceInterval.EndControlPointIndex; controlPointIndex++)
+                {
+                    ControlPointMarker marker = referenceChain.ControlPoints[controlPointIndex];
+
+                    items.Add(new TrackModelSequenceItem(
+                        MapControlPointToProtectedIntervalCoordinate(referenceChain, referenceInterval, controlPointIndex),
+                        0,
+                        FormatSharedMapStationLabel(marker.Building)));
+                }
+
+                for (int lineIndex = 0; lineIndex < corridorLines.Count; lineIndex++)
+                {
+                    Entity corridorLine = corridorLines[lineIndex];
+                    if (!routeWaypointBuffers.TryGetBuffer(corridorLine, out DynamicBuffer<RouteWaypoint> corridorWaypoints))
+                        continue;
+                    if (!routeVehicleBuffers.TryGetBuffer(corridorLine, out DynamicBuffer<RouteVehicle> corridorVehicles))
+                        continue;
+
+                    if (corridorLine == referenceLine)
+                    {
+                        for (int rvIndex = 0; rvIndex < corridorVehicles.Length; rvIndex++)
+                        {
+                            Entity vehicle = corridorVehicles[rvIndex].m_Vehicle;
+                            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                                continue;
+                            string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                                ? vehicleState.ToString()
+                                : "Unknown";
+                            if (!TryProjectTrackModelRuntimePosition(vehicle, corridorLine, corridorWaypoints, referenceInterval, out TrackModelRuntimePosition runtimePosition))
+                            {
+                                items.Add(new TrackModelSequenceItem(
+                                    float.MaxValue,
+                                    2,
+                                    FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)));
+                                continue;
+                            }
+
+                            float coordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(runtimePosition, referenceInterval, includeApproachers: true, out bool include);
+                            if (!include)
+                            {
+                                items.Add(new TrackModelSequenceItem(
+                                    float.MaxValue,
+                                    2,
+                                    FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)));
+                                continue;
+                            }
+
+                            string label = runtimePosition.Confidence < 0.6f
+                                ? FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)
+                                : FormatSharedMapVehicleLabel(vehicle, corridorLine, state, coordinate);
+                            items.Add(new TrackModelSequenceItem(
+                                runtimePosition.Confidence < 0.6f ? float.MaxValue : coordinate,
+                                runtimePosition.Confidence < 0.6f ? 2 : 1,
+                                label));
+                        }
+
+                        continue;
+                    }
+
+                    if (!TryGetLineTrackChain(corridorLine, corridorWaypoints, out LineTrackChain corridorChain))
+                        continue;
+                    RefreshBypassProtectedIntervals(corridorChain);
+                    ProtectedIntervalMatch corridorMatch = FindBestMatchingProtectedInterval(referenceChain, referenceInterval, corridorChain);
+                    if (!corridorMatch.Found)
+                        continue;
+
+                    int corridorProtectedIntervalIndex = corridorMatch.ProtectedIntervalIndex;
+                    if (corridorProtectedIntervalIndex < 0 || corridorProtectedIntervalIndex >= corridorChain.BypassProtectedIntervals.Count)
+                        continue;
+
+                    BypassProtectedInterval corridorInterval = corridorChain.BypassProtectedIntervals[corridorProtectedIntervalIndex];
+                    for (int rvIndex = 0; rvIndex < corridorVehicles.Length; rvIndex++)
+                    {
+                        Entity vehicle = corridorVehicles[rvIndex].m_Vehicle;
+                        if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                            continue;
+
+                        string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                            ? vehicleState.ToString()
+                            : "Unknown";
+                        if (!TryProjectTrackModelRuntimePosition(vehicle, corridorLine, corridorWaypoints, corridorInterval, out TrackModelRuntimePosition runtimePosition))
+                        {
+                            items.Add(new TrackModelSequenceItem(
+                                float.MaxValue,
+                                2,
+                                FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)));
+                            continue;
+                        }
+
+                        float mappedMeters = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+                            runtimePosition,
+                            corridorInterval,
+                            intervalDisplayLength,
+                            includeApproachers: true,
+                            out bool include);
+                        if (!include)
+                        {
+                            items.Add(new TrackModelSequenceItem(
+                                float.MaxValue,
+                                2,
+                                FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)));
+                            continue;
+                        }
+
+                        string label = runtimePosition.Confidence < 0.6f
+                            ? FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)
+                            : FormatSharedMapVehicleLabel(vehicle, corridorLine, state, mappedMeters);
+                        items.Add(new TrackModelSequenceItem(
+                            runtimePosition.Confidence < 0.6f ? float.MaxValue : mappedMeters,
+                            runtimePosition.Confidence < 0.6f ? 2 : 1,
+                            label));
+                    }
+                }
+
+                items.Sort((a, b) =>
+                {
+                    int cmp = a.DistanceMeters.CompareTo(b.DistanceMeters);
+                    if (cmp != 0)
+                        return cmp;
+                    cmp = a.KindOrder.CompareTo(b.KindOrder);
+                    if (cmp != 0)
+                        return cmp;
+                    return string.CompareOrdinal(a.Label, b.Label);
+                });
+
+                StringBuilder seqBuilder = new StringBuilder();
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (i > 0)
+                        seqBuilder.Append(" -> ");
+                    seqBuilder.Append(items[i].Label);
+                }
+
+                StringBuilder lineBuilder = new StringBuilder();
+                for (int i = 0; i < corridorLines.Count; i++)
+                {
+                    if (i > 0)
+                        lineBuilder.Append(" / ");
+                    lineBuilder.Append(FormatSharedMapLineLabel(corridorLines[i]));
+                }
+
+                row = FormatSharedMapStationLabel(startBuilding)
+                    + " -> "
+                    + FormatSharedMapStationLabel(endBuilding)
+                    + " | "
+                    + lineBuilder
+                    + " | "
+                    + seqBuilder;
+                return true;
+            }
+            finally
+            {
+                allLines.Dispose();
+            }
+        }
+
+        private bool TryEvaluateBypassTrackModelShadow(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentWaypointIndex,
+            out BypassTrackModelShadowEvaluation evaluation)
+        {
+            evaluation = default;
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+                return false;
+
+            RefreshSharedRuns(chain);
+            RefreshControlEdgeSharedSpans(chain);
+            RefreshBypassProtectedIntervals(chain);
+            RefreshProtectedSharedIntervals(chain);
+            RefreshProtectedIntervalSummaries(chain);
+
+            if (!TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out int protectedIntervalIndex, out BypassProtectedInterval protectedInterval))
+                return false;
+
+            if (protectedIntervalIndex < 0 || protectedIntervalIndex >= chain.ProtectedIntervalSummaries.Count)
+                return false;
+
+            ProtectedIntervalSummary summary = chain.ProtectedIntervalSummaries[protectedIntervalIndex];
+            evaluation = new BypassTrackModelShadowEvaluation(
+                available: true,
+                protectedIntervalIndex: protectedIntervalIndex,
+                risk: ClassifyProtectedIntervalShadowRisk(summary),
+                summary: FormatProtectedIntervalSummary(summary, protectedInterval));
+            return true;
+        }
+
+        private bool TryEvaluateBypassTrackModelShadowDecision(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            uint nowFrame,
+            out BypassTrackModelShadowDecision shadowDecision)
+        {
+            shadowDecision = default;
+            if (!TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain))
+            {
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-chain-missing", -1, "unavailable", "trackModel[unavailable]", "pos[unknown]", string.Empty, string.Empty);
+                return false;
+            }
+
+            RefreshSharedRuns(localChain);
+            RefreshControlEdgeSharedSpans(localChain);
+            RefreshBypassProtectedIntervals(localChain);
+            RefreshProtectedSharedIntervals(localChain);
+            RefreshProtectedIntervalSummaries(localChain);
+
+            if (!TryResolveBypassProtectedInterval(localChain, localWaypoints, currentWaypointIndex, out int protectedIntervalIndex, out BypassProtectedInterval protectedInterval)
+                || protectedIntervalIndex < 0
+                || protectedIntervalIndex >= localChain.ProtectedIntervalSummaries.Count)
+            {
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "protected-interval-missing", -1, "unavailable", "trackModel[unavailable]", "pos[unknown]", string.Empty, string.Empty);
+                return false;
+            }
+
+            ProtectedIntervalSummary localSummary = localChain.ProtectedIntervalSummaries[protectedIntervalIndex];
+            string summary = FormatProtectedIntervalSummary(localSummary, protectedInterval);
+            string risk = ClassifyProtectedIntervalShadowRisk(localSummary);
+            string sequenceSummary = string.Empty;
+            TryBuildBypassDecisionSequenceSummary(localVehicle, localLine, localWaypoints, currentWaypointIndex, protectedInterval, out sequenceSummary);
+            string localPositionText = "pos[unknown]";
+            TrackModelRuntimePosition localPosition = default;
+            bool hasLocalPosition = TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out localPosition);
+            if (hasLocalPosition)
+                localPositionText = FormatRuntimePosition(localPosition);
+
+            if (localSummary.SharedSegmentCount <= 0)
+            {
+                shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-shared-protected-interval", protectedIntervalIndex, risk, summary, localPositionText, string.Empty, sequenceSummary);
+                return true;
+            }
+
+            if (localSummary.HasMirroredContext)
+            {
+                shadowDecision = new BypassTrackModelShadowDecision(true, true, "mirrored-shared-in-protected-interval", protectedIntervalIndex, risk, summary, localPositionText, string.Empty, sequenceSummary);
+                return true;
+            }
+
+            if (!hasLocalPosition)
+            {
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-unknown", protectedIntervalIndex, risk, summary, localPositionText, string.Empty, sequenceSummary);
+                return false;
+            }
+            if (localPosition.Confidence < 0.6f)
+            {
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-low-confidence", protectedIntervalIndex, risk, summary, localPositionText, string.Empty, sequenceSummary);
+                return false;
+            }
+
+            if (localPosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.After)
+            {
+                shadowDecision = new BypassTrackModelShadowDecision(true, false, "local-cleared-protected-interval", protectedIntervalIndex, risk, summary, localPositionText, string.Empty, sequenceSummary);
+                return true;
+            }
+
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                Entity expressLine = entry.Value.LineEntity;
+                if (expressLine == Entity.Null
+                    || expressLine == localLine
+                    || !EntityManager.Exists(expressLine)
+                    || !EntityManager.HasComponent<TransportLine>(expressLine)
+                    || !IsAppliedWorkbenchExpressLine(expressLine)
+                    || !routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
+                    || !routeVehicleBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteVehicle> routeVehicles))
+                {
+                    continue;
+                }
+
+                if (!TryGetLineTrackChain(expressLine, expressWaypoints, out LineTrackChain expressChain))
+                    continue;
+
+                RefreshSharedRuns(expressChain);
+                RefreshControlEdgeSharedSpans(expressChain);
+                RefreshBypassProtectedIntervals(expressChain);
+                RefreshProtectedSharedIntervals(expressChain);
+                RefreshProtectedIntervalSummaries(expressChain);
+
+                ProtectedIntervalMatch expressMatch = FindBestMatchingProtectedInterval(localChain, protectedInterval, expressChain);
+                if (!expressMatch.Found)
+                    continue;
+                if (expressMatch.Ambiguous)
+                {
+                    shadowDecision = new BypassTrackModelShadowDecision(false, false, "protected-interval-match-ambiguous", protectedIntervalIndex, risk, summary, localPositionText, string.Empty, sequenceSummary);
+                    return false;
+                }
+
+                int expressProtectedIntervalIndex = expressMatch.ProtectedIntervalIndex;
+                if (expressProtectedIntervalIndex < 0 || expressProtectedIntervalIndex >= expressChain.BypassProtectedIntervals.Count)
+                    continue;
+
+                BypassProtectedInterval expressProtectedInterval = expressChain.BypassProtectedIntervals[expressProtectedIntervalIndex];
+                for (int rvIndex = 0; rvIndex < routeVehicles.Length; rvIndex++)
+                {
+                    Entity expressVehicle = routeVehicles[rvIndex].m_Vehicle;
+                    if (expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
+                        continue;
+                    if (!m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState) || expressState != VehicleState.Running)
+                        continue;
+
+                    if (!TryProjectTrackModelRuntimePosition(expressVehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition))
+                        continue;
+                    if (expressPosition.Confidence < 0.6f)
+                        continue;
+
+                    if (expressPosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.Before
+                        || expressPosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.Inside)
+                    {
+                        shadowDecision = new BypassTrackModelShadowDecision(true, true, "same-direction-shared-express-approaching", protectedIntervalIndex, risk, summary, localPositionText, FormatRuntimePosition(expressPosition), sequenceSummary);
+                        return true;
+                    }
+                }
+            }
+
+            shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-express-in-protected-interval", protectedIntervalIndex, risk, summary, localPositionText, string.Empty, sequenceSummary);
+            return true;
+        }
+
+        private bool TryGetBypassProtectedSharedContext(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentWaypointIndex,
+            out int protectedIntervalIndex,
+            out BypassProtectedInterval protectedInterval,
+            out int protectedSharedCount,
+            out bool hasMirroredContext)
+        {
+            protectedIntervalIndex = -1;
+            protectedInterval = default;
+            protectedSharedCount = 0;
+            hasMirroredContext = false;
+
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+                return false;
+
+            RefreshSharedRuns(chain);
+            RefreshControlEdgeSharedSpans(chain);
+            RefreshBypassProtectedIntervals(chain);
+            RefreshProtectedSharedIntervals(chain);
+
+            if (!TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out protectedIntervalIndex, out protectedInterval))
+                return false;
+
+            protectedSharedCount = CountProtectedSharedIntervals(chain, protectedIntervalIndex, out hasMirroredContext);
+            return true;
+        }
+
+        private bool TryBuildBypassTrackModelShadowSummary(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentWaypointIndex,
+            out string summary)
+        {
+            summary = string.Empty;
+            if (!TryEvaluateBypassTrackModelShadow(line, waypoints, currentWaypointIndex, out BypassTrackModelShadowEvaluation evaluation))
+                return false;
+
+            summary = evaluation.Summary;
+            return true;
+        }
+
+        private void LogBypassTrackModelShadowOnce(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            Entity currentBypassBuilding,
+            Entity nextBypassBuilding)
+        {
+            if (localVehicle == Entity.Null || localLine == Entity.Null)
+                return;
+
+            string summary = string.Empty;
+            bool hasSummary = TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out BypassTrackModelShadowEvaluation evaluation);
+            if (hasSummary)
+                summary = evaluation.Summary;
+            bool hasDecision = TryEvaluateBypassTrackModelShadowDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, m_SimulationSystem.frameIndex, out BypassTrackModelShadowDecision shadowDecision);
+            string decisionSequence = hasDecision ? shadowDecision.SequenceSummary : string.Empty;
+            string key = (hasSummary ? summary : "trackModel[unavailable]")
+                + "|"
+                + (hasDecision ? (shadowDecision.ShouldYield ? "Y" : "N") + "|" + shadowDecision.ReasonCode : "decision-unavailable")
+                + "|"
+                + currentBypassBuilding.Index
+                + "|"
+                + nextBypassBuilding.Index
+                + "|"
+                + decisionSequence;
+
+            if (m_BypassTrackModelShadowLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
+                return;
+
+            m_BypassTrackModelShadowLogCache[localVehicle] = key;
+            string shadowRisk = hasSummary ? evaluation.Risk : "unavailable";
+            m_BypassTrackModelShadowEvaluations[localVehicle] = hasSummary
+                ? evaluation
+                : new BypassTrackModelShadowEvaluation(false, -1, "unavailable", "trackModel[unavailable]");
+            m_BypassTrackModelShadowDecisions[localVehicle] = hasDecision
+                ? shadowDecision
+                : new BypassTrackModelShadowDecision(false, false, "decision-unavailable", -1, shadowRisk, hasSummary ? summary : "trackModel[unavailable]", "pos[unknown]", string.Empty, string.Empty);
+
+            log.Info("[BypassTrackModelShadow] vehicle=" + localVehicle.Index
+                + " line=" + localLine.Index
+                + " current=" + currentBypassBuilding.Index
+                + " next=" + nextBypassBuilding.Index
+                + " risk=" + shadowRisk
+                + " shadow=" + (hasDecision ? (shadowDecision.ShouldYield ? "yield" : "pass") : "unavailable")
+                + " reason=" + (hasDecision ? shadowDecision.ReasonCode : "decision-unavailable")
+                + " local=" + (hasDecision ? shadowDecision.LocalPosition : "pos[unknown]")
+                + " blocker=" + (hasDecision ? shadowDecision.BlockerPosition : string.Empty)
+                + (!string.IsNullOrEmpty(decisionSequence) ? " " + decisionSequence : string.Empty)
+                + " " + (hasSummary ? summary : "trackModel[unavailable]"));
+        }
+
+        private string GetBypassTrackModelDecisionShadowSuffix(Entity localVehicle, bool shouldYield)
+        {
+            if (localVehicle == Entity.Null
+                || !m_BypassTrackModelShadowEvaluations.TryGetValue(localVehicle, out BypassTrackModelShadowEvaluation evaluation))
+            {
+                return string.Empty;
+            }
+
+            string shadowDecision = evaluation.Risk == "none" ? "pass" : "yield";
+            string alignment = shadowDecision == (shouldYield ? "yield" : "pass") ? "match" : "diff";
+            return " shadow=" + shadowDecision + "/" + evaluation.Risk + "/" + alignment;
+        }
+
+        private void LogBypassTrackModelDecisionComparison(Entity localVehicle, bool shouldYield)
+        {
+            if (localVehicle == Entity.Null
+                || !m_BypassTrackModelShadowDecisions.TryGetValue(localVehicle, out BypassTrackModelShadowDecision decision))
+            {
+                return;
+            }
+
+            string liveDecision = shouldYield ? "yield" : "pass";
+            string shadowDecision = decision.ShouldYield ? "yield" : "pass";
+            string alignment = shadowDecision == liveDecision ? "match" : "diff";
+            string key = liveDecision
+                + "|"
+                + shadowDecision
+                + "|"
+                + decision.ReasonCode
+                + "|"
+                + decision.Risk
+                + "|"
+                + decision.ProtectedIntervalIndex
+                + "|"
+                + decision.LocalPosition
+                + "|"
+                + decision.BlockerPosition
+                + "|"
+                + decision.SequenceSummary;
+            if (m_BypassTrackModelCompareLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
+                return;
+
+            m_BypassTrackModelCompareLogCache[localVehicle] = key;
+            log.Info("[BypassTrackModelCompare] vehicle=" + localVehicle.Index
+                + " live=" + liveDecision
+                + " shadow=" + shadowDecision
+                + " reason=" + decision.ReasonCode
+                + " risk=" + decision.Risk
+                + " compare=" + alignment
+                + " protectedInterval=" + decision.ProtectedIntervalIndex
+                + " local=" + decision.LocalPosition
+                + " blocker=" + decision.BlockerPosition
+                + (!string.IsNullOrEmpty(decision.SequenceSummary) ? " " + decision.SequenceSummary : string.Empty)
+                + " " + decision.Summary);
+        }
+
+        private bool ShouldShadowVetoLiveBypassYield(Entity localVehicle, out string shadowReason)
+        {
+            shadowReason = string.Empty;
+            if (localVehicle == Entity.Null
+                || !m_BypassTrackModelShadowDecisions.TryGetValue(localVehicle, out BypassTrackModelShadowDecision decision)
+                || !decision.Available
+                || decision.ShouldYield
+                || string.Equals(decision.LocalPosition, "pos[unknown]", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            switch (decision.ReasonCode)
+            {
+                case "no-shared-protected-interval":
+                case "local-cleared-protected-interval":
+                case "no-express-in-protected-interval":
+                    shadowReason = decision.ReasonCode;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool ShouldIncludeIntervalAtom(TrackAtom atom)
+        {
+            return atom.AtomClass == TrackAtomClass.PrimaryLane;
+        }
+
+        private static void CollectProtectedIntervalAtomKeys(LineTrackChain chain, BypassProtectedInterval interval, List<TrackAtomKey> keys)
+        {
+            keys.Clear();
+            if (chain == null)
+                return;
+
+            for (int atomIndex = interval.StartAtomIndex; atomIndex < interval.EndAtomIndexExclusive && atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                if (!ShouldIncludeIntervalAtom(atom))
+                    continue;
+                keys.Add(atom.Key);
+            }
+        }
+
+        private static int CountProtectedIntervalAtomOverlap(
+            LineTrackChain sourceChain,
+            BypassProtectedInterval sourceInterval,
+            LineTrackChain candidateChain,
+            BypassProtectedInterval candidateInterval)
+        {
+            if (sourceChain == null || candidateChain == null)
+                return 0;
+
+            HashSet<TrackAtomKey> sourceKeys = new HashSet<TrackAtomKey>();
+            for (int atomIndex = sourceInterval.StartAtomIndex; atomIndex < sourceInterval.EndAtomIndexExclusive && atomIndex < sourceChain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = sourceChain.TrackAtoms[atomIndex];
+                if (!ShouldIncludeIntervalAtom(atom))
+                    continue;
+                sourceKeys.Add(atom.Key);
+            }
+
+            if (sourceKeys.Count == 0)
+                return 0;
+
+            int overlapCount = 0;
+            HashSet<TrackAtomKey> matchedKeys = new HashSet<TrackAtomKey>();
+            for (int atomIndex = candidateInterval.StartAtomIndex; atomIndex < candidateInterval.EndAtomIndexExclusive && atomIndex < candidateChain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = candidateChain.TrackAtoms[atomIndex];
+                if (!ShouldIncludeIntervalAtom(atom))
+                    continue;
+                if (sourceKeys.Contains(atom.Key) && matchedKeys.Add(atom.Key))
+                    overlapCount++;
+            }
+
+            return overlapCount;
+        }
+
+        private static int ComputeProtectedIntervalLongestOrderedRun(
+            LineTrackChain sourceChain,
+            BypassProtectedInterval sourceInterval,
+            LineTrackChain candidateChain,
+            BypassProtectedInterval candidateInterval)
+        {
+            List<TrackAtomKey> sourceKeys = new List<TrackAtomKey>();
+            List<TrackAtomKey> candidateKeys = new List<TrackAtomKey>();
+            CollectProtectedIntervalAtomKeys(sourceChain, sourceInterval, sourceKeys);
+            CollectProtectedIntervalAtomKeys(candidateChain, candidateInterval, candidateKeys);
+            if (sourceKeys.Count == 0 || candidateKeys.Count == 0)
+                return 0;
+
+            int bestRun = 0;
+            for (int sourceIndex = 0; sourceIndex < sourceKeys.Count; sourceIndex++)
+            {
+                for (int candidateIndex = 0; candidateIndex < candidateKeys.Count; candidateIndex++)
+                {
+                    int run = 0;
+                    while (sourceIndex + run < sourceKeys.Count
+                        && candidateIndex + run < candidateKeys.Count
+                        && sourceKeys[sourceIndex + run].Equals(candidateKeys[candidateIndex + run]))
+                    {
+                        run++;
+                    }
+
+                    if (run > bestRun)
+                        bestRun = run;
+                }
+            }
+
+            return bestRun;
+        }
+
+        private static ProtectedIntervalMatch FindBestMatchingProtectedInterval(
+            LineTrackChain sourceChain,
+            BypassProtectedInterval sourceInterval,
+            LineTrackChain candidateChain)
+        {
+            if (sourceChain == null
+                || candidateChain == null
+                || candidateChain.BypassProtectedIntervals.Count == 0)
+            {
+                return default;
+            }
+
+            int bestIndex = -1;
+            int bestOverlap = 0;
+            int bestOrderedRun = 0;
+            bool ambiguous = false;
+
+            for (int i = 0; i < candidateChain.BypassProtectedIntervals.Count; i++)
+            {
+                BypassProtectedInterval candidateInterval = candidateChain.BypassProtectedIntervals[i];
+                int overlapCount = CountProtectedIntervalAtomOverlap(sourceChain, sourceInterval, candidateChain, candidateInterval);
+                if (overlapCount <= 0)
+                    continue;
+                int orderedRun = ComputeProtectedIntervalLongestOrderedRun(sourceChain, sourceInterval, candidateChain, candidateInterval);
+
+                if (orderedRun > bestOrderedRun
+                    || (orderedRun == bestOrderedRun && overlapCount > bestOverlap))
+                {
+                    bestIndex = i;
+                    bestOverlap = overlapCount;
+                    bestOrderedRun = orderedRun;
+                    ambiguous = false;
+                    continue;
+                }
+
+                if (orderedRun == bestOrderedRun && overlapCount == bestOverlap)
+                    ambiguous = true;
+            }
+
+            if (bestIndex < 0)
+                return default;
+
+            return new ProtectedIntervalMatch(true, ambiguous, bestIndex, bestOverlap);
+        }
+
+        private static ulong ComputeProtectedIntervalAtomSignature(LineTrackChain chain, BypassProtectedInterval interval)
+        {
+            ulong hash = 1469598103934665603UL;
+            int atomCount = 0;
+
+            for (int atomIndex = interval.StartAtomIndex; atomIndex < interval.EndAtomIndexExclusive && atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                if (!ShouldIncludeIntervalAtom(atom))
+                    continue;
+
+                atomCount++;
+                hash = MixLineSignature(hash, atom.Key.PhysicalLaneKey.Index);
+                hash = MixLineSignature(hash, atom.Key.PreviousTarget.Index);
+                hash = MixLineSignature(hash, atom.Key.NextTarget.Index);
+            }
+
+            hash = MixLineSignature(hash, atomCount);
+            return hash;
+        }
+
+        private bool TryGetSharedAtomContext(Entity line, TrackAtomKey key, out int sharedLineCount, out bool mirroredContext)
+        {
+            sharedLineCount = 0;
+            mirroredContext = false;
+            if (!m_SharedTrackIndex.TryGetValue(key, out List<SharedTrackOccurrence> occurrences)
+                || occurrences == null
+                || occurrences.Count == 0)
+            {
+                return false;
+            }
+
+            var sharedLines = new HashSet<Entity>();
+            foreach (SharedTrackOccurrence occurrence in occurrences)
+            {
+                if (occurrence.LineEntity != line)
+                    sharedLines.Add(occurrence.LineEntity);
+            }
+
+            sharedLineCount = sharedLines.Count;
+            if (sharedLineCount == 0)
+                return false;
+
+            TrackAtomKey mirroredKey = new TrackAtomKey(key.PhysicalLaneKey, key.NextTarget, key.PreviousTarget);
+            if (m_SharedTrackIndex.TryGetValue(mirroredKey, out List<SharedTrackOccurrence> mirroredOccurrences)
+                && mirroredOccurrences != null)
+            {
+                foreach (SharedTrackOccurrence occurrence in mirroredOccurrences)
+                {
+                    if (occurrence.LineEntity != line)
+                    {
+                        mirroredContext = true;
+                        break;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private void LogLineTrackChainDiagnostics(Entity line)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line) || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return;
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (EntityManager.HasBuffer<RouteSegment>(line))
+            {
+                DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
+                int rawLimit = math.min(segments.Length, 4);
+                for (int waypointIndex = 0; waypointIndex < rawLimit; waypointIndex++)
+                    LogRouteSegmentPathElementDiagnostics(line, waypointIndex, segments[waypointIndex].m_Segment);
+            }
+
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+            {
+                log.Info("[TrackModel] line=" + line.Index + " chain=unavailable");
+                return;
+            }
+
+            RefreshSharedRuns(chain);
+            RefreshControlEdgeSharedSpans(chain);
+            RefreshBypassProtectedIntervals(chain);
+            RefreshProtectedSharedIntervals(chain);
+            RefreshProtectedIntervalSummaries(chain);
+
+            StringBuilder sb = new StringBuilder();
+            sb.Append("[TrackModel] line=").Append(line.Index)
+              .Append(" atoms=").Append(chain.TrackAtoms.Count)
+              .Append(" controlPoints=").Append(chain.ControlPoints.Count)
+              .Append(" controlEdges=").Append(chain.ControlEdges.Count)
+              .Append(" sharedRuns=").Append(chain.SharedRuns.Count)
+              .Append(" edgeSharedSpans=").Append(chain.ControlEdgeSharedSpans.Count)
+              .Append(" protectedIntervals=").Append(chain.BypassProtectedIntervals.Count)
+              .Append(" protectedShared=").Append(chain.ProtectedSharedIntervals.Count)
+              .Append(" signature=").Append(chain.Signature)
+              .Append(" firstAtoms=");
+
+            int limit = math.min(chain.TrackAtoms.Count, 12);
+            for (int i = 0; i < limit; i++)
+            {
+                if (i > 0)
+                    sb.Append(" -> ");
+
+                TrackAtom atom = chain.TrackAtoms[i];
+                sb.Append(atom.Key.PhysicalLaneKey.Index)
+                  .Append(":")
+                  .Append(atom.Key.PreviousTarget == Entity.Null ? "null" : atom.Key.PreviousTarget.Index.ToString())
+                  .Append(">")
+                  .Append(atom.Key.NextTarget == Entity.Null ? "null" : atom.Key.NextTarget.Index.ToString())
+                  .Append(":")
+                  .Append(atom.AtomClass);
+            }
+
+            log.Info(sb.ToString());
+
+            if (chain.SharedRuns.Count > 0)
+            {
+                StringBuilder runSb = new StringBuilder();
+                runSb.Append("[TrackModelRuns] line=").Append(line.Index);
+                int runLimit = math.min(chain.SharedRuns.Count, 8);
+                for (int i = 0; i < runLimit; i++)
+                {
+                    SharedTrackRun run = chain.SharedRuns[i];
+                    runSb.Append(" | run").Append(i)
+                      .Append("=").Append(run.StartAtomIndex)
+                      .Append("..").Append(run.EndAtomIndexExclusive)
+                      .Append(" sharedLines=").Append(run.SharedLineCount)
+                      .Append(" mirrored=").Append(run.HasMirroredContext ? "1" : "0");
+                }
+
+                log.Info(runSb.ToString());
+            }
+
+            if (chain.ControlEdgeSharedSpans.Count > 0)
+            {
+                StringBuilder edgeSb = new StringBuilder();
+                edgeSb.Append("[TrackModelEdges] line=").Append(line.Index);
+                int edgeLimit = math.min(chain.ControlEdgeSharedSpans.Count, 8);
+                for (int i = 0; i < edgeLimit; i++)
+                {
+                    ControlEdgeSharedSpan span = chain.ControlEdgeSharedSpans[i];
+                    edgeSb.Append(" | edge").Append(span.ControlEdgeIndex)
+                        .Append("=").Append(span.StartAtomIndex)
+                        .Append("..").Append(span.EndAtomIndexExclusive)
+                        .Append(" sharedLines=").Append(span.SharedLineCount)
+                        .Append(" mirrored=").Append(span.HasMirroredContext ? "1" : "0");
+                }
+
+                log.Info(edgeSb.ToString());
+            }
+
+            if (chain.BypassProtectedIntervals.Count > 0)
+            {
+                StringBuilder protectedSb = new StringBuilder();
+                protectedSb.Append("[TrackModelProtected] line=").Append(line.Index);
+                int protectedLimit = math.min(chain.BypassProtectedIntervals.Count, 6);
+                for (int i = 0; i < protectedLimit; i++)
+                {
+                    BypassProtectedInterval interval = chain.BypassProtectedIntervals[i];
+                    protectedSb.Append(" | p").Append(i)
+                        .Append(" cp=").Append(interval.StartControlPointIndex).Append("->").Append(interval.EndControlPointIndex)
+                        .Append(" edges=").Append(interval.StartControlEdgeIndex).Append("..").Append(interval.EndControlEdgeIndexInclusive)
+                        .Append(" atoms=").Append(interval.StartAtomIndex).Append("..").Append(interval.EndAtomIndexExclusive)
+                        .Append(" baseFrames=").Append(interval.BaseFrames.ToString("F1"));
+                }
+
+                log.Info(protectedSb.ToString());
+            }
+
+            if (chain.ProtectedSharedIntervals.Count > 0)
+            {
+                StringBuilder overlapSb = new StringBuilder();
+                overlapSb.Append("[TrackModelProtectedShared] line=").Append(line.Index);
+                int overlapLimit = math.min(chain.ProtectedSharedIntervals.Count, 8);
+                for (int i = 0; i < overlapLimit; i++)
+                {
+                    ProtectedSharedInterval interval = chain.ProtectedSharedIntervals[i];
+                    overlapSb.Append(" | ps").Append(i)
+                        .Append(" p=").Append(interval.ProtectedIntervalIndex)
+                        .Append(" edge=").Append(interval.ControlEdgeIndex)
+                        .Append(" atoms=").Append(interval.StartAtomIndex).Append("..").Append(interval.EndAtomIndexExclusive)
+                        .Append(" sharedLines=").Append(interval.SharedLineCount)
+                        .Append(" mirrored=").Append(interval.HasMirroredContext ? "1" : "0")
+                        .Append(" entry=").Append(interval.EntryOffsetFrames.ToString("F1"))
+                        .Append(" clear=").Append(interval.ClearOffsetFrames.ToString("F1"));
+                }
+
+                log.Info(overlapSb.ToString());
+            }
+
+            if (chain.BypassProtectedIntervals.Count > 0)
+            {
+                StringBuilder summarySb = new StringBuilder();
+                summarySb.Append("[TrackModelProtectedSummary] line=").Append(line.Index);
+                int summaryLimit = math.min(chain.ProtectedIntervalSummaries.Count, 6);
+                for (int i = 0; i < summaryLimit; i++)
+                {
+                    ProtectedIntervalSummary summary = chain.ProtectedIntervalSummaries[i];
+                    summarySb.Append(" | p").Append(i)
+                        .Append(" sharedSegments=").Append(summary.SharedSegmentCount)
+                        .Append(" maxSharedLines=").Append(summary.MaxSharedLineCount)
+                        .Append(" mirrored=").Append(summary.HasMirroredContext ? "1" : "0")
+                        .Append(" minEntry=").Append(summary.MinEntryOffsetFrames.ToString("F1"))
+                        .Append(" maxClear=").Append(summary.MaxClearOffsetFrames.ToString("F1"));
+                }
+
+                log.Info(summarySb.ToString());
+            }
+
+            LogSharedTrackIndexSummary();
+        }
+    }
+}

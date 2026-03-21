@@ -1,0 +1,136 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\net6.0\</OutputPath>
+    <RapidTransitDeployDir>$(UserProfile)\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\RapidTransitMod</RapidTransitDeployDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="references\**\*.cs" />
+    <None Include="references\**\*.cs" />
+    <None Include="RapidTransitMod.mjs">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="UI\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>UI\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="dispatch-workbench-app\dist\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>UI\dispatch-workbench-app\dist\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="dispatch-workbench-app\euis-dist\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>UI\dispatch-workbench-euis\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="Locales\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Locales\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="lang\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>lang\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="RapidTransitMod.l10n.*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="mod.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="AssetDatabase.TestScenarios">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\AssetDatabase.TestScenarios.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Colossal.Core">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="Colossal.AssetPipeline">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.AssetPipeline.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Colossal.IO.AssetDatabase">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.IO.AssetDatabase.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Colossal.Logging">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Logging.dll</HintPath>
+    </Reference>
+    <Reference Include="Colossal.Localization">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Localization.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Colossal.Mathematics">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Mathematics.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Colossal.UI.Binding">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.UI.Binding.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Colossal.UI">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Game">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Game.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="cohtml.Net">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\cohtml.Net.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.Burst">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Unity.Burst.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.Collections">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Unity.Collections.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.Entities">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Unity.Entities.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.Mathematics">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Unity.Mathematics.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Core" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+  <Target Name="DeployRapidTransitMod" AfterTargets="Build">
+    <ItemGroup>
+      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.dll" />
+      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.mjs" />
+      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.l10n.*.json" />
+      <RapidTransitDeployFiles Include="$(OutputPath)mod.json" />
+    </ItemGroup>
+    <ItemGroup>
+      <RapidTransitDeployUiFiles Include="$(OutputPath)UI\**\*" />
+      <RapidTransitDeployLocaleFiles Include="$(OutputPath)Locales\**\*.json" />
+      <RapidTransitDeployLangFiles Include="$(OutputPath)lang\**\*.json" />
+    </ItemGroup>
+    <MakeDir Directories="$(RapidTransitDeployDir)" />
+    <Copy SourceFiles="@(RapidTransitDeployFiles)" DestinationFolder="$(RapidTransitDeployDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitDeployUiFiles)" DestinationFiles="@(RapidTransitDeployUiFiles->'$(RapidTransitDeployDir)\UI\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitDeployLocaleFiles)" DestinationFiles="@(RapidTransitDeployLocaleFiles->'$(RapidTransitDeployDir)\Locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitDeployLangFiles)" DestinationFiles="@(RapidTransitDeployLangFiles->'$(RapidTransitDeployDir)\lang\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

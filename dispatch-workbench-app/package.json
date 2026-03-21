@@ -1,0 +1,19 @@
+{
+  "name": "rt-dispatch-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "validate:euis": "node ./scripts/validate-euis-frontend.mjs",
+    "build:euis": "npm run validate:euis && vite build --config vite.euis.config.js",
+    "build": "npm run build:euis"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}
