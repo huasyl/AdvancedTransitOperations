@@ -180,6 +180,7 @@ namespace RapidTransitMod
         private NativeHashMap<Entity, uint> m_LaunchCooldownUntil;
         private NativeHashMap<Entity, uint> m_LastRetireFixLogFrame;
         private NativeHashMap<Entity, uint> m_RetireFixCooldownUntil;
+        private NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
         private NativeHashMap<Entity, byte> m_RetireFixCount;
         // [修复2] 存档恢复后的 Running 车标记。UpdateLapStats 检测到后跳过写 m_VehicleLapFrames。
         // 防止倒推假起点算出的偏低圈时污染调度 ETA，导致系统静默。
@@ -268,6 +269,7 @@ namespace RapidTransitMod
         private const uint SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_REPATH_COOLDOWN_FRAMES = 120;
+        private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const byte RETIREFIX_DELETE_THRESHOLD = 3;
         private const float DISPATCH_ESTIMATE_MIN_MINUTES = 2f;
         private const float DISPATCH_ESTIMATE_MAX_MINUTES = 20f;
@@ -326,6 +328,7 @@ namespace RapidTransitMod
             m_LaunchCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_LastRetireFixLogFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_RetireFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
+            m_PreparingFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_RetireFixCount = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
             m_SpawningLines = new NativeHashMap<Entity, int>(64, Allocator.Persistent);
             m_LastSpawnBlockedLogFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
@@ -398,6 +401,7 @@ namespace RapidTransitMod
             if (m_LaunchCooldownUntil.IsCreated) m_LaunchCooldownUntil.Dispose();
             if (m_LastRetireFixLogFrame.IsCreated) m_LastRetireFixLogFrame.Dispose();
             if (m_RetireFixCooldownUntil.IsCreated) m_RetireFixCooldownUntil.Dispose();
+            if (m_PreparingFixCooldownUntil.IsCreated) m_PreparingFixCooldownUntil.Dispose();
             if (m_RetireFixCount.IsCreated) m_RetireFixCount.Dispose();
             if (m_SpawningLines.IsCreated) m_SpawningLines.Dispose();
             if (m_LastSpawnBlockedLogFrame.IsCreated) m_LastSpawnBlockedLogFrame.Dispose();
@@ -1371,6 +1375,7 @@ namespace RapidTransitMod
             m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
+            m_PreparingFixCooldownUntil.Clear();
             m_RetireFixCount.Clear();
             m_SpawningLines.Clear();
             m_LineSpawnRequestFrame.Clear();
@@ -1421,6 +1426,7 @@ namespace RapidTransitMod
             m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
+            m_PreparingFixCooldownUntil.Clear();
             m_RetireFixCount.Clear();
             m_SpawningLines.Clear();
             m_LineSpawnRequestFrame.Clear();
@@ -3034,6 +3040,7 @@ namespace RapidTransitMod
                     m_LaunchCooldownUntil.Remove(dead);
                     m_LastRetireFixLogFrame.Remove(dead);
                     m_RetireFixCooldownUntil.Remove(dead);
+                    m_PreparingFixCooldownUntil.Remove(dead);
                     m_RetireFixCount.Remove(dead);
                     m_OriginArrivalCandidateSinceFrame.Remove(dead);
                     m_ForcedOriginReadyFrame.Remove(dead);
@@ -3265,6 +3272,7 @@ namespace RapidTransitMod
             m_BVMisfireStartFrame.Remove(v);
             m_ForcedMidStopBoardingGraceUntil.Remove(v);
             m_LaunchCooldownUntil.Remove(v);
+            m_PreparingFixCooldownUntil.Remove(v);
             m_NearingTerminus.Remove(v);
             m_OriginArrivalCandidateSinceFrame.Remove(v);
             m_ForcedOriginReadyFrame.Remove(v);
@@ -3359,12 +3367,14 @@ namespace RapidTransitMod
         {
             Entity stationA = wps[0].m_Waypoint;
             bool wrongTarget = tgt.m_Target != stationA;
-            bool driftedToMidStop = curWpIdx > 0 || (boarding && curWpIdx != 0);
+            bool driftedToMidStop = boarding && curWpIdx > 0;
             if (!wrongTarget && !driftedToMidStop) return;
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (wrongTarget
                 && !driftedToMidStop
                 && IsFreshDispatchedPreparingVehicle(v, nowFrame))
+                return;
+            if (m_PreparingFixCooldownUntil.TryGetValue(v, out uint cooldownUntil) && nowFrame < cooldownUntil)
                 return;
 
             string lineTag = m_VehicleLine.TryGetValue(v, out Entity lineEnt)
@@ -3382,6 +3392,7 @@ namespace RapidTransitMod
             pt.m_DepartureFrame = nowFrame + 9999;
             tgt.m_Target = stationA;
             RepathVehicle(v, pt, tgt, ecb);
+            m_PreparingFixCooldownUntil[v] = nowFrame + PREPARINGFIX_REPATH_COOLDOWN_FRAMES;
 
             log.Info("[PreparingFix] " + lineTag + " 车辆" + v.Index
                 + " " + why + "，重置去始发站 wp0=" + stationA.Index);

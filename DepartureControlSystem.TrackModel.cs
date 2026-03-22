@@ -170,6 +170,7 @@ namespace RapidTransitMod
             public List<ControlPointMarker> ControlPoints = new List<ControlPointMarker>();
             public List<ControlEdge> ControlEdges = new List<ControlEdge>();
             public List<SharedTrackRun> SharedRuns = new List<SharedTrackRun>();
+            public Dictionary<Entity, List<SharedTrackRun>> SharedRunsByOtherLine = new Dictionary<Entity, List<SharedTrackRun>>();
             public List<ControlEdgeSharedSpan> ControlEdgeSharedSpans = new List<ControlEdgeSharedSpan>();
             public List<BypassProtectedInterval> BypassProtectedIntervals = new List<BypassProtectedInterval>();
             public List<ProtectedSharedInterval> ProtectedSharedIntervals = new List<ProtectedSharedInterval>();
@@ -1074,6 +1075,7 @@ namespace RapidTransitMod
         private void RefreshSharedRuns(LineTrackChain chain)
         {
             chain.SharedRuns.Clear();
+            chain.SharedRunsByOtherLine.Clear();
             EnsureSharedTrackIndexCurrent();
 
             int runStart = -1;
@@ -1110,6 +1112,77 @@ namespace RapidTransitMod
 
             if (runStart >= 0)
                 chain.SharedRuns.Add(new SharedTrackRun(runStart, chain.TrackAtoms.Count, runMirrored, runSharedLineCount));
+
+            RefreshSharedRunsByOtherLine(chain);
+        }
+
+        private void RefreshSharedRunsByOtherLine(LineTrackChain chain)
+        {
+            if (chain == null || chain.TrackAtoms.Count == 0)
+                return;
+
+            var candidateLines = new HashSet<Entity>();
+            for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                if (atom.AtomClass != TrackAtomClass.PrimaryLane)
+                    continue;
+
+                if (!m_SharedPhysicalTrackIndex.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
+                    || occurrences == null)
+                {
+                    continue;
+                }
+
+                foreach (SharedPhysicalOccurrence occurrence in occurrences)
+                {
+                    if (occurrence.LineEntity != chain.LineEntity)
+                        candidateLines.Add(occurrence.LineEntity);
+                }
+            }
+
+            foreach (Entity otherLine in candidateLines)
+            {
+                int runStart = -1;
+                bool runMirrored = false;
+                List<SharedTrackRun> runs = null;
+
+                for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+                {
+                    TrackAtom atom = chain.TrackAtoms[atomIndex];
+                    if (atom.AtomClass != TrackAtomClass.PrimaryLane
+                        || !TryGetSharedPhysicalContextForLine(chain.LineEntity, atom, otherLine, out bool mirroredContext))
+                    {
+                        if (runStart >= 0)
+                        {
+                            runs ??= new List<SharedTrackRun>();
+                            runs.Add(new SharedTrackRun(runStart, atomIndex, runMirrored, 1));
+                            runStart = -1;
+                            runMirrored = false;
+                        }
+
+                        continue;
+                    }
+
+                    if (runStart < 0)
+                    {
+                        runStart = atomIndex;
+                        runMirrored = mirroredContext;
+                        continue;
+                    }
+
+                    runMirrored |= mirroredContext;
+                }
+
+                if (runStart >= 0)
+                {
+                    runs ??= new List<SharedTrackRun>();
+                    runs.Add(new SharedTrackRun(runStart, chain.TrackAtoms.Count, runMirrored, 1));
+                }
+
+                if (runs != null && runs.Count > 0)
+                    chain.SharedRunsByOtherLine[otherLine] = runs;
+            }
         }
 
         private void RefreshControlEdgeSharedSpans(LineTrackChain chain)
@@ -2120,6 +2193,7 @@ namespace RapidTransitMod
             try
             {
                 LogIndependentSharedPhysicalCorridorDump(lines);
+                LogTrackModelReplayDump(lines);
             }
             finally
             {
@@ -2482,9 +2556,14 @@ namespace RapidTransitMod
                 PhysicalSharedWindowMatch sharedWindowMatch = FindBestPhysicalSharedWindow(localChain, protectedInterval, expressChain);
                 if (!sharedWindowMatch.Found)
                 {
+                    int expressSharedRunCountForLocal = expressChain.SharedRunsByOtherLine.TryGetValue(localLine, out List<SharedTrackRun> expressRunsForLocal)
+                        && expressRunsForLocal != null
+                        ? expressRunsForLocal.Count
+                        : 0;
                     if (sharedWindowAudit.Length > 0)
                         sharedWindowAudit.Append(" | ");
-                    sharedWindowAudit.Append("line=").Append(expressLine.Index).Append(" match=none runs=").Append(expressChain.SharedRuns.Count);
+                    sharedWindowAudit.Append("line=").Append(expressLine.Index)
+                        .Append(" match=none runs=").Append(expressSharedRunCountForLocal);
                     continue;
                 }
                 if (sharedWindowMatch.Ambiguous)
@@ -2676,13 +2755,20 @@ namespace RapidTransitMod
                 float localClearFrames = EstimateRuntimeFramesToAtomBoundary(localChain, localPosition, localSharedInterval.EndAtomIndexExclusive);
                 float expressEntryFrames = EstimateRuntimeFramesToAtomBoundary(expressChain, expressPosition, expressSharedInterval.StartAtomIndex);
                 float safetyGapFrames = TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES * (float)SIM_FRAMES_PER_MINUTE;
+                string etaWindowText = " localPs=p" + localSharedInterval.ProtectedIntervalIndex
+                    + "/e" + localSharedInterval.ControlEdgeIndex
+                    + "/a" + localSharedInterval.StartAtomIndex + ".." + localSharedInterval.EndAtomIndexExclusive
+                    + " expressPs=p" + expressSharedInterval.ProtectedIntervalIndex
+                    + "/e" + expressSharedInterval.ControlEdgeIndex
+                    + "/a" + expressSharedInterval.StartAtomIndex + ".." + expressSharedInterval.EndAtomIndexExclusive;
                 expressPositionText += " etaEntry=" + FormatEtaFrames(expressEntryFrames)
                     + " localClear=" + FormatEtaFrames(localClearFrames)
-                    + " gap=" + FormatEtaFrames(safetyGapFrames);
+                    + " gap=" + FormatEtaFrames(safetyGapFrames)
+                    + etaWindowText;
 
                 if (expressEntryFrames == float.MaxValue || localClearFrames == float.MaxValue)
                 {
-                    rejectReason = "eta-unknown";
+                    rejectReason = "eta-unknown" + etaWindowText;
                     return false;
                 }
 
@@ -2690,7 +2776,8 @@ namespace RapidTransitMod
                 {
                     rejectReason = "eta-safe entry=" + FormatEtaFrames(expressEntryFrames)
                         + " clear=" + FormatEtaFrames(localClearFrames)
-                        + " gap=" + FormatEtaFrames(safetyGapFrames);
+                        + " gap=" + FormatEtaFrames(safetyGapFrames)
+                        + etaWindowText;
                     return false;
                 }
             }
@@ -2833,8 +2920,18 @@ namespace RapidTransitMod
             BypassProtectedInterval localProtectedInterval,
             LineTrackChain expressChain)
         {
-            if (localChain == null || expressChain == null || localChain.ProtectedSharedIntervals.Count == 0 || expressChain.SharedRuns.Count == 0)
+            if (localChain == null || expressChain == null)
                 return default;
+
+            if (!localChain.SharedRunsByOtherLine.TryGetValue(expressChain.LineEntity, out List<SharedTrackRun> localSharedRuns)
+                || localSharedRuns == null
+                || localSharedRuns.Count == 0
+                || !expressChain.SharedRunsByOtherLine.TryGetValue(localChain.LineEntity, out List<SharedTrackRun> expressSharedRuns)
+                || expressSharedRuns == null
+                || expressSharedRuns.Count == 0)
+            {
+                return default;
+            }
 
             int bestOverlap = 0;
             int bestOrderedRun = 0;
@@ -2842,37 +2939,35 @@ namespace RapidTransitMod
             BypassProtectedInterval bestLocalWindow = default;
             BypassProtectedInterval bestExpressWindow = default;
 
-            for (int localIndex = 0; localIndex < localChain.ProtectedSharedIntervals.Count;)
+            for (int localIndex = 0; localIndex < localSharedRuns.Count;)
             {
-                ProtectedSharedInterval localCandidate = localChain.ProtectedSharedIntervals[localIndex];
-                if (localCandidate.StartAtomIndex < localProtectedInterval.StartAtomIndex
-                    || localCandidate.EndAtomIndexExclusive > localProtectedInterval.EndAtomIndexExclusive)
+                SharedTrackRun localCandidate = localSharedRuns[localIndex];
+                int clippedLocalStart = math.max(localProtectedInterval.StartAtomIndex, localCandidate.StartAtomIndex);
+                int clippedLocalEndExclusive = math.min(localProtectedInterval.EndAtomIndexExclusive, localCandidate.EndAtomIndexExclusive);
+                if (clippedLocalEndExclusive <= clippedLocalStart)
                 {
                     localIndex++;
                     continue;
                 }
 
-                int mergedLocalStart = localCandidate.StartAtomIndex;
-                int mergedLocalEndExclusive = localCandidate.EndAtomIndexExclusive;
+                int mergedLocalStart = clippedLocalStart;
+                int mergedLocalEndExclusive = clippedLocalEndExclusive;
                 int nextLocalIndex = localIndex + 1;
-                while (nextLocalIndex < localChain.ProtectedSharedIntervals.Count)
+                while (nextLocalIndex < localSharedRuns.Count)
                 {
-                    ProtectedSharedInterval nextCandidate = localChain.ProtectedSharedIntervals[nextLocalIndex];
-                    if (nextCandidate.StartAtomIndex < localProtectedInterval.StartAtomIndex
-                        || nextCandidate.EndAtomIndexExclusive > localProtectedInterval.EndAtomIndexExclusive)
+                    SharedTrackRun nextCandidate = localSharedRuns[nextLocalIndex];
+                    int clippedNextStart = math.max(localProtectedInterval.StartAtomIndex, nextCandidate.StartAtomIndex);
+                    int clippedNextEndExclusive = math.min(localProtectedInterval.EndAtomIndexExclusive, nextCandidate.EndAtomIndexExclusive);
+                    if (clippedNextEndExclusive <= clippedNextStart)
                     {
-                        break;
+                        nextLocalIndex++;
+                        continue;
                     }
 
-                    // Treat adjacent/overlapping shared fragments inside the same
-                    // local protected interval as one physical shared window.
-                    // This avoids picking only one edge-sized sub-fragment on
-                    // cases like 商业区 -> 墓园 where the same shared trunk spans
-                    // multiple control edges.
-                    if (nextCandidate.StartAtomIndex > mergedLocalEndExclusive)
+                    if (clippedNextStart > mergedLocalEndExclusive)
                         break;
 
-                    mergedLocalEndExclusive = math.max(mergedLocalEndExclusive, nextCandidate.EndAtomIndexExclusive);
+                    mergedLocalEndExclusive = math.max(mergedLocalEndExclusive, clippedNextEndExclusive);
                     nextLocalIndex++;
                 }
 
@@ -2883,9 +2978,9 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                for (int expressIndex = 0; expressIndex < expressChain.SharedRuns.Count; expressIndex++)
+                for (int expressIndex = 0; expressIndex < expressSharedRuns.Count; expressIndex++)
                 {
-                    SharedTrackRun expressRun = expressChain.SharedRuns[expressIndex];
+                    SharedTrackRun expressRun = expressSharedRuns[expressIndex];
                     BypassProtectedInterval expressWindow = BuildAtomWindowInterval(expressChain, expressRun.StartAtomIndex, expressRun.EndAtomIndexExclusive);
                     if (expressWindow.EndAtomIndexExclusive <= expressWindow.StartAtomIndex)
                         continue;
@@ -3052,6 +3147,161 @@ namespace RapidTransitMod
                 + " localLine=" + localLine.Index
                 + " protectedInterval=" + protectedIntervalIndex
                 + " " + auditSummary);
+        }
+
+        private string BuildSharedWindowAuditSummary(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            LineTrackChain localChain,
+            int currentWaypointIndex,
+            Entity currentBypassBuilding,
+            BypassProtectedInterval protectedInterval)
+        {
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            StringBuilder sharedWindowAudit = new StringBuilder();
+            float departureReleaseCoordinate = ComputeForwardDepartureReleaseCoordinate(localChain, protectedInterval, currentBypassBuilding);
+
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                Entity expressLine = entry.Value.LineEntity;
+                if (expressLine == Entity.Null
+                    || expressLine == localLine
+                    || !EntityManager.Exists(expressLine)
+                    || !EntityManager.HasComponent<TransportLine>(expressLine)
+                    || !IsAppliedWorkbenchExpressLine(expressLine)
+                    || !routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
+                    || !routeVehicleBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteVehicle> routeVehicles))
+                {
+                    continue;
+                }
+
+                if (!TryGetLineTrackChain(expressLine, expressWaypoints, out LineTrackChain expressChain))
+                {
+                    if (sharedWindowAudit.Length > 0)
+                        sharedWindowAudit.Append(" | ");
+                    sharedWindowAudit.Append("line=").Append(expressLine.Index).Append(" chain-missing");
+                    continue;
+                }
+
+                RefreshSharedRuns(expressChain);
+                RefreshControlEdgeSharedSpans(expressChain);
+                RefreshBypassProtectedIntervals(expressChain);
+                RefreshProtectedSharedIntervals(expressChain);
+                RefreshProtectedIntervalSummaries(expressChain);
+
+                PhysicalSharedWindowMatch sharedWindowMatch = FindBestPhysicalSharedWindow(localChain, protectedInterval, expressChain);
+                if (!sharedWindowMatch.Found)
+                {
+                    int expressSharedRunCountForLocal = expressChain.SharedRunsByOtherLine.TryGetValue(localLine, out List<SharedTrackRun> expressRunsForLocal)
+                        && expressRunsForLocal != null
+                        ? expressRunsForLocal.Count
+                        : 0;
+                    if (sharedWindowAudit.Length > 0)
+                        sharedWindowAudit.Append(" | ");
+                    sharedWindowAudit.Append("line=").Append(expressLine.Index)
+                        .Append(" match=none runs=").Append(expressSharedRunCountForLocal);
+                    continue;
+                }
+
+                if (sharedWindowAudit.Length > 0)
+                    sharedWindowAudit.Append(" | ");
+
+                if (sharedWindowMatch.Ambiguous)
+                {
+                    sharedWindowAudit.Append("line=").Append(expressLine.Index)
+                        .Append(" match=ambiguous overlap=").Append(sharedWindowMatch.OverlapCount)
+                        .Append(" run=").Append(sharedWindowMatch.OrderedRun);
+                    continue;
+                }
+
+                StringBuilder lineAudit = new StringBuilder();
+                lineAudit.Append("line=").Append(expressLine.Index)
+                    .Append(" match=found overlap=").Append(sharedWindowMatch.OverlapCount)
+                    .Append(" run=").Append(sharedWindowMatch.OrderedRun)
+                    .Append(" window=").Append(sharedWindowMatch.ExpressSharedWindow.StartAtomIndex)
+                    .Append("..").Append(sharedWindowMatch.ExpressSharedWindow.EndAtomIndexExclusive);
+
+                if (!TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, sharedWindowMatch.LocalSharedWindow, out TrackModelRuntimePosition localSharedPosition))
+                {
+                    lineAudit.Append(" local=proj-fail");
+                    sharedWindowAudit.Append(lineAudit);
+                    continue;
+                }
+
+                if (localSharedPosition.Confidence < 0.6f)
+                {
+                    lineAudit.Append(" local=low-conf(").Append(localSharedPosition.Confidence.ToString("0.00")).Append(")");
+                    sharedWindowAudit.Append(lineAudit);
+                    continue;
+                }
+
+                bool sawRunningVehicle = false;
+                for (int rvIndex = 0; rvIndex < routeVehicles.Length; rvIndex++)
+                {
+                    Entity expressVehicle = routeVehicles[rvIndex].m_Vehicle;
+                    if (expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
+                        continue;
+                    if (!m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState) || expressState != VehicleState.Running)
+                        continue;
+                    sawRunningVehicle = true;
+
+                    if (!TryProjectTrackModelRuntimePosition(expressVehicle, expressLine, expressWaypoints, sharedWindowMatch.ExpressSharedWindow, out TrackModelRuntimePosition expressPosition))
+                    {
+                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":proj-fail");
+                        continue;
+                    }
+
+                    if (expressPosition.Confidence < 0.6f)
+                    {
+                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":low-conf(").Append(expressPosition.Confidence.ToString("0.00")).Append(")");
+                        continue;
+                    }
+
+                    if (TryDescribeExpressReleaseWindowClear(
+                            sharedWindowMatch.LocalSharedWindow,
+                            sharedWindowMatch.ExpressSharedWindow,
+                            departureReleaseCoordinate,
+                            expressPosition,
+                            out string releaseReason,
+                            out string releasePositionText))
+                    {
+                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(releaseReason)
+                            .Append("(").Append(releasePositionText).Append(")");
+                        continue;
+                    }
+
+                    if (TryEvaluateSameDirectionProtectedIntervalConflict(
+                            localChain,
+                            sharedWindowMatch.LocalSharedWindow,
+                            departureReleaseCoordinate,
+                            localSharedPosition,
+                            expressChain,
+                            sharedWindowMatch.ExpressSharedWindow,
+                            expressPosition,
+                            out string conflictReason,
+                            out string expressPositionText,
+                            out string rejectReason))
+                    {
+                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":block(")
+                            .Append(conflictReason);
+                        if (!string.IsNullOrEmpty(expressPositionText))
+                            lineAudit.Append(" ").Append(expressPositionText);
+                        lineAudit.Append(")");
+                        continue;
+                    }
+
+                    lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(rejectReason);
+                }
+
+                if (!sawRunningVehicle)
+                    lineAudit.Append(" vehicles=none-running");
+
+                sharedWindowAudit.Append(lineAudit);
+            }
+
+            return sharedWindowAudit.Length > 0 ? sharedWindowAudit.ToString() : "no-express-lines-considered";
         }
 
         private void LogBypassTrackModelShadowOnce(
@@ -3461,6 +3711,33 @@ namespace RapidTransitMod
 
             sharedLineCount = sharedLines.Count;
             return sharedLineCount > 0;
+        }
+
+        private bool TryGetSharedPhysicalContextForLine(Entity line, TrackAtom atom, Entity otherLine, out bool mirroredContext)
+        {
+            mirroredContext = false;
+            if (otherLine == Entity.Null
+                || !m_SharedPhysicalTrackIndex.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
+                || occurrences == null)
+            {
+                return false;
+            }
+
+            bool found = false;
+            foreach (SharedPhysicalOccurrence occurrence in occurrences)
+            {
+                if (occurrence.LineEntity != otherLine)
+                    continue;
+
+                found = true;
+                if (occurrence.PreviousTarget == atom.Key.NextTarget
+                    && occurrence.NextTarget == atom.Key.PreviousTarget)
+                {
+                    mirroredContext = true;
+                }
+            }
+
+            return found;
         }
 
         private void LogLineTrackChainDiagnostics(Entity line)

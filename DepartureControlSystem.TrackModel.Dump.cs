@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using Unity.Collections;
@@ -675,6 +676,441 @@ namespace RapidTransitMod
 
             spans.Sort((a, b) => a.LineEntity.Index.CompareTo(b.LineEntity.Index));
             return spans;
+        }
+
+        private void LogTrackModelReplayDump(NativeArray<Entity> allLines)
+        {
+            List<Entity> targetLines = CollectReplayDumpTargetLines(allLines);
+            StringBuilder sb = new StringBuilder(32768);
+            sb.Append("[TrackModelReplayDump]").AppendLine();
+            sb.Append("time=").Append(SlotStr((int)(m_SimulationSystem.frameIndex / (uint)SIM_FRAMES_PER_MINUTE) % 1440))
+              .Append(" lines=").Append(targetLines.Count)
+              .Append(" managedVehicles=").Append(m_VehicleState.Count)
+              .AppendLine();
+
+            for (int i = 0; i < targetLines.Count; i++)
+            {
+                Entity line = targetLines[i];
+                AppendReplayLineDump(sb, line);
+            }
+
+            log.Info(sb.ToString().TrimEnd());
+        }
+
+        private List<Entity> CollectReplayDumpTargetLines(NativeArray<Entity> allLines)
+        {
+            HashSet<Entity> lines = new HashSet<Entity>();
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                Entity line = entry.Value.LineEntity;
+                if (line != Entity.Null && EntityManager.Exists(line))
+                    lines.Add(line);
+            }
+
+            if (lines.Count == 0)
+            {
+                for (int i = 0; i < allLines.Length; i++)
+                {
+                    Entity line = allLines[i];
+                    if (line != Entity.Null && EntityManager.Exists(line))
+                        lines.Add(line);
+                }
+            }
+
+            List<Entity> ordered = new List<Entity>(lines);
+            ordered.Sort((a, b) =>
+            {
+                int cmp = string.CompareOrdinal(FormatReadableLineLabel(a), FormatReadableLineLabel(b));
+                if (cmp != 0)
+                    return cmp;
+                return a.Index.CompareTo(b.Index);
+            });
+            return ordered;
+        }
+
+        private void AppendReplayLineDump(StringBuilder sb, Entity line)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line) || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return;
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+            {
+                sb.Append("line=").Append(line.Index).Append(" chain=unavailable").AppendLine();
+                return;
+            }
+
+            RefreshSharedRuns(chain);
+            RefreshControlEdgeSharedSpans(chain);
+            RefreshBypassProtectedIntervals(chain);
+            RefreshProtectedSharedIntervals(chain);
+            RefreshProtectedIntervalSummaries(chain);
+
+            sb.AppendLine("--- line ---");
+            sb.Append("line=").Append(line.Index)
+              .Append(" label=").Append(FormatReadableLineLabel(line))
+              .Append(" local=").Append(IsAppliedWorkbenchLocalLine(line) ? "1" : "0")
+              .Append(" express=").Append(IsAppliedWorkbenchExpressLine(line) ? "1" : "0")
+              .Append(" waypoints=").Append(waypoints.Length)
+              .Append(" segments=").Append(chain.SegmentRanges.Count)
+              .Append(" atoms=").Append(chain.TrackAtoms.Count)
+              .Append(" controlPoints=").Append(chain.ControlPoints.Count)
+              .Append(" controlEdges=").Append(chain.ControlEdges.Count)
+              .Append(" protectedIntervals=").Append(chain.BypassProtectedIntervals.Count)
+              .Append(" protectedShared=").Append(chain.ProtectedSharedIntervals.Count)
+              .AppendLine();
+
+            AppendReplayWaypoints(sb, line, waypoints, chain);
+            AppendReplayRawSegments(sb, line);
+            AppendReplayTrackAtoms(sb, chain);
+            AppendReplaySegmentRanges(sb, chain);
+            AppendReplayControlPoints(sb, chain);
+            AppendReplayControlEdges(sb, chain);
+            AppendReplaySharedRuns(sb, chain);
+            AppendReplaySharedRunsByOtherLine(sb, chain);
+            AppendReplayControlEdgeSharedSpans(sb, chain);
+            AppendReplayProtectedIntervals(sb, chain);
+            AppendReplayVehicles(sb, line, waypoints, chain);
+        }
+
+        private void AppendReplayWaypoints(StringBuilder sb, Entity line, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain chain)
+        {
+            sb.Append("waypoints:");
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity building = GetStationBuildingForWaypoint(waypoints, i);
+                int cpIndex = -1;
+                int stationAtom = -1;
+                int inAtom = -1;
+                int outAtom = -1;
+                ControlPointKind? cpKind = null;
+                for (int cpSearch = 0; cpSearch < chain.ControlPoints.Count; cpSearch++)
+                {
+                    ControlPointMarker cp = chain.ControlPoints[cpSearch];
+                    if (cp.WaypointIndex != i)
+                        continue;
+                    cpIndex = cpSearch;
+                    stationAtom = cp.AtomIndex;
+                    cpKind = cp.Kind;
+                    break;
+                }
+
+                if (cpIndex >= 0)
+                {
+                    if (cpIndex > 0)
+                    {
+                        ControlEdge inEdge = chain.ControlEdges[cpIndex - 1];
+                        inAtom = math.max(inEdge.StartAtomIndex, inEdge.EndAtomIndexExclusive - 1);
+                    }
+
+                    if (cpIndex < chain.ControlEdges.Count)
+                    {
+                        ControlEdge outEdge = chain.ControlEdges[cpIndex];
+                        outAtom = outEdge.StartAtomIndex;
+                    }
+                }
+
+                sb.Append(" | wp").Append(i)
+                  .Append(" target=").Append(waypoints[i].m_Waypoint.Index)
+                  .Append(" stop=").Append(building.Index)
+                  .Append(" label=").Append(FormatTrackModelDisplayStationLabel(building, i))
+                  .Append(" bypass=").Append(GetBypassBuildingForWaypoint(waypoints, i) != Entity.Null ? "1" : "0")
+                  .Append(" cp=").Append(cpIndex >= 0 ? cpIndex.ToString() : "-")
+                  .Append(" kind=").Append(cpKind.HasValue ? cpKind.Value.ToString() : "-")
+                  .Append(" atom=").Append(stationAtom >= 0 ? stationAtom.ToString() : "-")
+                  .Append(" inAtom=").Append(inAtom >= 0 ? inAtom.ToString() : "-")
+                  .Append(" outAtom=").Append(outAtom >= 0 ? outAtom.ToString() : "-");
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayRawSegments(StringBuilder sb, Entity line)
+        {
+            if (!EntityManager.HasBuffer<RouteSegment>(line))
+                return;
+
+            DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
+            sb.Append("routeSegments:");
+            for (int i = 0; i < segments.Length; i++)
+            {
+                Entity segmentEntity = segments[i].m_Segment;
+                sb.Append(" | seg").Append(i).Append("=").Append(segmentEntity.Index);
+                if (!EntityManager.HasBuffer<PathElement>(segmentEntity))
+                    continue;
+
+                DynamicBuffer<PathElement> path = EntityManager.GetBuffer<PathElement>(segmentEntity, true);
+                sb.Append("[");
+                for (int pathIndex = 0; pathIndex < path.Length; pathIndex++)
+                {
+                    if (pathIndex > 0)
+                        sb.Append(" -> ");
+                    sb.Append(path[pathIndex].m_Target.Index);
+                }
+                sb.Append("]");
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayTrackAtoms(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("trackAtoms:");
+            for (int i = 0; i < chain.TrackAtoms.Count; i++)
+            {
+                TrackAtom atom = chain.TrackAtoms[i];
+                sb.Append(" | a").Append(i)
+                  .Append(" lane=").Append(atom.Key.PhysicalLaneKey.Index)
+                  .Append(" prev=").Append(atom.Key.PreviousTarget.Index)
+                  .Append(" next=").Append(atom.Key.NextTarget.Index)
+                  .Append(" source=").Append(atom.SourceTarget.Index)
+                  .Append(" flags=").Append(atom.SourceFlags)
+                  .Append(" class=").Append(atom.AtomClass);
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplaySegmentRanges(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("segmentRanges:");
+            for (int i = 0; i < chain.SegmentRanges.Count; i++)
+            {
+                TrackSegmentRange range = chain.SegmentRanges[i];
+                sb.Append(" | seg").Append(i)
+                  .Append("=").Append(range.StartAtomIndex)
+                  .Append("..").Append(range.EndAtomIndexExclusive);
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayControlEdgeSharedSpans(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("controlEdgeSharedSpans:");
+            for (int i = 0; i < chain.ControlEdgeSharedSpans.Count; i++)
+            {
+                ControlEdgeSharedSpan span = chain.ControlEdgeSharedSpans[i];
+                sb.Append(" | ces").Append(i)
+                  .Append(" edge=").Append(span.ControlEdgeIndex)
+                  .Append(" atoms=").Append(span.StartAtomIndex).Append("..").Append(span.EndAtomIndexExclusive)
+                  .Append(" sharedLines=").Append(span.SharedLineCount)
+                  .Append(" mirrored=").Append(span.HasMirroredContext ? "1" : "0");
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayControlPoints(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("controlPoints:");
+            for (int i = 0; i < chain.ControlPoints.Count; i++)
+            {
+                ControlPointMarker cp = chain.ControlPoints[i];
+                sb.Append(" | cp").Append(i)
+                  .Append(" atom=").Append(cp.AtomIndex)
+                  .Append(" wp=").Append(cp.WaypointIndex)
+                  .Append(" kind=").Append(cp.Kind)
+                  .Append(" stop=").Append(cp.Building.Index)
+                  .Append(" label=").Append(FormatTrackModelDisplayStationLabel(cp.Building, cp.WaypointIndex));
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayControlEdges(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("controlEdges:");
+            for (int i = 0; i < chain.ControlEdges.Count; i++)
+            {
+                ControlEdge edge = chain.ControlEdges[i];
+                sb.Append(" | edge").Append(i)
+                  .Append(" cp=").Append(edge.StartControlPointIndex).Append("->").Append(edge.EndControlPointIndex)
+                  .Append(" atoms=").Append(edge.StartAtomIndex).Append("..").Append(edge.EndAtomIndexExclusive)
+                  .Append(" base=").Append(FormatEtaFrames(edge.BaseFrames));
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplaySharedRuns(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("sharedRuns:");
+            for (int i = 0; i < chain.SharedRuns.Count; i++)
+            {
+                SharedTrackRun run = chain.SharedRuns[i];
+                sb.Append(" | run").Append(i)
+                  .Append("=").Append(run.StartAtomIndex).Append("..").Append(run.EndAtomIndexExclusive)
+                  .Append(" sharedLines=").Append(run.SharedLineCount)
+                  .Append(" mirrored=").Append(run.HasMirroredContext ? "1" : "0");
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplaySharedRunsByOtherLine(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("sharedRunsByOtherLine:");
+            if (chain.SharedRunsByOtherLine.Count == 0)
+            {
+                sb.Append(" none").AppendLine();
+                return;
+            }
+
+            List<Entity> others = new List<Entity>(chain.SharedRunsByOtherLine.Keys);
+            others.Sort((a, b) => a.Index.CompareTo(b.Index));
+            for (int i = 0; i < others.Count; i++)
+            {
+                Entity otherLine = others[i];
+                sb.Append(" | line=").Append(otherLine.Index).Append("(").Append(FormatReadableLineLabel(otherLine)).Append(")");
+                List<SharedTrackRun> runs = chain.SharedRunsByOtherLine[otherLine];
+                for (int runIndex = 0; runIndex < runs.Count; runIndex++)
+                {
+                    SharedTrackRun run = runs[runIndex];
+                    sb.Append(" run").Append(runIndex)
+                      .Append("=").Append(run.StartAtomIndex).Append("..").Append(run.EndAtomIndexExclusive)
+                      .Append(" mirrored=").Append(run.HasMirroredContext ? "1" : "0");
+                }
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayProtectedIntervals(StringBuilder sb, LineTrackChain chain)
+        {
+            sb.Append("protectedIntervals:");
+            for (int i = 0; i < chain.BypassProtectedIntervals.Count; i++)
+            {
+                BypassProtectedInterval interval = chain.BypassProtectedIntervals[i];
+                sb.Append(" | p").Append(i)
+                  .Append(" cp=").Append(interval.StartControlPointIndex).Append("->").Append(interval.EndControlPointIndex)
+                  .Append(" edges=").Append(interval.StartControlEdgeIndex).Append("..").Append(interval.EndControlEdgeIndexInclusive)
+                  .Append(" atoms=").Append(interval.StartAtomIndex).Append("..").Append(interval.EndAtomIndexExclusive)
+                  .Append(" base=").Append(FormatEtaFrames(interval.BaseFrames));
+            }
+            sb.AppendLine();
+
+            sb.Append("protectedShared:");
+            for (int i = 0; i < chain.ProtectedSharedIntervals.Count; i++)
+            {
+                ProtectedSharedInterval interval = chain.ProtectedSharedIntervals[i];
+                sb.Append(" | ps").Append(i)
+                  .Append(" p=").Append(interval.ProtectedIntervalIndex)
+                  .Append(" edge=").Append(interval.ControlEdgeIndex)
+                  .Append(" atoms=").Append(interval.StartAtomIndex).Append("..").Append(interval.EndAtomIndexExclusive)
+                  .Append(" sharedLines=").Append(interval.SharedLineCount)
+                  .Append(" mirrored=").Append(interval.HasMirroredContext ? "1" : "0")
+                  .Append(" entry=").Append(FormatEtaFrames(interval.EntryOffsetFrames))
+                  .Append(" clear=").Append(FormatEtaFrames(interval.ClearOffsetFrames));
+            }
+            sb.AppendLine();
+
+            sb.Append("protectedSummaries:");
+            for (int i = 0; i < chain.ProtectedIntervalSummaries.Count; i++)
+            {
+                ProtectedIntervalSummary summary = chain.ProtectedIntervalSummaries[i];
+                sb.Append(" | p").Append(i)
+                  .Append(" shared=").Append(summary.SharedSegmentCount)
+                  .Append(" maxSharedLines=").Append(summary.MaxSharedLineCount)
+                  .Append(" mirrored=").Append(summary.HasMirroredContext ? "1" : "0")
+                  .Append(" minEntry=").Append(FormatEtaFrames(summary.MinEntryOffsetFrames))
+                  .Append(" maxClear=").Append(FormatEtaFrames(summary.MaxClearOffsetFrames));
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayVehicles(StringBuilder sb, Entity line, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain chain)
+        {
+            if (!EntityManager.HasBuffer<RouteVehicle>(line))
+            {
+                sb.Append("vehicles: none").AppendLine();
+                return;
+            }
+
+            DynamicBuffer<RouteVehicle> routeVehicles = EntityManager.GetBuffer<RouteVehicle>(line, true);
+            sb.Append("vehicles:");
+            for (int i = 0; i < routeVehicles.Length; i++)
+            {
+                Entity vehicle = routeVehicles[i].m_Vehicle;
+                if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                    continue;
+
+                string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState) ? vehicleState.ToString() : "Unknown";
+                int targetMin = m_VehicleTargetMin.TryGetValue(vehicle, out int tm) ? tm : -1;
+                int cachedWp = m_CachedWpIdx.TryGetValue(vehicle, out int cw) ? cw : -1;
+                bool hasRouteProgress = TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition);
+                bool hasCursor = TryProjectVehicleTrackCursor(vehicle, line, waypoints, out VehicleTrackCursor cursor);
+                float3 pos = default;
+                bool hasPos = EntityManager.HasComponent<Game.Objects.Transform>(vehicle);
+                if (hasPos)
+                    pos = EntityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position;
+
+                sb.Append(" | v=").Append(vehicle.Index)
+                  .Append(" state=").Append(state)
+                  .Append(" target=").Append(targetMin >= 0 ? SlotStr(targetMin) : "-")
+                  .Append(" cachedWp=").Append(cachedWp)
+                  .Append(" nextWp=").Append(hasRouteProgress ? nextWaypointIndex.ToString() : "-")
+                  .Append(" segPos=").Append(hasRouteProgress ? segmentPosition.ToString("0.00") : "-");
+
+                if (hasCursor)
+                {
+                    sb.Append(" cursorSeg=").Append(cursor.SegmentIndex)
+                      .Append(" atoms=").Append(cursor.AtomStartIndex).Append("..").Append(cursor.AtomEndIndexExclusive)
+                      .Append(" atom=").Append(cursor.AtomCursorIndex)
+                      .Append(" atomPos=").Append(cursor.AtomPosition01.ToString("0.00"))
+                      .Append(" conf=").Append(cursor.Confidence.ToString("0.00"));
+                }
+                else
+                {
+                    sb.Append(" cursor=-");
+                }
+
+                if (hasPos)
+                {
+                    sb.Append(" pos=(")
+                      .Append(pos.x.ToString("0.0")).Append(",")
+                      .Append(pos.y.ToString("0.0")).Append(",")
+                      .Append(pos.z.ToString("0.0")).Append(")");
+                }
+
+                if (IsAppliedWorkbenchLocalLine(line))
+                {
+                    int currentWaypointIndex = ResolveReplayVehicleWaypointContext(vehicle, nextWaypointIndex, cachedWp, waypoints.Length);
+                    if (currentWaypointIndex >= 0
+                        && TryGetBypassWaypointContext(waypoints, currentWaypointIndex, out Entity currentBypassBuilding, out int nextBypassWaypointIndex, out Entity nextBypassBuilding))
+                    {
+                        sb.Append(" bypass=")
+                          .Append(FormatTrackModelDisplayStationLabel(currentBypassBuilding, currentWaypointIndex))
+                          .Append("->")
+                          .Append(FormatTrackModelDisplayStationLabel(nextBypassBuilding, nextBypassWaypointIndex));
+
+                        if (TryEvaluateBypassTrackModelShadowDecision(vehicle, line, waypoints, currentWaypointIndex, m_SimulationSystem.frameIndex, out BypassTrackModelShadowDecision decision))
+                        {
+                            sb.Append(" shadow=").Append(decision.ShouldYield ? "yield" : "pass")
+                              .Append("/").Append(decision.ReasonCode);
+                            if (!string.IsNullOrEmpty(decision.BlockerPosition))
+                                sb.Append(" blocker=").Append(decision.BlockerVehicle.Index).Append("@").Append(decision.BlockerPosition);
+                        }
+
+                        if (TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out int protectedIntervalIndex, out BypassProtectedInterval protectedInterval))
+                        {
+                            sb.Append(" audit[p=").Append(protectedIntervalIndex).Append("]=")
+                              .Append(BuildSharedWindowAuditSummary(vehicle, line, waypoints, chain, currentWaypointIndex, currentBypassBuilding, protectedInterval));
+                        }
+                    }
+                }
+            }
+            sb.AppendLine();
+        }
+
+        private int ResolveReplayVehicleWaypointContext(Entity vehicle, int nextWaypointIndex, int cachedWp, int waypointCount)
+        {
+            int currentWaypointIndex = -1;
+            if (nextWaypointIndex >= 0)
+            {
+                currentWaypointIndex = nextWaypointIndex == 0
+                    ? math.max(0, waypointCount - 1)
+                    : nextWaypointIndex - 1;
+            }
+            else if (cachedWp >= 0)
+            {
+                currentWaypointIndex = cachedWp;
+            }
+
+            if (currentWaypointIndex < 0 || currentWaypointIndex >= waypointCount)
+                return -1;
+            return currentWaypointIndex;
         }
 
         private int CountControlPointsInSpan(AggregatedCorridorSpan span)
