@@ -16,6 +16,7 @@ export const emptyManualRows = [];
 export const emptyAutoRules = [];
 export const emptyStagedRows = [];
 export const emptyLines = [];
+export const emptyDepots = [];
 export const emptyStations = [];
 export const emptyTrips = [];
 
@@ -25,6 +26,7 @@ export function createEmptySnapshot(overrides = {}) {
     selectedEditLine: "",
     mergedView: emptyMergedView,
     lines: emptyLines,
+    depots: emptyDepots,
     stations: emptyStations,
     trips: emptyTrips,
     manualRows: emptyManualRows,
@@ -35,3 +37,6 @@ export function createEmptySnapshot(overrides = {}) {
     ...overrides
   };
 }
+
+
+

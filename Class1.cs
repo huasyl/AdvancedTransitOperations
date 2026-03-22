@@ -5,6 +5,7 @@ using Colossal.Logging;
 using Game;
 using Game.Modding;
 using Game.SceneFlow;
+using Game.Simulation;
 using Game.UI.InGame;
 
 namespace RapidTransitMod
@@ -41,6 +42,9 @@ namespace RapidTransitMod
         {
             log.Info(nameof(OnLoad));
             updateSystem.UpdateAt<DepartureControlSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<DepotSourceLockSystem, TransportDepotAISystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<DepotSourceLockSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RapidTransitPanelUISystem>(SystemUpdatePhase.Rendering);
             updateSystem.UpdateBefore<DispatchWorkbenchUISystem>(SystemUpdatePhase.Rendering);
 

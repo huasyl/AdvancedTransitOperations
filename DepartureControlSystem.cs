@@ -135,6 +135,7 @@ namespace RapidTransitMod
             public string AlertText;
             public bool ShowRetireAction;
             public bool ShowReevaluateAction;
+            public bool ShowLineSpawnAction;
             public bool ShowDumpTrackModelAction;
             public bool ShowBypassStationToggle;
             public bool BypassStationChecked;
@@ -1068,6 +1069,7 @@ namespace RapidTransitMod
                 lapCacheFrames,
                 dispatchCacheFrames,
                 spawnPending);
+            snapshot.ShowLineSpawnAction = isManagedLine;
             snapshot.ShowDumpTrackModelAction = true;
             snapshot.ShowBypassStationToggle = CanConfigureBypassStation(selectedEntity);
             snapshot.BypassStationChecked = snapshot.ShowBypassStationToggle && IsBypassStation(selectedEntity);
@@ -1472,9 +1474,11 @@ namespace RapidTransitMod
             if (line == Entity.Null || vehicle == Entity.Null)
                 return;
 
+            string depotSummary = DescribeVehicleOwnerDepot(vehicle);
             m_LineLastVehicleRegisterSummary[line] = SlotStr(nowMin)
                 + " 车辆" + vehicle.Index
-                + " 注册 -> " + finalState;
+                + " 注册 -> " + finalState
+                + " depot=" + depotSummary;
         }
 
         private void RecordLineHoldingSummary(Entity line, int nowMin, Entity vehicle, int targetMin)
@@ -1518,6 +1522,49 @@ namespace RapidTransitMod
                 }
             }
             finally { lines.Dispose(); }
+        }
+
+        public bool RequestSpawnForLine(Entity line)
+        {
+            line = ResolveSelectedLineEntity(line);
+            if (line == Entity.Null || !EntityManager.Exists(line) || !IsWorkbenchTimetableApplied(line))
+                return false;
+
+            var rvBuffers = GetBufferLookup<RouteVehicle>(true);
+            int actualCount = CountActiveVehicles(line, rvBuffers);
+            int pendingTarget = actualCount;
+            if (m_SpawningLines.TryGetValue(line, out int existingTarget))
+            {
+                pendingTarget = math.max(existingTarget, actualCount);
+            }
+
+            int nextTarget = pendingTarget + 1;
+            m_SpawningLines[line] = nextTarget;
+            m_LineSpawnRequestFrame[line] = m_SimulationSystem.frameIndex;
+            m_LineLastSpawnTriggerSummary[line] = SlotStr((int)(m_TimeSystem.normalizedTime * 1440f) % 1440)
+                + " 手动发车 -> "
+                + nextTarget.ToString();
+            log.Info("[面板发车] 线路" + line.Index + " 触发产车+1 (当前=" + actualCount + ", 目标=" + nextTarget + ")");
+            return true;
+        }
+
+        private string DescribeVehicleOwnerDepot(Entity vehicle)
+        {
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasComponent<Owner>(vehicle))
+            {
+                return "-";
+            }
+
+            Entity depot = EntityManager.GetComponentData<Owner>(vehicle).m_Owner;
+            if (depot == Entity.Null || !EntityManager.Exists(depot))
+                return "-";
+
+            string name = m_NameSystem.GetRenderedLabelName(depot);
+            return string.IsNullOrEmpty(name)
+                ? "#" + depot.Index
+                : ("#" + depot.Index + "[" + name + "]");
         }
 
         private void ForceRetireOne(EntityCommandBuffer ecb)
@@ -1615,8 +1662,17 @@ namespace RapidTransitMod
                         }
                     }
 
-                    if (nTarget <= 0) nTarget = 1;
-                    float targetInterval = D / nTarget;
+                    float targetInterval;
+                    if (nTarget <= 0)
+                    {
+                        // Allow true zero-vehicle lines by stretching the native interval far beyond
+                        // a normal lap, instead of forcing the game to keep one vehicle alive.
+                        targetInterval = math.max(iDefault, D) * 64f;
+                    }
+                    else
+                    {
+                        targetInterval = D / nTarget;
+                    }
                     float delta = targetInterval - iDefault;
                     InjectModifier(mods, delta);
                 }
@@ -2165,6 +2221,9 @@ namespace RapidTransitMod
                         m_CachedWpIdx[v] = initWpIdx;
                         m_VehicleLine[v] = line;
                         m_UICache.Remove(v);
+                        ClearVehicleProgressSuspect(v, "register-reset");
+                        if (initReason == "boarding-midway")
+                            MarkVehicleProgressSuspect(v, initReason);
 
                         if (boarding0 && initWpIdx < 0)
                         {
@@ -2199,7 +2258,17 @@ namespace RapidTransitMod
                             + " 初始:" + initState + " 最终:" + finalState
                             + (restored ? "(缓存恢复)" : "")
                             + " targetMin=" + finalTarget
-                            + " initReason=" + initReason);
+                            + " initReason=" + initReason
+                            + " depot=" + DescribeVehicleOwnerDepot(v));
+                        if (!adoptExistingVehicles)
+                        {
+                            log.Info("[OfficialSpawnResult] line=" + line.Index
+                                + " vehicle=" + v.Index
+                                + " state=" + finalState
+                                + " targetMin=" + finalTarget
+                                + " initReason=" + initReason
+                                + " depot=" + DescribeVehicleOwnerDepot(v));
+                        }
                         if (!adoptExistingVehicles)
                             RecordLineVehicleRegisterSummary(line, (int)(m_TimeSystem.normalizedTime * 1440f) % 1440, v, finalState);
                     }
@@ -2338,6 +2407,7 @@ namespace RapidTransitMod
                         {
                             TryRecordObservedStopDwellOnBoardingEnd(v, lineEnt, previousCachedWpIdx, nowFrame);
                             RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, false, -1, previousCachedWpIdx);
+                            TryClearVehicleProgressSuspectOnStableDeparture(v, previousCachedWpIdx);
                             curWpIdx = -1;
                             m_CachedWpIdx[v] = -1;
                             m_LastBoarding[v] = false;
@@ -2357,6 +2427,7 @@ namespace RapidTransitMod
                                 BeginObservedStopDwellSession(v, lineEnt, curWpIdx, nowFrame);
                                 RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, true, curWpIdx, previousCachedWpIdx);
                                 m_LastBoarding[v] = true;
+                                NoteVehicleProgressSuspectRecoveryBoarding(v, curWpIdx);
                                 m_BVMisfire.Remove(v);
                                 m_BVMisfireStartFrame.Remove(v);
                                 m_ForcedMidStopBoardingGraceUntil.Remove(v);
@@ -2705,7 +2776,11 @@ namespace RapidTransitMod
                             {
                                 runningReleaseReason = "快车已通过" + FormatBypassNodeLabel(runningNextBypassBuilding);
                             }
-                            ClearBypassYieldState(v, runningReleaseReason);
+                            if (!m_BypassYieldBlocker.ContainsKey(v)
+                                || CanClearBypassYieldAfterStationExit(v, cr.m_Route, wps, curWpIdx))
+                            {
+                                ClearBypassYieldState(v, runningReleaseReason);
+                            }
                             bool settleAtOrigin = !inCooldown && ShouldSettleRunningAtOrigin(
                                 v,
                                 wps,
@@ -3035,6 +3110,7 @@ namespace RapidTransitMod
                     m_CachedWpIdx.Remove(dead);
                     m_BVMisfire.Remove(dead);
                     m_BVMisfireStartFrame.Remove(dead);
+                    ClearVehicleProgressSuspect(dead, "vehicle-removed");
                     m_ForcedMidStopBoardingGraceUntil.Remove(dead);
                     m_VehicleLine.Remove(dead);
                     m_LaunchCooldownUntil.Remove(dead);
@@ -3993,7 +4069,6 @@ namespace RapidTransitMod
             string reason,
             Entity blockerVehicle)
         {
-            bool hadPreviousYield = localVehicle != Entity.Null && m_BypassYieldBlocker.TryGetValue(localVehicle, out _);
             if (shouldYield
                 && ShouldShadowVetoLiveBypassYield(localVehicle, out string shadowReason))
             {
@@ -4001,9 +4076,6 @@ namespace RapidTransitMod
                 blockerVehicle = Entity.Null;
                 reason = "shadow-veto-" + shadowReason;
             }
-
-            if (!shouldYield && hadPreviousYield)
-                ClearBypassYieldState(localVehicle, reason);
 
             LogBypassTrackModelDecisionComparison(localVehicle, shouldYield);
             LogBypassDecisionOnce(localVehicle, currentBypassBuilding, nextBypassBuilding, shouldYield, reason, blockerVehicle);
@@ -4096,6 +4168,14 @@ namespace RapidTransitMod
             if (!TryGetTrackModelLiveBypassDecision(localVehicle, out bool shouldYield, out string trackModelReason, out Entity trackModelBlocker))
             {
                 return FinalizeBypassDecision(localVehicle, currentBypassBuilding, nextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
+            }
+
+            if (m_BypassYieldBlocker.TryGetValue(localVehicle, out Entity existingBlocker)
+                && existingBlocker != Entity.Null
+                && IsVehicleWithinCurrentBypassStation(localVehicle, localLine, localWaypoints, currentWaypointIndex))
+            {
+                blockerVehicle = existingBlocker;
+                return FinalizeBypassDecision(localVehicle, currentBypassBuilding, nextBypassBuilding, true, "station-internal-bypass-hold", existingBlocker);
             }
 
             blockerVehicle = trackModelBlocker;

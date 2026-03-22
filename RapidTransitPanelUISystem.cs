@@ -43,6 +43,7 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding<bool>(kGroup, "setPanelOpen", SetPanelOpen));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleRetire", RequestVehicleRetire));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleReevaluate", RequestVehicleReevaluate));
+            AddBinding(new TriggerBinding(kGroup, "requestLineSpawn", RequestLineSpawn));
             AddBinding(new TriggerBinding(kGroup, "requestDumpTrackModel", RequestDumpTrackModel));
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
@@ -166,8 +167,9 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showAlerts", snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);
             AppendJsonBool(sb, "showReevaluateAction", snapshot.ShowReevaluateAction);
+            AppendJsonBool(sb, "showLineSpawnAction", snapshot.ShowLineSpawnAction);
             AppendJsonBool(sb, "showDumpTrackModelAction", snapshot.ShowDumpTrackModelAction);
-            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowReevaluateAction || snapshot.ShowDumpTrackModelAction);
+            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction);
             AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
             AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
             if (sb[sb.Length - 1] == ',')
@@ -302,6 +304,19 @@ namespace RapidTransitMod
             DepartureControlSystem.Instance.RequestDumpTrackModelSnapshot();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
+        }
+
+        private void RequestLineSpawn()
+        {
+            if (DepartureControlSystem.Instance == null)
+                return;
+
+            Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
+            if (selectedEntity != Entity.Null && DepartureControlSystem.Instance.RequestSpawnForLine(selectedEntity))
+            {
+                m_LastVehicle = Entity.Null;
+                m_LastSnapshotVersion = 0;
+            }
         }
 
         private void SetBypassStation(bool enabled)

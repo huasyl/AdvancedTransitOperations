@@ -14,6 +14,7 @@ export default function SchedulePage({
   stagedRows,
   lines,
   stationOptions = [],
+  mergedView,
   selectedEditLine,
   setSelectedEditLine,
   combinedRows,
@@ -25,6 +26,7 @@ export default function SchedulePage({
   onClearStagedLine,
   onRemoveStagedRow,
   onOriginHoldLimitChange,
+  onSelectedLineKindChange,
   onMaxStationDwellChange,
   saveState
 }) {
@@ -35,7 +37,14 @@ export default function SchedulePage({
     () => lines.find((line) => line.id === selectedEditLine) ?? lines[0] ?? null,
     [lines, selectedEditLine]
   );
-  const currentLineKind = selectedLine?.kind === "express" ? "express" : "local";
+  const currentLineKind = useMemo(() => {
+    const expressLineIds = Array.isArray(mergedView?.expressLineIds)
+      ? mergedView.expressLineIds
+      : mergedView?.expressLineId
+        ? [mergedView.expressLineId]
+        : [];
+    return expressLineIds.includes(selectedEditLine) ? "express" : "local";
+  }, [mergedView, selectedEditLine]);
   const selectedOriginStationName = selectedLine?.originStationName || stationOptions[0]?.name || (locale === "zh-CN" ? "始发站未加载" : "Origin pending");
   const [draftLineKind, setDraftLineKind] = useState(currentLineKind);
   const [originHoldInput, setOriginHoldInput] = useState(String(selectedLine?.originHoldLimitMinutes ?? 20));
@@ -76,6 +85,7 @@ export default function SchedulePage({
     setMaxStationDwellInput(String(normalizedValue));
     onMaxStationDwellChange?.(selectedEditLine, normalizedValue);
   }
+
   return (
     <div className={`dw-page-grid is-schedule is-shell-${shellMode}`}>
       <div className="dw-col-main">
@@ -135,7 +145,10 @@ export default function SchedulePage({
                   { value: "express", label: locale === "zh-CN" ? "快车" : "Express" }
                 ]}
                 value={draftLineKind}
-                onChange={setDraftLineKind}
+                onChange={(nextValue) => {
+                  setDraftLineKind(nextValue);
+                  onSelectedLineKindChange?.(nextValue);
+                }}
               />
             </div>
             <div className="dw-field dw-schedule-page-origin-field">

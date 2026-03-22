@@ -8,6 +8,7 @@ using Colossal.Serialization.Entities;
 using Game.Buildings;
 using Game.Common;
 using Game.Objects;
+using Game.Prefabs;
 using Game.Routes;
 using Game.Simulation;
 using Game.UI;
@@ -38,6 +39,8 @@ namespace RapidTransitMod
             [DataMember]
             public DispatchWorkbenchLineDto[] lines;
             [DataMember]
+            public DispatchWorkbenchDepotDto[] depots;
+            [DataMember]
             public DispatchWorkbenchStationDto[] stations;
             [DataMember]
             public DispatchWorkbenchTripDto[] trips;
@@ -66,6 +69,19 @@ namespace RapidTransitMod
             public int originHoldLimitMinutes;
             [DataMember]
             public int maxStationDwellMinutes;
+            [DataMember]
+            public string allowedDepotId;
+        }
+
+        [DataContract]
+        public class DispatchWorkbenchDepotDto
+        {
+            [DataMember]
+            public string id;
+            [DataMember]
+            public string name;
+            [DataMember]
+            public string transportType;
         }
 
         [DataContract]
@@ -188,6 +204,10 @@ namespace RapidTransitMod
             public int originHoldLimitMinutes;
             [DataMember]
             public int maxStationDwellMinutes;
+            [DataMember]
+            public string transportType;
+            [DataMember]
+            public string allowedDepotId;
         }
 
         [DataContract]
@@ -345,6 +365,7 @@ namespace RapidTransitMod
             public string Id = string.Empty;
             public string Name = string.Empty;
             public string Kind = "local";
+            public string TransportType = string.Empty;
             public int RouteNumber = int.MaxValue;
             public int StationCount = 0;
             public string Color = string.Empty;
@@ -379,6 +400,7 @@ namespace RapidTransitMod
         private readonly Dictionary<string, DispatchWorkbenchDraftState> m_WorkbenchDrafts = new Dictionary<string, DispatchWorkbenchDraftState>();
         private readonly Dictionary<string, int> m_WorkbenchLineOriginHoldLimits = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, int> m_WorkbenchLineMaxStationDwellMinutes = new Dictionary<string, int>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> m_WorkbenchLineAllowedDepots = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, AppliedWorkbenchLineState> m_AppliedWorkbenchLines = new Dictionary<string, AppliedWorkbenchLineState>(StringComparer.Ordinal);
         private readonly Dictionary<Entity, WorkbenchRealtimeVehicleRecord> m_WorkbenchRealtimeVehicles = new Dictionary<Entity, WorkbenchRealtimeVehicleRecord>();
         private ulong m_WorkbenchSnapshotVersion = 1;
@@ -549,6 +571,7 @@ namespace RapidTransitMod
             List<DispatchWorkbenchTripDto> trips = activeRuntime != null
                 ? BuildRealtimeWorkbenchTrips(activeRuntime, stations, draft)
                 : new List<DispatchWorkbenchTripDto>();
+            List<DispatchWorkbenchDepotDto> depots = BuildWorkbenchDepots();
 
             LogWorkbenchSnapshot(activeRuntime, stations, trips, draft);
 
@@ -569,8 +592,11 @@ namespace RapidTransitMod
                     originStationId = line.OriginStationId,
                     originStationName = line.OriginStationName,
                     originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Id),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Id)
+                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Id),
+                    transportType = line.TransportType,
+                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Id)
                 }).ToArray(),
+                depots = depots.ToArray(),
                 stations = stations.ToArray(),
                 trips = trips.ToArray(),
                 manualRows = mergedManualRows.ToArray(),
@@ -716,6 +742,7 @@ namespace RapidTransitMod
                     string originStationId;
                     string originStationName;
                     ResolveWorkbenchLineOrigin(line, out originStationId, out originStationName);
+                    string transportType = ResolveWorkbenchLineTransportType(line);
 
                     string name = ResolveWorkbenchEntityName(line);
                     if (string.IsNullOrEmpty(name))
@@ -733,6 +760,7 @@ namespace RapidTransitMod
                         Id = line.Index.ToString(),
                         Name = name,
                         Kind = kind,
+                        TransportType = transportType,
                         RouteNumber = routeNumber,
                         StationCount = stationCount,
                         Color = ResolveWorkbenchLineColor(line),
@@ -1124,11 +1152,52 @@ namespace RapidTransitMod
                 {
                     draft.StagedRows = applied.StagedRows.Select(CloneStagedRow).ToList();
                 }
+                if (!hasMixedDraftRows)
+                {
+                    EnsureAppliedMergedViewMatchesLineKind(draft, lineKey, applied);
+                }
                 draft.DraftApplied = true;
                 draft.RulesApplied = true;
                 draft.AppliedDepartureMinutesCache.Clear();
                 m_WorkbenchLineOriginHoldLimits[lineKey] =
                     NormalizeOriginHoldLimitMinutes(applied.OriginHoldLimitMinutes);
+            }
+        }
+
+        private void EnsureAppliedMergedViewMatchesLineKind(
+            DispatchWorkbenchDraftState draft,
+            string lineKey,
+            AppliedWorkbenchLineState applied)
+        {
+            if (draft == null || string.IsNullOrEmpty(lineKey))
+                return;
+
+            if (draft.MergedView == null)
+            {
+                draft.MergedView = new DispatchWorkbenchMergedView
+                {
+                    localLineIds = Array.Empty<string>(),
+                    expressLineIds = Array.Empty<string>(),
+                    isLoop = true,
+                    turnbackStationId = string.Empty,
+                    direction = "up"
+                };
+            }
+
+            string serviceKind = GetAppliedWorkbenchLineServiceKind(applied);
+            if (string.Equals(serviceKind, "express", StringComparison.Ordinal))
+            {
+                draft.MergedView.localLineIds = Array.Empty<string>();
+                draft.MergedView.localLineId = string.Empty;
+                draft.MergedView.expressLineIds = new[] { lineKey };
+                draft.MergedView.expressLineId = lineKey;
+            }
+            else
+            {
+                draft.MergedView.localLineIds = new[] { lineKey };
+                draft.MergedView.localLineId = lineKey;
+                draft.MergedView.expressLineIds = Array.Empty<string>();
+                draft.MergedView.expressLineId = string.Empty;
             }
         }
 
@@ -1210,7 +1279,8 @@ namespace RapidTransitMod
                 {
                     lineId = entry.Key,
                     originHoldLimitMinutes = NormalizeOriginHoldLimitMinutes(entry.Value),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(entry.Key)
+                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(entry.Key),
+                    allowedDepotId = GetWorkbenchAllowedDepotId(entry.Key)
                 })
                 .ToArray();
 
@@ -1226,6 +1296,8 @@ namespace RapidTransitMod
         {
             m_WorkbenchDrafts.Clear();
             m_WorkbenchLineOriginHoldLimits.Clear();
+            m_WorkbenchLineMaxStationDwellMinutes.Clear();
+            m_WorkbenchLineAllowedDepots.Clear();
             m_WorkbenchPreferredLineId = persisted?.preferredLineId ?? string.Empty;
 
             if (persisted?.lineSettings != null)
@@ -1256,10 +1328,10 @@ namespace RapidTransitMod
             {
                 lineKey = lineKey,
                 selectedLineId = draft?.SelectedLineId ?? string.Empty,
-                selectedEditLine = draft?.SelectedEditLine ?? string.Empty,
-                mergedView = CloneMergedView(draft?.MergedView),
-                manualRows = draft?.ManualRows?.Select(CloneManualRow).ToArray() ?? Array.Empty<DispatchWorkbenchManualRowDto>(),
-                autoRules = draft?.AutoRules?.Select(CloneAutoRule).ToArray() ?? Array.Empty<DispatchWorkbenchAutoRuleDto>(),
+                selectedEditLine = string.Empty,
+                mergedView = CloneMergedViewForPersistence(draft?.MergedView),
+                manualRows = Array.Empty<DispatchWorkbenchManualRowDto>(),
+                autoRules = Array.Empty<DispatchWorkbenchAutoRuleDto>(),
                 stagedRows = draft?.StagedRows?.Select(CloneStagedRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
                 rulesApplied = draft?.RulesApplied == true,
                 draftApplied = draft?.DraftApplied == true
@@ -1318,6 +1390,14 @@ namespace RapidTransitMod
                 windowStart = view.windowStart ?? string.Empty,
                 windowEnd = view.windowEnd ?? string.Empty
             };
+        }
+
+        private static DispatchWorkbenchMergedView CloneMergedViewForPersistence(DispatchWorkbenchMergedView view)
+        {
+            DispatchWorkbenchMergedView mergedView = CloneMergedView(view);
+            mergedView.windowStart = string.Empty;
+            mergedView.windowEnd = string.Empty;
+            return mergedView;
         }
 
         private static List<string> SplitWorkbenchPersistencePayload(string payloadJson)
@@ -1489,8 +1569,36 @@ namespace RapidTransitMod
                 return string.Empty;
             }
 
-            DispatchWorkbenchStagedRowDto firstRow = state.StagedRows[0];
-            return string.IsNullOrEmpty(firstRow?.kind) ? "local" : firstRow.kind;
+            return GetAppliedWorkbenchLineServiceKind(state);
+        }
+
+        private static string GetAppliedWorkbenchLineServiceKind(AppliedWorkbenchLineState state)
+        {
+            if (state == null || state.StagedRows == null || state.StagedRows.Count == 0)
+                return string.Empty;
+
+            bool sawExpress = false;
+            bool sawLocal = false;
+            for (int i = 0; i < state.StagedRows.Count; i++)
+            {
+                string kind = state.StagedRows[i]?.kind;
+                if (string.Equals(kind, "express", StringComparison.Ordinal))
+                {
+                    sawExpress = true;
+                }
+                else
+                {
+                    sawLocal = true;
+                }
+
+                if (sawExpress && sawLocal)
+                    return "local";
+            }
+
+            if (sawExpress)
+                return "express";
+
+            return "local";
         }
 
         private bool IsAppliedWorkbenchLocalLine(Entity line)
@@ -1847,7 +1955,7 @@ namespace RapidTransitMod
             Entity current = stop;
             for (int i = 0; i < 8 && current != Entity.Null; i++)
             {
-                if (EntityManager.HasComponent<TransportStation>(current))
+                if (EntityManager.HasComponent<Game.Buildings.TransportStation>(current))
                 {
                     if (EntityManager.HasComponent<Owner>(current))
                     {
@@ -2824,7 +2932,8 @@ namespace RapidTransitMod
             {
                 lineId = setting.lineId ?? string.Empty,
                 originHoldLimitMinutes = NormalizeOriginHoldLimitMinutes(setting.originHoldLimitMinutes),
-                maxStationDwellMinutes = NormalizeMaxStationDwellMinutes(setting.maxStationDwellMinutes)
+                maxStationDwellMinutes = NormalizeMaxStationDwellMinutes(setting.maxStationDwellMinutes),
+                allowedDepotId = setting.allowedDepotId ?? string.Empty
             };
         }
 
@@ -2851,6 +2960,7 @@ namespace RapidTransitMod
 
             m_WorkbenchLineOriginHoldLimits.Clear();
             m_WorkbenchLineMaxStationDwellMinutes.Clear();
+            m_WorkbenchLineAllowedDepots.Clear();
             foreach (DispatchWorkbenchLineSettingDto setting in settings)
             {
                 if (setting == null || string.IsNullOrEmpty(setting.lineId))
@@ -2860,6 +2970,7 @@ namespace RapidTransitMod
                     NormalizeOriginHoldLimitMinutes(setting.originHoldLimitMinutes);
                 m_WorkbenchLineMaxStationDwellMinutes[setting.lineId] =
                     NormalizeMaxStationDwellMinutes(setting.maxStationDwellMinutes);
+                m_WorkbenchLineAllowedDepots[setting.lineId] = setting.allowedDepotId ?? string.Empty;
             }
         }
 
@@ -2883,6 +2994,16 @@ namespace RapidTransitMod
                 : DEFAULT_MAX_STATION_DWELL_MINUTES;
         }
 
+        private string GetWorkbenchAllowedDepotId(string lineId)
+        {
+            if (string.IsNullOrEmpty(lineId))
+                return string.Empty;
+
+            return m_WorkbenchLineAllowedDepots.TryGetValue(lineId, out string configuredDepotId)
+                ? configuredDepotId ?? string.Empty
+                : string.Empty;
+        }
+
         private int GetWorkbenchOriginHoldLimitMinutes(Entity line)
         {
             return line == Entity.Null
@@ -2895,6 +3016,100 @@ namespace RapidTransitMod
             return line == Entity.Null
                 ? DEFAULT_MAX_STATION_DWELL_MINUTES
                 : GetWorkbenchMaxStationDwellMinutes(line.Index.ToString());
+        }
+
+        public Entity GetConfiguredAllowedDepot(Entity line)
+        {
+            if (line == Entity.Null)
+                return Entity.Null;
+
+            string depotId = GetWorkbenchAllowedDepotId(line.Index.ToString());
+            return ResolveWorkbenchDepotEntityById(depotId);
+        }
+
+        private string ResolveWorkbenchLineTransportType(Entity line)
+        {
+            if (line == Entity.Null || !EntityManager.HasComponent<PrefabRef>(line))
+                return string.Empty;
+
+            Entity prefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+            if (prefab == Entity.Null || !EntityManager.HasComponent<TransportLineData>(prefab))
+                return string.Empty;
+
+            return EntityManager.GetComponentData<TransportLineData>(prefab).m_TransportType.ToString();
+        }
+
+        private List<DispatchWorkbenchDepotDto> BuildWorkbenchDepots()
+        {
+            List<DispatchWorkbenchDepotDto> depots = new List<DispatchWorkbenchDepotDto>();
+            EntityQuery depotQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.ReadOnly<PrefabRef>(),
+                ComponentType.Exclude<Deleted>());
+            NativeArray<Entity> depotEntities = depotQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < depotEntities.Length; i++)
+                {
+                    Entity depot = depotEntities[i];
+                    string name = ResolveWorkbenchEntityName(depot);
+                    if (string.IsNullOrEmpty(name))
+                    {
+                        name = "Depot " + depot.Index;
+                    }
+
+                    string transportType = string.Empty;
+                    Entity prefab = EntityManager.GetComponentData<PrefabRef>(depot).m_Prefab;
+                    if (prefab != Entity.Null && EntityManager.HasComponent<TransportDepotData>(prefab))
+                    {
+                        transportType = EntityManager.GetComponentData<TransportDepotData>(prefab).m_TransportType.ToString();
+                    }
+
+                    depots.Add(new DispatchWorkbenchDepotDto
+                    {
+                        id = depot.Index.ToString(),
+                        name = name,
+                        transportType = transportType
+                    });
+                }
+            }
+            finally
+            {
+                if (depotEntities.IsCreated) depotEntities.Dispose();
+            }
+
+            return depots
+                .OrderBy(entry => entry.name, StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(entry => entry.id, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        private Entity ResolveWorkbenchDepotEntityById(string depotId)
+        {
+            if (string.IsNullOrEmpty(depotId))
+                return Entity.Null;
+
+            EntityQuery depotQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.Exclude<Deleted>());
+            NativeArray<Entity> depotEntities = depotQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < depotEntities.Length; i++)
+                {
+                    Entity depot = depotEntities[i];
+                    if (string.Equals(depot.Index.ToString(), depotId, StringComparison.Ordinal))
+                    {
+                        return depot;
+                    }
+                }
+            }
+            finally
+            {
+                if (depotEntities.IsCreated) depotEntities.Dispose();
+            }
+
+            return Entity.Null;
         }
 
         private static bool AreManualRowsEquivalent(
@@ -3091,6 +3306,14 @@ namespace RapidTransitMod
                 }
             }
 
+            Dictionary<string, WorkbenchLineRuntime> runtimeLineById = runtimeLines?
+                .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
+                .ToDictionary(line => line.Id, line => line, StringComparer.Ordinal)
+                ?? new Dictionary<string, WorkbenchLineRuntime>(StringComparer.Ordinal);
+            Dictionary<string, DispatchWorkbenchDepotDto> depotById = BuildWorkbenchDepots()
+                .Where(depot => depot != null && !string.IsNullOrEmpty(depot.id))
+                .ToDictionary(depot => depot.id, depot => depot, StringComparer.Ordinal);
+
             if (request.manualRows != null)
             {
                 Dictionary<string, HashSet<string>> seenByLine = new Dictionary<string, HashSet<string>>();
@@ -3197,6 +3420,21 @@ namespace RapidTransitMod
                         || setting.maxStationDwellMinutes > MAX_ORIGIN_HOLD_LIMIT_MINUTES)
                     {
                         errors.Add("Line setting " + setting.lineId + " has invalid max station dwell limit.");
+                    }
+
+                    if (!string.IsNullOrEmpty(setting.allowedDepotId))
+                    {
+                        if (!depotById.TryGetValue(setting.allowedDepotId, out DispatchWorkbenchDepotDto depot))
+                        {
+                            errors.Add("Line setting " + setting.lineId + " references a depot that no longer exists.");
+                        }
+                        else if (runtimeLineById.TryGetValue(setting.lineId, out WorkbenchLineRuntime runtimeLine)
+                            && !string.IsNullOrEmpty(runtimeLine.TransportType)
+                            && !string.IsNullOrEmpty(depot.transportType)
+                            && !string.Equals(runtimeLine.TransportType, depot.transportType, StringComparison.Ordinal))
+                        {
+                            errors.Add("Line setting " + setting.lineId + " references a depot with a different transport type.");
+                        }
                     }
                 }
             }

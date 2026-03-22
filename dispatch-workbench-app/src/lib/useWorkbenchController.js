@@ -408,6 +408,7 @@ export function useWorkbenchController() {
         suppressNextSnapshotRef.current = true;
         await workbenchApi.saveDraft({
           selectedEditLine,
+          mergedView: getPersistedMergedView(mergedView),
           manualRows,
           autoRules,
           stagedRows,
@@ -424,13 +425,14 @@ export function useWorkbenchController() {
   }, [
     workbenchApi,
     selectedEditLine,
+    mergedView,
     lineSettingsForSave,
     manualRows,
     autoRules,
     stagedRows
   ]);
 
-    function handleOriginHoldLimitChange(lineId, nextValue) {
+  function handleOriginHoldLimitChange(lineId, nextValue) {
     const normalizedValue =
       Number.isFinite(Number(nextValue)) && Number(nextValue) > 0
         ? Math.max(1, Math.min(120, Math.round(Number(nextValue))))
@@ -443,6 +445,33 @@ export function useWorkbenchController() {
           : line
       )
     );
+  }
+
+  function handleSelectedLineKindChange(nextKind) {
+    const normalizedKind = nextKind === "express" ? "express" : "local";
+    if (!selectedEditLine) {
+      return;
+    }
+
+    setMergedView((current) => {
+      const base = ensureMergedView(current);
+      const nextLocalLineIds = base.localLineIds.filter((lineId) => lineId !== selectedEditLine);
+      const nextExpressLineIds = base.expressLineIds.filter((lineId) => lineId !== selectedEditLine);
+
+      if (normalizedKind === "express") {
+        nextExpressLineIds.push(selectedEditLine);
+      } else {
+        nextLocalLineIds.push(selectedEditLine);
+      }
+
+      return {
+        ...base,
+        localLineIds: nextLocalLineIds,
+        localLineId: nextLocalLineIds[0] || "",
+        expressLineIds: nextExpressLineIds,
+        expressLineId: nextExpressLineIds[0] || ""
+      };
+    });
   }
 
   function handleMaxStationDwellChange(lineId, nextValue) {
@@ -657,6 +686,7 @@ export function useWorkbenchController() {
     windowValid,
     handleOverviewContextAction,
     handleScheduleContextAction,
+    handleSelectedLineKindChange,
     handleApplyDraft,
     handleAddManualToStaged,
     handleAddAutoToStaged,
@@ -664,14 +694,3 @@ export function useWorkbenchController() {
     handleRemoveStagedRow
   };
 }
-
-
-
-
-
-
-
-
-
-
-

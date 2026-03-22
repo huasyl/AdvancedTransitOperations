@@ -5,6 +5,7 @@ using Game.Common;
 using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
+using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -19,6 +20,11 @@ namespace RapidTransitMod
         private const float SAME_DIRECTION_AHEAD_MARGIN_ATOMS = 0.75f;
         private const float TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES = 1f;
         private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 32f;
+        private const float LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS = 8f;
+        private const uint SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES = 60;
+        private const int SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS = 1;
+        private const int SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD = 12;
+        private const float SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS = 120f;
 
         private enum TrackTraversalDir : byte
         {
@@ -175,6 +181,11 @@ namespace RapidTransitMod
             public List<BypassProtectedInterval> BypassProtectedIntervals = new List<BypassProtectedInterval>();
             public List<ProtectedSharedInterval> ProtectedSharedIntervals = new List<ProtectedSharedInterval>();
             public List<ProtectedIntervalSummary> ProtectedIntervalSummaries = new List<ProtectedIntervalSummary>();
+            public uint SharedRunsVersion;
+            public bool ControlEdgeSharedSpansReady;
+            public bool BypassProtectedIntervalsReady;
+            public bool ProtectedSharedIntervalsReady;
+            public bool ProtectedIntervalSummariesReady;
         }
 
         private readonly struct SharedTrackRun
@@ -486,12 +497,21 @@ namespace RapidTransitMod
         private readonly Dictionary<TrackAtomKey, List<SharedTrackOccurrence>> m_SharedTrackIndex = new Dictionary<TrackAtomKey, List<SharedTrackOccurrence>>();
         private readonly Dictionary<Entity, List<SharedPhysicalOccurrence>> m_SharedPhysicalTrackIndex = new Dictionary<Entity, List<SharedPhysicalOccurrence>>();
         private readonly Dictionary<Entity, VehicleTrackCursor> m_VehicleTrackCursorHints = new Dictionary<Entity, VehicleTrackCursor>();
+        private readonly Dictionary<Entity, uint> m_SuspectProgressSinceFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, uint> m_SuspectProgressLastValidationFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, bool> m_SuspectProgressProjectionInvalid = new Dictionary<Entity, bool>();
+        private readonly Dictionary<Entity, string> m_SuspectProgressReason = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_SuspectProgressLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, int> m_SuspectProgressRecoveryWaypoint = new Dictionary<Entity, int>();
+        private readonly Dictionary<Entity, int> m_SuspectProgressValidationCount = new Dictionary<Entity, int>();
+        private readonly Dictionary<Entity, SuspectProgressSample> m_SuspectProgressFirstSample = new Dictionary<Entity, SuspectProgressSample>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelShadowLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelCompareLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_SharedWindowAuditLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_TrackModelSequenceLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, BypassTrackModelShadowEvaluation> m_BypassTrackModelShadowEvaluations = new Dictionary<Entity, BypassTrackModelShadowEvaluation>();
         private readonly Dictionary<Entity, BypassTrackModelShadowDecision> m_BypassTrackModelShadowDecisions = new Dictionary<Entity, BypassTrackModelShadowDecision>();
+        private uint m_SharedTrackIndexVersion = 1;
         private readonly HashSet<Entity> m_DirtyTrackLines = new HashSet<Entity>();
         private bool m_SharedTrackIndexDirty = true;
 
@@ -512,6 +532,14 @@ namespace RapidTransitMod
             m_SharedTrackIndex.Clear();
             m_SharedPhysicalTrackIndex.Clear();
             m_VehicleTrackCursorHints.Clear();
+            m_SuspectProgressSinceFrame.Clear();
+            m_SuspectProgressLastValidationFrame.Clear();
+            m_SuspectProgressProjectionInvalid.Clear();
+            m_SuspectProgressReason.Clear();
+            m_SuspectProgressLogCache.Clear();
+            m_SuspectProgressRecoveryWaypoint.Clear();
+            m_SuspectProgressValidationCount.Clear();
+            m_SuspectProgressFirstSample.Clear();
             m_BypassTrackModelShadowLogCache.Clear();
             m_BypassTrackModelCompareLogCache.Clear();
             m_SharedWindowAuditLogCache.Clear();
@@ -1050,6 +1078,7 @@ namespace RapidTransitMod
             }
 
             m_SharedTrackIndexDirty = false;
+            m_SharedTrackIndexVersion++;
         }
 
         private void EnsureSharedTrackIndexCurrent()
@@ -1074,9 +1103,19 @@ namespace RapidTransitMod
 
         private void RefreshSharedRuns(LineTrackChain chain)
         {
+            if (chain == null)
+                return;
+
+            EnsureSharedTrackIndexCurrent();
+            if (chain.SharedRunsVersion == m_SharedTrackIndexVersion)
+                return;
+
             chain.SharedRuns.Clear();
             chain.SharedRunsByOtherLine.Clear();
-            EnsureSharedTrackIndexCurrent();
+            chain.ControlEdgeSharedSpansReady = false;
+            chain.BypassProtectedIntervalsReady = false;
+            chain.ProtectedSharedIntervalsReady = false;
+            chain.ProtectedIntervalSummariesReady = false;
 
             int runStart = -1;
             bool runMirrored = false;
@@ -1114,6 +1153,7 @@ namespace RapidTransitMod
                 chain.SharedRuns.Add(new SharedTrackRun(runStart, chain.TrackAtoms.Count, runMirrored, runSharedLineCount));
 
             RefreshSharedRunsByOtherLine(chain);
+            chain.SharedRunsVersion = m_SharedTrackIndexVersion;
         }
 
         private void RefreshSharedRunsByOtherLine(LineTrackChain chain)
@@ -1185,11 +1225,42 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct SuspectProgressSample
+        {
+            public readonly int ProjectedAtomIndex;
+            public readonly int BestAtomIndex;
+            public readonly float3 VehiclePosition;
+            public readonly float ProjectedDistanceMeters;
+            public readonly float BestDistanceMeters;
+
+            public SuspectProgressSample(
+                int projectedAtomIndex,
+                int bestAtomIndex,
+                float3 vehiclePosition,
+                float projectedDistanceMeters,
+                float bestDistanceMeters)
+            {
+                ProjectedAtomIndex = projectedAtomIndex;
+                BestAtomIndex = bestAtomIndex;
+                VehiclePosition = vehiclePosition;
+                ProjectedDistanceMeters = projectedDistanceMeters;
+                BestDistanceMeters = bestDistanceMeters;
+            }
+        }
+
         private void RefreshControlEdgeSharedSpans(LineTrackChain chain)
         {
-            chain.ControlEdgeSharedSpans.Clear();
-            if (chain.SharedRuns.Count == 0 || chain.ControlEdges.Count == 0)
+            if (chain == null || chain.ControlEdgeSharedSpansReady)
                 return;
+
+            chain.ControlEdgeSharedSpans.Clear();
+            chain.ProtectedSharedIntervalsReady = false;
+            chain.ProtectedIntervalSummariesReady = false;
+            if (chain.SharedRuns.Count == 0 || chain.ControlEdges.Count == 0)
+            {
+                chain.ControlEdgeSharedSpansReady = true;
+                return;
+            }
 
             for (int controlEdgeIndex = 0; controlEdgeIndex < chain.ControlEdges.Count; controlEdgeIndex++)
             {
@@ -1210,13 +1281,23 @@ namespace RapidTransitMod
                         run.SharedLineCount));
                 }
             }
+
+            chain.ControlEdgeSharedSpansReady = true;
         }
 
         private void RefreshBypassProtectedIntervals(LineTrackChain chain)
         {
-            chain.BypassProtectedIntervals.Clear();
-            if (chain.ControlPoints.Count < 2 || chain.ControlEdges.Count == 0)
+            if (chain == null || chain.BypassProtectedIntervalsReady)
                 return;
+
+            chain.BypassProtectedIntervals.Clear();
+            chain.ProtectedSharedIntervalsReady = false;
+            chain.ProtectedIntervalSummariesReady = false;
+            if (chain.ControlPoints.Count < 2 || chain.ControlEdges.Count == 0)
+            {
+                chain.BypassProtectedIntervalsReady = true;
+                return;
+            }
 
             for (int startControlPointIndex = 0; startControlPointIndex < chain.ControlPoints.Count - 1; startControlPointIndex++)
             {
@@ -1257,13 +1338,22 @@ namespace RapidTransitMod
                     endAtomIndexExclusive,
                     baseFrames));
             }
+
+            chain.BypassProtectedIntervalsReady = true;
         }
 
         private void RefreshProtectedSharedIntervals(LineTrackChain chain)
         {
-            chain.ProtectedSharedIntervals.Clear();
-            if (chain.BypassProtectedIntervals.Count == 0 || chain.ControlEdgeSharedSpans.Count == 0)
+            if (chain == null || chain.ProtectedSharedIntervalsReady)
                 return;
+
+            chain.ProtectedSharedIntervals.Clear();
+            chain.ProtectedIntervalSummariesReady = false;
+            if (chain.BypassProtectedIntervals.Count == 0 || chain.ControlEdgeSharedSpans.Count == 0)
+            {
+                chain.ProtectedSharedIntervalsReady = true;
+                return;
+            }
 
             for (int protectedIntervalIndex = 0; protectedIntervalIndex < chain.BypassProtectedIntervals.Count; protectedIntervalIndex++)
             {
@@ -1292,13 +1382,21 @@ namespace RapidTransitMod
                         clearOffsetFrames));
                 }
             }
+
+            chain.ProtectedSharedIntervalsReady = true;
         }
 
         private void RefreshProtectedIntervalSummaries(LineTrackChain chain)
         {
+            if (chain == null || chain.ProtectedIntervalSummariesReady)
+                return;
+
             chain.ProtectedIntervalSummaries.Clear();
             if (chain.BypassProtectedIntervals.Count == 0)
+            {
+                chain.ProtectedIntervalSummariesReady = true;
                 return;
+            }
 
             for (int protectedIntervalIndex = 0; protectedIntervalIndex < chain.BypassProtectedIntervals.Count; protectedIntervalIndex++)
             {
@@ -1335,6 +1433,8 @@ namespace RapidTransitMod
                     minEntryOffsetFrames,
                     maxClearOffsetFrames));
             }
+
+            chain.ProtectedIntervalSummariesReady = true;
         }
 
         private float EstimateFramesBetweenAtoms(LineTrackChain chain, int startControlEdgeIndex, int endControlEdgeIndexInclusive, int fromAtomIndex, int toAtomIndexExclusive)
@@ -1487,6 +1587,36 @@ namespace RapidTransitMod
                 segmentPosition = 0f;
             }
 
+            bool boarding = false;
+            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+            {
+                boarding = (EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State & PublicTransportFlags.Boarding) != 0;
+            }
+
+            if (boarding)
+            {
+                int anchoredWaypointIndex = ComputeWpIndex(vehicle, waypoints);
+                if (anchoredWaypointIndex >= 0)
+                {
+                    nextWaypointIndex = anchoredWaypointIndex;
+                    segmentPosition = 0f;
+                    trustedRouteProgress = false;
+                }
+            }
+            else if (trustedRouteProgress && TryResolveStationAnchoredProgressFallback(
+                vehicle,
+                line,
+                waypoints,
+                chain,
+                nextWaypointIndex,
+                segmentPosition,
+                out int anchoredWaypointIndex))
+            {
+                nextWaypointIndex = anchoredWaypointIndex;
+                segmentPosition = 0f;
+                trustedRouteProgress = false;
+            }
+
             nextWaypointIndex = math.clamp(nextWaypointIndex, 0, waypoints.Length - 1);
             int segmentIndex = nextWaypointIndex == 0
                 ? math.max(0, chain.SegmentRanges.Count - 1)
@@ -1523,6 +1653,9 @@ namespace RapidTransitMod
                 }
             }
 
+            if (IsVehicleProgressProjectionInvalid(vehicle, line, chain, segmentIndex, approximateAtomIndex))
+                return false;
+
             approximateAtomIndex = math.clamp(approximateAtomIndex, segmentRange.StartAtomIndex, segmentRange.EndAtomIndexExclusive - 1);
             cursor = new VehicleTrackCursor(
                 line,
@@ -1535,6 +1668,376 @@ namespace RapidTransitMod
                 confidence);
             m_VehicleTrackCursorHints[vehicle] = cursor;
             return true;
+        }
+
+        private bool TryResolveStationAnchoredProgressFallback(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            int nextWaypointIndex,
+            float segmentPosition,
+            out int anchoredWaypointIndex)
+        {
+            anchoredWaypointIndex = -1;
+            if (!TryGetVehicleWorldPosition(vehicle, out float3 vehiclePosition))
+                return false;
+
+            if (TryResolveWaypointAnchorConflict(
+                    vehiclePosition,
+                    waypoints,
+                    nextWaypointIndex,
+                    out int cachedAnchorWaypointIndex)
+                && m_CachedWpIdx.TryGetValue(vehicle, out int cachedWpIdx)
+                && cachedWpIdx == cachedAnchorWaypointIndex)
+            {
+                anchoredWaypointIndex = cachedAnchorWaypointIndex;
+                return true;
+            }
+
+            if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+                && hint.LineEntity == line
+                && hint.ChainSignature == chain.Signature)
+            {
+                int hintedWaypointIndex = hint.SegmentIndex >= chain.SegmentRanges.Count - 1
+                    ? 0
+                    : hint.SegmentIndex + 1;
+                if (TryResolveWaypointAnchorConflict(
+                        vehiclePosition,
+                        waypoints,
+                        nextWaypointIndex,
+                        out int nearbyWaypointIndex)
+                    && nearbyWaypointIndex == hintedWaypointIndex)
+                {
+                    anchoredWaypointIndex = nearbyWaypointIndex;
+                    return true;
+                }
+
+                bool wrappedForward = hint.SegmentIndex >= chain.SegmentRanges.Count - 2 && nextWaypointIndex <= 1;
+                bool monotonicForward = (nextWaypointIndex == 0 ? chain.SegmentRanges.Count - 1 : nextWaypointIndex - 1) >= hint.SegmentIndex || wrappedForward;
+                if (!monotonicForward && math.saturate(segmentPosition) <= 0.15f)
+                {
+                    anchoredWaypointIndex = hintedWaypointIndex;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void MarkVehicleProgressSuspect(Entity vehicle, string reason)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            m_SuspectProgressSinceFrame[vehicle] = nowFrame;
+            m_SuspectProgressReason[vehicle] = reason ?? "unknown";
+            m_SuspectProgressProjectionInvalid.Remove(vehicle);
+            m_SuspectProgressRecoveryWaypoint.Remove(vehicle);
+            m_SuspectProgressValidationCount.Remove(vehicle);
+            m_SuspectProgressFirstSample.Remove(vehicle);
+
+            string summary = vehicle.Index + "|" + reason;
+            if (m_SuspectProgressLogCache.TryGetValue(vehicle, out string previous) && previous == summary)
+                return;
+
+            m_SuspectProgressLogCache[vehicle] = summary;
+            log.Info("[ProgressSuspect] 车辆" + vehicle.Index + " reason=" + reason + " sinceFrame=" + nowFrame);
+        }
+
+        private void ClearVehicleProgressSuspect(Entity vehicle, string reason = null)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            bool hadState = m_SuspectProgressSinceFrame.Remove(vehicle);
+            m_SuspectProgressLastValidationFrame.Remove(vehicle);
+            m_SuspectProgressProjectionInvalid.Remove(vehicle);
+            m_SuspectProgressReason.Remove(vehicle);
+            m_SuspectProgressLogCache.Remove(vehicle);
+            m_SuspectProgressRecoveryWaypoint.Remove(vehicle);
+            m_SuspectProgressValidationCount.Remove(vehicle);
+            m_SuspectProgressFirstSample.Remove(vehicle);
+
+            if (hadState)
+            {
+                log.Info("[ProgressSuspectClear] 车辆" + vehicle.Index
+                    + (!string.IsNullOrWhiteSpace(reason) ? " reason=" + reason : string.Empty));
+            }
+        }
+
+        private void NoteVehicleProgressSuspectRecoveryBoarding(Entity vehicle, int waypointIndex)
+        {
+            if (vehicle == Entity.Null
+                || waypointIndex < 0
+                || !m_SuspectProgressSinceFrame.ContainsKey(vehicle))
+            {
+                return;
+            }
+
+            m_SuspectProgressRecoveryWaypoint[vehicle] = waypointIndex;
+        }
+
+        private void TryClearVehicleProgressSuspectOnStableDeparture(Entity vehicle, int departedWaypointIndex)
+        {
+            if (vehicle == Entity.Null
+                || departedWaypointIndex < 0
+                || !m_SuspectProgressSinceFrame.ContainsKey(vehicle)
+                || !m_SuspectProgressRecoveryWaypoint.TryGetValue(vehicle, out int recoveryWaypointIndex)
+                || recoveryWaypointIndex != departedWaypointIndex)
+            {
+                return;
+            }
+
+            ClearVehicleProgressSuspect(vehicle, "stable-stop-cycle wp=" + departedWaypointIndex);
+        }
+
+        private bool IsVehicleProgressProjectionInvalid(
+            Entity vehicle,
+            Entity line,
+            LineTrackChain chain,
+            int segmentIndex,
+            int projectedAtomIndex)
+        {
+            if (vehicle == Entity.Null
+                || !m_SuspectProgressSinceFrame.ContainsKey(vehicle))
+            {
+                return false;
+            }
+
+            if (m_SuspectProgressProjectionInvalid.TryGetValue(vehicle, out bool alreadyInvalid) && alreadyInvalid)
+                return true;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (m_SuspectProgressLastValidationFrame.TryGetValue(vehicle, out uint lastValidationFrame)
+                && nowFrame - lastValidationFrame < SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES)
+            {
+                return false;
+            }
+
+            m_SuspectProgressLastValidationFrame[vehicle] = nowFrame;
+            if (!TryValidateSuspectVehicleProjection(vehicle, line, chain, segmentIndex, projectedAtomIndex, out SuspectProgressSample sample, out string validationSummary, out bool projectionInvalid))
+                return false;
+
+            int validationCount = m_SuspectProgressValidationCount.TryGetValue(vehicle, out int previousCount)
+                ? previousCount + 1
+                : 1;
+            m_SuspectProgressValidationCount[vehicle] = validationCount;
+            if (!m_SuspectProgressFirstSample.ContainsKey(vehicle))
+                m_SuspectProgressFirstSample[vehicle] = sample;
+
+            string logKey = vehicle.Index + "|" + validationSummary;
+            if (!m_SuspectProgressLogCache.TryGetValue(vehicle, out string previous) || previous != logKey)
+            {
+                m_SuspectProgressLogCache[vehicle] = logKey;
+                log.Info("[ProgressSuspectCheck] " + validationSummary);
+            }
+
+            if (validationCount % 36 == 0
+                && m_SuspectProgressFirstSample.TryGetValue(vehicle, out SuspectProgressSample firstSample))
+            {
+                log.Info("[ProgressSuspectWindow] vehicle=" + vehicle.Index
+                    + " scans=" + validationCount
+                    + " startAtom=" + firstSample.ProjectedAtomIndex
+                    + " startBestAtom=" + firstSample.BestAtomIndex
+                    + " startPos=(" + firstSample.VehiclePosition.x.ToString("F1")
+                    + "," + firstSample.VehiclePosition.y.ToString("F1")
+                    + "," + firstSample.VehiclePosition.z.ToString("F1") + ")"
+                    + " startDist=" + firstSample.ProjectedDistanceMeters.ToString("F1")
+                    + "/" + firstSample.BestDistanceMeters.ToString("F1")
+                    + " currentAtom=" + sample.ProjectedAtomIndex
+                    + " currentBestAtom=" + sample.BestAtomIndex
+                    + " currentPos=(" + sample.VehiclePosition.x.ToString("F1")
+                    + "," + sample.VehiclePosition.y.ToString("F1")
+                    + "," + sample.VehiclePosition.z.ToString("F1") + ")"
+                    + " currentDist=" + sample.ProjectedDistanceMeters.ToString("F1")
+                    + "/" + sample.BestDistanceMeters.ToString("F1")
+                    + (projectionInvalid ? " invalid=true" : " invalid=false"));
+            }
+
+            if (!projectionInvalid)
+                return false;
+
+            m_SuspectProgressProjectionInvalid[vehicle] = true;
+            return true;
+        }
+
+        private bool TryValidateSuspectVehicleProjection(
+            Entity vehicle,
+            Entity line,
+            LineTrackChain chain,
+            int projectedSegmentIndex,
+            int projectedAtomIndex,
+            out SuspectProgressSample sample,
+            out string validationSummary,
+            out bool projectionInvalid)
+        {
+            sample = default;
+            validationSummary = string.Empty;
+            projectionInvalid = false;
+
+            if (!TryGetVehicleWorldPosition(vehicle, out float3 vehiclePosition))
+                return false;
+
+            if (!TryGetTrackAtomWorldPosition(chain, projectedAtomIndex, out float3 projectedAtomPosition))
+                return false;
+
+            float projectedDistance = math.distance(vehiclePosition, projectedAtomPosition);
+            int candidateStartSegment = math.max(0, projectedSegmentIndex - SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS);
+            int candidateEndSegment = math.min(chain.SegmentRanges.Count - 1, projectedSegmentIndex + SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS);
+
+            int bestAtomIndex = -1;
+            float bestDistance = float.MaxValue;
+            for (int seg = candidateStartSegment; seg <= candidateEndSegment; seg++)
+            {
+                TrackSegmentRange candidateRange = chain.SegmentRanges[seg];
+                for (int atomIndex = candidateRange.StartAtomIndex; atomIndex < candidateRange.EndAtomIndexExclusive; atomIndex++)
+                {
+                    if (!TryGetTrackAtomWorldPosition(chain, atomIndex, out float3 atomPosition))
+                        continue;
+
+                    float distance = math.distance(vehiclePosition, atomPosition);
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        bestAtomIndex = atomIndex;
+                    }
+                }
+            }
+
+            if (bestAtomIndex < 0)
+                return false;
+
+            int atomDelta = math.abs(bestAtomIndex - projectedAtomIndex);
+            projectionInvalid =
+                atomDelta >= SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD
+                && projectedDistance - bestDistance >= SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS;
+
+            sample = new SuspectProgressSample(
+                projectedAtomIndex,
+                bestAtomIndex,
+                vehiclePosition,
+                projectedDistance,
+                bestDistance);
+
+            validationSummary = "vehicle=" + vehicle.Index
+                + " line=" + line.Index
+                + " projectedAtom=" + projectedAtomIndex
+                + " bestAtom=" + bestAtomIndex
+                + " projectedDist=" + projectedDistance.ToString("F1")
+                + "m bestDist=" + bestDistance.ToString("F1")
+                + "m delta=" + atomDelta
+                + (projectionInvalid ? " invalid=true" : " invalid=false");
+            return true;
+        }
+
+        private bool TryGetTrackAtomWorldPosition(LineTrackChain chain, int atomIndex, out float3 position)
+        {
+            position = default;
+            if (chain == null || atomIndex < 0 || atomIndex >= chain.TrackAtoms.Count)
+                return false;
+
+            TrackAtom atom = chain.TrackAtoms[atomIndex];
+            return TryGetEntityWorldPosition(atom.SourceTarget, out position)
+                || TryGetEntityWorldPosition(atom.Key.PhysicalLaneKey, out position);
+        }
+
+        private bool TryGetEntityWorldPosition(Entity entity, out float3 position)
+        {
+            position = default;
+            if (entity == Entity.Null || !EntityManager.Exists(entity))
+                return false;
+
+            if (EntityManager.HasComponent<Position>(entity))
+            {
+                position = EntityManager.GetComponentData<Position>(entity).m_Position;
+                return true;
+            }
+
+            if (EntityManager.HasComponent<Game.Objects.Transform>(entity))
+            {
+                position = EntityManager.GetComponentData<Game.Objects.Transform>(entity).m_Position;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryResolveWaypointAnchorConflict(
+            float3 vehiclePosition,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int routeProgressNextWaypointIndex,
+            out int nearbyWaypointIndex)
+        {
+            nearbyWaypointIndex = -1;
+            const float stationAnchorRadiusMeters = 420f;
+
+            float bestDistance = float.MaxValue;
+            for (int waypointIndex = 0; waypointIndex < waypoints.Length; waypointIndex++)
+            {
+                if (!TryGetWaypointWorldPosition(waypoints[waypointIndex].m_Waypoint, out float3 waypointPosition))
+                    continue;
+
+                float distance = math.distance(vehiclePosition, waypointPosition);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    nearbyWaypointIndex = waypointIndex;
+                }
+            }
+
+            if (nearbyWaypointIndex < 0 || bestDistance > stationAnchorRadiusMeters)
+                return false;
+
+            int waypointDelta = math.abs(routeProgressNextWaypointIndex - nearbyWaypointIndex);
+            bool wrappedNeighbor =
+                (routeProgressNextWaypointIndex == 0 && nearbyWaypointIndex == waypoints.Length - 1)
+                || (nearbyWaypointIndex == 0 && routeProgressNextWaypointIndex == waypoints.Length - 1);
+
+            return waypointDelta >= 1 && !wrappedNeighbor;
+        }
+
+        private bool TryGetVehicleWorldPosition(Entity vehicle, out float3 position)
+        {
+            position = default;
+            if (!EntityManager.Exists(vehicle))
+                return false;
+
+            if (EntityManager.HasComponent<Game.Objects.Transform>(vehicle))
+            {
+                position = EntityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position;
+                return true;
+            }
+
+            if (EntityManager.HasComponent<Position>(vehicle))
+            {
+                position = EntityManager.GetComponentData<Position>(vehicle).m_Position;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryGetWaypointWorldPosition(Entity waypoint, out float3 position)
+        {
+            position = default;
+            if (waypoint == Entity.Null || !EntityManager.Exists(waypoint))
+                return false;
+
+            if (EntityManager.HasComponent<Position>(waypoint))
+            {
+                position = EntityManager.GetComponentData<Position>(waypoint).m_Position;
+                return true;
+            }
+
+            if (EntityManager.HasComponent<Game.Objects.Transform>(waypoint))
+            {
+                position = EntityManager.GetComponentData<Game.Objects.Transform>(waypoint).m_Position;
+                return true;
+            }
+
+            return false;
         }
 
         private bool TryProjectTrackModelRuntimePosition(
@@ -1668,15 +2171,15 @@ namespace RapidTransitMod
             return -1;
         }
 
-        private float ComputeForwardDepartureReleaseCoordinate(
+        private bool TryGetForwardStationExitCoordinate(
             LineTrackChain localChain,
             BypassProtectedInterval localProtectedInterval,
-            Entity currentBypassBuilding)
+            Entity currentBypassBuilding,
+            out float stationExitCoordinate)
         {
-            float intervalDisplayLength = GetProtectedIntervalDisplayLength(localProtectedInterval);
-            float fallback = math.min(intervalDisplayLength, LOCAL_BYPASS_EXIT_RELEASE_ATOMS);
+            stationExitCoordinate = -1f;
             if (localChain == null || currentBypassBuilding == Entity.Null)
-                return fallback;
+                return false;
 
             // Only treat the contiguous station-owned prefix at the start of the
             // local protected window as the "current bypass station" throat.
@@ -1694,9 +2197,22 @@ namespace RapidTransitMod
             }
 
             if (lastForwardStationAtomIndex < localProtectedInterval.StartAtomIndex)
+                return false;
+
+            stationExitCoordinate = (lastForwardStationAtomIndex - localProtectedInterval.StartAtomIndex) + 1f;
+            return true;
+        }
+
+        private float ComputeForwardDepartureReleaseCoordinate(
+            LineTrackChain localChain,
+            BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding)
+        {
+            float intervalDisplayLength = GetProtectedIntervalDisplayLength(localProtectedInterval);
+            float fallback = math.min(intervalDisplayLength, LOCAL_BYPASS_EXIT_RELEASE_ATOMS);
+            if (!TryGetForwardStationExitCoordinate(localChain, localProtectedInterval, currentBypassBuilding, out float stationExitCoordinate))
                 return fallback;
 
-            float stationExitCoordinate = (lastForwardStationAtomIndex - localProtectedInterval.StartAtomIndex) + 1f;
             return math.min(intervalDisplayLength, stationExitCoordinate + LOCAL_BYPASS_EXIT_RELEASE_ATOMS);
         }
 
@@ -2514,12 +3030,6 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (localPosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.After)
-            {
-                shadowDecision = new BypassTrackModelShadowDecision(true, false, "local-cleared-protected-interval", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, string.Empty, sequenceSummary);
-                return true;
-            }
-
             var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
             var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
             bool sawReleaseClearedExpress = false;
@@ -3302,6 +3812,91 @@ namespace RapidTransitMod
             }
 
             return sharedWindowAudit.Length > 0 ? sharedWindowAudit.ToString() : "no-express-lines-considered";
+        }
+
+        private bool CanClearBypassYieldAfterStationExit(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex)
+        {
+            if (localVehicle == Entity.Null
+                || localLine == Entity.Null
+                || !TryGetBypassWaypointContext(localWaypoints, currentWaypointIndex, out Entity currentBypassBuilding, out _, out _)
+                || currentBypassBuilding == Entity.Null)
+            {
+                return true;
+            }
+
+            if (!TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain))
+                return false;
+
+            RefreshSharedRuns(localChain);
+            RefreshControlEdgeSharedSpans(localChain);
+            RefreshBypassProtectedIntervals(localChain);
+            RefreshProtectedSharedIntervals(localChain);
+            RefreshProtectedIntervalSummaries(localChain);
+
+            if (!TryResolveBypassProtectedInterval(localChain, localWaypoints, currentWaypointIndex, out _, out BypassProtectedInterval protectedInterval))
+                return false;
+
+            if (!TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition))
+                return false;
+
+            if (localPosition.Confidence < 0.6f)
+                return false;
+
+            if (!TryGetForwardStationExitCoordinate(localChain, protectedInterval, currentBypassBuilding, out float stationExitCoordinate))
+                return false;
+
+            float localCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(localPosition, protectedInterval, includeApproachers: true, out bool includeLocal);
+            if (!includeLocal)
+                return false;
+
+            return localCoordinate > stationExitCoordinate + LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS;
+        }
+
+        private bool IsVehicleWithinCurrentBypassStation(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex)
+        {
+            if (localVehicle == Entity.Null
+                || localLine == Entity.Null
+                || currentWaypointIndex < 0
+                || !TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain))
+            {
+                return false;
+            }
+
+            int liveWaypointIndex = ComputeWpIndex(localVehicle, localWaypoints);
+            if (liveWaypointIndex == currentWaypointIndex)
+                return true;
+
+            if (!TryGetBypassWaypointContext(localWaypoints, currentWaypointIndex, out Entity currentBypassBuilding, out _, out _)
+                || currentBypassBuilding == Entity.Null)
+            {
+                return false;
+            }
+
+            if (!TryResolveBypassProtectedInterval(localChain, localWaypoints, currentWaypointIndex, out _, out BypassProtectedInterval protectedInterval))
+                return false;
+
+            if (!TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition)
+                || localPosition.Confidence < 0.6f)
+            {
+                return false;
+            }
+
+            if (!TryGetForwardStationExitCoordinate(localChain, protectedInterval, currentBypassBuilding, out float stationExitCoordinate))
+                return false;
+
+            float localCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(localPosition, protectedInterval, includeApproachers: true, out bool includeLocal);
+            if (!includeLocal)
+                return false;
+
+            return localCoordinate <= stationExitCoordinate;
         }
 
         private void LogBypassTrackModelShadowOnce(

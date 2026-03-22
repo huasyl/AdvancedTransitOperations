@@ -35,6 +35,7 @@ export default function DispatchWorkbenchContent({
   saveState,
   handleOverviewContextAction,
   handleScheduleContextAction,
+  handleSelectedLineKindChange,
   handleApplyDraft,
   handleAddManualToStaged,
   handleAddAutoToStaged,
@@ -72,6 +73,7 @@ export default function DispatchWorkbenchContent({
       lines={lineOptions}
       stationOptions={stationOptions}
       selectedEditLine={selectedEditLine}
+      mergedView={mergedView}
       setSelectedEditLine={setSelectedEditLine}
       validatedRows={validatedRows}
       combinedRows={combinedRows}
@@ -84,6 +86,7 @@ export default function DispatchWorkbenchContent({
       onAddAutoToStaged={handleAddAutoToStaged}
       onClearStagedLine={handleClearStagedLine}
       onRemoveStagedRow={handleRemoveStagedRow}
+      onSelectedLineKindChange={handleSelectedLineKindChange}
       onOriginHoldLimitChange={handleOriginHoldLimitChange}
       onMaxStationDwellChange={handleMaxStationDwellChange}
       saveState={saveState}
