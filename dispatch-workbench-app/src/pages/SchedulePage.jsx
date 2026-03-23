@@ -30,6 +30,7 @@ export default function SchedulePage({
   onSelectedLineKindChange,
   onAllowedDepotChange,
   onMaxStationDwellChange,
+  onRefreshMetadata,
   saveState
 }) {
   const { locale } = useI18n();
@@ -117,7 +118,12 @@ export default function SchedulePage({
                   type="button"
                   className={`dw-line-dropdown-trigger ${dropdownOpen ? "is-open" : ""}`}
                   title={selectedLine?.rawName || selectedLine?.name || ""}
-                  onClick={() => setDropdownOpen((current) => !current)}
+                  onClick={() => {
+                    if (!dropdownOpen) {
+                      onRefreshMetadata?.();
+                    }
+                    setDropdownOpen((current) => !current);
+                  }}
                 >
                   <ControlText>{selectedLine?.name || (locale === "zh-CN" ? "选择线路" : "Select line")}</ControlText>
                   <span className="dw-line-dropdown-caret" aria-hidden="true">
@@ -151,8 +157,8 @@ export default function SchedulePage({
               </label>
               <ChoiceButtons
                 options={[
-                  { value: "local", label: locale === "zh-CN" ? "普通" : "Local" },
-                  { value: "express", label: locale === "zh-CN" ? "快车" : "Express" }
+                  { value: "local", label: locale === "zh-CN" ? "\u666e\u901a" : "Local" },
+                  { value: "express", label: locale === "zh-CN" ? "\u5feb\u8f66" : "Express" }
                 ]}
                 value={draftLineKind}
                 onChange={(nextValue) => {
@@ -177,7 +183,12 @@ export default function SchedulePage({
                   type="button"
                   className={`dw-line-dropdown-trigger ${depotDropdownOpen ? "is-open" : ""}`}
                   title={availableDepots.find((depot) => depot.id === selectedLine?.allowedDepotId)?.name || ""}
-                  onClick={() => setDepotDropdownOpen((current) => !current)}
+                  onClick={() => {
+                    if (!depotDropdownOpen) {
+                      onRefreshMetadata?.();
+                    }
+                    setDepotDropdownOpen((current) => !current);
+                  }}
                 >
                   <ControlText>
                     {availableDepots.find((depot) => depot.id === selectedLine?.allowedDepotId)?.name || "Any depot"}
@@ -218,7 +229,7 @@ export default function SchedulePage({
             </div>
             <div className="dw-field dw-schedule-page-origin-field">
               <label>
-                <SafeControlText>{locale === "zh-CN" ? "始发站" : "Origin"}</SafeControlText>
+                <SafeControlText>{locale === "zh-CN" ? "\u59cb\u53d1\u7ad9" : "Origin"}</SafeControlText>
               </label>
               <div className="dw-static-help dw-schedule-page-origin-value">
                 <SafeControlText>{selectedOriginStationName}</SafeControlText>
@@ -226,7 +237,7 @@ export default function SchedulePage({
             </div>
             <div className="dw-field dw-schedule-page-hold-field">
               <label>
-                <SafeControlText>{locale === "zh-CN" ? "候车窗口 / 分钟" : "Hold window / min"}</SafeControlText>
+                <SafeControlText>{locale === "zh-CN" ? "\u5019\u8f66\u7a97\u53e3 / \u5206\u949f" : "Hold window / min"}</SafeControlText>
               </label>
               <input
                 type="text"
@@ -238,7 +249,7 @@ export default function SchedulePage({
             </div>
             <div className="dw-field dw-schedule-page-dwell-field">
               <label>
-                <SafeControlText>{locale === "zh-CN" ? "最长停站时间" : "Max dwell / min"}</SafeControlText>
+                <SafeControlText>{locale === "zh-CN" ? "\u6700\u957f\u505c\u7ad9\u65f6\u95f4" : "Max dwell / min"}</SafeControlText>
               </label>
               <input
                 type="text"

@@ -12,7 +12,8 @@ export default function OverviewPage({
   filteredTrips,
   selectedTripId,
   setSelectedTripId,
-  windowValid
+  windowValid,
+  onRefreshMetadata
 }) {
   return (
     <div className={`dw-page-grid is-overview is-shell-${shellMode}`}>
@@ -27,6 +28,7 @@ export default function OverviewPage({
           lines={lines}
           stations={stations}
           windowValid={windowValid}
+          onRefreshMetadata={onRefreshMetadata}
         />
       </div>
 

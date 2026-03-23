@@ -116,6 +116,7 @@ namespace RapidTransitMod
             var view = GameManager.instance.userInterface.view.View;
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadSnapshot", new Func<string>(HandleLoadSnapshot));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getLocale", new Func<string>(HandleGetLocale));
         }
@@ -132,6 +133,11 @@ namespace RapidTransitMod
             string snapshotJson = DepartureControlSystem.Instance?.RefreshWorkbenchSnapshotJson() ?? string.Empty;
             DispatchWorkbenchUISystem.PublishSnapshotJson(snapshotJson);
             return snapshotJson;
+        }
+
+        private static string HandleRefreshMetadata()
+        {
+            return DepartureControlSystem.Instance?.RefreshWorkbenchMetadataJson() ?? string.Empty;
         }
 
         private static string HandleSaveDraft(string requestJson)
@@ -251,6 +257,7 @@ namespace RapidTransitMod
 
             registerCall("workbench.loadSnapshot", new Func<string>(HandleLoadSnapshot));
             registerCall("workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
+            registerCall("workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             registerCall("workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             registerCall("workbench.getLocale", new Func<string>(HandleGetLocale));
         }

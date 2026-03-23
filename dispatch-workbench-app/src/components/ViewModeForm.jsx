@@ -3,7 +3,7 @@ import { ChoiceButtons, ControlText, SafeControlText } from "./ChoiceButtons";
 import { useI18n } from "../lib/i18n";
 import TimeInput from "./TimeInput";
 
-function LineDropdown({ value, onChange, options = [], placeholder }) {
+function LineDropdown({ value, onChange, onOpen, options = [], placeholder }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const orderedOptionIdsRef = useRef([]);
@@ -42,7 +42,7 @@ function LineDropdown({ value, onChange, options = [], placeholder }) {
             setOpen(false);
           }
         }}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => { if (!open) { onOpen?.(); } setOpen((current) => !current); }}
         title={selected?.title || selected?.label || ""}
       >
         <ControlText>{selected?.label || placeholder || "-"}</ControlText>
@@ -95,7 +95,8 @@ export default function ViewModeForm({
   setMergedView,
   lines = [],
   stations = [],
-  windowValid
+  windowValid,
+  onRefreshMetadata
 }) {
   const { t } = useI18n();
   const windowStartRef = useRef(null);
@@ -136,26 +137,6 @@ export default function ViewModeForm({
         : t("overview.form.direction.toOrigin")
     }
   ];
-  const selectedLocalLines = localLineIds
-    .map((id) => lines.find((line) => line.id === id))
-    .filter(Boolean);
-  const selectedExpressLines = expressLineIds
-    .map((id) => lines.find((line) => line.id === id))
-    .filter(Boolean);
-  const maxLocalStationCount = selectedLocalLines.reduce(
-    (max, line) => Math.max(max, Number(line.stationCount || 0)),
-    0
-  );
-  const maxExpressStationCount = selectedExpressLines.reduce(
-    (max, line) => Math.max(max, Number(line.stationCount || 0)),
-    0
-  );
-  const hasCoverageMismatch =
-    selectedLocalLines.length > 0
-    && selectedExpressLines.length > 0
-    && maxLocalStationCount > 0
-    && maxExpressStationCount > 0
-    && maxLocalStationCount < maxExpressStationCount;
 
   function setLocalIds(nextIds) {
     setMergedView((current) => {
@@ -248,6 +229,7 @@ export default function ViewModeForm({
                           !expressLineIds.includes(option.value))
                     )}
                     value={lineId}
+                    onOpen={onRefreshMetadata}
                     onChange={(value) => {
                       const next = [...localLineIds];
                       next[rowIndex] = value;
@@ -308,6 +290,7 @@ export default function ViewModeForm({
                           !localLineIds.includes(option.value))
                     )}
                     value={lineId}
+                    onOpen={onRefreshMetadata}
                     onChange={(value) => {
                       const next = [...expressLineIds];
                       next[rowIndex] = value;
@@ -460,11 +443,6 @@ export default function ViewModeForm({
           <span className="dw-chip is-warn">
             <ControlText>{t("overview.form.mergedReadonly")}</ControlText>
           </span>
-          {hasCoverageMismatch ? (
-            <span className="dw-chip is-warn">
-              <ControlText>{t("overview.form.coverageInvalid")}</ControlText>
-            </span>
-          ) : null}
         </div>
       </div>
     </section>

@@ -1,4 +1,4 @@
-﻿import { createEmptySnapshot } from "./workbench-defaults";
+import { createEmptySnapshot } from "./workbench-defaults";
 
 // Data source boundary.
 // The real workbench only runs against the EUIS/backend snapshot path.
@@ -7,6 +7,7 @@
 const CALLS = {
   loadSnapshot: "suhua::rt.workbench.loadSnapshot",
   refreshSnapshot: "suhua::rt.workbench.refreshSnapshot",
+  refreshMetadata: "suhua::rt.workbench.refreshMetadata",
   saveWorkbenchDraft: "suhua::rt.workbench.saveWorkbenchDraft",
   getLocale: "suhua::rt.workbench.getLocale"
 };
@@ -39,6 +40,10 @@ function createLiveApi() {
     },
     async refreshSnapshot() {
       const payload = await window.engine.call(CALLS.refreshSnapshot);
+      return parsePayload(payload, createEmptySnapshot());
+    },
+    async refreshMetadata() {
+      const payload = await window.engine.call(CALLS.refreshMetadata);
       return parsePayload(payload, createEmptySnapshot());
     },
     async saveDraft(request) {

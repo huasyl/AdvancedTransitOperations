@@ -308,6 +308,7 @@ export function useWorkbenchController() {
   const hasLoadedSnapshotRef = useRef(false);
   const suppressNextSnapshotRef = useRef(false);
 
+  const skipNextAutosaveRef = useRef(false);
   function applySnapshot(snapshot) {
     if (!snapshot) {
       return;
@@ -337,6 +338,28 @@ export function useWorkbenchController() {
     setAutoRules(nextAutoRules);
     setStagedRows(nextStagedRows);
     hasLoadedSnapshotRef.current = true;
+  }
+
+  async function refreshWorkbenchMetadata() {
+    try {
+      const metadata = await workbenchApi.refreshMetadata?.();
+      if (!metadata) {
+        return;
+      }
+
+      const nextLines = normalizeLineOptions(metadata.lines, t);
+      setLineOptions((current) => {
+        const mergedLines = mergeLineOptionsPreservingSettings(current, nextLines);
+        return areLineOptionsEquivalent(current, mergedLines) ? current : mergedLines;
+      });
+
+      const nextDepots = normalizeDepotOptions(metadata.depots);
+      setDepotOptions((current) => (
+        areDepotOptionsEquivalent(current, nextDepots) ? current : nextDepots
+      ));
+    } catch {
+      // Metadata refresh should stay silent; the page can keep current names.
+    }
   }
 
   const filteredTrips = useMemo(
@@ -484,34 +507,8 @@ export function useWorkbenchController() {
       return undefined;
     }
 
-    let isDisposed = false;
-    const intervalId = window.setInterval(async () => {
-      try {
-        const snapshot = await workbenchApi.refreshSnapshot?.();
-        if (!isDisposed && snapshot) {
-          const nextLines = normalizeLineOptions(snapshot.lines, t);
-          setLineOptions((current) => {
-            const mergedLines = mergeLineOptionsPreservingSettings(current, nextLines);
-            return areLineOptionsEquivalent(current, mergedLines) ? current : mergedLines;
-          });
-          const nextDepots = normalizeDepotOptions(snapshot.depots);
-          setDepotOptions((current) => (
-            areDepotOptionsEquivalent(current, nextDepots) ? current : nextDepots
-          ));
-        }
-      } catch {
-        // Keep background refresh silent; editing should stay uninterrupted.
-      }
-    }, 2000);
-
-    return () => {
-      isDisposed = true;
-      window.clearInterval(intervalId);
-    };
-  }, [workbenchApi, t]);
-
-  useEffect(() => {
-    if (!hasLoadedSnapshotRef.current) {
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false;
       return undefined;
     }
 
@@ -550,6 +547,7 @@ export function useWorkbenchController() {
     if (!hasLoadedSnapshotRef.current) {
       return;
     }
+    skipNextAutosaveRef.current = true;
 
     suppressNextSnapshotRef.current = true;
     workbenchApi.saveDraft({
@@ -754,7 +752,7 @@ export function useWorkbenchController() {
           status: "idle",
           message:
             locale === "zh-CN"
-              ? `已跳�?${plan.skippedCount} 班自动车次：需同时满足偏移规则，以及同始发站最�?${MIN_DEPARTURE_INTERVAL_MINUTES} 分钟发车间隔。`
+              ? `已跳�?${plan.skippedCount} 班自动车次：需同时满足偏移规则，以及同始发站最�?${MIN_DEPARTURE_INTERVAL_MINUTES} 分钟发车间隔。`
               : `Skipped ${plan.skippedCount} automatic departures because they violated the offset rule or the ${MIN_DEPARTURE_INTERVAL_MINUTES}-minute minimum headway for the same origin station.`
         });
       }
@@ -836,6 +834,7 @@ export function useWorkbenchController() {
     setMergedView,
     lineOptions,
     depotOptions,
+    refreshWorkbenchMetadata,
     stationOptions,
     filteredTrips,
     selectedTrip,

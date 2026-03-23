@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import OverviewPage from "./pages/OverviewPage";
 import SchedulePage from "./pages/SchedulePage";
 
@@ -15,6 +16,7 @@ export default function DispatchWorkbenchContent({
   setMergedView,
   lineOptions,
   depotOptions,
+  refreshWorkbenchMetadata,
   stationOptions,
   filteredTrips,
   selectedTrip,
@@ -46,6 +48,11 @@ export default function DispatchWorkbenchContent({
   handleOriginHoldLimitChange,
   handleMaxStationDwellChange,
 }) {
+  useEffect(() => {
+    if (activeTab === "schedule") {
+      refreshWorkbenchMetadata?.();
+    }
+  }, [activeTab]);
   if (activeTab === "overview") {
     return (
       <OverviewPage
@@ -55,6 +62,7 @@ export default function DispatchWorkbenchContent({
         mergedView={mergedView}
         setMergedView={setMergedView}
         lines={lineOptions}
+        onRefreshMetadata={refreshWorkbenchMetadata}
         stations={stationOptions}
         filteredTrips={filteredTrips}
         selectedTripId={selectedTrip?.id ?? ""}

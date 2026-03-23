@@ -436,6 +436,12 @@ namespace RapidTransitMod
             return DispatchWorkbenchJson.Serialize(BuildWorkbenchSnapshot(GetPreferredWorkbenchLineId()));
         }
 
+        public string RefreshWorkbenchMetadataJson()
+        {
+            EnsureWorkbenchPersistenceLoaded();
+            return DispatchWorkbenchJson.Serialize(BuildWorkbenchMetadataSnapshot());
+        }
+
         public string SaveWorkbenchDraftJson(string requestJson)
         {
             EnsureWorkbenchPersistenceLoaded();
@@ -484,6 +490,14 @@ namespace RapidTransitMod
                 state.ManualRows = nextManualRows;
                 state.AutoRules = nextAutoRules;
                 state.StagedRows = nextStagedRows;
+                RemoveWorkbenchRowsFromOtherDrafts(
+                    lineKey,
+                    CollectTouchedWorkbenchLineIds(
+                        state.SelectedLineId,
+                        state.SelectedEditLine,
+                        nextManualRows,
+                        nextAutoRules,
+                        nextStagedRows));
                 state.AppliedDepartureMinutesCache.Clear();
 
                 if (rulesChanged)
@@ -501,7 +515,7 @@ namespace RapidTransitMod
                 {
                     result.errors = new[] { "Add rows into the staged timetable before applying the draft." };
                     m_WorkbenchPreferredLineId = state.SelectedLineId;
-                    RebuildAppliedWorkbenchStateFromDrafts();
+                    RefreshAppliedWorkbenchLineSettings();
                     SaveWorkbenchPersistence();
                     SaveAppliedWorkbenchPersistence();
                     result.snapshot = BuildWorkbenchSnapshot(state.SelectedLineId);
@@ -515,7 +529,14 @@ namespace RapidTransitMod
 
                 m_WorkbenchSnapshotVersion++;
                 m_WorkbenchPreferredLineId = state.SelectedLineId;
-                RebuildAppliedWorkbenchStateFromDrafts();
+                if (request.applyDraft)
+                {
+                    RebuildAppliedWorkbenchStateFromDrafts();
+                }
+                else
+                {
+                    RefreshAppliedWorkbenchLineSettings();
+                }
                 SaveWorkbenchPersistence();
                 SaveAppliedWorkbenchPersistence();
                 result.success = true;
@@ -609,6 +630,46 @@ namespace RapidTransitMod
                 sourceMode = "game-backend",
                 rulesApplied = draft.RulesApplied,
                 draftApplied = draft.DraftApplied
+            };
+        }
+
+        private DispatchWorkbenchSnapshot BuildWorkbenchMetadataSnapshot()
+        {
+            EnsureWorkbenchPersistenceLoaded();
+            List<WorkbenchLineRuntime> runtimeLines = BuildWorkbenchLinesStable();
+            List<DispatchWorkbenchDepotDto> depots = BuildWorkbenchDepots();
+
+            return new DispatchWorkbenchSnapshot
+            {
+                selectedLineId = GetPreferredWorkbenchLineId(),
+                selectedEditLine = GetPreferredWorkbenchLineId(),
+                mergedView = new DispatchWorkbenchMergedView(),
+                lines = runtimeLines.Select(line => new DispatchWorkbenchLineDto
+                {
+                    id = line.Id,
+                    sourceLineId = line.Entity.Index.ToString(),
+                    name = line.Name,
+                    kind = line.Kind,
+                    direction = "up",
+                    stationCount = line.StationCount,
+                    color = line.Color,
+                    originStationId = line.OriginStationId,
+                    originStationName = line.OriginStationName,
+                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Id),
+                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Id),
+                    transportType = line.TransportType,
+                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Id)
+                }).ToArray(),
+                depots = depots.ToArray(),
+                stations = Array.Empty<DispatchWorkbenchStationDto>(),
+                trips = Array.Empty<DispatchWorkbenchTripDto>(),
+                manualRows = Array.Empty<DispatchWorkbenchManualRowDto>(),
+                autoRules = Array.Empty<DispatchWorkbenchAutoRuleDto>(),
+                stagedRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                version = m_WorkbenchSnapshotVersion.ToString(),
+                sourceMode = "game-backend",
+                rulesApplied = false,
+                draftApplied = false
             };
         }
 
@@ -1123,6 +1184,117 @@ namespace RapidTransitMod
             SyncWorkbenchDraftsFromAppliedState();
         }
 
+        private void RefreshAppliedWorkbenchLineSettings()
+        {
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                string lineKey = entry.Key;
+                AppliedWorkbenchLineState applied = entry.Value;
+                if (applied == null)
+                    continue;
+
+                applied.OriginHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(lineKey);
+                applied.MaxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(lineKey);
+            }
+        }
+
+        private static HashSet<string> CollectTouchedWorkbenchLineIds(
+            string selectedLineId,
+            string selectedEditLine,
+            List<DispatchWorkbenchManualRowDto> manualRows,
+            List<DispatchWorkbenchAutoRuleDto> autoRules,
+            List<DispatchWorkbenchStagedRowDto> stagedRows)
+        {
+            HashSet<string> lineIds = new HashSet<string>(StringComparer.Ordinal);
+
+            if (!string.IsNullOrEmpty(selectedLineId))
+                lineIds.Add(selectedLineId);
+            if (!string.IsNullOrEmpty(selectedEditLine))
+                lineIds.Add(selectedEditLine);
+
+            if (manualRows != null)
+            {
+                foreach (DispatchWorkbenchManualRowDto row in manualRows)
+                {
+                    if (!string.IsNullOrEmpty(row?.lineId))
+                        lineIds.Add(row.lineId);
+                }
+            }
+
+            if (autoRules != null)
+            {
+                foreach (DispatchWorkbenchAutoRuleDto rule in autoRules)
+                {
+                    if (!string.IsNullOrEmpty(rule?.lineId))
+                        lineIds.Add(rule.lineId);
+                }
+            }
+
+            if (stagedRows != null)
+            {
+                foreach (DispatchWorkbenchStagedRowDto row in stagedRows)
+                {
+                    if (!string.IsNullOrEmpty(row?.lineId))
+                        lineIds.Add(row.lineId);
+                }
+            }
+
+            return lineIds;
+        }
+
+        private void RemoveWorkbenchRowsFromOtherDrafts(string activeLineKey, HashSet<string> lineIds)
+        {
+            if (lineIds == null || lineIds.Count == 0)
+                return;
+
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts)
+            {
+                if (string.Equals(entry.Key, activeLineKey, StringComparison.Ordinal))
+                    continue;
+
+                DispatchWorkbenchDraftState draft = entry.Value;
+                if (draft == null)
+                    continue;
+
+                bool changed = false;
+                int manualBefore = draft.ManualRows?.Count ?? 0;
+                int autoBefore = draft.AutoRules?.Count ?? 0;
+                int stagedBefore = draft.StagedRows?.Count ?? 0;
+
+                if (draft.ManualRows != null)
+                {
+                    draft.ManualRows = draft.ManualRows
+                        .Where(row => row == null || string.IsNullOrEmpty(row.lineId) || !lineIds.Contains(row.lineId))
+                        .ToList();
+                }
+
+                if (draft.AutoRules != null)
+                {
+                    draft.AutoRules = draft.AutoRules
+                        .Where(rule => rule == null || string.IsNullOrEmpty(rule.lineId) || !lineIds.Contains(rule.lineId))
+                        .ToList();
+                }
+
+                if (draft.StagedRows != null)
+                {
+                    draft.StagedRows = draft.StagedRows
+                        .Where(row => row == null || string.IsNullOrEmpty(row.lineId) || !lineIds.Contains(row.lineId))
+                        .ToList();
+                }
+
+                changed = manualBefore != (draft.ManualRows?.Count ?? 0)
+                    || autoBefore != (draft.AutoRules?.Count ?? 0)
+                    || stagedBefore != (draft.StagedRows?.Count ?? 0);
+
+                if (!changed)
+                    continue;
+
+                draft.RulesApplied = false;
+                draft.DraftApplied = false;
+                draft.AppliedDepartureMinutesCache.Clear();
+            }
+        }
+
         private void SyncWorkbenchDraftsFromAppliedState()
         {
             foreach (DispatchWorkbenchDraftState draft in m_WorkbenchDrafts.Values)
@@ -1266,8 +1438,8 @@ namespace RapidTransitMod
         {
             return sourceCode switch
             {
-                1 => "已恢复手工时刻",
-                2 => "已恢复自动时刻",
+                1 => "restored-manual",
+                2 => "restored-auto",
                 _ => string.Empty
             };
         }
@@ -3342,26 +3514,6 @@ namespace RapidTransitMod
                     errors.Add("Local and express lines cannot contain the same line.");
                 }
 
-                int maxLocalStationCount = localIds
-                    .Select(id => runtimeLines.FirstOrDefault(line => line.Id == id))
-                    .Where(line => line != null)
-                    .Select(line => line.StationCount)
-                    .DefaultIfEmpty(0)
-                    .Max();
-
-                int maxExpressStationCount = expressIds
-                    .Select(id => runtimeLines.FirstOrDefault(line => line.Id == id))
-                    .Where(line => line != null)
-                    .Select(line => line.StationCount)
-                    .DefaultIfEmpty(0)
-                    .Max();
-
-                if (maxExpressStationCount > 0
-                    && maxLocalStationCount > 0
-                    && maxLocalStationCount < maxExpressStationCount)
-                {
-                    errors.Add("Local lines must cover at least as many stations as express lines.");
-                }
             }
 
             Dictionary<string, WorkbenchLineRuntime> runtimeLineById = runtimeLines?
