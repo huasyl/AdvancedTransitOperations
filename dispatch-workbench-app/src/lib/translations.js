@@ -1,4 +1,4 @@
-﻿export const translations = {
+export const translations = {
   "en-US": {
     "app.title": "Rapid Transit Dispatch Workbench",
     "app.subtitle.browser":
@@ -51,6 +51,12 @@
     "schedule.editingLine": "Editing line",
     "schedule.editingLine.local": "Local service",
     "schedule.editingLine.express": "Express service",
+    "schedule.selectLine": "Select line",
+    "schedule.lineType": "Line type",
+    "schedule.allowedDepot": "Allowed depot",
+    "schedule.anyDepot": "Any depot",
+    "schedule.originPending": "Origin pending",
+    "schedule.noLineSelected": "No line selected",
     "schedule.ruleLabel": "Rule",
     "schedule.ruleHelp":
       "Manual rows should remain in ascending order. Duplicate times and invalid inputs are flagged below.",
@@ -229,6 +235,12 @@
     "schedule.editingLine": "编辑线路",
     "schedule.editingLine.local": "慢车服务",
     "schedule.editingLine.express": "快车服务",
+    "schedule.selectLine": "选择线路",
+    "schedule.lineType": "线路类型",
+    "schedule.allowedDepot": "允许车库",
+    "schedule.anyDepot": "任意车库",
+    "schedule.originPending": "始发站未加载",
+    "schedule.noLineSelected": "未选择线路",
     "schedule.ruleLabel": "规则",
     "schedule.ruleHelp": "手工行应保持时间升序。重复时间和无效输入会在下方标记。",
     "schedule.departure": "发车",

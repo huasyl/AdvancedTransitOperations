@@ -791,6 +791,9 @@ namespace RapidTransitMod
 
         private List<WorkbenchLineRuntime> BuildWorkbenchLinesStable()
         {
+            EnsureWorkbenchPersistenceLoaded();
+            EnsureAppliedWorkbenchPersistenceLoaded();
+
             List<WorkbenchLineRuntime> lines = new List<WorkbenchLineRuntime>();
             NativeArray<Entity> entities = m_LineQuery.ToEntityArray(Allocator.Temp);
             try
@@ -820,12 +823,18 @@ namespace RapidTransitMod
                             : ("Line " + line.Index.ToString());
                     }
 
-                    string kind = "local";
+                    string lineKey = GetDraftKey(line.Index.ToString());
+                    m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState appliedState);
+                    string kind = GetEffectiveWorkbenchLineServiceKind(lineKey, appliedState);
+                    if (string.IsNullOrEmpty(kind))
+                    {
+                        kind = "local";
+                    }
 
                     lines.Add(new WorkbenchLineRuntime
                     {
                         Entity = line,
-                        Id = line.Index.ToString(),
+                        Id = lineKey,
                         Name = name,
                         Kind = kind,
                         TransportType = transportType,

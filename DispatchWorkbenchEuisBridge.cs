@@ -23,6 +23,7 @@ namespace RapidTransitMod
         private static bool s_IsRegistered;
         private static bool s_HostRegistered;
         private static bool s_EuisAppRegistered;
+        private static bool s_EuisDeferredLogged;
         private static string s_ModRootPath = string.Empty;
         private static Action<string, object[]> s_EuisCaller;
 
@@ -165,9 +166,15 @@ namespace RapidTransitMod
             ExecutableAsset euisAsset = FindExecutableAsset("ExtraUIScreens");
             if (euisAsset == null)
             {
-                Mod.log.Info("ExtraUIScreens not found yet; workbench EUIS registration deferred.");
+                if (!s_EuisDeferredLogged)
+                {
+                    Mod.log.Info("ExtraUIScreens not found yet; workbench EUIS registration deferred.");
+                    s_EuisDeferredLogged = true;
+                }
                 return false;
             }
+
+            s_EuisDeferredLogged = false;
 
             Type bridgeType = euisAsset.assembly
                 .GetExportedTypes()

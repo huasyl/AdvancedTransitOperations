@@ -33,7 +33,7 @@ export default function SchedulePage({
   onRefreshMetadata,
   saveState
 }) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [depotDropdownOpen, setDepotDropdownOpen] = useState(false);
   const [actionMessage, setActionMessage] = useState("");
@@ -41,15 +41,11 @@ export default function SchedulePage({
     () => lines.find((line) => line.id === selectedEditLine) ?? lines[0] ?? null,
     [lines, selectedEditLine]
   );
-  const currentLineKind = useMemo(() => {
-    const expressLineIds = Array.isArray(mergedView?.expressLineIds)
-      ? mergedView.expressLineIds
-      : mergedView?.expressLineId
-        ? [mergedView.expressLineId]
-        : [];
-    return expressLineIds.includes(selectedEditLine) ? "express" : "local";
-  }, [mergedView, selectedEditLine]);
-  const selectedOriginStationName = selectedLine?.originStationName || stationOptions[0]?.name || (locale === "zh-CN" ? "始发站未加载" : "Origin pending");
+  const currentLineKind = useMemo(
+    () => (selectedLine?.kind === "express" ? "express" : "local"),
+    [selectedLine?.kind]
+  );
+  const selectedOriginStationName = selectedLine?.originStationName || stationOptions[0]?.name || t("schedule.originPending");
   const availableDepots = useMemo(() => {
     if (!selectedLine?.transportType) {
       return depots;
@@ -57,6 +53,10 @@ export default function SchedulePage({
 
     return depots.filter((depot) => !depot.transportType || depot.transportType === selectedLine.transportType);
   }, [depots, selectedLine?.transportType]);
+  const selectedDepotName = useMemo(
+    () => depots.find((depot) => depot.id === selectedLine?.allowedDepotId)?.name || "",
+    [depots, selectedLine?.allowedDepotId]
+  );
   const [draftLineKind, setDraftLineKind] = useState(currentLineKind);
   const [originHoldInput, setOriginHoldInput] = useState(String(selectedLine?.originHoldLimitMinutes ?? 20));
   const [maxStationDwellInput, setMaxStationDwellInput] = useState(String(selectedLine?.maxStationDwellMinutes ?? 10));
@@ -104,7 +104,7 @@ export default function SchedulePage({
           <div className="dw-panel-body dw-schedule-page-toolbar">
             <div className="dw-field dw-schedule-page-line-field">
               <label>
-                <SafeControlText>{locale === "zh-CN" ? "编辑线路" : "Editing line"}</SafeControlText>
+                <SafeControlText>{t("schedule.editingLine")}</SafeControlText>
               </label>
               <div
                 className="dw-line-dropdown"
@@ -125,7 +125,7 @@ export default function SchedulePage({
                     setDropdownOpen((current) => !current);
                   }}
                 >
-                  <ControlText>{selectedLine?.name || (locale === "zh-CN" ? "选择线路" : "Select line")}</ControlText>
+                  <ControlText>{selectedLine?.name || t("schedule.selectLine")}</ControlText>
                   <span className="dw-line-dropdown-caret" aria-hidden="true">
                     v
                   </span>
@@ -153,7 +153,7 @@ export default function SchedulePage({
 
             <div className="dw-field dw-schedule-page-kind-field">
               <label>
-                <SafeControlText>{locale === "zh-CN" ? "线路类型" : "Line type"}</SafeControlText>
+                <SafeControlText>{t("schedule.lineType")}</SafeControlText>
               </label>
               <ChoiceButtons
                 options={[
@@ -169,7 +169,7 @@ export default function SchedulePage({
             </div>
             <div className="dw-field dw-schedule-page-depot-field">
               <label>
-                <SafeControlText>Allowed depot</SafeControlText>
+                <SafeControlText>{t("schedule.allowedDepot")}</SafeControlText>
               </label>
               <div
                 className="dw-line-dropdown"
@@ -182,7 +182,7 @@ export default function SchedulePage({
                 <button
                   type="button"
                   className={`dw-line-dropdown-trigger ${depotDropdownOpen ? "is-open" : ""}`}
-                  title={availableDepots.find((depot) => depot.id === selectedLine?.allowedDepotId)?.name || ""}
+                  title={selectedDepotName}
                   onClick={() => {
                     if (!depotDropdownOpen) {
                       onRefreshMetadata?.();
@@ -191,7 +191,7 @@ export default function SchedulePage({
                   }}
                 >
                   <ControlText>
-                    {availableDepots.find((depot) => depot.id === selectedLine?.allowedDepotId)?.name || "Any depot"}
+                    {selectedDepotName || t("schedule.anyDepot")}
                   </ControlText>
                   <span className="dw-line-dropdown-caret" aria-hidden="true">
                     v
@@ -207,7 +207,7 @@ export default function SchedulePage({
                         setDepotDropdownOpen(false);
                       }}
                     >
-                      <ControlText>Any depot</ControlText>
+                      <ControlText>{t("schedule.anyDepot")}</ControlText>
                     </button>
                     {availableDepots.map((depot) => (
                       <button
@@ -268,7 +268,7 @@ export default function SchedulePage({
               rows={manualRows}
               setRows={setManualRows}
               selectedEditLine={selectedEditLine}
-              selectedLineName={selectedLine?.name || (locale === "zh-CN" ? "未选择线路" : "No line selected")}
+              selectedLineName={selectedLine?.name || t("schedule.noLineSelected")}
               currentLineKind={draftLineKind}
               onAddToStaged={onAddManualToStaged}
             />
@@ -293,7 +293,7 @@ export default function SchedulePage({
               rules={autoRules}
               setRules={setAutoRules}
               selectedEditLine={selectedEditLine}
-              selectedLineName={selectedLine?.name || (locale === "zh-CN" ? "未选择线路" : "No line selected")}
+              selectedLineName={selectedLine?.name || t("schedule.noLineSelected")}
               selectedLineKind={draftLineKind}
               previewPlan={autoPreviewPlan}
               onAddToStaged={onAddAutoToStaged}
