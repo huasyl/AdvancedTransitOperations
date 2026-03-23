@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   emptyAutoRules,
+  emptyDepots,
   emptyLines,
   emptyManualRows,
   emptyMergedView,
@@ -124,7 +125,16 @@ function serializeLineSettingsForSave(lines) {
     maxStationDwellMinutes:
       Number.isFinite(Number(line?.maxStationDwellMinutes)) && Number(line.maxStationDwellMinutes) > 0
         ? Math.max(1, Math.min(120, Math.round(Number(line.maxStationDwellMinutes))))
-        : 10
+        : 10,
+    allowedDepotId: line?.allowedDepotId || ""
+  }));
+}
+
+function normalizeDepotOptions(depots) {
+  return ensureArray(depots, emptyDepots).map((depot, index) => ({
+    id: depot?.id || `depot-${index + 1}`,
+    name: depot?.name || depot?.id || `Depot ${index + 1}`,
+    transportType: depot?.transportType || ""
   }));
 }
 
@@ -220,6 +230,7 @@ export function useWorkbenchController() {
   const [selectedEditLine, setSelectedEditLine] = useState("");
   const [mergedView, setMergedView] = useState(emptyMergedView);
   const [lineOptions, setLineOptions] = useState(() => normalizeLineOptions(emptyLines, t));
+  const [depotOptions, setDepotOptions] = useState(() => normalizeDepotOptions(emptyDepots));
   const [stationOptions, setStationOptions] = useState(() => normalizeStationOptions(emptyStations, t));
   const [tripOptions, setTripOptions] = useState(emptyTrips);
   const [manualRows, setManualRows] = useState(emptyManualRows);
@@ -235,6 +246,7 @@ export function useWorkbenchController() {
     }
 
     const nextLines = normalizeLineOptions(snapshot.lines, t);
+    const nextDepots = normalizeDepotOptions(snapshot.depots);
     const nextStations = normalizeStationOptions(snapshot.stations, t);
     const nextTrips = ensureArray(snapshot.trips, emptyTrips);
     const fallbackLineId = snapshot.selectedEditLine || snapshot.selectedLineId || nextLines[0]?.id || "";
@@ -243,6 +255,7 @@ export function useWorkbenchController() {
     const nextStagedRows = normalizeStagedRows(snapshot.stagedRows);
 
     setLineOptions(nextLines);
+    setDepotOptions(nextDepots);
     setStationOptions(nextStations);
     setTripOptions(nextTrips);
     setSelectedLineId(snapshot.selectedLineId || nextLines[0]?.id || "line3-local");
@@ -407,6 +420,7 @@ export function useWorkbenchController() {
       try {
         suppressNextSnapshotRef.current = true;
         await workbenchApi.saveDraft({
+          selectedLineId,
           selectedEditLine,
           mergedView: getPersistedMergedView(mergedView),
           manualRows,
@@ -424,6 +438,7 @@ export function useWorkbenchController() {
     };
   }, [
     workbenchApi,
+    selectedLineId,
     selectedEditLine,
     mergedView,
     lineSettingsForSave,
@@ -431,6 +446,25 @@ export function useWorkbenchController() {
     autoRules,
     stagedRows
   ]);
+
+  function saveDraftImmediately(nextState) {
+    if (!hasLoadedSnapshotRef.current) {
+      return;
+    }
+
+    suppressNextSnapshotRef.current = true;
+    workbenchApi.saveDraft({
+      selectedLineId: nextState.selectedLineId ?? selectedLineId,
+      selectedEditLine: nextState.selectedEditLine ?? selectedEditLine,
+      mergedView: getPersistedMergedView(nextState.mergedView ?? mergedView),
+      manualRows: nextState.manualRows ?? manualRows,
+      autoRules: nextState.autoRules ?? autoRules,
+      stagedRows: nextState.stagedRows ?? stagedRows,
+      lineSettings: nextState.lineSettings ?? lineSettingsForSave
+    }).catch(() => {
+      suppressNextSnapshotRef.current = false;
+    });
+  }
 
   function handleOriginHoldLimitChange(lineId, nextValue) {
     const normalizedValue =
@@ -453,24 +487,37 @@ export function useWorkbenchController() {
       return;
     }
 
-    setMergedView((current) => {
-      const base = ensureMergedView(current);
-      const nextLocalLineIds = base.localLineIds.filter((lineId) => lineId !== selectedEditLine);
-      const nextExpressLineIds = base.expressLineIds.filter((lineId) => lineId !== selectedEditLine);
+    const base = ensureMergedView(mergedView);
+    const nextLocalLineIds = base.localLineIds.filter((lineId) => lineId !== selectedEditLine);
+    const nextExpressLineIds = base.expressLineIds.filter((lineId) => lineId !== selectedEditLine);
 
-      if (normalizedKind === "express") {
-        nextExpressLineIds.push(selectedEditLine);
-      } else {
-        nextLocalLineIds.push(selectedEditLine);
-      }
+    if (normalizedKind === "express") {
+      nextExpressLineIds.push(selectedEditLine);
+    } else {
+      nextLocalLineIds.push(selectedEditLine);
+    }
 
-      return {
-        ...base,
-        localLineIds: nextLocalLineIds,
-        localLineId: nextLocalLineIds[0] || "",
-        expressLineIds: nextExpressLineIds,
-        expressLineId: nextExpressLineIds[0] || ""
-      };
+    const nextMergedView = {
+      ...base,
+      localLineIds: nextLocalLineIds,
+      localLineId: nextLocalLineIds[0] || "",
+      expressLineIds: nextExpressLineIds,
+      expressLineId: nextExpressLineIds[0] || ""
+    };
+
+    setMergedView(nextMergedView);
+    saveDraftImmediately({ mergedView: nextMergedView });
+  }
+
+  function handleAllowedDepotChange(lineId, nextDepotId) {
+    const nextLineOptions = lineOptions.map((line) =>
+      line.id === lineId
+        ? { ...line, allowedDepotId: nextDepotId || "" }
+        : line
+    );
+    setLineOptions(nextLineOptions);
+    saveDraftImmediately({
+      lineSettings: serializeLineSettingsForSave(nextLineOptions)
     });
   }
 
@@ -619,6 +666,7 @@ export function useWorkbenchController() {
       if (result?.snapshot) {
         const snapshot = result.snapshot;
         setLineOptions(normalizeLineOptions(snapshot.lines, t));
+        setDepotOptions(normalizeDepotOptions(snapshot.depots));
         setStationOptions(normalizeStationOptions(snapshot.stations, t));
         setTripOptions(ensureArray(snapshot.trips, emptyTrips));
         setSelectedLineId(snapshot.selectedLineId || selectedLineId);
@@ -665,9 +713,11 @@ export function useWorkbenchController() {
     mergedView,
     setMergedView,
     lineOptions,
+    depotOptions,
     stationOptions,
     filteredTrips,
     selectedTrip,
+    handleAllowedDepotChange,
     handleOriginHoldLimitChange,
     handleMaxStationDwellChange,
     manualRows,

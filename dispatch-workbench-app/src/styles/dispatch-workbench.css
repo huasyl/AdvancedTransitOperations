@@ -460,6 +460,7 @@ body {
 
 .dw-workbench-input,
 .dw-field input,
+.dw-field select,
 .dw-inline-time-range input,
 .dw-table input,
 .dw-grid-table input,
@@ -2257,9 +2258,16 @@ body {
   margin-bottom: 0;
 }
 
+.dw-schedule-page-depot-field {
+  width: 176px;
+  flex: 0 0 176px;
+  margin-left: 16px;
+  margin-bottom: 0;
+}
+
 .dw-schedule-page-origin-field {
-  width: 188px;
-  flex: 0 0 188px;
+  width: 176px;
+  flex: 0 0 176px;
   margin-left: 16px;
   margin-bottom: 0;
 }
@@ -2490,9 +2498,15 @@ body {
   margin-left: 16px;
 }
 
+.dw-euis-body .dw-schedule-page-depot-field {
+  width: 176px;
+  flex: 0 0 176px;
+  margin-left: 16px;
+}
+
 .dw-euis-body .dw-schedule-page-origin-field {
-  width: 220px;
-  flex: 0 0 220px;
+  width: 176px;
+  flex: 0 0 176px;
   margin-left: 16px;
 }
 

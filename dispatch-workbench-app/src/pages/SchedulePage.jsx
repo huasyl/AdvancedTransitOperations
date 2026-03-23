@@ -13,6 +13,7 @@ export default function SchedulePage({
   setAutoRules,
   stagedRows,
   lines,
+  depots = [],
   stationOptions = [],
   mergedView,
   selectedEditLine,
@@ -27,11 +28,13 @@ export default function SchedulePage({
   onRemoveStagedRow,
   onOriginHoldLimitChange,
   onSelectedLineKindChange,
+  onAllowedDepotChange,
   onMaxStationDwellChange,
   saveState
 }) {
   const { locale } = useI18n();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [depotDropdownOpen, setDepotDropdownOpen] = useState(false);
   const [actionMessage, setActionMessage] = useState("");
   const selectedLine = useMemo(
     () => lines.find((line) => line.id === selectedEditLine) ?? lines[0] ?? null,
@@ -46,6 +49,13 @@ export default function SchedulePage({
     return expressLineIds.includes(selectedEditLine) ? "express" : "local";
   }, [mergedView, selectedEditLine]);
   const selectedOriginStationName = selectedLine?.originStationName || stationOptions[0]?.name || (locale === "zh-CN" ? "始发站未加载" : "Origin pending");
+  const availableDepots = useMemo(() => {
+    if (!selectedLine?.transportType) {
+      return depots;
+    }
+
+    return depots.filter((depot) => !depot.transportType || depot.transportType === selectedLine.transportType);
+  }, [depots, selectedLine?.transportType]);
   const [draftLineKind, setDraftLineKind] = useState(currentLineKind);
   const [originHoldInput, setOriginHoldInput] = useState(String(selectedLine?.originHoldLimitMinutes ?? 20));
   const [maxStationDwellInput, setMaxStationDwellInput] = useState(String(selectedLine?.maxStationDwellMinutes ?? 10));
@@ -150,6 +160,61 @@ export default function SchedulePage({
                   onSelectedLineKindChange?.(nextValue);
                 }}
               />
+            </div>
+            <div className="dw-field dw-schedule-page-depot-field">
+              <label>
+                <SafeControlText>Allowed depot</SafeControlText>
+              </label>
+              <div
+                className="dw-line-dropdown"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    setDepotDropdownOpen(false);
+                  }
+                }}
+              >
+                <button
+                  type="button"
+                  className={`dw-line-dropdown-trigger ${depotDropdownOpen ? "is-open" : ""}`}
+                  title={availableDepots.find((depot) => depot.id === selectedLine?.allowedDepotId)?.name || ""}
+                  onClick={() => setDepotDropdownOpen((current) => !current)}
+                >
+                  <ControlText>
+                    {availableDepots.find((depot) => depot.id === selectedLine?.allowedDepotId)?.name || "Any depot"}
+                  </ControlText>
+                  <span className="dw-line-dropdown-caret" aria-hidden="true">
+                    v
+                  </span>
+                </button>
+                {depotDropdownOpen ? (
+                  <div className="dw-line-dropdown-menu" role="listbox">
+                    <button
+                      type="button"
+                      className={`dw-line-dropdown-option ${!selectedLine?.allowedDepotId ? "is-active" : ""}`}
+                      onClick={() => {
+                        onAllowedDepotChange?.(selectedEditLine, "");
+                        setDepotDropdownOpen(false);
+                      }}
+                    >
+                      <ControlText>Any depot</ControlText>
+                    </button>
+                    {availableDepots.map((depot) => (
+                      <button
+                        key={depot.id}
+                        type="button"
+                        className={`dw-line-dropdown-option ${depot.id === selectedLine?.allowedDepotId ? "is-active" : ""}`}
+                        title={depot.name}
+                        onClick={() => {
+                          onAllowedDepotChange?.(selectedEditLine, depot.id);
+                          setDepotDropdownOpen(false);
+                        }}
+                      >
+                        <ControlText>{depot.name}</ControlText>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </div>
             <div className="dw-field dw-schedule-page-origin-field">
               <label>

@@ -10,8 +10,9 @@ function buildPreviewLabel(rule, previewEntry, locale) {
     return locale === "zh-CN" ? "当前规则尚未生成预览" : "No preview available yet.";
   }
 
-  if (previewEntry.times.length > 0) {
-    return previewEntry.times.join(" / ");
+  const previewTimes = Array.isArray(previewEntry.times) ? previewEntry.times : [];
+  if (previewTimes.length > 0) {
+    return previewTimes.join(" / ");
   }
 
   if (previewEntry.reason === "missing-paired-reference" && rule.kind === "express") {

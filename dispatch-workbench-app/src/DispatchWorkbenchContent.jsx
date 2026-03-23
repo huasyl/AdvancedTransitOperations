@@ -14,6 +14,7 @@ export default function DispatchWorkbenchContent({
   mergedView,
   setMergedView,
   lineOptions,
+  depotOptions,
   stationOptions,
   filteredTrips,
   selectedTrip,
@@ -36,6 +37,7 @@ export default function DispatchWorkbenchContent({
   handleOverviewContextAction,
   handleScheduleContextAction,
   handleSelectedLineKindChange,
+  handleAllowedDepotChange,
   handleApplyDraft,
   handleAddManualToStaged,
   handleAddAutoToStaged,
@@ -71,6 +73,7 @@ export default function DispatchWorkbenchContent({
       setAutoRules={setAutoRules}
       stagedRows={stagedRows}
       lines={lineOptions}
+      depots={depotOptions}
       stationOptions={stationOptions}
       selectedEditLine={selectedEditLine}
       mergedView={mergedView}
@@ -87,6 +90,7 @@ export default function DispatchWorkbenchContent({
       onClearStagedLine={handleClearStagedLine}
       onRemoveStagedRow={handleRemoveStagedRow}
       onSelectedLineKindChange={handleSelectedLineKindChange}
+      onAllowedDepotChange={handleAllowedDepotChange}
       onOriginHoldLimitChange={handleOriginHoldLimitChange}
       onMaxStationDwellChange={handleMaxStationDwellChange}
       saveState={saveState}

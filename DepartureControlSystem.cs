@@ -132,6 +132,8 @@ namespace RapidTransitMod
             public string Detail5Value;
             public string Detail6LabelKey;
             public string Detail6Value;
+            public string Detail7LabelKey;
+            public string Detail7Value;
             public string AlertText;
             public bool ShowRetireAction;
             public bool ShowReevaluateAction;
@@ -456,9 +458,9 @@ namespace RapidTransitMod
                 FillLineDebugInfo(entity, list);
         }
 
-        public bool ShouldDisplaySelectedLineInfo(Entity entity)
+        public bool ShouldDisplaySelectedLineInfo(Entity entity, Entity preferredRoute = default)
         {
-            return ResolveSelectedLineEntity(entity) != Entity.Null;
+            return ResolveSelectedLineEntity(entity, preferredRoute) != Entity.Null;
         }
 
         public bool ShouldDisplaySelectedVehicleInfo(Entity entity)
@@ -567,8 +569,20 @@ namespace RapidTransitMod
 
         private Entity ResolveSelectedLineEntity(Entity entity)
         {
+            return ResolveSelectedLineEntity(entity, Entity.Null);
+        }
+
+        private Entity ResolveSelectedLineEntity(Entity entity, Entity preferredRoute)
+        {
             if (entity == Entity.Null || !EntityManager.Exists(entity))
                 return Entity.Null;
+
+            if (preferredRoute != Entity.Null
+                && EntityManager.Exists(preferredRoute)
+                && EntityManager.HasComponent<TransportLine>(preferredRoute))
+            {
+                return preferredRoute;
+            }
 
             if (EntityManager.HasComponent<TransportLine>(entity))
                 return entity;
@@ -979,9 +993,14 @@ namespace RapidTransitMod
 
         public bool TryBuildSelectedLineSnapshot(Entity line, out SelectedPanelSnapshot snapshot)
         {
+            return TryBuildSelectedLineSnapshot(line, Entity.Null, out snapshot);
+        }
+
+        public bool TryBuildSelectedLineSnapshot(Entity line, Entity preferredRoute, out SelectedPanelSnapshot snapshot)
+        {
             snapshot = default;
             Entity selectedEntity = line;
-            line = ResolveSelectedLineEntity(line);
+            line = ResolveSelectedLineEntity(line, preferredRoute);
             if (line == Entity.Null)
                 return false;
 
@@ -1050,18 +1069,20 @@ namespace RapidTransitMod
             snapshot.PrimaryLabelKey = isManagedLine ? "nextSlot" : "dispatch";
             snapshot.PrimaryValue = isManagedLine ? SlotStr(nextSlot) : LocalizedOfficialDispatchValue();
             snapshot.PrimaryValueKind = isManagedLine ? "slot" : "text";
-            snapshot.Detail1LabelKey = IsChineseLocale() ? "当前时间" : "Time";
-            snapshot.Detail1Value = SlotStr(nowMin);
-            snapshot.Detail2LabelKey = IsChineseLocale() ? "真实产车命令" : "Spawn Command";
-            snapshot.Detail2Value = spawnTriggerSummary;
-            snapshot.Detail3LabelKey = IsChineseLocale() ? "新车注册" : "Vehicle Register";
-            snapshot.Detail3Value = registerSummary;
-            snapshot.Detail4LabelKey = IsChineseLocale() ? "到站候车" : "Arrival Holding";
-            snapshot.Detail4Value = holdingSummary;
-            snapshot.Detail5LabelKey = IsChineseLocale() ? "出库用时" : "Dispatch Sample";
-            snapshot.Detail5Value = dispatchSampleSummary;
-            snapshot.Detail6LabelKey = IsChineseLocale() ? "车辆概览" : "Fleet";
-            snapshot.Detail6Value = total + " / " + running + " / " + holding;
+            snapshot.Detail1LabelKey = IsChineseLocale() ? "线路编号" : "Line ID";
+            snapshot.Detail1Value = line.Index.ToString();
+            snapshot.Detail2LabelKey = IsChineseLocale() ? "当前时间" : "Time";
+            snapshot.Detail2Value = SlotStr(nowMin);
+            snapshot.Detail3LabelKey = IsChineseLocale() ? "真实产车命令" : "Spawn Command";
+            snapshot.Detail3Value = spawnTriggerSummary;
+            snapshot.Detail4LabelKey = IsChineseLocale() ? "新车注册" : "Vehicle Register";
+            snapshot.Detail4Value = registerSummary;
+            snapshot.Detail5LabelKey = IsChineseLocale() ? "到站候车" : "Arrival Holding";
+            snapshot.Detail5Value = holdingSummary;
+            snapshot.Detail6LabelKey = IsChineseLocale() ? "出库用时" : "Dispatch Sample";
+            snapshot.Detail6Value = dispatchSampleSummary;
+            snapshot.Detail7LabelKey = IsChineseLocale() ? "车辆概览" : "Fleet";
+            snapshot.Detail7Value = total + " / " + running + " / " + holding;
             snapshot.AlertText = BuildLineAlertSummary(
                 line,
                 nextSlotOccupancy,

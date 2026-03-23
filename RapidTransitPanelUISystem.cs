@@ -22,8 +22,10 @@ namespace RapidTransitMod
         private bool m_PanelOpen;
         private bool m_LastVisible;
         private Entity m_PendingVehicle;
+        private Entity m_PendingRoute;
         private int m_PendingSelectionFrame = -1;
         private Entity m_LastVehicle;
+        private Entity m_LastRoute;
         private ulong m_LastSnapshotVersion;
         private int m_LastPushFrame = -1;
         private DepartureControlSystem.SelectedPanelSnapshot m_LastSnapshot;
@@ -36,7 +38,9 @@ namespace RapidTransitMod
             base.OnCreate();
             m_SelectedInfoUISystem = World.GetOrCreateSystemManaged<SelectedInfoUISystem>();
             m_PendingVehicle = Entity.Null;
+            m_PendingRoute = Entity.Null;
             m_LastVehicle = Entity.Null;
+            m_LastRoute = Entity.Null;
 
             AddBinding(m_VisibleBinding = new ValueBinding<bool>(kGroup, "visible", initialValue: false));
             AddBinding(m_PanelDataJsonBinding = new ValueBinding<string>(kGroup, "panelDataJson", string.Empty));
@@ -70,12 +74,13 @@ namespace RapidTransitMod
 
             int currentFrame = UnityEngine.Time.frameCount;
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
+            Entity selectedRoute = m_SelectedInfoUISystem.selectedRoute;
             bool isInspectableVehicle = selectedEntity != Entity.Null && control.ShouldDisplaySelectedVehicleInfo(selectedEntity);
-            bool isInspectableLine = selectedEntity != Entity.Null && control.ShouldDisplaySelectedLineInfo(selectedEntity);
+            bool isInspectableLine = selectedEntity != Entity.Null && control.ShouldDisplaySelectedLineInfo(selectedEntity, selectedRoute);
 
             if (!isInspectableVehicle && !isInspectableLine)
             {
-                TrackPendingVehicle(selectedEntity, currentFrame);
+                TrackPendingSelection(selectedEntity, selectedRoute, currentFrame);
                 if (m_LastVisible && HasSelectionSettled(currentFrame))
                 {
                     ResetState(clearSnapshot: true);
@@ -84,34 +89,34 @@ namespace RapidTransitMod
                 return;
             }
 
-            if (selectedEntity != m_PendingVehicle)
+            if (selectedEntity != m_PendingVehicle || selectedRoute != m_PendingRoute)
             {
-                TrackPendingVehicle(selectedEntity, currentFrame);
+                TrackPendingSelection(selectedEntity, selectedRoute, currentFrame);
                 return;
             }
 
             if (!HasSelectionSettled(currentFrame))
                 return;
 
-            bool needsSelectionPush = !m_LastVisible || selectedEntity != m_LastVehicle;
+            bool needsSelectionPush = !m_LastVisible || selectedEntity != m_LastVehicle || selectedRoute != m_LastRoute;
             if (!needsSelectionPush && control.PanelDataVersion != m_LastSnapshotVersion)
             {
                 needsSelectionPush = true;
             }
             if (needsSelectionPush)
             {
-                TryPushSnapshot(control, selectedEntity, isInspectableVehicle, "refresh", currentFrame);
+                TryPushSnapshot(control, selectedEntity, selectedRoute, isInspectableVehicle, "refresh", currentFrame);
                 return;
             }
 
             SetVisibleIfNeeded();
         }
 
-        private bool TryPushSnapshot(DepartureControlSystem control, Entity entity, bool isVehicle, string dirtyReason, int currentFrame)
+        private bool TryPushSnapshot(DepartureControlSystem control, Entity entity, Entity selectedRoute, bool isVehicle, string dirtyReason, int currentFrame)
         {
             bool built = isVehicle
                 ? control.TryBuildSelectedVehicleSnapshot(entity, out m_LastSnapshot)
-                : control.TryBuildSelectedLineSnapshot(entity, out m_LastSnapshot);
+                : control.TryBuildSelectedLineSnapshot(entity, selectedRoute, out m_LastSnapshot);
 
             if (!built)
             {
@@ -122,18 +127,20 @@ namespace RapidTransitMod
 
             m_PanelDataJsonBinding.Update(SerializeSnapshot(m_LastSnapshot));
             m_LastVehicle = entity;
+            m_LastRoute = selectedRoute;
             m_LastSnapshotVersion = control.PanelDataVersion;
             m_LastPushFrame = currentFrame;
             SetVisibleIfNeeded();
             return true;
         }
 
-        private void TrackPendingVehicle(Entity vehicle, int currentFrame)
+        private void TrackPendingSelection(Entity vehicle, Entity selectedRoute, int currentFrame)
         {
-            if (vehicle == m_PendingVehicle)
+            if (vehicle == m_PendingVehicle && selectedRoute == m_PendingRoute)
                 return;
 
             m_PendingVehicle = vehicle;
+            m_PendingRoute = selectedRoute;
             m_PendingSelectionFrame = currentFrame;
         }
 
@@ -163,6 +170,8 @@ namespace RapidTransitMod
             AppendJsonString(sb, "detail5Value", snapshot.Detail5Value);
             AppendJsonString(sb, "detail6LabelKey", snapshot.Detail6LabelKey);
             AppendJsonString(sb, "detail6Value", snapshot.Detail6Value);
+            AppendJsonString(sb, "detail7LabelKey", snapshot.Detail7LabelKey);
+            AppendJsonString(sb, "detail7Value", snapshot.Detail7Value);
             AppendJsonString(sb, "alertText", snapshot.AlertText);
             AppendJsonBool(sb, "showAlerts", snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);
@@ -233,8 +242,10 @@ namespace RapidTransitMod
         private void ResetState(bool clearSnapshot)
         {
             m_PendingVehicle = Entity.Null;
+            m_PendingRoute = Entity.Null;
             m_PendingSelectionFrame = -1;
             m_LastVehicle = Entity.Null;
+            m_LastRoute = Entity.Null;
             m_LastSnapshotVersion = 0;
             m_LastPushFrame = -1;
 
@@ -311,10 +322,13 @@ namespace RapidTransitMod
             if (DepartureControlSystem.Instance == null)
                 return;
 
-            Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
+            Entity selectedEntity = m_SelectedInfoUISystem.selectedRoute != Entity.Null
+                ? m_SelectedInfoUISystem.selectedRoute
+                : m_SelectedInfoUISystem.selectedEntity;
             if (selectedEntity != Entity.Null && DepartureControlSystem.Instance.RequestSpawnForLine(selectedEntity))
             {
                 m_LastVehicle = Entity.Null;
+                m_LastRoute = Entity.Null;
                 m_LastSnapshotVersion = 0;
             }
         }

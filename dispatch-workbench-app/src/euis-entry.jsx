@@ -33,8 +33,8 @@ class EuisErrorBoundary extends React.Component {
     return { error };
   }
 
-  componentDidCatch(error) {
-    console.error("[RT Workbench] mount failed", error);
+  componentDidCatch(error, errorInfo) {
+    console.error("[RT Workbench] mount failed", error, errorInfo?.componentStack || "");
   }
 
   render() {
