@@ -77,7 +77,10 @@ export default function DispatchWorkbenchContent({
       stationOptions={stationOptions}
       selectedEditLine={selectedEditLine}
       mergedView={mergedView}
-      setSelectedEditLine={setSelectedEditLine}
+      setSelectedEditLine={(lineId) => {
+        setSelectedEditLine(lineId);
+        setSelectedLineId(lineId);
+      }}
       validatedRows={validatedRows}
       combinedRows={combinedRows}
       sideContext={scheduleSideContext}

@@ -71,6 +71,8 @@ namespace RapidTransitMod
             public int maxStationDwellMinutes;
             [DataMember]
             public string allowedDepotId;
+            [DataMember]
+            public string serviceKind;
         }
 
         [DataContract]
@@ -401,6 +403,7 @@ namespace RapidTransitMod
         private readonly Dictionary<string, int> m_WorkbenchLineOriginHoldLimits = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, int> m_WorkbenchLineMaxStationDwellMinutes = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_WorkbenchLineAllowedDepots = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> m_WorkbenchLineServiceKinds = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, AppliedWorkbenchLineState> m_AppliedWorkbenchLines = new Dictionary<string, AppliedWorkbenchLineState>(StringComparer.Ordinal);
         private readonly Dictionary<Entity, WorkbenchRealtimeVehicleRecord> m_WorkbenchRealtimeVehicles = new Dictionary<Entity, WorkbenchRealtimeVehicleRecord>();
         private ulong m_WorkbenchSnapshotVersion = 1;
@@ -673,7 +676,11 @@ namespace RapidTransitMod
                         name = "Line " + line.Index;
                     }
 
-                    string kind = "local";
+                    string kind = GetEffectiveWorkbenchLineServiceKind(line.Index.ToString(), null);
+                    if (string.IsNullOrEmpty(kind))
+                    {
+                        kind = "local";
+                    }
 
                     lines.Add(new WorkbenchLineRuntime
                     {
@@ -1184,7 +1191,7 @@ namespace RapidTransitMod
                 };
             }
 
-            string serviceKind = GetAppliedWorkbenchLineServiceKind(applied);
+            string serviceKind = GetEffectiveWorkbenchLineServiceKind(lineKey, applied);
             if (string.Equals(serviceKind, "express", StringComparison.Ordinal))
             {
                 draft.MergedView.localLineIds = Array.Empty<string>();
@@ -1273,14 +1280,19 @@ namespace RapidTransitMod
                 drafts.Add(CreatePersistedDraftState(entry.Key, entry.Value));
             }
 
-            DispatchWorkbenchLineSettingDto[] lineSettings = m_WorkbenchLineOriginHoldLimits
-                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
-                .Select(entry => new DispatchWorkbenchLineSettingDto
+            DispatchWorkbenchLineSettingDto[] lineSettings = m_WorkbenchLineOriginHoldLimits.Keys
+                .Concat(m_WorkbenchLineMaxStationDwellMinutes.Keys)
+                .Concat(m_WorkbenchLineAllowedDepots.Keys)
+                .Concat(m_WorkbenchLineServiceKinds.Keys)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(key => key, StringComparer.Ordinal)
+                .Select(lineId => new DispatchWorkbenchLineSettingDto
                 {
-                    lineId = entry.Key,
-                    originHoldLimitMinutes = NormalizeOriginHoldLimitMinutes(entry.Value),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(entry.Key),
-                    allowedDepotId = GetWorkbenchAllowedDepotId(entry.Key)
+                    lineId = lineId,
+                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(lineId),
+                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(lineId),
+                    allowedDepotId = GetWorkbenchAllowedDepotId(lineId),
+                    serviceKind = GetWorkbenchConfiguredLineServiceKind(lineId)
                 })
                 .ToArray();
 
@@ -1298,6 +1310,7 @@ namespace RapidTransitMod
             m_WorkbenchLineOriginHoldLimits.Clear();
             m_WorkbenchLineMaxStationDwellMinutes.Clear();
             m_WorkbenchLineAllowedDepots.Clear();
+            m_WorkbenchLineServiceKinds.Clear();
             m_WorkbenchPreferredLineId = persisted?.preferredLineId ?? string.Empty;
 
             if (persisted?.lineSettings != null)
@@ -1562,6 +1575,12 @@ namespace RapidTransitMod
                 return string.Empty;
 
             string lineKey = GetDraftKey(line.Index.ToString());
+            string configuredKind = GetWorkbenchConfiguredLineServiceKind(lineKey);
+            if (!string.IsNullOrEmpty(configuredKind))
+            {
+                return configuredKind;
+            }
+
             if (!m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState state)
                 || state.StagedRows == null
                 || state.StagedRows.Count == 0)
@@ -1599,6 +1618,17 @@ namespace RapidTransitMod
                 return "express";
 
             return "local";
+        }
+
+        private string GetEffectiveWorkbenchLineServiceKind(string lineKey, AppliedWorkbenchLineState applied)
+        {
+            string configuredKind = GetWorkbenchConfiguredLineServiceKind(lineKey);
+            if (!string.IsNullOrEmpty(configuredKind))
+            {
+                return configuredKind;
+            }
+
+            return GetAppliedWorkbenchLineServiceKind(applied);
         }
 
         private bool IsAppliedWorkbenchLocalLine(Entity line)
@@ -2924,7 +2954,8 @@ namespace RapidTransitMod
                 {
                     lineId = string.Empty,
                     originHoldLimitMinutes = DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES,
-                    maxStationDwellMinutes = DEFAULT_MAX_STATION_DWELL_MINUTES
+                    maxStationDwellMinutes = DEFAULT_MAX_STATION_DWELL_MINUTES,
+                    serviceKind = string.Empty
                 };
             }
 
@@ -2933,7 +2964,8 @@ namespace RapidTransitMod
                 lineId = setting.lineId ?? string.Empty,
                 originHoldLimitMinutes = NormalizeOriginHoldLimitMinutes(setting.originHoldLimitMinutes),
                 maxStationDwellMinutes = NormalizeMaxStationDwellMinutes(setting.maxStationDwellMinutes),
-                allowedDepotId = setting.allowedDepotId ?? string.Empty
+                allowedDepotId = setting.allowedDepotId ?? string.Empty,
+                serviceKind = NormalizeWorkbenchServiceKind(setting.serviceKind)
             };
         }
 
@@ -2961,6 +2993,7 @@ namespace RapidTransitMod
             m_WorkbenchLineOriginHoldLimits.Clear();
             m_WorkbenchLineMaxStationDwellMinutes.Clear();
             m_WorkbenchLineAllowedDepots.Clear();
+            m_WorkbenchLineServiceKinds.Clear();
             foreach (DispatchWorkbenchLineSettingDto setting in settings)
             {
                 if (setting == null || string.IsNullOrEmpty(setting.lineId))
@@ -2971,7 +3004,22 @@ namespace RapidTransitMod
                 m_WorkbenchLineMaxStationDwellMinutes[setting.lineId] =
                     NormalizeMaxStationDwellMinutes(setting.maxStationDwellMinutes);
                 m_WorkbenchLineAllowedDepots[setting.lineId] = setting.allowedDepotId ?? string.Empty;
+                string normalizedKind = NormalizeWorkbenchServiceKind(setting.serviceKind);
+                if (!string.IsNullOrEmpty(normalizedKind))
+                {
+                    m_WorkbenchLineServiceKinds[setting.lineId] = normalizedKind;
+                }
             }
+        }
+
+        private static string NormalizeWorkbenchServiceKind(string kind)
+        {
+            if (string.IsNullOrEmpty(kind))
+                return string.Empty;
+
+            return string.Equals(kind, "express", StringComparison.Ordinal)
+                ? "express"
+                : "local";
         }
 
         private int GetWorkbenchOriginHoldLimitMinutes(string lineId)
@@ -2982,6 +3030,16 @@ namespace RapidTransitMod
             return m_WorkbenchLineOriginHoldLimits.TryGetValue(lineId, out int configuredMinutes)
                 ? NormalizeOriginHoldLimitMinutes(configuredMinutes)
                 : DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
+        }
+
+        private string GetWorkbenchConfiguredLineServiceKind(string lineId)
+        {
+            if (string.IsNullOrEmpty(lineId))
+                return string.Empty;
+
+            return m_WorkbenchLineServiceKinds.TryGetValue(lineId, out string configuredKind)
+                ? NormalizeWorkbenchServiceKind(configuredKind)
+                : string.Empty;
         }
 
         private int GetWorkbenchMaxStationDwellMinutes(string lineId)

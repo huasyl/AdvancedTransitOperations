@@ -126,7 +126,8 @@ function serializeLineSettingsForSave(lines) {
       Number.isFinite(Number(line?.maxStationDwellMinutes)) && Number(line.maxStationDwellMinutes) > 0
         ? Math.max(1, Math.min(120, Math.round(Number(line.maxStationDwellMinutes))))
         : 10,
-    allowedDepotId: line?.allowedDepotId || ""
+    allowedDepotId: line?.allowedDepotId || "",
+    serviceKind: line?.kind === "express" ? "express" : "local"
   }));
 }
 
@@ -137,6 +138,73 @@ function normalizeDepotOptions(depots) {
     transportType: depot?.transportType || ""
   }));
 }
+
+function mergeLineOptionsPreservingSettings(currentLines, nextLines) {
+  const currentById = new Map(ensureArray(currentLines, emptyLines).map((line) => [line.id, line]));
+  return ensureArray(nextLines, emptyLines).map((line) => {
+    const current = currentById.get(line.id);
+    if (!current) {
+      return line;
+    }
+
+    return {
+      ...line,
+      originHoldLimitMinutes: current.originHoldLimitMinutes,
+      maxStationDwellMinutes: current.maxStationDwellMinutes,
+      allowedDepotId: current.allowedDepotId || "",
+      kind: current.kind || line.kind
+    };
+  });
+}
+function areLineOptionsEquivalent(left, right) {
+  const a = ensureArray(left, emptyLines);
+  const b = ensureArray(right, emptyLines);
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  for (let index = 0; index < a.length; index += 1) {
+    const current = a[index];
+    const next = b[index];
+    if (
+      current?.id !== next?.id ||
+      current?.name !== next?.name ||
+      current?.rawName !== next?.rawName ||
+      current?.kind !== next?.kind ||
+      current?.transportType !== next?.transportType ||
+      current?.originHoldLimitMinutes !== next?.originHoldLimitMinutes ||
+      current?.maxStationDwellMinutes !== next?.maxStationDwellMinutes ||
+      current?.allowedDepotId !== next?.allowedDepotId
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function areDepotOptionsEquivalent(left, right) {
+  const a = ensureArray(left, emptyDepots);
+  const b = ensureArray(right, emptyDepots);
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  for (let index = 0; index < a.length; index += 1) {
+    const current = a[index];
+    const next = b[index];
+    if (
+      current?.id !== next?.id ||
+      current?.name !== next?.name ||
+      current?.transportType !== next?.transportType
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 
 function normalizeStationOptions(stations, t) {
   return ensureArray(stations, emptyStations).map((station, index) => {
@@ -416,6 +484,37 @@ export function useWorkbenchController() {
       return undefined;
     }
 
+    let isDisposed = false;
+    const intervalId = window.setInterval(async () => {
+      try {
+        const snapshot = await workbenchApi.refreshSnapshot?.();
+        if (!isDisposed && snapshot) {
+          const nextLines = normalizeLineOptions(snapshot.lines, t);
+          setLineOptions((current) => {
+            const mergedLines = mergeLineOptionsPreservingSettings(current, nextLines);
+            return areLineOptionsEquivalent(current, mergedLines) ? current : mergedLines;
+          });
+          const nextDepots = normalizeDepotOptions(snapshot.depots);
+          setDepotOptions((current) => (
+            areDepotOptionsEquivalent(current, nextDepots) ? current : nextDepots
+          ));
+        }
+      } catch {
+        // Keep background refresh silent; editing should stay uninterrupted.
+      }
+    }, 2000);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [workbenchApi, t]);
+
+  useEffect(() => {
+    if (!hasLoadedSnapshotRef.current) {
+      return undefined;
+    }
+
     const timeoutId = window.setTimeout(async () => {
       try {
         suppressNextSnapshotRef.current = true;
@@ -504,9 +603,32 @@ export function useWorkbenchController() {
       expressLineIds: nextExpressLineIds,
       expressLineId: nextExpressLineIds[0] || ""
     };
+    const nextManualRows = manualRows.map((row) =>
+      row.lineId === selectedEditLine ? { ...row, kind: normalizedKind } : row
+    );
+    const nextAutoRules = autoRules.map((rule) =>
+      rule.lineId === selectedEditLine ? { ...rule, kind: normalizedKind } : rule
+    );
+    const nextStagedRows = stagedRows.map((row) =>
+      row.lineId === selectedEditLine ? { ...row, kind: normalizedKind } : row
+    );
 
+    const nextLineOptions = lineOptions.map((line) =>
+      line.id === selectedEditLine ? { ...line, kind: normalizedKind } : line
+    );
     setMergedView(nextMergedView);
-    saveDraftImmediately({ mergedView: nextMergedView });
+    setManualRows(nextManualRows);
+    setAutoRules(nextAutoRules);
+    setStagedRows(nextStagedRows);
+    setLineOptions(nextLineOptions);
+    saveDraftImmediately({
+      selectedLineId: selectedEditLine,
+      mergedView: nextMergedView,
+      manualRows: nextManualRows,
+      autoRules: nextAutoRules,
+      stagedRows: nextStagedRows,
+      lineSettings: serializeLineSettingsForSave(nextLineOptions)
+    });
   }
 
   function handleAllowedDepotChange(lineId, nextDepotId) {
@@ -632,7 +754,7 @@ export function useWorkbenchController() {
           status: "idle",
           message:
             locale === "zh-CN"
-              ? `已跳过 ${plan.skippedCount} 班自动车次：需同时满足偏移规则，以及同始发站最小 ${MIN_DEPARTURE_INTERVAL_MINUTES} 分钟发车间隔。`
+              ? `已跳�?${plan.skippedCount} 班自动车次：需同时满足偏移规则，以及同始发站最�?${MIN_DEPARTURE_INTERVAL_MINUTES} 分钟发车间隔。`
               : `Skipped ${plan.skippedCount} automatic departures because they violated the offset rule or the ${MIN_DEPARTURE_INTERVAL_MINUTES}-minute minimum headway for the same origin station.`
         });
       }
