@@ -570,6 +570,9 @@ namespace RapidTransitMod
             HashSet<string> mergedManualRowIds = new HashSet<string>(StringComparer.Ordinal);
             HashSet<string> mergedAutoRuleIds = new HashSet<string>(StringComparer.Ordinal);
             HashSet<string> mergedStagedRowIds = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> validRuntimeLineIds = new HashSet<string>(
+                runtimeLines.Select(line => line.Id),
+                StringComparer.Ordinal);
             List<DispatchWorkbenchStationDto> stations = activeRuntime != null
                 ? BuildWorkbenchStations(activeRuntime.Entity)
                 : new List<DispatchWorkbenchStationDto>();
@@ -585,12 +588,12 @@ namespace RapidTransitMod
             }
 
             EnsureMergedViewDefaultsStable(draft, runtimeLines, activeRuntime);
-            CollectWorkbenchDraftRows(draftKey, mergedManualRows, mergedAutoRules, mergedStagedRows, mergedManualRowIds, mergedAutoRuleIds, mergedStagedRowIds);
+            CollectWorkbenchDraftRows(draftKey, validRuntimeLineIds, mergedManualRows, mergedAutoRules, mergedStagedRows, mergedManualRowIds, mergedAutoRuleIds, mergedStagedRowIds);
             foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 if (string.Equals(entry.Key, draftKey, StringComparison.Ordinal))
                     continue;
-                CollectWorkbenchDraftRows(entry.Key, mergedManualRows, mergedAutoRules, mergedStagedRows, mergedManualRowIds, mergedAutoRuleIds, mergedStagedRowIds);
+                CollectWorkbenchDraftRows(entry.Key, validRuntimeLineIds, mergedManualRows, mergedAutoRules, mergedStagedRows, mergedManualRowIds, mergedAutoRuleIds, mergedStagedRowIds);
             }
             List<DispatchWorkbenchTripDto> trips = activeRuntime != null
                 ? BuildRealtimeWorkbenchTrips(activeRuntime, stations, draft)
@@ -675,6 +678,7 @@ namespace RapidTransitMod
 
         private void CollectWorkbenchDraftRows(
             string lineKey,
+            HashSet<string> validRuntimeLineIds,
             List<DispatchWorkbenchManualRowDto> manualRows,
             List<DispatchWorkbenchAutoRuleDto> autoRules,
             List<DispatchWorkbenchStagedRowDto> stagedRows,
@@ -695,8 +699,12 @@ namespace RapidTransitMod
             {
                 foreach (DispatchWorkbenchManualRowDto row in draft.ManualRows)
                 {
-                    if (row != null && manualRowIds.Add(row.id ?? string.Empty))
+                    if (row != null
+                        && validRuntimeLineIds.Contains(row.lineId ?? string.Empty)
+                        && manualRowIds.Add(row.id ?? string.Empty))
+                    {
                         manualRows.Add(CloneManualRow(row));
+                    }
                 }
             }
 
@@ -704,8 +712,12 @@ namespace RapidTransitMod
             {
                 foreach (DispatchWorkbenchAutoRuleDto rule in draft.AutoRules)
                 {
-                    if (rule != null && autoRuleIds.Add(rule.id ?? string.Empty))
+                    if (rule != null
+                        && validRuntimeLineIds.Contains(rule.lineId ?? string.Empty)
+                        && autoRuleIds.Add(rule.id ?? string.Empty))
+                    {
                         autoRules.Add(CloneAutoRule(rule));
+                    }
                 }
             }
 
@@ -713,8 +725,12 @@ namespace RapidTransitMod
             {
                 foreach (DispatchWorkbenchStagedRowDto row in draft.StagedRows)
                 {
-                    if (row != null && stagedRowIds.Add(row.id ?? string.Empty))
+                    if (row != null
+                        && validRuntimeLineIds.Contains(row.lineId ?? string.Empty)
+                        && stagedRowIds.Add(row.id ?? string.Empty))
+                    {
                         stagedRows.Add(CloneStagedRow(row));
+                    }
                 }
             }
         }
@@ -953,8 +969,7 @@ namespace RapidTransitMod
 
             if (!EntityManager.HasBuffer<WorkbenchTimetableStateElement>(city))
             {
-                m_WorkbenchPersistenceLoaded = true;
-                return true;
+                return false;
             }
 
             var buffer = EntityManager.GetBuffer<WorkbenchTimetableStateElement>(city, true);
@@ -966,9 +981,21 @@ namespace RapidTransitMod
 
             try
             {
-                string payloadJson = string.Concat(buffer
-                    .OrderBy(entry => entry.m_ChunkIndex)
-                    .Select(entry => entry.m_PayloadChunk.ToString()));
+                WorkbenchTimetableStateElement[] orderedEntries = new WorkbenchTimetableStateElement[buffer.Length];
+                for (int i = 0; i < buffer.Length; i++)
+                {
+                    orderedEntries[i] = buffer[i];
+                }
+
+                Array.Sort(orderedEntries, (left, right) => left.m_ChunkIndex.CompareTo(right.m_ChunkIndex));
+
+                StringBuilder payloadBuilder = new StringBuilder();
+                for (int i = 0; i < orderedEntries.Length; i++)
+                {
+                    payloadBuilder.Append(orderedEntries[i].m_PayloadChunk.ToString());
+                }
+
+                string payloadJson = payloadBuilder.ToString();
 
                 if (string.IsNullOrEmpty(payloadJson))
                 {
@@ -1003,6 +1030,12 @@ namespace RapidTransitMod
             Entity city = m_CitySystem.City;
             if (city == Entity.Null)
                 return false;
+
+            if (!EntityManager.HasBuffer<AppliedWorkbenchLineStateElement>(city)
+                && !EntityManager.HasBuffer<AppliedWorkbenchStagedRowElement>(city))
+            {
+                return false;
+            }
 
             m_AppliedWorkbenchLines.Clear();
 
@@ -1522,7 +1555,7 @@ namespace RapidTransitMod
             {
                 lineKey = lineKey,
                 selectedLineId = draft?.SelectedLineId ?? string.Empty,
-                selectedEditLine = string.Empty,
+                selectedEditLine = draft?.SelectedEditLine ?? string.Empty,
                 mergedView = CloneMergedViewForPersistence(draft?.MergedView),
                 manualRows = Array.Empty<DispatchWorkbenchManualRowDto>(),
                 autoRules = Array.Empty<DispatchWorkbenchAutoRuleDto>(),

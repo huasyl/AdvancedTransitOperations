@@ -374,6 +374,35 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct BypassTrackModelShadowSnapshot
+        {
+            public readonly uint Frame;
+            public readonly Entity Line;
+            public readonly int CurrentWaypointIndex;
+            public readonly Entity CurrentBypassBuilding;
+            public readonly Entity NextBypassBuilding;
+            public readonly BypassTrackModelShadowEvaluation Evaluation;
+            public readonly BypassTrackModelShadowDecision Decision;
+
+            public BypassTrackModelShadowSnapshot(
+                uint frame,
+                Entity line,
+                int currentWaypointIndex,
+                Entity currentBypassBuilding,
+                Entity nextBypassBuilding,
+                BypassTrackModelShadowEvaluation evaluation,
+                BypassTrackModelShadowDecision decision)
+            {
+                Frame = frame;
+                Line = line;
+                CurrentWaypointIndex = currentWaypointIndex;
+                CurrentBypassBuilding = currentBypassBuilding;
+                NextBypassBuilding = nextBypassBuilding;
+                Evaluation = evaluation;
+                Decision = decision;
+            }
+        }
+
         private readonly struct SharedTrackOccurrence
         {
             public readonly Entity LineEntity;
@@ -507,11 +536,16 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, int> m_SuspectProgressValidationCount = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, SuspectProgressSample> m_SuspectProgressFirstSample = new Dictionary<Entity, SuspectProgressSample>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelShadowLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassTrackModelShadowThrottleCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_BypassTrackModelShadowLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelCompareLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassTrackModelCompareThrottleCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_BypassTrackModelCompareLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_SharedWindowAuditLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_TrackModelSequenceLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, BypassTrackModelShadowEvaluation> m_BypassTrackModelShadowEvaluations = new Dictionary<Entity, BypassTrackModelShadowEvaluation>();
         private readonly Dictionary<Entity, BypassTrackModelShadowDecision> m_BypassTrackModelShadowDecisions = new Dictionary<Entity, BypassTrackModelShadowDecision>();
+        private readonly Dictionary<Entity, BypassTrackModelShadowSnapshot> m_BypassTrackModelShadowSnapshots = new Dictionary<Entity, BypassTrackModelShadowSnapshot>();
         private uint m_SharedTrackIndexVersion = 1;
         private readonly HashSet<Entity> m_DirtyTrackLines = new HashSet<Entity>();
         private bool m_SharedTrackIndexDirty = true;
@@ -542,11 +576,17 @@ namespace RapidTransitMod
             m_SuspectProgressValidationCount.Clear();
             m_SuspectProgressFirstSample.Clear();
             m_BypassTrackModelShadowLogCache.Clear();
+            m_BypassTrackModelShadowThrottleCache.Clear();
+            m_BypassTrackModelShadowLastLogFrame.Clear();
             m_BypassTrackModelCompareLogCache.Clear();
+            m_BypassTrackModelCompareThrottleCache.Clear();
+            m_BypassTrackModelCompareLastLogFrame.Clear();
             m_SharedWindowAuditLogCache.Clear();
             m_TrackModelSequenceLogCache.Clear();
             m_BypassTrackModelShadowEvaluations.Clear();
             m_BypassTrackModelShadowDecisions.Clear();
+            m_BypassTrackModelShadowSnapshots.Clear();
+            m_BypassHoldCadenceSnapshots.Clear();
             m_SharedTrackIndexDirty = true;
         }
 
@@ -4195,11 +4235,19 @@ namespace RapidTransitMod
             if (localVehicle == Entity.Null || localLine == Entity.Null)
                 return;
 
-            string summary = string.Empty;
-            bool hasSummary = TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out BypassTrackModelShadowEvaluation evaluation);
-            if (hasSummary)
-                summary = evaluation.Summary;
-            bool hasDecision = TryEvaluateBypassTrackModelShadowDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, m_SimulationSystem.frameIndex, out BypassTrackModelShadowDecision shadowDecision);
+            EnsureBypassTrackModelShadowSnapshotCurrent(
+                localVehicle,
+                localLine,
+                localWaypoints,
+                currentWaypointIndex,
+                currentBypassBuilding,
+                nextBypassBuilding,
+                out BypassTrackModelShadowEvaluation evaluation,
+                out BypassTrackModelShadowDecision shadowDecision);
+
+            bool hasSummary = evaluation.Available;
+            string summary = hasSummary ? evaluation.Summary : string.Empty;
+            bool hasDecision = shadowDecision.Available;
             string decisionSequence = hasDecision ? shadowDecision.SequenceSummary : string.Empty;
             string key = (hasSummary ? summary : "trackModel[unavailable]")
                 + "|"
@@ -4213,6 +4261,31 @@ namespace RapidTransitMod
 
             if (m_BypassTrackModelShadowLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
                 return;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            string coarseKey = (hasDecision ? (shadowDecision.ShouldYield ? "Y" : "N") : "U")
+                + "|"
+                + (hasDecision ? shadowDecision.ReasonCode : "decision-unavailable")
+                + "|"
+                + (hasSummary ? evaluation.Risk : "unavailable")
+                + "|"
+                + (hasDecision ? shadowDecision.ProtectedIntervalIndex : -1)
+                + "|"
+                + currentBypassBuilding.Index
+                + "|"
+                + nextBypassBuilding.Index
+                + "|"
+                + (hasDecision ? shadowDecision.BlockerVehicle.Index : -1);
+            if (!ShouldEmitVehicleLogWithCooldown(
+                    m_BypassTrackModelShadowThrottleCache,
+                    m_BypassTrackModelShadowLastLogFrame,
+                    localVehicle,
+                    coarseKey,
+                    nowFrame,
+                    BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES))
+            {
+                return;
+            }
 
             m_BypassTrackModelShadowLogCache[localVehicle] = key;
             string shadowRisk = hasSummary ? evaluation.Risk : "unavailable";
@@ -4234,6 +4307,50 @@ namespace RapidTransitMod
                 + " blocker=" + (hasDecision ? shadowDecision.BlockerPosition : string.Empty)
                 + (!string.IsNullOrEmpty(decisionSequence) ? " " + decisionSequence : string.Empty)
                 + " " + (hasSummary ? summary : "trackModel[unavailable]"));
+        }
+
+        private void EnsureBypassTrackModelShadowSnapshotCurrent(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            Entity currentBypassBuilding,
+            Entity nextBypassBuilding,
+            out BypassTrackModelShadowEvaluation evaluation,
+            out BypassTrackModelShadowDecision shadowDecision)
+        {
+            evaluation = new BypassTrackModelShadowEvaluation(false, -1, "unavailable", "trackModel[unavailable]");
+            shadowDecision = new BypassTrackModelShadowDecision(false, false, "decision-unavailable", -1, "unavailable", "trackModel[unavailable]", "pos[unknown]", Entity.Null, string.Empty, string.Empty);
+
+            if (localVehicle == Entity.Null || localLine == Entity.Null)
+                return;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (m_BypassTrackModelShadowSnapshots.TryGetValue(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+                && snapshot.Frame == nowFrame
+                && snapshot.Line == localLine
+                && snapshot.CurrentWaypointIndex == currentWaypointIndex
+                && snapshot.CurrentBypassBuilding == currentBypassBuilding
+                && snapshot.NextBypassBuilding == nextBypassBuilding)
+            {
+                evaluation = snapshot.Evaluation;
+                shadowDecision = snapshot.Decision;
+                return;
+            }
+
+            TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out evaluation);
+            TryEvaluateBypassTrackModelShadowDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, nowFrame, out shadowDecision);
+
+            m_BypassTrackModelShadowSnapshots[localVehicle] = new BypassTrackModelShadowSnapshot(
+                nowFrame,
+                localLine,
+                currentWaypointIndex,
+                currentBypassBuilding,
+                nextBypassBuilding,
+                evaluation,
+                shadowDecision);
+            m_BypassTrackModelShadowEvaluations[localVehicle] = evaluation;
+            m_BypassTrackModelShadowDecisions[localVehicle] = shadowDecision;
         }
 
         private string GetBypassTrackModelDecisionShadowSuffix(Entity localVehicle, bool shouldYield)
@@ -4277,6 +4394,31 @@ namespace RapidTransitMod
                 + decision.SequenceSummary;
             if (m_BypassTrackModelCompareLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
                 return;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            string coarseKey = liveDecision
+                + "|"
+                + shadowDecision
+                + "|"
+                + alignment
+                + "|"
+                + decision.ReasonCode
+                + "|"
+                + decision.Risk
+                + "|"
+                + decision.ProtectedIntervalIndex
+                + "|"
+                + decision.BlockerVehicle.Index;
+            if (!ShouldEmitVehicleLogWithCooldown(
+                    m_BypassTrackModelCompareThrottleCache,
+                    m_BypassTrackModelCompareLastLogFrame,
+                    localVehicle,
+                    coarseKey,
+                    nowFrame,
+                    BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES))
+            {
+                return;
+            }
 
             m_BypassTrackModelCompareLogCache[localVehicle] = key;
             log.Info("[BypassTrackModelCompare] vehicle=" + localVehicle.Index
