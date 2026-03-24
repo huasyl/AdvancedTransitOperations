@@ -476,6 +476,23 @@ namespace RapidTransitMod
                 List<DispatchWorkbenchStagedRowDto> nextStagedRows = request.stagedRows != null
                     ? request.stagedRows.Select(CloneStagedRow).ToList()
                     : new List<DispatchWorkbenchStagedRowDto>();
+                string requestedSelectedLineId = string.IsNullOrEmpty(request.selectedLineId) ? lineKey : request.selectedLineId;
+                string requestedSelectedEditLine = string.IsNullOrEmpty(request.selectedEditLine) ? "local" : request.selectedEditLine;
+                if (!request.applyDraft
+                    && !request.markRulesApplied
+                    && string.Equals(state.SelectedLineId ?? string.Empty, requestedSelectedLineId, StringComparison.Ordinal)
+                    && string.Equals(state.SelectedEditLine ?? string.Empty, requestedSelectedEditLine, StringComparison.Ordinal)
+                    && AreMergedViewsEquivalent(state.MergedView, request.mergedView)
+                    && AreManualRowsEquivalent(state.ManualRows, nextManualRows)
+                    && AreAutoRulesEquivalent(state.AutoRules, nextAutoRules)
+                    && AreStagedRowsEquivalent(state.StagedRows, nextStagedRows)
+                    && AreWorkbenchLineSettingsEquivalent(request.lineSettings))
+                {
+                    result.success = true;
+                    result.version = m_WorkbenchSnapshotVersion.ToString();
+                    result.snapshot = null;
+                    return DispatchWorkbenchJson.Serialize(result);
+                }
                 if (request.lineSettings != null)
                 {
                     ApplyWorkbenchLineSettings(request.lineSettings);
@@ -484,8 +501,8 @@ namespace RapidTransitMod
                     || !AreAutoRulesEquivalent(state.AutoRules, nextAutoRules)
                     || !AreStagedRowsEquivalent(state.StagedRows, nextStagedRows);
 
-                state.SelectedLineId = string.IsNullOrEmpty(request.selectedLineId) ? lineKey : request.selectedLineId;
-                state.SelectedEditLine = string.IsNullOrEmpty(request.selectedEditLine) ? "local" : request.selectedEditLine;
+                state.SelectedLineId = requestedSelectedLineId;
+                state.SelectedEditLine = requestedSelectedEditLine;
                 state.MergedView = request.mergedView ?? state.MergedView;
                 state.ManualRows = nextManualRows;
                 state.AutoRules = nextAutoRules;
@@ -1617,6 +1634,44 @@ namespace RapidTransitMod
                 windowStart = view.windowStart ?? string.Empty,
                 windowEnd = view.windowEnd ?? string.Empty
             };
+        }
+
+        private static bool AreMergedViewsEquivalent(DispatchWorkbenchMergedView left, DispatchWorkbenchMergedView right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null)
+                return false;
+
+            List<string> leftLocalIds = NormalizeLineIdList(left.localLineIds, left.localLineId, null);
+            List<string> rightLocalIds = NormalizeLineIdList(right.localLineIds, right.localLineId, null);
+            List<string> leftExpressIds = NormalizeLineIdList(left.expressLineIds, left.expressLineId, null);
+            List<string> rightExpressIds = NormalizeLineIdList(right.expressLineIds, right.expressLineId, null);
+
+            if (left.isLoop != right.isLoop
+                || !string.Equals(left.turnbackStationId ?? string.Empty, right.turnbackStationId ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(left.direction ?? string.Empty, right.direction ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(left.windowStart ?? string.Empty, right.windowStart ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(left.windowEnd ?? string.Empty, right.windowEnd ?? string.Empty, StringComparison.Ordinal)
+                || leftLocalIds.Count != rightLocalIds.Count
+                || leftExpressIds.Count != rightExpressIds.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < leftLocalIds.Count; i++)
+            {
+                if (!string.Equals(leftLocalIds[i], rightLocalIds[i], StringComparison.Ordinal))
+                    return false;
+            }
+
+            for (int i = 0; i < leftExpressIds.Count; i++)
+            {
+                if (!string.Equals(leftExpressIds[i], rightExpressIds[i], StringComparison.Ordinal))
+                    return false;
+            }
+
+            return true;
         }
 
         private static DispatchWorkbenchMergedView CloneMergedViewForPersistence(DispatchWorkbenchMergedView view)
@@ -3224,6 +3279,46 @@ namespace RapidTransitMod
                     m_WorkbenchLineServiceKinds[setting.lineId] = normalizedKind;
                 }
             }
+        }
+
+        private bool AreWorkbenchLineSettingsEquivalent(IEnumerable<DispatchWorkbenchLineSettingDto> settings)
+        {
+            Dictionary<string, DispatchWorkbenchLineSettingDto> requested = new Dictionary<string, DispatchWorkbenchLineSettingDto>(StringComparer.Ordinal);
+            if (settings != null)
+            {
+                foreach (DispatchWorkbenchLineSettingDto setting in settings)
+                {
+                    if (setting == null || string.IsNullOrEmpty(setting.lineId))
+                        continue;
+
+                    requested[setting.lineId] = setting;
+                }
+            }
+
+            HashSet<string> currentLineIds = new HashSet<string>(StringComparer.Ordinal);
+            currentLineIds.UnionWith(m_WorkbenchLineOriginHoldLimits.Keys);
+            currentLineIds.UnionWith(m_WorkbenchLineMaxStationDwellMinutes.Keys);
+            currentLineIds.UnionWith(m_WorkbenchLineAllowedDepots.Keys);
+            currentLineIds.UnionWith(m_WorkbenchLineServiceKinds.Keys);
+
+            if (requested.Count != currentLineIds.Count)
+                return false;
+
+            foreach (string lineId in currentLineIds)
+            {
+                if (!requested.TryGetValue(lineId, out DispatchWorkbenchLineSettingDto setting))
+                    return false;
+
+                if (NormalizeOriginHoldLimitMinutes(setting.originHoldLimitMinutes) != GetWorkbenchOriginHoldLimitMinutes(lineId)
+                    || NormalizeMaxStationDwellMinutes(setting.maxStationDwellMinutes) != GetWorkbenchMaxStationDwellMinutes(lineId)
+                    || !string.Equals(setting.allowedDepotId ?? string.Empty, GetWorkbenchAllowedDepotId(lineId), StringComparison.Ordinal)
+                    || !string.Equals(NormalizeWorkbenchServiceKind(setting.serviceKind), GetWorkbenchConfiguredLineServiceKind(lineId), StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static string NormalizeWorkbenchServiceKind(string kind)

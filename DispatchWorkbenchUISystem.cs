@@ -57,9 +57,6 @@ namespace RapidTransitMod
         {
             string resultJson = DepartureControlSystem.Instance?.SaveWorkbenchDraftJson(requestJson) ?? string.Empty;
             PublishSaveResultJson(resultJson);
-
-            string snapshotJson = DepartureControlSystem.Instance?.RefreshWorkbenchSnapshotJson() ?? string.Empty;
-            PublishSnapshotJson(snapshotJson);
         }
 
         internal static void PublishSnapshotJson(string snapshotJson)
