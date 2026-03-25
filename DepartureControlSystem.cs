@@ -4968,7 +4968,13 @@ namespace RapidTransitMod
                 return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
             }
 
-            if (shouldYield && trackModelBlocker != Entity.Null)
+            bool hasQueuedLocalInApproachKnown = false;
+            bool hasQueuedLocalInApproach = false;
+            float queuedLocalMeters = 0f;
+
+            if (shouldYield
+                && trackModelBlocker != Entity.Null
+                && trackModelReason == "track-model-same-direction-shared-express-approaching")
             {
                 if (IsExpressBlockerStillWithinBypassStation(trackModelBlocker, scope.CurrentBypassBuilding))
                 {
@@ -4979,82 +4985,101 @@ namespace RapidTransitMod
                         "skip",
                         "blocker-still-in-bypass-station");
                 }
-                else if (!TryFindNearestLocalVehicleInApproachSegment(
+                else
+                {
+                    hasQueuedLocalInApproach = TryFindNearestLocalVehicleInApproachSegment(
                         scope.Line,
                         scope.Vehicle,
                         localWaypoints,
                         scope.WaypointIndex,
                         out _,
-                        out float queuedLocalMeters))
-                {
-                    LogQueuedLocalBypassOverrideOnce(
-                        scope.Vehicle,
-                        scope.Line,
-                        trackModelBlocker,
-                        "skip",
-                        "no-queued-local-in-approach");
-                }
-                else if (!TryProjectVehicleOntoLine(trackModelBlocker, scope.Line, localWaypoints, out LineDistanceProjection expressProjection))
-                {
-                    LogQueuedLocalBypassOverrideOnce(
-                        scope.Vehicle,
-                        scope.Line,
-                        trackModelBlocker,
-                        "skip",
-                        "express-projection-failed",
-                        queuedLocalMeters: queuedLocalMeters);
-                }
-                else if (!TryProjectVehicleOntoLine(scope.Vehicle, scope.Line, localWaypoints, out LineDistanceProjection localProjection))
-                {
-                    LogQueuedLocalBypassOverrideOnce(
-                        scope.Vehicle,
-                        scope.Line,
-                        trackModelBlocker,
-                        "skip",
-                        "local-projection-failed",
-                        expressProjection.DistanceMeters,
-                        queuedLocalMeters: queuedLocalMeters);
-                }
-                else if (HasExpressBehindNearestQueuedLocalVehicle(
-                        scope.Line,
-                        localWaypoints,
-                        expressProjection.DistanceMeters,
-                        localProjection.DistanceMeters,
-                        queuedLocalMeters))
-                {
-                    LogQueuedLocalBypassOverrideOnce(
-                        scope.Vehicle,
-                        scope.Line,
-                        trackModelBlocker,
-                        "release",
-                        "local-ahead-of-express-without-bypass",
-                        expressProjection.DistanceMeters,
-                        localProjection.DistanceMeters,
-                        queuedLocalMeters);
-                    blockerVehicle = Entity.Null;
-                    return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "local-ahead-of-express-without-bypass", Entity.Null);
-                }
-                else
-                {
-                    LogQueuedLocalBypassOverrideOnce(
-                        scope.Vehicle,
-                        scope.Line,
-                        trackModelBlocker,
-                        "skip",
-                        "express-not-behind-nearest-queued-local",
-                        expressProjection.DistanceMeters,
-                        localProjection.DistanceMeters,
-                        queuedLocalMeters);
+                        out queuedLocalMeters);
+                    hasQueuedLocalInApproachKnown = true;
+
+                    if (!hasQueuedLocalInApproach)
+                    {
+                        LogQueuedLocalBypassOverrideOnce(
+                            scope.Vehicle,
+                            scope.Line,
+                            trackModelBlocker,
+                            "skip",
+                            "no-queued-local-in-approach");
+                    }
+                    else if (!TryProjectVehicleOntoLine(trackModelBlocker, scope.Line, localWaypoints, out LineDistanceProjection expressProjection))
+                    {
+                        LogQueuedLocalBypassOverrideOnce(
+                            scope.Vehicle,
+                            scope.Line,
+                            trackModelBlocker,
+                            "skip",
+                            "express-projection-failed",
+                            queuedLocalMeters: queuedLocalMeters);
+                    }
+                    else if (!TryProjectVehicleOntoLine(scope.Vehicle, scope.Line, localWaypoints, out LineDistanceProjection localProjection))
+                    {
+                        LogQueuedLocalBypassOverrideOnce(
+                            scope.Vehicle,
+                            scope.Line,
+                            trackModelBlocker,
+                            "skip",
+                            "local-projection-failed",
+                            expressProjection.DistanceMeters,
+                            queuedLocalMeters: queuedLocalMeters);
+                    }
+                    else if (HasExpressBehindNearestQueuedLocalVehicle(
+                            scope.Line,
+                            localWaypoints,
+                            expressProjection.DistanceMeters,
+                            localProjection.DistanceMeters,
+                            queuedLocalMeters))
+                    {
+                        LogQueuedLocalBypassOverrideOnce(
+                            scope.Vehicle,
+                            scope.Line,
+                            trackModelBlocker,
+                            "release",
+                            "local-ahead-of-express-without-bypass",
+                            expressProjection.DistanceMeters,
+                            localProjection.DistanceMeters,
+                            queuedLocalMeters);
+                        blockerVehicle = Entity.Null;
+                        return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "local-ahead-of-express-without-bypass", Entity.Null);
+                    }
+                    else
+                    {
+                        LogQueuedLocalBypassOverrideOnce(
+                            scope.Vehicle,
+                            scope.Line,
+                            trackModelBlocker,
+                            "skip",
+                            "express-not-behind-nearest-queued-local",
+                            expressProjection.DistanceMeters,
+                            localProjection.DistanceMeters,
+                            queuedLocalMeters);
+                    }
                 }
             }
 
-            bool hasPreviousBlockOccupied = TryFindNearestLocalVehicleInApproachSegment(
-                scope.Line,
-                scope.Vehicle,
-                localWaypoints,
-                scope.WaypointIndex,
-                out _,
-                out _);
+            bool hasPreviousBlockOccupied;
+            if (!shouldYield && hasQueuedLocalInApproachKnown)
+            {
+                hasPreviousBlockOccupied = hasQueuedLocalInApproach;
+            }
+            else if (!shouldYield)
+            {
+                hasPreviousBlockOccupied = TryFindNearestLocalVehicleInApproachSegment(
+                    scope.Line,
+                    scope.Vehicle,
+                    localWaypoints,
+                    scope.WaypointIndex,
+                    out _,
+                    out _);
+            }
+            else
+            {
+                hasPreviousBlockOccupied = false;
+            }
+
             if (!shouldYield && hasPreviousBlockOccupied)
                 return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "previous-block-occupied", Entity.Null);
 
