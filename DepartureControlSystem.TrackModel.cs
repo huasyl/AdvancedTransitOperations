@@ -327,51 +327,26 @@ namespace RapidTransitMod
             public readonly bool ShouldYield;
             public readonly string ReasonCode;
             public readonly int ProtectedIntervalIndex;
-            public readonly string Risk;
-            public readonly string Summary;
-            public readonly string LocalPosition;
+            public readonly bool HasReliableLocalPosition;
             public readonly Entity BlockerVehicle;
-            public readonly string BlockerPosition;
-            public readonly string SequenceSummary;
+            public readonly bool UsedFallbackResolution;
 
             public BypassTrackModelShadowDecision(
                 bool available,
                 bool shouldYield,
                 string reasonCode,
                 int protectedIntervalIndex,
-                string risk,
-                string summary,
-                string localPosition,
+                bool hasReliableLocalPosition,
                 Entity blockerVehicle,
-                string blockerPosition,
-                string sequenceSummary)
+                bool usedFallbackResolution)
             {
                 Available = available;
                 ShouldYield = shouldYield;
                 ReasonCode = reasonCode;
                 ProtectedIntervalIndex = protectedIntervalIndex;
-                Risk = risk;
-                Summary = summary;
-                LocalPosition = localPosition;
+                HasReliableLocalPosition = hasReliableLocalPosition;
                 BlockerVehicle = blockerVehicle;
-                BlockerPosition = blockerPosition;
-                SequenceSummary = sequenceSummary;
-            }
-        }
-
-        private readonly struct BypassTrackModelShadowEvaluation
-        {
-            public readonly bool Available;
-            public readonly int ProtectedIntervalIndex;
-            public readonly string Risk;
-            public readonly string Summary;
-
-            public BypassTrackModelShadowEvaluation(bool available, int protectedIntervalIndex, string risk, string summary)
-            {
-                Available = available;
-                ProtectedIntervalIndex = protectedIntervalIndex;
-                Risk = risk;
-                Summary = summary;
+                UsedFallbackResolution = usedFallbackResolution;
             }
         }
 
@@ -382,7 +357,6 @@ namespace RapidTransitMod
             public readonly int CurrentWaypointIndex;
             public readonly Entity CurrentBypassBuilding;
             public readonly Entity NextBypassBuilding;
-            public readonly BypassTrackModelShadowEvaluation Evaluation;
             public readonly BypassTrackModelShadowDecision Decision;
 
             public BypassTrackModelShadowSnapshot(
@@ -391,7 +365,6 @@ namespace RapidTransitMod
                 int currentWaypointIndex,
                 Entity currentBypassBuilding,
                 Entity nextBypassBuilding,
-                BypassTrackModelShadowEvaluation evaluation,
                 BypassTrackModelShadowDecision decision)
             {
                 Frame = frame;
@@ -399,7 +372,6 @@ namespace RapidTransitMod
                 CurrentWaypointIndex = currentWaypointIndex;
                 CurrentBypassBuilding = currentBypassBuilding;
                 NextBypassBuilding = nextBypassBuilding;
-                Evaluation = evaluation;
                 Decision = decision;
             }
         }
@@ -537,17 +509,20 @@ namespace RapidTransitMod
         {
             public readonly Entity LocalLine;
             public readonly Entity ExpressLine;
+            public readonly Entity CurrentBypassBuilding;
             public readonly int LocalStartAtomIndex;
             public readonly int LocalEndAtomIndexExclusive;
 
             public SharedWindowMatchCacheKey(
                 Entity localLine,
                 Entity expressLine,
+                Entity currentBypassBuilding,
                 int localStartAtomIndex,
                 int localEndAtomIndexExclusive)
             {
                 LocalLine = localLine;
                 ExpressLine = expressLine;
+                CurrentBypassBuilding = currentBypassBuilding;
                 LocalStartAtomIndex = localStartAtomIndex;
                 LocalEndAtomIndexExclusive = localEndAtomIndexExclusive;
             }
@@ -556,6 +531,7 @@ namespace RapidTransitMod
             {
                 return LocalLine == other.LocalLine
                     && ExpressLine == other.ExpressLine
+                    && CurrentBypassBuilding == other.CurrentBypassBuilding
                     && LocalStartAtomIndex == other.LocalStartAtomIndex
                     && LocalEndAtomIndexExclusive == other.LocalEndAtomIndexExclusive;
             }
@@ -571,6 +547,7 @@ namespace RapidTransitMod
                 {
                     int hash = LocalLine.GetHashCode();
                     hash = (hash * 397) ^ ExpressLine.GetHashCode();
+                    hash = (hash * 397) ^ CurrentBypassBuilding.GetHashCode();
                     hash = (hash * 397) ^ LocalStartAtomIndex;
                     hash = (hash * 397) ^ LocalEndAtomIndexExclusive;
                     return hash;
@@ -637,9 +614,11 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_SharedWindowAuditLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot> m_SharedWindowMatchSnapshots = new Dictionary<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot>();
         private readonly Dictionary<Entity, string> m_TrackModelSequenceLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, BypassTrackModelShadowEvaluation> m_BypassTrackModelShadowEvaluations = new Dictionary<Entity, BypassTrackModelShadowEvaluation>();
-        private readonly Dictionary<Entity, BypassTrackModelShadowDecision> m_BypassTrackModelShadowDecisions = new Dictionary<Entity, BypassTrackModelShadowDecision>();
         private readonly Dictionary<Entity, BypassTrackModelShadowSnapshot> m_BypassTrackModelShadowSnapshots = new Dictionary<Entity, BypassTrackModelShadowSnapshot>();
+        private readonly HashSet<Entity> m_ProtectedIntervalOverlapSourceKeys = new HashSet<Entity>();
+        private readonly HashSet<Entity> m_ProtectedIntervalOverlapMatchedKeys = new HashSet<Entity>();
+        private readonly List<Entity> m_ProtectedIntervalOrderedSourceKeys = new List<Entity>();
+        private readonly List<Entity> m_ProtectedIntervalOrderedCandidateKeys = new List<Entity>();
         private uint m_SharedTrackIndexVersion = 1;
         private readonly HashSet<Entity> m_DirtyTrackLines = new HashSet<Entity>();
         private bool m_SharedTrackIndexDirty = true;
@@ -651,6 +630,7 @@ namespace RapidTransitMod
 
             m_DirtyTrackLines.Add(line);
             m_LineTrackChains.Remove(line);
+            ClearBypassRuntimeStateForLine(line);
             m_SharedTrackIndexDirty = true;
         }
 
@@ -670,6 +650,12 @@ namespace RapidTransitMod
             m_SuspectProgressRecoveryWaypoint.Clear();
             m_SuspectProgressValidationCount.Clear();
             m_SuspectProgressFirstSample.Clear();
+            ClearBypassTrackModelRuntimeState();
+            m_SharedTrackIndexDirty = true;
+        }
+
+        private void ClearBypassTrackModelRuntimeState()
+        {
             m_BypassTrackModelShadowLogCache.Clear();
             m_BypassTrackModelShadowThrottleCache.Clear();
             m_BypassTrackModelShadowLastLogFrame.Clear();
@@ -679,11 +665,57 @@ namespace RapidTransitMod
             m_SharedWindowAuditLogCache.Clear();
             m_SharedWindowMatchSnapshots.Clear();
             m_TrackModelSequenceLogCache.Clear();
-            m_BypassTrackModelShadowEvaluations.Clear();
-            m_BypassTrackModelShadowDecisions.Clear();
             m_BypassTrackModelShadowSnapshots.Clear();
-            m_BypassHoldCadenceSnapshots.Clear();
-            m_SharedTrackIndexDirty = true;
+        }
+
+        private void ClearBypassTrackModelRuntimeStateForLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            List<SharedWindowMatchCacheKey> sharedWindowKeysToRemove = null;
+            foreach (KeyValuePair<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot> entry in m_SharedWindowMatchSnapshots)
+            {
+                SharedWindowMatchCacheKey key = entry.Key;
+                if (key.LocalLine != line && key.ExpressLine != line)
+                    continue;
+
+                sharedWindowKeysToRemove ??= new List<SharedWindowMatchCacheKey>();
+                sharedWindowKeysToRemove.Add(key);
+            }
+
+            if (sharedWindowKeysToRemove != null)
+            {
+                for (int i = 0; i < sharedWindowKeysToRemove.Count; i++)
+                    m_SharedWindowMatchSnapshots.Remove(sharedWindowKeysToRemove[i]);
+            }
+
+            List<Entity> shadowSnapshotKeysToRemove = null;
+            foreach (KeyValuePair<Entity, BypassTrackModelShadowSnapshot> entry in m_BypassTrackModelShadowSnapshots)
+            {
+                if (entry.Value.Line != line)
+                    continue;
+
+                shadowSnapshotKeysToRemove ??= new List<Entity>();
+                shadowSnapshotKeysToRemove.Add(entry.Key);
+            }
+
+            if (shadowSnapshotKeysToRemove != null)
+            {
+                for (int i = 0; i < shadowSnapshotKeysToRemove.Count; i++)
+                {
+                    Entity vehicle = shadowSnapshotKeysToRemove[i];
+                    m_BypassTrackModelShadowSnapshots.Remove(vehicle);
+                    m_BypassTrackModelShadowLogCache.Remove(vehicle);
+                    m_BypassTrackModelShadowThrottleCache.Remove(vehicle);
+                    m_BypassTrackModelShadowLastLogFrame.Remove(vehicle);
+                    m_BypassTrackModelCompareLogCache.Remove(vehicle);
+                    m_BypassTrackModelCompareThrottleCache.Remove(vehicle);
+                    m_BypassTrackModelCompareLastLogFrame.Remove(vehicle);
+                    m_SharedWindowAuditLogCache.Remove(vehicle);
+                    m_TrackModelSequenceLogCache.Remove(vehicle);
+                }
+            }
         }
 
         private ulong ComputeLineTrackChainSignature(
@@ -1744,11 +1776,19 @@ namespace RapidTransitMod
             BypassProtectedInterval localProtectedInterval,
             out int protectedIntervalIndex,
             out BypassProtectedInterval protectedInterval,
+            out int overlapCount,
+            out int orderedRun,
             out string resolutionSource)
         {
+            overlapCount = 0;
+            orderedRun = 0;
             resolutionSource = "direct";
             if (TryResolveVehicleCurrentProtectedInterval(vehicle, waypoints, chain, out protectedIntervalIndex, out protectedInterval))
+            {
+                overlapCount = CountProtectedIntervalPhysicalOverlap(localChain, localProtectedInterval, chain, protectedInterval);
+                orderedRun = ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localProtectedInterval, chain, protectedInterval);
                 return true;
+            }
 
             protectedIntervalIndex = -1;
             protectedInterval = default;
@@ -1764,13 +1804,15 @@ namespace RapidTransitMod
 
             int currentControlEdgeIndex = ResolveControlEdgeIndexForAtom(chain, cursor.AtomCursorIndex);
             int bestScore = int.MinValue;
+            int bestOverlapCount = 0;
+            int bestOrderedRun = 0;
             for (int i = 0; i < chain.BypassProtectedIntervals.Count; i++)
             {
                 BypassProtectedInterval candidate = chain.BypassProtectedIntervals[i];
-                int overlapCount = CountProtectedIntervalPhysicalOverlap(localChain, localProtectedInterval, chain, candidate);
-                int orderedRun = ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localProtectedInterval, chain, candidate);
-                if (overlapCount < MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS
-                    || orderedRun < MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
+                int candidateOverlapCount = CountProtectedIntervalPhysicalOverlap(localChain, localProtectedInterval, chain, candidate);
+                int candidateOrderedRun = ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localProtectedInterval, chain, candidate);
+                if (candidateOverlapCount < MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS
+                    || candidateOrderedRun < MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
                 {
                     continue;
                 }
@@ -1785,8 +1827,8 @@ namespace RapidTransitMod
                 int entryDistanceAtoms = math.max(0, candidate.StartAtomIndex - cursor.AtomCursorIndex);
                 int relativeScore = relative == TrackModelRelativeToProtectedInterval.Inside ? 2 : 1;
                 int score = relativeScore * 1000000
-                    + overlapCount * 1000
-                    + orderedRun * 100
+                    + candidateOverlapCount * 1000
+                    + candidateOrderedRun * 100
                     - math.min(999, entryDistanceAtoms);
                 if (score <= bestScore)
                     continue;
@@ -1794,11 +1836,15 @@ namespace RapidTransitMod
                 bestScore = score;
                 protectedIntervalIndex = i;
                 protectedInterval = candidate;
+                bestOverlapCount = candidateOverlapCount;
+                bestOrderedRun = candidateOrderedRun;
             }
 
             if (protectedIntervalIndex < 0)
                 return false;
 
+            overlapCount = bestOverlapCount;
+            orderedRun = bestOrderedRun;
             resolutionSource = "fallback";
             return true;
         }
@@ -2541,6 +2587,28 @@ namespace RapidTransitMod
             return true;
         }
 
+        private bool TryGetForwardStationExitAtomIndex(
+            LineTrackChain localChain,
+            BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding,
+            out int stationExitAtomIndex)
+        {
+            stationExitAtomIndex = -1;
+            if (localChain == null || currentBypassBuilding == Entity.Null)
+                return false;
+
+            for (int atomIndex = localProtectedInterval.StartAtomIndex; atomIndex < localProtectedInterval.EndAtomIndexExclusive && atomIndex < localChain.TrackAtoms.Count; atomIndex++)
+            {
+                Entity atomBuilding = ResolvePassingStationBuilding(localChain.TrackAtoms[atomIndex].SourceTarget);
+                if (atomBuilding != currentBypassBuilding)
+                    break;
+
+                stationExitAtomIndex = atomIndex;
+            }
+
+            return stationExitAtomIndex >= localProtectedInterval.StartAtomIndex;
+        }
+
         private float ComputeForwardDepartureReleaseCoordinate(
             LineTrackChain localChain,
             BypassProtectedInterval localProtectedInterval,
@@ -2880,6 +2948,7 @@ namespace RapidTransitMod
                 return false;
             }
 
+            Entity currentBypassBuilding = GetBypassBuildingForWaypoint(localWaypoints, currentWaypointIndex);
             List<TrackModelSequenceItem> items = new List<TrackModelSequenceItem>(localWaypoints.Length + 8);
             for (int controlPointIndex = localProtectedInterval.StartControlPointIndex; controlPointIndex <= localProtectedInterval.EndControlPointIndex; controlPointIndex++)
             {
@@ -2935,7 +3004,7 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(localChain, localProtectedInterval, expressChain);
+                PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(localChain, localProtectedInterval, currentBypassBuilding, expressChain);
                 if (!sharedWindowMatch.Found || sharedWindowMatch.Ambiguous)
                     continue;
                 for (int rvIndex = 0; rvIndex < expressVehicles.Length; rvIndex++)
@@ -3275,26 +3344,27 @@ namespace RapidTransitMod
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             int currentWaypointIndex,
-            out BypassTrackModelShadowEvaluation evaluation)
+            out int protectedIntervalIndex,
+            out string risk,
+            out string summary)
         {
-            evaluation = default;
+            protectedIntervalIndex = -1;
+            risk = string.Empty;
+            summary = string.Empty;
             if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
                 return false;
 
             EnsureTrackChainBypassPipelineReady(chain);
 
-            if (!TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out int protectedIntervalIndex, out BypassProtectedInterval protectedInterval))
+            if (!TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out protectedIntervalIndex, out BypassProtectedInterval protectedInterval))
                 return false;
 
             if (protectedIntervalIndex < 0 || protectedIntervalIndex >= chain.ProtectedIntervalSummaries.Count)
                 return false;
 
-            ProtectedIntervalSummary summary = chain.ProtectedIntervalSummaries[protectedIntervalIndex];
-            evaluation = new BypassTrackModelShadowEvaluation(
-                available: true,
-                protectedIntervalIndex: protectedIntervalIndex,
-                risk: ClassifyProtectedIntervalShadowRisk(summary),
-                summary: FormatProtectedIntervalSummary(summary, protectedInterval));
+            ProtectedIntervalSummary intervalSummary = chain.ProtectedIntervalSummaries[protectedIntervalIndex];
+            risk = ClassifyProtectedIntervalShadowRisk(intervalSummary);
+            summary = FormatProtectedIntervalSummary(intervalSummary, protectedInterval);
             return true;
         }
 
@@ -3309,7 +3379,7 @@ namespace RapidTransitMod
             shadowDecision = default;
             if (!TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain))
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-chain-missing", -1, "unavailable", "trackModel[unavailable]", "pos[unknown]", Entity.Null, string.Empty, string.Empty);
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-chain-missing", -1, false, Entity.Null, false);
                 return false;
             }
 
@@ -3319,51 +3389,45 @@ namespace RapidTransitMod
                 || protectedIntervalIndex < 0
                 || protectedIntervalIndex >= localChain.ProtectedIntervalSummaries.Count)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, "protected-interval-missing", -1, "unavailable", "trackModel[unavailable]", "pos[unknown]", Entity.Null, string.Empty, string.Empty);
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "protected-interval-missing", -1, false, Entity.Null, false);
                 return false;
             }
 
             ProtectedIntervalSummary localSummary = localChain.ProtectedIntervalSummaries[protectedIntervalIndex];
-            string summary = FormatProtectedIntervalSummary(localSummary, protectedInterval);
-            string risk = ClassifyProtectedIntervalShadowRisk(localSummary);
-            Entity currentBypassBuilding = GetBypassBuildingForWaypoint(localWaypoints, currentWaypointIndex);
-            float departureReleaseCoordinate = ComputeForwardDepartureReleaseCoordinate(localChain, protectedInterval, currentBypassBuilding);
-            string sequenceSummary = string.Empty;
-            TryBuildBypassDecisionSequenceSummary(localVehicle, localLine, localWaypoints, currentWaypointIndex, protectedInterval, out sequenceSummary);
-            string localPositionText = "pos[unknown]";
             TrackModelRuntimePosition localPosition = default;
             bool hasLocalPosition = TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out localPosition);
-            if (hasLocalPosition)
-                localPositionText = FormatRuntimePosition(localPosition);
+            Entity currentBypassBuilding = GetBypassBuildingForWaypoint(localWaypoints, currentWaypointIndex);
 
             if (localSummary.SharedSegmentCount <= 0)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-shared-protected-interval", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, string.Empty, sequenceSummary);
+                shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-shared-protected-interval", protectedIntervalIndex, hasLocalPosition, Entity.Null, false);
                 return true;
             }
 
             if (localSummary.HasMirroredContext)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(true, true, "mirrored-shared-in-protected-interval", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, string.Empty, sequenceSummary);
+                shadowDecision = new BypassTrackModelShadowDecision(true, true, "mirrored-shared-in-protected-interval", protectedIntervalIndex, hasLocalPosition, Entity.Null, false);
                 return true;
             }
 
             if (!hasLocalPosition)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-unknown", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, string.Empty, sequenceSummary);
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-unknown", protectedIntervalIndex, false, Entity.Null, false);
                 return false;
             }
             if (localPosition.Confidence < 0.6f)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-low-confidence", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, string.Empty, sequenceSummary);
+                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-low-confidence", protectedIntervalIndex, false, Entity.Null, false);
                 return false;
             }
-
+            float departureReleaseCoordinate = ComputeForwardDepartureReleaseCoordinate(localChain, protectedInterval, currentBypassBuilding);
+            float intervalDisplayLength = GetProtectedIntervalDisplayLength(protectedInterval);
+            float localCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(localPosition, protectedInterval, includeApproachers: true, out bool includeLocalCoordinate);
             var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
             var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            bool releaseClearedUsedFallbackResolution = false;
             bool sawReleaseClearedExpress = false;
-            string releaseClearedExpressPosition = string.Empty;
-            StringBuilder sharedWindowAudit = new StringBuilder();
+
             foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
             {
                 Entity expressLine = entry.Value.LineEntity;
@@ -3379,48 +3443,18 @@ namespace RapidTransitMod
                 }
 
                 if (!TryGetLineTrackChain(expressLine, expressWaypoints, out LineTrackChain expressChain))
-                {
-                    if (sharedWindowAudit.Length > 0)
-                        sharedWindowAudit.Append(" | ");
-                    sharedWindowAudit.Append("line=").Append(expressLine.Index).Append(" chain-missing");
                     continue;
-                }
 
                 EnsureTrackChainBypassPipelineReady(expressChain);
-
-                PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(localChain, protectedInterval, expressChain);
+                PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(localChain, protectedInterval, currentBypassBuilding, expressChain);
                 if (!sharedWindowMatch.Found)
-                {
-                    int expressSharedRunCountForLocal = expressChain.SharedRunsByOtherLine.TryGetValue(localLine, out List<SharedTrackRun> expressRunsForLocal)
-                        && expressRunsForLocal != null
-                        ? expressRunsForLocal.Count
-                        : 0;
-                    if (sharedWindowAudit.Length > 0)
-                        sharedWindowAudit.Append(" | ");
-                    sharedWindowAudit.Append("line=").Append(expressLine.Index)
-                        .Append(" match=none runs=").Append(expressSharedRunCountForLocal);
                     continue;
-                }
                 if (sharedWindowMatch.Ambiguous)
                 {
-                    if (sharedWindowAudit.Length > 0)
-                        sharedWindowAudit.Append(" | ");
-                    sharedWindowAudit.Append("line=").Append(expressLine.Index)
-                        .Append(" match=ambiguous overlap=").Append(sharedWindowMatch.OverlapCount)
-                        .Append(" run=").Append(sharedWindowMatch.OrderedRun);
-                    LogSharedWindowAuditOnce(localVehicle, localLine, protectedIntervalIndex, sharedWindowAudit.ToString());
-                    shadowDecision = new BypassTrackModelShadowDecision(false, false, "shared-window-match-ambiguous", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, string.Empty, sequenceSummary);
+                    shadowDecision = new BypassTrackModelShadowDecision(false, false, "shared-window-match-ambiguous", protectedIntervalIndex, true, Entity.Null, false);
                     return false;
                 }
 
-                StringBuilder lineAudit = new StringBuilder();
-                lineAudit.Append("line=").Append(expressLine.Index)
-                    .Append(" match=found overlap=").Append(sharedWindowMatch.OverlapCount)
-                    .Append(" run=").Append(sharedWindowMatch.OrderedRun)
-                    .Append(" window=").Append(sharedWindowMatch.ExpressSharedWindow.StartAtomIndex)
-                    .Append("..").Append(sharedWindowMatch.ExpressSharedWindow.EndAtomIndexExclusive);
-
-                bool sawRunningVehicle = false;
                 for (int rvIndex = 0; rvIndex < routeVehicles.Length; rvIndex++)
                 {
                     Entity expressVehicle = routeVehicles[rvIndex].m_Vehicle;
@@ -3428,7 +3462,6 @@ namespace RapidTransitMod
                         continue;
                     if (!m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState) || expressState != VehicleState.Running)
                         continue;
-                    sawRunningVehicle = true;
 
                     if (!TryResolveVehicleCurrentProtectedIntervalForLocalConflict(
                             expressVehicle,
@@ -3439,94 +3472,106 @@ namespace RapidTransitMod
                             protectedInterval,
                             out _,
                             out BypassProtectedInterval expressProtectedInterval,
+                            out int overlapCount,
+                            out int orderedRun,
                             out string intervalResolutionSource))
                     {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":protected-interval-missing");
+                        continue;
+                    }
+
+                    if (overlapCount < MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS
+                        || orderedRun < MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
+                    {
                         continue;
                     }
 
                     if (!TryProjectTrackModelRuntimePosition(expressVehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition))
-                    {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":proj-fail");
                         continue;
-                    }
                     if (expressPosition.Confidence < 0.6f)
+                        continue;
+
+                    float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+                        expressPosition,
+                        expressProtectedInterval,
+                        intervalDisplayLength,
+                        includeApproachers: true,
+                        out bool includeExpressCoordinate);
+
+                    if (!IsExpressApproachingCurrentBypassStation(
+                            localChain,
+                            protectedInterval,
+                            currentBypassBuilding,
+                            expressPosition,
+                            expressCoordinate,
+                            includeExpressCoordinate))
                     {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":low-conf(").Append(expressPosition.Confidence.ToString("0.00")).Append(")");
                         continue;
                     }
-
-                    string resolutionSuffix = intervalResolutionSource == "fallback"
-                        ? " src=fallback"
-                        : string.Empty;
 
                     if (TryDescribeExpressReleaseWindowClear(
-                            protectedInterval,
-                            expressProtectedInterval,
                             departureReleaseCoordinate,
                             expressPosition,
-                            out string releaseReason,
-                            out string releasePositionText))
+                            expressCoordinate,
+                            includeExpressCoordinate,
+                            out _,
+                            out _))
                     {
                         sawReleaseClearedExpress = true;
-                        if (!string.IsNullOrEmpty(releasePositionText))
-                            releaseClearedExpressPosition = releasePositionText + resolutionSuffix;
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(releaseReason)
-                            .Append("(").Append(releasePositionText).Append(resolutionSuffix).Append(")");
+                        releaseClearedUsedFallbackResolution = intervalResolutionSource == "fallback";
                         continue;
                     }
 
                     if (TryEvaluateSameDirectionProtectedIntervalConflict(
                             localChain,
                             protectedInterval,
+                            currentBypassBuilding,
                             departureReleaseCoordinate,
-                            localPosition,
-                            expressChain,
-                            expressProtectedInterval,
-                            expressPosition,
-                            out string conflictReason,
-                            out string expressPositionText,
-                            out string rejectReason))
+                              localPosition,
+                              expressChain,
+                              expressProtectedInterval,
+                              overlapCount,
+                              orderedRun,
+                              intervalDisplayLength,
+                              localCoordinate,
+                              includeLocalCoordinate,
+                              expressCoordinate,
+                              includeExpressCoordinate,
+                              expressPosition,
+                              out string conflictReason,
+                              out string expressPositionText,
+                              out _))
                     {
-                        if (!string.IsNullOrEmpty(resolutionSuffix))
-                            expressPositionText += resolutionSuffix;
-                        shadowDecision = new BypassTrackModelShadowDecision(true, true, conflictReason, protectedIntervalIndex, risk, summary, localPositionText, expressVehicle, expressPositionText, sequenceSummary);
+                        shadowDecision = new BypassTrackModelShadowDecision(true, true, conflictReason, protectedIntervalIndex, true, expressVehicle, intervalResolutionSource == "fallback");
                         return true;
                     }
-
-                    lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(rejectReason).Append(resolutionSuffix);
                 }
-
-                if (!sawRunningVehicle)
-                    lineAudit.Append(" vehicles=none-running");
-
-                if (sharedWindowAudit.Length > 0)
-                    sharedWindowAudit.Append(" | ");
-                sharedWindowAudit.Append(lineAudit);
             }
 
             if (sawReleaseClearedExpress)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(true, false, "express-cleared-bypass-release-window", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, releaseClearedExpressPosition, sequenceSummary);
+                shadowDecision = new BypassTrackModelShadowDecision(true, false, "express-cleared-bypass-release-window", protectedIntervalIndex, true, Entity.Null, releaseClearedUsedFallbackResolution);
                 return true;
             }
 
-            LogSharedWindowAuditOnce(
-                localVehicle,
-                localLine,
-                protectedIntervalIndex,
-                sharedWindowAudit.Length > 0 ? sharedWindowAudit.ToString() : "no-express-lines-considered");
-            shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-express-in-shared-window", protectedIntervalIndex, risk, summary, localPositionText, Entity.Null, string.Empty, sequenceSummary);
+            shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-express-in-shared-window", protectedIntervalIndex, true, Entity.Null, false);
             return true;
         }
 
         private bool TryEvaluateSameDirectionProtectedIntervalConflict(
             LineTrackChain localChain,
             BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding,
             float departureReleaseCoordinate,
             TrackModelRuntimePosition localPosition,
             LineTrackChain expressChain,
             BypassProtectedInterval expressProtectedInterval,
+            int overlapCount,
+            int orderedRun,
+            float intervalDisplayLength,
+            float localCoordinate,
+            bool includeLocal,
+            float expressCoordinate,
+            bool includeExpress,
             TrackModelRuntimePosition expressPosition,
             out string reason,
             out string expressPositionText,
@@ -3542,8 +3587,6 @@ namespace RapidTransitMod
                 return false;
             }
 
-            int overlapCount = CountProtectedIntervalPhysicalOverlap(localChain, localProtectedInterval, expressChain, expressProtectedInterval);
-            int orderedRun = ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localProtectedInterval, expressChain, expressProtectedInterval);
             if (overlapCount < MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS
                 || orderedRun < MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
             {
@@ -3551,14 +3594,6 @@ namespace RapidTransitMod
                 return false;
             }
 
-            float intervalDisplayLength = GetProtectedIntervalDisplayLength(localProtectedInterval);
-            float localCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(localPosition, localProtectedInterval, includeApproachers: true, out bool includeLocal);
-            float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
-                expressPosition,
-                expressProtectedInterval,
-                intervalDisplayLength,
-                includeApproachers: true,
-                out bool includeExpress);
             if (!includeLocal || !includeExpress)
             {
                 rejectReason = "window-map-failed local=" + (includeLocal ? "1" : "0") + " express=" + (includeExpress ? "1" : "0");
@@ -3589,14 +3624,14 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (!TryFindBestProtectedSharedInterval(localChain, localProtectedInterval, expressChain, expressProtectedInterval, out ProtectedSharedInterval localSharedInterval, out ProtectedSharedInterval expressSharedInterval))
+            if (!TryFindBestProtectedSharedInterval(localChain, localProtectedInterval, currentBypassBuilding, expressChain, expressProtectedInterval, out ProtectedSharedInterval localSharedInterval, out ProtectedSharedInterval expressSharedInterval))
             {
                 rejectReason = "no-current-shared-subinterval";
                 return false;
             }
 
-            if (!TryBuildConflictCorridor(localChain, localProtectedInterval, localSharedInterval, out ConflictCorridor localCorridor)
-                || !TryBuildConflictCorridor(expressChain, expressProtectedInterval, expressSharedInterval, out ConflictCorridor expressCorridor))
+            if (!TryBuildConflictCorridor(localChain, localProtectedInterval, currentBypassBuilding, localSharedInterval, out ConflictCorridor localCorridor)
+                || !TryBuildConflictCorridor(expressChain, expressProtectedInterval, Entity.Null, expressSharedInterval, out ConflictCorridor expressCorridor))
             {
                 rejectReason = "corridor-build-failed";
                 return false;
@@ -3641,24 +3676,177 @@ namespace RapidTransitMod
             return true;
         }
 
+        private string BuildBypassDecisionSequenceSummaryForLogging(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            int protectedIntervalIndex)
+        {
+            if (localVehicle == Entity.Null
+                || localLine == Entity.Null
+                || !TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain))
+            {
+                return string.Empty;
+            }
+
+            EnsureTrackChainBypassPipelineReady(localChain);
+            if (protectedIntervalIndex < 0 || protectedIntervalIndex >= localChain.BypassProtectedIntervals.Count)
+                return string.Empty;
+
+            return TryBuildBypassDecisionSequenceSummary(
+                localVehicle,
+                localLine,
+                localWaypoints,
+                currentWaypointIndex,
+                localChain.BypassProtectedIntervals[protectedIntervalIndex],
+                out string sequenceSummary)
+                ? sequenceSummary
+                : string.Empty;
+        }
+
+        private bool TryBuildProtectedIntervalConflictCandidate(
+            Entity localVehicle,
+            Entity localLine,
+            LineTrackChain localChain,
+            BypassProtectedInterval protectedInterval,
+            Entity currentBypassBuilding,
+            float departureReleaseCoordinate,
+            float intervalDisplayLength,
+            Entity expressVehicle,
+            Entity expressLine,
+            DynamicBuffer<RouteWaypoint> expressWaypoints,
+            LineTrackChain expressChain,
+            StringBuilder lineAudit,
+            ref bool sawRunningVehicle)
+        {
+            if (expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
+                return false;
+            if (!m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState) || expressState != VehicleState.Running)
+                return false;
+            sawRunningVehicle = true;
+
+            if (!TryResolveVehicleCurrentProtectedIntervalForLocalConflict(
+                    expressVehicle,
+                    expressLine,
+                    expressWaypoints,
+                    expressChain,
+                    localChain,
+                    protectedInterval,
+                    out _,
+                    out BypassProtectedInterval expressProtectedInterval,
+                    out int overlapCount,
+                    out int orderedRun,
+                    out string intervalResolutionSource))
+            {
+                if (lineAudit != null)
+                    lineAudit.Append(" #").Append(expressVehicle.Index).Append(":protected-interval-missing");
+                return false;
+            }
+
+            string resolutionSuffix = intervalResolutionSource == "fallback"
+                ? " src=fallback"
+                : string.Empty;
+
+            if (overlapCount < MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS
+                || orderedRun < MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
+            {
+                if (lineAudit != null)
+                {
+                    lineAudit.Append(" #").Append(expressVehicle.Index)
+                        .Append(":weak-physical-overlap overlap=").Append(overlapCount)
+                        .Append(" run=").Append(orderedRun)
+                        .Append(resolutionSuffix);
+                }
+                return false;
+            }
+
+              if (!TryProjectTrackModelRuntimePosition(expressVehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition))
+              {
+                  if (lineAudit != null)
+                      lineAudit.Append(" #").Append(expressVehicle.Index).Append(":proj-fail");
+                  return false;
+            }
+              if (expressPosition.Confidence < 0.6f)
+              {
+                  if (lineAudit != null)
+                      lineAudit.Append(" #").Append(expressVehicle.Index).Append(":low-conf(").Append(expressPosition.Confidence.ToString("0.00")).Append(")");
+                  return false;
+              }
+
+              float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+                  expressPosition,
+                  expressProtectedInterval,
+                  intervalDisplayLength,
+                  includeApproachers: true,
+                  out bool includeExpress);
+
+              if (!IsExpressApproachingCurrentBypassStation(
+                      localChain,
+                      protectedInterval,
+                      currentBypassBuilding,
+                      expressPosition,
+                      expressCoordinate,
+                      includeExpress))
+              {
+                  if (lineAudit != null)
+                      lineAudit.Append(" #").Append(expressVehicle.Index).Append(":not-current-bypass-approacher").Append(resolutionSuffix);
+                  return false;
+              }
+
+              if (!TryFindBestProtectedSharedInterval(localChain, protectedInterval, currentBypassBuilding, expressChain, expressProtectedInterval, out ProtectedSharedInterval localSharedInterval, out ProtectedSharedInterval expressSharedInterval))
+              {
+                  if (lineAudit != null)
+                      lineAudit.Append(" #").Append(expressVehicle.Index).Append(":no-current-shared-subinterval").Append(resolutionSuffix);
+                return false;
+            }
+
+              if (TryDescribeExpressReleaseWindowClear(
+                      departureReleaseCoordinate,
+                      expressPosition,
+                      expressCoordinate,
+                      includeExpress,
+                      out string releaseReason,
+                      out string releasePositionText))
+              {
+                  if (lineAudit != null)
+                  {
+                    lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(releaseReason)
+                        .Append("(").Append(releasePositionText).Append(resolutionSuffix).Append(")");
+                }
+                return false;
+            }
+
+              if (!TryBuildConflictCorridor(localChain, protectedInterval, currentBypassBuilding, localSharedInterval, out ConflictCorridor localCorridor)
+                  || !TryBuildConflictCorridor(expressChain, expressProtectedInterval, Entity.Null, expressSharedInterval, out ConflictCorridor expressCorridor))
+              {
+                  if (lineAudit != null)
+                      lineAudit.Append(" #").Append(expressVehicle.Index).Append(":corridor-build-failed").Append(resolutionSuffix);
+                  return false;
+              }
+              if (!includeExpress)
+              {
+                  if (lineAudit != null)
+                      lineAudit.Append(" #").Append(expressVehicle.Index).Append(":window-map-failed express=0").Append(resolutionSuffix);
+                  return false;
+            }
+
+            if (lineAudit != null)
+                lineAudit.Append(" #").Append(expressVehicle.Index).Append(":candidate").Append(resolutionSuffix);
+            return true;
+        }
+
         private bool TryDescribeExpressReleaseWindowClear(
-            BypassProtectedInterval localProtectedInterval,
-            BypassProtectedInterval expressProtectedInterval,
             float departureReleaseCoordinate,
             TrackModelRuntimePosition expressPosition,
+            float expressCoordinate,
+            bool includeExpress,
             out string reason,
             out string expressPositionText)
         {
             reason = string.Empty;
             expressPositionText = string.Empty;
 
-            float intervalDisplayLength = GetProtectedIntervalDisplayLength(localProtectedInterval);
-            float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
-                expressPosition,
-                expressProtectedInterval,
-                intervalDisplayLength,
-                includeApproachers: true,
-                out bool includeExpress);
             if (!includeExpress)
                 return false;
 
@@ -3687,6 +3875,7 @@ namespace RapidTransitMod
         private bool TryFindBestProtectedSharedInterval(
             LineTrackChain localChain,
             BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding,
             LineTrackChain expressChain,
             BypassProtectedInterval expressProtectedInterval,
             out ProtectedSharedInterval localSharedInterval,
@@ -3695,11 +3884,25 @@ namespace RapidTransitMod
             localSharedInterval = default;
             expressSharedInterval = default;
 
-            int bestScore = 0;
+            bool hasAnchor = TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
+            int localAnchorMaxStartAtomIndex = hasAnchor
+                ? stationExitAtomIndex + MAX_CONFLICT_CORRIDOR_GAP_ATOMS
+                : int.MaxValue;
+            int bestAnchorDistance = int.MaxValue;
+            int bestPhysicalOverlap = 0;
+            int bestLocalWindowOverlap = 0;
+            int bestExpressWindowOverlap = 0;
             bool found = false;
             for (int localIndex = 0; localIndex < localChain.ProtectedSharedIntervals.Count; localIndex++)
             {
                 ProtectedSharedInterval localCandidate = localChain.ProtectedSharedIntervals[localIndex];
+                int clippedLocalStart = math.max(localCandidate.StartAtomIndex, localProtectedInterval.StartAtomIndex);
+                int clippedLocalEndExclusive = math.min(localCandidate.EndAtomIndexExclusive, localProtectedInterval.EndAtomIndexExclusive);
+                if (clippedLocalEndExclusive <= clippedLocalStart)
+                    continue;
+                if (clippedLocalStart > localAnchorMaxStartAtomIndex)
+                    continue;
+
                 int localWindowOverlap = CountAtomIntervalOverlap(
                     localCandidate.StartAtomIndex,
                     localCandidate.EndAtomIndexExclusive,
@@ -3707,6 +3910,8 @@ namespace RapidTransitMod
                     localProtectedInterval.EndAtomIndexExclusive);
                 if (localWindowOverlap <= 0)
                     continue;
+
+                int anchorDistance = clippedLocalStart - localProtectedInterval.StartAtomIndex;
 
                 for (int expressIndex = 0; expressIndex < expressChain.ProtectedSharedIntervals.Count; expressIndex++)
                 {
@@ -3729,11 +3934,22 @@ namespace RapidTransitMod
                     if (physicalOverlap <= 0)
                         continue;
 
-                    int score = physicalOverlap * 10000 + localWindowOverlap * 100 + expressWindowOverlap;
-                    if (score <= 0 || score < bestScore)
+                    bool better = !found;
+                    if (!better && anchorDistance != bestAnchorDistance)
+                        better = anchorDistance < bestAnchorDistance;
+                    if (!better && physicalOverlap != bestPhysicalOverlap)
+                        better = physicalOverlap > bestPhysicalOverlap;
+                    if (!better && localWindowOverlap != bestLocalWindowOverlap)
+                        better = localWindowOverlap > bestLocalWindowOverlap;
+                    if (!better && expressWindowOverlap != bestExpressWindowOverlap)
+                        better = expressWindowOverlap > bestExpressWindowOverlap;
+                    if (!better)
                         continue;
 
-                    bestScore = score;
+                    bestAnchorDistance = anchorDistance;
+                    bestPhysicalOverlap = physicalOverlap;
+                    bestLocalWindowOverlap = localWindowOverlap;
+                    bestExpressWindowOverlap = expressWindowOverlap;
                     localSharedInterval = localCandidate;
                     expressSharedInterval = expressCandidate;
                     found = true;
@@ -3746,6 +3962,7 @@ namespace RapidTransitMod
         private bool TryBuildConflictCorridor(
             LineTrackChain chain,
             BypassProtectedInterval protectedInterval,
+            Entity currentBypassBuilding,
             ProtectedSharedInterval anchorSharedInterval,
             out ConflictCorridor corridor)
         {
@@ -3790,18 +4007,6 @@ namespace RapidTransitMod
             int sharedSliceCount = 1;
             int bridgedGapAtoms = 0;
 
-            for (int i = anchorIndex - 1; i >= 0; i--)
-            {
-                ProtectedSharedInterval candidate = intervals[i];
-                int gapAtoms = math.max(0, mergedStart - candidate.EndAtomIndexExclusive);
-                if (gapAtoms > MAX_CONFLICT_CORRIDOR_GAP_ATOMS)
-                    break;
-
-                mergedStart = candidate.StartAtomIndex;
-                bridgedGapAtoms += gapAtoms;
-                sharedSliceCount++;
-            }
-
             for (int i = anchorIndex + 1; i < intervals.Count; i++)
             {
                 ProtectedSharedInterval candidate = intervals[i];
@@ -3816,7 +4021,8 @@ namespace RapidTransitMod
 
             int corridorStart = mergedStart;
             int prefixGapAtoms = math.max(0, mergedStart - protectedInterval.StartAtomIndex);
-            if (prefixGapAtoms <= MAX_CONFLICT_CORRIDOR_GAP_ATOMS)
+            if (currentBypassBuilding != Entity.Null
+                && prefixGapAtoms <= MAX_CONFLICT_CORRIDOR_GAP_ATOMS)
             {
                 corridorStart = protectedInterval.StartAtomIndex;
                 bridgedGapAtoms += prefixGapAtoms;
@@ -3901,6 +4107,7 @@ namespace RapidTransitMod
         private PhysicalSharedWindowMatch FindBestPhysicalSharedWindow(
             LineTrackChain localChain,
             BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding,
             LineTrackChain expressChain)
         {
             if (localChain == null || expressChain == null)
@@ -3921,6 +4128,10 @@ namespace RapidTransitMod
             bool ambiguous = false;
             BypassProtectedInterval bestLocalWindow = default;
             BypassProtectedInterval bestExpressWindow = default;
+            bool hasAnchor = TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
+            int localAnchorMaxStartAtomIndex = hasAnchor
+                ? stationExitAtomIndex + MAX_CONFLICT_CORRIDOR_GAP_ATOMS
+                : int.MaxValue;
 
             for (int localIndex = 0; localIndex < localSharedRuns.Count;)
             {
@@ -3928,6 +4139,12 @@ namespace RapidTransitMod
                 int clippedLocalStart = math.max(localProtectedInterval.StartAtomIndex, localCandidate.StartAtomIndex);
                 int clippedLocalEndExclusive = math.min(localProtectedInterval.EndAtomIndexExclusive, localCandidate.EndAtomIndexExclusive);
                 if (clippedLocalEndExclusive <= clippedLocalStart)
+                {
+                    localIndex++;
+                    continue;
+                }
+
+                if (clippedLocalStart > localAnchorMaxStartAtomIndex)
                 {
                     localIndex++;
                     continue;
@@ -3946,6 +4163,9 @@ namespace RapidTransitMod
                         nextLocalIndex++;
                         continue;
                     }
+
+                    if (clippedNextStart > localAnchorMaxStartAtomIndex)
+                        break;
 
                     if (clippedNextStart > mergedLocalEndExclusive)
                         break;
@@ -4003,6 +4223,7 @@ namespace RapidTransitMod
         private PhysicalSharedWindowMatch GetPhysicalSharedWindowMatchCurrentFrame(
             LineTrackChain localChain,
             BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding,
             LineTrackChain expressChain)
         {
             if (localChain == null || expressChain == null)
@@ -4015,6 +4236,7 @@ namespace RapidTransitMod
             var key = new SharedWindowMatchCacheKey(
                 localChain.LineEntity,
                 expressChain.LineEntity,
+                currentBypassBuilding,
                 localProtectedInterval.StartAtomIndex,
                 localProtectedInterval.EndAtomIndexExclusive);
             uint nowFrame = m_SimulationSystem.frameIndex;
@@ -4027,7 +4249,7 @@ namespace RapidTransitMod
                 return snapshot.Match;
             }
 
-            PhysicalSharedWindowMatch match = FindBestPhysicalSharedWindow(localChain, localProtectedInterval, expressChain);
+            PhysicalSharedWindowMatch match = FindBestPhysicalSharedWindow(localChain, localProtectedInterval, currentBypassBuilding, expressChain);
             m_SharedWindowMatchSnapshots[key] = new SharedWindowMatchSnapshot(
                 nowFrame,
                 m_SharedTrackIndexVersion,
@@ -4035,6 +4257,28 @@ namespace RapidTransitMod
                 expressChain.Signature,
                 match);
             return match;
+        }
+
+        private bool IsExpressApproachingCurrentBypassStation(
+            LineTrackChain localChain,
+            BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding,
+            TrackModelRuntimePosition expressPosition,
+            float expressCoordinate,
+            bool includeExpress)
+        {
+            if (localChain == null
+                || currentBypassBuilding == Entity.Null
+                || !includeExpress
+                || expressPosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.After)
+            {
+                return false;
+            }
+
+            if (!TryGetForwardStationExitCoordinate(localChain, localProtectedInterval, currentBypassBuilding, out float stationExitCoordinate))
+                return false;
+
+            return expressCoordinate <= stationExitCoordinate;
         }
 
         private static int CountSharedPhysicalOverlap(
@@ -4139,10 +4383,8 @@ namespace RapidTransitMod
             out string summary)
         {
             summary = string.Empty;
-            if (!TryEvaluateBypassTrackModelShadow(line, waypoints, currentWaypointIndex, out BypassTrackModelShadowEvaluation evaluation))
+            if (!TryEvaluateBypassTrackModelShadow(line, waypoints, currentWaypointIndex, out _, out _, out summary))
                 return false;
-
-            summary = evaluation.Summary;
             return true;
         }
 
@@ -4175,14 +4417,20 @@ namespace RapidTransitMod
             Entity currentBypassBuilding,
             BypassProtectedInterval protectedInterval)
         {
-            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
-            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
-            StringBuilder sharedWindowAudit = new StringBuilder();
-            float departureReleaseCoordinate = ComputeForwardDepartureReleaseCoordinate(localChain, protectedInterval, currentBypassBuilding);
             if (!TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition))
                 return "local=proj-fail";
             if (localPosition.Confidence < 0.6f)
                 return "local=low-conf(" + localPosition.Confidence.ToString("0.00") + ")";
+
+            if (!TryResolveBypassProtectedInterval(localChain, localWaypoints, currentWaypointIndex, out _, out _))
+                return "local=protected-interval-missing";
+
+            StringBuilder sharedWindowAudit = new StringBuilder();
+            sharedWindowAudit.Append("local=").Append(FormatRuntimePosition(localPosition));
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            float departureReleaseCoordinate = ComputeForwardDepartureReleaseCoordinate(localChain, protectedInterval, currentBypassBuilding);
+            float intervalDisplayLength = GetProtectedIntervalDisplayLength(protectedInterval);
 
             foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
             {
@@ -4200,42 +4448,35 @@ namespace RapidTransitMod
 
                 if (!TryGetLineTrackChain(expressLine, expressWaypoints, out LineTrackChain expressChain))
                 {
-                    if (sharedWindowAudit.Length > 0)
-                        sharedWindowAudit.Append(" | ");
-                    sharedWindowAudit.Append("line=").Append(expressLine.Index).Append(" chain-missing");
+                    sharedWindowAudit.Append(" | line=").Append(expressLine.Index).Append(" chain-missing");
                     continue;
                 }
 
                 EnsureTrackChainBypassPipelineReady(expressChain);
-
-                PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(localChain, protectedInterval, expressChain);
+                PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(localChain, protectedInterval, currentBypassBuilding, expressChain);
                 if (!sharedWindowMatch.Found)
                 {
                     int expressSharedRunCountForLocal = expressChain.SharedRunsByOtherLine.TryGetValue(localLine, out List<SharedTrackRun> expressRunsForLocal)
                         && expressRunsForLocal != null
                         ? expressRunsForLocal.Count
                         : 0;
-                    if (sharedWindowAudit.Length > 0)
-                        sharedWindowAudit.Append(" | ");
-                    sharedWindowAudit.Append("line=").Append(expressLine.Index)
+                    sharedWindowAudit.Append(" | line=").Append(expressLine.Index)
                         .Append(" match=none runs=").Append(expressSharedRunCountForLocal);
                     continue;
                 }
 
-                if (sharedWindowAudit.Length > 0)
-                    sharedWindowAudit.Append(" | ");
+                StringBuilder lineAudit = new StringBuilder();
+                lineAudit.Append("line=").Append(expressLine.Index);
 
                 if (sharedWindowMatch.Ambiguous)
                 {
-                    sharedWindowAudit.Append("line=").Append(expressLine.Index)
-                        .Append(" match=ambiguous overlap=").Append(sharedWindowMatch.OverlapCount)
+                    lineAudit.Append(" match=ambiguous overlap=").Append(sharedWindowMatch.OverlapCount)
                         .Append(" run=").Append(sharedWindowMatch.OrderedRun);
+                    sharedWindowAudit.Append(" | ").Append(lineAudit);
                     continue;
                 }
 
-                StringBuilder lineAudit = new StringBuilder();
-                lineAudit.Append("line=").Append(expressLine.Index)
-                    .Append(" match=found overlap=").Append(sharedWindowMatch.OverlapCount)
+                lineAudit.Append(" match=found overlap=").Append(sharedWindowMatch.OverlapCount)
                     .Append(" run=").Append(sharedWindowMatch.OrderedRun)
                     .Append(" window=").Append(sharedWindowMatch.ExpressSharedWindow.StartAtomIndex)
                     .Append("..").Append(sharedWindowMatch.ExpressSharedWindow.EndAtomIndexExclusive);
@@ -4244,88 +4485,50 @@ namespace RapidTransitMod
                 for (int rvIndex = 0; rvIndex < routeVehicles.Length; rvIndex++)
                 {
                     Entity expressVehicle = routeVehicles[rvIndex].m_Vehicle;
-                    if (expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
-                        continue;
-                    if (!m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState) || expressState != VehicleState.Running)
-                        continue;
-                    sawRunningVehicle = true;
-
-                    if (!TryResolveVehicleCurrentProtectedIntervalForLocalConflict(
-                            expressVehicle,
-                            expressLine,
-                            expressWaypoints,
-                            expressChain,
-                            localChain,
-                            protectedInterval,
-                            out _,
-                            out BypassProtectedInterval expressProtectedInterval,
-                            out string intervalResolutionSource))
-                    {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":protected-interval-missing");
-                        continue;
-                    }
-
-                    if (!TryProjectTrackModelRuntimePosition(expressVehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition))
-                    {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":proj-fail");
-                        continue;
-                    }
-
-                    if (expressPosition.Confidence < 0.6f)
-                    {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":low-conf(").Append(expressPosition.Confidence.ToString("0.00")).Append(")");
-                        continue;
-                    }
-
-                    string resolutionSuffix = intervalResolutionSource == "fallback"
-                        ? " src=fallback"
-                        : string.Empty;
-
-                    if (TryDescribeExpressReleaseWindowClear(
-                            protectedInterval,
-                            expressProtectedInterval,
-                            departureReleaseCoordinate,
-                            expressPosition,
-                            out string releaseReason,
-                            out string releasePositionText))
-                    {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(releaseReason)
-                            .Append("(").Append(releasePositionText).Append(resolutionSuffix).Append(")");
-                        continue;
-                    }
-
-                    if (TryEvaluateSameDirectionProtectedIntervalConflict(
-                            localChain,
-                            protectedInterval,
-                            departureReleaseCoordinate,
-                            localPosition,
-                            expressChain,
-                            expressProtectedInterval,
-                            expressPosition,
-                            out string conflictReason,
-                            out string expressPositionText,
-                            out string rejectReason))
-                    {
-                        lineAudit.Append(" #").Append(expressVehicle.Index).Append(":block(")
-                            .Append(conflictReason);
-                        if (!string.IsNullOrEmpty(expressPositionText))
-                            lineAudit.Append(" ").Append(expressPositionText);
-                        if (!string.IsNullOrEmpty(resolutionSuffix))
-                            lineAudit.Append(resolutionSuffix);
-                        lineAudit.Append(")");
-                        continue;
-                    }
-
-                    lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(rejectReason).Append(resolutionSuffix);
+                    TryBuildProtectedIntervalConflictCandidate(
+                        localVehicle,
+                        localLine,
+                        localChain,
+                        protectedInterval,
+                        currentBypassBuilding,
+                        departureReleaseCoordinate,
+                        intervalDisplayLength,
+                        expressVehicle,
+                        expressLine,
+                        expressWaypoints,
+                        expressChain,
+                        lineAudit,
+                        ref sawRunningVehicle);
                 }
 
                 if (!sawRunningVehicle)
                     lineAudit.Append(" vehicles=none-running");
 
-                sharedWindowAudit.Append(lineAudit);
+                sharedWindowAudit.Append(" | ").Append(lineAudit);
             }
 
-            return sharedWindowAudit.Length > 0 ? sharedWindowAudit.ToString() : "no-express-lines-considered";
+            return sharedWindowAudit.ToString();
+        }
+
+        private static bool ShouldIncludeBypassSequenceForShadowLog(bool hasDecision, BypassTrackModelShadowDecision decision)
+        {
+            if (!hasDecision)
+                return false;
+            if (!decision.ShouldYield || decision.BlockerVehicle == Entity.Null)
+                return true;
+            if (decision.ReasonCode == "shared-window-match-ambiguous"
+                || decision.ReasonCode == "local-runtime-position-unknown"
+                || decision.ReasonCode == "local-runtime-position-low-confidence")
+            {
+                return true;
+            }
+
+            return decision.UsedFallbackResolution;
+        }
+
+        private static bool ShouldIncludeBypassSequenceForCompareLog(string alignment, BypassTrackModelShadowDecision decision)
+        {
+            return alignment != "match" || ShouldIncludeBypassSequenceForShadowLog(true, decision);
         }
 
         private bool CanClearBypassYieldAfterStationExit(
@@ -4409,6 +4612,31 @@ namespace RapidTransitMod
             return localCoordinate <= stationExitCoordinate;
         }
 
+        private bool IsVehicleWithinBypassStationPhysicalContext(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            Entity bypassBuilding)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || bypassBuilding == Entity.Null
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || !TryResolveVehicleCurrentProtectedInterval(vehicle, waypoints, chain, out _, out BypassProtectedInterval protectedInterval)
+                || !TryProjectTrackModelRuntimePosition(vehicle, line, waypoints, protectedInterval, out TrackModelRuntimePosition runtimePosition)
+                || runtimePosition.Confidence < 0.6f
+                || runtimePosition.CurrentAtomIndex < protectedInterval.StartAtomIndex
+                || runtimePosition.CurrentAtomIndex >= protectedInterval.EndAtomIndexExclusive
+                || runtimePosition.CurrentAtomIndex < 0
+                || runtimePosition.CurrentAtomIndex >= chain.TrackAtoms.Count)
+            {
+                return false;
+            }
+
+            Entity atomBuilding = ResolvePassingStationBuilding(chain.TrackAtoms[runtimePosition.CurrentAtomIndex].SourceTarget);
+            return atomBuilding == bypassBuilding;
+        }
+
         private void LogBypassTrackModelShadowOnce(
             Entity localVehicle,
             Entity localLine,
@@ -4427,19 +4655,13 @@ namespace RapidTransitMod
                 currentWaypointIndex,
                 currentBypassBuilding,
                 nextBypassBuilding,
-                out BypassTrackModelShadowEvaluation evaluation,
                 out BypassTrackModelShadowDecision shadowDecision);
 
-            bool hasSummary = evaluation.Available;
-            string summary = hasSummary ? evaluation.Summary : string.Empty;
             bool hasDecision = shadowDecision.Available;
-            string decisionSequence = hasDecision ? shadowDecision.SequenceSummary : string.Empty;
             uint nowFrame = m_SimulationSystem.frameIndex;
             string coarseKey = (hasDecision ? (shadowDecision.ShouldYield ? "Y" : "N") : "U")
                 + "|"
                 + (hasDecision ? shadowDecision.ReasonCode : "decision-unavailable")
-                + "|"
-                + (hasSummary ? evaluation.Risk : "unavailable")
                 + "|"
                 + (hasDecision ? shadowDecision.ProtectedIntervalIndex : -1)
                 + "|"
@@ -4459,9 +4681,59 @@ namespace RapidTransitMod
                 return;
             }
 
-            string key = (hasSummary ? summary : "trackModel[unavailable]")
+            string summary = "trackModel[unavailable]";
+            string shadowRisk = "unavailable";
+            if (TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out _, out string risk, out string builtSummary))
+            {
+                summary = builtSummary;
+                shadowRisk = risk;
+            }
+
+            string localPositionText = "pos[unknown]";
+            string blockerPositionText = string.Empty;
+            if (TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain)
+                && TryResolveBypassProtectedInterval(localChain, localWaypoints, currentWaypointIndex, out _, out BypassProtectedInterval protectedInterval))
+            {
+                if (TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition))
+                    localPositionText = FormatRuntimePosition(localPosition);
+
+                if (shadowDecision.BlockerVehicle != Entity.Null
+                    && ResolveVehicleLine(shadowDecision.BlockerVehicle) is Entity blockerLine
+                    && blockerLine != Entity.Null
+                    && GetBufferLookup<RouteWaypoint>(true).TryGetBuffer(blockerLine, out DynamicBuffer<RouteWaypoint> blockerWaypoints)
+                    && TryGetLineTrackChain(blockerLine, blockerWaypoints, out LineTrackChain blockerChain)
+                    && TryResolveVehicleCurrentProtectedIntervalForLocalConflict(
+                        shadowDecision.BlockerVehicle,
+                        blockerLine,
+                        blockerWaypoints,
+                        blockerChain,
+                        localChain,
+                        protectedInterval,
+                        out _,
+                        out BypassProtectedInterval blockerProtectedInterval,
+                        out _,
+                        out _,
+                        out string intervalResolutionSource)
+                    && TryProjectTrackModelRuntimePosition(shadowDecision.BlockerVehicle, blockerLine, blockerWaypoints, blockerProtectedInterval, out TrackModelRuntimePosition blockerPosition))
+                {
+                    blockerPositionText = FormatRuntimePosition(blockerPosition);
+                    if (intervalResolutionSource == "fallback")
+                        blockerPositionText += " src=fallback";
+                }
+            }
+
+            bool includeDecisionSequence = hasDecision && ShouldIncludeBypassSequenceForShadowLog(hasDecision, shadowDecision);
+            string decisionSequence = includeDecisionSequence
+                ? BuildBypassDecisionSequenceSummaryForLogging(
+                    localVehicle,
+                    localLine,
+                    localWaypoints,
+                    currentWaypointIndex,
+                    shadowDecision.ProtectedIntervalIndex)
+                : string.Empty;
+            string key = summary
                 + "|"
-                + (hasSummary ? evaluation.Risk : "unavailable")
+                + shadowRisk
                 + "|"
                 + (hasDecision ? shadowDecision.ProtectedIntervalIndex : -1)
                 + "|"
@@ -4473,18 +4745,15 @@ namespace RapidTransitMod
                 + "|"
                 + (hasDecision ? shadowDecision.BlockerVehicle.Index : -1)
                 + "|"
+                + localPositionText
+                + "|"
+                + blockerPositionText
+                + "|"
                 + decisionSequence;
             if (m_BypassTrackModelShadowLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
                 return;
 
             m_BypassTrackModelShadowLogCache[localVehicle] = key;
-            string shadowRisk = hasSummary ? evaluation.Risk : "unavailable";
-            m_BypassTrackModelShadowEvaluations[localVehicle] = hasSummary
-                ? evaluation
-                : new BypassTrackModelShadowEvaluation(false, -1, "unavailable", "trackModel[unavailable]");
-            m_BypassTrackModelShadowDecisions[localVehicle] = hasDecision
-                ? shadowDecision
-                : new BypassTrackModelShadowDecision(false, false, "decision-unavailable", -1, shadowRisk, hasSummary ? summary : "trackModel[unavailable]", "pos[unknown]", Entity.Null, string.Empty, string.Empty);
 
             log.Info("[BypassTrackModelShadow] vehicle=" + localVehicle.Index
                 + " line=" + localLine.Index
@@ -4493,10 +4762,10 @@ namespace RapidTransitMod
                 + " risk=" + shadowRisk
                 + " shadow=" + (hasDecision ? (shadowDecision.ShouldYield ? "yield" : "pass") : "unavailable")
                 + " reason=" + (hasDecision ? shadowDecision.ReasonCode : "decision-unavailable")
-                + " local=" + (hasDecision ? shadowDecision.LocalPosition : "pos[unknown]")
-                + " blocker=" + (hasDecision ? shadowDecision.BlockerPosition : string.Empty)
+                + " local=" + localPositionText
+                + " blocker=" + blockerPositionText
                 + (!string.IsNullOrEmpty(decisionSequence) ? " " + decisionSequence : string.Empty)
-                + " " + (hasSummary ? summary : "trackModel[unavailable]"));
+                + " " + summary);
         }
 
         private void EnsureBypassTrackModelShadowSnapshotCurrent(
@@ -4506,11 +4775,9 @@ namespace RapidTransitMod
             int currentWaypointIndex,
             Entity currentBypassBuilding,
             Entity nextBypassBuilding,
-            out BypassTrackModelShadowEvaluation evaluation,
             out BypassTrackModelShadowDecision shadowDecision)
         {
-            evaluation = new BypassTrackModelShadowEvaluation(false, -1, "unavailable", "trackModel[unavailable]");
-            shadowDecision = new BypassTrackModelShadowDecision(false, false, "decision-unavailable", -1, "unavailable", "trackModel[unavailable]", "pos[unknown]", Entity.Null, string.Empty, string.Empty);
+            shadowDecision = new BypassTrackModelShadowDecision(false, false, "decision-unavailable", -1, false, Entity.Null, false);
 
             if (localVehicle == Entity.Null || localLine == Entity.Null)
                 return;
@@ -4523,12 +4790,10 @@ namespace RapidTransitMod
                 && snapshot.CurrentBypassBuilding == currentBypassBuilding
                 && snapshot.NextBypassBuilding == nextBypassBuilding)
             {
-                evaluation = snapshot.Evaluation;
                 shadowDecision = snapshot.Decision;
                 return;
             }
 
-            TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out evaluation);
             TryEvaluateBypassTrackModelShadowDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, nowFrame, out shadowDecision);
 
             m_BypassTrackModelShadowSnapshots[localVehicle] = new BypassTrackModelShadowSnapshot(
@@ -4537,33 +4802,46 @@ namespace RapidTransitMod
                 currentWaypointIndex,
                 currentBypassBuilding,
                 nextBypassBuilding,
-                evaluation,
                 shadowDecision);
-            m_BypassTrackModelShadowEvaluations[localVehicle] = evaluation;
-            m_BypassTrackModelShadowDecisions[localVehicle] = shadowDecision;
         }
 
         private string GetBypassTrackModelDecisionShadowSuffix(Entity localVehicle, bool shouldYield)
         {
-            if (localVehicle == Entity.Null
-                || !m_BypassTrackModelShadowEvaluations.TryGetValue(localVehicle, out BypassTrackModelShadowEvaluation evaluation))
+            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot))
             {
                 return string.Empty;
             }
 
-            string shadowDecision = evaluation.Risk == "none" ? "pass" : "yield";
+            BypassTrackModelShadowDecision decision = snapshot.Decision;
+            string shadowDecision = decision.ShouldYield ? "yield" : "pass";
             string alignment = shadowDecision == (shouldYield ? "yield" : "pass") ? "match" : "diff";
-            return " shadow=" + shadowDecision + "/" + evaluation.Risk + "/" + alignment;
+            return " shadow=" + shadowDecision + "/" + decision.ReasonCode + "/" + alignment;
         }
 
-        private void LogBypassTrackModelDecisionComparison(Entity localVehicle, bool shouldYield)
+        private void LogBypassTrackModelDecisionComparison(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            bool shouldYield)
         {
-            if (localVehicle == Entity.Null
-                || !m_BypassTrackModelShadowDecisions.TryGetValue(localVehicle, out BypassTrackModelShadowDecision decision))
+            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot))
             {
                 return;
             }
 
+            BypassTrackModelShadowDecision decision = snapshot.Decision;
+            string summary = "trackModel[unavailable]";
+            string risk = "unavailable";
+            if (TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out _, out string builtRisk, out string builtSummary))
+            {
+                summary = builtSummary;
+                risk = builtRisk;
+            }
+            string localPositionText = decision.HasReliableLocalPosition ? "pos[known]" : "pos[unknown]";
+            string blockerPositionText = decision.BlockerVehicle != Entity.Null
+                ? (decision.UsedFallbackResolution ? "blocker src=fallback" : "blocker")
+                : string.Empty;
             string liveDecision = shouldYield ? "yield" : "pass";
             string shadowDecision = decision.ShouldYield ? "yield" : "pass";
             string alignment = shadowDecision == liveDecision ? "match" : "diff";
@@ -4575,8 +4853,6 @@ namespace RapidTransitMod
                 + alignment
                 + "|"
                 + decision.ReasonCode
-                + "|"
-                + decision.Risk
                 + "|"
                 + decision.ProtectedIntervalIndex
                 + "|"
@@ -4592,23 +4868,30 @@ namespace RapidTransitMod
                 return;
             }
 
+            bool includeDecisionSequence = ShouldIncludeBypassSequenceForCompareLog(alignment, decision);
+            string decisionSequence = includeDecisionSequence
+                ? BuildBypassDecisionSequenceSummaryForLogging(
+                    localVehicle,
+                    localLine,
+                    localWaypoints,
+                    currentWaypointIndex,
+                    decision.ProtectedIntervalIndex)
+                : string.Empty;
             string key = liveDecision
                 + "|"
                 + shadowDecision
                 + "|"
                 + decision.ReasonCode
                 + "|"
-                + decision.Risk
-                + "|"
                 + decision.ProtectedIntervalIndex
                 + "|"
                 + decision.BlockerVehicle.Index
                 + "|"
-                + decision.LocalPosition
+                + localPositionText
                 + "|"
-                + decision.BlockerPosition
+                + blockerPositionText
                 + "|"
-                + decision.SequenceSummary;
+                + decisionSequence;
             if (m_BypassTrackModelCompareLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
                 return;
 
@@ -4617,13 +4900,13 @@ namespace RapidTransitMod
                 + " live=" + liveDecision
                 + " shadow=" + shadowDecision
                 + " reason=" + decision.ReasonCode
-                + " risk=" + decision.Risk
+                + " risk=" + risk
                 + " compare=" + alignment
                 + " protectedInterval=" + decision.ProtectedIntervalIndex
-                + " local=" + decision.LocalPosition
-                + " blocker=" + decision.BlockerPosition
-                + (!string.IsNullOrEmpty(decision.SequenceSummary) ? " " + decision.SequenceSummary : string.Empty)
-                + " " + decision.Summary);
+                + " local=" + localPositionText
+                + " blocker=" + blockerPositionText
+                + (!string.IsNullOrEmpty(decisionSequence) ? " " + decisionSequence : string.Empty)
+                + " " + summary);
         }
 
         private bool TryGetTrackModelLiveBypassDecision(
@@ -4635,13 +4918,13 @@ namespace RapidTransitMod
             shouldYield = false;
             reason = "track-model-decision-unavailable";
             blockerVehicle = Entity.Null;
-            if (localVehicle == Entity.Null
-                || !m_BypassTrackModelShadowDecisions.TryGetValue(localVehicle, out BypassTrackModelShadowDecision decision)
-                || !decision.Available)
+            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+                || !snapshot.Decision.Available)
             {
                 return false;
             }
 
+            BypassTrackModelShadowDecision decision = snapshot.Decision;
             shouldYield = decision.ShouldYield;
             reason = "track-model-" + decision.ReasonCode;
             blockerVehicle = decision.BlockerVehicle;
@@ -4650,30 +4933,26 @@ namespace RapidTransitMod
 
         private string GetTrackModelLiveDecisionLogSuffix(Entity localVehicle)
         {
-            if (localVehicle == Entity.Null
-                || !m_BypassTrackModelShadowDecisions.TryGetValue(localVehicle, out BypassTrackModelShadowDecision decision)
-                || !decision.Available)
+            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+                || !snapshot.Decision.Available)
             {
                 return string.Empty;
             }
-
-            return " localEta=" + decision.LocalPosition
-                + (!string.IsNullOrEmpty(decision.BlockerPosition) ? " expressEta=" + decision.BlockerPosition : string.Empty)
-                + " track=" + decision.Summary;
+            return string.Empty;
         }
 
         private bool ShouldShadowVetoLiveBypassYield(Entity localVehicle, out string shadowReason)
         {
             shadowReason = string.Empty;
-            if (localVehicle == Entity.Null
-                || !m_BypassTrackModelShadowDecisions.TryGetValue(localVehicle, out BypassTrackModelShadowDecision decision)
-                || !decision.Available
-                || decision.ShouldYield
-                || string.Equals(decision.LocalPosition, "pos[unknown]", StringComparison.Ordinal))
+            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+                || !snapshot.Decision.Available
+                || snapshot.Decision.ShouldYield
+                || !snapshot.Decision.HasReliableLocalPosition)
             {
                 return false;
             }
 
+            BypassTrackModelShadowDecision decision = snapshot.Decision;
             switch (decision.ReasonCode)
             {
                 case "no-shared-protected-interval":
@@ -4685,6 +4964,13 @@ namespace RapidTransitMod
                 default:
                     return false;
             }
+        }
+
+        private bool TryGetLatestBypassTrackModelShadowSnapshot(Entity localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+        {
+            snapshot = default;
+            return localVehicle != Entity.Null
+                && m_BypassTrackModelShadowSnapshots.TryGetValue(localVehicle, out snapshot);
         }
 
         private static bool ShouldIncludeIntervalAtom(TrackAtom atom)
@@ -4722,7 +5008,7 @@ namespace RapidTransitMod
             }
         }
 
-        private static int CountProtectedIntervalPhysicalOverlap(
+        private int CountProtectedIntervalPhysicalOverlap(
             LineTrackChain sourceChain,
             BypassProtectedInterval sourceInterval,
             LineTrackChain candidateChain,
@@ -4731,55 +5017,53 @@ namespace RapidTransitMod
             if (sourceChain == null || candidateChain == null)
                 return 0;
 
-            HashSet<Entity> sourceKeys = new HashSet<Entity>();
+            m_ProtectedIntervalOverlapSourceKeys.Clear();
             for (int atomIndex = sourceInterval.StartAtomIndex; atomIndex < sourceInterval.EndAtomIndexExclusive && atomIndex < sourceChain.TrackAtoms.Count; atomIndex++)
             {
                 TrackAtom atom = sourceChain.TrackAtoms[atomIndex];
                 if (!ShouldIncludeIntervalAtom(atom))
                     continue;
-                sourceKeys.Add(atom.Key.PhysicalLaneKey);
+                m_ProtectedIntervalOverlapSourceKeys.Add(atom.Key.PhysicalLaneKey);
             }
 
-            if (sourceKeys.Count == 0)
+            if (m_ProtectedIntervalOverlapSourceKeys.Count == 0)
                 return 0;
 
             int overlapCount = 0;
-            HashSet<Entity> matchedKeys = new HashSet<Entity>();
+            m_ProtectedIntervalOverlapMatchedKeys.Clear();
             for (int atomIndex = candidateInterval.StartAtomIndex; atomIndex < candidateInterval.EndAtomIndexExclusive && atomIndex < candidateChain.TrackAtoms.Count; atomIndex++)
             {
                 TrackAtom atom = candidateChain.TrackAtoms[atomIndex];
                 if (!ShouldIncludeIntervalAtom(atom))
                     continue;
                 Entity physicalLaneKey = atom.Key.PhysicalLaneKey;
-                if (sourceKeys.Contains(physicalLaneKey) && matchedKeys.Add(physicalLaneKey))
+                if (m_ProtectedIntervalOverlapSourceKeys.Contains(physicalLaneKey) && m_ProtectedIntervalOverlapMatchedKeys.Add(physicalLaneKey))
                     overlapCount++;
             }
 
             return overlapCount;
         }
 
-        private static int ComputeProtectedIntervalLongestPhysicalOrderedRun(
+        private int ComputeProtectedIntervalLongestPhysicalOrderedRun(
             LineTrackChain sourceChain,
             BypassProtectedInterval sourceInterval,
             LineTrackChain candidateChain,
             BypassProtectedInterval candidateInterval)
         {
-            List<Entity> sourceKeys = new List<Entity>();
-            List<Entity> candidateKeys = new List<Entity>();
-            CollectProtectedIntervalPhysicalLaneKeys(sourceChain, sourceInterval, sourceKeys);
-            CollectProtectedIntervalPhysicalLaneKeys(candidateChain, candidateInterval, candidateKeys);
-            if (sourceKeys.Count == 0 || candidateKeys.Count == 0)
+            CollectProtectedIntervalPhysicalLaneKeys(sourceChain, sourceInterval, m_ProtectedIntervalOrderedSourceKeys);
+            CollectProtectedIntervalPhysicalLaneKeys(candidateChain, candidateInterval, m_ProtectedIntervalOrderedCandidateKeys);
+            if (m_ProtectedIntervalOrderedSourceKeys.Count == 0 || m_ProtectedIntervalOrderedCandidateKeys.Count == 0)
                 return 0;
 
             int bestRun = 0;
-            for (int sourceIndex = 0; sourceIndex < sourceKeys.Count; sourceIndex++)
+            for (int sourceIndex = 0; sourceIndex < m_ProtectedIntervalOrderedSourceKeys.Count; sourceIndex++)
             {
-                for (int candidateIndex = 0; candidateIndex < candidateKeys.Count; candidateIndex++)
+                for (int candidateIndex = 0; candidateIndex < m_ProtectedIntervalOrderedCandidateKeys.Count; candidateIndex++)
                 {
                     int run = 0;
-                    while (sourceIndex + run < sourceKeys.Count
-                        && candidateIndex + run < candidateKeys.Count
-                        && sourceKeys[sourceIndex + run] == candidateKeys[candidateIndex + run])
+                    while (sourceIndex + run < m_ProtectedIntervalOrderedSourceKeys.Count
+                        && candidateIndex + run < m_ProtectedIntervalOrderedCandidateKeys.Count
+                        && m_ProtectedIntervalOrderedSourceKeys[sourceIndex + run] == m_ProtectedIntervalOrderedCandidateKeys[candidateIndex + run])
                     {
                         run++;
                     }
@@ -4792,7 +5076,7 @@ namespace RapidTransitMod
             return bestRun;
         }
 
-        private static ProtectedIntervalMatch FindBestMatchingProtectedInterval(
+        private ProtectedIntervalMatch FindBestMatchingProtectedInterval(
             LineTrackChain sourceChain,
             BypassProtectedInterval sourceInterval,
             LineTrackChain candidateChain)

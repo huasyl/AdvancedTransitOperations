@@ -635,10 +635,10 @@ namespace RapidTransitMod
                     color = line.Color,
                     originStationId = line.OriginStationId,
                     originStationName = line.OriginStationName,
-                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Id),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Id),
+                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Entity),
+                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Entity),
                     transportType = line.TransportType,
-                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Id)
+                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Entity)
                 }).ToArray(),
                 depots = depots.ToArray(),
                 stations = stations.ToArray(),
@@ -675,10 +675,10 @@ namespace RapidTransitMod
                     color = line.Color,
                     originStationId = line.OriginStationId,
                     originStationName = line.OriginStationName,
-                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Id),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Id),
+                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Entity),
+                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Entity),
                     transportType = line.TransportType,
-                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Id)
+                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Entity)
                 }).ToArray(),
                 depots = depots.ToArray(),
                 stations = Array.Empty<DispatchWorkbenchStationDto>(),
@@ -770,7 +770,8 @@ namespace RapidTransitMod
                         name = "Line " + line.Index;
                     }
 
-                    string kind = GetEffectiveWorkbenchLineServiceKind(line.Index.ToString(), null);
+                    string lineId = GetWorkbenchLineId(line);
+                    string kind = GetEffectiveWorkbenchLineServiceKind(lineId, null);
                     if (string.IsNullOrEmpty(kind))
                     {
                         kind = "local";
@@ -779,7 +780,7 @@ namespace RapidTransitMod
                     lines.Add(new WorkbenchLineRuntime
                     {
                         Entity = line,
-                        Id = line.Index.ToString(),
+                        Id = lineId,
                         Name = name,
                         Kind = kind
                     });
@@ -856,9 +857,9 @@ namespace RapidTransitMod
                             : ("Line " + line.Index.ToString());
                     }
 
-                    string lineKey = GetDraftKey(line.Index.ToString());
+                    string lineKey = GetDraftKey(GetWorkbenchLineId(line));
                     m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState appliedState);
-                    string kind = GetEffectiveWorkbenchLineServiceKind(lineKey, appliedState);
+                    string kind = GetEffectiveWorkbenchLineServiceKind(line, appliedState);
                     if (string.IsNullOrEmpty(kind))
                     {
                         kind = "local";
@@ -924,6 +925,29 @@ namespace RapidTransitMod
         private string GetDraftKey(string lineId)
         {
             return string.IsNullOrEmpty(lineId) ? "__default__" : lineId;
+        }
+
+        private string GetWorkbenchLineId(Entity line)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return string.Empty;
+
+            string transportType = ResolveWorkbenchLineTransportType(line);
+            int routeNumber = int.MaxValue;
+            if (EntityManager.HasComponent<RouteNumber>(line))
+            {
+                routeNumber = EntityManager.GetComponentData<RouteNumber>(line).m_Number;
+            }
+
+            if (routeNumber != int.MaxValue)
+            {
+                string prefix = string.IsNullOrEmpty(transportType)
+                    ? "line"
+                    : transportType.ToLowerInvariant();
+                return prefix + ":" + routeNumber.ToString();
+            }
+
+            return line.Index.ToString();
         }
 
         private void EnsureWorkbenchPersistenceLoaded()
@@ -1067,7 +1091,7 @@ namespace RapidTransitMod
                         if (entry.m_LineEntity == Entity.Null)
                             continue;
 
-                        string lineKey = GetDraftKey(entry.m_LineEntity.Index.ToString());
+                        string lineKey = GetDraftKey(GetWorkbenchLineId(entry.m_LineEntity));
                         m_AppliedWorkbenchLines[lineKey] = new AppliedWorkbenchLineState
                         {
                             LineEntity = entry.m_LineEntity,
@@ -1085,7 +1109,7 @@ namespace RapidTransitMod
                         if (row.m_LineEntity == Entity.Null)
                             continue;
 
-                        string lineKey = GetDraftKey(row.m_LineEntity.Index.ToString());
+                        string lineKey = GetDraftKey(GetWorkbenchLineId(row.m_LineEntity));
                         if (!m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState state))
                         {
                             state = new AppliedWorkbenchLineState
@@ -1116,7 +1140,7 @@ namespace RapidTransitMod
                         .ThenBy(row => row.id, StringComparer.Ordinal)
                         .Select(CloneStagedRow)
                         .ToList();
-                    state.DepartureMinutesCache = BuildAppliedDepartureMinutes(state.StagedRows, state.LineEntity.Index.ToString());
+                    state.DepartureMinutesCache = BuildAppliedDepartureMinutes(state.StagedRows, GetWorkbenchLineId(state.LineEntity));
                 }
 
                 SyncWorkbenchDraftsFromAppliedState();
@@ -1762,7 +1786,7 @@ namespace RapidTransitMod
             if (line == Entity.Null)
                 return false;
 
-            string lineKey = GetDraftKey(line.Index.ToString());
+            string lineKey = GetDraftKey(GetWorkbenchLineId(line));
             return m_AppliedWorkbenchLines.ContainsKey(lineKey);
         }
 
@@ -1772,7 +1796,7 @@ namespace RapidTransitMod
             if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
                 return Array.Empty<int>();
 
-            string lineKey = GetDraftKey(line.Index.ToString());
+            string lineKey = GetDraftKey(GetWorkbenchLineId(line));
             if (!m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState state)
                 || state.StagedRows == null
                 || state.StagedRows.Count == 0)
@@ -1782,7 +1806,7 @@ namespace RapidTransitMod
 
             if (state.DepartureMinutesCache == null || state.DepartureMinutesCache.Length == 0)
             {
-                state.DepartureMinutesCache = BuildAppliedDepartureMinutes(state.StagedRows, line.Index.ToString());
+                state.DepartureMinutesCache = BuildAppliedDepartureMinutes(state.StagedRows, GetWorkbenchLineId(line));
             }
 
             return state.DepartureMinutesCache;
@@ -1794,7 +1818,7 @@ namespace RapidTransitMod
             if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
                 return;
 
-            string lineKey = GetDraftKey(line.Index.ToString());
+            string lineKey = GetDraftKey(GetWorkbenchLineId(line));
             if (!m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState state))
                 return;
 
@@ -1810,7 +1834,7 @@ namespace RapidTransitMod
                 ? string.Join(", ", state.DepartureMinutesCache.Select(MinutesToSlotString))
                 : "-";
             string key =
-                line.Index.ToString()
+                GetWorkbenchLineId(line)
                 + "|"
                 + nowMin.ToString()
                 + "|"
@@ -1825,7 +1849,7 @@ namespace RapidTransitMod
             m_LastAppliedWorkbenchInspectLogKey = key;
             Mod.log.Info(
                 "[AppliedWorkbenchInspect] line="
-                + line.Index.ToString()
+                + GetWorkbenchLineId(line)
                 + " now="
                 + SlotStr(nowMin)
                 + " next="
@@ -1843,8 +1867,8 @@ namespace RapidTransitMod
             if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
                 return string.Empty;
 
-            string lineKey = GetDraftKey(line.Index.ToString());
-            string configuredKind = GetWorkbenchConfiguredLineServiceKind(lineKey);
+            string lineKey = GetDraftKey(GetWorkbenchLineId(line));
+            string configuredKind = GetWorkbenchConfiguredLineServiceKind(line);
             if (!string.IsNullOrEmpty(configuredKind))
             {
                 return configuredKind;
@@ -1892,6 +1916,17 @@ namespace RapidTransitMod
         private string GetEffectiveWorkbenchLineServiceKind(string lineKey, AppliedWorkbenchLineState applied)
         {
             string configuredKind = GetWorkbenchConfiguredLineServiceKind(lineKey);
+            if (!string.IsNullOrEmpty(configuredKind))
+            {
+                return configuredKind;
+            }
+
+            return GetAppliedWorkbenchLineServiceKind(applied);
+        }
+
+        private string GetEffectiveWorkbenchLineServiceKind(Entity line, AppliedWorkbenchLineState applied)
+        {
+            string configuredKind = GetWorkbenchConfiguredLineServiceKind(line);
             if (!string.IsNullOrEmpty(configuredKind))
             {
                 return configuredKind;
@@ -2586,7 +2621,7 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                string lineId = record.Line.Index.ToString();
+                string lineId = GetWorkbenchLineId(record.Line);
                 if (!allowedLineIds.Contains(lineId))
                 {
                     continue;
@@ -3272,7 +3307,7 @@ namespace RapidTransitMod
                     NormalizeOriginHoldLimitMinutes(setting.originHoldLimitMinutes);
                 m_WorkbenchLineMaxStationDwellMinutes[setting.lineId] =
                     NormalizeMaxStationDwellMinutes(setting.maxStationDwellMinutes);
-                m_WorkbenchLineAllowedDepots[setting.lineId] = setting.allowedDepotId ?? string.Empty;
+                m_WorkbenchLineAllowedDepots[setting.lineId] = NormalizeWorkbenchAllowedDepotId(setting.allowedDepotId);
                 string normalizedKind = NormalizeWorkbenchServiceKind(setting.serviceKind);
                 if (!string.IsNullOrEmpty(normalizedKind))
                 {
@@ -3367,22 +3402,69 @@ namespace RapidTransitMod
                 return string.Empty;
 
             return m_WorkbenchLineAllowedDepots.TryGetValue(lineId, out string configuredDepotId)
-                ? configuredDepotId ?? string.Empty
+                ? NormalizeWorkbenchAllowedDepotId(configuredDepotId)
                 : string.Empty;
         }
 
         private int GetWorkbenchOriginHoldLimitMinutes(Entity line)
         {
-            return line == Entity.Null
-                ? DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES
-                : GetWorkbenchOriginHoldLimitMinutes(line.Index.ToString());
+            if (line == Entity.Null)
+                return DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
+
+            string stableLineId = GetWorkbenchLineId(line);
+            if (!string.IsNullOrEmpty(stableLineId)
+                && m_WorkbenchLineOriginHoldLimits.TryGetValue(stableLineId, out int stableMinutes))
+            {
+                return NormalizeOriginHoldLimitMinutes(stableMinutes);
+            }
+
+            string legacyLineId = line.Index.ToString();
+            return GetWorkbenchOriginHoldLimitMinutes(legacyLineId);
+        }
+
+        private string GetWorkbenchConfiguredLineServiceKind(Entity line)
+        {
+            if (line == Entity.Null)
+                return string.Empty;
+
+            string stableLineId = GetWorkbenchLineId(line);
+            if (!string.IsNullOrEmpty(stableLineId)
+                && m_WorkbenchLineServiceKinds.TryGetValue(stableLineId, out string stableKind))
+            {
+                return NormalizeWorkbenchServiceKind(stableKind);
+            }
+
+            return GetWorkbenchConfiguredLineServiceKind(line.Index.ToString());
         }
 
         private int GetWorkbenchMaxStationDwellMinutes(Entity line)
         {
-            return line == Entity.Null
-                ? DEFAULT_MAX_STATION_DWELL_MINUTES
-                : GetWorkbenchMaxStationDwellMinutes(line.Index.ToString());
+            if (line == Entity.Null)
+                return DEFAULT_MAX_STATION_DWELL_MINUTES;
+
+            string stableLineId = GetWorkbenchLineId(line);
+            if (!string.IsNullOrEmpty(stableLineId)
+                && m_WorkbenchLineMaxStationDwellMinutes.TryGetValue(stableLineId, out int stableMinutes))
+            {
+                return NormalizeMaxStationDwellMinutes(stableMinutes);
+            }
+
+            return GetWorkbenchMaxStationDwellMinutes(line.Index.ToString());
+        }
+
+        private string GetWorkbenchAllowedDepotId(Entity line)
+        {
+            if (line == Entity.Null)
+                return string.Empty;
+
+            string stableLineId = GetWorkbenchLineId(line);
+            if (!string.IsNullOrEmpty(stableLineId)
+                && m_WorkbenchLineAllowedDepots.TryGetValue(stableLineId, out string stableDepotId))
+            {
+                return stableDepotId ?? string.Empty;
+            }
+
+            return GetWorkbenchAllowedDepotId(line.Index.ToString());
         }
 
         public Entity GetConfiguredAllowedDepot(Entity line)
@@ -3390,8 +3472,55 @@ namespace RapidTransitMod
             if (line == Entity.Null)
                 return Entity.Null;
 
-            string depotId = GetWorkbenchAllowedDepotId(line.Index.ToString());
+            string depotId = GetWorkbenchAllowedDepotId(line);
             return ResolveWorkbenchDepotEntityById(depotId);
+        }
+
+        private string NormalizeWorkbenchAllowedDepotId(string depotId)
+        {
+            if (string.IsNullOrWhiteSpace(depotId))
+                return string.Empty;
+
+            Entity depot = ResolveWorkbenchDepotEntityById(depotId);
+            return depot != Entity.Null
+                ? BuildWorkbenchDepotPersistentId(depot)
+                : string.Empty;
+        }
+
+        private string BuildWorkbenchDepotPersistentId(Entity depot)
+        {
+            if (depot == Entity.Null || !EntityManager.Exists(depot))
+                return string.Empty;
+
+            string transportType = string.Empty;
+            int prefabIndex = 0;
+            if (EntityManager.HasComponent<PrefabRef>(depot))
+            {
+                Entity prefab = EntityManager.GetComponentData<PrefabRef>(depot).m_Prefab;
+                prefabIndex = prefab.Index;
+                if (prefab != Entity.Null && EntityManager.HasComponent<TransportDepotData>(prefab))
+                {
+                    transportType = EntityManager.GetComponentData<TransportDepotData>(prefab).m_TransportType.ToString();
+                }
+            }
+
+            int x = 0;
+            int y = 0;
+            int z = 0;
+            if (EntityManager.HasComponent<Transform>(depot))
+            {
+                float3 position = EntityManager.GetComponentData<Transform>(depot).m_Position;
+                x = (int)math.round(position.x);
+                y = (int)math.round(position.y);
+                z = (int)math.round(position.z);
+            }
+
+            return "depot:"
+                + (string.IsNullOrEmpty(transportType) ? "-" : transportType.ToLowerInvariant())
+                + ":prefab-" + prefabIndex.ToString()
+                + ":x" + x.ToString()
+                + ":y" + y.ToString()
+                + ":z" + z.ToString();
         }
 
         private string ResolveWorkbenchLineTransportType(Entity line)
@@ -3434,7 +3563,7 @@ namespace RapidTransitMod
 
                     depots.Add(new DispatchWorkbenchDepotDto
                     {
-                        id = depot.Index.ToString(),
+                        id = BuildWorkbenchDepotPersistentId(depot),
                         name = name,
                         transportType = transportType
                     });
@@ -3456,6 +3585,29 @@ namespace RapidTransitMod
             if (string.IsNullOrEmpty(depotId))
                 return Entity.Null;
 
+            if (int.TryParse(depotId, out int legacyDepotIndex))
+            {
+                EntityQuery legacyDepotQuery = GetEntityQuery(
+                    ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                    ComponentType.Exclude<Deleted>());
+                NativeArray<Entity> legacyDepotEntities = legacyDepotQuery.ToEntityArray(Allocator.Temp);
+                try
+                {
+                    for (int i = 0; i < legacyDepotEntities.Length; i++)
+                    {
+                        Entity depot = legacyDepotEntities[i];
+                        if (depot.Index == legacyDepotIndex)
+                        {
+                            return depot;
+                        }
+                    }
+                }
+                finally
+                {
+                    if (legacyDepotEntities.IsCreated) legacyDepotEntities.Dispose();
+                }
+            }
+
             EntityQuery depotQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
                 ComponentType.Exclude<Deleted>());
@@ -3465,7 +3617,7 @@ namespace RapidTransitMod
                 for (int i = 0; i < depotEntities.Length; i++)
                 {
                     Entity depot = depotEntities[i];
-                    if (string.Equals(depot.Index.ToString(), depotId, StringComparison.Ordinal))
+                    if (string.Equals(BuildWorkbenchDepotPersistentId(depot), depotId, StringComparison.Ordinal))
                     {
                         return depot;
                     }
@@ -3771,7 +3923,13 @@ namespace RapidTransitMod
 
                     if (!string.IsNullOrEmpty(setting.allowedDepotId))
                     {
-                        if (!depotById.TryGetValue(setting.allowedDepotId, out DispatchWorkbenchDepotDto depot))
+                        string normalizedDepotId = NormalizeWorkbenchAllowedDepotId(setting.allowedDepotId);
+                        if (string.IsNullOrEmpty(normalizedDepotId))
+                        {
+                            continue;
+                        }
+
+                        if (!depotById.TryGetValue(normalizedDepotId, out DispatchWorkbenchDepotDto depot))
                         {
                             errors.Add("Line setting " + setting.lineId + " references a depot that no longer exists.");
                         }

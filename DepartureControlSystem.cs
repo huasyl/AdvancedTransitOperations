@@ -164,6 +164,45 @@ namespace RapidTransitMod
             public readonly List<LineRunningVehicleSnapshot> Vehicles = new List<LineRunningVehicleSnapshot>();
         }
 
+        private readonly struct WaypointIndexFrameSnapshot
+        {
+            public readonly uint Frame;
+            public readonly Entity Route;
+            public readonly bool Boarding;
+            public readonly int WaypointIndex;
+
+            public WaypointIndexFrameSnapshot(uint frame, Entity route, bool boarding, int waypointIndex)
+            {
+                Frame = frame;
+                Route = route;
+                Boarding = boarding;
+                WaypointIndex = waypointIndex;
+            }
+        }
+
+        private readonly struct RouteProgressFrameSnapshot
+        {
+            public readonly uint Frame;
+            public readonly Entity Route;
+            public readonly Entity Target;
+            public readonly int NextWaypointIndex;
+            public readonly float SegmentPosition;
+
+            public RouteProgressFrameSnapshot(
+                uint frame,
+                Entity route,
+                Entity target,
+                int nextWaypointIndex,
+                float segmentPosition)
+            {
+                Frame = frame;
+                Route = route;
+                Target = target;
+                NextWaypointIndex = nextWaypointIndex;
+                SegmentPosition = segmentPosition;
+            }
+        }
+
         private sealed class LineMileageModel
         {
             public ulong Signature;
@@ -171,6 +210,9 @@ namespace RapidTransitMod
             public float[] WaypointDistances = Array.Empty<float>();
             public float[] BypassWaypointDistances = Array.Empty<float>();
             public float[] BypassStopNodeDistances = Array.Empty<float>();
+            public int[] PreviousDistinctStationWaypointIndices = Array.Empty<int>();
+            public float[] PreviousDistinctStationMeters = Array.Empty<float>();
+            public float[] CurrentStationMeters = Array.Empty<float>();
             public List<CorridorNode> CorridorNodes = new List<CorridorNode>();
             public Dictionary<Entity, float> BuildingDistances = new Dictionary<Entity, float>();
         }
@@ -226,6 +268,7 @@ namespace RapidTransitMod
             public string Detail7Value;
             public string AlertText;
             public bool ShowRetireAction;
+            public bool ShowForceDepartAction;
             public bool ShowReevaluateAction;
             public bool ShowLineSpawnAction;
             public bool ShowDumpTrackModelAction;
@@ -292,6 +335,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, LineMileageModel> m_LineMileageModels = new Dictionary<Entity, LineMileageModel>();
         private SharedLocalCorridorGraph m_SharedLocalCorridorGraph;
         private readonly Dictionary<Entity, string> m_BypassDecisionLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassQueuedLocalOverrideLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_PreparingSlotLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_HoldingSkipLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LateDispatchLogCache = new Dictionary<Entity, string>();
@@ -301,7 +345,10 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, BypassHoldCadenceSnapshot> m_BypassHoldCadenceSnapshots = new Dictionary<Entity, BypassHoldCadenceSnapshot>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
+        private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_WaypointIndexFrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
+        private readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_RouteProgressFrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
         private bool m_CorridorModelFaulted = false;
+        private bool m_BypassRuntimeEnabled = true;
 
         // ── 线路状态 ──
         private NativeHashMap<Entity, int> m_SpawningLines;
@@ -335,6 +382,7 @@ namespace RapidTransitMod
         private bool m_StartupRuntimeStateCleared = false;
         private int m_StableFrameCount = 0;
         private int m_LastVehicleCount = -1;
+        private bool m_BypassToggleKeyArmed = true;
         private int m_LastPuppetMasterMinute = -1;
         private int m_LastRegisterSweepMinute = -1;
         private int m_LastSchedulerTickMinute = -1;
@@ -347,6 +395,7 @@ namespace RapidTransitMod
         private EntityQuery m_VehicleQuery;
         private EntityQuery m_AllPublicTransportQuery;
         private EntityQuery m_LineQuery;
+        private EntityQuery m_TransportVehicleRequestQuery;
 
         private const int SLOT_INTERVAL = 30;
         private const int SPAWN_LEAD_MIN = 60;
@@ -474,6 +523,20 @@ namespace RapidTransitMod
                 None = new ComponentType[] {
                     ComponentType.ReadOnly<Deleted>(),
                     ComponentType.ReadOnly<Disabled>()
+                }
+            });
+
+            m_TransportVehicleRequestQuery = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<TransportVehicleRequest>(),
+                    ComponentType.ReadOnly<ServiceRequest>(),
+                    ComponentType.ReadOnly<UpdateFrame>()
+                },
+                None = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<Deleted>()
                 }
             });
 
@@ -737,7 +800,7 @@ namespace RapidTransitMod
                 return false;
             if (!EntityManager.HasBuffer<ConnectedRoute>(entity))
                 return false;
-            if (!EntityManager.HasComponent<Game.Routes.TransportStop>(entity) && !EntityManager.HasComponent<Game.Routes.WorkStop>(entity))
+            if (!EntityManager.HasComponent<Game.Routes.TransportStop>(entity))
                 return false;
             if (EntityManager.HasComponent<TaxiStand>(entity))
                 return false;
@@ -760,25 +823,38 @@ namespace RapidTransitMod
             return found;
         }
 
+        private bool IsSelectableTransitStationBuilding(Entity building)
+        {
+            if (building == Entity.Null || !EntityManager.Exists(building) || !EntityManager.HasComponent<Building>(building))
+                return false;
+
+            var routes = new List<Entity>(4);
+            return TryGetStationRoutes(building, routes) && routes.Count > 0;
+        }
+
         private Entity ResolvePassingStationBuilding(Entity entity)
         {
             if (entity == Entity.Null || !EntityManager.Exists(entity))
                 return Entity.Null;
             if (EntityManager.HasComponent<Building>(entity))
-                return entity;
+            {
+                if (IsSelectableTransitStationBuilding(entity))
+                    return entity;
+                return Entity.Null;
+            }
 
             Entity stopEntity = ResolveWorkbenchStopEntity(entity);
             if (stopEntity != Entity.Null)
             {
                 Entity stationEntity = FindTransportStationFromStop(stopEntity);
-                if (stationEntity != Entity.Null)
+                if (stationEntity != Entity.Null && IsSelectableTransitStationBuilding(stationEntity))
                     return stationEntity;
             }
 
             Entity current = entity;
             for (int i = 0; i < 8 && current != Entity.Null; i++)
             {
-                if (EntityManager.HasComponent<Building>(current))
+                if (EntityManager.HasComponent<Building>(current) && IsSelectableTransitStationBuilding(current))
                     return current;
                 if (!EntityManager.HasComponent<Owner>(current))
                     break;
@@ -1235,8 +1311,9 @@ namespace RapidTransitMod
             snapshot.Detail6Value = BuildVehicleInboundTimeValue(vehicle);
             snapshot.AlertText = alertText;
             snapshot.ShowRetireAction = isManagedVehicle;
-            snapshot.ShowReevaluateAction = isManagedVehicle;
-            snapshot.ShowDumpTrackModelAction = true;
+            snapshot.ShowForceDepartAction = isManagedVehicle;
+            snapshot.ShowReevaluateAction = false;
+            snapshot.ShowDumpTrackModelAction = false;
             return true;
         }
 
@@ -1326,6 +1403,52 @@ namespace RapidTransitMod
             return true;
         }
 
+        public bool RequestVehicleForceDepart(Entity vehicle)
+        {
+            vehicle = ResolveSelectedVehicleEntity(vehicle);
+            if (!IsManagedVehicle(vehicle))
+                return false;
+            if (!EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+                return false;
+            if (!EntityManager.HasComponent<Target>(vehicle))
+                return false;
+
+            Entity line = ResolveVehicleLine(vehicle);
+            if (line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+
+            Game.Vehicles.PublicTransport pt = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+            if ((pt.m_State & PublicTransportFlags.Boarding) == 0)
+                return false;
+
+            Target tgt = EntityManager.GetComponentData<Target>(vehicle);
+            DynamicBuffer<RouteWaypoint> wps = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            int currentWaypointIndex = ComputeWpIndex(vehicle, wps);
+            if (currentWaypointIndex < 0)
+                currentWaypointIndex = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
+                    ? cachedWaypointIndex
+                    : -1;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (currentWaypointIndex >= 0)
+                TryRecordObservedStopDwellOnBoardingEnd(vehicle, line, currentWaypointIndex, nowFrame);
+
+            ForceDepartMidStop(
+                vehicle,
+                pt,
+                tgt,
+                wps,
+                currentWaypointIndex,
+                m_EndFrameBarrier.CreateCommandBuffer());
+
+            m_LastBoarding[vehicle] = false;
+            m_StopDwellStartFrame.Remove(vehicle);
+            m_StopDwellSessions.Remove(vehicle);
+            ClearBypassYieldState(vehicle, "UI强制发车");
+            InvalidatePanelData();
+            return true;
+        }
+
         private string GetVehiclePanelStateCode(Entity vehicle, VehicleState vehicleState)
         {
             if (m_BypassYieldBlocker.ContainsKey(vehicle)
@@ -1359,6 +1482,17 @@ namespace RapidTransitMod
             if (Input.GetKeyDown(KeyCode.F8))
             {
                 TestSpawnRequest();
+                return;
+            }
+
+            if (!Input.GetKey(KeyCode.F5))
+            {
+                m_BypassToggleKeyArmed = true;
+            }
+            else if (m_BypassToggleKeyArmed)
+            {
+                m_BypassToggleKeyArmed = false;
+                SetBypassRuntimeEnabled(!m_BypassRuntimeEnabled);
                 return;
             }
 
@@ -1458,12 +1592,23 @@ namespace RapidTransitMod
                 }
             }
 
+            try
+            {
+                ForceConfiguredDepotTransportVehicleRequests();
+            }
+            catch (Exception ex)
+            {
+                log.Info("[运行异常] ForceConfiguredDepotTransportVehicleRequests -> " + ex.GetType().Name + ": " + ex.Message);
+                throw;
+            }
+
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
             {
                 FlushAllVehicleStates();
                 m_LastVehicleCacheFlushFrame = nowFrame;
             }
+
         }
 
         private void SafeClearAll()
@@ -1513,8 +1658,10 @@ namespace RapidTransitMod
             m_StopDwellStartFrame.Clear();
             m_WaypointStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
-            m_BypassHoldCadenceSnapshots.Clear();
+            ClearBypassRuntimeState();
             m_LineRunningVehicleFrameSnapshots.Clear();
+            m_WaypointIndexFrameSnapshots.Clear();
+            m_RouteProgressFrameSnapshots.Clear();
             m_BvWaypointMismatchLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_SystemReady = false;
@@ -1527,6 +1674,70 @@ namespace RapidTransitMod
             ClearLineDispatchDebugSummaries();
             ClearDispatchLogCaches();
             log.Info("[清场] 已清除所有公共交通车辆");
+        }
+
+        private void SetBypassRuntimeEnabled(bool enabled)
+        {
+            if (m_BypassRuntimeEnabled == enabled)
+                return;
+
+            m_BypassRuntimeEnabled = enabled;
+            ClearBypassRuntimeState();
+            log.Info(enabled
+                ? "[F5] 已启用快慢车待避"
+                : "[F5] 已禁用快慢车待避（仅用于性能排查）");
+        }
+
+        private void ClearBypassRuntimeState()
+        {
+            if (m_BypassYieldBlocker.IsCreated)
+                m_BypassYieldBlocker.Clear();
+
+            m_BypassHoldCadenceSnapshots.Clear();
+            m_BypassDecisionLogCache.Clear();
+            m_BypassQueuedLocalOverrideLogCache.Clear();
+            ClearBypassTrackModelRuntimeState();
+        }
+
+        private void ClearBypassRuntimeStateForLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            if (m_BypassYieldBlocker.IsCreated)
+            {
+                var blockerKeys = m_BypassYieldBlocker.GetKeyArray(Allocator.Temp);
+                for (int i = blockerKeys.Length - 1; i >= 0; i--)
+                {
+                    Entity vehicle = blockerKeys[i];
+                    if (ResolveVehicleLine(vehicle) == line)
+                        m_BypassYieldBlocker.Remove(vehicle);
+                }
+                blockerKeys.Dispose();
+            }
+
+            List<Entity> cadenceKeysToRemove = null;
+            foreach (KeyValuePair<Entity, BypassHoldCadenceSnapshot> entry in m_BypassHoldCadenceSnapshots)
+            {
+                if (entry.Value.Line != line)
+                    continue;
+
+                cadenceKeysToRemove ??= new List<Entity>();
+                cadenceKeysToRemove.Add(entry.Key);
+            }
+
+            if (cadenceKeysToRemove != null)
+            {
+                for (int i = 0; i < cadenceKeysToRemove.Count; i++)
+                {
+                    Entity vehicle = cadenceKeysToRemove[i];
+                    m_BypassHoldCadenceSnapshots.Remove(vehicle);
+                    m_BypassDecisionLogCache.Remove(vehicle);
+                    m_BypassQueuedLocalOverrideLogCache.Remove(vehicle);
+                }
+            }
+
+            ClearBypassTrackModelRuntimeStateForLine(line);
         }
 
         private void ClearRuntimeTrackingState()
@@ -1567,8 +1778,9 @@ namespace RapidTransitMod
             m_ForcedOriginReadyFrame.Clear();
             m_WaypointStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
-            m_BypassHoldCadenceSnapshots.Clear();
+            ClearBypassRuntimeState();
             m_LineRunningVehicleFrameSnapshots.Clear();
+            m_RouteProgressFrameSnapshots.Clear();
             m_BvWaypointMismatchLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_LastPuppetMasterMinute = -1;
@@ -2287,6 +2499,127 @@ namespace RapidTransitMod
             finally { lines.Dispose(); }
         }
 
+        private void ForceConfiguredDepotTransportVehicleRequests()
+        {
+            if (m_TransportVehicleRequestQuery.IsEmptyIgnoreFilter)
+                return;
+
+            NativeArray<Entity> requestEntities = m_TransportVehicleRequestQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < requestEntities.Length; i++)
+                {
+                    Entity request = requestEntities[i];
+                    if (!EntityManager.Exists(request) || EntityManager.HasComponent<Dispatched>(request))
+                        continue;
+                    if (!EntityManager.HasComponent<TransportVehicleRequest>(request)
+                        || !EntityManager.HasComponent<ServiceRequest>(request))
+                    {
+                        continue;
+                    }
+
+                    ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(request);
+                    if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
+                        continue;
+
+                    TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
+                    Entity line = vehicleRequest.m_Route;
+                    if (line == Entity.Null
+                        || !EntityManager.Exists(line)
+                        || !EntityManager.HasComponent<TransportLine>(line))
+                    {
+                        continue;
+                    }
+
+                    Entity configuredDepot = GetConfiguredAllowedDepot(line);
+                    if (!IsConfiguredDepotCompatibleWithLine(configuredDepot, line))
+                        continue;
+
+                    if (!TryGetForcedTransportVehicleRequestDestination(line, out Entity destinationWaypoint))
+                        continue;
+
+                    PathInformation forcedPath = default;
+                    forcedPath.m_Origin = configuredDepot;
+                    forcedPath.m_Destination = destinationWaypoint;
+
+                    if (EntityManager.HasComponent<PathInformation>(request))
+                    {
+                        PathInformation existingPath = EntityManager.GetComponentData<PathInformation>(request);
+                        if (existingPath.m_Origin != forcedPath.m_Origin
+                            || existingPath.m_Destination != forcedPath.m_Destination)
+                        {
+                            EntityManager.SetComponentData(request, forcedPath);
+                        }
+                    }
+                    else
+                    {
+                        EntityManager.AddComponentData(request, forcedPath);
+                    }
+
+                    if (!EntityManager.HasBuffer<PathElement>(request))
+                    {
+                        EntityManager.AddBuffer<PathElement>(request);
+                    }
+                }
+            }
+            finally
+            {
+                if (requestEntities.IsCreated) requestEntities.Dispose();
+            }
+        }
+
+        private bool IsConfiguredDepotCompatibleWithLine(Entity depot, Entity line)
+        {
+            if (depot == Entity.Null
+                || line == Entity.Null
+                || !EntityManager.Exists(depot)
+                || !EntityManager.Exists(line)
+                || !EntityManager.HasComponent<Game.Buildings.TransportDepot>(depot)
+                || !EntityManager.HasComponent<PrefabRef>(depot)
+                || !EntityManager.HasComponent<PrefabRef>(line))
+            {
+                return false;
+            }
+
+            Entity depotPrefab = EntityManager.GetComponentData<PrefabRef>(depot).m_Prefab;
+            Entity linePrefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+            if (depotPrefab == Entity.Null
+                || linePrefab == Entity.Null
+                || !EntityManager.HasComponent<TransportDepotData>(depotPrefab)
+                || !EntityManager.HasComponent<TransportLineData>(linePrefab))
+            {
+                return false;
+            }
+
+            TransportDepotData depotData = EntityManager.GetComponentData<TransportDepotData>(depotPrefab);
+            TransportLineData lineData = EntityManager.GetComponentData<TransportLineData>(linePrefab);
+            return depotData.m_TransportType == lineData.m_TransportType;
+        }
+
+        private bool TryGetForcedTransportVehicleRequestDestination(Entity line, out Entity destinationWaypoint)
+        {
+            destinationWaypoint = Entity.Null;
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || !EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                if (waypoint == Entity.Null || !EntityManager.Exists(waypoint))
+                    continue;
+
+                destinationWaypoint = waypoint;
+                return true;
+            }
+
+            return false;
+        }
+
         private void RegisterNewVehicles(bool fullSweep)
         {
             var lines = m_LineQuery.ToEntityArray(Allocator.Temp);
@@ -2410,6 +2743,9 @@ namespace RapidTransitMod
         private void DriveStateMachine(EntityCommandBuffer ecb, int nowMin)
         {
             var wpBuffers = GetBufferLookup<RouteWaypoint>(true);
+            var publicTransportLookup = GetComponentLookup<Game.Vehicles.PublicTransport>(true);
+            var targetLookup = GetComponentLookup<Target>(true);
+            var currentRouteLookup = GetComponentLookup<CurrentRoute>(true);
             var vehicles = m_VehicleQuery.ToEntityArray(Allocator.Temp);
 
             try
@@ -2420,12 +2756,20 @@ namespace RapidTransitMod
                     Entity line = ResolveVehicleLine(v);
                     if (!IsWorkbenchTimetableApplied(line)) continue;
                     if (!m_VehicleState.TryGetValue(v, out var state)) continue;
+                    if (!publicTransportLookup.HasComponent(v)
+                        || !targetLookup.HasComponent(v)
+                        || !currentRouteLookup.HasComponent(v))
+                    {
+                        continue;
+                    }
 
-                    var pt = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v);
-                    var tgt = EntityManager.GetComponentData<Target>(v);
-                    var cr = EntityManager.GetComponentData<CurrentRoute>(v);
+                    var pt = publicTransportLookup[v];
+                    var tgt = targetLookup[v];
+                    var cr = currentRouteLookup[v];
+                    Entity routeEnt = cr.m_Route;
 
-                    if (!wpBuffers.TryGetBuffer(cr.m_Route, out var wps) || wps.Length < 2) continue;
+                    if (!wpBuffers.TryGetBuffer(routeEnt, out var wps) || wps.Length < 2) continue;
+                    int waypointCount = wps.Length;
 
                     bool boarding = (pt.m_State & PublicTransportFlags.Boarding) != 0;
                     int targetMin = m_VehicleTargetMin.TryGetValue(v, out int tm) ? tm : -1;
@@ -2440,8 +2784,8 @@ namespace RapidTransitMod
                         m_BVMisfireStartFrame.Remove(v);
                     }
 
-                    string lineTag = m_VehicleLine.TryGetValue(v, out Entity lineEnt)
-                        ? "线路" + lineEnt.Index : "线路?";
+                    Entity lineEnt = line;
+                    string lineTag = "线路" + line.Index;
                     bool allowOriginHoldingBoardingGhost = state == VehicleState.Holding
                         && targetMin >= 0
                         && GetDistanceToOriginMeters(v, wps) <= ORIGIN_FORCE_IDLE_RADIUS_METERS;
@@ -2540,7 +2884,7 @@ namespace RapidTransitMod
                                         departedStopName = "stop#" + departedStop.Index;
                                     }
 
-                                    int nextWaypointIndex = previousCachedWpIdx + 1 < wps.Length
+                                    int nextWaypointIndex = previousCachedWpIdx + 1 < waypointCount
                                         ? previousCachedWpIdx + 1
                                         : -1;
                                     Entity nextStop = nextWaypointIndex >= 0
@@ -2609,7 +2953,7 @@ namespace RapidTransitMod
                         {
                             if (curWpIdx >= 0)
                             {
-                                if (curWpIdx == wps.Length - 1)
+                                if (curWpIdx == waypointCount - 1)
                                     m_NearingTerminus.Add(v);
                             }
                             else if (boarding)
@@ -2645,7 +2989,7 @@ namespace RapidTransitMod
                     bool midStopBoarding = state == VehicleState.Running
                         && boarding
                         && curWpIdx > 0
-                        && curWpIdx < wps.Length - 1;
+                        && curWpIdx < waypointCount - 1;
                     uint midStopDwellSinceFrame = 0;
                     uint midStopDwellDeadlineFrame = 0;
                     int maxStationDwellMinutes = 0;
@@ -2656,7 +3000,7 @@ namespace RapidTransitMod
                             curWpIdx,
                             boarding,
                             nowFrame,
-                            wps.Length,
+                            waypointCount,
                             out midStopDwellSinceFrame,
                             out midStopDwellDeadlineFrame,
                             out maxStationDwellMinutes);
@@ -2681,7 +3025,7 @@ namespace RapidTransitMod
                             if (atA)
                             {
                                 if (targetMin < 0 && TryAssignUpcomingScheduledTargetToWaitingVehicle(
-                                    cr.m_Route,
+                                    routeEnt,
                                     v,
                                     nowMin,
                                     lineTag,
@@ -2692,9 +3036,9 @@ namespace RapidTransitMod
                                     targetMin = preparingAssignedTarget;
                                 }
 
-                                if (ShouldRetireWaitingVehicleForFarFutureTarget(cr.m_Route, nowMin, targetMin))
+                                if (ShouldRetireWaitingVehicleForFarFutureTarget(routeEnt, nowMin, targetMin))
                                 {
-                                    DoRetire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(cr.m_Route, nowMin, targetMin));
+                                    DoRetire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMin, targetMin));
                                     break;
                                 }
                                 m_VehicleState[v] = VehicleState.Holding;
@@ -2741,10 +3085,10 @@ namespace RapidTransitMod
                             if (targetMin < 0)
                             {
                                 int lateSlot = -1;
-                                int[] appliedTargets = GetAppliedWorkbenchDepartureMinutes(cr.m_Route);
+                                int[] appliedTargets = GetAppliedWorkbenchDepartureMinutes(routeEnt);
                                 bool assigned = appliedTargets.Length > 0
                                     ? TryAssignCurrentOrLateScheduledTargetToWaitingVehicle(
-                                        cr.m_Route,
+                                        routeEnt,
                                         v,
                                         nowMin,
                                         lineTag,
@@ -2752,7 +3096,7 @@ namespace RapidTransitMod
                                         appliedTargets,
                                         out lateSlot)
                                     : TryAssignCurrentOrLateSlotToWaitingVehicle(
-                                        cr.m_Route,
+                                        routeEnt,
                                         v,
                                         nowMin,
                                         lineTag,
@@ -2763,7 +3107,7 @@ namespace RapidTransitMod
                                     targetMin = lateSlot;
                                 }
                                 else if (TryAssignUpcomingScheduledTargetToWaitingVehicle(
-                                    cr.m_Route,
+                                    routeEnt,
                                     v,
                                     nowMin,
                                     lineTag,
@@ -2785,9 +3129,9 @@ namespace RapidTransitMod
                                 }
                             }
 
-                            if (ShouldRetireWaitingVehicleForFarFutureTarget(cr.m_Route, nowMin, targetMin))
+                            if (ShouldRetireWaitingVehicleForFarFutureTarget(routeEnt, nowMin, targetMin))
                             {
-                                DoRetire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(cr.m_Route, nowMin, targetMin));
+                                DoRetire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMin, targetMin));
                                 ClearBypassYieldState(v);
                                 break;
                             }
@@ -2795,7 +3139,7 @@ namespace RapidTransitMod
                             if (IsTimeReached(nowMin, targetMin) || CanLateDispatchSlot(nowMin, targetMin))
                             {
                                 ClearBypassYieldState(v, "始发候车不参与待避");
-                                if (IsDispatchTargetAlreadyOccupied(cr.m_Route, v, targetMin))
+                                if (IsDispatchTargetAlreadyOccupied(routeEnt, v, targetMin))
                                 {
                                     m_VehicleTargetMin[v] = -1;
                                     pt.m_DepartureFrame = nowFrame + 9999;
@@ -2897,7 +3241,7 @@ namespace RapidTransitMod
                             {
                                 TryGetCadencedBypassHoldDecision(
                                     v,
-                                    cr.m_Route,
+                                    routeEnt,
                                     wps,
                                     bypassControlWaypointIndex,
                                     nowFrame,
@@ -2920,7 +3264,7 @@ namespace RapidTransitMod
                                     + " sinceFrame=" + midStopDwellSinceFrame
                                     + " deadlineFrame=" + midStopDwellDeadlineFrame
                                     + " curWpIdx=" + curWpIdx
-                                    + " nextTargetWp=" + (curWpIdx + 1 < wps.Length ? (curWpIdx + 1).ToString() : "-"));
+                                    + " nextTargetWp=" + (curWpIdx + 1 < waypointCount ? (curWpIdx + 1).ToString() : "-"));
                                 break;
                             }
 
@@ -3142,11 +3486,11 @@ namespace RapidTransitMod
 
                             if (targetMin < 0)
                             {
-                                int[] appliedTargets = GetAppliedWorkbenchDepartureMinutes(cr.m_Route);
+                                int[] appliedTargets = GetAppliedWorkbenchDepartureMinutes(routeEnt);
                                 int lateTarget = -1;
                                 bool assignedLateTarget = appliedTargets.Length > 0
                                     ? TryAssignCurrentOrLateScheduledTargetToWaitingVehicle(
-                                        cr.m_Route,
+                                        routeEnt,
                                         v,
                                         nowMin,
                                         lineTag,
@@ -3154,7 +3498,7 @@ namespace RapidTransitMod
                                         appliedTargets,
                                         out lateTarget)
                                     : TryAssignCurrentOrLateSlotToWaitingVehicle(
-                                        cr.m_Route,
+                                        routeEnt,
                                         v,
                                         nowMin,
                                         lineTag,
@@ -3164,9 +3508,9 @@ namespace RapidTransitMod
                                     targetMin = lateTarget;
                             }
 
-                            if (HasInboundVehicleNearOrigin(cr.m_Route, wps, v, ORIGIN_CONGESTION_RADIUS_METERS, includePreparingVehicles: false))
+                            if (HasInboundVehicleNearOrigin(routeEnt, wps, v, ORIGIN_CONGESTION_RADIUS_METERS, includePreparingVehicles: false))
                             {
-                                if (ShouldProtectIdleFromYield(cr.m_Route, v, nowMin))
+                                if (ShouldProtectIdleFromYield(routeEnt, v, nowMin))
                                 {
                                     if (m_VehicleTargetMin.TryGetValue(v, out int ptm) && ptm >= 0 && CanLateDispatchSlot(nowMin, ptm))
                                     {
@@ -3182,7 +3526,7 @@ namespace RapidTransitMod
                                     {
                                         int protectTarget = m_VehicleTargetMin.TryGetValue(v, out int ptm2) && ptm2 >= 0
                                             ? ptm2
-                                            : GetFallbackProtectTarget(cr.m_Route, nowMin);
+                                            : GetFallbackProtectTarget(routeEnt, nowMin);
                                         LogVehicleStateOnce(
                                             m_YieldSkipLogCache,
                                             v,
@@ -3200,9 +3544,9 @@ namespace RapidTransitMod
 
                             if (targetMin >= 0)
                             {
-                                if (ShouldRetireWaitingVehicleForFarFutureTarget(cr.m_Route, nowMin, targetMin))
+                                if (ShouldRetireWaitingVehicleForFarFutureTarget(routeEnt, nowMin, targetMin))
                                 {
-                                    DoRetire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(cr.m_Route, nowMin, targetMin));
+                                    DoRetire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMin, targetMin));
                                     break;
                                 }
                                 m_VehicleState[v] = VehicleState.Holding;
@@ -3272,6 +3616,8 @@ namespace RapidTransitMod
                     m_UICache.Remove(dead);
                     m_LastBoarding.Remove(dead);
                     m_CachedWpIdx.Remove(dead);
+                    m_WaypointIndexFrameSnapshots.Remove(dead);
+                    m_RouteProgressFrameSnapshots.Remove(dead);
                     m_BVMisfire.Remove(dead);
                     m_BVMisfireStartFrame.Remove(dead);
                     m_BypassHoldCadenceSnapshots.Remove(dead);
@@ -3289,8 +3635,13 @@ namespace RapidTransitMod
                     m_BypassYieldBlocker.Remove(dead);
                     m_BvWaypointMismatchLogCache.Remove(dead);
                     m_BvWaypointMismatchLastLogFrame.Remove(dead);
+                    m_BypassQueuedLocalOverrideLogCache.Remove(dead);
                     log.Info("[清理] 车辆" + dead.Index + " 消失");
                 }
+                if (deadKeys.Length > 0)
+                    m_WaypointIndexFrameSnapshots.Clear();
+                if (deadKeys.Length > 0)
+                    m_RouteProgressFrameSnapshots.Clear();
                 if (deadKeys.Length > 0)
                     m_LineRunningVehicleFrameSnapshots.Clear();
                 deadKeys.Dispose();
@@ -3299,6 +3650,57 @@ namespace RapidTransitMod
         }
 
         private int ComputeWpIndex(Entity v, DynamicBuffer<RouteWaypoint> wps)
+        {
+            bool hit = TryGetWaypointIndexCurrentFrame(v, wps, out int cachedWaypointIndex);
+            if (hit)
+                return cachedWaypointIndex;
+
+            int computedWaypointIndex = ComputeWpIndexUncached(v, wps);
+            if (computedWaypointIndex >= 0)
+            {
+                Entity route = ResolveVehicleLine(v);
+                bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v)
+                    && (EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v).m_State & PublicTransportFlags.Boarding) != 0;
+                m_WaypointIndexFrameSnapshots[v] = new WaypointIndexFrameSnapshot(
+                    m_SimulationSystem.frameIndex,
+                    route,
+                    boarding,
+                    computedWaypointIndex);
+            }
+            else
+            {
+                m_WaypointIndexFrameSnapshots.Remove(v);
+            }
+
+            return computedWaypointIndex;
+        }
+
+        private bool TryGetWaypointIndexCurrentFrame(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints, out int waypointIndex)
+        {
+            waypointIndex = -1;
+            if (vehicle == Entity.Null
+                || !m_WaypointIndexFrameSnapshots.TryGetValue(vehicle, out WaypointIndexFrameSnapshot snapshot))
+            {
+                return false;
+            }
+
+            if (snapshot.Frame != m_SimulationSystem.frameIndex)
+                return false;
+
+            Entity route = ResolveVehicleLine(vehicle);
+            if (snapshot.Route != route)
+                return false;
+
+            bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
+                && (EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State & PublicTransportFlags.Boarding) != 0;
+            if (snapshot.Boarding != boarding)
+                return false;
+
+            waypointIndex = snapshot.WaypointIndex;
+            return true;
+        }
+
+        private int ComputeWpIndexUncached(Entity v, DynamicBuffer<RouteWaypoint> wps)
         {
             if (!EntityManager.HasComponent<Game.Objects.Transform>(v)) return -1;
             float3 vPos = EntityManager.GetComponentData<Game.Objects.Transform>(v).m_Position;
@@ -4285,6 +4687,12 @@ namespace RapidTransitMod
             blockerVehicle = Entity.Null;
             canClearAfterExit = true;
 
+            if (!m_BypassRuntimeEnabled)
+            {
+                m_BypassHoldCadenceSnapshots.Remove(localVehicle);
+                return true;
+            }
+
             if (!TryGetBypassControlScope(
                     localVehicle,
                     localLine,
@@ -4416,6 +4824,9 @@ namespace RapidTransitMod
 
         private bool FinalizeBypassDecision(
             Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
             Entity currentBypassBuilding,
             Entity nextBypassBuilding,
             bool shouldYield,
@@ -4430,7 +4841,6 @@ namespace RapidTransitMod
                 reason = "shadow-veto-" + shadowReason;
             }
 
-            LogBypassTrackModelDecisionComparison(localVehicle, shouldYield);
             LogBypassDecisionOnce(localVehicle, currentBypassBuilding, nextBypassBuilding, shouldYield, reason, blockerVehicle);
             return shouldYield;
         }
@@ -4461,11 +4871,41 @@ namespace RapidTransitMod
             string lineTag = line != Entity.Null ? "线路" + line.Index : "线路?";
             log.Info("[待避判定] " + lineTag + " 车辆" + localVehicle.Index
                 + " result=" + (shouldYield ? "yield" : "pass")
-                + " current=" + FormatBypassNodeLabel(currentBypassBuilding)
-                + " next=" + FormatBypassNodeLabel(nextBypassBuilding)
                 + " reason=" + reason
-                + (blockerVehicle != Entity.Null ? " blocker=" + blockerVehicle.Index : string.Empty)
-                + GetTrackModelLiveDecisionLogSuffix(localVehicle));
+                + (blockerVehicle != Entity.Null ? " blocker=" + blockerVehicle.Index : string.Empty));
+        }
+
+        private void LogQueuedLocalBypassOverrideOnce(
+            Entity localVehicle,
+            Entity localLine,
+            Entity blockerVehicle,
+            string result,
+            string reason,
+            float expressMeters = float.NaN,
+            float currentLocalMeters = float.NaN,
+            float queuedLocalMeters = float.NaN)
+        {
+            string key = result + "|" + reason + "|" + blockerVehicle.Index;
+            if (!float.IsNaN(expressMeters))
+                key += "|e=" + math.round(expressMeters).ToString();
+            if (!float.IsNaN(currentLocalMeters))
+                key += "|l=" + math.round(currentLocalMeters).ToString();
+            if (!float.IsNaN(queuedLocalMeters))
+                key += "|q=" + math.round(queuedLocalMeters).ToString();
+
+            string lineTag = localLine != Entity.Null ? "线路" + localLine.Index : "线路?";
+            string message = "[待避同线复核] " + lineTag + " 车辆" + localVehicle.Index
+                + " result=" + result
+                + " reason=" + reason
+                + (blockerVehicle != Entity.Null ? " blocker=" + blockerVehicle.Index : string.Empty);
+            if (!float.IsNaN(expressMeters))
+                message += " expressM=" + expressMeters.ToString("0.0");
+            if (!float.IsNaN(currentLocalMeters))
+                message += " localM=" + currentLocalMeters.ToString("0.0");
+            if (!float.IsNaN(queuedLocalMeters))
+                message += " queuedM=" + queuedLocalMeters.ToString("0.0");
+
+            LogVehicleStateOnce(m_BypassQueuedLocalOverrideLogCache, localVehicle, key, message);
         }
 
         private string FormatBypassNodeLabel(Entity building)
@@ -4499,7 +4939,7 @@ namespace RapidTransitMod
                 || !IsWorkbenchTimetableApplied(localLine)
                 || !IsAppliedWorkbenchLocalLine(localLine))
             {
-                return FinalizeBypassDecision(localVehicle, Entity.Null, Entity.Null, false, "local-line-invalid", Entity.Null);
+                return FinalizeBypassDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, Entity.Null, Entity.Null, false, "local-line-invalid", Entity.Null);
             }
 
             if (!TryGetBypassControlScope(
@@ -4510,7 +4950,7 @@ namespace RapidTransitMod
                     out BypassControlScope scope,
                     out string failureReason))
             {
-                return FinalizeBypassDecision(localVehicle, Entity.Null, Entity.Null, false, failureReason, Entity.Null);
+                return FinalizeBypassDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, Entity.Null, Entity.Null, false, failureReason, Entity.Null);
             }
 
             return ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle);
@@ -4525,38 +4965,106 @@ namespace RapidTransitMod
             blockerVehicle = Entity.Null;
             if (!TryGetTrackModelBypassBaseline(scope, localWaypoints, out bool shouldYield, out string trackModelReason, out Entity trackModelBlocker))
             {
-                return FinalizeBypassDecision(scope.Vehicle, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
+                return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
             }
 
-            bool hasPreviousBlockOccupied = HasLocalVehicleInPreviousBlock(scope.Line, scope.Vehicle, scope.WaypointIndex);
-            if (shouldYield
-                && hasPreviousBlockOccupied
-                && trackModelBlocker != Entity.Null
-                && !IsExpressBlockerStillWithinBypassStation(trackModelBlocker)
-                && TryProjectVehicleOntoLine(trackModelBlocker, scope.Line, localWaypoints, out LineDistanceProjection expressProjection)
-                && TryProjectVehicleOntoLine(scope.Vehicle, scope.Line, localWaypoints, out LineDistanceProjection localProjection)
-                && HasLocalVehicleAheadOfExpressWithoutBypass(
-                    scope.Line,
-                    scope.Vehicle,
-                    localWaypoints,
-                    scope.CurrentBypassBuilding,
-                    expressProjection.DistanceMeters,
-                    localProjection.DistanceMeters))
+            if (shouldYield && trackModelBlocker != Entity.Null)
             {
-                blockerVehicle = Entity.Null;
-                return FinalizeBypassDecision(scope.Vehicle, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "local-ahead-of-express-without-bypass", Entity.Null);
+                if (IsExpressBlockerStillWithinBypassStation(trackModelBlocker, scope.CurrentBypassBuilding))
+                {
+                    LogQueuedLocalBypassOverrideOnce(
+                        scope.Vehicle,
+                        scope.Line,
+                        trackModelBlocker,
+                        "skip",
+                        "blocker-still-in-bypass-station");
+                }
+                else if (!TryFindNearestLocalVehicleInApproachSegment(
+                        scope.Line,
+                        scope.Vehicle,
+                        localWaypoints,
+                        scope.WaypointIndex,
+                        out _,
+                        out float queuedLocalMeters))
+                {
+                    LogQueuedLocalBypassOverrideOnce(
+                        scope.Vehicle,
+                        scope.Line,
+                        trackModelBlocker,
+                        "skip",
+                        "no-queued-local-in-approach");
+                }
+                else if (!TryProjectVehicleOntoLine(trackModelBlocker, scope.Line, localWaypoints, out LineDistanceProjection expressProjection))
+                {
+                    LogQueuedLocalBypassOverrideOnce(
+                        scope.Vehicle,
+                        scope.Line,
+                        trackModelBlocker,
+                        "skip",
+                        "express-projection-failed",
+                        queuedLocalMeters: queuedLocalMeters);
+                }
+                else if (!TryProjectVehicleOntoLine(scope.Vehicle, scope.Line, localWaypoints, out LineDistanceProjection localProjection))
+                {
+                    LogQueuedLocalBypassOverrideOnce(
+                        scope.Vehicle,
+                        scope.Line,
+                        trackModelBlocker,
+                        "skip",
+                        "local-projection-failed",
+                        expressProjection.DistanceMeters,
+                        queuedLocalMeters: queuedLocalMeters);
+                }
+                else if (HasExpressBehindNearestQueuedLocalVehicle(
+                        scope.Line,
+                        localWaypoints,
+                        expressProjection.DistanceMeters,
+                        localProjection.DistanceMeters,
+                        queuedLocalMeters))
+                {
+                    LogQueuedLocalBypassOverrideOnce(
+                        scope.Vehicle,
+                        scope.Line,
+                        trackModelBlocker,
+                        "release",
+                        "local-ahead-of-express-without-bypass",
+                        expressProjection.DistanceMeters,
+                        localProjection.DistanceMeters,
+                        queuedLocalMeters);
+                    blockerVehicle = Entity.Null;
+                    return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "local-ahead-of-express-without-bypass", Entity.Null);
+                }
+                else
+                {
+                    LogQueuedLocalBypassOverrideOnce(
+                        scope.Vehicle,
+                        scope.Line,
+                        trackModelBlocker,
+                        "skip",
+                        "express-not-behind-nearest-queued-local",
+                        expressProjection.DistanceMeters,
+                        localProjection.DistanceMeters,
+                        queuedLocalMeters);
+                }
             }
 
+            bool hasPreviousBlockOccupied = TryFindNearestLocalVehicleInApproachSegment(
+                scope.Line,
+                scope.Vehicle,
+                localWaypoints,
+                scope.WaypointIndex,
+                out _,
+                out _);
             if (!shouldYield && hasPreviousBlockOccupied)
-                return FinalizeBypassDecision(scope.Vehicle, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "previous-block-occupied", Entity.Null);
+                return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "previous-block-occupied", Entity.Null);
 
             blockerVehicle = trackModelBlocker;
-            return FinalizeBypassDecision(scope.Vehicle, scope.CurrentBypassBuilding, scope.NextBypassBuilding, shouldYield, trackModelReason, trackModelBlocker);
+            return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, shouldYield, trackModelReason, trackModelBlocker);
         }
 
-        private bool IsExpressBlockerStillWithinBypassStation(Entity blockerVehicle)
+        private bool IsExpressBlockerStillWithinBypassStation(Entity blockerVehicle, Entity localCurrentBypassBuilding)
         {
-            if (blockerVehicle == Entity.Null)
+            if (blockerVehicle == Entity.Null || localCurrentBypassBuilding == Entity.Null)
                 return false;
 
             Entity blockerLine = ResolveVehicleLine(blockerVehicle);
@@ -4567,11 +5075,11 @@ namespace RapidTransitMod
             if (!routeWaypointBuffers.TryGetBuffer(blockerLine, out DynamicBuffer<RouteWaypoint> blockerWaypoints))
                 return false;
 
-            int blockerWaypointIndex = ComputeWpIndex(blockerVehicle, blockerWaypoints);
-            if (blockerWaypointIndex < 0 && !m_CachedWpIdx.TryGetValue(blockerVehicle, out blockerWaypointIndex))
-                return false;
-
-            return IsVehicleWithinCurrentBypassStation(blockerVehicle, blockerLine, blockerWaypoints, blockerWaypointIndex);
+            return IsVehicleWithinBypassStationPhysicalContext(
+                blockerVehicle,
+                blockerLine,
+                blockerWaypoints,
+                localCurrentBypassBuilding);
         }
 
         private bool TryGetTrackModelBypassBaseline(
@@ -4585,13 +5093,14 @@ namespace RapidTransitMod
             trackModelReason = string.Empty;
             trackModelBlocker = Entity.Null;
 
-            LogBypassTrackModelShadowOnce(
+            EnsureBypassTrackModelShadowSnapshotCurrent(
                 scope.Vehicle,
                 scope.Line,
                 localWaypoints,
                 scope.WaypointIndex,
                 scope.CurrentBypassBuilding,
-                scope.NextBypassBuilding);
+                scope.NextBypassBuilding,
+                out _);
 
             return TryGetTrackModelLiveBypassDecision(
                 scope.Vehicle,
@@ -4600,13 +5109,12 @@ namespace RapidTransitMod
                 out trackModelBlocker);
         }
 
-        private bool HasLocalVehicleAheadOfExpressWithoutBypass(
+        private bool HasExpressBehindNearestQueuedLocalVehicle(
             Entity localLine,
-            Entity currentLocalVehicle,
             DynamicBuffer<RouteWaypoint> localWaypoints,
-            Entity currentBypassBuilding,
             float expressMetersOnLocalAxis,
-            float currentLocalMeters)
+            float currentLocalMeters,
+            float queuedLocalMeters)
         {
             if (!TryGetLineMileageModel(localLine, localWaypoints, out LineMileageModel localModel)
                 || localModel.TotalDistanceMeters <= 0f)
@@ -4614,32 +5122,15 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (!localModel.BuildingDistances.TryGetValue(currentBypassBuilding, out float currentBypassMeters))
-                return false;
-
             float expressToCurrent = ForwardDistanceOnLoop(localModel.TotalDistanceMeters, expressMetersOnLocalAxis, currentLocalMeters);
             if (!(expressToCurrent > 0f) || expressToCurrent == float.MaxValue)
                 return false;
 
-            if (!TryGetLineRunningVehicleFrameSnapshot(localLine, localWaypoints, m_SimulationSystem.frameIndex, out LineRunningVehicleFrameSnapshot snapshot))
+            float expressToQueuedLocal = ForwardDistanceOnLoop(localModel.TotalDistanceMeters, expressMetersOnLocalAxis, queuedLocalMeters);
+            if (!(expressToQueuedLocal > 0f) || expressToQueuedLocal == float.MaxValue)
                 return false;
 
-            for (int i = 0; i < snapshot.Vehicles.Count; i++)
-            {
-                LineRunningVehicleSnapshot other = snapshot.Vehicles[i];
-                if (other.Vehicle == currentLocalVehicle || !other.HasProjection)
-                    continue;
-
-                float expressToOther = ForwardDistanceOnLoop(localModel.TotalDistanceMeters, expressMetersOnLocalAxis, other.ProjectionDistanceMeters);
-                if (!(expressToOther > 0f) || expressToOther >= expressToCurrent)
-                    continue;
-
-                if (!HasBypassWaypointBetweenDistances(localWaypoints, localModel, other.ProjectionDistanceMeters, currentLocalMeters)
-                    && !HasBypassBuildingBetweenDistances(localModel, other.ProjectionDistanceMeters, currentBypassMeters))
-                    return true;
-            }
-
-            return false;
+            return expressToQueuedLocal < expressToCurrent;
         }
 
         private bool HasBypassBuildingBetweenDistances(LineMileageModel model, float fromMetersExclusive, float toMetersExclusive)
@@ -4786,23 +5277,83 @@ namespace RapidTransitMod
                 return false;
 
             DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            return TryFindNearestLocalVehicleInApproachSegment(
+                line,
+                localVehicle,
+                waypoints,
+                currentWaypointIndex,
+                out _,
+                out _);
+        }
+
+        private bool TryFindNearestLocalVehicleInApproachSegment(
+            Entity line,
+            Entity localVehicle,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentWaypointIndex,
+            out Entity nearestVehicle,
+            out float nearestVehicleMeters)
+        {
+            nearestVehicle = Entity.Null;
+            nearestVehicleMeters = 0f;
+
+            if (line == Entity.Null || currentWaypointIndex < 0 || waypoints.Length == 0)
+                return false;
+
+            if (!TryGetLineMileageModel(line, waypoints, out LineMileageModel model)
+                || model.TotalDistanceMeters <= 0f)
+            {
+                return false;
+            }
+
+            if (model.PreviousDistinctStationWaypointIndices == null
+                || model.PreviousDistinctStationMeters == null
+                || model.CurrentStationMeters == null
+                || model.PreviousDistinctStationWaypointIndices.Length != waypoints.Length
+                || model.PreviousDistinctStationMeters.Length != waypoints.Length
+                || model.CurrentStationMeters.Length != waypoints.Length
+                || currentWaypointIndex >= model.PreviousDistinctStationWaypointIndices.Length)
+            {
+                return false;
+            }
+
+            int previousDistinctWaypointIndex = model.PreviousDistinctStationWaypointIndices[currentWaypointIndex];
+            if (previousDistinctWaypointIndex < 0)
+                return false;
+
+            float previousStationMeters = model.PreviousDistinctStationMeters[currentWaypointIndex];
+            float currentStationMeters = model.CurrentStationMeters[currentWaypointIndex];
+            float segmentLength = ForwardDistanceOnLoop(model.TotalDistanceMeters, previousStationMeters, currentStationMeters);
+            if (!(segmentLength > 1f) || segmentLength == float.MaxValue)
+                return false;
+
             if (!TryGetLineRunningVehicleFrameSnapshot(line, waypoints, m_SimulationSystem.frameIndex, out LineRunningVehicleFrameSnapshot snapshot))
                 return false;
 
-            int previousWaypointIndex = currentWaypointIndex == 0 ? -1 : currentWaypointIndex - 1;
+            float bestDistanceToCurrent = float.MaxValue;
             for (int i = 0; i < snapshot.Vehicles.Count; i++)
             {
                 LineRunningVehicleSnapshot other = snapshot.Vehicles[i];
-                if (other.Vehicle == localVehicle)
+                if (other.Vehicle == localVehicle || !other.HasProjection)
                     continue;
 
-                if (other.NextWaypointIndex == currentWaypointIndex)
-                    return true;
-                if (previousWaypointIndex >= 0 && other.NextWaypointIndex == previousWaypointIndex && other.Boarding)
-                    return true;
+                float previousToOther = ForwardDistanceOnLoop(model.TotalDistanceMeters, previousStationMeters, other.ProjectionDistanceMeters);
+                if (!(previousToOther > 1f) || previousToOther >= segmentLength)
+                    continue;
+
+                float otherToCurrent = ForwardDistanceOnLoop(model.TotalDistanceMeters, other.ProjectionDistanceMeters, currentStationMeters);
+                if (!(otherToCurrent > 0f) || otherToCurrent >= segmentLength)
+                    continue;
+
+                if (otherToCurrent < bestDistanceToCurrent)
+                {
+                    bestDistanceToCurrent = otherToCurrent;
+                    nearestVehicle = other.Vehicle;
+                    nearestVehicleMeters = other.ProjectionDistanceMeters;
+                }
             }
 
-            return false;
+            return nearestVehicle != Entity.Null;
         }
 
         private bool TryGetLineRunningVehicleFrameSnapshot(
@@ -5703,6 +6254,10 @@ namespace RapidTransitMod
 
         private bool TryGetRouteProgress(Entity transportVehicle, out int nextWaypointIndex, out float segmentPosition)
         {
+            bool hit = TryGetRouteProgressCurrentFrame(transportVehicle, out nextWaypointIndex, out segmentPosition);
+            if (hit)
+                return true;
+
             if (EntityManager.HasComponent<CurrentRoute>(transportVehicle))
             {
                 var currentRoute = EntityManager.GetComponentData<CurrentRoute>(transportVehicle);
@@ -5742,6 +6297,7 @@ namespace RapidTransitMod
                                         remaining += EntityManager.GetBuffer<AircraftNavigationLane>(transportVehicle, true).Length;
 
                                     segmentPosition = math.saturate((float)(segmentPath.Length - remaining) / (float)segmentPath.Length);
+                                    StoreRouteProgressCurrentFrame(transportVehicle, currentRoute.m_Route, pathInfo.m_Destination, nextWaypointIndex, segmentPosition);
                                     return true;
                                 }
                             }
@@ -5772,6 +6328,7 @@ namespace RapidTransitMod
                                 float toTarget = math.distance(transform.m_Position, targetPos.m_Position);
                                 float segmentLength = math.max(1f, math.distance(prevPos.m_Position, targetPos.m_Position));
                                 segmentPosition = math.saturate((segmentLength - toTarget) / segmentLength);
+                                StoreRouteProgressCurrentFrame(transportVehicle, currentRoute.m_Route, target.m_Target, nextWaypointIndex, segmentPosition);
                                 return true;
                             }
                         }
@@ -5782,6 +6339,49 @@ namespace RapidTransitMod
             nextWaypointIndex = 0;
             segmentPosition = 0f;
             return false;
+        }
+
+        private bool TryGetRouteProgressCurrentFrame(Entity vehicle, out int nextWaypointIndex, out float segmentPosition)
+        {
+            nextWaypointIndex = 0;
+            segmentPosition = 0f;
+            if (vehicle == Entity.Null
+                || !m_RouteProgressFrameSnapshots.TryGetValue(vehicle, out RouteProgressFrameSnapshot snapshot))
+            {
+                return false;
+            }
+
+            if (snapshot.Frame != m_SimulationSystem.frameIndex)
+                return false;
+            if (!EntityManager.HasComponent<CurrentRoute>(vehicle) || !EntityManager.HasComponent<Target>(vehicle))
+                return false;
+
+            CurrentRoute currentRoute = EntityManager.GetComponentData<CurrentRoute>(vehicle);
+            Target target = EntityManager.GetComponentData<Target>(vehicle);
+            if (snapshot.Route != currentRoute.m_Route || snapshot.Target != target.m_Target)
+                return false;
+
+            nextWaypointIndex = snapshot.NextWaypointIndex;
+            segmentPosition = snapshot.SegmentPosition;
+            return true;
+        }
+
+        private void StoreRouteProgressCurrentFrame(
+            Entity vehicle,
+            Entity route,
+            Entity target,
+            int nextWaypointIndex,
+            float segmentPosition)
+        {
+            if (vehicle == Entity.Null || route == Entity.Null || nextWaypointIndex < 0)
+                return;
+
+            m_RouteProgressFrameSnapshots[vehicle] = new RouteProgressFrameSnapshot(
+                m_SimulationSystem.frameIndex,
+                route,
+                target,
+                nextWaypointIndex,
+                segmentPosition);
         }
 
         private static ulong MixLineSignature(ulong hash, int value)
@@ -6216,6 +6816,12 @@ namespace RapidTransitMod
             cumulative = math.max(1f, cumulative);
             float[] bypassWaypointDistances = BuildBypassWaypointDistanceCache(waypoints, anchors);
             float[] bypassStopNodeDistances = BuildBypassStopNodeDistanceCache(corridorNodes);
+            BuildApproachStationCacheData(
+                waypoints,
+                buildingDistances,
+                out int[] previousDistinctStationWaypointIndices,
+                out float[] previousDistinctStationMeters,
+                out float[] currentStationMeters);
 
             return new LineMileageModel
             {
@@ -6224,6 +6830,9 @@ namespace RapidTransitMod
                 WaypointDistances = anchors,
                 BypassWaypointDistances = bypassWaypointDistances,
                 BypassStopNodeDistances = bypassStopNodeDistances,
+                PreviousDistinctStationWaypointIndices = previousDistinctStationWaypointIndices,
+                PreviousDistinctStationMeters = previousDistinctStationMeters,
+                CurrentStationMeters = currentStationMeters,
                 CorridorNodes = corridorNodes,
                 BuildingDistances = buildingDistances
             };
@@ -6262,6 +6871,55 @@ namespace RapidTransitMod
             }
 
             return distances.Count > 0 ? distances.ToArray() : Array.Empty<float>();
+        }
+
+        private void BuildApproachStationCacheData(
+            DynamicBuffer<RouteWaypoint> waypoints,
+            Dictionary<Entity, float> buildingDistances,
+            out int[] previousDistinctStationWaypointIndices,
+            out float[] previousDistinctStationMeters,
+            out float[] currentStationMeters)
+        {
+            int count = waypoints.Length;
+            previousDistinctStationWaypointIndices = new int[count];
+            previousDistinctStationMeters = new float[count];
+            currentStationMeters = new float[count];
+
+            for (int i = 0; i < count; i++)
+            {
+                previousDistinctStationWaypointIndices[i] = -1;
+            }
+
+            if (count == 0 || buildingDistances == null || buildingDistances.Count == 0)
+                return;
+
+            for (int waypointIndex = 0; waypointIndex < count; waypointIndex++)
+            {
+                Entity currentStationBuilding = GetStationBuildingForWaypoint(waypoints, waypointIndex);
+                if (currentStationBuilding == Entity.Null
+                    || !buildingDistances.TryGetValue(currentStationBuilding, out float currentMeters))
+                {
+                    continue;
+                }
+
+                currentStationMeters[waypointIndex] = currentMeters;
+                for (int offset = 1; offset < count; offset++)
+                {
+                    int candidateIndex = waypointIndex - offset;
+                    if (candidateIndex < 0)
+                        candidateIndex += count;
+
+                    Entity candidateBuilding = GetStationBuildingForWaypoint(waypoints, candidateIndex);
+                    if (candidateBuilding == Entity.Null || candidateBuilding == currentStationBuilding)
+                        continue;
+                    if (!buildingDistances.TryGetValue(candidateBuilding, out float previousMeters))
+                        break;
+
+                    previousDistinctStationWaypointIndices[waypointIndex] = candidateIndex;
+                    previousDistinctStationMeters[waypointIndex] = previousMeters;
+                    break;
+                }
+            }
         }
 
         private void LogLineCorridorModel(Entity line, LineMileageModel model)

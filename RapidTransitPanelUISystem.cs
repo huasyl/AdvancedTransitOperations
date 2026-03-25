@@ -46,6 +46,7 @@ namespace RapidTransitMod
             AddBinding(m_PanelDataJsonBinding = new ValueBinding<string>(kGroup, "panelDataJson", string.Empty));
             AddBinding(new TriggerBinding<bool>(kGroup, "setPanelOpen", SetPanelOpen));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleRetire", RequestVehicleRetire));
+            AddBinding(new TriggerBinding(kGroup, "requestVehicleForceDepart", RequestVehicleForceDepart));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleReevaluate", RequestVehicleReevaluate));
             AddBinding(new TriggerBinding(kGroup, "requestLineSpawn", RequestLineSpawn));
             AddBinding(new TriggerBinding(kGroup, "requestDumpTrackModel", RequestDumpTrackModel));
@@ -175,10 +176,11 @@ namespace RapidTransitMod
             AppendJsonString(sb, "alertText", snapshot.AlertText);
             AppendJsonBool(sb, "showAlerts", snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);
+            AppendJsonBool(sb, "showForceDepartAction", snapshot.ShowForceDepartAction);
             AppendJsonBool(sb, "showReevaluateAction", snapshot.ShowReevaluateAction);
             AppendJsonBool(sb, "showLineSpawnAction", snapshot.ShowLineSpawnAction);
             AppendJsonBool(sb, "showDumpTrackModelAction", snapshot.ShowDumpTrackModelAction);
-            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction);
+            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction);
             AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
             AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
             if (sb[sb.Length - 1] == ',')
@@ -291,6 +293,20 @@ namespace RapidTransitMod
             {
                 DepartureControlSystem.Instance.RequestVehicleRetire(selectedEntity);
                 m_LastVehicle = Entity.Null;
+            }
+        }
+
+        private void RequestVehicleForceDepart()
+        {
+            if (DepartureControlSystem.Instance == null)
+                return;
+
+            Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
+            if (selectedEntity != Entity.Null)
+            {
+                DepartureControlSystem.Instance.RequestVehicleForceDepart(selectedEntity);
+                m_LastVehicle = Entity.Null;
+                m_LastSnapshotVersion = 0;
             }
         }
 

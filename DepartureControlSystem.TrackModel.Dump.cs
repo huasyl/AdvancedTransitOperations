@@ -1079,8 +1079,12 @@ namespace RapidTransitMod
                         {
                             sb.Append(" shadow=").Append(decision.ShouldYield ? "yield" : "pass")
                               .Append("/").Append(decision.ReasonCode);
-                            if (!string.IsNullOrEmpty(decision.BlockerPosition))
-                                sb.Append(" blocker=").Append(decision.BlockerVehicle.Index).Append("@").Append(decision.BlockerPosition);
+                            if (decision.BlockerVehicle != Entity.Null)
+                            {
+                                sb.Append(" blocker=").Append(decision.BlockerVehicle.Index);
+                                if (decision.UsedFallbackResolution)
+                                    sb.Append("@fallback");
+                            }
                         }
 
                         if (TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out int protectedIntervalIndex, out BypassProtectedInterval protectedInterval))
