@@ -34,6 +34,13 @@ namespace RapidTransitMod
             Reverse = 2,
         }
 
+        private enum SharedTraversalRelation : byte
+        {
+            Unknown = 0,
+            SameDirection = 1,
+            OppositeDirection = 2,
+        }
+
         private enum TrackAtomClass : byte
         {
             Unknown = 0,
@@ -103,17 +110,20 @@ namespace RapidTransitMod
             public readonly Entity SourceTarget;
             public readonly PathElementFlags SourceFlags;
             public readonly TrackAtomClass AtomClass;
+            public readonly TrackTraversalDir TraversalDir;
 
             public TrackAtom(
                 TrackAtomKey key,
                 Entity sourceTarget,
                 PathElementFlags sourceFlags,
-                TrackAtomClass atomClass)
+                TrackAtomClass atomClass,
+                TrackTraversalDir traversalDir)
             {
                 Key = key;
                 SourceTarget = sourceTarget;
                 SourceFlags = sourceFlags;
                 AtomClass = atomClass;
+                TraversalDir = traversalDir;
             }
         }
 
@@ -376,6 +386,53 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct DirectedSharedPairSegment
+        {
+            public readonly int LocalStartAtomIndex;
+            public readonly int LocalEndAtomIndexExclusive;
+            public readonly int ExpressStartAtomIndex;
+            public readonly int ExpressEndAtomIndexExclusive;
+            public readonly int LocalSharedSliceCount;
+            public readonly int ExpressSharedSliceCount;
+            public readonly int LocalBridgedGapAtoms;
+            public readonly int ExpressBridgedGapAtoms;
+            public readonly int PhysicalOverlap;
+            public readonly int OrderedRun;
+            public readonly bool HasMirroredContext;
+            public readonly int MaxSharedLineCount;
+            public readonly SharedTraversalRelation TraversalRelation;
+
+            public DirectedSharedPairSegment(
+                int localStartAtomIndex,
+                int localEndAtomIndexExclusive,
+                int expressStartAtomIndex,
+                int expressEndAtomIndexExclusive,
+                int localSharedSliceCount,
+                int expressSharedSliceCount,
+                int localBridgedGapAtoms,
+                int expressBridgedGapAtoms,
+                int physicalOverlap,
+                int orderedRun,
+                bool hasMirroredContext,
+                int maxSharedLineCount,
+                SharedTraversalRelation traversalRelation)
+            {
+                LocalStartAtomIndex = localStartAtomIndex;
+                LocalEndAtomIndexExclusive = localEndAtomIndexExclusive;
+                ExpressStartAtomIndex = expressStartAtomIndex;
+                ExpressEndAtomIndexExclusive = expressEndAtomIndexExclusive;
+                LocalSharedSliceCount = localSharedSliceCount;
+                ExpressSharedSliceCount = expressSharedSliceCount;
+                LocalBridgedGapAtoms = localBridgedGapAtoms;
+                ExpressBridgedGapAtoms = expressBridgedGapAtoms;
+                PhysicalOverlap = physicalOverlap;
+                OrderedRun = orderedRun;
+                HasMirroredContext = hasMirroredContext;
+                MaxSharedLineCount = maxSharedLineCount;
+                TraversalRelation = traversalRelation;
+            }
+        }
+
         private readonly struct GlobalSharedTrunkSegment
         {
             public readonly int LocalCorridorStartAtomIndex;
@@ -394,6 +451,7 @@ namespace RapidTransitMod
             public readonly int OrderedRun;
             public readonly bool HasMirroredContext;
             public readonly int MaxSharedLineCount;
+            public readonly SharedTraversalRelation TraversalRelation;
 
             public GlobalSharedTrunkSegment(
                 int localCorridorStartAtomIndex,
@@ -411,7 +469,8 @@ namespace RapidTransitMod
                 int physicalOverlap,
                 int orderedRun,
                 bool hasMirroredContext,
-                int maxSharedLineCount)
+                int maxSharedLineCount,
+                SharedTraversalRelation traversalRelation)
             {
                 LocalCorridorStartAtomIndex = localCorridorStartAtomIndex;
                 LocalCorridorEndAtomIndexExclusive = localCorridorEndAtomIndexExclusive;
@@ -429,6 +488,7 @@ namespace RapidTransitMod
                 OrderedRun = orderedRun;
                 HasMirroredContext = hasMirroredContext;
                 MaxSharedLineCount = maxSharedLineCount;
+                TraversalRelation = traversalRelation;
             }
         }
 
@@ -704,6 +764,10 @@ namespace RapidTransitMod
             public readonly Entity LocalLine;
             public readonly Entity ExpressLine;
             public readonly Entity CurrentBypassBuilding;
+            public readonly int LocalStartControlPointIndex;
+            public readonly int LocalEndControlPointIndex;
+            public readonly int ExpressStartControlPointIndex;
+            public readonly int ExpressEndControlPointIndex;
             public readonly int LocalStartAtomIndex;
             public readonly int LocalEndAtomIndexExclusive;
             public readonly int ExpressStartAtomIndex;
@@ -713,6 +777,10 @@ namespace RapidTransitMod
                 Entity localLine,
                 Entity expressLine,
                 Entity currentBypassBuilding,
+                int localStartControlPointIndex,
+                int localEndControlPointIndex,
+                int expressStartControlPointIndex,
+                int expressEndControlPointIndex,
                 int localStartAtomIndex,
                 int localEndAtomIndexExclusive,
                 int expressStartAtomIndex,
@@ -721,6 +789,10 @@ namespace RapidTransitMod
                 LocalLine = localLine;
                 ExpressLine = expressLine;
                 CurrentBypassBuilding = currentBypassBuilding;
+                LocalStartControlPointIndex = localStartControlPointIndex;
+                LocalEndControlPointIndex = localEndControlPointIndex;
+                ExpressStartControlPointIndex = expressStartControlPointIndex;
+                ExpressEndControlPointIndex = expressEndControlPointIndex;
                 LocalStartAtomIndex = localStartAtomIndex;
                 LocalEndAtomIndexExclusive = localEndAtomIndexExclusive;
                 ExpressStartAtomIndex = expressStartAtomIndex;
@@ -732,6 +804,10 @@ namespace RapidTransitMod
                 return LocalLine == other.LocalLine
                     && ExpressLine == other.ExpressLine
                     && CurrentBypassBuilding == other.CurrentBypassBuilding
+                    && LocalStartControlPointIndex == other.LocalStartControlPointIndex
+                    && LocalEndControlPointIndex == other.LocalEndControlPointIndex
+                    && ExpressStartControlPointIndex == other.ExpressStartControlPointIndex
+                    && ExpressEndControlPointIndex == other.ExpressEndControlPointIndex
                     && LocalStartAtomIndex == other.LocalStartAtomIndex
                     && LocalEndAtomIndexExclusive == other.LocalEndAtomIndexExclusive
                     && ExpressStartAtomIndex == other.ExpressStartAtomIndex
@@ -750,6 +826,10 @@ namespace RapidTransitMod
                     int hash = LocalLine.GetHashCode();
                     hash = (hash * 397) ^ ExpressLine.GetHashCode();
                     hash = (hash * 397) ^ CurrentBypassBuilding.GetHashCode();
+                    hash = (hash * 397) ^ LocalStartControlPointIndex;
+                    hash = (hash * 397) ^ LocalEndControlPointIndex;
+                    hash = (hash * 397) ^ ExpressStartControlPointIndex;
+                    hash = (hash * 397) ^ ExpressEndControlPointIndex;
                     hash = (hash * 397) ^ LocalStartAtomIndex;
                     hash = (hash * 397) ^ LocalEndAtomIndexExclusive;
                     hash = (hash * 397) ^ ExpressStartAtomIndex;
@@ -1099,7 +1179,7 @@ namespace RapidTransitMod
             Entity previousTarget = pathIndex > 0 ? pathElements[pathIndex - 1].m_Target : Entity.Null;
             Entity nextTarget = pathIndex + 1 < pathElements.Length ? pathElements[pathIndex + 1].m_Target : Entity.Null;
             TrackAtomKey key = new TrackAtomKey(element.m_Target, previousTarget, nextTarget);
-            atom = new TrackAtom(key, element.m_Target, element.m_Flags, atomClass);
+            atom = new TrackAtom(key, element.m_Target, element.m_Flags, atomClass, traversalDir);
             return true;
         }
 
@@ -2028,6 +2108,7 @@ namespace RapidTransitMod
             out int orderedRun,
             out string resolutionSource)
         {
+            m_BypassPerfProbeResolveCalls++;
             overlapCount = 0;
             orderedRun = 0;
             resolutionSource = "direct";
@@ -3624,6 +3705,7 @@ namespace RapidTransitMod
             uint nowFrame,
             out BypassTrackModelShadowDecision shadowDecision)
         {
+            m_BypassPerfProbeTrackDecisionCalls++;
             shadowDecision = default;
             if (!TryGetLineTrackChain(localLine, localWaypoints, out LineTrackChain localChain))
             {
@@ -3649,12 +3731,6 @@ namespace RapidTransitMod
             if (localSummary.SharedSegmentCount <= 0)
             {
                 shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-shared-protected-interval", protectedIntervalIndex, hasLocalPosition, Entity.Null, false);
-                return true;
-            }
-
-            if (localSummary.HasMirroredContext)
-            {
-                shadowDecision = new BypassTrackModelShadowDecision(true, true, "mirrored-shared-in-protected-interval", protectedIntervalIndex, hasLocalPosition, Entity.Null, false);
                 return true;
             }
 
@@ -3878,11 +3954,18 @@ namespace RapidTransitMod
                     currentBypassBuilding,
                     expressChain,
                     expressProtectedInterval,
+                    expressPosition,
                     out ConflictCorridor localCorridor,
                     out ConflictCorridor expressCorridor,
                     out GlobalSharedTrunkSegment trunkSegment))
             {
                 rejectReason = "no-active-conflict-corridor";
+                return false;
+            }
+
+            if (trunkSegment.TraversalRelation != SharedTraversalRelation.SameDirection)
+            {
+                rejectReason = "trunk-not-same-direction";
                 return false;
             }
 
@@ -4063,6 +4146,7 @@ namespace RapidTransitMod
                       currentBypassBuilding,
                       expressChain,
                       expressProtectedInterval,
+                      expressPosition,
                       out _,
                       out _,
                       out _))
@@ -4334,7 +4418,37 @@ namespace RapidTransitMod
             return -1;
         }
 
-        private static void BuildSharedRunBands(List<SharedTrackRun> sourceRuns, List<SharedRunBand> bands)
+        private static TrackTraversalDir GetPrimaryTraversalDirNear(LineTrackChain chain, int atomIndex, int step)
+        {
+            if (chain == null || chain.TrackAtoms.Count == 0 || step == 0)
+                return TrackTraversalDir.Unknown;
+
+            for (int index = atomIndex; index >= 0 && index < chain.TrackAtoms.Count; index += step)
+            {
+                TrackAtom atom = chain.TrackAtoms[index];
+                if (atom.AtomClass != TrackAtomClass.PrimaryLane)
+                    continue;
+
+                if (atom.TraversalDir != TrackTraversalDir.Unknown)
+                    return atom.TraversalDir;
+            }
+
+            return TrackTraversalDir.Unknown;
+        }
+
+        private static bool ShouldSplitSharedBandAtGap(LineTrackChain chain, int mergedEndExclusive, SharedTrackRun candidate)
+        {
+            if (chain == null || candidate.EndAtomIndexExclusive <= candidate.StartAtomIndex)
+                return false;
+
+            TrackTraversalDir previousDir = GetPrimaryTraversalDirNear(chain, math.max(0, mergedEndExclusive - 1), -1);
+            TrackTraversalDir nextDir = GetPrimaryTraversalDirNear(chain, candidate.StartAtomIndex, 1);
+            return previousDir != TrackTraversalDir.Unknown
+                && nextDir != TrackTraversalDir.Unknown
+                && previousDir != nextDir;
+        }
+
+        private static void BuildSharedRunBands(LineTrackChain chain, List<SharedTrackRun> sourceRuns, List<SharedRunBand> bands)
         {
             bands.Clear();
             if (sourceRuns == null || sourceRuns.Count == 0)
@@ -4351,7 +4465,8 @@ namespace RapidTransitMod
             {
                 SharedTrackRun candidate = sourceRuns[i];
                 int gapAtoms = math.max(0, candidate.StartAtomIndex - mergedEndExclusive);
-                if (gapAtoms > MAX_CONFLICT_CORRIDOR_GAP_ATOMS)
+                if (gapAtoms > MAX_CONFLICT_CORRIDOR_GAP_ATOMS
+                    || ShouldSplitSharedBandAtGap(chain, mergedEndExclusive, candidate))
                 {
                     bands.Add(new SharedRunBand(
                         mergedStart,
@@ -4386,6 +4501,179 @@ namespace RapidTransitMod
                 maxSharedLineCount));
         }
 
+        private static void CollectPhysicalLaneKeySet(LineTrackChain chain, int startAtomIndex, int endAtomIndexExclusive, HashSet<Entity> keys)
+        {
+            keys.Clear();
+            if (chain == null || chain.TrackAtoms.Count == 0)
+                return;
+
+            int start = math.max(0, startAtomIndex);
+            int endExclusive = math.min(endAtomIndexExclusive, chain.TrackAtoms.Count);
+            for (int atomIndex = start; atomIndex < endExclusive; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                if (atom.AtomClass == TrackAtomClass.PrimaryLane)
+                    keys.Add(atom.Key.PhysicalLaneKey);
+            }
+        }
+
+        private static void CollectDistinctSharedPhysicalKeyOrder(LineTrackChain chain, int startAtomIndex, int endAtomIndexExclusive, HashSet<Entity> sharedKeys, List<Entity> orderedKeys)
+        {
+            orderedKeys.Clear();
+            if (chain == null || chain.TrackAtoms.Count == 0 || sharedKeys == null || sharedKeys.Count == 0)
+                return;
+
+            var seen = new HashSet<Entity>();
+            int start = math.max(0, startAtomIndex);
+            int endExclusive = math.min(endAtomIndexExclusive, chain.TrackAtoms.Count);
+            for (int atomIndex = start; atomIndex < endExclusive; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                if (atom.AtomClass != TrackAtomClass.PrimaryLane)
+                    continue;
+
+                Entity physicalLaneKey = atom.Key.PhysicalLaneKey;
+                if (!sharedKeys.Contains(physicalLaneKey) || !seen.Add(physicalLaneKey))
+                    continue;
+
+                orderedKeys.Add(physicalLaneKey);
+            }
+        }
+
+        private static int ComputeOrderedPhysicalKeyLcsLength(List<Entity> leftKeys, List<Entity> rightKeys)
+        {
+            if (leftKeys == null || rightKeys == null || leftKeys.Count == 0 || rightKeys.Count == 0)
+                return 0;
+
+            int[] previous = new int[rightKeys.Count + 1];
+            int[] current = new int[rightKeys.Count + 1];
+            for (int leftIndex = 1; leftIndex <= leftKeys.Count; leftIndex++)
+            {
+                Entity leftKey = leftKeys[leftIndex - 1];
+                for (int rightIndex = 1; rightIndex <= rightKeys.Count; rightIndex++)
+                {
+                    if (leftKey == rightKeys[rightIndex - 1])
+                    {
+                        current[rightIndex] = previous[rightIndex - 1] + 1;
+                    }
+                    else
+                    {
+                        current[rightIndex] = math.max(previous[rightIndex], current[rightIndex - 1]);
+                    }
+                }
+
+                int[] swap = previous;
+                previous = current;
+                current = swap;
+                Array.Clear(current, 0, current.Length);
+            }
+
+            return previous[rightKeys.Count];
+        }
+
+        private static SharedTraversalRelation ResolveSharedTraversalRelation(
+            LineTrackChain localChain,
+            SharedRunBand localBand,
+            LineTrackChain expressChain,
+            SharedRunBand expressBand)
+        {
+            if (localChain == null || expressChain == null)
+                return SharedTraversalRelation.Unknown;
+
+            var localKeys = new HashSet<Entity>();
+            var expressKeys = new HashSet<Entity>();
+            CollectPhysicalLaneKeySet(localChain, localBand.StartAtomIndex, localBand.EndAtomIndexExclusive, localKeys);
+            CollectPhysicalLaneKeySet(expressChain, expressBand.StartAtomIndex, expressBand.EndAtomIndexExclusive, expressKeys);
+            localKeys.IntersectWith(expressKeys);
+            if (localKeys.Count == 0)
+                return SharedTraversalRelation.Unknown;
+
+            var localOrder = new List<Entity>();
+            var expressOrder = new List<Entity>();
+            CollectDistinctSharedPhysicalKeyOrder(localChain, localBand.StartAtomIndex, localBand.EndAtomIndexExclusive, localKeys, localOrder);
+            CollectDistinctSharedPhysicalKeyOrder(expressChain, expressBand.StartAtomIndex, expressBand.EndAtomIndexExclusive, localKeys, expressOrder);
+            if (localOrder.Count == 0 || expressOrder.Count == 0)
+                return SharedTraversalRelation.Unknown;
+
+            int forwardScore = ComputeOrderedPhysicalKeyLcsLength(localOrder, expressOrder);
+            var reverseExpressOrder = new List<Entity>(expressOrder.Count);
+            for (int i = expressOrder.Count - 1; i >= 0; i--)
+                reverseExpressOrder.Add(expressOrder[i]);
+            int reverseScore = ComputeOrderedPhysicalKeyLcsLength(localOrder, reverseExpressOrder);
+
+            if (forwardScore >= 2 || reverseScore >= 2)
+            {
+                if (forwardScore > reverseScore)
+                    return SharedTraversalRelation.SameDirection;
+                if (reverseScore > forwardScore)
+                    return SharedTraversalRelation.OppositeDirection;
+            }
+
+            if (localBand.HasMirroredContext || expressBand.HasMirroredContext)
+                return SharedTraversalRelation.OppositeDirection;
+
+            return SharedTraversalRelation.Unknown;
+        }
+
+        private void BuildDirectedSharedPairSegments(
+            LineTrackChain localChain,
+            List<SharedRunBand> localBands,
+            LineTrackChain expressChain,
+            List<SharedRunBand> expressBands,
+            List<DirectedSharedPairSegment> pairSegments)
+        {
+            pairSegments.Clear();
+            if (localChain == null
+                || expressChain == null
+                || localBands == null
+                || expressBands == null
+                || localBands.Count == 0
+                || expressBands.Count == 0)
+            {
+                return;
+            }
+
+            for (int localIndex = 0; localIndex < localBands.Count; localIndex++)
+            {
+                SharedRunBand localBand = localBands[localIndex];
+                BypassProtectedInterval localWindow = BuildAtomWindowInterval(localChain, localBand.StartAtomIndex, localBand.EndAtomIndexExclusive);
+                if (localWindow.EndAtomIndexExclusive <= localWindow.StartAtomIndex)
+                    continue;
+
+                for (int expressIndex = 0; expressIndex < expressBands.Count; expressIndex++)
+                {
+                    SharedRunBand expressBand = expressBands[expressIndex];
+                    BypassProtectedInterval expressWindow = BuildAtomWindowInterval(expressChain, expressBand.StartAtomIndex, expressBand.EndAtomIndexExclusive);
+                    if (expressWindow.EndAtomIndexExclusive <= expressWindow.StartAtomIndex)
+                        continue;
+
+                    int overlapCount = CountProtectedIntervalPhysicalOverlap(localChain, localWindow, expressChain, expressWindow);
+                    if (overlapCount <= 0)
+                        continue;
+
+                    int orderedRun = ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localWindow, expressChain, expressWindow);
+                    if (orderedRun <= 0)
+                        continue;
+
+                    SharedTraversalRelation traversalRelation = ResolveSharedTraversalRelation(localChain, localBand, expressChain, expressBand);
+                    pairSegments.Add(new DirectedSharedPairSegment(
+                        localBand.StartAtomIndex,
+                        localBand.EndAtomIndexExclusive,
+                        expressBand.StartAtomIndex,
+                        expressBand.EndAtomIndexExclusive,
+                        localBand.SharedSliceCount,
+                        expressBand.SharedSliceCount,
+                        localBand.BridgedGapAtoms,
+                        expressBand.BridgedGapAtoms,
+                        overlapCount,
+                        orderedRun,
+                        localBand.HasMirroredContext || expressBand.HasMirroredContext,
+                        math.max(localBand.MaxSharedLineCount, expressBand.MaxSharedLineCount),
+                        traversalRelation));
+                }
+            }
+        }
+
         private GlobalSharedTrunkSnapshot BuildGlobalSharedTrunkSnapshot(LineTrackChain localChain, LineTrackChain expressChain)
         {
             var snapshot = new GlobalSharedTrunkSnapshot
@@ -4409,71 +4697,31 @@ namespace RapidTransitMod
 
             var localBands = new List<SharedRunBand>();
             var expressBands = new List<SharedRunBand>();
-            BuildSharedRunBands(localSharedRuns, localBands);
-            BuildSharedRunBands(expressSharedRuns, expressBands);
-
-            for (int localIndex = 0; localIndex < localBands.Count; localIndex++)
+            BuildSharedRunBands(localChain, localSharedRuns, localBands);
+            BuildSharedRunBands(expressChain, expressSharedRuns, expressBands);
+            var pairSegments = new List<DirectedSharedPairSegment>();
+            BuildDirectedSharedPairSegments(localChain, localBands, expressChain, expressBands, pairSegments);
+            for (int i = 0; i < pairSegments.Count; i++)
             {
-                SharedRunBand localBand = localBands[localIndex];
-                BypassProtectedInterval localWindow = BuildAtomWindowInterval(localChain, localBand.StartAtomIndex, localBand.EndAtomIndexExclusive);
-                if (localWindow.EndAtomIndexExclusive <= localWindow.StartAtomIndex)
-                    continue;
-
-                int bestOverlap = 0;
-                int bestOrderedRun = 0;
-                int bestExpressIndex = -1;
-                bool ambiguous = false;
-
-                for (int expressIndex = 0; expressIndex < expressBands.Count; expressIndex++)
-                {
-                    SharedRunBand expressBand = expressBands[expressIndex];
-                    BypassProtectedInterval expressWindow = BuildAtomWindowInterval(expressChain, expressBand.StartAtomIndex, expressBand.EndAtomIndexExclusive);
-                    if (expressWindow.EndAtomIndexExclusive <= expressWindow.StartAtomIndex)
-                        continue;
-
-                    int overlapCount = CountProtectedIntervalPhysicalOverlap(localChain, localWindow, expressChain, expressWindow);
-                    if (overlapCount <= 0)
-                        continue;
-
-                    int orderedRun = ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localWindow, expressChain, expressWindow);
-                    if (orderedRun <= 0)
-                        continue;
-
-                    if (orderedRun > bestOrderedRun
-                        || (orderedRun == bestOrderedRun && overlapCount > bestOverlap))
-                    {
-                        bestOverlap = overlapCount;
-                        bestOrderedRun = orderedRun;
-                        bestExpressIndex = expressIndex;
-                        ambiguous = false;
-                        continue;
-                    }
-
-                    if (orderedRun == bestOrderedRun && overlapCount == bestOverlap)
-                        ambiguous = true;
-                }
-
-                if (bestExpressIndex < 0 || ambiguous)
-                    continue;
-
-                SharedRunBand expressBandBest = expressBands[bestExpressIndex];
+                DirectedSharedPairSegment pair = pairSegments[i];
                 snapshot.Segments.Add(new GlobalSharedTrunkSegment(
-                    localBand.StartAtomIndex,
-                    localBand.EndAtomIndexExclusive,
-                    expressBandBest.StartAtomIndex,
-                    expressBandBest.EndAtomIndexExclusive,
-                    localBand.StartAtomIndex,
-                    localBand.EndAtomIndexExclusive,
-                    expressBandBest.StartAtomIndex,
-                    expressBandBest.EndAtomIndexExclusive,
-                    localBand.SharedSliceCount,
-                    expressBandBest.SharedSliceCount,
-                    localBand.BridgedGapAtoms,
-                    expressBandBest.BridgedGapAtoms,
-                    bestOverlap,
-                    bestOrderedRun,
-                    localBand.HasMirroredContext || expressBandBest.HasMirroredContext,
-                    math.max(localBand.MaxSharedLineCount, expressBandBest.MaxSharedLineCount)));
+                    pair.LocalStartAtomIndex,
+                    pair.LocalEndAtomIndexExclusive,
+                    pair.ExpressStartAtomIndex,
+                    pair.ExpressEndAtomIndexExclusive,
+                    pair.LocalStartAtomIndex,
+                    pair.LocalEndAtomIndexExclusive,
+                    pair.ExpressStartAtomIndex,
+                    pair.ExpressEndAtomIndexExclusive,
+                    pair.LocalSharedSliceCount,
+                    pair.ExpressSharedSliceCount,
+                    pair.LocalBridgedGapAtoms,
+                    pair.ExpressBridgedGapAtoms,
+                    pair.PhysicalOverlap,
+                    pair.OrderedRun,
+                    pair.HasMirroredContext,
+                    pair.MaxSharedLineCount,
+                    pair.TraversalRelation));
             }
 
             return snapshot;
@@ -4508,6 +4756,7 @@ namespace RapidTransitMod
             Entity currentBypassBuilding,
             LineTrackChain expressChain,
             BypassProtectedInterval expressProtectedInterval,
+            TrackModelRuntimePosition expressPosition,
             out GlobalSharedTrunkSegment segment)
         {
             segment = default;
@@ -4524,10 +4773,17 @@ namespace RapidTransitMod
             int bestPhysicalOverlap = int.MinValue;
             int bestLocalOverlap = int.MinValue;
             int bestExpressOverlap = int.MinValue;
+            int bestExpressApproachDistance = int.MaxValue;
+            int bestTraversalRank = int.MinValue;
             bool found = false;
             for (int i = 0; i < snapshot.Segments.Count; i++)
             {
                 GlobalSharedTrunkSegment candidate = snapshot.Segments[i];
+                if (candidate.HasMirroredContext)
+                    continue;
+                if (candidate.TraversalRelation != SharedTraversalRelation.SameDirection)
+                    continue;
+
                 int candidateLocalStart = math.max(candidate.LocalCorridorStartAtomIndex, localProtectedInterval.StartAtomIndex);
                 int candidateLocalEndExclusive = math.min(candidate.LocalCorridorEndAtomIndexExclusive, localProtectedInterval.EndAtomIndexExclusive);
                 int localOverlap = CountAtomIntervalOverlap(
@@ -4549,11 +4805,24 @@ namespace RapidTransitMod
                     expressProtectedInterval.EndAtomIndexExclusive);
                 if (expressOverlap <= 0)
                     continue;
+                int candidateExpressStart = math.max(candidate.ExpressCorridorStartAtomIndex, expressProtectedInterval.StartAtomIndex);
+                int candidateExpressEndExclusive = math.min(candidate.ExpressCorridorEndAtomIndexExclusive, expressProtectedInterval.EndAtomIndexExclusive);
+                if (candidateExpressEndExclusive <= candidateExpressStart)
+                    continue;
+                if (expressPosition.CurrentAtomIndex >= candidateExpressEndExclusive)
+                    continue;
+
+                int expressApproachDistance = math.max(0, candidateExpressStart - expressPosition.CurrentAtomIndex);
+                int traversalRank = 2;
 
                 int anchorDistance = candidateLocalStart - localProtectedInterval.StartAtomIndex;
                 bool better = !found;
+                if (!better && traversalRank != bestTraversalRank)
+                    better = traversalRank > bestTraversalRank;
                 if (!better && anchorDistance != bestAnchorDistance)
                     better = anchorDistance < bestAnchorDistance;
+                if (!better && expressApproachDistance != bestExpressApproachDistance)
+                    better = expressApproachDistance < bestExpressApproachDistance;
                 if (!better && candidate.OrderedRun != bestOrderedRun)
                     better = candidate.OrderedRun > bestOrderedRun;
                 if (!better && candidate.PhysicalOverlap != bestPhysicalOverlap)
@@ -4565,7 +4834,9 @@ namespace RapidTransitMod
                 if (!better)
                     continue;
 
+                bestTraversalRank = traversalRank;
                 bestAnchorDistance = anchorDistance;
+                bestExpressApproachDistance = expressApproachDistance;
                 bestOrderedRun = candidate.OrderedRun;
                 bestPhysicalOverlap = candidate.PhysicalOverlap;
                 bestLocalOverlap = localOverlap;
@@ -4583,10 +4854,12 @@ namespace RapidTransitMod
             Entity currentBypassBuilding,
             LineTrackChain expressChain,
             BypassProtectedInterval expressProtectedInterval,
+            TrackModelRuntimePosition expressPosition,
             out ConflictCorridor localCorridor,
             out ConflictCorridor expressCorridor,
             out GlobalSharedTrunkSegment trunkSegment)
         {
+            m_BypassPerfProbeActiveCorridorCalls++;
             localCorridor = default;
             expressCorridor = default;
             trunkSegment = default;
@@ -4597,6 +4870,10 @@ namespace RapidTransitMod
                 localChain.LineEntity,
                 expressChain.LineEntity,
                 currentBypassBuilding,
+                localProtectedInterval.StartControlPointIndex,
+                localProtectedInterval.EndControlPointIndex,
+                expressProtectedInterval.StartControlPointIndex,
+                expressProtectedInterval.EndControlPointIndex,
                 localProtectedInterval.StartAtomIndex,
                 localProtectedInterval.EndAtomIndexExclusive,
                 expressProtectedInterval.StartAtomIndex,
@@ -4616,7 +4893,7 @@ namespace RapidTransitMod
                 return true;
             }
 
-            if (!TryFindBestGlobalSharedTrunkSegment(localChain, localProtectedInterval, currentBypassBuilding, expressChain, expressProtectedInterval, out trunkSegment))
+            if (!TryFindBestGlobalSharedTrunkSegment(localChain, localProtectedInterval, currentBypassBuilding, expressChain, expressProtectedInterval, expressPosition, out trunkSegment))
             {
                 m_ActiveConflictCorridorSnapshots[key] = new ActiveConflictCorridorSnapshot(
                     m_SharedTrackIndexVersion,

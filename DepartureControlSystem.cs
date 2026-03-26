@@ -349,6 +349,13 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_RouteProgressFrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
         private bool m_CorridorModelFaulted = false;
         private bool m_BypassRuntimeEnabled = true;
+        private uint m_BypassPerfProbeLastLogFrame;
+        private ulong m_BypassPerfProbeCadenceCalls;
+        private ulong m_BypassPerfProbeCadenceMisses;
+        private ulong m_BypassPerfProbeBaselineCalls;
+        private ulong m_BypassPerfProbeTrackDecisionCalls;
+        private ulong m_BypassPerfProbeResolveCalls;
+        private ulong m_BypassPerfProbeActiveCorridorCalls;
 
         // ── 线路状态 ──
         private NativeHashMap<Entity, int> m_SpawningLines;
@@ -418,9 +425,10 @@ namespace RapidTransitMod
         private const uint RETIREFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
-        private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 5;
-        private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 3;
+        private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
+        private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 6;
         private const uint BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES = 60;
+        private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
         private const byte RETIREFIX_DELETE_THRESHOLD = 3;
         private const float DISPATCH_ESTIMATE_MIN_MINUTES = 2f;
         private const float DISPATCH_ESTIMATE_MAX_MINUTES = 20f;
@@ -1609,6 +1617,45 @@ namespace RapidTransitMod
                 m_LastVehicleCacheFlushFrame = nowFrame;
             }
 
+            FlushBypassPerfProbeIfDue(nowFrame);
+
+        }
+
+        private void FlushBypassPerfProbeIfDue(uint nowFrame)
+        {
+            if (m_BypassPerfProbeLastLogFrame == 0)
+            {
+                m_BypassPerfProbeLastLogFrame = nowFrame;
+                return;
+            }
+
+            uint elapsedFrames = nowFrame - m_BypassPerfProbeLastLogFrame;
+            if (elapsedFrames < BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES)
+                return;
+
+            if (m_BypassPerfProbeCadenceCalls > 0
+                || m_BypassPerfProbeCadenceMisses > 0
+                || m_BypassPerfProbeBaselineCalls > 0
+                || m_BypassPerfProbeTrackDecisionCalls > 0
+                || m_BypassPerfProbeResolveCalls > 0
+                || m_BypassPerfProbeActiveCorridorCalls > 0)
+            {
+                log.Info("[待避轻量计数] frames=" + elapsedFrames
+                    + " cadence=" + m_BypassPerfProbeCadenceCalls
+                    + " miss=" + m_BypassPerfProbeCadenceMisses
+                    + " baseline=" + m_BypassPerfProbeBaselineCalls
+                    + " trackDecision=" + m_BypassPerfProbeTrackDecisionCalls
+                    + " resolve=" + m_BypassPerfProbeResolveCalls
+                    + " activeCorridor=" + m_BypassPerfProbeActiveCorridorCalls);
+            }
+
+            m_BypassPerfProbeLastLogFrame = nowFrame;
+            m_BypassPerfProbeCadenceCalls = 0;
+            m_BypassPerfProbeCadenceMisses = 0;
+            m_BypassPerfProbeBaselineCalls = 0;
+            m_BypassPerfProbeTrackDecisionCalls = 0;
+            m_BypassPerfProbeResolveCalls = 0;
+            m_BypassPerfProbeActiveCorridorCalls = 0;
         }
 
         private void SafeClearAll()
@@ -2873,53 +2920,65 @@ namespace RapidTransitMod
                             }
                             else
                             {
-                                TryRecordObservedStopDwellOnBoardingEnd(v, lineEnt, previousCachedWpIdx, nowFrame);
-                                RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, false, -1, previousCachedWpIdx);
-                                if (previousCachedWpIdx >= 0)
+                                int liveDepartureWpIdx = ComputeWpIndex(v, wps);
+                                bool stillAtPreviousStop = previousCachedWpIdx >= 0
+                                    && liveDepartureWpIdx == previousCachedWpIdx;
+                                if (stillAtPreviousStop)
                                 {
-                                    Entity departedStop = GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
-                                    string departedStopName = ResolveWorkbenchEntityName(departedStop);
-                                    if (string.IsNullOrWhiteSpace(departedStopName))
-                                    {
-                                        departedStopName = "stop#" + departedStop.Index;
-                                    }
-
-                                    int nextWaypointIndex = previousCachedWpIdx + 1 < waypointCount
-                                        ? previousCachedWpIdx + 1
-                                        : -1;
-                                    Entity nextStop = nextWaypointIndex >= 0
-                                        ? GetStationBuildingForWaypoint(wps, nextWaypointIndex)
-                                        : Entity.Null;
-                                    string nextStopName = nextStop != Entity.Null
-                                        ? ResolveWorkbenchEntityName(nextStop)
-                                        : string.Empty;
-                                    if (nextStop != Entity.Null && string.IsNullOrWhiteSpace(nextStopName))
-                                    {
-                                        nextStopName = "stop#" + nextStop.Index;
-                                    }
-
-                                    string departureKey = SlotStr((int)(nowFrame / (uint)SIM_FRAMES_PER_MINUTE) % 1440)
-                                        + "|wp=" + previousCachedWpIdx.ToString()
-                                        + "|next=" + nextWaypointIndex.ToString();
-                                    LogVehicleStateOnce(
-                                        m_DepartureObserveLogCache,
-                                        v,
-                                        departureKey,
-                                        "[离站观察] " + lineTag
-                                        + " 车辆" + v.Index
-                                        + " 从\"" + departedStopName + "\"离站"
-                                        + (nextWaypointIndex >= 0 ? " next=\"" + nextStopName + "\"" : " next=\"-\"")
-                                        + " state=" + state.ToString());
+                                    curWpIdx = previousCachedWpIdx;
+                                    m_CachedWpIdx[v] = previousCachedWpIdx;
+                                    m_LastBoarding[v] = true;
                                 }
-                                TryClearVehicleProgressSuspectOnStableDeparture(v, previousCachedWpIdx);
-                                curWpIdx = -1;
-                                m_CachedWpIdx[v] = -1;
-                                m_LastBoarding[v] = false;
-                                m_BVMisfire.Remove(v);
-                                m_BVMisfireStartFrame.Remove(v);
-                                m_ForcedMidStopBoardingGraceUntil.Remove(v);
-                                m_StopDwellStartFrame.Remove(v);
-                                m_StopDwellSessions.Remove(v);
+                                else
+                                {
+                                    TryRecordObservedStopDwellOnBoardingEnd(v, lineEnt, previousCachedWpIdx, nowFrame);
+                                    RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, false, -1, previousCachedWpIdx);
+                                    if (previousCachedWpIdx >= 0)
+                                    {
+                                        Entity departedStop = GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
+                                        string departedStopName = ResolveWorkbenchEntityName(departedStop);
+                                        if (string.IsNullOrWhiteSpace(departedStopName))
+                                        {
+                                            departedStopName = "stop#" + departedStop.Index;
+                                        }
+
+                                        int nextWaypointIndex = previousCachedWpIdx + 1 < waypointCount
+                                            ? previousCachedWpIdx + 1
+                                            : -1;
+                                        Entity nextStop = nextWaypointIndex >= 0
+                                            ? GetStationBuildingForWaypoint(wps, nextWaypointIndex)
+                                            : Entity.Null;
+                                        string nextStopName = nextStop != Entity.Null
+                                            ? ResolveWorkbenchEntityName(nextStop)
+                                            : string.Empty;
+                                        if (nextStop != Entity.Null && string.IsNullOrWhiteSpace(nextStopName))
+                                        {
+                                            nextStopName = "stop#" + nextStop.Index;
+                                        }
+
+                                        string departureKey = SlotStr((int)(nowFrame / (uint)SIM_FRAMES_PER_MINUTE) % 1440)
+                                            + "|wp=" + previousCachedWpIdx.ToString()
+                                            + "|next=" + nextWaypointIndex.ToString();
+                                        LogVehicleStateOnce(
+                                            m_DepartureObserveLogCache,
+                                            v,
+                                            departureKey,
+                                            "[离站观察] " + lineTag
+                                            + " 车辆" + v.Index
+                                            + " 从\"" + departedStopName + "\"离站"
+                                            + (nextWaypointIndex >= 0 ? " next=\"" + nextStopName + "\"" : " next=\"-\"")
+                                            + " state=" + state.ToString());
+                                    }
+                                    TryClearVehicleProgressSuspectOnStableDeparture(v, previousCachedWpIdx);
+                                    curWpIdx = -1;
+                                    m_CachedWpIdx[v] = -1;
+                                    m_LastBoarding[v] = false;
+                                    m_BVMisfire.Remove(v);
+                                    m_BVMisfireStartFrame.Remove(v);
+                                    m_ForcedMidStopBoardingGraceUntil.Remove(v);
+                                    m_StopDwellStartFrame.Remove(v);
+                                    m_StopDwellSessions.Remove(v);
+                                }
                             }
                         }
                         else
@@ -3260,7 +3319,7 @@ namespace RapidTransitMod
                                 ClearBypassYieldState(v);
                                 SetUILabel(v, "停站超时" + vTag);
                                 log.Info("[停站超时] " + lineTag + " 车辆" + v.Index
-                                    + " 中途停站超时" + maxStationDwellMinutes + "分钟"
+                                    + " 停站超时" + maxStationDwellMinutes + "分钟"
                                     + " sinceFrame=" + midStopDwellSinceFrame
                                     + " deadlineFrame=" + midStopDwellDeadlineFrame
                                     + " curWpIdx=" + curWpIdx
@@ -4683,6 +4742,7 @@ namespace RapidTransitMod
             out Entity blockerVehicle,
             out bool canClearAfterExit)
         {
+            m_BypassPerfProbeCadenceCalls++;
             shouldHold = false;
             blockerVehicle = Entity.Null;
             canClearAfterExit = true;
@@ -4711,6 +4771,7 @@ namespace RapidTransitMod
                 return true;
             }
 
+            m_BypassPerfProbeCadenceMisses++;
             shouldHold = ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle);
             canClearAfterExit = (hasLatchedYield || shouldHold)
                 && CanClearBypassYieldAfterStationExit(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex);
@@ -4963,7 +5024,7 @@ namespace RapidTransitMod
             out Entity blockerVehicle)
         {
             blockerVehicle = Entity.Null;
-            if (!TryGetTrackModelBypassBaseline(scope, localWaypoints, out bool shouldYield, out string trackModelReason, out Entity trackModelBlocker))
+            if (!TryGetTrackModelBypassBaseline(scope, localWaypoints, nowFrame, out bool shouldYield, out string trackModelReason, out Entity trackModelBlocker))
             {
                 return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
             }
@@ -5110,28 +5171,32 @@ namespace RapidTransitMod
         private bool TryGetTrackModelBypassBaseline(
             BypassControlScope scope,
             DynamicBuffer<RouteWaypoint> localWaypoints,
+            uint nowFrame,
             out bool shouldYield,
             out string trackModelReason,
             out Entity trackModelBlocker)
         {
+            m_BypassPerfProbeBaselineCalls++;
             shouldYield = false;
             trackModelReason = string.Empty;
             trackModelBlocker = Entity.Null;
 
-            EnsureBypassTrackModelShadowSnapshotCurrent(
-                scope.Vehicle,
-                scope.Line,
-                localWaypoints,
-                scope.WaypointIndex,
-                scope.CurrentBypassBuilding,
-                scope.NextBypassBuilding,
-                out _);
+            if (!TryEvaluateBypassTrackModelShadowDecision(
+                    scope.Vehicle,
+                    scope.Line,
+                    localWaypoints,
+                    scope.WaypointIndex,
+                    nowFrame,
+                    out BypassTrackModelShadowDecision liveDecision)
+                || !liveDecision.Available)
+            {
+                return false;
+            }
 
-            return TryGetTrackModelLiveBypassDecision(
-                scope.Vehicle,
-                out shouldYield,
-                out trackModelReason,
-                out trackModelBlocker);
+            shouldYield = liveDecision.ShouldYield;
+            trackModelReason = "track-model-" + liveDecision.ReasonCode;
+            trackModelBlocker = liveDecision.BlockerVehicle;
+            return true;
         }
 
         private bool HasExpressBehindNearestQueuedLocalVehicle(
@@ -6242,7 +6307,7 @@ namespace RapidTransitMod
             dwellSinceFrame = 0;
             dwellDeadlineFrame = 0;
             maxDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line);
-            if (!boarding || currentWaypointIndex <= 0 || currentWaypointIndex >= waypointCount - 1)
+            if (!boarding || currentWaypointIndex <= 0 || currentWaypointIndex >= waypointCount)
             {
                 if (m_StopDwellStartFrame.Remove(vehicle))
                 {
