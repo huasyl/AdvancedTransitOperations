@@ -178,6 +178,96 @@ namespace RapidTransitMod
             }
         }
 
+        private enum TraversalEventKind : byte
+        {
+            Unknown = 0,
+            Stop = 1,
+            Pass = 2,
+            ApproachSplitBoundary = 3,
+            DepartureSplitBoundary = 4,
+        }
+
+        private readonly struct TraversalEvent
+        {
+            public readonly int EventIndex;
+            public readonly TraversalEventKind Kind;
+            public readonly Entity Building;
+            public readonly int WaypointIndex;
+            public readonly int PassIndex;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly float StopFrames;
+
+            public TraversalEvent(
+                int eventIndex,
+                TraversalEventKind kind,
+                Entity building,
+                int waypointIndex,
+                int passIndex,
+                int startAtomIndex,
+                int endAtomIndexExclusive,
+                float stopFrames)
+            {
+                EventIndex = eventIndex;
+                Kind = kind;
+                Building = building;
+                WaypointIndex = waypointIndex;
+                PassIndex = passIndex;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                StopFrames = stopFrames;
+            }
+        }
+
+        private readonly struct TraversalRunSlice
+        {
+            public readonly int SliceIndex;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly int StartEventIndex;
+            public readonly int EndEventIndex;
+            public readonly Entity[] PhysicalLaneKeys;
+            public readonly float RunFrames;
+
+            public TraversalRunSlice(
+                int sliceIndex,
+                int startAtomIndex,
+                int endAtomIndexExclusive,
+                int startEventIndex,
+                int endEventIndex,
+                Entity[] physicalLaneKeys,
+                float runFrames)
+            {
+                SliceIndex = sliceIndex;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                StartEventIndex = startEventIndex;
+                EndEventIndex = endEventIndex;
+                PhysicalLaneKeys = physicalLaneKeys ?? Array.Empty<Entity>();
+                RunFrames = runFrames;
+            }
+        }
+
+        private sealed class LineTraversalProfile
+        {
+            public readonly List<TraversalEvent> Events = new List<TraversalEvent>();
+            public readonly List<TraversalRunSlice> RunSlices = new List<TraversalRunSlice>();
+        }
+
+        private readonly struct TraversalTimingEstimate
+        {
+            public readonly float RunFrames;
+            public readonly float StopFrames;
+            public readonly float TotalFrames;
+
+            public TraversalTimingEstimate(float runFrames, float stopFrames)
+            {
+                RunFrames = runFrames;
+                StopFrames = stopFrames;
+                TotalFrames = runFrames + stopFrames;
+            }
+        }
+
         private sealed class LineTrackChain
         {
             public Entity LineEntity;
@@ -186,6 +276,7 @@ namespace RapidTransitMod
             public List<TrackSegmentRange> SegmentRanges = new List<TrackSegmentRange>();
             public List<ControlPointMarker> ControlPoints = new List<ControlPointMarker>();
             public List<ControlEdge> ControlEdges = new List<ControlEdge>();
+            public LineTraversalProfile TraversalProfile = new LineTraversalProfile();
             public List<SharedTrackRun> SharedRuns = new List<SharedTrackRun>();
             public Dictionary<Entity, List<SharedTrackRun>> SharedRunsByOtherLine = new Dictionary<Entity, List<SharedTrackRun>>();
             public List<ControlEdgeSharedSpan> ControlEdgeSharedSpans = new List<ControlEdgeSharedSpan>();
@@ -990,6 +1081,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BypassTrackModelCompareThrottleCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BypassTrackModelCompareLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_SharedWindowAuditLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_SharedWindowAuditThrottleCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_SharedWindowAuditLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot> m_SharedWindowMatchSnapshots = new Dictionary<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot>();
         private readonly Dictionary<GlobalSharedTrunkCacheKey, GlobalSharedTrunkSnapshot> m_GlobalSharedTrunkSnapshots = new Dictionary<GlobalSharedTrunkCacheKey, GlobalSharedTrunkSnapshot>();
         private readonly Dictionary<ProtectedIntervalPairMetricsCacheKey, ProtectedIntervalPairMetricsSnapshot> m_ProtectedIntervalPairMetricsSnapshots = new Dictionary<ProtectedIntervalPairMetricsCacheKey, ProtectedIntervalPairMetricsSnapshot>();
@@ -1045,6 +1138,8 @@ namespace RapidTransitMod
             m_BypassTrackModelCompareThrottleCache.Clear();
             m_BypassTrackModelCompareLastLogFrame.Clear();
             m_SharedWindowAuditLogCache.Clear();
+            m_SharedWindowAuditThrottleCache.Clear();
+            m_SharedWindowAuditLastLogFrame.Clear();
             m_SharedWindowMatchSnapshots.Clear();
             m_GlobalSharedTrunkSnapshots.Clear();
             m_ProtectedIntervalPairMetricsSnapshots.Clear();
@@ -1150,6 +1245,8 @@ namespace RapidTransitMod
                     m_BypassTrackModelCompareThrottleCache.Remove(vehicle);
                     m_BypassTrackModelCompareLastLogFrame.Remove(vehicle);
                     m_SharedWindowAuditLogCache.Remove(vehicle);
+                    m_SharedWindowAuditThrottleCache.Remove(vehicle);
+                    m_SharedWindowAuditLastLogFrame.Remove(vehicle);
                     m_TrackModelSequenceLogCache.Remove(vehicle);
                 }
             }
@@ -1249,6 +1346,7 @@ namespace RapidTransitMod
             }
 
             BuildControlEdges(chain, line, waypoints);
+            BuildTraversalProfile(chain, line, waypoints);
             return chain;
         }
 
@@ -1631,6 +1729,298 @@ namespace RapidTransitMod
                     endAtomIndexExclusive,
                     baseFrames));
             }
+        }
+
+        private readonly struct StationPassRange
+        {
+            public readonly Entity Building;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly int WaypointIndex;
+            public readonly float StopFrames;
+            public readonly int PassIndex;
+
+            public StationPassRange(
+                Entity building,
+                int startAtomIndex,
+                int endAtomIndexExclusive,
+                int waypointIndex,
+                float stopFrames,
+                int passIndex)
+            {
+                Building = building;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                WaypointIndex = waypointIndex;
+                StopFrames = stopFrames;
+                PassIndex = passIndex;
+            }
+        }
+
+        private void BuildTraversalProfile(LineTrackChain chain, Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (chain == null)
+                return;
+
+            chain.TraversalProfile.Events.Clear();
+            chain.TraversalProfile.RunSlices.Clear();
+            if (chain.TrackAtoms.Count == 0)
+                return;
+
+            bool hasTimeProfile = TryGetLineTimeProfile(line, waypoints, out LineTimeProfileHeader timeProfile);
+            float lineFrames = GetLineLoopFramesEstimate(line, waypoints);
+            List<StationPassRange> stationPasses = CollectStationPassRanges(chain, line, waypoints);
+            if (stationPasses.Count == 0)
+                return;
+
+            Dictionary<int, int> boundaryEventIndexByAtom = new Dictionary<int, int>();
+            List<int> boundaries = new List<int> { 0, chain.TrackAtoms.Count };
+
+            for (int passIndex = 0; passIndex < stationPasses.Count; passIndex++)
+            {
+                StationPassRange pass = stationPasses[passIndex];
+                if (!boundaries.Contains(pass.StartAtomIndex))
+                    boundaries.Add(pass.StartAtomIndex);
+                if (!boundaries.Contains(pass.EndAtomIndexExclusive))
+                    boundaries.Add(pass.EndAtomIndexExclusive);
+
+                int approachIndex = chain.TraversalProfile.Events.Count;
+                chain.TraversalProfile.Events.Add(new TraversalEvent(
+                    approachIndex,
+                    TraversalEventKind.ApproachSplitBoundary,
+                    pass.Building,
+                    pass.WaypointIndex,
+                    pass.PassIndex,
+                    pass.StartAtomIndex,
+                    pass.StartAtomIndex,
+                    0f));
+                boundaryEventIndexByAtom[pass.StartAtomIndex] = approachIndex;
+
+                int stationEventIndex = chain.TraversalProfile.Events.Count;
+                chain.TraversalProfile.Events.Add(new TraversalEvent(
+                    stationEventIndex,
+                    pass.WaypointIndex >= 0 ? TraversalEventKind.Stop : TraversalEventKind.Pass,
+                    pass.Building,
+                    pass.WaypointIndex,
+                    pass.PassIndex,
+                    pass.StartAtomIndex,
+                    pass.EndAtomIndexExclusive,
+                    pass.StopFrames));
+
+                int departureIndex = chain.TraversalProfile.Events.Count;
+                chain.TraversalProfile.Events.Add(new TraversalEvent(
+                    departureIndex,
+                    TraversalEventKind.DepartureSplitBoundary,
+                    pass.Building,
+                    pass.WaypointIndex,
+                    pass.PassIndex,
+                    pass.EndAtomIndexExclusive,
+                    pass.EndAtomIndexExclusive,
+                    0f));
+                boundaryEventIndexByAtom[pass.EndAtomIndexExclusive] = departureIndex;
+            }
+
+            boundaries.Sort();
+            for (int boundaryIndex = 0; boundaryIndex < boundaries.Count - 1; boundaryIndex++)
+            {
+                int startAtomIndex = boundaries[boundaryIndex];
+                int endAtomIndexExclusive = boundaries[boundaryIndex + 1];
+                if (endAtomIndexExclusive <= startAtomIndex)
+                    continue;
+
+                int sliceIndex = chain.TraversalProfile.RunSlices.Count;
+                boundaryEventIndexByAtom.TryGetValue(startAtomIndex, out int startEventIndex);
+                boundaryEventIndexByAtom.TryGetValue(endAtomIndexExclusive, out int endEventIndex);
+                chain.TraversalProfile.RunSlices.Add(new TraversalRunSlice(
+                    sliceIndex,
+                    startAtomIndex,
+                    endAtomIndexExclusive,
+                    startEventIndex,
+                    endEventIndex,
+                    CollectTraversalSlicePhysicalLaneKeys(chain, startAtomIndex, endAtomIndexExclusive),
+                    EstimateTraversalRunSliceFrames(
+                        chain,
+                        startAtomIndex,
+                        endAtomIndexExclusive,
+                        hasTimeProfile,
+                        timeProfile,
+                        lineFrames)));
+            }
+        }
+
+        private List<StationPassRange> CollectStationPassRanges(
+            LineTrackChain chain,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            List<StationPassRange> stationPasses = new List<StationPassRange>();
+            if (chain == null || chain.TrackAtoms.Count == 0)
+                return stationPasses;
+
+            bool hasLinePrefabData = TryGetTraversalProfileLineData(line, out Game.Prefabs.TransportLineData prefabLineData);
+            Dictionary<Entity, int> passCountByBuilding = new Dictionary<Entity, int>();
+
+            for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count;)
+            {
+                Entity building = ResolvePassingStationBuilding(chain.TrackAtoms[atomIndex].SourceTarget);
+                if (building == Entity.Null)
+                {
+                    atomIndex++;
+                    continue;
+                }
+
+                int startAtomIndex = atomIndex;
+                atomIndex++;
+                while (atomIndex < chain.TrackAtoms.Count
+                    && ResolvePassingStationBuilding(chain.TrackAtoms[atomIndex].SourceTarget) == building)
+                {
+                    atomIndex++;
+                }
+
+                int endAtomIndexExclusive = atomIndex;
+                int passIndex = passCountByBuilding.TryGetValue(building, out int existingPassCount)
+                    ? existingPassCount
+                    : 0;
+                passCountByBuilding[building] = passIndex + 1;
+
+                int waypointIndex = -1;
+                float stopFrames = 0f;
+                if (TryFindTraversalStopWaypointIndex(chain, building, startAtomIndex, endAtomIndexExclusive, out int matchedWaypointIndex))
+                {
+                    waypointIndex = matchedWaypointIndex;
+                    if (hasLinePrefabData)
+                        stopFrames = GetProfileWaypointStopFrames(line, waypoints, matchedWaypointIndex, prefabLineData);
+                }
+
+                stationPasses.Add(new StationPassRange(
+                    building,
+                    startAtomIndex,
+                    endAtomIndexExclusive,
+                    waypointIndex,
+                    stopFrames,
+                    passIndex));
+            }
+
+            return stationPasses;
+        }
+
+        private bool TryGetTraversalProfileLineData(Entity line, out Game.Prefabs.TransportLineData prefabLineData)
+        {
+            prefabLineData = default;
+            if (line == Entity.Null
+                || !EntityManager.HasComponent<Game.Prefabs.PrefabRef>(line))
+            {
+                return false;
+            }
+
+            Entity prefab = EntityManager.GetComponentData<Game.Prefabs.PrefabRef>(line).m_Prefab;
+            if (prefab == Entity.Null || !EntityManager.HasComponent<Game.Prefabs.TransportLineData>(prefab))
+                return false;
+
+            prefabLineData = EntityManager.GetComponentData<Game.Prefabs.TransportLineData>(prefab);
+            return true;
+        }
+
+        private bool TryFindTraversalStopWaypointIndex(
+            LineTrackChain chain,
+            Entity building,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            out int waypointIndex)
+        {
+            waypointIndex = -1;
+            if (chain == null || building == Entity.Null)
+                return false;
+
+            for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count; controlPointIndex++)
+            {
+                ControlPointMarker marker = chain.ControlPoints[controlPointIndex];
+                if ((marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass)
+                    || marker.Building != building
+                    || marker.AtomIndex < startAtomIndex
+                    || marker.AtomIndex >= endAtomIndexExclusive)
+                {
+                    continue;
+                }
+
+                waypointIndex = marker.WaypointIndex;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static Entity[] CollectTraversalSlicePhysicalLaneKeys(
+            LineTrackChain chain,
+            int startAtomIndex,
+            int endAtomIndexExclusive)
+        {
+            if (chain == null || chain.TrackAtoms.Count == 0 || endAtomIndexExclusive <= startAtomIndex)
+                return Array.Empty<Entity>();
+
+            HashSet<Entity> keys = new HashSet<Entity>();
+            int start = math.max(0, startAtomIndex);
+            int end = math.min(endAtomIndexExclusive, chain.TrackAtoms.Count);
+            for (int atomIndex = start; atomIndex < end; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                if (atom.AtomClass != TrackAtomClass.PrimaryLane)
+                    continue;
+
+                keys.Add(atom.Key.PhysicalLaneKey);
+            }
+
+            if (keys.Count == 0)
+                return Array.Empty<Entity>();
+
+            Entity[] result = new Entity[keys.Count];
+            keys.CopyTo(result);
+            return result;
+        }
+
+        private float EstimateTraversalRunSliceFrames(
+            LineTrackChain chain,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            bool hasTimeProfile,
+            LineTimeProfileHeader timeProfile,
+            float lineFrames)
+        {
+            if (chain == null
+                || chain.TrackAtoms.Count == 0
+                || endAtomIndexExclusive <= startAtomIndex)
+            {
+                return 0f;
+            }
+
+            startAtomIndex = math.clamp(startAtomIndex, 0, chain.TrackAtoms.Count - 1);
+            endAtomIndexExclusive = math.clamp(endAtomIndexExclusive, startAtomIndex + 1, chain.TrackAtoms.Count);
+
+            if (hasTimeProfile && timeProfile.m_Count == chain.SegmentRanges.Count)
+            {
+                float runFrames = 0f;
+                for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
+                {
+                    TrackSegmentRange range = chain.SegmentRanges[segmentIndex];
+                    int overlapStart = math.max(startAtomIndex, range.StartAtomIndex);
+                    int overlapEndExclusive = math.min(endAtomIndexExclusive, range.EndAtomIndexExclusive);
+                    if (overlapEndExclusive <= overlapStart)
+                        continue;
+
+                    int segmentAtomLength = math.max(1, range.EndAtomIndexExclusive - range.StartAtomIndex);
+                    int overlapAtomLength = overlapEndExclusive - overlapStart;
+                    runFrames += m_LineTimeProfileSegmentFrames[timeProfile.m_Offset + segmentIndex]
+                        * (overlapAtomLength / (float)segmentAtomLength);
+                }
+
+                if (runFrames > 0f)
+                    return runFrames;
+            }
+
+            float atomCount = math.max(1f, chain.TrackAtoms.Count);
+            return lineFrames > 0f
+                ? lineFrames * ((endAtomIndexExclusive - startAtomIndex) / atomCount)
+                : 0f;
         }
 
         private void RebuildSharedTrackIndex()
@@ -2334,27 +2724,18 @@ namespace RapidTransitMod
             protectedInterval = default;
             overlapCount = 0;
             orderedRun = 0;
-            resolutionSource = "direct";
+            resolutionSource = "shared-window";
 
-            if (TryResolveVehicleCurrentProtectedIntervalForLocalConflict(
-                    vehicle,
-                    line,
-                    waypoints,
-                    chain,
-                    localChain,
-                    localProtectedIntervalIndex,
-                    localProtectedInterval,
-                    out protectedIntervalIndex,
-                    out protectedInterval,
-                    out resolutionSource))
+            // Consume the already-selected current shared-window first.
+            // This keeps vehicle-level evaluation aligned with the current
+            // local scene instead of collapsing back to a coarser
+            // local-interval x express-interval matrix.
+            if (sharedWindowMatch.Found && !sharedWindowMatch.Ambiguous)
             {
-                return TryGetProtectedIntervalPairMetricsCurrent(
-                    localChain,
-                    localProtectedIntervalIndex,
-                    chain,
-                    protectedIntervalIndex,
-                    out overlapCount,
-                    out orderedRun);
+                protectedInterval = sharedWindowMatch.ExpressSharedWindow;
+                overlapCount = sharedWindowMatch.OverlapCount;
+                orderedRun = sharedWindowMatch.OrderedRun;
+                return true;
             }
 
             if (chain == null
@@ -3000,6 +3381,38 @@ namespace RapidTransitMod
             }
         }
 
+        private static float MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
+            TrackModelRuntimePosition runtimePosition,
+            BypassProtectedInterval interval,
+            bool includeApproachers,
+            out bool include)
+        {
+            include = true;
+            float intervalLength = GetProtectedIntervalDisplayLength(interval);
+            float rawCoordinate = (runtimePosition.CurrentAtomIndex - interval.StartAtomIndex) + math.saturate(runtimePosition.AtomPosition01);
+            switch (runtimePosition.RelativeToProtectedInterval)
+            {
+                case TrackModelRelativeToProtectedInterval.Before:
+                    include = includeApproachers;
+                    return math.min(-0.5f, rawCoordinate);
+                case TrackModelRelativeToProtectedInterval.After:
+                    include = includeApproachers;
+                    return math.max(intervalLength + 0.5f, rawCoordinate);
+                case TrackModelRelativeToProtectedInterval.Inside:
+                    return math.clamp(rawCoordinate, 0f, intervalLength);
+                default:
+                    include = false;
+                    return 0f;
+            }
+        }
+
+        private static float MapAtomIndexToProtectedIntervalCoordinateExact(
+            BypassProtectedInterval interval,
+            int atomIndex)
+        {
+            return atomIndex - interval.StartAtomIndex;
+        }
+
         private static float MapRuntimePositionToReferenceProtectedIntervalCoordinate(
             TrackModelRuntimePosition runtimePosition,
             BypassProtectedInterval sourceInterval,
@@ -3030,6 +3443,25 @@ namespace RapidTransitMod
             }
         }
 
+        private static float MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
+            TrackModelRuntimePosition runtimePosition,
+            BypassProtectedInterval sourceInterval,
+            float referenceLength,
+            bool includeApproachers,
+            out bool include)
+        {
+            float sourceLength = GetProtectedIntervalDisplayLength(sourceInterval);
+            float sourceCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
+                runtimePosition,
+                sourceInterval,
+                includeApproachers,
+                out include);
+            if (!include)
+                return 0f;
+
+            return sourceCoordinate / sourceLength * referenceLength;
+        }
+
         private static float MapRuntimePositionToReferenceWindowCoordinate(
             TrackModelRuntimePosition runtimePosition,
             BypassProtectedInterval sourceWindow,
@@ -3050,6 +3482,28 @@ namespace RapidTransitMod
             float envelopeLength = GetProtectedIntervalDisplayLength(referenceEnvelope);
             float windowOffset = math.clamp(referenceWindow.StartAtomIndex - referenceEnvelope.StartAtomIndex, 0f, envelopeLength);
             return math.clamp(windowOffset + mappedInWindow, -0.5f, envelopeLength + 0.5f);
+        }
+
+        private static float MapRuntimePositionToReferenceWindowCoordinateExact(
+            TrackModelRuntimePosition runtimePosition,
+            BypassProtectedInterval sourceWindow,
+            BypassProtectedInterval referenceWindow,
+            BypassProtectedInterval referenceEnvelope,
+            bool includeApproachers,
+            out bool include)
+        {
+            float mappedInWindow = MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
+                runtimePosition,
+                sourceWindow,
+                GetProtectedIntervalDisplayLength(referenceWindow),
+                includeApproachers,
+                out include);
+            if (!include)
+                return 0f;
+
+            float envelopeLength = GetProtectedIntervalDisplayLength(referenceEnvelope);
+            float windowOffset = math.clamp(referenceWindow.StartAtomIndex - referenceEnvelope.StartAtomIndex, 0f, envelopeLength);
+            return windowOffset + mappedInWindow;
         }
 
         private static float MapControlPointToProtectedIntervalCoordinate(LineTrackChain chain, BypassProtectedInterval interval, int controlPointIndex)
@@ -4018,7 +4472,7 @@ namespace RapidTransitMod
             }
             float departureReleaseCoordinate = ComputeForwardDepartureReleaseCoordinate(localChain, protectedInterval, currentBypassBuilding);
             float intervalDisplayLength = GetProtectedIntervalDisplayLength(protectedInterval);
-            float localCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(localPosition, protectedInterval, includeApproachers: true, out bool includeLocalCoordinate);
+            float localCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinateExact(localPosition, protectedInterval, includeApproachers: true, out bool includeLocalCoordinate);
             var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
             bool releaseClearedUsedFallbackResolution = false;
             bool sawReleaseClearedExpress = false;
@@ -4118,7 +4572,7 @@ namespace RapidTransitMod
                     if (expressPosition.Confidence < 0.6f)
                         continue;
 
-                    float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+                    float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
                         expressPosition,
                         expressProtectedInterval,
                         intervalDisplayLength,
@@ -4156,7 +4610,7 @@ namespace RapidTransitMod
                               expressPosition,
                               out string conflictReason,
                               out string expressPositionText,
-                              out _))
+                              out string rejectReason))
                     {
                         int expressPhaseEndAtomExclusive = -1;
                         if (TryGetExpressCurrentForwardPhaseWindow(
@@ -4184,6 +4638,23 @@ namespace RapidTransitMod
                         shadowDecision = new BypassTrackModelShadowDecision(true, true, conflictReason, protectedIntervalIndex, true, expressVehicle, intervalResolutionSource == "fallback");
                         return true;
                     }
+                    else if (!string.IsNullOrWhiteSpace(rejectReason)
+                        && intervalResolutionSource == "shared-window")
+                    {
+                        string auditSummary = BuildSharedWindowAuditSummary(
+                            localVehicle,
+                            localLine,
+                            localWaypoints,
+                            localChain,
+                            currentWaypointIndex,
+                            currentBypassBuilding,
+                            protectedInterval);
+                        LogSharedWindowAuditOnce(
+                            localVehicle,
+                            localLine,
+                            protectedIntervalIndex,
+                            auditSummary + " | finalReject#" + expressVehicle.Index + "=" + rejectReason);
+                    }
                 }
             }
 
@@ -4193,8 +4664,67 @@ namespace RapidTransitMod
                 return true;
             }
 
+            TryLogSharedWindowAuditForNoExpress(
+                localVehicle,
+                localLine,
+                localWaypoints,
+                localChain,
+                currentWaypointIndex,
+                currentBypassBuilding,
+                protectedIntervalIndex,
+                protectedInterval);
             shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-express-in-shared-window", protectedIntervalIndex, true, Entity.Null, false);
             return true;
+        }
+
+        private void TryLogSharedWindowAuditForNoExpress(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            LineTrackChain localChain,
+            int currentWaypointIndex,
+            Entity currentBypassBuilding,
+            int protectedIntervalIndex,
+            BypassProtectedInterval protectedInterval)
+        {
+            if (localVehicle == Entity.Null
+                || localLine == Entity.Null
+                || localChain == null)
+            {
+                return;
+            }
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            string coarseKey = "no-express-in-shared-window|"
+                + localLine.Index
+                + "|"
+                + protectedIntervalIndex
+                + "|"
+                + currentBypassBuilding.Index;
+            if (!ShouldEmitVehicleLogWithCooldown(
+                    m_SharedWindowAuditThrottleCache,
+                    m_SharedWindowAuditLastLogFrame,
+                    localVehicle,
+                    coarseKey,
+                    nowFrame,
+                    BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES))
+            {
+                return;
+            }
+
+            string auditSummary = BuildSharedWindowAuditSummary(
+                localVehicle,
+                localLine,
+                localWaypoints,
+                localChain,
+                currentWaypointIndex,
+                currentBypassBuilding,
+                protectedInterval);
+            LogSharedWindowAuditOnce(
+                localVehicle,
+                localLine,
+                protectedIntervalIndex,
+                auditSummary);
         }
 
         private void LogBypassSelectedBlockerDetailOnce(
@@ -4329,8 +4859,17 @@ namespace RapidTransitMod
                 return false;
             }
 
-            float localClearFrames = EstimateRuntimeFramesToAtomBoundary(localChain, localPosition, localCorridor.EndAtomIndexExclusive);
+            bool hasLocalTraversalTiming = TryEstimateTraversalTimingWithinCorridor(localChain, localCorridor, localPosition, out TraversalTimingEstimate localTraversalTiming);
+            float localClearFrames = hasLocalTraversalTiming
+                ? localTraversalTiming.TotalFrames
+                : EstimateRuntimeFramesToAtomBoundary(localChain, localPosition, localCorridor.EndAtomIndexExclusive);
             float expressEntryFrames = EstimateRuntimeFramesToAtomBoundary(expressChain, expressPosition, expressCorridor.StartAtomIndex);
+            bool hasExpressTraversalTiming = TryEstimateTraversalTimingWithinCorridor(expressChain, expressCorridor, expressPosition, out TraversalTimingEstimate expressTraversalTiming);
+            float expressClearFrames = hasExpressTraversalTiming
+                ? (expressPosition.CurrentAtomIndex < expressCorridor.StartAtomIndex
+                    ? expressEntryFrames + expressTraversalTiming.TotalFrames
+                    : expressTraversalTiming.TotalFrames)
+                : EstimateRuntimeFramesToAtomBoundary(expressChain, expressPosition, expressCorridor.EndAtomIndexExclusive);
             float safetyGapFrames = TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES * (float)SIM_FRAMES_PER_MINUTE;
             string etaWindowText = " trunk local=a" + trunkSegment.LocalAnchorStartAtomIndex + ".." + trunkSegment.LocalAnchorEndAtomIndexExclusive
                 + " express=a" + trunkSegment.ExpressAnchorStartAtomIndex + ".." + trunkSegment.ExpressAnchorEndAtomIndexExclusive
@@ -4339,11 +4878,16 @@ namespace RapidTransitMod
             etaWindowText += " " + FormatConflictCorridor(localCorridor)
                 + " " + FormatConflictCorridor(expressCorridor);
             expressPositionText += " etaEntry=" + FormatEtaFrames(expressEntryFrames)
+                + " expressClear=" + FormatEtaFrames(expressClearFrames)
                 + " localClear=" + FormatEtaFrames(localClearFrames)
+                + " localRun=" + FormatEtaFrames(hasLocalTraversalTiming ? localTraversalTiming.RunFrames : float.MaxValue)
+                + " localStop=" + FormatEtaFrames(hasLocalTraversalTiming ? localTraversalTiming.StopFrames : 0f)
+                + " expressRun=" + FormatEtaFrames(hasExpressTraversalTiming ? expressTraversalTiming.RunFrames : float.MaxValue)
+                + " expressStop=" + FormatEtaFrames(hasExpressTraversalTiming ? expressTraversalTiming.StopFrames : 0f)
                 + " gap=" + FormatEtaFrames(safetyGapFrames)
                 + etaWindowText;
 
-            if (expressEntryFrames == float.MaxValue || localClearFrames == float.MaxValue)
+            if (expressEntryFrames == float.MaxValue || expressClearFrames == float.MaxValue || localClearFrames == float.MaxValue)
             {
                 rejectReason = "eta-unknown" + etaWindowText;
                 return false;
@@ -4358,11 +4902,195 @@ namespace RapidTransitMod
                 return false;
             }
 
+            if (!TryEvaluateLinearCatchRiskCurrentScene(
+                    localProtectedInterval,
+                    localCorridor,
+                    localCoordinate,
+                    expressPosition,
+                    expressCoordinate,
+                    localClearFrames,
+                    expressEntryFrames,
+                    expressClearFrames,
+                    safetyGapFrames,
+                    out string catchText,
+                    out string catchRejectReason))
+            {
+                rejectReason = catchRejectReason + etaWindowText;
+                return false;
+            }
+
+            expressPositionText += catchText;
             reason = "same-direction-shared-express-approaching";
             expressPositionText += " overlap=" + overlapCount + " run=" + orderedRun
                 + " release=" + departureReleaseCoordinate.ToString("0.00")
                 + " mapped=" + expressCoordinate.ToString("0.00")
                 + " local=" + localCoordinate.ToString("0.00");
+            return true;
+        }
+
+        private bool TryEstimateTraversalTimingWithinCorridor(
+            LineTrackChain chain,
+            ConflictCorridor corridor,
+            TrackModelRuntimePosition runtimePosition,
+            out TraversalTimingEstimate estimate)
+        {
+            estimate = default;
+            if (chain == null
+                || chain.TraversalProfile == null
+                || chain.TraversalProfile.RunSlices.Count == 0
+                || corridor.EndAtomIndexExclusive <= corridor.StartAtomIndex)
+            {
+                return false;
+            }
+
+            float corridorStartCoordinate = corridor.StartAtomIndex;
+            float corridorEndCoordinate = corridor.EndAtomIndexExclusive;
+            float fromCoordinate = runtimePosition.CurrentAtomIndex + math.saturate(runtimePosition.AtomPosition01);
+            if (runtimePosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.Before
+                || fromCoordinate < corridorStartCoordinate)
+            {
+                fromCoordinate = corridorStartCoordinate;
+            }
+
+            if (runtimePosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.After
+                || fromCoordinate >= corridorEndCoordinate)
+            {
+                estimate = new TraversalTimingEstimate(0f, 0f);
+                return true;
+            }
+
+            float runFrames = 0f;
+            for (int sliceIndex = 0; sliceIndex < chain.TraversalProfile.RunSlices.Count; sliceIndex++)
+            {
+                TraversalRunSlice slice = chain.TraversalProfile.RunSlices[sliceIndex];
+                if (!(slice.RunFrames > 0f))
+                    continue;
+
+                float overlapStart = math.max(fromCoordinate, slice.StartAtomIndex);
+                float overlapEnd = math.min(corridorEndCoordinate, slice.EndAtomIndexExclusive);
+                if (overlapEnd <= overlapStart)
+                    continue;
+
+                float sliceLength = math.max(1f, slice.EndAtomIndexExclusive - slice.StartAtomIndex);
+                runFrames += slice.RunFrames * ((overlapEnd - overlapStart) / sliceLength);
+            }
+
+            float stopFrames = 0f;
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                if (traversalEvent.Kind != TraversalEventKind.Stop
+                    || !(traversalEvent.StopFrames > 0f))
+                {
+                    continue;
+                }
+
+                float eventCoordinate = traversalEvent.StartAtomIndex;
+                if (eventCoordinate <= fromCoordinate + 0.001f
+                    || eventCoordinate < corridorStartCoordinate
+                    || eventCoordinate >= corridorEndCoordinate)
+                {
+                    continue;
+                }
+
+                stopFrames += traversalEvent.StopFrames;
+            }
+
+            estimate = new TraversalTimingEstimate(runFrames, stopFrames);
+            return true;
+        }
+
+        private bool TryEvaluateLinearCatchRiskCurrentScene(
+            BypassProtectedInterval localProtectedInterval,
+            ConflictCorridor localCorridor,
+            float localCoordinate,
+            TrackModelRuntimePosition expressPosition,
+            float expressCoordinate,
+            float localClearFrames,
+            float expressEntryFrames,
+            float expressClearFrames,
+            float safetyGapFrames,
+            out string catchText,
+            out string rejectReason)
+        {
+            catchText = string.Empty;
+            rejectReason = string.Empty;
+
+            float corridorStartCoordinate = MapAtomIndexToProtectedIntervalCoordinateExact(localProtectedInterval, localCorridor.StartAtomIndex);
+            float corridorEndCoordinate = MapAtomIndexToProtectedIntervalCoordinateExact(localProtectedInterval, localCorridor.EndAtomIndexExclusive);
+            if (!(corridorEndCoordinate > corridorStartCoordinate)
+                || !(localClearFrames > 0f)
+                || !(expressClearFrames > 0f))
+            {
+                rejectReason = "linear-catch-unknown";
+                return false;
+            }
+
+            float localDistanceToClear = math.max(0f, corridorEndCoordinate - localCoordinate);
+            float localSpeed = localDistanceToClear / math.max(1f, localClearFrames);
+            if (!(localSpeed > 0f))
+            {
+                rejectReason = "linear-catch-safe local-speed";
+                return false;
+            }
+
+            float modelStartFrames;
+            float expressBaseCoordinate;
+            float localBaseCoordinate;
+            if (expressPosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.Before
+                && expressEntryFrames > 0f)
+            {
+                modelStartFrames = expressEntryFrames;
+                expressBaseCoordinate = corridorStartCoordinate;
+                localBaseCoordinate = math.min(corridorEndCoordinate, localCoordinate + localSpeed * expressEntryFrames);
+            }
+            else
+            {
+                modelStartFrames = 0f;
+                expressBaseCoordinate = math.max(expressCoordinate, corridorStartCoordinate);
+                localBaseCoordinate = localCoordinate;
+            }
+
+            float expressDistanceAfterBase = math.max(0f, corridorEndCoordinate - expressBaseCoordinate);
+            float expressFramesAfterBase = expressClearFrames - modelStartFrames;
+            if (!(expressFramesAfterBase > 0f))
+            {
+                rejectReason = "linear-catch-safe express-window";
+                return false;
+            }
+
+            float expressSpeed = expressDistanceAfterBase / math.max(1f, expressFramesAfterBase);
+            catchText = " catch[vL=" + localSpeed.ToString("0.000")
+                + " vE=" + expressSpeed.ToString("0.000");
+
+            if (!(expressSpeed > localSpeed))
+            {
+                rejectReason = "linear-catch-safe speed local=" + localSpeed.ToString("0.000")
+                    + " express=" + expressSpeed.ToString("0.000") + "]";
+                catchText += "]";
+                return false;
+            }
+
+            float deltaAtModelStart = localBaseCoordinate - expressBaseCoordinate;
+            if (deltaAtModelStart <= SAME_DIRECTION_AHEAD_MARGIN_ATOMS)
+            {
+                catchText += " catch=" + FormatEtaFrames(modelStartFrames) + "]";
+                return modelStartFrames < localClearFrames - safetyGapFrames;
+            }
+
+            float catchAfterBaseFrames = deltaAtModelStart / math.max(0.0001f, expressSpeed - localSpeed);
+            float catchFrames = modelStartFrames + catchAfterBaseFrames;
+            catchText += " catch=" + FormatEtaFrames(catchFrames) + "]";
+
+            if (catchFrames >= localClearFrames - safetyGapFrames
+                || catchFrames > expressClearFrames + safetyGapFrames)
+            {
+                rejectReason = "linear-catch-safe catch=" + FormatEtaFrames(catchFrames)
+                    + " localClear=" + FormatEtaFrames(localClearFrames)
+                    + " expressClear=" + FormatEtaFrames(expressClearFrames);
+                return false;
+            }
+
             return true;
         }
 
@@ -4499,7 +5227,7 @@ namespace RapidTransitMod
                   return false;
               }
 
-              float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+              float expressCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
                   expressPosition,
                   expressProtectedInterval,
                   intervalDisplayLength,

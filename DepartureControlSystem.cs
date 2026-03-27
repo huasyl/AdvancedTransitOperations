@@ -203,6 +203,34 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct TraversalSliceObservation
+        {
+            public readonly float AverageFrames;
+            public readonly int SampleCount;
+            public readonly uint LastObservedFrame;
+
+            public TraversalSliceObservation(float averageFrames, int sampleCount, uint lastObservedFrame)
+            {
+                AverageFrames = averageFrames;
+                SampleCount = sampleCount;
+                LastObservedFrame = lastObservedFrame;
+            }
+        }
+
+        private readonly struct VehicleTraversalSliceSession
+        {
+            public readonly Entity Line;
+            public readonly int SliceIndex;
+            public readonly uint EnterFrame;
+
+            public VehicleTraversalSliceSession(Entity line, int sliceIndex, uint enterFrame)
+            {
+                Line = line;
+                SliceIndex = sliceIndex;
+                EnterFrame = enterFrame;
+            }
+        }
+
         private sealed class LineMileageModel
         {
             public ulong Signature;
@@ -343,6 +371,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_DepartureObserveLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BvWaypointMismatchLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
+        private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
         private readonly Dictionary<Entity, BypassHoldCadenceSnapshot> m_BypassHoldCadenceSnapshots = new Dictionary<Entity, BypassHoldCadenceSnapshot>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_WaypointIndexFrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
@@ -3042,6 +3072,9 @@ namespace RapidTransitMod
                     if (state == VehicleState.Idle)
                         m_LastBoarding[v] = boarding;
 
+                    if (state != VehicleState.Running)
+                        m_VehicleTraversalSliceSessions.Remove(v);
+
                     bool atA = state == VehicleState.Preparing
                         ? HasPreparingVehicleReachedOrigin(v, wps, boarding, curWpIdx)
                         : (curWpIdx == 0);
@@ -3290,6 +3323,9 @@ namespace RapidTransitMod
                             break;
 
                         case VehicleState.Running:
+                            if (IsAppliedWorkbenchExpressLine(lineEnt))
+                                UpdateVehicleTraversalSliceObservation(v, lineEnt, wps, nowFrame);
+
                             int bypassControlWaypointIndex = curWpIdx >= 0 ? curWpIdx : previousCachedWpIdx;
                             bool runningShouldHoldBypass = false;
                             bool runningCanClearAfterExit = true;
@@ -3489,6 +3525,7 @@ namespace RapidTransitMod
                                     }
                                     break;
                                 }
+                                FinalizeVehicleTraversalSliceObservation(v, nowFrame);
                                 UpdateLapStats(v);
                                 m_VehicleState[v] = VehicleState.Idle;
                                 if (targetMin >= 0)
@@ -3692,6 +3729,7 @@ namespace RapidTransitMod
                     m_ForcedOriginReadyFrame.Remove(dead);
                     m_StopDwellStartFrame.Remove(dead);
                     m_BypassYieldBlocker.Remove(dead);
+                    m_VehicleTraversalSliceSessions.Remove(dead);
                     m_BvWaypointMismatchLogCache.Remove(dead);
                     m_BvWaypointMismatchLastLogFrame.Remove(dead);
                     m_BypassQueuedLocalOverrideLogCache.Remove(dead);
@@ -4351,9 +4389,282 @@ namespace RapidTransitMod
                 log.Info("[圈统计] " + lineTag + " 车辆" + v.Index
                     + " 本圈 " + realMin.ToString("F1") + "游戏分钟/" + framesDelta + "帧");
 
+                if (m_VehicleLine.TryGetValue(v, out Entity timingLine)
+                    && timingLine != Entity.Null
+                    && IsAppliedWorkbenchExpressLine(timingLine)
+                    && EntityManager.HasBuffer<RouteWaypoint>(timingLine))
+                {
+                    DynamicBuffer<RouteWaypoint> timingWaypoints = EntityManager.GetBuffer<RouteWaypoint>(timingLine, true);
+                    if (TryGetTraversalProfileLapTiming(
+                            timingLine,
+                            timingWaypoints,
+                            out float profileRunFrames,
+                            out float profileStopFrames,
+                            out int profileStopCount,
+                            out int profilePassCount))
+                    {
+                        float profileTotalFrames = profileRunFrames + profileStopFrames;
+                        log.Info("[快车圈时] " + lineTag + " 车辆" + v.Index
+                            + " 实测=" + realMin.ToString("F1") + "分钟"
+                            + " profileTotal=" + (profileTotalFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                            + " run=" + (profileRunFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                            + " stop=" + (profileStopFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                            + " stopCount=" + profileStopCount
+                            + " passCount=" + profilePassCount);
+                        LogTraversalProfileLapSlices(v, timingLine, timingWaypoints);
+                    }
+                }
+
                 if (m_VehicleLine.TryGetValue(v, out Entity lapLine))
                     FlushLineLapCache(lapLine);
             }
+        }
+
+        private bool TryGetTraversalProfileLapTiming(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out float runFrames,
+            out float stopFrames,
+            out int stopCount,
+            out int passCount)
+        {
+            runFrames = 0f;
+            stopFrames = 0f;
+            stopCount = 0;
+            passCount = 0;
+
+            if (line == Entity.Null
+                || waypoints.Length == 0
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+            {
+                return false;
+            }
+
+            EnsureTrackChainBypassPipelineReady(chain);
+            if (chain.TraversalProfile == null)
+                return false;
+
+            for (int i = 0; i < chain.TraversalProfile.RunSlices.Count; i++)
+            {
+                if (TryGetEffectiveTraversalRunSliceFrames(line, chain.TraversalProfile.RunSlices[i], out float effectiveRunFrames))
+                    runFrames += math.max(0f, effectiveRunFrames);
+            }
+
+            for (int i = 0; i < chain.TraversalProfile.Events.Count; i++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[i];
+                if (traversalEvent.Kind == TraversalEventKind.Stop)
+                {
+                    stopCount++;
+                    stopFrames += math.max(0f, traversalEvent.StopFrames);
+                }
+                else if (traversalEvent.Kind == TraversalEventKind.Pass)
+                {
+                    passCount++;
+                }
+            }
+
+            return runFrames > 0f || stopFrames > 0f || stopCount > 0 || passCount > 0;
+        }
+
+        private void UpdateVehicleTraversalSliceObservation(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame)
+        {
+            if (!TryGetCurrentTraversalRunSlice(vehicle, line, waypoints, out int sliceIndex))
+            {
+                m_VehicleTraversalSliceSessions.Remove(vehicle);
+                return;
+            }
+
+            if (m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
+                && session.Line == line
+                && session.SliceIndex == sliceIndex)
+            {
+                return;
+            }
+
+            FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame);
+            m_VehicleTraversalSliceSessions[vehicle] = new VehicleTraversalSliceSession(line, sliceIndex, nowFrame);
+        }
+
+        private void FinalizeVehicleTraversalSliceObservation(Entity vehicle, uint nowFrame)
+        {
+            if (vehicle == Entity.Null
+                || !m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
+                || session.Line == Entity.Null
+                || session.SliceIndex < 0
+                || nowFrame <= session.EnterFrame)
+            {
+                m_VehicleTraversalSliceSessions.Remove(vehicle);
+                return;
+            }
+
+            float observedFrames = nowFrame - session.EnterFrame;
+            ulong key = MakeTraversalSliceObservationKey(session.Line, session.SliceIndex);
+            if (m_TraversalRunSliceObservations.TryGetValue(key, out TraversalSliceObservation existing))
+            {
+                int sampleCount = existing.SampleCount + 1;
+                float averageFrames = ((existing.AverageFrames * existing.SampleCount) + observedFrames) / sampleCount;
+                m_TraversalRunSliceObservations[key] = new TraversalSliceObservation(averageFrames, sampleCount, nowFrame);
+            }
+            else
+            {
+                m_TraversalRunSliceObservations[key] = new TraversalSliceObservation(observedFrames, 1, nowFrame);
+            }
+
+            m_VehicleTraversalSliceSessions.Remove(vehicle);
+        }
+
+        private bool TryGetCurrentTraversalRunSlice(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out int sliceIndex)
+        {
+            sliceIndex = -1;
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || waypoints.Length == 0
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain.TraversalProfile == null
+                || chain.TraversalProfile.RunSlices.Count == 0
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            {
+                return false;
+            }
+
+            int atomIndex = math.clamp(cursor.AtomCursorIndex, 0, chain.TrackAtoms.Count - 1);
+            for (int i = 0; i < chain.TraversalProfile.RunSlices.Count; i++)
+            {
+                TraversalRunSlice slice = chain.TraversalProfile.RunSlices[i];
+                if (atomIndex >= slice.StartAtomIndex && atomIndex < slice.EndAtomIndexExclusive)
+                {
+                    sliceIndex = i;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryGetEffectiveTraversalRunSliceFrames(
+            Entity line,
+            TraversalRunSlice slice,
+            out float effectiveRunFrames)
+        {
+            effectiveRunFrames = math.max(0f, slice.RunFrames);
+            if (line == Entity.Null || slice.SliceIndex < 0)
+                return effectiveRunFrames > 0f;
+
+            ulong key = MakeTraversalSliceObservationKey(line, slice.SliceIndex);
+            if (m_TraversalRunSliceObservations.TryGetValue(key, out TraversalSliceObservation observation)
+                && observation.SampleCount > 0
+                && observation.AverageFrames > 0f)
+            {
+                effectiveRunFrames = observation.AverageFrames;
+                return true;
+            }
+
+            return effectiveRunFrames > 0f;
+        }
+
+        private static ulong MakeTraversalSliceObservationKey(Entity line, int sliceIndex)
+        {
+            unchecked
+            {
+                return ((ulong)(uint)line.Index << 32) | (uint)sliceIndex;
+            }
+        }
+
+        private void LogTraversalProfileLapSlices(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || waypoints.Length == 0
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+            {
+                return;
+            }
+
+            EnsureTrackChainBypassPipelineReady(chain);
+            if (chain.TraversalProfile == null || chain.TraversalProfile.RunSlices.Count == 0)
+                return;
+
+            string lineTag = "线路" + line.Index;
+            for (int i = 0; i < chain.TraversalProfile.RunSlices.Count; i++)
+            {
+                TraversalRunSlice slice = chain.TraversalProfile.RunSlices[i];
+                string startLabel = DescribeTraversalBoundaryLabel(chain, slice.StartEventIndex, slice.StartAtomIndex);
+                string endLabel = DescribeTraversalBoundaryLabel(chain, slice.EndEventIndex, slice.EndAtomIndexExclusive);
+                float stopFrames = GetTraversalSliceStopFrames(chain, slice);
+                TryGetEffectiveTraversalRunSliceFrames(line, slice, out float effectiveRunFrames);
+
+                log.Info("[快车圈时明细] " + lineTag + " 车辆" + vehicle.Index
+                    + " slice#" + slice.SliceIndex
+                    + " " + startLabel + " -> " + endLabel
+                    + " run=" + (math.max(0f, effectiveRunFrames) / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
+                    + " stop=" + (stopFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
+                    + " total=" + ((math.max(0f, effectiveRunFrames) + stopFrames) / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
+                    + " atoms=" + slice.StartAtomIndex + ".." + slice.EndAtomIndexExclusive
+                    + " laneKeys=" + (slice.PhysicalLaneKeys != null ? slice.PhysicalLaneKeys.Length : 0));
+            }
+        }
+
+        private static float GetTraversalSliceStopFrames(LineTrackChain chain, TraversalRunSlice slice)
+        {
+            if (chain?.TraversalProfile == null)
+                return 0f;
+
+            for (int i = 0; i < chain.TraversalProfile.Events.Count; i++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[i];
+                if (traversalEvent.Kind == TraversalEventKind.Stop
+                    && traversalEvent.StartAtomIndex == slice.StartAtomIndex
+                    && traversalEvent.EndAtomIndexExclusive == slice.EndAtomIndexExclusive)
+                {
+                    return math.max(0f, traversalEvent.StopFrames);
+                }
+            }
+
+            return 0f;
+        }
+
+        private string DescribeTraversalBoundaryLabel(LineTrackChain chain, int eventIndex, int atomIndex)
+        {
+            if (chain != null
+                && chain.TraversalProfile != null
+                && eventIndex >= 0
+                && eventIndex < chain.TraversalProfile.Events.Count)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                bool eventMatchesBoundary = traversalEvent.StartAtomIndex == atomIndex
+                    || traversalEvent.EndAtomIndexExclusive == atomIndex;
+                if (eventMatchesBoundary)
+                {
+                    string buildingLabel = traversalEvent.Building != Entity.Null
+                        ? FormatBypassNodeLabel(traversalEvent.Building)
+                        : "atom" + atomIndex;
+                    switch (traversalEvent.Kind)
+                    {
+                        case TraversalEventKind.Stop:
+                            return "Stop(" + buildingLabel + ")";
+                        case TraversalEventKind.Pass:
+                            return "Pass(" + buildingLabel + ")";
+                        case TraversalEventKind.ApproachSplitBoundary:
+                            return "ApproachSplit(" + buildingLabel + ")";
+                        case TraversalEventKind.DepartureSplitBoundary:
+                            return "DepartureSplit(" + buildingLabel + ")";
+                    }
+                }
+            }
+
+            return "atom" + atomIndex;
         }
 
         private static int NextSlotMin(int nowMin)
@@ -5029,8 +5340,6 @@ namespace RapidTransitMod
                 return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
             }
 
-            bool hasQueuedLocalInApproachKnown = false;
-            bool hasQueuedLocalInApproach = false;
             float queuedLocalMeters = 0f;
 
             if (shouldYield
@@ -5048,101 +5357,82 @@ namespace RapidTransitMod
                 }
                 else
                 {
-                    hasQueuedLocalInApproach = TryFindNearestLocalVehicleInApproachSegment(
-                        scope.Line,
-                        scope.Vehicle,
-                        localWaypoints,
-                        scope.WaypointIndex,
-                        out _,
-                        out queuedLocalMeters);
-                    hasQueuedLocalInApproachKnown = true;
-
-                    if (!hasQueuedLocalInApproach)
-                    {
-                        LogQueuedLocalBypassOverrideOnce(
-                            scope.Vehicle,
-                            scope.Line,
-                            trackModelBlocker,
-                            "skip",
-                            "no-queued-local-in-approach");
-                    }
-                    else if (!TryProjectVehicleOntoLine(trackModelBlocker, scope.Line, localWaypoints, out LineDistanceProjection expressProjection))
-                    {
-                        LogQueuedLocalBypassOverrideOnce(
-                            scope.Vehicle,
-                            scope.Line,
-                            trackModelBlocker,
-                            "skip",
-                            "express-projection-failed",
-                            queuedLocalMeters: queuedLocalMeters);
-                    }
-                    else if (!TryProjectVehicleOntoLine(scope.Vehicle, scope.Line, localWaypoints, out LineDistanceProjection localProjection))
-                    {
-                        LogQueuedLocalBypassOverrideOnce(
-                            scope.Vehicle,
-                            scope.Line,
-                            trackModelBlocker,
-                            "skip",
-                            "local-projection-failed",
-                            expressProjection.DistanceMeters,
-                            queuedLocalMeters: queuedLocalMeters);
-                    }
-                    else if (HasExpressBehindNearestQueuedLocalVehicle(
-                            scope.Line,
+                    if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
+                            scope,
                             localWaypoints,
-                            expressProjection.DistanceMeters,
-                            localProjection.DistanceMeters,
-                            queuedLocalMeters))
+                            scope.Vehicle,
+                            out float localSceneCoordinate))
                     {
                         LogQueuedLocalBypassOverrideOnce(
                             scope.Vehicle,
                             scope.Line,
                             trackModelBlocker,
-                            "release",
-                            "local-ahead-of-express-without-bypass",
-                            expressProjection.DistanceMeters,
-                            localProjection.DistanceMeters,
-                            queuedLocalMeters);
-                        blockerVehicle = Entity.Null;
-                        return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "local-ahead-of-express-without-bypass", Entity.Null);
+                            "skip",
+                            "local-scene-projection-failed");
                     }
                     else
                     {
-                        LogQueuedLocalBypassOverrideOnce(
-                            scope.Vehicle,
-                            scope.Line,
-                            trackModelBlocker,
-                            "skip",
-                            "express-not-behind-nearest-queued-local",
-                            expressProjection.DistanceMeters,
-                            localProjection.DistanceMeters,
-                            queuedLocalMeters);
+                        bool hasQueuedLocalInApproach = TryFindNearestLocalVehicleInApproachSegment(
+                            scope,
+                            localWaypoints,
+                            localSceneCoordinate,
+                            out _,
+                            out queuedLocalMeters);
+
+                        if (!hasQueuedLocalInApproach)
+                        {
+                            LogQueuedLocalBypassOverrideOnce(
+                                scope.Vehicle,
+                                scope.Line,
+                                trackModelBlocker,
+                                "skip",
+                                "no-queued-local-in-approach");
+                        }
+                        else if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
+                                scope,
+                                localWaypoints,
+                                trackModelBlocker,
+                                out float expressSceneCoordinate))
+                        {
+                            LogQueuedLocalBypassOverrideOnce(
+                                scope.Vehicle,
+                                scope.Line,
+                                trackModelBlocker,
+                                "skip",
+                                "express-scene-projection-failed",
+                                queuedLocalMeters: queuedLocalMeters);
+                        }
+                        else if (!IsExpressAheadOfNearestQueuedLocalOnCurrentSceneAxis(
+                                expressSceneCoordinate,
+                                queuedLocalMeters))
+                        {
+                            LogQueuedLocalBypassOverrideOnce(
+                                scope.Vehicle,
+                                scope.Line,
+                                trackModelBlocker,
+                                "release",
+                                "express-behind-nearest-queued-local",
+                                expressSceneCoordinate,
+                                localSceneCoordinate,
+                                queuedLocalMeters);
+                            blockerVehicle = Entity.Null;
+                            return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "express-behind-nearest-queued-local", Entity.Null);
+                        }
+                        else
+                        {
+                            LogQueuedLocalBypassOverrideOnce(
+                                scope.Vehicle,
+                                scope.Line,
+                                trackModelBlocker,
+                                "skip",
+                                "express-ahead-of-nearest-queued-local",
+                                expressSceneCoordinate,
+                                localSceneCoordinate,
+                                queuedLocalMeters);
+                        }
                     }
                 }
             }
-
-            bool hasPreviousBlockOccupied;
-            if (!shouldYield && hasQueuedLocalInApproachKnown)
-            {
-                hasPreviousBlockOccupied = hasQueuedLocalInApproach;
-            }
-            else if (!shouldYield)
-            {
-                hasPreviousBlockOccupied = TryFindNearestLocalVehicleInApproachSegment(
-                    scope.Line,
-                    scope.Vehicle,
-                    localWaypoints,
-                    scope.WaypointIndex,
-                    out _,
-                    out _);
-            }
-            else
-            {
-                hasPreviousBlockOccupied = false;
-            }
-
-            if (!shouldYield && hasPreviousBlockOccupied)
-                return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "previous-block-occupied", Entity.Null);
 
             blockerVehicle = trackModelBlocker;
             return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, shouldYield, trackModelReason, trackModelBlocker);
@@ -5199,28 +5489,100 @@ namespace RapidTransitMod
             return true;
         }
 
-        private bool HasExpressBehindNearestQueuedLocalVehicle(
-            Entity localLine,
+        private bool TryProjectVehicleToCurrentLocalSceneCoordinate(
+            BypassControlScope scope,
             DynamicBuffer<RouteWaypoint> localWaypoints,
-            float expressMetersOnLocalAxis,
-            float currentLocalMeters,
-            float queuedLocalMeters)
+            Entity vehicle,
+            out float sceneCoordinate)
         {
-            if (!TryGetLineMileageModel(localLine, localWaypoints, out LineMileageModel localModel)
-                || localModel.TotalDistanceMeters <= 0f)
+            sceneCoordinate = 0f;
+            if (vehicle == Entity.Null
+                || scope.Line == Entity.Null
+                || !TryGetLineTrackChain(scope.Line, localWaypoints, out LineTrackChain localChain))
             {
                 return false;
             }
 
-            float expressToCurrent = ForwardDistanceOnLoop(localModel.TotalDistanceMeters, expressMetersOnLocalAxis, currentLocalMeters);
-            if (!(expressToCurrent > 0f) || expressToCurrent == float.MaxValue)
+            EnsureTrackChainBypassPipelineReady(localChain);
+            if (!TryResolveBypassProtectedInterval(localChain, localWaypoints, scope.WaypointIndex, out int localProtectedIntervalIndex, out BypassProtectedInterval localProtectedInterval))
                 return false;
 
-            float expressToQueuedLocal = ForwardDistanceOnLoop(localModel.TotalDistanceMeters, expressMetersOnLocalAxis, queuedLocalMeters);
-            if (!(expressToQueuedLocal > 0f) || expressToQueuedLocal == float.MaxValue)
+            if (ResolveVehicleLine(vehicle) == scope.Line)
+            {
+                if (!TryProjectTrackModelRuntimePosition(vehicle, scope.Line, localWaypoints, localProtectedInterval, out TrackModelRuntimePosition localPosition)
+                    || localPosition.Confidence < 0.6f)
+                {
+                    return false;
+                }
+
+                sceneCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
+                    localPosition,
+                    localProtectedInterval,
+                    includeApproachers: true,
+                    out bool includeLocal);
+                return includeLocal;
+            }
+
+            Entity expressLine = ResolveVehicleLine(vehicle);
+            if (expressLine == Entity.Null)
                 return false;
 
-            return expressToQueuedLocal < expressToCurrent;
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            if (!routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
+                || !TryGetLineTrackChain(expressLine, expressWaypoints, out LineTrackChain expressChain))
+            {
+                return false;
+            }
+
+            EnsureTrackChainBypassPipelineReady(expressChain);
+            PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(
+                localChain,
+                localProtectedInterval,
+                scope.CurrentBypassBuilding,
+                expressChain);
+            if (!sharedWindowMatch.Found || sharedWindowMatch.Ambiguous)
+                return false;
+
+            if (!TryResolveExpressConflictWindowForLocalConflict(
+                    vehicle,
+                    expressLine,
+                    expressWaypoints,
+                    expressChain,
+                    localChain,
+                    localProtectedIntervalIndex,
+                    localProtectedInterval,
+                    sharedWindowMatch,
+                    out _,
+                    out BypassProtectedInterval expressProtectedInterval,
+                    out _,
+                    out _,
+                    out _))
+            {
+                return false;
+            }
+
+            if (!TryProjectTrackModelRuntimePosition(vehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition)
+                || expressPosition.Confidence < 0.6f)
+            {
+                return false;
+            }
+
+            sceneCoordinate = MapRuntimePositionToReferenceWindowCoordinateExact(
+                expressPosition,
+                sharedWindowMatch.ExpressSharedWindow,
+                sharedWindowMatch.LocalSharedWindow,
+                localProtectedInterval,
+                includeApproachers: true,
+                out bool includeExpress);
+            return includeExpress;
+        }
+
+        private static bool IsExpressAheadOfNearestQueuedLocalOnCurrentSceneAxis(
+            float expressSceneCoordinate,
+            float queuedLocalCoordinate)
+        {
+            const float orderEpsilon = 0.05f;
+            return expressSceneCoordinate > queuedLocalCoordinate + orderEpsilon;
         }
 
         private bool HasBypassBuildingBetweenDistances(LineMileageModel model, float fromMetersExclusive, float toMetersExclusive)
@@ -5358,89 +5720,97 @@ namespace RapidTransitMod
             return false;
         }
 
-        private bool HasLocalVehicleInPreviousBlock(Entity line, Entity localVehicle, int currentWaypointIndex)
-        {
-            if (line == Entity.Null || currentWaypointIndex < 0)
-                return false;
-
-            if (!EntityManager.HasBuffer<RouteWaypoint>(line))
-                return false;
-
-            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            return TryFindNearestLocalVehicleInApproachSegment(
-                line,
-                localVehicle,
-                waypoints,
-                currentWaypointIndex,
-                out _,
-                out _);
-        }
-
         private bool TryFindNearestLocalVehicleInApproachSegment(
-            Entity line,
-            Entity localVehicle,
+            BypassControlScope scope,
             DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex,
+            float currentLocalSceneCoordinate,
             out Entity nearestVehicle,
             out float nearestVehicleMeters)
         {
             nearestVehicle = Entity.Null;
             nearestVehicleMeters = 0f;
 
-            if (line == Entity.Null || currentWaypointIndex < 0 || waypoints.Length == 0)
+            if (scope.Line == Entity.Null || scope.WaypointIndex < 0 || waypoints.Length == 0)
                 return false;
 
-            if (!TryGetLineMileageModel(line, waypoints, out LineMileageModel model)
-                || model.TotalDistanceMeters <= 0f)
+            if (!TryGetLineTrackChain(scope.Line, waypoints, out LineTrackChain localChain))
+                return false;
+
+            EnsureTrackChainBypassPipelineReady(localChain);
+            if (!TryResolveBypassProtectedInterval(localChain, waypoints, scope.WaypointIndex, out _, out BypassProtectedInterval localProtectedInterval))
+                return false;
+
+            int currentControlPointIndex = localProtectedInterval.StartControlPointIndex;
+            if (currentControlPointIndex < 0 || currentControlPointIndex >= localChain.ControlPoints.Count)
+                return false;
+
+            Entity currentBuilding = localChain.ControlPoints[currentControlPointIndex].Building;
+            int previousStationControlPointIndex = -1;
+            for (int controlPointIndex = currentControlPointIndex - 1; controlPointIndex >= 0; controlPointIndex--)
             {
-                return false;
-            }
-
-            if (model.PreviousDistinctStationWaypointIndices == null
-                || model.PreviousDistinctStationMeters == null
-                || model.CurrentStationMeters == null
-                || model.PreviousDistinctStationWaypointIndices.Length != waypoints.Length
-                || model.PreviousDistinctStationMeters.Length != waypoints.Length
-                || model.CurrentStationMeters.Length != waypoints.Length
-                || currentWaypointIndex >= model.PreviousDistinctStationWaypointIndices.Length)
-            {
-                return false;
-            }
-
-            int previousDistinctWaypointIndex = model.PreviousDistinctStationWaypointIndices[currentWaypointIndex];
-            if (previousDistinctWaypointIndex < 0)
-                return false;
-
-            float previousStationMeters = model.PreviousDistinctStationMeters[currentWaypointIndex];
-            float currentStationMeters = model.CurrentStationMeters[currentWaypointIndex];
-            float segmentLength = ForwardDistanceOnLoop(model.TotalDistanceMeters, previousStationMeters, currentStationMeters);
-            if (!(segmentLength > 1f) || segmentLength == float.MaxValue)
-                return false;
-
-            if (!TryGetLineRunningVehicleFrameSnapshot(line, waypoints, m_SimulationSystem.frameIndex, out LineRunningVehicleFrameSnapshot snapshot))
-                return false;
-
-            float bestDistanceToCurrent = float.MaxValue;
-            for (int i = 0; i < snapshot.Vehicles.Count; i++)
-            {
-                LineRunningVehicleSnapshot other = snapshot.Vehicles[i];
-                if (other.Vehicle == localVehicle || !other.HasProjection)
-                    continue;
-
-                float previousToOther = ForwardDistanceOnLoop(model.TotalDistanceMeters, previousStationMeters, other.ProjectionDistanceMeters);
-                if (!(previousToOther > 1f) || previousToOther >= segmentLength)
-                    continue;
-
-                float otherToCurrent = ForwardDistanceOnLoop(model.TotalDistanceMeters, other.ProjectionDistanceMeters, currentStationMeters);
-                if (!(otherToCurrent > 0f) || otherToCurrent >= segmentLength)
-                    continue;
-
-                if (otherToCurrent < bestDistanceToCurrent)
+                ControlPointMarker marker = localChain.ControlPoints[controlPointIndex];
+                if ((marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass)
+                    || marker.Building == Entity.Null
+                    || marker.Building == currentBuilding)
                 {
-                    bestDistanceToCurrent = otherToCurrent;
-                    nearestVehicle = other.Vehicle;
-                    nearestVehicleMeters = other.ProjectionDistanceMeters;
+                    continue;
                 }
+
+                previousStationControlPointIndex = controlPointIndex;
+                break;
+            }
+
+            if (previousStationControlPointIndex < 0)
+                return false;
+
+            float previousStationSceneCoordinate = MapAtomIndexToProtectedIntervalCoordinateExact(
+                localProtectedInterval,
+                localChain.ControlPoints[previousStationControlPointIndex].AtomIndex);
+            float approachUpperBound = math.min(currentLocalSceneCoordinate, 0f);
+            if (!(previousStationSceneCoordinate < approachUpperBound))
+                return false;
+
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            if (!routeVehicleBuffers.TryGetBuffer(scope.Line, out DynamicBuffer<RouteVehicle> routeVehicles))
+                return false;
+
+            float bestSceneCoordinate = float.MinValue;
+            for (int i = 0; i < routeVehicles.Length; i++)
+            {
+                Entity otherVehicle = routeVehicles[i].m_Vehicle;
+                if (otherVehicle == Entity.Null
+                    || otherVehicle == scope.Vehicle
+                    || !EntityManager.Exists(otherVehicle)
+                    || !m_VehicleState.TryGetValue(otherVehicle, out VehicleState vehicleState)
+                    || vehicleState != VehicleState.Running)
+                {
+                    continue;
+                }
+
+                if (!TryProjectTrackModelRuntimePosition(otherVehicle, scope.Line, waypoints, localProtectedInterval, out TrackModelRuntimePosition otherPosition)
+                    || otherPosition.Confidence < 0.6f)
+                {
+                    continue;
+                }
+
+                float otherSceneCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
+                    otherPosition,
+                    localProtectedInterval,
+                    includeApproachers: true,
+                    out bool includeOther);
+                if (!includeOther
+                    || otherSceneCoordinate < previousStationSceneCoordinate
+                    || otherSceneCoordinate >= approachUpperBound)
+                {
+                    continue;
+                }
+
+                if (otherSceneCoordinate <= bestSceneCoordinate)
+                    continue;
+
+                bestSceneCoordinate = otherSceneCoordinate;
+                nearestVehicle = otherVehicle;
+                nearestVehicleMeters = otherSceneCoordinate;
             }
 
             return nearestVehicle != Entity.Null;
