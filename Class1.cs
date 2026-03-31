@@ -6,6 +6,7 @@ using Game;
 using Game.Modding;
 using Game.SceneFlow;
 using Game.Simulation;
+using Game.Tools;
 using Game.UI.InGame;
 
 namespace RapidTransitMod
@@ -45,8 +46,11 @@ namespace RapidTransitMod
             updateSystem.UpdateAt<DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<DepotSourceLockSystem, TransportDepotAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<DepotSourceLockSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<DevSightRaycastCollectorSystem>(SystemUpdatePhase.Raycast);
+            updateSystem.UpdateAfter<DevSightRaycastCollectorSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
             updateSystem.UpdateBefore<RapidTransitPanelUISystem>(SystemUpdatePhase.Rendering);
             updateSystem.UpdateBefore<DispatchWorkbenchUISystem>(SystemUpdatePhase.Rendering);
+            updateSystem.UpdateAt<DevSightTooltipSystem>(SystemUpdatePhase.UITooltip);
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
             {

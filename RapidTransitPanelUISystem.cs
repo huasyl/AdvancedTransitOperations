@@ -18,6 +18,8 @@ namespace RapidTransitMod
         private SelectedInfoUISystem m_SelectedInfoUISystem = null!;
         private ValueBinding<bool> m_VisibleBinding = null!;
         private ValueBinding<string> m_PanelDataJsonBinding = null!;
+        private ValueBinding<bool> m_DevSightVisibleBinding = null!;
+        private ValueBinding<string> m_DevSightJsonBinding = null!;
 
         private bool m_PanelOpen;
         private bool m_LastVisible;
@@ -44,6 +46,8 @@ namespace RapidTransitMod
 
             AddBinding(m_VisibleBinding = new ValueBinding<bool>(kGroup, "visible", initialValue: false));
             AddBinding(m_PanelDataJsonBinding = new ValueBinding<string>(kGroup, "panelDataJson", string.Empty));
+            AddBinding(m_DevSightVisibleBinding = new ValueBinding<bool>(kGroup, "devSightVisible", initialValue: false));
+            AddBinding(m_DevSightJsonBinding = new ValueBinding<string>(kGroup, "devSightJson", string.Empty));
             AddBinding(new TriggerBinding<bool>(kGroup, "setPanelOpen", SetPanelOpen));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleRetire", RequestVehicleRetire));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleForceDepart", RequestVehicleForceDepart));
@@ -57,6 +61,16 @@ namespace RapidTransitMod
         protected override void OnUpdate()
         {
             base.OnUpdate();
+
+            try
+            {
+                UpdateDevSightBindings();
+            }
+            catch (System.Exception ex)
+            {
+                ClearDevSightBindings();
+                Mod.log.Info("[DevSightPanel] update failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
 
             if (!m_PanelOpen)
             {
@@ -189,6 +203,18 @@ namespace RapidTransitMod
             return sb.ToString();
         }
 
+        private static string SerializeDevSight(string source, string summaryText)
+        {
+            StringBuilder sb = new StringBuilder(256);
+            sb.Append('{');
+            AppendJsonString(sb, "source", source ?? string.Empty);
+            AppendJsonString(sb, "summaryText", summaryText ?? string.Empty);
+            if (sb[sb.Length - 1] == ',')
+                sb.Length--;
+            sb.Append('}');
+            return sb.ToString();
+        }
+
         private static void AppendJsonString(StringBuilder sb, string name, string value)
         {
             sb.Append('"').Append(name).Append("\":\"");
@@ -239,6 +265,32 @@ namespace RapidTransitMod
                 return;
 
             m_PanelDataJsonBinding.Update(string.Empty);
+        }
+
+        private void UpdateDevSightBindings()
+        {
+            bool visible = DevSightTooltipSystem.TryGetPanelState(out string source, out string summaryText);
+            if (!visible)
+            {
+                ClearDevSightBindings();
+                return;
+            }
+
+            string payload = SerializeDevSight(source, summaryText);
+            if (!m_DevSightVisibleBinding.value)
+                m_DevSightVisibleBinding.Update(true);
+
+            if (m_DevSightJsonBinding.value != payload)
+                m_DevSightJsonBinding.Update(payload);
+        }
+
+        private void ClearDevSightBindings()
+        {
+            if (m_DevSightVisibleBinding.value)
+                m_DevSightVisibleBinding.Update(false);
+
+            if (m_DevSightJsonBinding.value.Length > 0)
+                m_DevSightJsonBinding.Update(string.Empty);
         }
 
         private void ResetState(bool clearSnapshot)

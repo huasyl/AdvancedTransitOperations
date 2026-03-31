@@ -273,6 +273,7 @@ namespace RapidTransitMod
             public Entity LineEntity;
             public ulong Signature;
             public List<TrackAtom> TrackAtoms = new List<TrackAtom>();
+            public Dictionary<Entity, List<int>> AtomIndicesByLane = new Dictionary<Entity, List<int>>();
             public List<TrackSegmentRange> SegmentRanges = new List<TrackSegmentRange>();
             public List<ControlPointMarker> ControlPoints = new List<ControlPointMarker>();
             public List<ControlEdge> ControlEdges = new List<ControlEdge>();
@@ -289,6 +290,20 @@ namespace RapidTransitMod
             public bool BypassProtectedIntervalsReady;
             public bool ProtectedSharedIntervalsReady;
             public bool ProtectedIntervalSummariesReady;
+        }
+
+        private readonly struct DevSightLaneOccurrence
+        {
+            public readonly Entity LineEntity;
+            public readonly LineTrackChain Chain;
+            public readonly List<int> AtomIndices;
+
+            public DevSightLaneOccurrence(Entity lineEntity, LineTrackChain chain, List<int> atomIndices)
+            {
+                LineEntity = lineEntity;
+                Chain = chain;
+                AtomIndices = atomIndices;
+            }
         }
 
         private readonly struct SharedTrackRun
@@ -1014,6 +1029,43 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct SharedWindowPairStateKey : IEquatable<SharedWindowPairStateKey>
+        {
+            public readonly Entity LocalVehicle;
+            public readonly int ProtectedIntervalIndex;
+            public readonly Entity ExpressVehicle;
+
+            public SharedWindowPairStateKey(Entity localVehicle, int protectedIntervalIndex, Entity expressVehicle)
+            {
+                LocalVehicle = localVehicle;
+                ProtectedIntervalIndex = protectedIntervalIndex;
+                ExpressVehicle = expressVehicle;
+            }
+
+            public bool Equals(SharedWindowPairStateKey other)
+            {
+                return LocalVehicle == other.LocalVehicle
+                    && ProtectedIntervalIndex == other.ProtectedIntervalIndex
+                    && ExpressVehicle == other.ExpressVehicle;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is SharedWindowPairStateKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = LocalVehicle.GetHashCode();
+                    hash = (hash * 397) ^ ProtectedIntervalIndex;
+                    hash = (hash * 397) ^ ExpressVehicle.GetHashCode();
+                    return hash;
+                }
+            }
+        }
+
         private readonly struct ActiveConflictCorridorSnapshot
         {
             public readonly uint Frame;
@@ -1061,6 +1113,7 @@ namespace RapidTransitMod
         }
 
         private readonly Dictionary<Entity, LineTrackChain> m_LineTrackChains = new Dictionary<Entity, LineTrackChain>();
+        private readonly Dictionary<Entity, List<DevSightLaneOccurrence>> m_DevSightLaneIndex = new Dictionary<Entity, List<DevSightLaneOccurrence>>();
         private readonly Dictionary<TrackAtomKey, List<SharedTrackOccurrence>> m_SharedTrackIndex = new Dictionary<TrackAtomKey, List<SharedTrackOccurrence>>();
         private readonly Dictionary<Entity, List<SharedPhysicalOccurrence>> m_SharedPhysicalTrackIndex = new Dictionary<Entity, List<SharedPhysicalOccurrence>>();
         private readonly Dictionary<Entity, VehicleTrackCursor> m_VehicleTrackCursorHints = new Dictionary<Entity, VehicleTrackCursor>();
@@ -1077,13 +1130,14 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BypassTrackModelShadowThrottleCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BypassTrackModelShadowLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_BypassSelectedBlockerDetailLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_TrainLaneSourceDiagnosticLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelCompareLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelCompareThrottleCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BypassTrackModelCompareLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_SharedWindowAuditSummaryLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_SharedWindowAuditThrottleCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_SharedWindowAuditLastLogFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<string, string> m_SharedWindowAuditPairStateCache = new Dictionary<string, string>();
+        private readonly Dictionary<SharedWindowPairStateKey, string> m_SharedWindowAuditPairStateCache = new Dictionary<SharedWindowPairStateKey, string>();
         private readonly Dictionary<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot> m_SharedWindowMatchSnapshots = new Dictionary<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot>();
         private readonly Dictionary<GlobalSharedTrunkCacheKey, GlobalSharedTrunkSnapshot> m_GlobalSharedTrunkSnapshots = new Dictionary<GlobalSharedTrunkCacheKey, GlobalSharedTrunkSnapshot>();
         private readonly Dictionary<ProtectedIntervalPairMetricsCacheKey, ProtectedIntervalPairMetricsSnapshot> m_ProtectedIntervalPairMetricsSnapshots = new Dictionary<ProtectedIntervalPairMetricsCacheKey, ProtectedIntervalPairMetricsSnapshot>();
@@ -1095,6 +1149,8 @@ namespace RapidTransitMod
         private readonly HashSet<Entity> m_ProtectedIntervalOverlapMatchedKeys = new HashSet<Entity>();
         private readonly List<Entity> m_ProtectedIntervalOrderedSourceKeys = new List<Entity>();
         private readonly List<Entity> m_ProtectedIntervalOrderedCandidateKeys = new List<Entity>();
+        private readonly List<int> m_ProtectedIntervalOrderedSourceAtomIndices = new List<int>();
+        private readonly List<int> m_ProtectedIntervalOrderedCandidateAtomIndices = new List<int>();
         private uint m_SharedTrackIndexVersion = 1;
         private readonly HashSet<Entity> m_DirtyTrackLines = new HashSet<Entity>();
         private bool m_SharedTrackIndexDirty = true;
@@ -1105,6 +1161,8 @@ namespace RapidTransitMod
                 return;
 
             m_DirtyTrackLines.Add(line);
+            if (m_LineTrackChains.TryGetValue(line, out LineTrackChain existingChain) && existingChain != null)
+                RemoveDevSightLaneIndexForChain(existingChain);
             m_LineTrackChains.Remove(line);
             ClearBypassRuntimeStateForLine(line);
             m_SharedTrackIndexDirty = true;
@@ -1114,6 +1172,7 @@ namespace RapidTransitMod
         {
             m_DirtyTrackLines.Clear();
             m_LineTrackChains.Clear();
+            m_DevSightLaneIndex.Clear();
             m_SharedTrackIndex.Clear();
             m_SharedPhysicalTrackIndex.Clear();
             m_VehicleTrackCursorHints.Clear();
@@ -1138,6 +1197,7 @@ namespace RapidTransitMod
             m_BypassTrackModelCompareLogCache.Clear();
             m_BypassTrackModelCompareThrottleCache.Clear();
             m_BypassTrackModelCompareLastLogFrame.Clear();
+            m_TrainLaneSourceDiagnosticLogCache.Clear();
             m_SharedWindowAuditSummaryLogCache.Clear();
             m_SharedWindowAuditThrottleCache.Clear();
             m_SharedWindowAuditLastLogFrame.Clear();
@@ -1243,26 +1303,27 @@ namespace RapidTransitMod
                     m_BypassTrackModelShadowLogCache.Remove(vehicle);
                     m_BypassTrackModelShadowThrottleCache.Remove(vehicle);
                     m_BypassTrackModelShadowLastLogFrame.Remove(vehicle);
+                    m_TrainLaneSourceDiagnosticLogCache.Remove(vehicle);
                     m_BypassTrackModelCompareLogCache.Remove(vehicle);
                     m_BypassTrackModelCompareThrottleCache.Remove(vehicle);
                     m_BypassTrackModelCompareLastLogFrame.Remove(vehicle);
                     m_SharedWindowAuditSummaryLogCache.Remove(vehicle);
                     m_SharedWindowAuditThrottleCache.Remove(vehicle);
                     m_SharedWindowAuditLastLogFrame.Remove(vehicle);
-                    List<string> sharedPairKeysToRemove = null;
-                    foreach (KeyValuePair<string, string> pairEntry in m_SharedWindowAuditPairStateCache)
+                    List<SharedWindowPairStateKey> sharedPairKeysToRemove = null;
+                    foreach (KeyValuePair<SharedWindowPairStateKey, string> pairEntry in m_SharedWindowAuditPairStateCache)
                     {
-                        if (!pairEntry.Key.StartsWith(vehicle.Index.ToString() + "|"))
+                        if (pairEntry.Key.LocalVehicle != vehicle)
                             continue;
 
-                        sharedPairKeysToRemove ??= new List<string>();
+                        sharedPairKeysToRemove ??= new List<SharedWindowPairStateKey>();
                         sharedPairKeysToRemove.Add(pairEntry.Key);
                     }
 
                     if (sharedPairKeysToRemove != null)
                     {
-                        for (int i = 0; i < sharedPairKeysToRemove.Count; i++)
-                            m_SharedWindowAuditPairStateCache.Remove(sharedPairKeysToRemove[i]);
+                        for (int removeIndex = 0; removeIndex < sharedPairKeysToRemove.Count; removeIndex++)
+                            m_SharedWindowAuditPairStateCache.Remove(sharedPairKeysToRemove[removeIndex]);
                     }
                     m_TrackModelSequenceLogCache.Remove(vehicle);
                 }
@@ -1318,6 +1379,7 @@ namespace RapidTransitMod
                 return false;
 
             ulong signature = ComputeLineTrackChainSignature(line, waypoints, segments);
+            LineTrackChain previousChain = null;
             if (m_LineTrackChains.TryGetValue(line, out chain)
                 && chain != null
                 && chain.Signature == signature)
@@ -1325,11 +1387,16 @@ namespace RapidTransitMod
                 return chain.TrackAtoms.Count > 0;
             }
 
+            previousChain = chain;
+
             chain = BuildLineTrackChain(line, waypoints, segments, signature);
             if (chain == null || chain.TrackAtoms.Count == 0)
                 return false;
 
+            if (previousChain != null)
+                RemoveDevSightLaneIndexForChain(previousChain);
             m_LineTrackChains[line] = chain;
+            AddDevSightLaneIndexForChain(chain);
             m_DirtyTrackLines.Remove(line);
             m_SharedTrackIndexDirty = true;
             return true;
@@ -1364,6 +1431,7 @@ namespace RapidTransitMod
 
             BuildControlEdges(chain, line, waypoints);
             BuildTraversalProfile(chain, line, waypoints);
+            BuildAtomIndicesByLane(chain);
             return chain;
         }
 
@@ -1383,6 +1451,166 @@ namespace RapidTransitMod
 
                 atoms.Add(atom);
             }
+        }
+
+        private void BuildAtomIndicesByLane(LineTrackChain chain)
+        {
+            if (chain == null)
+                return;
+
+            chain.AtomIndicesByLane.Clear();
+            for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                AddAtomIndexForLane(chain.AtomIndicesByLane, atom.Key.PhysicalLaneKey, atomIndex);
+                if (atom.SourceTarget != atom.Key.PhysicalLaneKey)
+                    AddAtomIndexForLane(chain.AtomIndicesByLane, atom.SourceTarget, atomIndex);
+
+                AddAtomIndexForNetOwnerChain(chain.AtomIndicesByLane, atom.Key.PhysicalLaneKey, atomIndex);
+                if (atom.SourceTarget != atom.Key.PhysicalLaneKey)
+                    AddAtomIndexForNetOwnerChain(chain.AtomIndicesByLane, atom.SourceTarget, atomIndex);
+            }
+        }
+
+        private static void AddAtomIndexForLane(Dictionary<Entity, List<int>> indexByLane, Entity lane, int atomIndex)
+        {
+            if (lane == Entity.Null)
+                return;
+
+            if (!indexByLane.TryGetValue(lane, out List<int> atomIndices))
+            {
+                atomIndices = new List<int>();
+                indexByLane[lane] = atomIndices;
+            }
+
+            atomIndices.Add(atomIndex);
+        }
+
+        private void AddAtomIndexForNetOwnerChain(Dictionary<Entity, List<int>> indexByLane, Entity entity, int atomIndex)
+        {
+            Entity current = entity;
+            for (int i = 0; i < 4 && current != Entity.Null; i++)
+            {
+                if (!EntityManager.HasComponent<Owner>(current))
+                    break;
+
+                Entity owner = EntityManager.GetComponentData<Owner>(current).m_Owner;
+                if (owner == Entity.Null || owner == current)
+                    break;
+
+                if (EntityManager.HasComponent<Game.Net.Edge>(owner)
+                    || EntityManager.HasComponent<Game.Net.Node>(owner)
+                    || EntityManager.HasBuffer<Game.Net.SubLane>(owner))
+                {
+                    AddAtomIndexForLane(indexByLane, owner, atomIndex);
+                }
+
+                current = owner;
+            }
+        }
+
+        private void AddDevSightLaneIndexForChain(LineTrackChain chain)
+        {
+            if (chain == null || chain.AtomIndicesByLane == null)
+                return;
+
+            foreach (KeyValuePair<Entity, List<int>> entry in chain.AtomIndicesByLane)
+            {
+                if (entry.Key == Entity.Null
+                    || entry.Value == null
+                    || entry.Value.Count == 0)
+                    continue;
+
+                if (!m_DevSightLaneIndex.TryGetValue(entry.Key, out List<DevSightLaneOccurrence> occurrences))
+                {
+                    occurrences = new List<DevSightLaneOccurrence>();
+                    m_DevSightLaneIndex[entry.Key] = occurrences;
+                }
+
+                occurrences.Add(new DevSightLaneOccurrence(chain.LineEntity, chain, entry.Value));
+            }
+        }
+
+        private void RemoveDevSightLaneIndexForChain(LineTrackChain chain)
+        {
+            if (chain == null || chain.AtomIndicesByLane == null)
+                return;
+
+            foreach (KeyValuePair<Entity, List<int>> entry in chain.AtomIndicesByLane)
+            {
+                if (entry.Key == Entity.Null
+                    || !m_DevSightLaneIndex.TryGetValue(entry.Key, out List<DevSightLaneOccurrence> occurrences)
+                    || occurrences == null)
+                {
+                    continue;
+                }
+
+                for (int i = occurrences.Count - 1; i >= 0; i--)
+                {
+                    if (occurrences[i].LineEntity == chain.LineEntity)
+                        occurrences.RemoveAt(i);
+                }
+
+                if (occurrences.Count == 0)
+                    m_DevSightLaneIndex.Remove(entry.Key);
+            }
+        }
+
+        public string BuildDevSightLaneTooltipSummary(Entity laneEntity)
+        {
+            if (laneEntity == Entity.Null)
+                return "target  null";
+
+            bool hasIndex = m_DevSightLaneIndex.TryGetValue(laneEntity, out List<DevSightLaneOccurrence> occurrences);
+
+            if (!hasIndex)
+            {
+                foreach (var kvp in m_DevSightLaneIndex)
+                {
+                    if (kvp.Key.Index == laneEntity.Index)
+                    {
+                        occurrences = kvp.Value;
+                        hasIndex = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasIndex || occurrences == null || occurrences.Count == 0)
+            {
+                return "target  " + FormatEntityRef(laneEntity) + "\ntrack model  no-chain-hit";
+            }
+            StringBuilder result = new StringBuilder(256);
+            result.Append("target  ").Append(FormatEntityRef(laneEntity));
+
+            for (int i = 0; i < occurrences.Count; i++)
+            {
+                result.Append('\n').Append(FormatDevSightOccurrence(occurrences[i]));
+            }
+
+            return result.ToString();
+        }
+
+        private string FormatDevSightOccurrence(DevSightLaneOccurrence occurrence)
+        {
+            string lineLabel = ResolveTrackModelLineLabel(occurrence.LineEntity, includeEntityFallback: false);
+            return lineLabel + " atoms=" + FormatDevSightAtomIndices(occurrence.AtomIndices);
+        }
+
+        private string FormatDevSightAtomIndices(List<int> atomIndices)
+        {
+            if (atomIndices == null || atomIndices.Count == 0)
+                return "[]";
+
+            if (atomIndices.Count <= 3)
+                return "[" + string.Join(",", atomIndices) + "]";
+
+            return "[" + atomIndices[0] + "," + atomIndices[1] + ".." + atomIndices[atomIndices.Count - 1] + " x" + atomIndices.Count + "]";
+        }
+
+        private static string FormatEntityRef(Entity entity)
+        {
+            return entity == Entity.Null ? "null" : entity.Index + ":" + entity.Version;
         }
 
         private bool TryClassifyTrackAtom(
@@ -2843,6 +3071,39 @@ namespace RapidTransitMod
                 return false;
             }
 
+            if (TryResolveTrainCurrentLaneCursor(
+                    vehicle,
+                    line,
+                    chain,
+                    out cursor))
+            {
+                if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor trainHint)
+                    && trainHint.LineEntity == line
+                    && trainHint.ChainSignature == chain.Signature)
+                {
+                    bool wrappedForward = trainHint.SegmentIndex >= chain.SegmentRanges.Count - 2 && cursor.SegmentIndex <= 1;
+                    bool monotonicForward = cursor.SegmentIndex >= trainHint.SegmentIndex || wrappedForward;
+                    if (!monotonicForward)
+                    {
+                        cursor = new VehicleTrackCursor(
+                            cursor.LineEntity,
+                            cursor.ChainSignature,
+                            cursor.SegmentIndex,
+                            cursor.AtomStartIndex,
+                            cursor.AtomEndIndexExclusive,
+                            cursor.AtomCursorIndex,
+                            cursor.AtomPosition01,
+                            cursor.Confidence * 0.7f);
+                    }
+                }
+
+                if (IsVehicleProgressProjectionInvalid(vehicle, line, chain, cursor.SegmentIndex, cursor.AtomCursorIndex))
+                    return false;
+
+                m_VehicleTrackCursorHints[vehicle] = cursor;
+                return true;
+            }
+
             bool trustedRouteProgress = TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition);
             if (!trustedRouteProgress)
             {
@@ -2932,6 +3193,143 @@ namespace RapidTransitMod
                 confidence);
             m_VehicleTrackCursorHints[vehicle] = cursor;
             return true;
+        }
+
+        private bool TryResolveTrainCurrentLaneCursor(
+            Entity vehicle,
+            Entity line,
+            LineTrackChain chain,
+            out VehicleTrackCursor cursor)
+        {
+            cursor = default;
+            if (vehicle == Entity.Null
+                || chain == null
+                || !EntityManager.HasComponent<Game.Vehicles.TrainCurrentLane>(vehicle))
+            {
+                return false;
+            }
+
+            Game.Vehicles.TrainCurrentLane currentLane = EntityManager.GetComponentData<Game.Vehicles.TrainCurrentLane>(vehicle);
+            Entity frontLane = currentLane.m_Front.m_Lane;
+            Entity rearLane = currentLane.m_Rear.m_Lane;
+            float frontCurvePosition = math.saturate(currentLane.m_Front.m_CurvePosition.x);
+            float rearCurvePosition = math.saturate(currentLane.m_Rear.m_CurvePosition.x);
+
+            int referenceAtomIndex = m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+                && hint.LineEntity == line
+                && hint.ChainSignature == chain.Signature
+                ? hint.AtomCursorIndex
+                : -1;
+
+            int preferredSegmentIndex = m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor segmentHint)
+                && segmentHint.LineEntity == line
+                && segmentHint.ChainSignature == chain.Signature
+                ? segmentHint.SegmentIndex
+                : -1;
+
+            int searchStartAtomIndex = 0;
+            int searchEndAtomIndexExclusive = chain.TrackAtoms.Count;
+            if (preferredSegmentIndex >= 0 && preferredSegmentIndex < chain.SegmentRanges.Count)
+            {
+                int searchStartSegmentIndex = math.max(0, preferredSegmentIndex - 1);
+                int searchEndSegmentIndex = math.min(chain.SegmentRanges.Count - 1, preferredSegmentIndex + 1);
+                searchStartAtomIndex = chain.SegmentRanges[searchStartSegmentIndex].StartAtomIndex;
+                searchEndAtomIndexExclusive = chain.SegmentRanges[searchEndSegmentIndex].EndAtomIndexExclusive;
+            }
+
+            bool found = TryFindClosestAtomIndexForLane(chain, frontLane, searchStartAtomIndex, searchEndAtomIndexExclusive, referenceAtomIndex, out int atomIndex);
+            float atomPosition01 = frontCurvePosition;
+            if (!found)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, rearLane, searchStartAtomIndex, searchEndAtomIndexExclusive, referenceAtomIndex, out atomIndex);
+                atomPosition01 = rearCurvePosition;
+            }
+            if (!found)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, frontLane, 0, chain.TrackAtoms.Count, referenceAtomIndex, out atomIndex);
+                atomPosition01 = frontCurvePosition;
+            }
+            if (!found)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, rearLane, 0, chain.TrackAtoms.Count, referenceAtomIndex, out atomIndex);
+                atomPosition01 = rearCurvePosition;
+            }
+            if (!found)
+                return false;
+
+            int segmentIndex = ResolveSegmentIndexForAtom(chain, atomIndex);
+            if (segmentIndex < 0 || segmentIndex >= chain.SegmentRanges.Count)
+                return false;
+
+            TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
+            cursor = new VehicleTrackCursor(
+                line,
+                chain.Signature,
+                segmentIndex,
+                segmentRange.StartAtomIndex,
+                segmentRange.EndAtomIndexExclusive,
+                atomIndex,
+                atomPosition01,
+                1f);
+            return true;
+        }
+
+        private static bool TryFindClosestAtomIndexForLane(
+            LineTrackChain chain,
+            Entity lane,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            int referenceAtomIndex,
+            out int atomIndex)
+        {
+            atomIndex = -1;
+            if (chain == null
+                || lane == Entity.Null
+                || chain.TrackAtoms.Count == 0)
+            {
+                return false;
+            }
+
+            if (!chain.AtomIndicesByLane.TryGetValue(lane, out List<int> candidateAtomIndices)
+                || candidateAtomIndices == null
+                || candidateAtomIndices.Count == 0)
+            {
+                return false;
+            }
+
+            int bestDistance = int.MaxValue;
+            startAtomIndex = math.clamp(startAtomIndex, 0, chain.TrackAtoms.Count - 1);
+            endAtomIndexExclusive = math.clamp(endAtomIndexExclusive, startAtomIndex + 1, chain.TrackAtoms.Count);
+            for (int candidateIndex = 0; candidateIndex < candidateAtomIndices.Count; candidateIndex++)
+            {
+                int index = candidateAtomIndices[candidateIndex];
+                if (index < startAtomIndex || index >= endAtomIndexExclusive)
+                    continue;
+
+                int distance = math.abs(index - referenceAtomIndex);
+                if (distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                atomIndex = index;
+            }
+
+            return atomIndex >= 0;
+        }
+
+        private static int ResolveSegmentIndexForAtom(LineTrackChain chain, int atomIndex)
+        {
+            if (chain == null || chain.SegmentRanges.Count == 0 || atomIndex < 0)
+                return -1;
+
+            for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
+            {
+                TrackSegmentRange range = chain.SegmentRanges[segmentIndex];
+                if (atomIndex >= range.StartAtomIndex && atomIndex < range.EndAtomIndexExclusive)
+                    return segmentIndex;
+            }
+
+            return -1;
         }
 
         private bool TryGetVehicleTrackCursorCurrentFrame(
@@ -4616,6 +5014,17 @@ namespace RapidTransitMod
                         continue;
                     }
 
+                    if (intervalResolutionSource == "shared-window")
+                    {
+                        TryLogTrainLaneSourceDisagreement(
+                            expressVehicle,
+                            expressLine,
+                            expressWaypoints,
+                            expressChain,
+                            expressCursor,
+                            "shared-window-candidate");
+                    }
+
                     if (!IsProtectedIntervalPairStaticallySameDirection(
                             localChain,
                             protectedInterval,
@@ -4759,6 +5168,7 @@ namespace RapidTransitMod
                             expressCursor.AtomCursorIndex,
                             expressPhaseEndAtomExclusive,
                             expressPositionText);
+                        m_SharedWindowAuditPairStateCache[new SharedWindowPairStateKey(localVehicle, protectedIntervalIndex, expressVehicle)] = "blocker";
                         shadowDecision = new BypassTrackModelShadowDecision(true, true, conflictReason, protectedIntervalIndex, true, expressVehicle, intervalResolutionSource == "fallback");
                         return true;
                     }
@@ -4816,24 +5226,14 @@ namespace RapidTransitMod
                 || string.IsNullOrWhiteSpace(rejectReason))
                 return;
 
-            string pairKey = localVehicle.Index
-                + "|"
-                + protectedIntervalIndex
-                + "|"
-                + expressVehicle.Index;
             string state = "finalReject|" + rejectReason;
+            var pairKey = new SharedWindowPairStateKey(localVehicle, protectedIntervalIndex, expressVehicle);
             if (m_SharedWindowAuditPairStateCache.TryGetValue(pairKey, out string previousState)
                 && previousState == state)
             {
                 return;
             }
             m_SharedWindowAuditPairStateCache[pairKey] = state;
-
-            LogSharedWindowAuditOnce(
-                localVehicle,
-                localLine,
-                protectedIntervalIndex,
-                "finalReject#" + expressVehicle.Index + "=" + rejectReason);
         }
 
         private void TryLogSharedWindowAuditForNoExpress(
@@ -4884,6 +5284,111 @@ namespace RapidTransitMod
                 localLine,
                 protectedIntervalIndex,
                 auditSummary);
+        }
+
+        private bool TryGetSharedWindowPairState(
+            Entity localVehicle,
+            int protectedIntervalIndex,
+            Entity expressVehicle,
+            out string state)
+        {
+            state = string.Empty;
+            if (localVehicle == Entity.Null || expressVehicle == Entity.Null)
+                return false;
+
+            return m_SharedWindowAuditPairStateCache.TryGetValue(
+                new SharedWindowPairStateKey(localVehicle, protectedIntervalIndex, expressVehicle),
+                out state)
+                && !string.IsNullOrWhiteSpace(state);
+        }
+
+        private void TryLogTrainLaneSourceDisagreement(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            VehicleTrackCursor cursor,
+            string stage)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || chain == null
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasComponent<Game.Vehicles.TrainCurrentLane>(vehicle))
+            {
+                return;
+            }
+
+            Entity pathTarget = Entity.Null;
+            int pathElementIndex = -1;
+            if (EntityManager.HasComponent<Game.Pathfind.PathOwner>(vehicle)
+                && EntityManager.HasBuffer<Game.Pathfind.PathElement>(vehicle))
+            {
+                Game.Pathfind.PathOwner pathOwner = EntityManager.GetComponentData<Game.Pathfind.PathOwner>(vehicle);
+                DynamicBuffer<Game.Pathfind.PathElement> path = EntityManager.GetBuffer<Game.Pathfind.PathElement>(vehicle, true);
+                if (pathOwner.m_ElementIndex >= 0 && pathOwner.m_ElementIndex < path.Length)
+                {
+                    pathElementIndex = pathOwner.m_ElementIndex;
+                    pathTarget = path[pathElementIndex].m_Target;
+                }
+            }
+
+            Game.Vehicles.TrainCurrentLane currentLane = EntityManager.GetComponentData<Game.Vehicles.TrainCurrentLane>(vehicle);
+            Entity frontLane = currentLane.m_Front.m_Lane;
+            Entity rearLane = currentLane.m_Rear.m_Lane;
+            Entity navigationLane = Entity.Null;
+            if (EntityManager.HasBuffer<Game.Vehicles.TrainNavigationLane>(vehicle))
+            {
+                DynamicBuffer<Game.Vehicles.TrainNavigationLane> navigationLanes = EntityManager.GetBuffer<Game.Vehicles.TrainNavigationLane>(vehicle, true);
+                if (navigationLanes.Length > 0)
+                    navigationLane = navigationLanes[navigationLanes.Length - 1].m_Lane;
+            }
+
+            Entity cursorLane = Entity.Null;
+            if (cursor.AtomCursorIndex >= 0 && cursor.AtomCursorIndex < chain.TrackAtoms.Count)
+                cursorLane = chain.TrackAtoms[cursor.AtomCursorIndex].Key.PhysicalLaneKey;
+
+            int distinctLaneCount = 0;
+            HashSet<Entity> uniqueLanes = new HashSet<Entity>();
+            if (pathTarget != Entity.Null && uniqueLanes.Add(pathTarget))
+                distinctLaneCount++;
+            if (frontLane != Entity.Null && uniqueLanes.Add(frontLane))
+                distinctLaneCount++;
+            if (rearLane != Entity.Null && uniqueLanes.Add(rearLane))
+                distinctLaneCount++;
+            if (navigationLane != Entity.Null && uniqueLanes.Add(navigationLane))
+                distinctLaneCount++;
+            if (cursorLane != Entity.Null && uniqueLanes.Add(cursorLane))
+                distinctLaneCount++;
+
+            if (distinctLaneCount <= 1)
+                return;
+
+            string key = stage
+                + "|line=" + line.Index
+                + "|pathIdx=" + pathElementIndex
+                + "|path=" + pathTarget.Index
+                + "|front=" + frontLane.Index
+                + "|rear=" + rearLane.Index
+                + "|nav=" + navigationLane.Index
+                + "|cursorLane=" + cursorLane.Index
+                + "|cursorAtom=" + cursor.AtomCursorIndex
+                + "|seg=" + cursor.SegmentIndex;
+
+            string message = "[TrainLaneSource] vehicle=" + vehicle.Index
+                + " line=" + line.Index
+                + " stage=" + stage
+                + " pathIdx=" + pathElementIndex
+                + " pathTarget=" + pathTarget.Index
+                + " frontLane=" + frontLane.Index
+                + " rearLane=" + rearLane.Index
+                + " navLast=" + navigationLane.Index
+                + " cursorLane=" + cursorLane.Index
+                + " cursorAtom=" + cursor.AtomCursorIndex
+                + " seg=" + cursor.SegmentIndex
+                + " conf=" + cursor.Confidence.ToString("0.00");
+
+            LogVehicleStateOnce(m_TrainLaneSourceDiagnosticLogCache, vehicle, key, message);
         }
 
         private void LogBypassSelectedBlockerDetailOnce(
@@ -5432,7 +5937,19 @@ namespace RapidTransitMod
             }
 
             if (lineAudit != null)
-                lineAudit.Append(" #").Append(expressVehicle.Index).Append(":candidate").Append(resolutionSuffix);
+            {
+                if (TryGetSharedWindowPairState(localVehicle, localProtectedIntervalIndex, expressVehicle, out string pairState))
+                {
+                    string stateText = pairState.StartsWith("finalReject|", StringComparison.Ordinal)
+                        ? pairState.Substring("finalReject|".Length)
+                        : pairState;
+                    lineAudit.Append(" #").Append(expressVehicle.Index).Append(":").Append(stateText).Append(resolutionSuffix);
+                }
+                else
+                {
+                    lineAudit.Append(" #").Append(expressVehicle.Index).Append(":candidate").Append(resolutionSuffix);
+                }
+            }
             return true;
         }
 
@@ -6963,7 +7480,9 @@ namespace RapidTransitMod
                 return "local=protected-interval-missing";
 
             StringBuilder sharedWindowAudit = new StringBuilder();
-            sharedWindowAudit.Append("local=").Append(FormatRuntimePosition(localPosition));
+            sharedWindowAudit.Append("local=rel=").Append(localPosition.RelativeToProtectedInterval)
+                .Append(" conf=")
+                .Append(localPosition.Confidence >= 0.9f ? "high" : "ok");
             var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
             var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
             float departureReleaseCoordinate = ComputeForwardDepartureReleaseCoordinate(localChain, protectedInterval, currentBypassBuilding);
@@ -7614,7 +8133,7 @@ namespace RapidTransitMod
             return bestRun;
         }
 
-        private static bool TryFindProtectedIntervalOrderedRunSpan(
+        private bool TryFindProtectedIntervalOrderedRunSpan(
             LineTrackChain sourceChain,
             BypassProtectedInterval sourceInterval,
             LineTrackChain candidateChain,
@@ -7634,43 +8153,43 @@ namespace RapidTransitMod
             if (sourceChain == null || candidateChain == null)
                 return false;
 
-            List<Entity> sourceKeys = new List<Entity>();
-            List<int> sourceAtoms = new List<int>();
+            m_ProtectedIntervalOrderedSourceKeys.Clear();
+            m_ProtectedIntervalOrderedSourceAtomIndices.Clear();
             for (int atomIndex = sourceInterval.StartAtomIndex; atomIndex < sourceInterval.EndAtomIndexExclusive && atomIndex < sourceChain.TrackAtoms.Count; atomIndex++)
             {
                 TrackAtom atom = sourceChain.TrackAtoms[atomIndex];
                 if (!ShouldIncludeIntervalAtom(atom))
                     continue;
 
-                sourceKeys.Add(atom.Key.PhysicalLaneKey);
-                sourceAtoms.Add(atomIndex);
+                m_ProtectedIntervalOrderedSourceKeys.Add(atom.Key.PhysicalLaneKey);
+                m_ProtectedIntervalOrderedSourceAtomIndices.Add(atomIndex);
             }
 
-            List<Entity> candidateKeys = new List<Entity>();
-            List<int> candidateAtoms = new List<int>();
+            m_ProtectedIntervalOrderedCandidateKeys.Clear();
+            m_ProtectedIntervalOrderedCandidateAtomIndices.Clear();
             for (int atomIndex = candidateInterval.StartAtomIndex; atomIndex < candidateInterval.EndAtomIndexExclusive && atomIndex < candidateChain.TrackAtoms.Count; atomIndex++)
             {
                 TrackAtom atom = candidateChain.TrackAtoms[atomIndex];
                 if (!ShouldIncludeIntervalAtom(atom))
                     continue;
 
-                candidateKeys.Add(atom.Key.PhysicalLaneKey);
-                candidateAtoms.Add(atomIndex);
+                m_ProtectedIntervalOrderedCandidateKeys.Add(atom.Key.PhysicalLaneKey);
+                m_ProtectedIntervalOrderedCandidateAtomIndices.Add(atomIndex);
             }
 
-            if (sourceKeys.Count == 0 || candidateKeys.Count == 0)
+            if (m_ProtectedIntervalOrderedSourceKeys.Count == 0 || m_ProtectedIntervalOrderedCandidateKeys.Count == 0)
                 return false;
 
             int bestSourceIndex = -1;
             int bestCandidateIndex = -1;
-            for (int sourceIndex = 0; sourceIndex < sourceKeys.Count; sourceIndex++)
+            for (int sourceIndex = 0; sourceIndex < m_ProtectedIntervalOrderedSourceKeys.Count; sourceIndex++)
             {
-                for (int candidateIndex = 0; candidateIndex < candidateKeys.Count; candidateIndex++)
+                for (int candidateIndex = 0; candidateIndex < m_ProtectedIntervalOrderedCandidateKeys.Count; candidateIndex++)
                 {
                     int run = 0;
-                    while (sourceIndex + run < sourceKeys.Count
-                        && candidateIndex + run < candidateKeys.Count
-                        && sourceKeys[sourceIndex + run] == candidateKeys[candidateIndex + run])
+                    while (sourceIndex + run < m_ProtectedIntervalOrderedSourceKeys.Count
+                        && candidateIndex + run < m_ProtectedIntervalOrderedCandidateKeys.Count
+                        && m_ProtectedIntervalOrderedSourceKeys[sourceIndex + run] == m_ProtectedIntervalOrderedCandidateKeys[candidateIndex + run])
                     {
                         run++;
                     }
@@ -7687,10 +8206,10 @@ namespace RapidTransitMod
             if (orderedRunLength <= 0 || bestSourceIndex < 0 || bestCandidateIndex < 0)
                 return false;
 
-            sourceStartAtomIndex = sourceAtoms[bestSourceIndex];
-            sourceEndAtomIndexExclusive = sourceAtoms[bestSourceIndex + orderedRunLength - 1] + 1;
-            candidateStartAtomIndex = candidateAtoms[bestCandidateIndex];
-            candidateEndAtomIndexExclusive = candidateAtoms[bestCandidateIndex + orderedRunLength - 1] + 1;
+            sourceStartAtomIndex = m_ProtectedIntervalOrderedSourceAtomIndices[bestSourceIndex];
+            sourceEndAtomIndexExclusive = m_ProtectedIntervalOrderedSourceAtomIndices[bestSourceIndex + orderedRunLength - 1] + 1;
+            candidateStartAtomIndex = m_ProtectedIntervalOrderedCandidateAtomIndices[bestCandidateIndex];
+            candidateEndAtomIndexExclusive = m_ProtectedIntervalOrderedCandidateAtomIndices[bestCandidateIndex + orderedRunLength - 1] + 1;
             return sourceEndAtomIndexExclusive > sourceStartAtomIndex
                 && candidateEndAtomIndexExclusive > candidateStartAtomIndex;
         }
