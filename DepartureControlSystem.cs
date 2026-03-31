@@ -222,12 +222,56 @@ namespace RapidTransitMod
             public readonly Entity Line;
             public readonly int SliceIndex;
             public readonly uint EnterFrame;
+            public readonly int EnterAtomIndex;
+            public readonly float EnterAtomPosition01;
 
-            public VehicleTraversalSliceSession(Entity line, int sliceIndex, uint enterFrame)
+            public VehicleTraversalSliceSession(Entity line, int sliceIndex, uint enterFrame, int enterAtomIndex, float enterAtomPosition01)
             {
                 Line = line;
                 SliceIndex = sliceIndex;
                 EnterFrame = enterFrame;
+                EnterAtomIndex = enterAtomIndex;
+                EnterAtomPosition01 = enterAtomPosition01;
+            }
+        }
+
+        private struct TraversalSliceLapDebugAggregate
+        {
+            public int StartCount;
+            public int FinalizeCount;
+            public int MidSliceStartCount;
+            public int DroppedWithoutFinalizeCount;
+            public float EnterOffsetSumAtoms;
+            public float MaxEnterOffsetAtoms;
+            public float ObservedFramesSum;
+            public float MinObservedFrames;
+            public float MaxObservedFrames;
+
+            public void RecordStart(float enterOffsetAtoms, bool midSliceStart)
+            {
+                StartCount++;
+                EnterOffsetSumAtoms += enterOffsetAtoms;
+                if (enterOffsetAtoms > MaxEnterOffsetAtoms)
+                    MaxEnterOffsetAtoms = enterOffsetAtoms;
+                if (midSliceStart)
+                    MidSliceStartCount++;
+            }
+
+            public void RecordFinalize(float observedFrames)
+            {
+                FinalizeCount++;
+                ObservedFramesSum += observedFrames;
+                if (FinalizeCount == 1)
+                {
+                    MinObservedFrames = observedFrames;
+                    MaxObservedFrames = observedFrames;
+                    return;
+                }
+
+                if (observedFrames < MinObservedFrames)
+                    MinObservedFrames = observedFrames;
+                if (observedFrames > MaxObservedFrames)
+                    MaxObservedFrames = observedFrames;
             }
         }
 
@@ -370,9 +414,11 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BvMisfireObserveLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_DepartureObserveLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BvWaypointMismatchLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BvTrackAnchorRecoveryLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
+        private readonly Dictionary<ulong, TraversalSliceLapDebugAggregate> m_VehicleTraversalSliceLapDebug = new Dictionary<ulong, TraversalSliceLapDebugAggregate>();
         private readonly Dictionary<Entity, BypassHoldCadenceSnapshot> m_BypassHoldCadenceSnapshots = new Dictionary<Entity, BypassHoldCadenceSnapshot>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_WaypointIndexFrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
@@ -1740,6 +1786,7 @@ namespace RapidTransitMod
             m_WaypointIndexFrameSnapshots.Clear();
             m_RouteProgressFrameSnapshots.Clear();
             m_BvWaypointMismatchLogCache.Clear();
+            m_BvTrackAnchorRecoveryLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_SystemReady = false;
             m_StartupRuntimeStateCleared = false;
@@ -1859,6 +1906,7 @@ namespace RapidTransitMod
             m_LineRunningVehicleFrameSnapshots.Clear();
             m_RouteProgressFrameSnapshots.Clear();
             m_BvWaypointMismatchLogCache.Clear();
+            m_BvTrackAnchorRecoveryLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_LastPuppetMasterMinute = -1;
             m_LastRegisterSweepMinute = -1;
@@ -3073,7 +3121,11 @@ namespace RapidTransitMod
                         m_LastBoarding[v] = boarding;
 
                     if (state != VehicleState.Running)
+                    {
+                        if (m_VehicleTraversalSliceSessions.TryGetValue(v, out VehicleTraversalSliceSession droppedSession))
+                            RecordTraversalSliceLapDebugDropped(v, droppedSession.SliceIndex);
                         m_VehicleTraversalSliceSessions.Remove(v);
+                    }
 
                     bool atA = state == VehicleState.Preparing
                         ? HasPreparingVehicleReachedOrigin(v, wps, boarding, curWpIdx)
@@ -3730,7 +3782,9 @@ namespace RapidTransitMod
                     m_StopDwellStartFrame.Remove(dead);
                     m_BypassYieldBlocker.Remove(dead);
                     m_VehicleTraversalSliceSessions.Remove(dead);
+                    ClearVehicleTraversalSliceLapDebug(dead);
                     m_BvWaypointMismatchLogCache.Remove(dead);
+                    m_BvTrackAnchorRecoveryLogCache.Remove(dead);
                     m_BvWaypointMismatchLastLogFrame.Remove(dead);
                     m_BypassQueuedLocalOverrideLogCache.Remove(dead);
                     log.Info("[清理] 车辆" + dead.Index + " 消失");
@@ -3801,6 +3855,15 @@ namespace RapidTransitMod
         {
             if (!EntityManager.HasComponent<Game.Objects.Transform>(v)) return -1;
             float3 vPos = EntityManager.GetComponentData<Game.Objects.Transform>(v).m_Position;
+            bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v)
+                && (EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v).m_State & PublicTransportFlags.Boarding) != 0;
+            int targetWaypointIndex = -1;
+            if (EntityManager.HasComponent<Target>(v))
+            {
+                Entity targetWaypoint = EntityManager.GetComponentData<Target>(v).m_Target;
+                if (EntityManager.HasComponent<Waypoint>(targetWaypoint))
+                    targetWaypointIndex = EntityManager.GetComponentData<Waypoint>(targetWaypoint).m_Index;
+            }
 
             int bvWi = -1;
             float bvDist = float.MaxValue;
@@ -3840,6 +3903,17 @@ namespace RapidTransitMod
                     if (IsSuppressedForcedMidStopBoardingGhost(v, target, wps, m_SimulationSystem.frameIndex, out _))
                         return closestWi >= 0 ? closestWi : -1;
                 }
+
+                if (TryResolveWaypointIndexByTrackCursor(v, wps, targetWaypointIndex, bvWi, closestWi, out int anchoredWaypointIndex, out string anchorDetail))
+                {
+                    LogVehicleStateOnce(
+                        m_BvTrackAnchorRecoveryLogCache,
+                        v,
+                        "bv-mismatch|" + anchorDetail,
+                        "[定位接管] 车辆" + v.Index + " BV误写后按track锚定 wp[" + anchoredWaypointIndex + "] " + anchorDetail);
+                    return anchoredWaypointIndex;
+                }
+
                 uint nowFrame = m_SimulationSystem.frameIndex;
                 string mismatchKey = "wps[" + bvWi + "]|closest[" + closestWi + "]";
                 if (ShouldEmitVehicleLogWithCooldown(
@@ -3856,10 +3930,146 @@ namespace RapidTransitMod
                 return -1;
             }
 
+            if (boarding && TryResolveWaypointIndexByTrackCursor(v, wps, targetWaypointIndex, -1, closestWi, out int boardingWaypointIndex, out string boardingAnchorDetail))
+            {
+                LogVehicleStateOnce(
+                    m_BvTrackAnchorRecoveryLogCache,
+                    v,
+                    "boarding-track|" + boardingAnchorDetail,
+                    "[定位接管] 车辆" + v.Index + " boarding无站位按track锚定 wp[" + boardingWaypointIndex + "] " + boardingAnchorDetail);
+                return boardingWaypointIndex;
+            }
+
             if (closestWi >= 0)
                 return closestWi;
 
             return -1;
+        }
+
+        private bool TryResolveWaypointIndexByTrackCursor(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int targetWaypointIndex,
+            int boardingWaypointIndex,
+            int closestWaypointIndex,
+            out int waypointIndex,
+            out string detail)
+        {
+            waypointIndex = -1;
+            detail = string.Empty;
+            Entity line = ResolveVehicleLine(vehicle);
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            {
+                return false;
+            }
+
+            var candidateIndices = new HashSet<int>();
+            void AddCandidate(int index)
+            {
+                if (index >= 0 && index < waypoints.Length)
+                    candidateIndices.Add(index);
+            }
+
+            AddCandidate(targetWaypointIndex);
+            AddCandidate(boardingWaypointIndex);
+            AddCandidate(closestWaypointIndex);
+            if (cursor.SegmentIndex >= 0)
+            {
+                AddCandidate(cursor.SegmentIndex);
+                AddCandidate(cursor.SegmentIndex + 1);
+                AddCandidate(cursor.SegmentIndex - 1);
+                AddCandidate(cursor.SegmentIndex + 2);
+            }
+
+            int bestWaypointIndex = -1;
+            int bestWindowStart = -1;
+            int bestWindowEndExclusive = -1;
+            int bestDistance = int.MaxValue;
+            const int anchorSlackAtoms = 6;
+
+            foreach (int candidateIndex in candidateIndices)
+            {
+                if (!TryGetWaypointTraversalAtomWindow(chain, candidateIndex, cursor.AtomCursorIndex, out int windowStart, out int windowEndExclusive))
+                    continue;
+
+                int expandedStart = math.max(0, windowStart - anchorSlackAtoms);
+                int expandedEndExclusive = math.min(chain.TrackAtoms.Count, windowEndExclusive + anchorSlackAtoms);
+                if (cursor.AtomCursorIndex < expandedStart || cursor.AtomCursorIndex >= expandedEndExclusive)
+                    continue;
+
+                int distance = cursor.AtomCursorIndex < windowStart
+                    ? windowStart - cursor.AtomCursorIndex
+                    : cursor.AtomCursorIndex >= windowEndExclusive
+                        ? cursor.AtomCursorIndex - (windowEndExclusive - 1)
+                        : 0;
+                if (distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                bestWaypointIndex = candidateIndex;
+                bestWindowStart = windowStart;
+                bestWindowEndExclusive = windowEndExclusive;
+            }
+
+            if (bestWaypointIndex < 0)
+                return false;
+
+            waypointIndex = bestWaypointIndex;
+            detail = "atom=" + cursor.AtomCursorIndex
+                + " seg=" + cursor.SegmentIndex
+                + " targetWp=" + targetWaypointIndex
+                + " bvWp=" + boardingWaypointIndex
+                + " closestWp=" + closestWaypointIndex
+                + " window=" + bestWindowStart + ".." + bestWindowEndExclusive;
+            return true;
+        }
+
+        private bool TryGetWaypointTraversalAtomWindow(
+            LineTrackChain chain,
+            int waypointIndex,
+            int referenceAtomIndex,
+            out int startAtomIndex,
+            out int endAtomIndexExclusive)
+        {
+            startAtomIndex = -1;
+            endAtomIndexExclusive = -1;
+            if (chain == null
+                || chain.TraversalProfile == null
+                || chain.TraversalProfile.Events == null
+                || waypointIndex < 0)
+            {
+                return false;
+            }
+
+            int bestDistance = int.MaxValue;
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                if (traversalEvent.WaypointIndex != waypointIndex
+                    || (traversalEvent.Kind != TraversalEventKind.Stop && traversalEvent.Kind != TraversalEventKind.Pass))
+                {
+                    continue;
+                }
+
+                int candidateStart = traversalEvent.StartAtomIndex;
+                int candidateEndExclusive = math.max(candidateStart + 1, traversalEvent.EndAtomIndexExclusive);
+                int candidateDistance = referenceAtomIndex < candidateStart
+                    ? candidateStart - referenceAtomIndex
+                    : referenceAtomIndex >= candidateEndExclusive
+                        ? referenceAtomIndex - (candidateEndExclusive - 1)
+                        : 0;
+                if (candidateDistance >= bestDistance)
+                    continue;
+
+                bestDistance = candidateDistance;
+                startAtomIndex = candidateStart;
+                endAtomIndexExclusive = candidateEndExclusive;
+            }
+
+            return startAtomIndex >= 0 && endAtomIndexExclusive > startAtomIndex;
         }
 
         private bool IsSuppressedForcedMidStopBoardingGhost(
@@ -4359,6 +4569,7 @@ namespace RapidTransitMod
                 m_RestoredRunning.Remove(v);
                 if (lapDist > 0f)
                     m_VehicleLapDistance[v] = lapDist;
+                ClearVehicleTraversalSliceLapDebug(v);
                 log.Info("[圈统计-跳过] " + lineTag + " 车辆" + v.Index
                     + " 恢复首圈，圈距" + (lapDist / 1000f).ToString("F2") + "km，圈时不可信，跳过写入");
                 return;
@@ -4417,6 +4628,8 @@ namespace RapidTransitMod
 
                 if (m_VehicleLine.TryGetValue(v, out Entity lapLine))
                     FlushLineLapCache(lapLine);
+
+                ClearVehicleTraversalSliceLapDebug(v);
             }
         }
 
@@ -4473,8 +4686,10 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> waypoints,
             uint nowFrame)
         {
-            if (!TryGetCurrentTraversalRunSlice(vehicle, line, waypoints, out int sliceIndex))
+            if (!TryGetCurrentTraversalRunSlice(vehicle, line, waypoints, out int sliceIndex, out VehicleTrackCursor cursor))
             {
+                if (m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession droppedSession))
+                    RecordTraversalSliceLapDebugDropped(vehicle, droppedSession.SliceIndex);
                 m_VehicleTraversalSliceSessions.Remove(vehicle);
                 return;
             }
@@ -4487,7 +4702,15 @@ namespace RapidTransitMod
             }
 
             FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame);
-            m_VehicleTraversalSliceSessions[vehicle] = new VehicleTraversalSliceSession(line, sliceIndex, nowFrame);
+            if (TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                && chain.TraversalProfile != null
+                && sliceIndex >= 0
+                && sliceIndex < chain.TraversalProfile.RunSlices.Count)
+            {
+                RecordTraversalSliceLapDebugStart(vehicle, chain.TraversalProfile.RunSlices[sliceIndex], cursor.AtomCursorIndex, cursor.AtomPosition01);
+            }
+
+            m_VehicleTraversalSliceSessions[vehicle] = new VehicleTraversalSliceSession(line, sliceIndex, nowFrame, cursor.AtomCursorIndex, cursor.AtomPosition01);
         }
 
         private void FinalizeVehicleTraversalSliceObservation(Entity vehicle, uint nowFrame)
@@ -4503,6 +4726,7 @@ namespace RapidTransitMod
             }
 
             float observedFrames = nowFrame - session.EnterFrame;
+            RecordTraversalSliceLapDebugFinalize(vehicle, session.SliceIndex, observedFrames);
             ulong key = MakeTraversalSliceObservationKey(session.Line, session.SliceIndex);
             if (m_TraversalRunSliceObservations.TryGetValue(key, out TraversalSliceObservation existing))
             {
@@ -4522,16 +4746,18 @@ namespace RapidTransitMod
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            out int sliceIndex)
+            out int sliceIndex,
+            out VehicleTrackCursor cursor)
         {
             sliceIndex = -1;
+            cursor = default;
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypoints.Length == 0
                 || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
                 || chain.TraversalProfile == null
                 || chain.TraversalProfile.RunSlices.Count == 0
-                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor))
             {
                 return false;
             }
@@ -4579,6 +4805,79 @@ namespace RapidTransitMod
             }
         }
 
+        private static ulong MakeVehicleTraversalSliceLapDebugKey(Entity vehicle, int sliceIndex)
+        {
+            unchecked
+            {
+                return ((ulong)(uint)vehicle.Index << 32) | (uint)sliceIndex;
+            }
+        }
+
+        private void RecordTraversalSliceLapDebugStart(Entity vehicle, TraversalRunSlice slice, int atomIndex, float atomPosition01)
+        {
+            if (vehicle == Entity.Null || slice.SliceIndex < 0)
+                return;
+
+            float enterCoordinate = atomIndex + math.saturate(atomPosition01);
+            float enterOffsetAtoms = math.max(0f, enterCoordinate - slice.StartAtomIndex);
+            bool midSliceStart = enterOffsetAtoms > 0.05f;
+            ulong key = MakeVehicleTraversalSliceLapDebugKey(vehicle, slice.SliceIndex);
+            if (!m_VehicleTraversalSliceLapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
+                aggregate = default;
+
+            aggregate.RecordStart(enterOffsetAtoms, midSliceStart);
+            m_VehicleTraversalSliceLapDebug[key] = aggregate;
+        }
+
+        private void RecordTraversalSliceLapDebugDropped(Entity vehicle, int sliceIndex)
+        {
+            if (vehicle == Entity.Null || sliceIndex < 0)
+                return;
+
+            ulong key = MakeVehicleTraversalSliceLapDebugKey(vehicle, sliceIndex);
+            if (!m_VehicleTraversalSliceLapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
+                aggregate = default;
+
+            aggregate.DroppedWithoutFinalizeCount++;
+            m_VehicleTraversalSliceLapDebug[key] = aggregate;
+        }
+
+        private void RecordTraversalSliceLapDebugFinalize(Entity vehicle, int sliceIndex, float observedFrames)
+        {
+            if (vehicle == Entity.Null || sliceIndex < 0 || observedFrames <= 0f)
+                return;
+
+            ulong key = MakeVehicleTraversalSliceLapDebugKey(vehicle, sliceIndex);
+            if (!m_VehicleTraversalSliceLapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
+                aggregate = default;
+
+            aggregate.RecordFinalize(observedFrames);
+            m_VehicleTraversalSliceLapDebug[key] = aggregate;
+        }
+
+        private void ClearVehicleTraversalSliceLapDebug(Entity vehicle)
+        {
+            if (vehicle == Entity.Null || m_VehicleTraversalSliceLapDebug.Count == 0)
+                return;
+
+            List<ulong> removeKeys = null;
+            foreach (var kvp in m_VehicleTraversalSliceLapDebug)
+            {
+                if ((int)(kvp.Key >> 32) != vehicle.Index)
+                    continue;
+
+                if (removeKeys == null)
+                    removeKeys = new List<ulong>();
+                removeKeys.Add(kvp.Key);
+            }
+
+            if (removeKeys == null)
+                return;
+
+            for (int i = 0; i < removeKeys.Count; i++)
+                m_VehicleTraversalSliceLapDebug.Remove(removeKeys[i]);
+        }
+
         private void LogTraversalProfileLapSlices(
             Entity vehicle,
             Entity line,
@@ -4603,16 +4902,47 @@ namespace RapidTransitMod
                 string startLabel = DescribeTraversalBoundaryLabel(chain, slice.StartEventIndex, slice.StartAtomIndex);
                 string endLabel = DescribeTraversalBoundaryLabel(chain, slice.EndEventIndex, slice.EndAtomIndexExclusive);
                 float stopFrames = GetTraversalSliceStopFrames(chain, slice);
+                float staticRunFrames = math.max(0f, slice.RunFrames);
                 TryGetEffectiveTraversalRunSliceFrames(line, slice, out float effectiveRunFrames);
+                ulong observationKey = MakeTraversalSliceObservationKey(line, slice.SliceIndex);
+                bool hasObservation = m_TraversalRunSliceObservations.TryGetValue(observationKey, out TraversalSliceObservation observation)
+                    && observation.SampleCount > 0
+                    && observation.AverageFrames > 0f;
+                ulong lapDebugKey = MakeVehicleTraversalSliceLapDebugKey(vehicle, slice.SliceIndex);
+                bool hasLapDebug = m_VehicleTraversalSliceLapDebug.TryGetValue(lapDebugKey, out TraversalSliceLapDebugAggregate lapDebug);
+                string lapDebugText = string.Empty;
+                if (hasLapDebug && lapDebug.StartCount > 0)
+                {
+                    float avgEnterOffset = lapDebug.EnterOffsetSumAtoms / math.max(1, lapDebug.StartCount);
+                    lapDebugText = " lapStart=" + lapDebug.StartCount
+                        + " midStart=" + lapDebug.MidSliceStartCount
+                        + " drop=" + lapDebug.DroppedWithoutFinalizeCount
+                        + " enterOffsetAvg=" + avgEnterOffset.ToString("0.00")
+                        + "a"
+                        + " enterOffsetMax=" + lapDebug.MaxEnterOffsetAtoms.ToString("0.00")
+                        + "a";
+                    if (lapDebug.FinalizeCount > 0)
+                    {
+                        lapDebugText += " obsLapAvg=" + (lapDebug.ObservedFramesSum / lapDebug.FinalizeCount / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
+                            + " obsLapMin=" + (lapDebug.MinObservedFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
+                            + " obsLapMax=" + (lapDebug.MaxObservedFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟";
+                    }
+                }
 
                 log.Info("[快车圈时明细] " + lineTag + " 车辆" + vehicle.Index
                     + " slice#" + slice.SliceIndex
                     + " " + startLabel + " -> " + endLabel
                     + " run=" + (math.max(0f, effectiveRunFrames) / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
+                    + " staticRun=" + (staticRunFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
                     + " stop=" + (stopFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
                     + " total=" + ((math.max(0f, effectiveRunFrames) + stopFrames) / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
                     + " atoms=" + slice.StartAtomIndex + ".." + slice.EndAtomIndexExclusive
-                    + " laneKeys=" + (slice.PhysicalLaneKeys != null ? slice.PhysicalLaneKeys.Length : 0));
+                    + " laneKeys=" + (slice.PhysicalLaneKeys != null ? slice.PhysicalLaneKeys.Length : 0)
+                    + " obsGlobal=" + (hasObservation ? observation.SampleCount.ToString() : "0")
+                    + (hasObservation
+                        ? " obsGlobalAvg=" + (observation.AverageFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "分钟"
+                        : string.Empty)
+                    + lapDebugText);
             }
         }
 

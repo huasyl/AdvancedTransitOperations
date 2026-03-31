@@ -740,11 +740,15 @@ namespace RapidTransitMod
 
             if (draft.StagedRows != null)
             {
+                HashSet<string> stagedRowSemanticKeys = new HashSet<string>(
+                    stagedRows.Select(BuildWorkbenchStagedRowSemanticKey),
+                    StringComparer.Ordinal);
                 foreach (DispatchWorkbenchStagedRowDto row in draft.StagedRows)
                 {
                     if (row != null
                         && validRuntimeLineIds.Contains(row.lineId ?? string.Empty)
-                        && stagedRowIds.Add(row.id ?? string.Empty))
+                        && stagedRowIds.Add(row.id ?? string.Empty)
+                        && stagedRowSemanticKeys.Add(BuildWorkbenchStagedRowSemanticKey(row)))
                     {
                         stagedRows.Add(CloneStagedRow(row));
                     }
@@ -1144,6 +1148,7 @@ namespace RapidTransitMod
                 }
 
                 SyncWorkbenchDraftsFromAppliedState();
+                InvalidateAppliedWorkbenchTrackModelState();
                 m_AppliedWorkbenchPersistenceLoaded = true;
                 return true;
             }
@@ -1265,6 +1270,13 @@ namespace RapidTransitMod
             }
 
             SyncWorkbenchDraftsFromAppliedState();
+            InvalidateAppliedWorkbenchTrackModelState();
+        }
+
+        private void InvalidateAppliedWorkbenchTrackModelState()
+        {
+            m_SharedTrackIndexDirty = true;
+            ClearBypassTrackModelRuntimeState();
         }
 
         private void RefreshAppliedWorkbenchLineSettings()
@@ -3248,6 +3260,18 @@ namespace RapidTransitMod
                 source = row.source,
                 note = row.note
             };
+        }
+
+        private static string BuildWorkbenchStagedRowSemanticKey(DispatchWorkbenchStagedRowDto row)
+        {
+            if (row == null)
+                return string.Empty;
+
+            return (row.lineId ?? string.Empty)
+                + "|"
+                + (string.IsNullOrEmpty(row.kind) ? "local" : row.kind)
+                + "|"
+                + (row.time ?? string.Empty);
         }
 
         private static DispatchWorkbenchLineSettingDto CloneLineSetting(DispatchWorkbenchLineSettingDto setting)

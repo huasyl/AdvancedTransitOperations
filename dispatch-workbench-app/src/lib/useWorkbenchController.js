@@ -278,14 +278,24 @@ function minutesToTime(totalMinutes) {
 }
 
 function normalizeStagedRows(rows) {
-  return ensureArray(rows, emptyStagedRows).map((row, index) => ({
-    id: row?.id || `staged-${index + 1}`,
-    lineId: row?.lineId || "",
-    time: row?.time || "",
-    kind: row?.kind === "express" ? "express" : "local",
-    source: row?.source || "manual",
-    note: row?.note || ""
-  }));
+  const seen = new Set();
+  return ensureArray(rows, emptyStagedRows)
+    .map((row, index) => ({
+      id: row?.id || `staged-${index + 1}`,
+      lineId: row?.lineId || "",
+      time: row?.time || "",
+      kind: row?.kind === "express" ? "express" : "local",
+      source: row?.source || "manual",
+      note: row?.note || ""
+    }))
+    .filter((row) => {
+      const key = `${row.lineId}|${row.kind}|${row.time}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }
 
 export function useWorkbenchController() {

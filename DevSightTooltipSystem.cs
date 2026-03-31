@@ -6,9 +6,10 @@ using Game.Pathfind;
 using Game.Prefabs;
 using Game.Rendering;
 using Game.Tools;
-using Game.UI.Localization;
 using Game.UI.Tooltip;
 using System;
+using System.Collections.Generic;
+using System.Text;
 using System.Reflection;
 using Unity.Collections;
 using Unity.Entities;
@@ -76,7 +77,6 @@ namespace RapidTransitMod
         private ToolRaycastSystem m_ToolRaycastSystem = null!;
         private DevSightRaycastCollectorSystem m_RaycastCollectorSystem = null!;
         private CameraUpdateSystem m_CameraUpdateSystem = null!;
-        private StringTooltip m_Tooltip = null!;
         private bool m_ToggleArmed = true;
         private bool m_Enabled;
         private Entity m_LastMoveItEntity = Entity.Null;
@@ -178,11 +178,6 @@ namespace RapidTransitMod
             m_ToolRaycastSystem = World.GetOrCreateSystemManaged<ToolRaycastSystem>();
             m_RaycastCollectorSystem = World.GetOrCreateSystemManaged<DevSightRaycastCollectorSystem>();
             m_CameraUpdateSystem = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
-            m_Tooltip = new StringTooltip
-            {
-                path = "rapidTransit.devSight.trackLane",
-                icon = "Media/Game/Icons/Train.svg"
-            };
         }
 
         [Preserve]
@@ -213,10 +208,6 @@ namespace RapidTransitMod
             if (!m_CameraUpdateSystem.TryGetViewer(out var viewer))
             {
                 SetPanelState(true, "viewer", "DevSight: no-viewer");
-                m_Tooltip.value = LocalizedString.IdWithFallback(
-                    "RapidTransit.DevSight.TrackLane",
-                    "DevSight: no-viewer");
-                AddMouseTooltip(m_Tooltip);
                 return;
             }
 
@@ -259,13 +250,7 @@ namespace RapidTransitMod
                 string summaryText = moveItControl != null
                     ? moveItControl.BuildDevSightLaneTooltipSummary(finalEntity)
                     : "target  " + FormatEntity(moveItVisibleEntity);
-                string tooltipContent = "source  MoveIt visible\n" + summaryText;
                 SetPanelState(true, "MoveIt visible", summaryText);
-
-                m_Tooltip.value = LocalizedString.IdWithFallback(
-                    "RapidTransit.DevSight.TrackLane",
-                    tooltipContent);
-                AddMouseTooltip(m_Tooltip);
                 return;
             }
 
@@ -276,10 +261,6 @@ namespace RapidTransitMod
                     ? moveItControl.BuildDevSightLaneTooltipSummary(moveItOverlayOwner)
                     : "target  " + FormatEntity(moveItOverlayOwner);
                 SetPanelState(true, "MoveIt overlay", summaryText);
-                m_Tooltip.value = LocalizedString.IdWithFallback(
-                    "RapidTransit.DevSight.TrackLane",
-                    "source  MoveIt overlay\n" + summaryText);
-                AddMouseTooltip(m_Tooltip);
                 return;
             }
 
@@ -290,10 +271,6 @@ namespace RapidTransitMod
                     ? moveItControl.BuildDevSightLaneTooltipSummary(moveItEntity)
                     : "target  " + FormatEntity(moveItEntity);
                 SetPanelState(true, "MoveIt searcher", summaryText);
-                m_Tooltip.value = LocalizedString.IdWithFallback(
-                    "RapidTransit.DevSight.TrackLane",
-                    "source  MoveIt searcher\n" + summaryText);
-                AddMouseTooltip(m_Tooltip);
                 return;
             }
 
@@ -306,10 +283,6 @@ namespace RapidTransitMod
             if (!hasMoveItResult && !hasCollectorResult)
             {
                 SetPanelState(true, "raycast", "DevSight: no-raycast-result");
-                m_Tooltip.value = LocalizedString.IdWithFallback(
-                    "RapidTransit.DevSight.TrackLane",
-                    "DevSight: no-raycast-result");
-                AddMouseTooltip(m_Tooltip);
                 return;
             }
 
@@ -319,10 +292,6 @@ namespace RapidTransitMod
             DevSightProbe probe = ProbeTrackLane(result);
             string summary = BuildTooltipText(result, probe);
             SetPanelState(true, hasMoveItResult ? "MoveIt raw" : "collector", summary);
-            m_Tooltip.value = LocalizedString.IdWithFallback(
-                "RapidTransit.DevSight.TrackLane",
-                summary);
-            AddMouseTooltip(m_Tooltip);
         }
 
         private bool TryGetMoveItOverlayOwner(out Entity entity)
@@ -744,6 +713,15 @@ namespace RapidTransitMod
 
         private string BuildTooltipText(RaycastResult result, DevSightProbe probe)
         {
+            DepartureControlSystem control = DepartureControlSystem.Instance;
+            if (control != null
+                && probe.NetEntity != Entity.Null
+                && probe.NetHasSubLane
+                && probe.TrainTrackSubLaneCount > 1)
+            {
+                return BuildNetBoundLaneText(control, probe);
+            }
+
             Entity resolvedTarget = probe.FirstTrainTrackSubLane != Entity.Null
                 ? probe.FirstTrainTrackSubLane
                 : (probe.FirstTrackSubLane != Entity.Null
@@ -759,11 +737,48 @@ namespace RapidTransitMod
                     + "chain   " + DescribeOwnerChain(probe.RawHitEntity);
             }
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
             if (control == null)
                 return "target  " + FormatEntity(resolvedTarget) + "\ntrack model  unavailable";
 
             return control.BuildDevSightLaneTooltipSummary(resolvedTarget);
+        }
+
+        private string BuildNetBoundLaneText(DepartureControlSystem control, DevSightProbe probe)
+        {
+            StringBuilder sb = new StringBuilder(512);
+            sb.Append("target  ").Append(FormatEntity(probe.NetEntity));
+            sb.Append('\n').Append("net     ").Append(DescribeEntity(probe.NetEntity));
+
+            DynamicBuffer<Game.Net.SubLane> subLanes = World.EntityManager.GetBuffer<Game.Net.SubLane>(probe.NetEntity, true);
+            List<Entity> trainLanes = new List<Entity>();
+            for (int i = 0; i < subLanes.Length; i++)
+            {
+                Game.Net.SubLane subLane = subLanes[i];
+                if ((subLane.m_PathMethods & PathMethod.Track) == 0)
+                    continue;
+
+                Entity laneEntity = subLane.m_SubLane;
+                if (laneEntity == Entity.Null
+                    || !World.EntityManager.HasComponent<Game.Net.TrackLane>(laneEntity)
+                    || !TryGetTrackLaneType(laneEntity, out Game.Net.TrackTypes trackTypes)
+                    || (trackTypes & Game.Net.TrackTypes.Train) == 0)
+                {
+                    continue;
+                }
+
+                if (!trainLanes.Contains(laneEntity))
+                    trainLanes.Add(laneEntity);
+            }
+
+            sb.Append('\n').Append("lanes   ").Append(trainLanes.Count);
+            for (int i = 0; i < trainLanes.Count; i++)
+            {
+                Entity laneEntity = trainLanes[i];
+                sb.Append('\n').Append("lane    ").Append(FormatEntity(laneEntity));
+                sb.Append('\n').Append(control.BuildDevSightLaneTooltipSummary(laneEntity));
+            }
+
+            return sb.ToString();
         }
 
         private string DescribeOwnerChain(Entity entity)

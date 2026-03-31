@@ -2769,6 +2769,24 @@ namespace RapidTransitMod
             return frames;
         }
 
+        private static float EstimateAverageControlEdgeFramesPerAtom(LineTrackChain chain)
+        {
+            if (chain == null || chain.ControlEdges == null || chain.ControlEdges.Count == 0)
+                return 0f;
+
+            float totalFrames = 0f;
+            int totalAtoms = 0;
+            for (int i = 0; i < chain.ControlEdges.Count; i++)
+            {
+                ControlEdge edge = chain.ControlEdges[i];
+                int edgeAtomLength = math.max(1, edge.EndAtomIndexExclusive - edge.StartAtomIndex);
+                totalFrames += edge.BaseFrames;
+                totalAtoms += edgeAtomLength;
+            }
+
+            return totalAtoms > 0 ? totalFrames / totalAtoms : 0f;
+        }
+
         private bool TryResolveBypassProtectedInterval(
             LineTrackChain chain,
             DynamicBuffer<RouteWaypoint> waypoints,
@@ -3759,7 +3777,7 @@ namespace RapidTransitMod
 
             int currentControlEdgeIndex = ResolveControlEdgeIndexForAtom(chain, cursor.AtomCursorIndex);
             TrackModelRelativeToProtectedInterval relative = ResolveRelativeToProtectedInterval(currentControlEdgeIndex, cursor.AtomCursorIndex, protectedInterval);
-            float confidence = currentControlEdgeIndex >= 0 ? cursor.Confidence : cursor.Confidence * 0.5f;
+            float confidence = cursor.Confidence;
             runtimePosition = new TrackModelRuntimePosition(currentControlEdgeIndex, cursor.AtomCursorIndex, cursor.AtomPosition01, relative, confidence);
             return true;
         }
@@ -5627,7 +5645,8 @@ namespace RapidTransitMod
             for (int sliceIndex = 0; sliceIndex < chain.TraversalProfile.RunSlices.Count; sliceIndex++)
             {
                 TraversalRunSlice slice = chain.TraversalProfile.RunSlices[sliceIndex];
-                if (!(slice.RunFrames > 0f))
+                if (!TryGetEffectiveTraversalRunSliceFrames(chain.LineEntity, slice, out float effectiveRunFrames)
+                    || !(effectiveRunFrames > 0f))
                     continue;
 
                 float overlapStart = math.max(fromCoordinate, slice.StartAtomIndex);
@@ -5636,7 +5655,7 @@ namespace RapidTransitMod
                     continue;
 
                 float sliceLength = math.max(1f, slice.EndAtomIndexExclusive - slice.StartAtomIndex);
-                runFrames += slice.RunFrames * ((overlapEnd - overlapStart) / sliceLength);
+                runFrames += effectiveRunFrames * ((overlapEnd - overlapStart) / sliceLength);
             }
 
             float stopFrames = 0f;
@@ -5694,7 +5713,11 @@ namespace RapidTransitMod
             float localSpeed = localDistanceToClear / math.max(1f, localClearFrames);
             if (!(localSpeed > 0f))
             {
-                rejectReason = "linear-catch-safe local-speed";
+                rejectReason = "linear-catch-safe local-speed"
+                    + " localCoord=" + localCoordinate.ToString("0.00")
+                    + " corridorEnd=" + corridorEndCoordinate.ToString("0.00")
+                    + " localDist=" + localDistanceToClear.ToString("0.00")
+                    + " localClear=" + FormatEtaFrames(localClearFrames);
                 return false;
             }
 
@@ -5719,7 +5742,12 @@ namespace RapidTransitMod
             float expressFramesAfterBase = expressClearFrames - modelStartFrames;
             if (!(expressFramesAfterBase > 0f))
             {
-                rejectReason = "linear-catch-safe express-window";
+                rejectReason = "linear-catch-safe express-window"
+                    + " modelStart=" + FormatEtaFrames(modelStartFrames)
+                    + " expressClear=" + FormatEtaFrames(expressClearFrames)
+                    + " expressBase=" + expressBaseCoordinate.ToString("0.00")
+                    + " localBase=" + localBaseCoordinate.ToString("0.00")
+                    + " expressDist=" + expressDistanceAfterBase.ToString("0.00");
                 return false;
             }
 
@@ -5730,7 +5758,20 @@ namespace RapidTransitMod
             if (!(expressSpeed > localSpeed))
             {
                 rejectReason = "linear-catch-safe speed local=" + localSpeed.ToString("0.000")
-                    + " express=" + expressSpeed.ToString("0.000") + "]";
+                    + " express=" + expressSpeed.ToString("0.000")
+                    + " localCoord=" + localCoordinate.ToString("0.00")
+                    + " expressCoord=" + expressCoordinate.ToString("0.00")
+                    + " corridor=" + corridorStartCoordinate.ToString("0.00") + ".." + corridorEndCoordinate.ToString("0.00")
+                    + " modelStart=" + FormatEtaFrames(modelStartFrames)
+                    + " localBase=" + localBaseCoordinate.ToString("0.00")
+                    + " expressBase=" + expressBaseCoordinate.ToString("0.00")
+                    + " localDist=" + localDistanceToClear.ToString("0.00")
+                    + " expressDist=" + expressDistanceAfterBase.ToString("0.00")
+                    + " localClear=" + FormatEtaFrames(localClearFrames)
+                    + " expressEntry=" + FormatEtaFrames(expressEntryFrames)
+                    + " expressClear=" + FormatEtaFrames(expressClearFrames)
+                    + " expressAfterBase=" + FormatEtaFrames(expressFramesAfterBase)
+                    + "]";
                 catchText += "]";
                 return false;
             }
@@ -5751,7 +5792,13 @@ namespace RapidTransitMod
             {
                 rejectReason = "linear-catch-safe catch=" + FormatEtaFrames(catchFrames)
                     + " localClear=" + FormatEtaFrames(localClearFrames)
-                    + " expressClear=" + FormatEtaFrames(expressClearFrames);
+                    + " expressClear=" + FormatEtaFrames(expressClearFrames)
+                    + " modelStart=" + FormatEtaFrames(modelStartFrames)
+                    + " localBase=" + localBaseCoordinate.ToString("0.00")
+                    + " expressBase=" + expressBaseCoordinate.ToString("0.00")
+                    + " delta=" + deltaAtModelStart.ToString("0.00")
+                    + " localSpeed=" + localSpeed.ToString("0.000")
+                    + " expressSpeed=" + expressSpeed.ToString("0.000");
                 return false;
             }
 
@@ -7129,13 +7176,10 @@ namespace RapidTransitMod
             startAtomIndex = math.clamp(startAtomIndex, 0, chain.TrackAtoms.Count - 1);
             endAtomIndexExclusive = math.clamp(endAtomIndexExclusive, startAtomIndex + 1, chain.TrackAtoms.Count);
 
-            int startControlEdgeIndex = ResolveControlEdgeIndexForAtom(chain, startAtomIndex);
-            int endControlEdgeIndexInclusive = ResolveControlEdgeIndexForAtom(chain, math.max(startAtomIndex, endAtomIndexExclusive - 1));
-            if (startControlEdgeIndex < 0 || endControlEdgeIndexInclusive < startControlEdgeIndex)
-                return default;
-
+            int startControlEdgeIndex = -1;
+            int endControlEdgeIndexInclusive = -1;
             float baseFrames = 0f;
-            for (int controlEdgeIndex = startControlEdgeIndex; controlEdgeIndex <= endControlEdgeIndexInclusive && controlEdgeIndex < chain.ControlEdges.Count; controlEdgeIndex++)
+            for (int controlEdgeIndex = 0; controlEdgeIndex < chain.ControlEdges.Count; controlEdgeIndex++)
             {
                 ControlEdge edge = chain.ControlEdges[controlEdgeIndex];
                 int overlapStart = math.max(edge.StartAtomIndex, startAtomIndex);
@@ -7143,9 +7187,39 @@ namespace RapidTransitMod
                 if (overlapEndExclusive <= overlapStart)
                     continue;
 
+                if (startControlEdgeIndex < 0)
+                    startControlEdgeIndex = controlEdgeIndex;
+                endControlEdgeIndexInclusive = controlEdgeIndex;
+
                 int edgeAtomLength = math.max(1, edge.EndAtomIndexExclusive - edge.StartAtomIndex);
                 int overlapAtomLength = overlapEndExclusive - overlapStart;
                 baseFrames += edge.BaseFrames * (overlapAtomLength / (float)edgeAtomLength);
+            }
+
+            if (startControlEdgeIndex < 0 && chain.ControlEdges.Count > 0)
+            {
+                if (endAtomIndexExclusive <= chain.ControlEdges[0].StartAtomIndex)
+                {
+                    startControlEdgeIndex = 0;
+                    endControlEdgeIndexInclusive = 0;
+                }
+                else
+                {
+                    int lastControlEdgeIndex = chain.ControlEdges.Count - 1;
+                    ControlEdge lastEdge = chain.ControlEdges[lastControlEdgeIndex];
+                    if (startAtomIndex >= lastEdge.EndAtomIndexExclusive)
+                    {
+                        startControlEdgeIndex = lastControlEdgeIndex;
+                        endControlEdgeIndexInclusive = lastControlEdgeIndex;
+                    }
+                }
+            }
+
+            if (!(baseFrames > 0f))
+            {
+                float averageFramesPerAtom = EstimateAverageControlEdgeFramesPerAtom(chain);
+                if (averageFramesPerAtom > 0f)
+                    baseFrames = (endAtomIndexExclusive - startAtomIndex) * averageFramesPerAtom;
             }
 
             return new BypassProtectedInterval(
@@ -7384,16 +7458,33 @@ namespace RapidTransitMod
             int currentControlEdgeIndex = runtimePosition.CurrentControlEdgeIndex >= 0
                 ? runtimePosition.CurrentControlEdgeIndex
                 : ResolveControlEdgeIndexForAtom(chain, runtimePosition.CurrentAtomIndex);
-            if (currentControlEdgeIndex < 0 || currentControlEdgeIndex >= chain.ControlEdges.Count)
-                return float.MaxValue;
-
             int fromAtomIndex = math.clamp(runtimePosition.CurrentAtomIndex, 0, chain.TrackAtoms.Count - 1);
             int toAtomIndexExclusive = math.clamp(targetAtomIndexExclusive, fromAtomIndex + 1, chain.TrackAtoms.Count);
+            float averageFramesPerAtom = EstimateAverageControlEdgeFramesPerAtom(chain);
+            if (currentControlEdgeIndex < 0 || currentControlEdgeIndex >= chain.ControlEdges.Count)
+            {
+                if (!(averageFramesPerAtom > 0f))
+                    return float.MaxValue;
+
+                float rawAtomDistance = (toAtomIndexExclusive - fromAtomIndex) - math.saturate(runtimePosition.AtomPosition01);
+                return math.max(0f, rawAtomDistance * averageFramesPerAtom);
+            }
+
             float frames = EstimateFramesBetweenAtoms(chain, currentControlEdgeIndex, chain.ControlEdges.Count - 1, fromAtomIndex, toAtomIndexExclusive);
             ControlEdge currentEdge = chain.ControlEdges[currentControlEdgeIndex];
             int edgeAtomLength = math.max(1, currentEdge.EndAtomIndexExclusive - currentEdge.StartAtomIndex);
             float consumedFrames = (currentEdge.BaseFrames / edgeAtomLength) * math.saturate(runtimePosition.AtomPosition01);
-            return math.max(0f, frames - consumedFrames);
+            frames = math.max(0f, frames - consumedFrames);
+
+            ControlEdge lastEdge = chain.ControlEdges[chain.ControlEdges.Count - 1];
+            if (averageFramesPerAtom > 0f && toAtomIndexExclusive > lastEdge.EndAtomIndexExclusive)
+            {
+                int uncoveredStartAtomIndex = math.max(fromAtomIndex, lastEdge.EndAtomIndexExclusive);
+                if (toAtomIndexExclusive > uncoveredStartAtomIndex)
+                    frames += (toAtomIndexExclusive - uncoveredStartAtomIndex) * averageFramesPerAtom;
+            }
+
+            return frames;
         }
 
         private static string FormatEtaFrames(float frames)
@@ -7462,6 +7553,217 @@ namespace RapidTransitMod
                 + " " + auditSummary);
         }
 
+        private string BuildSharedWindowNoMatchDebugSummary(
+            LineTrackChain localChain,
+            BypassProtectedInterval localProtectedInterval,
+            Entity currentBypassBuilding,
+            LineTrackChain expressChain)
+        {
+            if (localChain == null || expressChain == null)
+                return string.Empty;
+
+            StringBuilder debug = new StringBuilder();
+            debug.Append(" localP=").Append(localProtectedInterval.StartAtomIndex)
+                .Append("..").Append(localProtectedInterval.EndAtomIndexExclusive);
+
+            if (TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex))
+            {
+                debug.Append(" exit=").Append(stationExitAtomIndex)
+                    .Append(" gate<=").Append(stationExitAtomIndex + MAX_CONFLICT_CORRIDOR_GAP_ATOMS);
+            }
+            else
+            {
+                debug.Append(" exit=none");
+            }
+
+            if (localChain.SharedRunsByOtherLine.TryGetValue(expressChain.LineEntity, out List<SharedTrackRun> localSharedRuns)
+                && localSharedRuns != null
+                && localSharedRuns.Count > 0)
+            {
+                debug.Append(" localRuns=");
+                int written = 0;
+                for (int i = 0; i < localSharedRuns.Count && written < 4; i++)
+                {
+                    SharedTrackRun run = localSharedRuns[i];
+                    int start = math.max(run.StartAtomIndex, localProtectedInterval.StartAtomIndex);
+                    int endExclusive = math.min(run.EndAtomIndexExclusive, localProtectedInterval.EndAtomIndexExclusive);
+                    if (endExclusive <= start)
+                        continue;
+
+                    if (written > 0)
+                        debug.Append(",");
+
+                    debug.Append(start).Append("..").Append(endExclusive);
+                    written++;
+                }
+
+                if (written == 0)
+                    debug.Append("none-in-local");
+            }
+            else
+            {
+                debug.Append(" localRuns=none");
+            }
+
+            if (expressChain.SharedRunsByOtherLine.TryGetValue(localChain.LineEntity, out List<SharedTrackRun> expressSharedRuns)
+                && expressSharedRuns != null
+                && expressSharedRuns.Count > 0)
+            {
+                debug.Append(" expressRuns=");
+                int written = 0;
+                for (int i = 0; i < expressSharedRuns.Count && written < 4; i++)
+                {
+                    SharedTrackRun run = expressSharedRuns[i];
+                    if (written > 0)
+                        debug.Append(",");
+
+                    debug.Append(run.StartAtomIndex).Append("..").Append(run.EndAtomIndexExclusive);
+                    written++;
+                }
+            }
+            else
+            {
+                debug.Append(" expressRuns=none");
+            }
+
+            GlobalSharedTrunkSnapshot snapshot = GetGlobalSharedTrunkSnapshotCurrent(localChain, expressChain);
+            if (snapshot == null || snapshot.Segments.Count == 0)
+            {
+                debug.Append(" pairSegs=none");
+                return debug.Append(BuildSharedWindowNoMatchPairAttemptSummary(
+                    localChain,
+                    localProtectedInterval,
+                    expressChain,
+                    localSharedRuns,
+                    expressSharedRuns)).ToString();
+            }
+
+            debug.Append(" pairSegs=");
+            int segmentWritten = 0;
+            for (int i = 0; i < snapshot.Segments.Count && segmentWritten < 4; i++)
+            {
+                GlobalSharedTrunkSegment segment = snapshot.Segments[i];
+                int localStart = math.max(segment.LocalCorridorStartAtomIndex, localProtectedInterval.StartAtomIndex);
+                int localEndExclusive = math.min(segment.LocalCorridorEndAtomIndexExclusive, localProtectedInterval.EndAtomIndexExclusive);
+                if (localEndExclusive <= localStart)
+                    continue;
+
+                if (segmentWritten > 0)
+                    debug.Append(",");
+
+                debug.Append("L").Append(localStart).Append("..").Append(localEndExclusive)
+                    .Append("/E").Append(segment.ExpressCorridorStartAtomIndex).Append("..").Append(segment.ExpressCorridorEndAtomIndexExclusive)
+                    .Append("/")
+                    .Append(segment.TraversalRelation == SharedTraversalRelation.SameDirection
+                        ? "same"
+                        : segment.TraversalRelation == SharedTraversalRelation.OppositeDirection
+                            ? "opp"
+                            : "unk");
+                segmentWritten++;
+            }
+
+            if (segmentWritten == 0)
+                debug.Append("none-in-local");
+
+            return debug.Append(BuildSharedWindowNoMatchPairAttemptSummary(
+                localChain,
+                localProtectedInterval,
+                expressChain,
+                localSharedRuns,
+                expressSharedRuns)).ToString();
+        }
+
+        private string BuildSharedWindowNoMatchPairAttemptSummary(
+            LineTrackChain localChain,
+            BypassProtectedInterval localProtectedInterval,
+            LineTrackChain expressChain,
+            List<SharedTrackRun> localSharedRuns,
+            List<SharedTrackRun> expressSharedRuns)
+        {
+            if (localChain == null
+                || expressChain == null
+                || localSharedRuns == null
+                || localSharedRuns.Count == 0
+                || expressSharedRuns == null
+                || expressSharedRuns.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var localBands = new List<SharedRunBand>();
+            var expressBands = new List<SharedRunBand>();
+            BuildSharedRunBands(localChain, localSharedRuns, localBands);
+            BuildSharedRunBands(expressChain, expressSharedRuns, expressBands);
+
+            StringBuilder debug = new StringBuilder();
+            debug.Append(" pairTry=");
+            int attemptCount = 0;
+            for (int localIndex = 0; localIndex < localBands.Count && attemptCount < 4; localIndex++)
+            {
+                SharedRunBand localBand = localBands[localIndex];
+                int clippedLocalStart = math.max(localBand.StartAtomIndex, localProtectedInterval.StartAtomIndex);
+                int clippedLocalEndExclusive = math.min(localBand.EndAtomIndexExclusive, localProtectedInterval.EndAtomIndexExclusive);
+                if (clippedLocalEndExclusive <= clippedLocalStart)
+                    continue;
+
+                BypassProtectedInterval localWindow = BuildAtomWindowInterval(localChain, clippedLocalStart, clippedLocalEndExclusive);
+                if (localWindow.EndAtomIndexExclusive <= localWindow.StartAtomIndex)
+                    continue;
+
+                for (int expressIndex = 0; expressIndex < expressBands.Count && attemptCount < 4; expressIndex++)
+                {
+                    SharedRunBand expressBand = expressBands[expressIndex];
+                    BypassProtectedInterval expressWindow = BuildAtomWindowInterval(expressChain, expressBand.StartAtomIndex, expressBand.EndAtomIndexExclusive);
+                    if (expressWindow.EndAtomIndexExclusive <= expressWindow.StartAtomIndex)
+                        continue;
+
+                    if (attemptCount > 0)
+                        debug.Append(",");
+
+                    debug.Append("L").Append(clippedLocalStart).Append("..").Append(clippedLocalEndExclusive)
+                        .Append("/E").Append(expressBand.StartAtomIndex).Append("..").Append(expressBand.EndAtomIndexExclusive);
+
+                    int overlapCount = CountProtectedIntervalPhysicalOverlap(localChain, localWindow, expressChain, expressWindow);
+                    if (overlapCount <= 0)
+                    {
+                        debug.Append(":overlap0");
+                        attemptCount++;
+                        continue;
+                    }
+
+                    int orderedRun = ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localWindow, expressChain, expressWindow);
+                    SharedTraversalRelation relation = ResolveSharedTraversalRelation(localChain, localBand, expressChain, expressBand);
+                    if (orderedRun <= 0)
+                    {
+                        debug.Append(":run0/")
+                            .Append(relation == SharedTraversalRelation.SameDirection
+                                ? "same"
+                                : relation == SharedTraversalRelation.OppositeDirection
+                                    ? "opp"
+                                    : "unk");
+                        attemptCount++;
+                        continue;
+                    }
+
+                    debug.Append(":ok")
+                        .Append("/o=").Append(overlapCount)
+                        .Append("/r=").Append(orderedRun)
+                        .Append("/")
+                        .Append(relation == SharedTraversalRelation.SameDirection
+                            ? "same"
+                            : relation == SharedTraversalRelation.OppositeDirection
+                                ? "opp"
+                                : "unk");
+                    attemptCount++;
+                }
+            }
+
+            if (attemptCount == 0)
+                debug.Append("none");
+
+            return debug.ToString();
+        }
+
         private string BuildSharedWindowAuditSummary(
             Entity localVehicle,
             Entity localLine,
@@ -7517,7 +7819,12 @@ namespace RapidTransitMod
                         ? expressRunsForLocal.Count
                         : 0;
                     sharedWindowAudit.Append(" | line=").Append(expressLine.Index)
-                        .Append(" match=none runs=").Append(expressSharedRunCountForLocal);
+                        .Append(" match=none runs=").Append(expressSharedRunCountForLocal)
+                        .Append(BuildSharedWindowNoMatchDebugSummary(
+                            localChain,
+                            protectedInterval,
+                            currentBypassBuilding,
+                            expressChain));
                     continue;
                 }
 
