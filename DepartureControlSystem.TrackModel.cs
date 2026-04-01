@@ -1129,6 +1129,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BypassTrackModelShadowLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelShadowThrottleCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BypassTrackModelShadowLastLogFrame = new Dictionary<Entity, uint>();
+        private const bool ENABLE_TRACKMODEL_DIAGNOSTIC_LOGS = true;
         private readonly Dictionary<Entity, string> m_BypassSelectedBlockerDetailLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_TrainLaneSourceDiagnosticLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BypassTrackModelCompareLogCache = new Dictionary<Entity, string>();
@@ -3092,6 +3093,7 @@ namespace RapidTransitMod
             if (TryResolveTrainCurrentLaneCursor(
                     vehicle,
                     line,
+                    waypoints,
                     chain,
                     out cursor))
             {
@@ -3138,8 +3140,25 @@ namespace RapidTransitMod
 
             if (boarding)
             {
-                int anchoredWaypointIndex = ComputeWpIndex(vehicle, waypoints);
-                if (anchoredWaypointIndex >= 0)
+                // Avoid recursive dependency between cursor projection and
+                // waypoint anchoring when boarding vehicles lose a reliable
+                // TrainCurrentLane projection.
+                if (m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
+                    && cachedWaypointIndex >= 0
+                    && cachedWaypointIndex < waypoints.Length)
+                {
+                    nextWaypointIndex = cachedWaypointIndex;
+                    segmentPosition = 0f;
+                    trustedRouteProgress = false;
+                }
+                else if (trustedRouteProgress && TryResolveStationAnchoredProgressFallback(
+                    vehicle,
+                    line,
+                    waypoints,
+                    chain,
+                    nextWaypointIndex,
+                    segmentPosition,
+                    out int anchoredWaypointIndex))
                 {
                     nextWaypointIndex = anchoredWaypointIndex;
                     segmentPosition = 0f;
@@ -3216,6 +3235,7 @@ namespace RapidTransitMod
         private bool TryResolveTrainCurrentLaneCursor(
             Entity vehicle,
             Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
             LineTrackChain chain,
             out VehicleTrackCursor cursor)
         {
@@ -3245,6 +3265,28 @@ namespace RapidTransitMod
                 ? segmentHint.SegmentIndex
                 : -1;
 
+            bool found = TryResolveSemanticLaneAtomCandidate(
+                vehicle,
+                line,
+                waypoints,
+                chain,
+                frontLane,
+                referenceAtomIndex,
+                out int atomIndex);
+            float atomPosition01 = frontCurvePosition;
+            if (!found)
+            {
+                found = TryResolveSemanticLaneAtomCandidate(
+                    vehicle,
+                    line,
+                    waypoints,
+                    chain,
+                    rearLane,
+                    referenceAtomIndex,
+                    out atomIndex);
+                atomPosition01 = rearCurvePosition;
+            }
+
             int searchStartAtomIndex = 0;
             int searchEndAtomIndexExclusive = chain.TrackAtoms.Count;
             if (preferredSegmentIndex >= 0 && preferredSegmentIndex < chain.SegmentRanges.Count)
@@ -3255,8 +3297,11 @@ namespace RapidTransitMod
                 searchEndAtomIndexExclusive = chain.SegmentRanges[searchEndSegmentIndex].EndAtomIndexExclusive;
             }
 
-            bool found = TryFindClosestAtomIndexForLane(chain, frontLane, searchStartAtomIndex, searchEndAtomIndexExclusive, referenceAtomIndex, out int atomIndex);
-            float atomPosition01 = frontCurvePosition;
+            if (!found)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, frontLane, searchStartAtomIndex, searchEndAtomIndexExclusive, referenceAtomIndex, out atomIndex);
+                atomPosition01 = frontCurvePosition;
+            }
             if (!found)
             {
                 found = TryFindClosestAtomIndexForLane(chain, rearLane, searchStartAtomIndex, searchEndAtomIndexExclusive, referenceAtomIndex, out atomIndex);
@@ -3290,6 +3335,112 @@ namespace RapidTransitMod
                 atomPosition01,
                 1f);
             return true;
+        }
+
+        private bool TryResolveSemanticLaneAtomCandidate(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            Entity lane,
+            int referenceAtomIndex,
+            out int atomIndex)
+        {
+            atomIndex = -1;
+            if (lane == Entity.Null
+                || chain == null
+                || chain.SegmentRanges.Count == 0
+                || waypoints.Length == 0)
+            {
+                return false;
+            }
+
+            int segmentCount = chain.SegmentRanges.Count;
+            List<int> semanticSegments = new List<int>(4);
+            void AddSegmentCandidate(int segmentIndex)
+            {
+                if (segmentIndex < 0)
+                    return;
+
+                int normalized = segmentIndex % segmentCount;
+                if (normalized < 0)
+                    normalized += segmentCount;
+
+                if (!semanticSegments.Contains(normalized))
+                    semanticSegments.Add(normalized);
+            }
+
+            void AddWaypointAnchor(int waypointIndex)
+            {
+                if (waypointIndex < 0 || waypointIndex >= waypoints.Length)
+                    return;
+
+                AddSegmentCandidate(waypointIndex == 0 ? segmentCount - 1 : waypointIndex - 1);
+            }
+
+            if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+                && hint.LineEntity == line
+                && hint.ChainSignature == chain.Signature)
+            {
+                AddSegmentCandidate(hint.SegmentIndex);
+            }
+
+            if (m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex))
+                AddWaypointAnchor(cachedWaypointIndex);
+
+            if (EntityManager.HasComponent<Target>(vehicle))
+            {
+                Entity targetWaypoint = EntityManager.GetComponentData<Target>(vehicle).m_Target;
+                if (EntityManager.HasComponent<Waypoint>(targetWaypoint))
+                    AddWaypointAnchor(EntityManager.GetComponentData<Waypoint>(targetWaypoint).m_Index);
+            }
+
+            if (TryGetRouteProgress(vehicle, out int nextWaypointIndex, out _))
+                AddWaypointAnchor(nextWaypointIndex);
+
+            if (semanticSegments.Count == 0)
+                return false;
+
+            int[] segmentOffsets = new[] { 0, -1, 1 };
+            int bestDistance = int.MaxValue;
+            foreach (int baseSegmentIndex in semanticSegments)
+            {
+                for (int offsetIndex = 0; offsetIndex < segmentOffsets.Length; offsetIndex++)
+                {
+                    int segmentIndex = baseSegmentIndex + segmentOffsets[offsetIndex];
+                    if (segmentIndex < 0)
+                        segmentIndex += segmentCount;
+                    else if (segmentIndex >= segmentCount)
+                        segmentIndex -= segmentCount;
+
+                    TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
+                    if (!TryFindClosestAtomIndexForLane(
+                            chain,
+                            lane,
+                            segmentRange.StartAtomIndex,
+                            segmentRange.EndAtomIndexExclusive,
+                            referenceAtomIndex,
+                            out int candidateAtomIndex))
+                    {
+                        continue;
+                    }
+
+                    if (referenceAtomIndex < 0)
+                    {
+                        atomIndex = candidateAtomIndex;
+                        return true;
+                    }
+
+                    int candidateDistance = math.abs(candidateAtomIndex - referenceAtomIndex);
+                    if (candidateDistance >= bestDistance)
+                        continue;
+
+                    bestDistance = candidateDistance;
+                    atomIndex = candidateAtomIndex;
+                }
+            }
+
+            return atomIndex >= 0;
         }
 
         private static bool TryFindClosestAtomIndexForLane(
@@ -4909,6 +5060,19 @@ namespace RapidTransitMod
             var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
             bool releaseClearedUsedFallbackResolution = false;
             bool sawReleaseClearedExpress = false;
+            bool foundBestBlocker = false;
+            float bestBlockerEntryFrames = float.MaxValue;
+            string bestConflictReason = string.Empty;
+            string bestExpressPositionText = string.Empty;
+            Entity bestExpressVehicle = Entity.Null;
+            Entity bestExpressLine = Entity.Null;
+            int bestExpressProtectedIntervalIndex = -1;
+            string bestIntervalResolutionSource = string.Empty;
+            int bestOverlapCount = 0;
+            int bestOrderedRun = 0;
+            int bestExpressAtomCursorIndex = -1;
+            int bestExpressPhaseEndAtomExclusive = -1;
+            bool bestUsedFallbackResolution = false;
 
             foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
             {
@@ -5144,6 +5308,10 @@ namespace RapidTransitMod
                     }
 
                     if (TryEvaluateSameDirectionProtectedIntervalConflict(
+                            localVehicle,
+                            localLine,
+                            localWaypoints,
+                            currentWaypointIndex,
                             localChain,
                             protectedInterval,
                             currentBypassBuilding,
@@ -5156,12 +5324,13 @@ namespace RapidTransitMod
                               intervalDisplayLength,
                               localCoordinate,
                               includeLocalCoordinate,
-                              expressCoordinate,
-                              includeExpressCoordinate,
-                              expressPosition,
-                              out string conflictReason,
-                              out string expressPositionText,
-                              out string rejectReason))
+                            expressCoordinate,
+                            includeExpressCoordinate,
+                            expressPosition,
+                            out string conflictReason,
+                            out string expressPositionText,
+                            out string rejectReason,
+                            out float blockerEntryFrames))
                     {
                         int expressPhaseEndAtomExclusive = -1;
                         if (TryGetExpressCurrentForwardPhaseWindow(
@@ -5172,23 +5341,22 @@ namespace RapidTransitMod
                             expressPhaseEndAtomExclusive = phaseEndAtomExclusive;
                         }
 
-                        LogBypassSelectedBlockerDetailOnce(
-                            localVehicle,
-                            localLine,
-                            protectedIntervalIndex,
-                            currentBypassBuilding,
-                            expressVehicle,
-                            expressLine,
-                            expressProtectedIntervalIndex,
-                            intervalResolutionSource,
-                            overlapCount,
-                            orderedRun,
-                            expressCursor.AtomCursorIndex,
-                            expressPhaseEndAtomExclusive,
-                            expressPositionText);
-                        m_SharedWindowAuditPairStateCache[new SharedWindowPairStateKey(localVehicle, protectedIntervalIndex, expressVehicle)] = "blocker";
-                        shadowDecision = new BypassTrackModelShadowDecision(true, true, conflictReason, protectedIntervalIndex, true, expressVehicle, intervalResolutionSource == "fallback");
-                        return true;
+                        if (!foundBestBlocker || blockerEntryFrames < bestBlockerEntryFrames)
+                        {
+                            foundBestBlocker = true;
+                            bestBlockerEntryFrames = blockerEntryFrames;
+                            bestConflictReason = conflictReason;
+                            bestExpressPositionText = expressPositionText;
+                            bestExpressVehicle = expressVehicle;
+                            bestExpressLine = expressLine;
+                            bestExpressProtectedIntervalIndex = expressProtectedIntervalIndex;
+                            bestIntervalResolutionSource = intervalResolutionSource;
+                            bestOverlapCount = overlapCount;
+                            bestOrderedRun = orderedRun;
+                            bestExpressAtomCursorIndex = expressCursor.AtomCursorIndex;
+                            bestExpressPhaseEndAtomExclusive = expressPhaseEndAtomExclusive;
+                            bestUsedFallbackResolution = intervalResolutionSource == "fallback";
+                        }
                     }
                     else if (!string.IsNullOrWhiteSpace(rejectReason)
                         && intervalResolutionSource == "shared-window")
@@ -5206,6 +5374,27 @@ namespace RapidTransitMod
                             rejectReason);
                     }
                 }
+            }
+
+            if (foundBestBlocker)
+            {
+                LogBypassSelectedBlockerDetailOnce(
+                    localVehicle,
+                    localLine,
+                    protectedIntervalIndex,
+                    currentBypassBuilding,
+                    bestExpressVehicle,
+                    bestExpressLine,
+                    bestExpressProtectedIntervalIndex,
+                    bestIntervalResolutionSource,
+                    bestOverlapCount,
+                    bestOrderedRun,
+                    bestExpressAtomCursorIndex,
+                    bestExpressPhaseEndAtomExclusive,
+                    bestExpressPositionText);
+                m_SharedWindowAuditPairStateCache[new SharedWindowPairStateKey(localVehicle, protectedIntervalIndex, bestExpressVehicle)] = "blocker";
+                shadowDecision = new BypassTrackModelShadowDecision(true, true, bestConflictReason, protectedIntervalIndex, true, bestExpressVehicle, bestUsedFallbackResolution);
+                return true;
             }
 
             if (sawReleaseClearedExpress)
@@ -5270,6 +5459,9 @@ namespace RapidTransitMod
             {
                 return;
             }
+
+            if (!ENABLE_TRACKMODEL_DIAGNOSTIC_LOGS)
+                return;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
             string coarseKey = "no-express-in-shared-window|"
@@ -5336,6 +5528,9 @@ namespace RapidTransitMod
             {
                 return;
             }
+
+            if (!ENABLE_TRACKMODEL_DIAGNOSTIC_LOGS)
+                return;
 
             Entity pathTarget = Entity.Null;
             int pathElementIndex = -1;
@@ -5424,6 +5619,9 @@ namespace RapidTransitMod
             int expressPhaseEndAtomExclusive,
             string expressPositionText)
         {
+            if (!ENABLE_TRACKMODEL_DIAGNOSTIC_LOGS)
+                return;
+
             string key = localProtectedIntervalIndex.ToString()
                 + "|b=" + currentBypassBuilding.Index
                 + "|x=" + expressVehicle.Index
@@ -5454,6 +5652,10 @@ namespace RapidTransitMod
         }
 
         private bool TryEvaluateSameDirectionProtectedIntervalConflict(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
             LineTrackChain localChain,
             BypassProtectedInterval localProtectedInterval,
             Entity currentBypassBuilding,
@@ -5471,11 +5673,13 @@ namespace RapidTransitMod
             TrackModelRuntimePosition expressPosition,
             out string reason,
             out string expressPositionText,
-            out string rejectReason)
+            out string rejectReason,
+            out float blockerEntryFrames)
         {
             reason = string.Empty;
             expressPositionText = FormatRuntimePosition(expressPosition);
             rejectReason = string.Empty;
+            blockerEntryFrames = float.MaxValue;
 
             if (expressPosition.RelativeToProtectedInterval == TrackModelRelativeToProtectedInterval.After)
             {
@@ -5545,7 +5749,22 @@ namespace RapidTransitMod
             float localClearFrames = hasLocalTraversalTiming
                 ? localTraversalTiming.TotalFrames
                 : EstimateRuntimeFramesToAtomBoundary(localChain, localPosition, localCorridor.EndAtomIndexExclusive);
+            float localBoardingFrames = 0f;
+            if (TryEstimateRemainingBoardingDwellFrames(
+                    localVehicle,
+                    localLine,
+                    localWaypoints,
+                    currentWaypointIndex,
+                    currentBypassBuilding,
+                    m_SimulationSystem.frameIndex,
+                    out float estimatedBoardingFrames))
+            {
+                localBoardingFrames = estimatedBoardingFrames;
+                if (localClearFrames != float.MaxValue)
+                    localClearFrames += estimatedBoardingFrames;
+            }
             float expressEntryFrames = EstimateRuntimeFramesToAtomBoundary(expressChain, expressPosition, expressCorridor.StartAtomIndex);
+            blockerEntryFrames = expressEntryFrames;
             bool hasExpressTraversalTiming = TryEstimateTraversalTimingWithinCorridor(expressChain, expressCorridor, expressPosition, out TraversalTimingEstimate expressTraversalTiming);
             float expressClearFrames = hasExpressTraversalTiming
                 ? (expressPosition.CurrentAtomIndex < expressCorridor.StartAtomIndex
@@ -5564,6 +5783,7 @@ namespace RapidTransitMod
                 + " localClear=" + FormatEtaFrames(localClearFrames)
                 + " localRun=" + FormatEtaFrames(hasLocalTraversalTiming ? localTraversalTiming.RunFrames : float.MaxValue)
                 + " localStop=" + FormatEtaFrames(hasLocalTraversalTiming ? localTraversalTiming.StopFrames : 0f)
+                + " localBoarding=" + FormatEtaFrames(localBoardingFrames)
                 + " expressRun=" + FormatEtaFrames(hasExpressTraversalTiming ? expressTraversalTiming.RunFrames : float.MaxValue)
                 + " expressStop=" + FormatEtaFrames(hasExpressTraversalTiming ? expressTraversalTiming.StopFrames : 0f)
                 + " gap=" + FormatEtaFrames(safetyGapFrames)
@@ -7539,6 +7759,9 @@ namespace RapidTransitMod
             int protectedIntervalIndex,
             string auditSummary)
         {
+            if (!ENABLE_TRACKMODEL_DIAGNOSTIC_LOGS)
+                return;
+
             if (localVehicle == Entity.Null || string.IsNullOrWhiteSpace(auditSummary))
                 return;
 
