@@ -77,6 +77,12 @@ namespace RapidTransitMod
             }
         }
 
+        private struct DeferredBoardingTailIgnoreEntry
+        {
+            public Entity Vehicle;
+            public uint ExpireFrame;
+        }
+
         private struct BypassHoldCadenceSnapshot
         {
             public Entity Line;
@@ -378,6 +384,7 @@ namespace RapidTransitMod
         private NativeHashSet<Entity> m_BVMisfire;
         private NativeHashMap<Entity, uint> m_BVMisfireStartFrame;
         private NativeHashMap<Entity, uint> m_ForcedMidStopBoardingGraceUntil;
+        private NativeHashMap<Entity, uint> m_ForcedMidStopBoardingHardCloseAfter;
         private NativeHashMap<Entity, Entity> m_VehicleLine;
         /// <summary>
         /// 已进入最后一个 waypoint 的车辆集合。
@@ -420,6 +427,9 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BvWaypointMismatchLogCache = new Dictionary<Entity, string>();
         private const bool ENABLE_TRACK_WAYPOINT_ANCHORING = true;
         private readonly Dictionary<Entity, string> m_BvTrackAnchorRecoveryLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, BoardingDepartureAuditSnapshot> m_LastBoardingAssistSnapshots = new Dictionary<Entity, BoardingDepartureAuditSnapshot>();
+        private readonly Dictionary<Entity, DeferredBoardingTailIgnoreEntry> m_DeferredBoardingTailIgnores = new Dictionary<Entity, DeferredBoardingTailIgnoreEntry>();
+        private uint m_LastDeferredBoardingTailCleanupFrame;
         private static bool IsTraversalSliceObservationPersistenceEnabled() => false;
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
@@ -502,7 +512,8 @@ namespace RapidTransitMod
         private static bool IsBvMisfireEnforcementEnabled() => false;
         /// <summary>发车后冷却帧数：屏蔽 boarding 变化检测，防假进站</summary>
         private const uint LAUNCH_COOLDOWN_FRAMES = 600;
-        private const uint FORCED_MIDSTOP_BV_GRACE_FRAMES = 600;
+        private const uint FORCED_MIDSTOP_BV_GRACE_FRAMES = 180;
+        private const uint FORCED_MIDSTOP_HARD_CLOSE_FRAMES = 360;
         private const uint SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES = 1800;
         private const uint SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_LOG_COOLDOWN_FRAMES = 1800;
@@ -510,6 +521,7 @@ namespace RapidTransitMod
         private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
+        internal const float BOARDING_CLOSE_BYPASS_MIN_WAITING_DISTANCE_SENTINEL = -1f;
         private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 6;
         private const uint BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES = 60;
         private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
@@ -536,6 +548,8 @@ namespace RapidTransitMod
         private const float DISPATCH_SAMPLE_OUTLIER_FACTOR = 1.5f;
         private const uint BYPASS_YIELD_DECISION_COOLDOWN_FRAMES = 30;
         private const uint PREPARING_ROUTE_FIX_GRACE_FRAMES = 300;
+        private const uint BOARDING_TAIL_IGNORE_TTL_FRAMES = 900;
+        private const uint BOARDING_TAIL_IGNORE_CLEANUP_INTERVAL_FRAMES = 256;
 
         // ============================================================
         //  生命周期
@@ -567,6 +581,7 @@ namespace RapidTransitMod
             m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
             m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
+            m_ForcedMidStopBoardingHardCloseAfter = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
             m_VehicleLine = new NativeHashMap<Entity, Entity>(1024, Allocator.Persistent);
             m_LaunchCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_LastRetireFixLogFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
@@ -655,6 +670,7 @@ namespace RapidTransitMod
             if (m_BVMisfire.IsCreated) m_BVMisfire.Dispose();
             if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
             if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();
+            if (m_ForcedMidStopBoardingHardCloseAfter.IsCreated) m_ForcedMidStopBoardingHardCloseAfter.Dispose();
             if (m_VehicleLine.IsCreated) m_VehicleLine.Dispose();
             if (m_LaunchCooldownUntil.IsCreated) m_LaunchCooldownUntil.Dispose();
             if (m_LastRetireFixLogFrame.IsCreated) m_LastRetireFixLogFrame.Dispose();
@@ -1525,19 +1541,22 @@ namespace RapidTransitMod
 
             int scannedPassengers = 0;
             int readiedPassengers = 0;
+            BoardingCloseAssistStats assistStats = default;
             EntityCommandBuffer commandBuffer = m_EndFrameBarrier.CreateCommandBuffer();
             PrepareVehicleForOriginalBoardingClose(
                 vehicle,
                 ref pt,
                 commandBuffer,
                 out scannedPassengers,
-                out readiedPassengers);
+                out readiedPassengers,
+                out assistStats);
             commandBuffer.SetComponent(vehicle, pt);
             ClearBypassYieldState(vehicle, "UI强制发车");
             SetUILabel(vehicle, "结束上客");
             log.Info("[强制发车协助] 线路" + line.Index + " 车辆" + vehicle.Index
                 + " scannedPassengers=" + scannedPassengers
                 + " readiedPassengers=" + readiedPassengers
+                + " " + FormatBoardingCloseAssistStats(assistStats)
                 + " wp=" + currentWaypointIndex);
             InvalidatePanelData();
             return true;
@@ -1631,6 +1650,7 @@ namespace RapidTransitMod
             }
 
             var ecb = m_EndFrameBarrier.CreateCommandBuffer();
+            CleanupDeferredBoardingTailIgnores(m_SimulationSystem.frameIndex);
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
 
             EnsureLapCacheBuffer();
@@ -1776,6 +1796,7 @@ namespace RapidTransitMod
             m_BVMisfire.Clear();
             m_BVMisfireStartFrame.Clear();
             m_ForcedMidStopBoardingGraceUntil.Clear();
+            m_ForcedMidStopBoardingHardCloseAfter.Clear();
             m_VehicleLine.Clear();
             m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
@@ -1807,6 +1828,7 @@ namespace RapidTransitMod
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
+            m_DeferredBoardingTailIgnores.Clear();
             m_SystemReady = false;
             m_StartupRuntimeStateCleared = false;
             m_StableFrameCount = 0;
@@ -1902,6 +1924,7 @@ namespace RapidTransitMod
             m_BVMisfire.Clear();
             m_BVMisfireStartFrame.Clear();
             m_ForcedMidStopBoardingGraceUntil.Clear();
+            m_ForcedMidStopBoardingHardCloseAfter.Clear();
             m_VehicleLine.Clear();
             m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
@@ -1931,6 +1954,7 @@ namespace RapidTransitMod
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
+            m_DeferredBoardingTailIgnores.Clear();
             m_LastPuppetMasterMinute = -1;
             m_LastRegisterSweepMinute = -1;
             m_LastSchedulerTickMinute = -1;
@@ -3037,6 +3061,7 @@ namespace RapidTransitMod
                                     if (previousCachedWpIdx >= 0)
                                     {
                                         Entity departedStop = GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
+                                        Entity departedStopEntity = ResolveWorkbenchStopEntity(wps[previousCachedWpIdx].m_Waypoint);
                                         string departedStopName = ResolveWorkbenchEntityName(departedStop);
                                         if (string.IsNullOrWhiteSpace(departedStopName))
                                         {
@@ -3069,6 +3094,12 @@ namespace RapidTransitMod
                                             + " 从\"" + departedStopName + "\"离站"
                                             + (nextWaypointIndex >= 0 ? " next=\"" + nextStopName + "\"" : " next=\"-\"")
                                             + " state=" + state.ToString());
+                                        TryLogBoardingDepartureAudit(
+                                            v,
+                                            lineTag,
+                                            departedStopEntity,
+                                            departedStopName,
+                                            nowFrame);
                                     }
                                     TryClearVehicleProgressSuspectOnStableDeparture(v, previousCachedWpIdx);
                                     curWpIdx = -1;
@@ -3076,7 +3107,7 @@ namespace RapidTransitMod
                                     m_LastBoarding[v] = false;
                                     m_BVMisfire.Remove(v);
                                     m_BVMisfireStartFrame.Remove(v);
-                                    m_ForcedMidStopBoardingGraceUntil.Remove(v);
+                                    ClearForcedMidStopClosingConsist(v);
                                     m_StopDwellStartFrame.Remove(v);
                                     m_StopDwellSessions.Remove(v);
                                 }
@@ -3095,7 +3126,7 @@ namespace RapidTransitMod
                                 NoteVehicleProgressSuspectRecoveryBoarding(v, curWpIdx);
                                 m_BVMisfire.Remove(v);
                                 m_BVMisfireStartFrame.Remove(v);
-                                m_ForcedMidStopBoardingGraceUntil.Remove(v);
+                                ClearForcedMidStopClosingConsist(v);
                             }
                             else
                             {
@@ -3330,6 +3361,34 @@ namespace RapidTransitMod
                                         : "候车 " + SlotStr(targetMin) + vTag);
                                     break;
                                 }
+                                if (boarding)
+                                {
+                                    bool shouldRefreshOriginAssist = !m_ForcedOriginBoardingGraceUntil.TryGetValue(v, out uint originBoardingGraceUntil)
+                                        || nowFrame >= originBoardingGraceUntil;
+                                    int scannedPassengers = 0;
+                                    int readiedPassengers = 0;
+                                    BoardingCloseAssistStats assistStats = default;
+                                    if (shouldRefreshOriginAssist)
+                                    {
+                                        PrepareVehicleForOriginalBoardingClose(
+                                            v,
+                                            ref pt,
+                                            ecb,
+                                            out scannedPassengers,
+                                            out readiedPassengers,
+                                            out assistStats);
+                                        ecb.SetComponent(v, pt);
+                                        m_ForcedOriginBoardingGraceUntil[v] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
+                                        log.Info("[始发发车协助] " + lineTag + " 车辆" + v.Index
+                                            + " 班次" + SlotStr(targetMin)
+                                            + " scannedPassengers=" + scannedPassengers
+                                            + " readiedPassengers=" + readiedPassengers
+                                            + " " + FormatBoardingCloseAssistStats(assistStats)
+                                            + " wp=" + curWpIdx);
+                                    }
+                                    SetUILabel(v, "结束上客 " + SlotStr(targetMin) + vTag);
+                                    break;
+                                }
                                 bool isLateDispatch = CanLateDispatchSlot(nowMin, targetMin);
                                 int overdue = isLateDispatch ? GetSlotOverdueMinutes(nowMin, targetMin) : 0;
                                 LaunchVehicle(v, pt, tgt, wps, ecb);
@@ -3426,6 +3485,7 @@ namespace RapidTransitMod
                                     || nowFrame >= timeoutAssistGraceUntil;
                                 int scannedPassengers = 0;
                                 int readiedPassengers = 0;
+                                BoardingCloseAssistStats assistStats = default;
                                 if (shouldRefreshTimeoutAssist)
                                 {
                                     PrepareVehicleForOriginalBoardingClose(
@@ -3433,14 +3493,19 @@ namespace RapidTransitMod
                                         ref pt,
                                         ecb,
                                         out scannedPassengers,
-                                        out readiedPassengers);
+                                        out readiedPassengers,
+                                        out assistStats);
+                                    Entity assistStop = Entity.Null;
+                                    if (tgt.m_Target != Entity.Null && EntityManager.HasComponent<Connected>(tgt.m_Target))
+                                        assistStop = EntityManager.GetComponentData<Connected>(tgt.m_Target).m_Connected;
+                                    if (assistStop == Entity.Null && curWpIdx >= 0 && curWpIdx < waypointCount)
+                                        assistStop = ResolveWorkbenchStopEntity(wps[curWpIdx].m_Waypoint);
+                                    RememberBoardingAssistSnapshot(v, assistStop, nowFrame);
                                     ecb.SetComponent(v, pt);
-                                    m_ForcedMidStopBoardingGraceUntil[v] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
-                                }
-                                ClearBypassYieldState(v);
-                                SetUILabel(v, "停站超时" + vTag);
-                                if (shouldRefreshTimeoutAssist)
-                                {
+                                    MarkForcedMidStopClosingConsist(
+                                        v,
+                                        nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES,
+                                        nowFrame + FORCED_MIDSTOP_HARD_CLOSE_FRAMES);
                                     log.Info("[停站超时] " + lineTag + " 车辆" + v.Index
                                         + " 停站超时" + maxStationDwellMinutes + "分钟"
                                         + " sinceFrame=" + midStopDwellSinceFrame
@@ -3448,9 +3513,12 @@ namespace RapidTransitMod
                                         + " curWpIdx=" + curWpIdx
                                         + " nextTargetWp=" + (curWpIdx + 1 < waypointCount ? (curWpIdx + 1).ToString() : "-")
                                         + " scannedPassengers=" + scannedPassengers
-                                        + " readiedPassengers=" + readiedPassengers);
+                                        + " readiedPassengers=" + readiedPassengers
+                                        + " " + FormatBoardingCloseAssistStats(assistStats));
                                 }
-                                else
+                                ClearBypassYieldState(v);
+                                SetUILabel(v, "停站超时" + vTag);
+                                if (!shouldRefreshTimeoutAssist)
                                 {
                                     Entity currentStop = Entity.Null;
                                     Entity boardingVehicle = Entity.Null;
@@ -3843,7 +3911,7 @@ namespace RapidTransitMod
                     m_BVMisfireStartFrame.Remove(dead);
                     m_BypassHoldCadenceSnapshots.Remove(dead);
                     ClearVehicleProgressSuspect(dead, "vehicle-removed");
-                    m_ForcedMidStopBoardingGraceUntil.Remove(dead);
+                    ClearForcedMidStopClosingConsist(dead);
                     m_VehicleLine.Remove(dead);
                     m_LaunchCooldownUntil.Remove(dead);
                     m_LastRetireFixLogFrame.Remove(dead);
@@ -3861,6 +3929,7 @@ namespace RapidTransitMod
                     m_BvTrackAnchorRecoveryLogCache.Remove(dead);
                     m_BvWaypointMismatchLastLogFrame.Remove(dead);
                     m_BypassQueuedLocalOverrideLogCache.Remove(dead);
+                    m_LastBoardingAssistSnapshots.Remove(dead);
                     log.Info("[清理] 车辆" + dead.Index + " 消失");
                 }
                 if (deadKeys.Length > 0)
@@ -4314,7 +4383,7 @@ namespace RapidTransitMod
             m_VehicleDispatchRequestStartFrame.Remove(v);
             m_BVMisfire.Remove(v);
             m_BVMisfireStartFrame.Remove(v);
-            m_ForcedMidStopBoardingGraceUntil.Remove(v);
+            ClearForcedMidStopClosingConsist(v);
             m_LaunchCooldownUntil.Remove(v);
             m_PreparingFixCooldownUntil.Remove(v);
             m_NearingTerminus.Remove(v);
@@ -4347,6 +4416,7 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> wps,
             EntityCommandBuffer ecb)
         {
+            m_ForcedOriginBoardingGraceUntil.Remove(v);
             pt.m_State &= ~PublicTransportFlags.Boarding;
             pt.m_DepartureFrame = m_SimulationSystem.frameIndex - 1;
             tgt.m_Target = wps[1].m_Waypoint;
@@ -4389,35 +4459,75 @@ namespace RapidTransitMod
             RepathVehicle(v, pt, tgt, ecb);
         }
 
+        private struct BoardingCloseAssistStats
+        {
+            public int enteringPromoted;
+            public int stalledLanePromoted;
+            public int animalLanePromoted;
+            public int noLanePromoted;
+            public int readyAlready;
+            public int exitingSkipped;
+            public int stalledLaneAnimating;
+            public int stalledLaneNotEndReached;
+            public int stalledLaneWrongLane;
+            public int blockedByLanePresence;
+            public int canceledHumanTail;
+            public int canceledAnimalTail;
+        }
+
+        private struct BoardingDepartureAuditSnapshot
+        {
+            public uint frame;
+            public Entity stop;
+            public int bound;
+            public int ready;
+            public int entering;
+            public int exiting;
+            public int laneVehicle;
+            public int laneVehicleEnd;
+            public int laneVehicleNeedEnd;
+            public int laneVehicleEnterAnim;
+            public int laneWrong;
+            public int laneWrongEnd;
+            public int laneWrongNeedEnd;
+            public int laneWrongEnterAnim;
+            public int animalLane;
+            public int noLaneFallback;
+            public int noLaneNoFallback;
+            public int waiting;
+        }
+
         private void PrepareVehicleForOriginalBoardingClose(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,
             EntityCommandBuffer ecb,
             out int scannedPassengers,
-            out int readiedPassengers)
+            out int readiedPassengers,
+            out BoardingCloseAssistStats stats)
         {
             scannedPassengers = 0;
             readiedPassengers = 0;
+            stats = default;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
             publicTransport.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
             publicTransport.m_MinWaitingDistance = float.MaxValue;
             publicTransport.m_MaxBoardingDistance = float.MaxValue;
-
-            PromoteNonReadyPassengersForVehicle(vehicle, ecb, ref scannedPassengers, ref readiedPassengers);
+            PromoteClosablePassengersForVehicle(vehicle, ecb, ref scannedPassengers, ref readiedPassengers, ref stats);
             if (EntityManager.HasBuffer<LayoutElement>(vehicle))
             {
                 DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
                 for (int i = 0; i < layout.Length; i++)
-                    PromoteNonReadyPassengersForVehicle(layout[i].m_Vehicle, ecb, ref scannedPassengers, ref readiedPassengers);
+                    PromoteClosablePassengersForVehicle(layout[i].m_Vehicle, ecb, ref scannedPassengers, ref readiedPassengers, ref stats);
             }
         }
 
-        private void PromoteNonReadyPassengersForVehicle(
+        private void PromoteClosablePassengersForVehicle(
             Entity transportVehicle,
             EntityCommandBuffer ecb,
             ref int scannedPassengers,
-            ref int readiedPassengers)
+            ref int readiedPassengers,
+            ref BoardingCloseAssistStats stats)
         {
             if (transportVehicle == Entity.Null
                 || !EntityManager.Exists(transportVehicle)
@@ -4439,17 +4549,565 @@ namespace RapidTransitMod
                 }
 
                 CurrentVehicle currentVehicle = EntityManager.GetComponentData<CurrentVehicle>(passenger);
-                if (currentVehicle.m_Vehicle != transportVehicle
-                    || (currentVehicle.m_Flags & CreatureVehicleFlags.Ready) != 0)
+                if (currentVehicle.m_Vehicle != transportVehicle)
                     continue;
+
+                if (ShouldCancelLingeringBoardingTailPassenger(passenger, currentVehicle, ref stats))
+                {
+                    RememberDeferredBoardingTailPassenger(passenger, transportVehicle);
+                }
+            }
+            for (int i = 0; i < passengers.Length; i++)
+            {
+                Entity passenger = passengers[i].m_Passenger;
+                if (passenger == Entity.Null
+                    || !EntityManager.Exists(passenger)
+                    || !EntityManager.HasComponent<CurrentVehicle>(passenger))
+                {
+                    continue;
+                }
+
+                CurrentVehicle currentVehicle = EntityManager.GetComponentData<CurrentVehicle>(passenger);
+                if (currentVehicle.m_Vehicle != transportVehicle)
+                    continue;
+
+                if ((currentVehicle.m_Flags & CreatureVehicleFlags.Ready) != 0)
+                {
+                    stats.readyAlready++;
+                    ForgetDeferredBoardingTailPassenger(passenger);
+                    continue;
+                }
+
+                if (ShouldIgnoreDeferredBoardingTailPassenger(passenger, transportVehicle, currentVehicle))
+                    continue;
+
+                bool wasEntering = (currentVehicle.m_Flags & CreatureVehicleFlags.Entering) != 0;
+                bool hadNoLanePresence = !EntityManager.HasComponent<HumanCurrentLane>(passenger)
+                    && !EntityManager.HasComponent<AnimalCurrentLane>(passenger);
+                bool hadAnimalLane = EntityManager.HasComponent<AnimalCurrentLane>(passenger);
+                if (!CanSafelyPromotePassengerReady(passenger, currentVehicle, ref stats))
+                    continue;
+
+                if (!hadNoLanePresence)
+                {
+                    RememberDeferredBoardingTailPassenger(passenger, transportVehicle);
+                    continue;
+                }
 
                 currentVehicle.m_Flags |= CreatureVehicleFlags.Ready;
                 currentVehicle.m_Flags &= ~CreatureVehicleFlags.Entering;
                 EntityManager.SetComponentData(passenger, currentVehicle);
                 if (!EntityManager.HasComponent<BatchesUpdated>(passenger))
                     ecb.AddComponent<BatchesUpdated>(passenger);
+                ForgetDeferredBoardingTailPassenger(passenger);
+                if (wasEntering)
+                    stats.enteringPromoted++;
+                else if (hadAnimalLane)
+                    stats.animalLanePromoted++;
+                else if (hadNoLanePresence)
+                    stats.noLanePromoted++;
+                else
+                    stats.stalledLanePromoted++;
                 readiedPassengers++;
             }
+        }
+
+        private bool CanSafelyPromotePassengerReady(Entity passenger, CurrentVehicle currentVehicle, ref BoardingCloseAssistStats stats)
+        {
+            if ((currentVehicle.m_Flags & CreatureVehicleFlags.Entering) != 0)
+                return true;
+
+            if ((currentVehicle.m_Flags & CreatureVehicleFlags.Exiting) != 0)
+            {
+                stats.exitingSkipped++;
+                return false;
+            }
+
+            if (EntityManager.HasComponent<HumanCurrentLane>(passenger)
+                && IsSafeStalledHumanBoardingPassenger(passenger, currentVehicle, ref stats))
+            {
+                return true;
+            }
+
+            if (EntityManager.HasComponent<AnimalCurrentLane>(passenger)
+                && IsSafeStalledAnimalBoardingPassenger(passenger, currentVehicle, ref stats))
+            {
+                return true;
+            }
+
+            bool stillHasLanePresence = EntityManager.HasComponent<HumanCurrentLane>(passenger)
+                || EntityManager.HasComponent<AnimalCurrentLane>(passenger);
+            if (stillHasLanePresence)
+            {
+                stats.blockedByLanePresence++;
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool ShouldCancelLingeringBoardingTailPassenger(Entity passenger, CurrentVehicle currentVehicle, ref BoardingCloseAssistStats stats)
+        {
+            if (!IsLingeringBoardingTailPassenger(passenger, currentVehicle))
+                return false;
+
+            if (EntityManager.HasComponent<HumanCurrentLane>(passenger))
+                stats.canceledHumanTail++;
+            else if (EntityManager.HasComponent<AnimalCurrentLane>(passenger))
+                stats.canceledAnimalTail++;
+            return true;
+        }
+
+        private bool IsLingeringBoardingTailPassenger(Entity passenger, CurrentVehicle currentVehicle)
+        {
+            if ((currentVehicle.m_Flags & (CreatureVehicleFlags.Ready | CreatureVehicleFlags.Entering | CreatureVehicleFlags.Exiting)) != 0)
+                return false;
+
+            if (EntityManager.HasComponent<HumanCurrentLane>(passenger))
+            {
+                HumanCurrentLane currentLane = EntityManager.GetComponentData<HumanCurrentLane>(passenger);
+                if (currentLane.m_Lane == currentVehicle.m_Vehicle)
+                    return false;
+
+                if (EntityManager.HasComponent<HumanNavigation>(passenger))
+                {
+                    HumanNavigation navigation = EntityManager.GetComponentData<HumanNavigation>(passenger);
+                    bool animatingEnter = navigation.m_TargetActivity == (byte)ActivityType.Enter
+                        && navigation.m_TransformState == Game.Objects.TransformState.Action;
+                    if (animatingEnter)
+                        return false;
+                }
+
+                return true;
+            }
+
+            if (EntityManager.HasComponent<AnimalCurrentLane>(passenger))
+            {
+                AnimalCurrentLane currentLane = EntityManager.GetComponentData<AnimalCurrentLane>(passenger);
+                return currentLane.m_Lane != currentVehicle.m_Vehicle;
+            }
+
+            return false;
+        }
+
+        private void RememberDeferredBoardingTailPassenger(Entity passenger, Entity vehicle)
+        {
+            if (passenger == Entity.Null || vehicle == Entity.Null)
+                return;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            m_DeferredBoardingTailIgnores[passenger] = new DeferredBoardingTailIgnoreEntry
+            {
+                Vehicle = vehicle,
+                ExpireFrame = nowFrame + BOARDING_TAIL_IGNORE_TTL_FRAMES
+            };
+        }
+
+        private void ForgetDeferredBoardingTailPassenger(Entity passenger)
+        {
+            if (passenger != Entity.Null)
+                m_DeferredBoardingTailIgnores.Remove(passenger);
+        }
+
+        private bool ShouldIgnoreDeferredBoardingTailPassenger(Entity passenger, Entity vehicle, CurrentVehicle currentVehicle)
+        {
+            if (!m_DeferredBoardingTailIgnores.TryGetValue(passenger, out DeferredBoardingTailIgnoreEntry entry))
+                return false;
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (entry.Vehicle != vehicle
+                || nowFrame >= entry.ExpireFrame
+                || currentVehicle.m_Vehicle != vehicle
+                || (currentVehicle.m_Flags & CreatureVehicleFlags.Ready) != 0
+                || !IsLingeringBoardingTailPassenger(passenger, currentVehicle))
+            {
+                m_DeferredBoardingTailIgnores.Remove(passenger);
+                return false;
+            }
+
+            return true;
+        }
+
+        internal bool AreDeferredBoardingTailsIgnoredForReadyCheck(Entity vehicleEntity)
+        {
+            if (ShouldForceMidStopHardCloseReadyCheck(vehicleEntity))
+                return true;
+
+            if (vehicleEntity == Entity.Null
+                || !EntityManager.Exists(vehicleEntity)
+                || !EntityManager.HasBuffer<Passenger>(vehicleEntity))
+            {
+                return true;
+            }
+
+            DynamicBuffer<Passenger> passengers = EntityManager.GetBuffer<Passenger>(vehicleEntity, true);
+            for (int i = 0; i < passengers.Length; i++)
+            {
+                Entity passenger = passengers[i].m_Passenger;
+                if (!EntityManager.HasComponent<CurrentVehicle>(passenger))
+                    continue;
+
+                CurrentVehicle currentVehicle = EntityManager.GetComponentData<CurrentVehicle>(passenger);
+                if ((currentVehicle.m_Flags & CreatureVehicleFlags.Ready) != 0)
+                {
+                    ForgetDeferredBoardingTailPassenger(passenger);
+                    continue;
+                }
+
+                if (ShouldIgnoreDeferredBoardingTailPassenger(passenger, vehicleEntity, currentVehicle))
+                    continue;
+
+                return false;
+            }
+
+            return true;
+        }
+
+        internal bool ShouldBlockNewBoardingForClosingVehicle(Entity vehicleEntity)
+        {
+            if (vehicleEntity == Entity.Null
+                || !EntityManager.Exists(vehicleEntity)
+                || !m_ForcedMidStopBoardingHardCloseAfter.TryGetValue(vehicleEntity, out uint hardCloseAfter))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool ShouldForceMidStopHardCloseReadyCheck(Entity vehicleEntity)
+        {
+            if (vehicleEntity == Entity.Null
+                || !m_ForcedMidStopBoardingHardCloseAfter.TryGetValue(vehicleEntity, out uint hardCloseAfter))
+            {
+                return false;
+            }
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (nowFrame < hardCloseAfter)
+                return false;
+
+            m_ForcedMidStopBoardingGraceUntil.Remove(vehicleEntity);
+            m_ForcedMidStopBoardingHardCloseAfter.Remove(vehicleEntity);
+            return true;
+        }
+
+        private void MarkForcedMidStopClosingConsist(Entity vehicle, uint graceUntil, uint hardCloseAfter)
+        {
+            MarkForcedMidStopClosingVehicle(vehicle, graceUntil, hardCloseAfter);
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasBuffer<LayoutElement>(vehicle))
+            {
+                return;
+            }
+
+            DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+            for (int i = 0; i < layout.Length; i++)
+                MarkForcedMidStopClosingVehicle(layout[i].m_Vehicle, graceUntil, hardCloseAfter);
+        }
+
+        private void MarkForcedMidStopClosingVehicle(Entity vehicle, uint graceUntil, uint hardCloseAfter)
+        {
+            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                return;
+
+            m_ForcedMidStopBoardingGraceUntil[vehicle] = graceUntil;
+            if (!m_ForcedMidStopBoardingHardCloseAfter.ContainsKey(vehicle))
+                m_ForcedMidStopBoardingHardCloseAfter[vehicle] = hardCloseAfter;
+        }
+
+        private void ClearForcedMidStopClosingConsist(Entity vehicle)
+        {
+            ClearForcedMidStopClosingVehicle(vehicle);
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasBuffer<LayoutElement>(vehicle))
+            {
+                return;
+            }
+
+            DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+            for (int i = 0; i < layout.Length; i++)
+                ClearForcedMidStopClosingVehicle(layout[i].m_Vehicle);
+        }
+
+        private void ClearForcedMidStopClosingVehicle(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+            m_ForcedMidStopBoardingHardCloseAfter.Remove(vehicle);
+        }
+
+        private void CleanupDeferredBoardingTailIgnores(uint nowFrame)
+        {
+            if (m_DeferredBoardingTailIgnores.Count == 0)
+                return;
+            if (m_LastDeferredBoardingTailCleanupFrame != 0
+                && (nowFrame - m_LastDeferredBoardingTailCleanupFrame) < BOARDING_TAIL_IGNORE_CLEANUP_INTERVAL_FRAMES)
+            {
+                return;
+            }
+
+            m_LastDeferredBoardingTailCleanupFrame = nowFrame;
+            List<Entity> stalePassengers = null;
+            foreach (KeyValuePair<Entity, DeferredBoardingTailIgnoreEntry> entry in m_DeferredBoardingTailIgnores)
+            {
+                Entity passenger = entry.Key;
+                if (passenger == Entity.Null
+                    || !EntityManager.Exists(passenger)
+                    || nowFrame >= entry.Value.ExpireFrame
+                    || !EntityManager.HasComponent<CurrentVehicle>(passenger))
+                {
+                    stalePassengers ??= new List<Entity>();
+                    stalePassengers.Add(passenger);
+                    continue;
+                }
+
+                CurrentVehicle currentVehicle = EntityManager.GetComponentData<CurrentVehicle>(passenger);
+                if (currentVehicle.m_Vehicle != entry.Value.Vehicle
+                    || (currentVehicle.m_Flags & CreatureVehicleFlags.Ready) != 0
+                    || !IsLingeringBoardingTailPassenger(passenger, currentVehicle))
+                {
+                    stalePassengers ??= new List<Entity>();
+                    stalePassengers.Add(passenger);
+                }
+            }
+
+            if (stalePassengers == null)
+                return;
+
+            for (int i = 0; i < stalePassengers.Count; i++)
+                m_DeferredBoardingTailIgnores.Remove(stalePassengers[i]);
+        }
+
+        private bool IsSafeStalledHumanBoardingPassenger(Entity passenger, CurrentVehicle currentVehicle, ref BoardingCloseAssistStats stats)
+        {
+            HumanCurrentLane currentLane = EntityManager.GetComponentData<HumanCurrentLane>(passenger);
+            if (currentLane.m_Lane != currentVehicle.m_Vehicle)
+            {
+                stats.stalledLaneWrongLane++;
+                return false;
+            }
+
+            if ((currentLane.m_Flags & CreatureLaneFlags.EndReached) == 0)
+            {
+                stats.stalledLaneNotEndReached++;
+                return false;
+            }
+
+            if (!EntityManager.HasComponent<HumanNavigation>(passenger))
+                return true;
+
+            HumanNavigation navigation = EntityManager.GetComponentData<HumanNavigation>(passenger);
+            bool animatingEnter = navigation.m_TargetActivity == (byte)ActivityType.Enter
+                && navigation.m_TransformState == Game.Objects.TransformState.Action;
+            if (animatingEnter)
+            {
+                stats.stalledLaneAnimating++;
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool IsSafeStalledAnimalBoardingPassenger(Entity passenger, CurrentVehicle currentVehicle, ref BoardingCloseAssistStats stats)
+        {
+            AnimalCurrentLane currentLane = EntityManager.GetComponentData<AnimalCurrentLane>(passenger);
+            if (currentLane.m_Lane != currentVehicle.m_Vehicle)
+                return false;
+
+            if ((currentLane.m_Flags & CreatureLaneFlags.EndReached) == 0)
+                return false;
+
+            return true;
+        }
+
+        private BoardingDepartureAuditSnapshot CaptureBoardingDepartureAuditSnapshot(Entity vehicle, Entity stop, uint nowFrame)
+        {
+            BoardingDepartureAuditSnapshot snapshot = default;
+            snapshot.frame = nowFrame;
+            snapshot.stop = stop;
+            snapshot.waiting = GetWaitingPassengerCount(stop);
+            AccumulateBoardingDepartureAuditSnapshot(vehicle, vehicle, ref snapshot);
+            if (EntityManager.HasBuffer<LayoutElement>(vehicle))
+            {
+                DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+                for (int i = 0; i < layout.Length; i++)
+                    AccumulateBoardingDepartureAuditSnapshot(layout[i].m_Vehicle, layout[i].m_Vehicle, ref snapshot);
+            }
+            return snapshot;
+        }
+
+        private void AccumulateBoardingDepartureAuditSnapshot(Entity transportVehicle, Entity owningVehicle, ref BoardingDepartureAuditSnapshot snapshot)
+        {
+            if (transportVehicle == Entity.Null
+                || !EntityManager.Exists(transportVehicle)
+                || !EntityManager.HasBuffer<Passenger>(transportVehicle))
+            {
+                return;
+            }
+
+            DynamicBuffer<Passenger> passengers = EntityManager.GetBuffer<Passenger>(transportVehicle, true);
+            for (int i = 0; i < passengers.Length; i++)
+            {
+                Entity passenger = passengers[i].m_Passenger;
+                if (passenger == Entity.Null
+                    || !EntityManager.Exists(passenger)
+                    || !EntityManager.HasComponent<CurrentVehicle>(passenger))
+                {
+                    continue;
+                }
+
+                CurrentVehicle currentVehicle = EntityManager.GetComponentData<CurrentVehicle>(passenger);
+                if (currentVehicle.m_Vehicle != owningVehicle)
+                    continue;
+
+                snapshot.bound++;
+                if ((currentVehicle.m_Flags & CreatureVehicleFlags.Ready) != 0)
+                    snapshot.ready++;
+                if ((currentVehicle.m_Flags & CreatureVehicleFlags.Entering) != 0)
+                    snapshot.entering++;
+                if ((currentVehicle.m_Flags & CreatureVehicleFlags.Exiting) != 0)
+                    snapshot.exiting++;
+
+                bool hasLanePresence = false;
+                if (EntityManager.HasComponent<HumanCurrentLane>(passenger))
+                {
+                    hasLanePresence = true;
+                    HumanCurrentLane currentLane = EntityManager.GetComponentData<HumanCurrentLane>(passenger);
+                    bool animatingEnter = false;
+                    if (EntityManager.HasComponent<HumanNavigation>(passenger))
+                    {
+                        HumanNavigation navigation = EntityManager.GetComponentData<HumanNavigation>(passenger);
+                        animatingEnter = navigation.m_TargetActivity == (byte)ActivityType.Enter
+                            && navigation.m_TransformState == Game.Objects.TransformState.Action;
+                    }
+                    if (currentLane.m_Lane == owningVehicle)
+                    {
+                        snapshot.laneVehicle++;
+                        if ((currentLane.m_Flags & CreatureLaneFlags.EndReached) != 0)
+                            snapshot.laneVehicleEnd++;
+                        else
+                            snapshot.laneVehicleNeedEnd++;
+                        if (animatingEnter)
+                            snapshot.laneVehicleEnterAnim++;
+                    }
+                    else
+                    {
+                        snapshot.laneWrong++;
+                        if ((currentLane.m_Flags & CreatureLaneFlags.EndReached) != 0)
+                            snapshot.laneWrongEnd++;
+                        else
+                            snapshot.laneWrongNeedEnd++;
+                        if (animatingEnter)
+                            snapshot.laneWrongEnterAnim++;
+                    }
+                }
+                else if (EntityManager.HasComponent<AnimalCurrentLane>(passenger))
+                {
+                    hasLanePresence = true;
+                    snapshot.animalLane++;
+                }
+
+                if (!hasLanePresence)
+                {
+                    bool hasFallback = EntityManager.HasComponent<Game.Objects.Unspawned>(passenger)
+                        || EntityManager.HasComponent<Game.Objects.Relative>(passenger);
+                    if (hasFallback)
+                        snapshot.noLaneFallback++;
+                    else
+                        snapshot.noLaneNoFallback++;
+                }
+            }
+        }
+
+        private int GetWaitingPassengerCount(Entity stop)
+        {
+            if (stop == Entity.Null
+                || !EntityManager.Exists(stop)
+                || !EntityManager.HasComponent<WaitingPassengers>(stop))
+            {
+                return -1;
+            }
+
+            return EntityManager.GetComponentData<WaitingPassengers>(stop).m_Count;
+        }
+
+        private void RememberBoardingAssistSnapshot(Entity vehicle, Entity stop, uint nowFrame)
+        {
+            if (vehicle == Entity.Null || stop == Entity.Null)
+                return;
+
+            m_LastBoardingAssistSnapshots[vehicle] = CaptureBoardingDepartureAuditSnapshot(vehicle, stop, nowFrame);
+        }
+
+        private void TryLogBoardingDepartureAudit(
+            Entity vehicle,
+            string lineTag,
+            Entity stop,
+            string stopName,
+            uint nowFrame)
+        {
+            if (vehicle == Entity.Null || stop == Entity.Null)
+                return;
+            if (!m_LastBoardingAssistSnapshots.TryGetValue(vehicle, out BoardingDepartureAuditSnapshot assistSnapshot))
+                return;
+            if (assistSnapshot.stop != stop)
+                return;
+
+            BoardingDepartureAuditSnapshot departSnapshot = CaptureBoardingDepartureAuditSnapshot(vehicle, stop, nowFrame);
+            log.Info("[离站对照] " + lineTag
+                + " 车辆" + vehicle.Index
+                + " stop=\"" + stopName + "\""
+                + " assist{" + FormatBoardingDepartureAuditSnapshot(assistSnapshot) + "}"
+                + " depart{" + FormatBoardingDepartureAuditSnapshot(departSnapshot) + "}"
+                + " deltaBound=" + (departSnapshot.bound - assistSnapshot.bound)
+                + " deltaReady=" + (departSnapshot.ready - assistSnapshot.ready)
+                + " deltaWaiting=" + ((assistSnapshot.waiting >= 0 && departSnapshot.waiting >= 0)
+                    ? (departSnapshot.waiting - assistSnapshot.waiting).ToString()
+                    : "?"));
+            m_LastBoardingAssistSnapshots.Remove(vehicle);
+        }
+
+        private static string FormatBoardingDepartureAuditSnapshot(BoardingDepartureAuditSnapshot snapshot)
+        {
+            return "frame=" + snapshot.frame
+                + " bound=" + snapshot.bound
+                + " ready=" + snapshot.ready
+                + " entering=" + snapshot.entering
+                + " exiting=" + snapshot.exiting
+                + " laneV=" + snapshot.laneVehicle
+                + " laneVEnd=" + snapshot.laneVehicleEnd
+                + " laneVNeedEnd=" + snapshot.laneVehicleNeedEnd
+                + " laneVAnim=" + snapshot.laneVehicleEnterAnim
+                + " laneWrong=" + snapshot.laneWrong
+                + " laneWrongEnd=" + snapshot.laneWrongEnd
+                + " laneWrongNeedEnd=" + snapshot.laneWrongNeedEnd
+                + " laneWrongAnim=" + snapshot.laneWrongEnterAnim
+                + " animalLane=" + snapshot.animalLane
+                + " fallback=" + snapshot.noLaneFallback
+                + " noFallback=" + snapshot.noLaneNoFallback
+                + " waiting=" + snapshot.waiting;
+        }
+
+        private static string FormatBoardingCloseAssistStats(BoardingCloseAssistStats stats)
+        {
+            return "assist[entering=" + stats.enteringPromoted
+                + " stalled=" + stats.stalledLanePromoted
+                + " animal=" + stats.animalLanePromoted
+                + " noLane=" + stats.noLanePromoted
+                + " ready=" + stats.readyAlready
+                + " exiting=" + stats.exitingSkipped
+                + " cancelHuman=" + stats.canceledHumanTail
+                + " cancelAnimal=" + stats.canceledAnimalTail
+                + " anim=" + stats.stalledLaneAnimating
+                + " laneNotEnd=" + stats.stalledLaneNotEndReached
+                + " laneWrong=" + stats.stalledLaneWrongLane
+                + " laneBlock=" + stats.blockedByLanePresence
+                + "]";
         }
 
         private void CommitVehicleDepartureState(
@@ -7309,6 +7967,7 @@ namespace RapidTransitMod
             {
                 if (m_StopDwellStartFrame.Remove(vehicle))
                 {
+                    ClearForcedMidStopClosingConsist(vehicle);
                     log.Info("[停站计时结束] 线路" + line.Index
                         + " 车辆" + vehicle.Index
                         + " boarding=" + boarding
