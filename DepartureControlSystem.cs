@@ -148,19 +148,34 @@ namespace RapidTransitMod
             public readonly bool Boarding;
             public readonly bool HasProjection;
             public readonly float ProjectionDistanceMeters;
+            public readonly bool HasTrackCursor;
+            public readonly VehicleTrackCursor TrackCursor;
+            public readonly int CurrentControlEdgeIndex;
+            public readonly float OwnLineAtomCoordinate;
+            public readonly int PhaseEndAtomExclusive;
 
             public LineRunningVehicleSnapshot(
                 Entity vehicle,
                 int nextWaypointIndex,
                 bool boarding,
                 bool hasProjection,
-                float projectionDistanceMeters)
+                float projectionDistanceMeters,
+                bool hasTrackCursor,
+                VehicleTrackCursor trackCursor,
+                int currentControlEdgeIndex,
+                float ownLineAtomCoordinate,
+                int phaseEndAtomExclusive)
             {
                 Vehicle = vehicle;
                 NextWaypointIndex = nextWaypointIndex;
                 Boarding = boarding;
                 HasProjection = hasProjection;
                 ProjectionDistanceMeters = projectionDistanceMeters;
+                HasTrackCursor = hasTrackCursor;
+                TrackCursor = trackCursor;
+                CurrentControlEdgeIndex = currentControlEdgeIndex;
+                OwnLineAtomCoordinate = ownLineAtomCoordinate;
+                PhaseEndAtomExclusive = phaseEndAtomExclusive;
             }
         }
 
@@ -7251,6 +7266,8 @@ namespace RapidTransitMod
             snapshot.Line = line;
             snapshot.Vehicles.Clear();
 
+            bool hasTrackChain = TryGetLineTrackChain(line, waypoints, out LineTrackChain trackChain);
+
             for (int i = 0; i < routeVehicles.Length; i++)
             {
                 Entity vehicle = routeVehicles[i].m_Vehicle;
@@ -7269,12 +7286,35 @@ namespace RapidTransitMod
                 }
 
                 bool hasProjection = TryProjectVehicleOntoLine(vehicle, line, waypoints, out LineDistanceProjection projection);
+                bool hasTrackCursor = false;
+                VehicleTrackCursor trackCursor = default;
+                int currentControlEdgeIndex = -1;
+                float ownLineAtomCoordinate = 0f;
+                int phaseEndAtomExclusive = -1;
+                if (hasTrackChain)
+                {
+                    hasTrackCursor = TryBuildLineRunningVehicleOwnLineRuntimeSnapshot(
+                        vehicle,
+                        line,
+                        waypoints,
+                        trackChain,
+                        out trackCursor,
+                        out currentControlEdgeIndex,
+                        out ownLineAtomCoordinate,
+                        out phaseEndAtomExclusive);
+                }
+
                 snapshot.Vehicles.Add(new LineRunningVehicleSnapshot(
                     vehicle,
                     nextWaypointIndex,
                     boarding,
                     hasProjection,
-                    hasProjection ? projection.DistanceMeters : 0f));
+                    hasProjection ? projection.DistanceMeters : 0f,
+                    hasTrackCursor,
+                    trackCursor,
+                    currentControlEdgeIndex,
+                    ownLineAtomCoordinate,
+                    phaseEndAtomExclusive));
             }
 
             return true;
