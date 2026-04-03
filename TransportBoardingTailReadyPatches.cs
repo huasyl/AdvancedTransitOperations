@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 using Game.Routes;
 using Game.Simulation;
 using HarmonyLib;
@@ -9,27 +8,6 @@ namespace RapidTransitMod
 {
     internal static class TransportBoardingTailReadyPatches
     {
-        private static readonly Type s_TrainTickJobType = AccessTools.Inner(typeof(TransportTrainAISystem), "TransportTrainTickJob");
-
-        [HarmonyPatch]
-        private static class TrainArePassengersReadyPatch
-        {
-            private static MethodBase TargetMethod()
-            {
-                return AccessTools.Method(s_TrainTickJobType, "ArePassengersReady", new[] { typeof(Entity) });
-            }
-
-            private static bool Prefix(Entity vehicleEntity, ref bool __result)
-            {
-                DepartureControlSystem system = DepartureControlSystem.Instance;
-                if (system == null)
-                    return true;
-
-                __result = system.AreDeferredBoardingTailsIgnoredForReadyCheck(vehicleEntity);
-                return false;
-            }
-        }
-
         [HarmonyPatch(typeof(RouteUtils), nameof(RouteUtils.GetBoardingVehicle))]
         private static class RouteUtilsGetBoardingVehiclePatch
         {
@@ -46,6 +24,32 @@ namespace RapidTransitMod
                 testing = false;
                 obsolete = false;
                 __result = false;
+            }
+        }
+
+        [HarmonyPatch(typeof(ResidentAISystem), "OnUpdate")]
+        private static class ResidentAISystemOnUpdatePatch
+        {
+            private static void Prefix(ResidentAISystem __instance)
+            {
+                DepartureControlSystem system = DepartureControlSystem.Instance;
+                if (system == null)
+                    return;
+
+                system.ProcessForcedMidStopHardCloseTailCancels(processResidents: true, processPets: false);
+            }
+        }
+
+        [HarmonyPatch(typeof(PetAISystem), "OnUpdate")]
+        private static class PetAISystemOnUpdatePatch
+        {
+            private static void Prefix(PetAISystem __instance)
+            {
+                DepartureControlSystem system = DepartureControlSystem.Instance;
+                if (system == null)
+                    return;
+
+                system.ProcessForcedMidStopHardCloseTailCancels(processResidents: false, processPets: true);
             }
         }
     }

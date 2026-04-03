@@ -350,6 +350,30 @@ export function useWorkbenchController() {
     hasLoadedSnapshotRef.current = true;
   }
 
+  function applySaveDraftResult(result, { reportSuccess = false, reportFailure = true } = {}) {
+    if (result?.snapshot) {
+      applySnapshot(result.snapshot);
+    }
+
+    if (result?.success) {
+      if (reportSuccess) {
+        setSaveState({
+          status: "success",
+          message: t("message.saveSuccessBackend", { version: result.version ?? "-" })
+        });
+      }
+      return true;
+    }
+
+    if (reportFailure) {
+      const errorMessage = result?.errors?.length
+        ? t("message.saveFailed", { message: result.errors[0] })
+        : t("message.saveFailedGeneric");
+      setSaveState({ status: "error", message: errorMessage });
+    }
+    return false;
+  }
+
   async function refreshWorkbenchMetadata() {
     try {
       const metadata = await workbenchApi.refreshMetadata?.();
@@ -525,7 +549,7 @@ export function useWorkbenchController() {
     const timeoutId = window.setTimeout(async () => {
       try {
         suppressNextSnapshotRef.current = true;
-        await workbenchApi.saveDraft({
+        const result = await workbenchApi.saveDraft({
           selectedLineId,
           selectedEditLine,
           mergedView: getPersistedMergedView(mergedView),
@@ -534,6 +558,9 @@ export function useWorkbenchController() {
           stagedRows,
           lineSettings: lineSettingsForSave
         });
+        if (!applySaveDraftResult(result, { reportSuccess: false, reportFailure: true }) || !result?.snapshot) {
+          suppressNextSnapshotRef.current = false;
+        }
       } catch {
         suppressNextSnapshotRef.current = false;
       }
@@ -568,6 +595,12 @@ export function useWorkbenchController() {
       autoRules: nextState.autoRules ?? autoRules,
       stagedRows: nextState.stagedRows ?? stagedRows,
       lineSettings: nextState.lineSettings ?? lineSettingsForSave
+    }).then((result) => {
+      if (applySaveDraftResult(result, { reportSuccess: false, reportFailure: true })) {
+        return;
+      }
+
+      suppressNextSnapshotRef.current = false;
     }).catch(() => {
       suppressNextSnapshotRef.current = false;
     });
@@ -792,34 +825,13 @@ export function useWorkbenchController() {
         lineSettings: lineSettingsForSave,
         applyDraft: true
       });
-
-      if (result?.snapshot) {
-        const snapshot = result.snapshot;
-        setLineOptions(normalizeLineOptions(snapshot.lines, t));
-        setDepotOptions(normalizeDepotOptions(snapshot.depots));
-        setStationOptions(normalizeStationOptions(snapshot.stations, t));
-        setTripOptions(ensureArray(snapshot.trips, emptyTrips));
-        setSelectedLineId(snapshot.selectedLineId || selectedLineId);
-        setSelectedEditLine(snapshot.selectedEditLine || selectedEditLine);
-        setMergedView((current) =>
-          mergeLocalDisplayPrefs(ensureMergedView(snapshot.mergedView || mergedView), current)
-        );
-        setManualRows(normalizeManualRows(snapshot.manualRows, snapshot.selectedEditLine || selectedEditLine));
-        setAutoRules(normalizeAutoRules(snapshot.autoRules, snapshot.selectedEditLine || selectedEditLine));
-        setStagedRows(normalizeStagedRows(snapshot.stagedRows));
+      if (applySaveDraftResult(result, { reportSuccess: true, reportFailure: true })) {
+        return t("message.saveSuccessBackend", { version: result?.version ?? "-" });
       }
 
-      if (result?.success) {
-        const successMessage = t("message.saveSuccessBackend", { version: result.version ?? "-" });
-        setSaveState({ status: "success", message: successMessage });
-        return successMessage;
-      }
-
-      const errorMessage = result?.errors?.length
+      return result?.errors?.length
         ? t("message.saveFailed", { message: result.errors[0] })
         : t("message.saveFailedGeneric");
-      setSaveState({ status: "error", message: errorMessage });
-      return errorMessage;
     } catch (error) {
       const errorMessage = t("message.saveFailed", {
         message: error instanceof Error ? error.message : "unknown error"

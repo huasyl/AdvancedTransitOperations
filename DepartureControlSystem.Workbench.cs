@@ -457,7 +457,10 @@ namespace RapidTransitMod
             try
             {
                 DispatchWorkbenchSaveRequest request = DispatchWorkbenchJson.Deserialize<DispatchWorkbenchSaveRequest>(requestJson);
-                List<string> errors = ValidateWorkbenchRequest(request, BuildWorkbenchLinesStable());
+                List<WorkbenchLineRuntime> runtimeLines = BuildWorkbenchLinesStable();
+                bool lineSettingsChanged = request?.lineSettings != null;
+                NormalizeRequestedLineSettingsFromMergedView(request, runtimeLines);
+                List<string> errors = ValidateWorkbenchRequest(request, runtimeLines);
                 if (errors.Count > 0)
                 {
                     result.errors = errors.ToArray();
@@ -553,6 +556,10 @@ namespace RapidTransitMod
                 else
                 {
                     RefreshAppliedWorkbenchLineSettings();
+                    if (lineSettingsChanged)
+                    {
+                        InvalidateAppliedWorkbenchTrackModelState();
+                    }
                 }
                 SaveWorkbenchPersistence();
                 SaveAppliedWorkbenchPersistence();
@@ -1276,7 +1283,7 @@ namespace RapidTransitMod
         private void InvalidateAppliedWorkbenchTrackModelState()
         {
             m_SharedTrackIndexDirty = true;
-            ClearBypassTrackModelRuntimeState();
+            ClearBypassRuntimeState();
         }
 
         private void RefreshAppliedWorkbenchLineSettings()
@@ -4011,6 +4018,40 @@ namespace RapidTransitMod
             }
 
             return errors;
+        }
+
+        private void NormalizeRequestedLineSettingsFromMergedView(
+            DispatchWorkbenchSaveRequest request,
+            List<WorkbenchLineRuntime> runtimeLines)
+        {
+            if (request?.mergedView == null || request.lineSettings == null || request.lineSettings.Length == 0)
+                return;
+
+            List<string> localIds = NormalizeLineIdList(
+                request.mergedView.localLineIds,
+                request.mergedView.localLineId,
+                runtimeLines);
+            List<string> expressIds = NormalizeLineIdList(
+                request.mergedView.expressLineIds,
+                request.mergedView.expressLineId,
+                runtimeLines);
+
+            HashSet<string> localSet = new HashSet<string>(localIds, StringComparer.Ordinal);
+            HashSet<string> expressSet = new HashSet<string>(expressIds, StringComparer.Ordinal);
+
+            for (int i = 0; i < request.lineSettings.Length; i++)
+            {
+                DispatchWorkbenchLineSettingDto setting = request.lineSettings[i];
+                if (setting == null || string.IsNullOrEmpty(setting.lineId))
+                    continue;
+
+                bool isLocal = localSet.Contains(setting.lineId);
+                bool isExpress = expressSet.Contains(setting.lineId);
+                if (isLocal == isExpress)
+                    continue;
+
+                setting.serviceKind = isExpress ? "express" : "local";
+            }
         }
 
         private void LogWorkbenchException(string scope, Exception ex)
