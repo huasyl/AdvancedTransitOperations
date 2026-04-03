@@ -522,6 +522,7 @@ namespace RapidTransitMod
         private const float MAINTENANCE_THRESHOLD = 0.9f;
         private const int IDLE_TIMEOUT_MIN = 2;
         private const double SIM_FRAMES_PER_MINUTE = 182.044;
+        private const float EARLY_STOP_DWELL_CLOSE_MAX_MINUTES = 3f;
         private const float AT_STOP_MAX_DIST = 300f;
         /// <summary>班次宽限分钟数：发车窗口和过期判断共用同一阈值。</summary>
         private const int SLOT_GRACE_MIN = 4;
@@ -8142,7 +8143,7 @@ namespace RapidTransitMod
             {
                 dwellSinceFrame = nowFrame;
                 m_StopDwellStartFrame[vehicle] = dwellSinceFrame;
-                dwellDeadlineFrame = dwellSinceFrame + (uint)(maxDwellMinutes * SIM_FRAMES_PER_MINUTE);
+                dwellDeadlineFrame = ComputeAdjustedStopDwellDeadlineFrame(line, currentWaypointIndex, dwellSinceFrame, maxDwellMinutes);
                 log.Info("[停站计时开始] 线路" + line.Index
                     + " 车辆" + vehicle.Index
                     + " wp=" + currentWaypointIndex
@@ -8152,8 +8153,33 @@ namespace RapidTransitMod
                 return false;
             }
 
-            dwellDeadlineFrame = dwellSinceFrame + (uint)(maxDwellMinutes * SIM_FRAMES_PER_MINUTE);
+            dwellDeadlineFrame = ComputeAdjustedStopDwellDeadlineFrame(line, currentWaypointIndex, dwellSinceFrame, maxDwellMinutes);
             return nowFrame >= dwellDeadlineFrame;
+        }
+
+        private uint ComputeAdjustedStopDwellDeadlineFrame(
+            Entity line,
+            int waypointIndex,
+            uint dwellSinceFrame,
+            int maxDwellMinutes)
+        {
+            float configuredFrames = math.max(0f, maxDwellMinutes * (float)SIM_FRAMES_PER_MINUTE);
+            float earlyCloseFrames = 0f;
+
+            if (line != Entity.Null
+                && waypointIndex >= 0
+                && m_WaypointStopDwellObservations.TryGetValue(
+                    MakeLineWaypointStopObservationKey(line, waypointIndex),
+                    out StopDwellObservation observation)
+                && observation.AverageFrames > configuredFrames)
+            {
+                earlyCloseFrames = math.min(
+                    observation.AverageFrames - configuredFrames,
+                    EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)SIM_FRAMES_PER_MINUTE);
+            }
+
+            float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);
+            return dwellSinceFrame + (uint)math.round(adjustedFrames);
         }
 
         private bool TryGetRouteProgress(Entity transportVehicle, out int nextWaypointIndex, out float segmentPosition)
@@ -9154,9 +9180,13 @@ namespace RapidTransitMod
 
             float elapsedFrames = nowFrame - dwellSinceFrame;
             int maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line);
-            float timeoutRemainingFrames = maxStationDwellMinutes > 0
-                ? math.max(0f, (dwellSinceFrame + (uint)(maxStationDwellMinutes * SIM_FRAMES_PER_MINUTE)) - nowFrame)
-                : 0f;
+            float timeoutRemainingFrames = 0f;
+            if (maxStationDwellMinutes > 0)
+            {
+                uint timeoutDeadlineFrame = ComputeAdjustedStopDwellDeadlineFrame(line, currentWaypointIndex, dwellSinceFrame, maxStationDwellMinutes);
+                if (nowFrame < timeoutDeadlineFrame)
+                    timeoutRemainingFrames = timeoutDeadlineFrame - nowFrame;
+            }
 
             float estimatedRemainingFrames = 0f;
             if (TryGetObservedWaypointStopFrames(line, currentWaypointIndex, out float observedDwellFrames)
