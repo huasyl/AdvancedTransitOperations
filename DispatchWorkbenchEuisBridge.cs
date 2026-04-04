@@ -24,6 +24,7 @@ namespace RapidTransitMod
         private static bool s_HostRegistered;
         private static bool s_EuisAppRegistered;
         private static bool s_EuisDeferredLogged;
+        private static DateTime s_NextEuisAssetLookupUtc;
         private static string s_ModRootPath = string.Empty;
         private static Action<string, object[]> s_EuisCaller;
 
@@ -160,12 +161,18 @@ namespace RapidTransitMod
                 return true;
             }
 
+            if (DateTime.UtcNow < s_NextEuisAssetLookupUtc)
+            {
+                return false;
+            }
+
             // Do not move this call back into RegisterOnce().
             // ExtraUIScreens may not have exported its bridge yet when our host location becomes available,
             // so the EUIS app registration has to keep retrying from the updater until the bridge exists.
             ExecutableAsset euisAsset = FindExecutableAsset("ExtraUIScreens");
             if (euisAsset == null)
             {
+                s_NextEuisAssetLookupUtc = DateTime.UtcNow.AddSeconds(2);
                 if (!s_EuisDeferredLogged)
                 {
                     Mod.log.Info("ExtraUIScreens not found yet; workbench EUIS registration deferred.");
@@ -174,6 +181,7 @@ namespace RapidTransitMod
                 return false;
             }
 
+            s_NextEuisAssetLookupUtc = DateTime.MinValue;
             s_EuisDeferredLogged = false;
 
             Type bridgeType = euisAsset.assembly
@@ -271,6 +279,11 @@ namespace RapidTransitMod
 
         private static ExecutableAsset FindExecutableAsset(string assetName)
         {
+            if (string.IsNullOrWhiteSpace(assetName) || AssetDatabase.global == null)
+            {
+                return null;
+            }
+
             return AssetDatabase.global.GetAsset<ExecutableAsset>(
                 SearchFilter<ExecutableAsset>.ByCondition(
                     asset => asset.isLoaded && ((AssetData)asset).name.Equals(assetName, StringComparison.Ordinal),

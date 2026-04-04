@@ -449,7 +449,8 @@ namespace RapidTransitMod
         private readonly List<Entity> m_DeferredBoardingTailScratch = new List<Entity>();
         private readonly Dictionary<Entity, string> m_MidStopTimeoutLogCache = new Dictionary<Entity, string>();
         private uint m_LastDeferredBoardingTailCleanupFrame;
-        private static bool IsTraversalSliceObservationPersistenceEnabled() => false;
+        private static bool IsTraversalSliceObservationPersistenceEnabled() => true;
+        private static bool IsStopDwellObservationPersistenceEnabled() => true;
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
@@ -486,6 +487,8 @@ namespace RapidTransitMod
         private bool m_LapCacheBufferReady = false;
         private bool m_TraversalSliceObservationBufferReady = false;
         private bool m_TraversalSliceObservationCacheLoaded = false;
+        private bool m_StopDwellObservationBufferReady = false;
+        private bool m_StopDwellObservationCacheLoaded = false;
         private bool m_VehicleCacheBufferReady = false;
         private bool m_DispatchCacheBufferReady = false;
         private bool m_BypassStationBufferReady = false;
@@ -1677,6 +1680,11 @@ namespace RapidTransitMod
             EnsureLapCacheBuffer();
             EnsureVehicleCacheBuffer();
             EnsureDispatchCacheBuffer();
+            if (IsStopDwellObservationPersistenceEnabled())
+            {
+                EnsureStopDwellObservationBuffer();
+                RestoreStopDwellObservationsFromBuffer();
+            }
             if (IsTraversalSliceObservationPersistenceEnabled())
             {
                 EnsureTraversalSliceObservationBuffer();
@@ -1829,6 +1837,10 @@ namespace RapidTransitMod
             m_LastSpawnBlockedLogFrame.Clear();
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
+            m_WaypointStopDwellObservations.Clear();
+            m_StopDwellSessions.Clear();
+            m_StopDwellObservationBufferReady = false;
+            m_StopDwellObservationCacheLoaded = false;
             m_TraversalRunSliceObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
@@ -1961,6 +1973,10 @@ namespace RapidTransitMod
             m_LastSpawnBlockedLogFrame.Clear();
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
+            m_WaypointStopDwellObservations.Clear();
+            m_StopDwellSessions.Clear();
+            m_StopDwellObservationBufferReady = false;
+            m_StopDwellObservationCacheLoaded = false;
             m_TraversalRunSliceObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
@@ -5688,6 +5704,139 @@ namespace RapidTransitMod
             return math.lerp(existingFastBaselineFrames, observedFrames, alpha);
         }
 
+        private void EnsureStopDwellObservationBuffer()
+        {
+            if (!IsStopDwellObservationPersistenceEnabled())
+                return;
+
+            if (m_StopDwellObservationBufferReady)
+                return;
+
+            Entity city = m_CitySystem.City;
+            if (city == Entity.Null)
+                return;
+
+            if (!EntityManager.HasBuffer<StopDwellObservationElement>(city))
+                EntityManager.AddBuffer<StopDwellObservationElement>(city);
+
+            m_StopDwellObservationBufferReady = true;
+        }
+
+        private void RestoreStopDwellObservationsFromBuffer()
+        {
+            if (!IsStopDwellObservationPersistenceEnabled())
+                return;
+
+            if (m_StopDwellObservationCacheLoaded || !m_StopDwellObservationBufferReady)
+                return;
+
+            Entity city = m_CitySystem.City;
+            if (city == Entity.Null || !EntityManager.HasBuffer<StopDwellObservationElement>(city))
+                return;
+
+            m_WaypointStopDwellObservations.Clear();
+            var buffer = EntityManager.GetBuffer<StopDwellObservationElement>(city, true);
+            int restoredCount = 0;
+            int skippedSignatureMismatchCount = 0;
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                StopDwellObservationElement entry = buffer[i];
+                if (entry.m_LineEntity == Entity.Null
+                    || entry.m_WaypointIndex < 0
+                    || !(entry.m_AverageFrames > 0f)
+                    || entry.m_SampleCount <= 0)
+                {
+                    continue;
+                }
+
+                if (!TryGetStopDwellObservationProfileSignature(entry.m_LineEntity, out ulong currentSignature)
+                    || currentSignature != entry.m_ProfileSignature)
+                {
+                    skippedSignatureMismatchCount++;
+                    continue;
+                }
+
+                m_WaypointStopDwellObservations[MakeLineWaypointStopObservationKey(entry.m_LineEntity, entry.m_WaypointIndex)] =
+                    new StopDwellObservation
+                    {
+                        AverageFrames = entry.m_AverageFrames,
+                        SampleCount = math.max(0, entry.m_SampleCount)
+                    };
+                restoredCount++;
+            }
+
+            m_StopDwellObservationCacheLoaded = true;
+            log.Info("[恢复] StopDwellObservations buffer=" + buffer.Length
+                + " restored=" + restoredCount
+                + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
+        }
+
+        private void FlushStopDwellObservation(Entity line, int waypointIndex, StopDwellObservation observation)
+        {
+            if (!IsStopDwellObservationPersistenceEnabled())
+                return;
+
+            if (line == Entity.Null
+                || waypointIndex < 0
+                || !(observation.AverageFrames > 0f)
+                || observation.SampleCount <= 0
+                || !m_StopDwellObservationBufferReady)
+            {
+                return;
+            }
+
+            if (!TryGetStopDwellObservationProfileSignature(line, out ulong profileSignature))
+                return;
+
+            Entity city = m_CitySystem.City;
+            if (city == Entity.Null || !EntityManager.HasBuffer<StopDwellObservationElement>(city))
+                return;
+
+            var buffer = EntityManager.GetBuffer<StopDwellObservationElement>(city);
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                if (buffer[i].m_LineEntity != line || buffer[i].m_WaypointIndex != waypointIndex)
+                    continue;
+
+                buffer[i] = new StopDwellObservationElement
+                {
+                    m_LineEntity = line,
+                    m_ProfileSignature = profileSignature,
+                    m_WaypointIndex = waypointIndex,
+                    m_AverageFrames = observation.AverageFrames,
+                    m_SampleCount = observation.SampleCount
+                };
+                return;
+            }
+
+            buffer.Add(new StopDwellObservationElement
+            {
+                m_LineEntity = line,
+                m_ProfileSignature = profileSignature,
+                m_WaypointIndex = waypointIndex,
+                m_AverageFrames = observation.AverageFrames,
+                m_SampleCount = observation.SampleCount
+            });
+        }
+
+        private bool TryGetStopDwellObservationProfileSignature(Entity line, out ulong signature)
+        {
+            signature = 0UL;
+            if (line == Entity.Null || !EntityManager.Exists(line) || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+
+            var segmentBuffers = GetBufferLookup<RouteSegment>(true);
+            if (!segmentBuffers.TryGetBuffer(line, out DynamicBuffer<RouteSegment> segments))
+                return false;
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypoints.Length == 0 || segments.Length != waypoints.Length)
+                return false;
+
+            signature = ComputeLineProfileSignature(waypoints, segments);
+            return signature != 0UL;
+        }
+
         private void EnsureTraversalSliceObservationBuffer()
         {
             if (!IsTraversalSliceObservationPersistenceEnabled())
@@ -6917,14 +7066,18 @@ namespace RapidTransitMod
             sceneCoordinate = 0f;
             if (vehicle == Entity.Null
                 || scope.Line == Entity.Null
-                || !TryGetLineTrackChain(scope.Line, localWaypoints, out LineTrackChain localChain))
+                || !TryGetLocalBypassSceneStaticSnapshot(
+                    scope.Line,
+                    localWaypoints,
+                    scope.WaypointIndex,
+                    out LineTrackChain localChain,
+                    out LocalBypassSceneStaticSnapshot localScene))
             {
                 return false;
             }
 
-            EnsureTrackChainBypassPipelineReady(localChain);
-            if (!TryResolveBypassProtectedInterval(localChain, localWaypoints, scope.WaypointIndex, out int localProtectedIntervalIndex, out BypassProtectedInterval localProtectedInterval))
-                return false;
+            int localProtectedIntervalIndex = localScene.ProtectedIntervalIndex;
+            BypassProtectedInterval localProtectedInterval = localScene.ProtectedInterval;
 
             if (ResolveVehicleLine(vehicle) == scope.Line)
             {
@@ -9250,6 +9403,7 @@ namespace RapidTransitMod
                     AverageFrames = averageFrames,
                     SampleCount = sampleCount
                 };
+                FlushStopDwellObservation(line, waypointIndex, m_WaypointStopDwellObservations[key]);
                 ClearLineTimeProfiles();
                 InvalidateTrackModel(line);
                 return;
@@ -9260,6 +9414,7 @@ namespace RapidTransitMod
                 AverageFrames = sampleFrames,
                 SampleCount = 1
             };
+            FlushStopDwellObservation(line, waypointIndex, m_WaypointStopDwellObservations[key]);
             ClearLineTimeProfiles();
             InvalidateTrackModel(line);
         }
