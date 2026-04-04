@@ -657,7 +657,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct GlobalSharedTrunkSegment
+        private readonly struct GlobalSharedTrunkSegment : IEquatable<GlobalSharedTrunkSegment>
         {
             public readonly int LocalCorridorStartAtomIndex;
             public readonly int LocalCorridorEndAtomIndexExclusive;
@@ -722,6 +722,63 @@ namespace RapidTransitMod
                 HasCanonicalDirection = hasCanonicalDirection;
                 LocalAlongCanonical = localAlongCanonical;
                 ExpressAlongCanonical = expressAlongCanonical;
+            }
+
+            public bool Equals(GlobalSharedTrunkSegment other)
+            {
+                return LocalCorridorStartAtomIndex == other.LocalCorridorStartAtomIndex
+                    && LocalCorridorEndAtomIndexExclusive == other.LocalCorridorEndAtomIndexExclusive
+                    && ExpressCorridorStartAtomIndex == other.ExpressCorridorStartAtomIndex
+                    && ExpressCorridorEndAtomIndexExclusive == other.ExpressCorridorEndAtomIndexExclusive
+                    && LocalAnchorStartAtomIndex == other.LocalAnchorStartAtomIndex
+                    && LocalAnchorEndAtomIndexExclusive == other.LocalAnchorEndAtomIndexExclusive
+                    && ExpressAnchorStartAtomIndex == other.ExpressAnchorStartAtomIndex
+                    && ExpressAnchorEndAtomIndexExclusive == other.ExpressAnchorEndAtomIndexExclusive
+                    && LocalSharedSliceCount == other.LocalSharedSliceCount
+                    && ExpressSharedSliceCount == other.ExpressSharedSliceCount
+                    && LocalBridgedGapAtoms == other.LocalBridgedGapAtoms
+                    && ExpressBridgedGapAtoms == other.ExpressBridgedGapAtoms
+                    && PhysicalOverlap == other.PhysicalOverlap
+                    && OrderedRun == other.OrderedRun
+                    && HasMirroredContext == other.HasMirroredContext
+                    && MaxSharedLineCount == other.MaxSharedLineCount
+                    && TraversalRelation == other.TraversalRelation
+                    && HasCanonicalDirection == other.HasCanonicalDirection
+                    && LocalAlongCanonical == other.LocalAlongCanonical
+                    && ExpressAlongCanonical == other.ExpressAlongCanonical;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is GlobalSharedTrunkSegment other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = LocalCorridorStartAtomIndex;
+                    hash = (hash * 397) ^ LocalCorridorEndAtomIndexExclusive;
+                    hash = (hash * 397) ^ ExpressCorridorStartAtomIndex;
+                    hash = (hash * 397) ^ ExpressCorridorEndAtomIndexExclusive;
+                    hash = (hash * 397) ^ LocalAnchorStartAtomIndex;
+                    hash = (hash * 397) ^ LocalAnchorEndAtomIndexExclusive;
+                    hash = (hash * 397) ^ ExpressAnchorStartAtomIndex;
+                    hash = (hash * 397) ^ ExpressAnchorEndAtomIndexExclusive;
+                    hash = (hash * 397) ^ LocalSharedSliceCount;
+                    hash = (hash * 397) ^ ExpressSharedSliceCount;
+                    hash = (hash * 397) ^ LocalBridgedGapAtoms;
+                    hash = (hash * 397) ^ ExpressBridgedGapAtoms;
+                    hash = (hash * 397) ^ PhysicalOverlap;
+                    hash = (hash * 397) ^ OrderedRun;
+                    hash = (hash * 397) ^ HasMirroredContext.GetHashCode();
+                    hash = (hash * 397) ^ MaxSharedLineCount;
+                    hash = (hash * 397) ^ (int)TraversalRelation;
+                    hash = (hash * 397) ^ HasCanonicalDirection.GetHashCode();
+                    hash = (hash * 397) ^ LocalAlongCanonical.GetHashCode();
+                    hash = (hash * 397) ^ ExpressAlongCanonical.GetHashCode();
+                    return hash;
+                }
             }
         }
 
@@ -1118,6 +1175,8 @@ namespace RapidTransitMod
             public readonly int OverlapCount;
             public readonly int OrderedRun;
             public readonly string ResolutionSource;
+            public readonly bool HasRelevantSharedEntryAtomIndex;
+            public readonly int RelevantSharedEntryAtomIndex;
 
             public LocalSceneExpressStaticMatchSnapshot(
                 uint sharedTrackVersion,
@@ -1130,7 +1189,9 @@ namespace RapidTransitMod
                 BypassProtectedInterval expressProtectedInterval,
                 int overlapCount,
                 int orderedRun,
-                string resolutionSource)
+                string resolutionSource,
+                bool hasRelevantSharedEntryAtomIndex,
+                int relevantSharedEntryAtomIndex)
             {
                 SharedTrackVersion = sharedTrackVersion;
                 LocalChainSignature = localChainSignature;
@@ -1143,6 +1204,8 @@ namespace RapidTransitMod
                 OverlapCount = overlapCount;
                 OrderedRun = orderedRun;
                 ResolutionSource = resolutionSource;
+                HasRelevantSharedEntryAtomIndex = hasRelevantSharedEntryAtomIndex;
+                RelevantSharedEntryAtomIndex = relevantSharedEntryAtomIndex;
             }
         }
 
@@ -1251,6 +1314,8 @@ namespace RapidTransitMod
             public readonly int LocalEndAtomIndexExclusive;
             public readonly int ExpressStartAtomIndex;
             public readonly int ExpressEndAtomIndexExclusive;
+            public readonly bool HasPreselectedTrunkSegment;
+            public readonly GlobalSharedTrunkSegment PreselectedTrunkSegment;
             public readonly int ExpressCurrentAtomIndex;
 
             public ActiveConflictCorridorCacheKey(
@@ -1265,6 +1330,8 @@ namespace RapidTransitMod
                 int localEndAtomIndexExclusive,
                 int expressStartAtomIndex,
                 int expressEndAtomIndexExclusive,
+                bool hasPreselectedTrunkSegment,
+                GlobalSharedTrunkSegment preselectedTrunkSegment,
                 int expressCurrentAtomIndex)
             {
                 LocalLine = localLine;
@@ -1278,6 +1345,8 @@ namespace RapidTransitMod
                 LocalEndAtomIndexExclusive = localEndAtomIndexExclusive;
                 ExpressStartAtomIndex = expressStartAtomIndex;
                 ExpressEndAtomIndexExclusive = expressEndAtomIndexExclusive;
+                HasPreselectedTrunkSegment = hasPreselectedTrunkSegment;
+                PreselectedTrunkSegment = preselectedTrunkSegment;
                 ExpressCurrentAtomIndex = expressCurrentAtomIndex;
             }
 
@@ -1294,6 +1363,8 @@ namespace RapidTransitMod
                     && LocalEndAtomIndexExclusive == other.LocalEndAtomIndexExclusive
                     && ExpressStartAtomIndex == other.ExpressStartAtomIndex
                     && ExpressEndAtomIndexExclusive == other.ExpressEndAtomIndexExclusive
+                    && HasPreselectedTrunkSegment == other.HasPreselectedTrunkSegment
+                    && PreselectedTrunkSegment.Equals(other.PreselectedTrunkSegment)
                     && ExpressCurrentAtomIndex == other.ExpressCurrentAtomIndex;
             }
 
@@ -1317,6 +1388,8 @@ namespace RapidTransitMod
                     hash = (hash * 397) ^ LocalEndAtomIndexExclusive;
                     hash = (hash * 397) ^ ExpressStartAtomIndex;
                     hash = (hash * 397) ^ ExpressEndAtomIndexExclusive;
+                    hash = (hash * 397) ^ HasPreselectedTrunkSegment.GetHashCode();
+                    hash = (hash * 397) ^ PreselectedTrunkSegment.GetHashCode();
                     hash = (hash * 397) ^ ExpressCurrentAtomIndex;
                     return hash;
                 }
@@ -5589,6 +5662,7 @@ namespace RapidTransitMod
         {
             candidates = new List<SceneExpressVehicleCandidate>();
             fatalReason = string.Empty;
+            m_BypassPerfProbeSceneSamples++;
 
             List<Entity> candidateExpressLines = GetCandidateExpressLinesForLocalScene(localChain, protectedInterval, currentBypassBuilding);
             if (candidateExpressLines == null || candidateExpressLines.Count == 0)
@@ -5627,20 +5701,6 @@ namespace RapidTransitMod
                 if (!staticMatch.Found)
                     continue;
 
-                bool hasExpressFirstSharedAtomAfterCurrentBypassStation = TryGetExpressFirstSharedAtomAfterCurrentBypassStation(
-                    localChain,
-                    protectedInterval,
-                    currentBypassBuilding,
-                    expressChain,
-                    new PhysicalSharedWindowMatch(
-                        true,
-                        false,
-                        staticMatch.LocalSharedWindow,
-                        staticMatch.ExpressProtectedInterval,
-                        staticMatch.OverlapCount,
-                        staticMatch.OrderedRun),
-                    out int expressFirstSharedAtomAfterCurrentBypassStation);
-
                 if (!TryGetLineRunningVehicleFrameSnapshot(expressLine, expressWaypoints, nowFrame, out LineRunningVehicleFrameSnapshot runningSnapshot))
                     continue;
 
@@ -5650,6 +5710,7 @@ namespace RapidTransitMod
                     Entity expressVehicle = runningVehicle.Vehicle;
                     if (expressVehicle == localVehicle || expressVehicle == Entity.Null || !EntityManager.Exists(expressVehicle))
                         continue;
+                    m_BypassPerfProbeSceneCandidateVehicles++;
 
                     int expressProtectedIntervalIndex = staticMatch.ExpressProtectedIntervalIndex;
                     BypassProtectedInterval expressProtectedInterval = staticMatch.ExpressProtectedInterval;
@@ -5769,10 +5830,10 @@ namespace RapidTransitMod
                         continue;
                     }
 
-                    int relevantSharedEntryAtomIndex = hasExpressFirstSharedAtomAfterCurrentBypassStation
-                        ? expressFirstSharedAtomAfterCurrentBypassStation
+                    int relevantSharedEntryAtomIndex = staticMatch.HasRelevantSharedEntryAtomIndex
+                        ? staticMatch.RelevantSharedEntryAtomIndex
                         : selectedTrunkSegment.ExpressCorridorStartAtomIndex;
-                    if (hasExpressFirstSharedAtomAfterCurrentBypassStation
+                    if (staticMatch.HasRelevantSharedEntryAtomIndex
                         && IsVehicleClearlyPastExpressAtom(runningVehicle, relevantSharedEntryAtomIndex))
                     {
                         LogSharedWindowFinalReject(
@@ -5809,6 +5870,7 @@ namespace RapidTransitMod
                         expressTrunkState,
                         relevantSharedEntryAtomIndex,
                         entryDistanceAtoms));
+                    m_BypassPerfProbeSceneAdmittedCandidates++;
                 }
             }
 
@@ -5869,6 +5931,9 @@ namespace RapidTransitMod
             {
                 return false;
             }
+
+            m_BypassPerfProbeSameStationCalls++;
+            m_BypassPerfProbeSameStationReusedCandidates += (ulong)orderedCandidates.Count;
 
             bool found = false;
             Entity bestExpressLine = Entity.Null;
@@ -6571,6 +6636,7 @@ namespace RapidTransitMod
                 return false;
             }
 
+            m_BypassPerfProbeDeepCorridorEntries++;
             if (!TryGetActiveConflictCorridorCurrent(
                     localChain,
                     localProtectedInterval,
@@ -8409,7 +8475,9 @@ namespace RapidTransitMod
                 localProtectedInterval.EndAtomIndexExclusive,
                 expressProtectedInterval.StartAtomIndex,
                 expressProtectedInterval.EndAtomIndexExclusive,
-                expressPosition.CurrentAtomIndex);
+                hasPreselectedTrunkSegment,
+                hasPreselectedTrunkSegment ? preselectedTrunkSegment : default,
+                hasPreselectedTrunkSegment ? -1 : expressPosition.CurrentAtomIndex);
 
             if (m_ActiveConflictCorridorSnapshots.TryGetValue(key, out ActiveConflictCorridorSnapshot snapshot)
                 && snapshot.Frame == nowFrame
@@ -8855,7 +8923,9 @@ namespace RapidTransitMod
                     default,
                     0,
                     0,
-                    string.Empty);
+                    string.Empty,
+                    false,
+                    -1);
                 m_LocalSceneExpressStaticMatchSnapshots[key] = snapshot;
                 return false;
             }
@@ -8873,13 +8943,22 @@ namespace RapidTransitMod
                     default,
                     0,
                     0,
-                    string.Empty);
+                    string.Empty,
+                    false,
+                    -1);
                 m_LocalSceneExpressStaticMatchSnapshots[key] = snapshot;
                 return true;
             }
 
             BypassProtectedInterval expressProtectedInterval = sharedWindowMatch.ExpressSharedWindow;
             int expressProtectedIntervalIndex = FindProtectedIntervalIndex(expressChain, expressProtectedInterval);
+            bool hasRelevantSharedEntryAtomIndex = TryGetExpressFirstSharedAtomAfterCurrentBypassStation(
+                localChain,
+                localProtectedInterval,
+                currentBypassBuilding,
+                expressChain,
+                sharedWindowMatch,
+                out int relevantSharedEntryAtomIndex);
             snapshot = new LocalSceneExpressStaticMatchSnapshot(
                 m_SharedTrackIndexVersion,
                 localChain.Signature,
@@ -8891,7 +8970,9 @@ namespace RapidTransitMod
                 expressProtectedInterval,
                 sharedWindowMatch.OverlapCount,
                 sharedWindowMatch.OrderedRun,
-                "shared-window");
+                "shared-window",
+                hasRelevantSharedEntryAtomIndex,
+                relevantSharedEntryAtomIndex);
             m_LocalSceneExpressStaticMatchSnapshots[key] = snapshot;
             return true;
         }

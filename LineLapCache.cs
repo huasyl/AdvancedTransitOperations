@@ -110,7 +110,10 @@ namespace RapidTransitMod
         }
     }
 
-    [InternalBufferCapacity(256)]
+    // This buffer is persisted on the city singleton and may be added to old
+    // saves during load. Keep the in-chunk footprint tiny so the city
+    // archetype does not bloat when the buffer is first attached.
+    [InternalBufferCapacity(1)]
     public struct TraversalSliceObservationElement : IBufferElementData, ISerializable
     {
         public Entity m_LineEntity;
@@ -144,7 +147,10 @@ namespace RapidTransitMod
         }
     }
 
-    [InternalBufferCapacity(256)]
+    // This buffer lives on the city singleton and can grow large in old saves.
+    // Keep the in-chunk footprint tiny so adding the buffer does not bloat the
+    // city archetype during load; the dynamic buffer can spill externally.
+    [InternalBufferCapacity(1)]
     public struct StopDwellObservationElement : IBufferElementData, ISerializable
     {
         public Entity m_LineEntity;
@@ -191,7 +197,9 @@ namespace RapidTransitMod
         }
     }
 
-    [InternalBufferCapacity(128)]
+    // This persisted buffer is attached to the city singleton. Keep the
+    // in-chunk footprint minimal so old saves can attach it safely on first load.
+    [InternalBufferCapacity(1)]
     public struct AppliedWorkbenchStagedRowElement : IBufferElementData, ISerializable
     {
         public Entity m_LineEntity;
@@ -263,7 +271,9 @@ namespace RapidTransitMod
         }
     }
 
-    [InternalBufferCapacity(128)]
+    // This persisted buffer is attached to the city singleton. Keep the
+    // in-chunk footprint minimal so old saves can attach it safely on first load.
+    [InternalBufferCapacity(1)]
     public struct LineMileageAnchorElement : IBufferElementData, ISerializable
     {
         public Entity m_LineEntity;
@@ -310,7 +320,9 @@ namespace RapidTransitMod
         }
     }
 
-    [InternalBufferCapacity(256)]
+    // This persisted buffer is attached to the city singleton. Keep the
+    // in-chunk footprint minimal so old saves can attach it safely on first load.
+    [InternalBufferCapacity(1)]
     public struct LineCorridorNodeElement : IBufferElementData, ISerializable
     {
         public Entity m_LineEntity;

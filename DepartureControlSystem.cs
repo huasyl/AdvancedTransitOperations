@@ -93,6 +93,7 @@ namespace RapidTransitMod
             public uint ReevaluateAfterFrame;
             public bool ShouldHold;
             public bool CanClearAfterExit;
+            public bool LockToBlockerUntilRelease;
             public Entity Blocker;
 
             public BypassHoldCadenceSnapshot(
@@ -104,6 +105,7 @@ namespace RapidTransitMod
                 uint reevaluateAfterFrame,
                 bool shouldHold,
                 bool canClearAfterExit,
+                bool lockToBlockerUntilRelease,
                 Entity blocker)
             {
                 Line = line;
@@ -114,6 +116,7 @@ namespace RapidTransitMod
                 ReevaluateAfterFrame = reevaluateAfterFrame;
                 ShouldHold = shouldHold;
                 CanClearAfterExit = canClearAfterExit;
+                LockToBlockerUntilRelease = lockToBlockerUntilRelease;
                 Blocker = blocker;
             }
         }
@@ -468,6 +471,12 @@ namespace RapidTransitMod
         private ulong m_BypassPerfProbeTrackDecisionCalls;
         private ulong m_BypassPerfProbeResolveCalls;
         private ulong m_BypassPerfProbeActiveCorridorCalls;
+        private ulong m_BypassPerfProbeSceneSamples;
+        private ulong m_BypassPerfProbeSceneCandidateVehicles;
+        private ulong m_BypassPerfProbeSceneAdmittedCandidates;
+        private ulong m_BypassPerfProbeSameStationCalls;
+        private ulong m_BypassPerfProbeSameStationReusedCandidates;
+        private ulong m_BypassPerfProbeDeepCorridorEntries;
 
         // ── 线路状态 ──
         private NativeHashMap<Entity, int> m_SpawningLines;
@@ -1778,7 +1787,13 @@ namespace RapidTransitMod
                 || m_BypassPerfProbeBaselineCalls > 0
                 || m_BypassPerfProbeTrackDecisionCalls > 0
                 || m_BypassPerfProbeResolveCalls > 0
-                || m_BypassPerfProbeActiveCorridorCalls > 0)
+                || m_BypassPerfProbeActiveCorridorCalls > 0
+                || m_BypassPerfProbeSceneSamples > 0
+                || m_BypassPerfProbeSceneCandidateVehicles > 0
+                || m_BypassPerfProbeSceneAdmittedCandidates > 0
+                || m_BypassPerfProbeSameStationCalls > 0
+                || m_BypassPerfProbeSameStationReusedCandidates > 0
+                || m_BypassPerfProbeDeepCorridorEntries > 0)
             {
                 log.Info("[待避轻量计数] frames=" + elapsedFrames
                     + " cadence=" + m_BypassPerfProbeCadenceCalls
@@ -1786,7 +1801,13 @@ namespace RapidTransitMod
                     + " baseline=" + m_BypassPerfProbeBaselineCalls
                     + " trackDecision=" + m_BypassPerfProbeTrackDecisionCalls
                     + " resolve=" + m_BypassPerfProbeResolveCalls
-                    + " activeCorridor=" + m_BypassPerfProbeActiveCorridorCalls);
+                    + " activeCorridor=" + m_BypassPerfProbeActiveCorridorCalls
+                    + " scenes=" + m_BypassPerfProbeSceneSamples
+                    + " cand=" + m_BypassPerfProbeSceneCandidateVehicles
+                    + " admitted=" + m_BypassPerfProbeSceneAdmittedCandidates
+                    + " sameReuse=" + m_BypassPerfProbeSameStationReusedCandidates
+                    + " sameCalls=" + m_BypassPerfProbeSameStationCalls
+                    + " deepCorridor=" + m_BypassPerfProbeDeepCorridorEntries);
             }
 
             m_BypassPerfProbeLastLogFrame = nowFrame;
@@ -1796,6 +1817,12 @@ namespace RapidTransitMod
             m_BypassPerfProbeTrackDecisionCalls = 0;
             m_BypassPerfProbeResolveCalls = 0;
             m_BypassPerfProbeActiveCorridorCalls = 0;
+            m_BypassPerfProbeSceneSamples = 0;
+            m_BypassPerfProbeSceneCandidateVehicles = 0;
+            m_BypassPerfProbeSceneAdmittedCandidates = 0;
+            m_BypassPerfProbeSameStationCalls = 0;
+            m_BypassPerfProbeSameStationReusedCandidates = 0;
+            m_BypassPerfProbeDeepCorridorEntries = 0;
         }
 
         private void SafeClearAll()
@@ -1909,13 +1936,32 @@ namespace RapidTransitMod
             if (m_BypassYieldBlocker.IsCreated)
             {
                 var blockerKeys = m_BypassYieldBlocker.GetKeyArray(Allocator.Temp);
+                List<Entity> yieldVehiclesToRelease = null;
                 for (int i = blockerKeys.Length - 1; i >= 0; i--)
                 {
                     Entity vehicle = blockerKeys[i];
-                    if (ResolveVehicleLine(vehicle) == line)
-                        m_BypassYieldBlocker.Remove(vehicle);
+                    Entity localLine = ResolveVehicleLine(vehicle);
+                    Entity blockerLine = m_BypassYieldBlocker.TryGetValue(vehicle, out Entity blockerVehicle)
+                        ? ResolveVehicleLine(blockerVehicle)
+                        : Entity.Null;
+                    if (localLine != line && blockerLine != line)
+                        continue;
+
+                    yieldVehiclesToRelease ??= new List<Entity>();
+                    yieldVehiclesToRelease.Add(vehicle);
                 }
                 blockerKeys.Dispose();
+
+                if (yieldVehiclesToRelease != null)
+                {
+                    for (int i = 0; i < yieldVehiclesToRelease.Count; i++)
+                    {
+                        Entity vehicle = yieldVehiclesToRelease[i];
+                        ClearBypassYieldState(vehicle, "线路运行态失效");
+                        m_BypassDecisionLogCache.Remove(vehicle);
+                        m_BypassQueuedLocalOverrideLogCache.Remove(vehicle);
+                    }
+                }
             }
 
             List<Entity> cadenceKeysToRemove = null;
@@ -1940,6 +1986,35 @@ namespace RapidTransitMod
             }
 
             ClearBypassTrackModelRuntimeStateForLine(line);
+        }
+
+        private void InvalidateTrackTimingForLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            ClearLineTimeProfiles();
+
+            List<Entity> cadenceKeysToRemove = null;
+            foreach (KeyValuePair<Entity, BypassHoldCadenceSnapshot> entry in m_BypassHoldCadenceSnapshots)
+            {
+                if (entry.Value.Line != line)
+                    continue;
+
+                cadenceKeysToRemove ??= new List<Entity>();
+                cadenceKeysToRemove.Add(entry.Key);
+            }
+
+            if (cadenceKeysToRemove == null)
+                return;
+
+            for (int i = 0; i < cadenceKeysToRemove.Count; i++)
+            {
+                Entity vehicle = cadenceKeysToRemove[i];
+                m_BypassHoldCadenceSnapshots.Remove(vehicle);
+                m_BypassDecisionLogCache.Remove(vehicle);
+                m_BypassQueuedLocalOverrideLogCache.Remove(vehicle);
+            }
         }
 
         private void ClearRuntimeTrackingState()
@@ -6645,15 +6720,24 @@ namespace RapidTransitMod
             }
 
             bool hasLatchedYield = m_BypassYieldBlocker.ContainsKey(localVehicle);
+            if (hasLatchedYield
+                && TryReuseLatchedBypassBlockerUntilRelease(scope, localWaypoints, out shouldHold, out blockerVehicle, out canClearAfterExit))
+            {
+                return true;
+            }
+
             if (TryReuseBypassHoldCadenceSnapshot(scope, hasLatchedYield, nowFrame, out shouldHold, out blockerVehicle, out canClearAfterExit))
             {
                 return true;
             }
 
             m_BypassPerfProbeCadenceMisses++;
-            shouldHold = ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle);
+            shouldHold = ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle, out string decisionReason);
             canClearAfterExit = (hasLatchedYield || shouldHold)
                 && CanClearBypassYieldAfterStationExit(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex);
+            bool lockToBlockerUntilRelease = shouldHold
+                && blockerVehicle != Entity.Null
+                && string.Equals(decisionReason, "track-model-same-station-same-direction-express-departing", StringComparison.Ordinal);
 
             StoreBypassHoldCadenceSnapshot(
                 scope,
@@ -6661,7 +6745,42 @@ namespace RapidTransitMod
                 nowFrame,
                 shouldHold,
                 canClearAfterExit,
+                lockToBlockerUntilRelease,
                 blockerVehicle);
+            return true;
+        }
+
+        private bool TryReuseLatchedBypassBlockerUntilRelease(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            out bool shouldHold,
+            out Entity blockerVehicle,
+            out bool canClearAfterExit)
+        {
+            shouldHold = false;
+            blockerVehicle = Entity.Null;
+            canClearAfterExit = true;
+
+            if (!m_BypassHoldCadenceSnapshots.TryGetValue(scope.Vehicle, out BypassHoldCadenceSnapshot snapshot)
+                || snapshot.Line != scope.Line
+                || snapshot.WaypointIndex != scope.WaypointIndex
+                || snapshot.CurrentBypassBuilding != scope.CurrentBypassBuilding
+                || snapshot.NextBypassBuilding != scope.NextBypassBuilding
+                || !snapshot.ShouldHold
+                || !snapshot.LockToBlockerUntilRelease
+                || snapshot.Blocker == Entity.Null)
+            {
+                return false;
+            }
+
+            blockerVehicle = snapshot.Blocker;
+            if (!TryIsLatchedBypassBlockerBeforeRelease(scope, localWaypoints, blockerVehicle, out bool blockerStillBeforeRelease))
+                return false;
+            if (!blockerStillBeforeRelease)
+                return false;
+
+            shouldHold = true;
+            canClearAfterExit = CanClearBypassYieldAfterStationExit(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex);
             return true;
         }
 
@@ -6742,6 +6861,7 @@ namespace RapidTransitMod
             uint nowFrame,
             bool shouldHold,
             bool canClearAfterExit,
+            bool lockToBlockerUntilRelease,
             Entity blockerVehicle)
         {
             uint reevaluateAfterFrame = nowFrame + 1;
@@ -6759,6 +6879,7 @@ namespace RapidTransitMod
                 reevaluateAfterFrame,
                 shouldHold,
                 canClearAfterExit,
+                lockToBlockerUntilRelease,
                 blockerVehicle);
         }
 
@@ -6872,13 +6993,16 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> localWaypoints,
             int currentWaypointIndex,
             uint nowFrame,
-            out Entity blockerVehicle)
+            out Entity blockerVehicle,
+            out string decisionReason)
         {
             blockerVehicle = Entity.Null;
+            decisionReason = string.Empty;
             if (localLine == Entity.Null
                 || !IsWorkbenchTimetableApplied(localLine)
                 || !IsAppliedWorkbenchLocalLine(localLine))
             {
+                decisionReason = "local-line-invalid";
                 return FinalizeBypassDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, Entity.Null, Entity.Null, false, "local-line-invalid", Entity.Null);
             }
 
@@ -6890,21 +7014,25 @@ namespace RapidTransitMod
                     out BypassControlScope scope,
                     out string failureReason))
             {
+                decisionReason = failureReason ?? string.Empty;
                 return FinalizeBypassDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, Entity.Null, Entity.Null, false, failureReason, Entity.Null);
             }
 
-            return ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle);
+            return ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle, out decisionReason);
         }
 
         private bool ShouldHoldLocalVehicleForExpressBypass(
             BypassControlScope scope,
             DynamicBuffer<RouteWaypoint> localWaypoints,
             uint nowFrame,
-            out Entity blockerVehicle)
+            out Entity blockerVehicle,
+            out string decisionReason)
         {
             blockerVehicle = Entity.Null;
+            decisionReason = string.Empty;
             if (!TryGetTrackModelBypassBaseline(scope, localWaypoints, nowFrame, out bool shouldYield, out string trackModelReason, out Entity trackModelBlocker))
             {
+                decisionReason = "track-model-decision-unavailable";
                 return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
             }
 
@@ -6984,6 +7112,7 @@ namespace RapidTransitMod
                                 localSceneCoordinate,
                                 queuedLocalMeters);
                             blockerVehicle = Entity.Null;
+                            decisionReason = "express-behind-nearest-queued-local";
                             return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "express-behind-nearest-queued-local", Entity.Null);
                         }
                         else
@@ -7003,6 +7132,7 @@ namespace RapidTransitMod
             }
 
             blockerVehicle = trackModelBlocker;
+            decisionReason = trackModelReason ?? string.Empty;
             return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, shouldYield, trackModelReason, trackModelBlocker);
         }
 
@@ -7147,6 +7277,32 @@ namespace RapidTransitMod
                 includeApproachers: true,
                 out bool includeExpress);
             return includeExpress;
+        }
+
+        private bool TryIsLatchedBypassBlockerBeforeRelease(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            Entity blockerVehicle,
+            out bool blockerStillBeforeRelease)
+        {
+            blockerStillBeforeRelease = false;
+            if (blockerVehicle == Entity.Null
+                || scope.Line == Entity.Null
+                || !TryGetLocalBypassSceneStaticSnapshot(
+                    scope.Line,
+                    localWaypoints,
+                    scope.WaypointIndex,
+                    out _,
+                    out LocalBypassSceneStaticSnapshot localScene))
+            {
+                return false;
+            }
+
+            if (!TryProjectVehicleToCurrentLocalSceneCoordinate(scope, localWaypoints, blockerVehicle, out float blockerSceneCoordinate))
+                return false;
+
+            blockerStillBeforeRelease = blockerSceneCoordinate <= localScene.DepartureReleaseCoordinate;
+            return true;
         }
 
         private static bool IsExpressAheadOfNearestQueuedLocalOnCurrentSceneAxis(
@@ -9404,8 +9560,7 @@ namespace RapidTransitMod
                     SampleCount = sampleCount
                 };
                 FlushStopDwellObservation(line, waypointIndex, m_WaypointStopDwellObservations[key]);
-                ClearLineTimeProfiles();
-                InvalidateTrackModel(line);
+                InvalidateTrackTimingForLine(line);
                 return;
             }
 
@@ -9415,8 +9570,7 @@ namespace RapidTransitMod
                 SampleCount = 1
             };
             FlushStopDwellObservation(line, waypointIndex, m_WaypointStopDwellObservations[key]);
-            ClearLineTimeProfiles();
-            InvalidateTrackModel(line);
+            InvalidateTrackTimingForLine(line);
         }
 
         private float ResolveProfileScale(Entity v, float baseLoopFrames)
