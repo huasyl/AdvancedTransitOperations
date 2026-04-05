@@ -197,6 +197,8 @@ namespace RapidTransitMod
             public readonly uint AcquiredFrame;
             public readonly bool CanClearAfterExit;
             public readonly bool SameStationRequired;
+            public readonly bool HasLatchedBlockerProjection;
+            public readonly BypassLatchedBlockerProjection LatchedBlockerProjection;
 
             public BypassConflictEpisode(
                 Entity localVehicle,
@@ -206,7 +208,9 @@ namespace RapidTransitMod
                 BypassConflictMode mode,
                 uint acquiredFrame,
                 bool canClearAfterExit,
-                bool sameStationRequired)
+                bool sameStationRequired,
+                bool hasLatchedBlockerProjection = false,
+                BypassLatchedBlockerProjection latchedBlockerProjection = default)
             {
                 LocalVehicle = localVehicle;
                 SceneKey = sceneKey;
@@ -216,6 +220,33 @@ namespace RapidTransitMod
                 AcquiredFrame = acquiredFrame;
                 CanClearAfterExit = canClearAfterExit;
                 SameStationRequired = sameStationRequired;
+                HasLatchedBlockerProjection = hasLatchedBlockerProjection;
+                LatchedBlockerProjection = latchedBlockerProjection;
+            }
+        }
+
+        private readonly struct BypassLatchedBlockerProjection
+        {
+            public readonly bool Available;
+            public readonly Entity ExpressLine;
+            public readonly BypassProtectedInterval ExpressProtectedInterval;
+            public readonly GlobalSharedTrunkSegment SelectedTrunkSegment;
+            public readonly ulong ExpressChainSignature;
+            public readonly uint SharedTrackVersion;
+
+            public BypassLatchedBlockerProjection(
+                Entity expressLine,
+                BypassProtectedInterval expressProtectedInterval,
+                GlobalSharedTrunkSegment selectedTrunkSegment,
+                ulong expressChainSignature,
+                uint sharedTrackVersion)
+            {
+                Available = expressLine != Entity.Null;
+                ExpressLine = expressLine;
+                ExpressProtectedInterval = expressProtectedInterval;
+                SelectedTrunkSegment = selectedTrunkSegment;
+                ExpressChainSignature = expressChainSignature;
+                SharedTrackVersion = sharedTrackVersion;
             }
         }
 
@@ -362,6 +393,23 @@ namespace RapidTransitMod
             public Entity CurrentBypassBuilding => Scene.CurrentBypassBuilding;
             public Entity NextBypassBuilding => Scene.NextBypassBuilding;
             public SceneKey SceneKey => Scene.Key;
+        }
+
+        private readonly struct BypassControlScopeCacheEntry
+        {
+            public readonly Entity Line;
+            public readonly int WaypointIndex;
+            public readonly BypassControlScope Scope;
+
+            public BypassControlScopeCacheEntry(
+                Entity line,
+                int waypointIndex,
+                BypassControlScope scope)
+            {
+                Line = line;
+                WaypointIndex = waypointIndex;
+                Scope = scope;
+            }
         }
 
         private readonly struct LineRunningVehicleSnapshot
@@ -678,6 +726,7 @@ namespace RapidTransitMod
         private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
         private readonly Dictionary<ulong, TraversalSliceLapDebugAggregate> m_VehicleTraversalSliceLapDebug = new Dictionary<ulong, TraversalSliceLapDebugAggregate>();
+        private readonly Dictionary<Entity, BypassControlScopeCacheEntry> m_BypassControlScopeCache = new Dictionary<Entity, BypassControlScopeCacheEntry>();
         private readonly Dictionary<Entity, BypassHoldCadenceSnapshot> m_BypassHoldCadenceSnapshots = new Dictionary<Entity, BypassHoldCadenceSnapshot>();
         private readonly Dictionary<Entity, BypassConflictEpisode> m_BypassConflictEpisodes = new Dictionary<Entity, BypassConflictEpisode>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
@@ -789,6 +838,9 @@ namespace RapidTransitMod
         private const float ORIGIN_FORCE_IDLE_RADIUS_METERS = 180f;
         private const float ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS = 0.92f;
         private const uint ORIGIN_FORCE_IDLE_SETTLE_FRAMES = 180;
+
+        private static bool IsBypassRuntimeLoggingEnabled() => false;
+        private static bool IsBypassPerfProbeLoggingEnabled() => false;
         private const float ORIGIN_ARRIVAL_HOLD_MINUTES = 2f;
         private static readonly uint FORCED_ORIGIN_MIN_DWELL_FRAMES = (uint)math.round(3f * (float)SIM_FRAMES_PER_MINUTE);
         private const float SPAWN_TRIGGER_BUFFER_SHORT_MINUTES = 10f;
@@ -1985,6 +2037,9 @@ namespace RapidTransitMod
 
         private void FlushBypassPerfProbeIfDue(uint nowFrame)
         {
+            if (!IsBypassPerfProbeLoggingEnabled())
+                return;
+
             if (m_BypassPerfProbeLastLogFrame == 0)
             {
                 m_BypassPerfProbeLastLogFrame = nowFrame;
@@ -2143,6 +2198,7 @@ namespace RapidTransitMod
 
             m_BypassHoldCadenceSnapshots.Clear();
             m_BypassConflictEpisodes.Clear();
+            m_BypassControlScopeCache.Clear();
             m_BypassDecisionLogCache.Clear();
             m_BypassQueuedLocalOverrideLogCache.Clear();
             ClearBypassTrackModelRuntimeState();
@@ -2203,6 +2259,22 @@ namespace RapidTransitMod
                     m_BypassDecisionLogCache.Remove(vehicle);
                     m_BypassQueuedLocalOverrideLogCache.Remove(vehicle);
                 }
+            }
+
+            List<Entity> scopeKeysToRemove = null;
+            foreach (KeyValuePair<Entity, BypassControlScopeCacheEntry> entry in m_BypassControlScopeCache)
+            {
+                if (entry.Value.Line != line)
+                    continue;
+
+                scopeKeysToRemove ??= new List<Entity>();
+                scopeKeysToRemove.Add(entry.Key);
+            }
+
+            if (scopeKeysToRemove != null)
+            {
+                for (int i = 0; i < scopeKeysToRemove.Count; i++)
+                    m_BypassControlScopeCache.Remove(scopeKeysToRemove[i]);
             }
 
             List<Entity> episodeKeysToRemove = null;
@@ -3938,14 +4010,23 @@ namespace RapidTransitMod
                             {
                                 ClearBypassYieldState(v, runningReleaseReason);
                             }
-                            bool settleAtOrigin = !inCooldown && ShouldSettleRunningAtOrigin(
-                                v,
-                                wps,
-                                nowFrame,
-                                atA,
-                                boarding,
-                                lastBoarding,
-                                targetMin);
+                            bool shouldEvaluateOriginSettle = !inCooldown
+                                && ShouldEvaluateRunningOriginSettleCheck(
+                                    v,
+                                    wps,
+                                    atA,
+                                    boarding,
+                                    lastBoarding,
+                                    targetMin);
+                            bool settleAtOrigin = shouldEvaluateOriginSettle
+                                && ShouldSettleRunningAtOrigin(
+                                    v,
+                                    wps,
+                                    nowFrame,
+                                    atA,
+                                    boarding,
+                                    lastBoarding,
+                                    targetMin);
                             bool forcedAtOrigin = settleAtOrigin && !atA;
                             if ((atA || forcedAtOrigin) && !inCooldown)
                             {
@@ -4270,6 +4351,7 @@ namespace RapidTransitMod
                     m_RouteProgressFrameSnapshots.Remove(dead);
                     m_BVMisfire.Remove(dead);
                     m_BVMisfireStartFrame.Remove(dead);
+                    m_BypassControlScopeCache.Remove(dead);
                     m_BypassHoldCadenceSnapshots.Remove(dead);
                     m_BypassConflictEpisodes.Remove(dead);
                     ClearVehicleProgressSuspect(dead, "vehicle-removed");
@@ -6910,6 +6992,9 @@ namespace RapidTransitMod
                 return;
 
             m_BypassYieldBlocker[vehicle] = blocker;
+            if (!IsBypassRuntimeLoggingEnabled())
+                return;
+
             log.Info("[待避] " + lineTag + " 车辆" + vehicle.Index
                 + " state=" + stateTag
                 + " 等待快车" + blocker.Index + " 先行");
@@ -6923,6 +7008,9 @@ namespace RapidTransitMod
             m_BypassYieldBlocker.Remove(vehicle);
             m_BypassHoldCadenceSnapshots.Remove(vehicle);
             m_BypassConflictEpisodes.Remove(vehicle);
+            if (!IsBypassRuntimeLoggingEnabled())
+                return;
+
             Entity line = ResolveVehicleLine(vehicle);
             string lineTag = line != Entity.Null ? "线路" + line.Index : "线路?";
             log.Info("[待避解除] " + lineTag + " 车辆" + vehicle.Index
@@ -6956,7 +7044,9 @@ namespace RapidTransitMod
             BypassConflictMode conflictMode,
             uint nowFrame,
             bool canClearAfterExit,
-            bool sameStationRequired)
+            bool sameStationRequired,
+            bool hasLatchedBlockerProjection,
+            BypassLatchedBlockerProjection latchedBlockerProjection)
         {
             if (scope.Vehicle == Entity.Null
                 || blockerVehicle == Entity.Null
@@ -6974,7 +7064,9 @@ namespace RapidTransitMod
                 conflictMode,
                 nowFrame,
                 canClearAfterExit,
-                sameStationRequired);
+                sameStationRequired,
+                hasLatchedBlockerProjection,
+                latchedBlockerProjection);
         }
 
         private bool TryReuseConflictEpisodeUntilRelease(
@@ -7004,8 +7096,20 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (!TryIsLatchedBypassBlockerBeforeRelease(scope, localWaypoints, blockerVehicle, out bool blockerStillBeforeRelease)
+            if (!TryIsLatchedBypassBlockerBeforeRelease(scope, localWaypoints, episode, blockerVehicle, out bool blockerStillBeforeRelease)
                 || !blockerStillBeforeRelease)
+            {
+                return false;
+            }
+
+            if (!episode.SameStationRequired
+                && TryShouldReleaseForQueuedLocalAhead(
+                    scope,
+                    localWaypoints,
+                    blockerVehicle,
+                    out _,
+                    out _,
+                    out _))
             {
                 return false;
             }
@@ -7072,14 +7176,30 @@ namespace RapidTransitMod
             }
 
             m_BypassPerfProbeCadenceMisses++;
-            shouldHold = ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle, out string decisionReason);
+            shouldHold = ShouldHoldLocalVehicleForExpressBypass(
+                scope,
+                localWaypoints,
+                nowFrame,
+                out blockerVehicle,
+                out string decisionReason,
+                out bool hasLatchedBlockerProjection,
+                out BypassLatchedBlockerProjection latchedBlockerProjection);
             canClearAfterExit = (hasLatchedYield || shouldHold)
                 && CanClearBypassYieldAfterStationExit(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex);
             BypassConflictMode conflictMode = InferConflictModeFromDecisionReason(decisionReason);
             Entity expressLine = blockerVehicle != Entity.Null ? ResolveVehicleLine(blockerVehicle) : Entity.Null;
             bool sameStationRequired = string.Equals(decisionReason, "track-model-same-station-same-direction-express-departing", StringComparison.Ordinal);
             if (shouldHold && blockerVehicle != Entity.Null)
-                StoreBypassConflictEpisode(scope, blockerVehicle, expressLine, conflictMode, nowFrame, canClearAfterExit, sameStationRequired);
+                StoreBypassConflictEpisode(
+                    scope,
+                    blockerVehicle,
+                    expressLine,
+                    conflictMode,
+                    nowFrame,
+                    canClearAfterExit,
+                    sameStationRequired,
+                    hasLatchedBlockerProjection,
+                    latchedBlockerProjection);
             else
                 m_BypassConflictEpisodes.Remove(scope.Vehicle);
 
@@ -7109,8 +7229,17 @@ namespace RapidTransitMod
                 || localLine == Entity.Null
                 || currentWaypointIndex < 0)
             {
+                m_BypassControlScopeCache.Remove(localVehicle);
                 failureReason = "local-line-invalid";
                 return false;
+            }
+
+            if (m_BypassControlScopeCache.TryGetValue(localVehicle, out BypassControlScopeCacheEntry cachedScope)
+                && cachedScope.Line == localLine
+                && cachedScope.WaypointIndex == currentWaypointIndex)
+            {
+                scope = cachedScope.Scope;
+                return true;
             }
 
             if (!TryGetLocalSceneDefinition(
@@ -7120,6 +7249,7 @@ namespace RapidTransitMod
                     out _,
                     out SceneDefinition sceneDefinition))
             {
+                m_BypassControlScopeCache.Remove(localVehicle);
                 failureReason = "scene-definition-missing";
                 return false;
             }
@@ -7132,6 +7262,10 @@ namespace RapidTransitMod
                 localVehicle,
                 sceneBinding,
                 sceneDefinition);
+            m_BypassControlScopeCache[localVehicle] = new BypassControlScopeCacheEntry(
+                localLine,
+                currentWaypointIndex,
+                scope);
             return true;
         }
 
@@ -7230,6 +7364,9 @@ namespace RapidTransitMod
             string reason,
             Entity blockerVehicle)
         {
+            if (!IsBypassRuntimeLoggingEnabled())
+                return;
+
             if (localVehicle == Entity.Null)
                 return;
 
@@ -7262,6 +7399,9 @@ namespace RapidTransitMod
             float currentLocalMeters = float.NaN,
             float queuedLocalMeters = float.NaN)
         {
+            if (!IsBypassRuntimeLoggingEnabled())
+                return;
+
             string key = result + "|" + reason + "|" + blockerVehicle.Index;
             if (!float.IsNaN(expressMeters))
                 key += "|e=" + math.round(expressMeters).ToString();
@@ -7310,10 +7450,14 @@ namespace RapidTransitMod
             int currentWaypointIndex,
             uint nowFrame,
             out Entity blockerVehicle,
-            out string decisionReason)
+            out string decisionReason,
+            out bool hasLatchedBlockerProjection,
+            out BypassLatchedBlockerProjection latchedBlockerProjection)
         {
             blockerVehicle = Entity.Null;
             decisionReason = string.Empty;
+            hasLatchedBlockerProjection = false;
+            latchedBlockerProjection = default;
             if (localLine == Entity.Null
                 || !IsWorkbenchTimetableApplied(localLine)
                 || !IsAppliedWorkbenchLocalLine(localLine))
@@ -7334,7 +7478,14 @@ namespace RapidTransitMod
                 return FinalizeBypassDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, Entity.Null, Entity.Null, false, failureReason, Entity.Null);
             }
 
-            return ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle, out decisionReason);
+            return ShouldHoldLocalVehicleForExpressBypass(
+                scope,
+                localWaypoints,
+                nowFrame,
+                out blockerVehicle,
+                out decisionReason,
+                out hasLatchedBlockerProjection,
+                out latchedBlockerProjection);
         }
 
         private bool ShouldHoldLocalVehicleForExpressBypass(
@@ -7342,114 +7493,149 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> localWaypoints,
             uint nowFrame,
             out Entity blockerVehicle,
-            out string decisionReason)
+            out string decisionReason,
+            out bool hasLatchedBlockerProjection,
+            out BypassLatchedBlockerProjection latchedBlockerProjection)
         {
             blockerVehicle = Entity.Null;
             decisionReason = string.Empty;
-            if (!TryGetTrackModelBypassBaseline(scope, localWaypoints, nowFrame, out bool shouldYield, out string trackModelReason, out Entity trackModelBlocker))
+            hasLatchedBlockerProjection = false;
+            latchedBlockerProjection = default;
+            if (!TryGetTrackModelBypassBaseline(
+                    scope,
+                    localWaypoints,
+                    nowFrame,
+                    out bool shouldYield,
+                    out string trackModelReason,
+                    out Entity trackModelBlocker,
+                    out hasLatchedBlockerProjection,
+                    out latchedBlockerProjection))
             {
                 decisionReason = "track-model-decision-unavailable";
                 return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
             }
 
-            float queuedLocalMeters = 0f;
-
             if (shouldYield
                 && trackModelBlocker != Entity.Null
                 && trackModelReason == "track-model-same-direction-shared-express-approaching")
             {
-                if (IsExpressBlockerStillWithinBypassStation(trackModelBlocker, scope.CurrentBypassBuilding))
+                if (TryShouldReleaseForQueuedLocalAhead(
+                        scope,
+                        localWaypoints,
+                        trackModelBlocker,
+                        out float expressSceneCoordinate,
+                        out float localSceneCoordinate,
+                        out float queuedLocalMeters))
                 {
                     LogQueuedLocalBypassOverrideOnce(
                         scope.Vehicle,
                         scope.Line,
                         trackModelBlocker,
-                        "skip",
-                        "blocker-still-in-bypass-station");
-                }
-                else
-                {
-                    if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
-                            scope,
-                            localWaypoints,
-                            scope.Vehicle,
-                            out float localSceneCoordinate))
-                    {
-                        LogQueuedLocalBypassOverrideOnce(
-                            scope.Vehicle,
-                            scope.Line,
-                            trackModelBlocker,
-                            "skip",
-                            "local-scene-projection-failed");
-                    }
-                    else
-                    {
-                        bool hasQueuedLocalInApproach = TryFindNearestLocalVehicleInApproachSegment(
-                            scope,
-                            localWaypoints,
-                            localSceneCoordinate,
-                            out _,
-                            out queuedLocalMeters);
-
-                        if (!hasQueuedLocalInApproach)
-                        {
-                            LogQueuedLocalBypassOverrideOnce(
-                                scope.Vehicle,
-                                scope.Line,
-                                trackModelBlocker,
-                                "skip",
-                                "no-queued-local-in-approach");
-                        }
-                        else if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
-                                scope,
-                                localWaypoints,
-                                trackModelBlocker,
-                                out float expressSceneCoordinate))
-                        {
-                            LogQueuedLocalBypassOverrideOnce(
-                                scope.Vehicle,
-                                scope.Line,
-                                trackModelBlocker,
-                                "skip",
-                                "express-scene-projection-failed",
-                                queuedLocalMeters: queuedLocalMeters);
-                        }
-                        else if (!IsExpressAheadOfNearestQueuedLocalOnCurrentSceneAxis(
-                                expressSceneCoordinate,
-                                queuedLocalMeters))
-                        {
-                            LogQueuedLocalBypassOverrideOnce(
-                                scope.Vehicle,
-                                scope.Line,
-                                trackModelBlocker,
-                                "release",
-                                "express-behind-nearest-queued-local",
-                                expressSceneCoordinate,
-                                localSceneCoordinate,
-                                queuedLocalMeters);
-                            blockerVehicle = Entity.Null;
-                            decisionReason = "express-behind-nearest-queued-local";
-                            return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "express-behind-nearest-queued-local", Entity.Null);
-                        }
-                        else
-                        {
-                            LogQueuedLocalBypassOverrideOnce(
-                                scope.Vehicle,
-                                scope.Line,
-                                trackModelBlocker,
-                                "skip",
-                                "express-ahead-of-nearest-queued-local",
-                                expressSceneCoordinate,
-                                localSceneCoordinate,
-                                queuedLocalMeters);
-                        }
-                    }
+                        "release",
+                        "express-behind-nearest-queued-local",
+                        expressSceneCoordinate,
+                        localSceneCoordinate,
+                        queuedLocalMeters);
+                    blockerVehicle = Entity.Null;
+                    decisionReason = "express-behind-nearest-queued-local";
+                    return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "express-behind-nearest-queued-local", Entity.Null);
                 }
             }
 
             blockerVehicle = trackModelBlocker;
             decisionReason = trackModelReason ?? string.Empty;
             return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, shouldYield, trackModelReason, trackModelBlocker);
+        }
+
+        private bool TryShouldReleaseForQueuedLocalAhead(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            Entity blockerVehicle,
+            out float expressSceneCoordinate,
+            out float localSceneCoordinate,
+            out float queuedLocalMeters)
+        {
+            expressSceneCoordinate = float.NaN;
+            localSceneCoordinate = float.NaN;
+            queuedLocalMeters = float.NaN;
+
+            if (blockerVehicle == Entity.Null)
+                return false;
+
+            if (IsExpressBlockerStillWithinBypassStation(blockerVehicle, scope.CurrentBypassBuilding))
+            {
+                LogQueuedLocalBypassOverrideOnce(
+                    scope.Vehicle,
+                    scope.Line,
+                    blockerVehicle,
+                    "skip",
+                    "blocker-still-in-bypass-station");
+                return false;
+            }
+
+            if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
+                    scope,
+                    localWaypoints,
+                    scope.Vehicle,
+                    out localSceneCoordinate))
+            {
+                LogQueuedLocalBypassOverrideOnce(
+                    scope.Vehicle,
+                    scope.Line,
+                    blockerVehicle,
+                    "skip",
+                    "local-scene-projection-failed");
+                return false;
+            }
+
+            bool hasQueuedLocalInApproach = TryFindNearestLocalVehicleInApproachSegment(
+                scope,
+                localWaypoints,
+                localSceneCoordinate,
+                out _,
+                out queuedLocalMeters);
+            if (!hasQueuedLocalInApproach)
+            {
+                LogQueuedLocalBypassOverrideOnce(
+                    scope.Vehicle,
+                    scope.Line,
+                    blockerVehicle,
+                    "skip",
+                    "no-queued-local-in-approach");
+                return false;
+            }
+
+            if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
+                    scope,
+                    localWaypoints,
+                    blockerVehicle,
+                    out expressSceneCoordinate))
+            {
+                LogQueuedLocalBypassOverrideOnce(
+                    scope.Vehicle,
+                    scope.Line,
+                    blockerVehicle,
+                    "skip",
+                    "express-scene-projection-failed",
+                    queuedLocalMeters: queuedLocalMeters);
+                return false;
+            }
+
+            if (IsExpressAheadOfNearestQueuedLocalOnCurrentSceneAxis(expressSceneCoordinate, queuedLocalMeters))
+            {
+                LogQueuedLocalBypassOverrideOnce(
+                    scope.Vehicle,
+                    scope.Line,
+                    blockerVehicle,
+                    "skip",
+                    "express-ahead-of-nearest-queued-local",
+                    expressSceneCoordinate,
+                    localSceneCoordinate,
+                    queuedLocalMeters);
+                return false;
+            }
+
+            return true;
         }
 
         private bool IsExpressBlockerStillWithinBypassStation(Entity blockerVehicle, Entity localCurrentBypassBuilding)
@@ -7478,12 +7664,16 @@ namespace RapidTransitMod
             uint nowFrame,
             out bool shouldYield,
             out string trackModelReason,
-            out Entity trackModelBlocker)
+            out Entity trackModelBlocker,
+            out bool hasLatchedBlockerProjection,
+            out BypassLatchedBlockerProjection latchedBlockerProjection)
         {
             m_BypassPerfProbeBaselineCalls++;
             shouldYield = false;
             trackModelReason = string.Empty;
             trackModelBlocker = Entity.Null;
+            hasLatchedBlockerProjection = false;
+            latchedBlockerProjection = default;
 
             if (!TryEvaluateBypassTrackModelShadowDecision(
                     scope.Vehicle,
@@ -7500,6 +7690,8 @@ namespace RapidTransitMod
             shouldYield = liveDecision.ShouldYield;
             trackModelReason = "track-model-" + liveDecision.ReasonCode;
             trackModelBlocker = liveDecision.BlockerVehicle;
+            hasLatchedBlockerProjection = liveDecision.HasLatchedBlockerProjection;
+            latchedBlockerProjection = liveDecision.LatchedBlockerProjection;
             return true;
         }
 
@@ -7512,18 +7704,13 @@ namespace RapidTransitMod
             sceneCoordinate = 0f;
             if (vehicle == Entity.Null
                 || scope.Line == Entity.Null
-                || !TryGetLocalBypassSceneStaticSnapshot(
-                    scope.Line,
-                    localWaypoints,
-                    scope.WaypointIndex,
-                    out LineTrackChain localChain,
-                    out LocalBypassSceneStaticSnapshot localScene))
+                || !TryGetLineTrackChain(scope.Line, localWaypoints, out LineTrackChain localChain))
             {
                 return false;
             }
 
-            int localProtectedIntervalIndex = localScene.ProtectedIntervalIndex;
-            BypassProtectedInterval localProtectedInterval = localScene.ProtectedInterval;
+            int localProtectedIntervalIndex = scope.Scene.ProtectedIntervalIndex;
+            BypassProtectedInterval localProtectedInterval = scope.Scene.ProtectedInterval;
 
             if (ResolveVehicleLine(vehicle) == scope.Line)
             {
@@ -7612,7 +7799,64 @@ namespace RapidTransitMod
             sceneCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
                 expressPosition,
                 expressProtectedInterval,
-                GetProtectedIntervalDisplayLength(localProtectedInterval),
+                scope.Scene.IntervalDisplayLength,
+                includeApproachers: true,
+                out bool includeExpress);
+            return includeExpress;
+        }
+
+        private bool TryProjectLatchedBlockerToCurrentLocalSceneCoordinate(
+            BypassControlScope scope,
+            Entity blockerVehicle,
+            BypassLatchedBlockerProjection latchedProjection,
+            out float sceneCoordinate)
+        {
+            sceneCoordinate = 0f;
+            if (!latchedProjection.Available
+                || blockerVehicle == Entity.Null
+                || scope.Line == Entity.Null
+                || latchedProjection.SharedTrackVersion != m_SharedTrackIndexVersion
+                || ResolveVehicleLine(blockerVehicle) != latchedProjection.ExpressLine)
+            {
+                return false;
+            }
+
+            Entity expressLine = latchedProjection.ExpressLine;
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            if (!routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
+                || !TryGetLineTrackChain(expressLine, expressWaypoints, out LineTrackChain expressChain)
+                || expressChain.Signature != latchedProjection.ExpressChainSignature)
+            {
+                return false;
+            }
+
+            if (!TryProjectTrackModelRuntimePosition(
+                    blockerVehicle,
+                    expressLine,
+                    expressWaypoints,
+                    latchedProjection.ExpressProtectedInterval,
+                    out TrackModelRuntimePosition expressPosition)
+                || expressPosition.Confidence < 0.6f)
+            {
+                return false;
+            }
+
+            RelativeToTrunkState expressTrunkState = BuildRelativeToTrunkStateFromRuntimePosition(
+                expressPosition,
+                expressChain,
+                latchedProjection.SelectedTrunkSegment,
+                useLocalSide: false);
+            if (!latchedProjection.SelectedTrunkSegment.HasCanonicalDirection
+                || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
+                || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, latchedProjection.SelectedTrunkSegment))
+            {
+                return false;
+            }
+
+            sceneCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
+                expressPosition,
+                latchedProjection.ExpressProtectedInterval,
+                scope.Scene.IntervalDisplayLength,
                 includeApproachers: true,
                 out bool includeExpress);
             return includeExpress;
@@ -7621,26 +7865,35 @@ namespace RapidTransitMod
         private bool TryIsLatchedBypassBlockerBeforeRelease(
             BypassControlScope scope,
             DynamicBuffer<RouteWaypoint> localWaypoints,
+            BypassConflictEpisode episode,
             Entity blockerVehicle,
             out bool blockerStillBeforeRelease)
         {
             blockerStillBeforeRelease = false;
             if (blockerVehicle == Entity.Null
-                || scope.Line == Entity.Null
-                || !TryGetLocalBypassSceneStaticSnapshot(
-                    scope.Line,
-                    localWaypoints,
-                    scope.WaypointIndex,
-                    out _,
-                    out LocalBypassSceneStaticSnapshot localScene))
+                || scope.Line == Entity.Null)
             {
                 return false;
             }
 
-            if (!TryProjectVehicleToCurrentLocalSceneCoordinate(scope, localWaypoints, blockerVehicle, out float blockerSceneCoordinate))
+            float blockerSceneCoordinate;
+            if (episode.HasLatchedBlockerProjection)
+            {
+                if (!TryProjectLatchedBlockerToCurrentLocalSceneCoordinate(
+                        scope,
+                        blockerVehicle,
+                        episode.LatchedBlockerProjection,
+                        out blockerSceneCoordinate))
+                {
+                    return false;
+                }
+            }
+            else if (!TryProjectVehicleToCurrentLocalSceneCoordinate(scope, localWaypoints, blockerVehicle, out blockerSceneCoordinate))
+            {
                 return false;
+            }
 
-            blockerStillBeforeRelease = blockerSceneCoordinate <= localScene.DepartureReleaseCoordinate;
+            blockerStillBeforeRelease = blockerSceneCoordinate <= scope.Scene.DepartureReleaseCoordinate;
             return true;
         }
 
@@ -8632,6 +8885,47 @@ namespace RapidTransitMod
             return math.distance(vehiclePos, stopPos);
         }
 
+        private bool ShouldEvaluateRunningOriginSettleCheck(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            bool atA,
+            bool boarding,
+            bool lastBoarding,
+            int targetMin)
+        {
+            if (vehicle == Entity.Null || waypoints.Length == 0)
+                return false;
+
+            if (atA
+                || boarding
+                || lastBoarding
+                || targetMin >= 0
+                || m_OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
+            {
+                return true;
+            }
+
+            Entity line = ResolveVehicleLine(vehicle);
+            if (line == Entity.Null
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || !m_VehicleTrackCursorFrameSnapshots.TryGetValue(vehicle, out VehicleTrackCursorFrameSnapshot snapshot)
+                || snapshot.Frame != m_SimulationSystem.frameIndex
+                || snapshot.LineEntity != line
+                || snapshot.ChainSignature != chain.Signature
+                || !snapshot.Available)
+            {
+                return false;
+            }
+
+            int atomCursorIndex = snapshot.Cursor.AtomCursorIndex;
+            if (atomCursorIndex < 0 || atomCursorIndex >= chain.TrackAtoms.Count)
+                return false;
+
+            const int originAtomWindow = 2;
+            return atomCursorIndex <= originAtomWindow
+                || atomCursorIndex >= math.max(0, chain.TrackAtoms.Count - 1 - originAtomWindow);
+        }
+
         private bool ShouldSettleRunningAtOrigin(
             Entity v,
             DynamicBuffer<RouteWaypoint> wps,
@@ -8650,6 +8944,16 @@ namespace RapidTransitMod
 
             if (!waitingAtOrigin)
             {
+                // Cheap world-distance prefilter first so we do not touch
+                // route/path dynamic buffers for vehicles that are clearly
+                // nowhere near the origin settle zone.
+                float originDist = GetDistanceToOriginMeters(v, wps);
+                if (originDist > ORIGIN_FORCE_IDLE_RADIUS_METERS)
+                {
+                    m_OriginArrivalCandidateSinceFrame.Remove(v);
+                    return false;
+                }
+
                 if (!TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition))
                 {
                     m_OriginArrivalCandidateSinceFrame.Remove(v);
@@ -8657,13 +8961,6 @@ namespace RapidTransitMod
                 }
 
                 if (nextWaypointIndex != 0 || segmentPosition < ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS)
-                {
-                    m_OriginArrivalCandidateSinceFrame.Remove(v);
-                    return false;
-                }
-
-                float originDist = GetDistanceToOriginMeters(v, wps);
-                if (originDist > ORIGIN_FORCE_IDLE_RADIUS_METERS)
                 {
                     m_OriginArrivalCandidateSinceFrame.Remove(v);
                     return false;
@@ -8684,11 +8981,14 @@ namespace RapidTransitMod
 
         private bool IsBorderlineOriginArrivalCandidate(Entity v, DynamicBuffer<RouteWaypoint> wps)
         {
+            if (GetDistanceToOriginMeters(v, wps) > ORIGIN_FORCE_IDLE_RADIUS_METERS)
+                return false;
+
             if (!TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition))
                 return false;
             if (nextWaypointIndex != 0 || segmentPosition < ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS)
                 return false;
-            return GetDistanceToOriginMeters(v, wps) <= ORIGIN_FORCE_IDLE_RADIUS_METERS;
+            return true;
         }
 
         private bool HasBorderlineOriginArrivalCandidate(
