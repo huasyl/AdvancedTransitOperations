@@ -83,40 +83,260 @@ namespace RapidTransitMod
             public uint ExpireFrame;
         }
 
-        private struct BypassHoldCadenceSnapshot
+        private enum BypassConflictMode : byte
         {
-            public Entity Line;
-            public int WaypointIndex;
-            public Entity CurrentBypassBuilding;
-            public Entity NextBypassBuilding;
-            public uint EvaluatedFrame;
-            public uint ReevaluateAfterFrame;
-            public bool ShouldHold;
-            public bool CanClearAfterExit;
-            public bool LockToBlockerUntilRelease;
-            public Entity Blocker;
+            Unknown = 0,
+            Block = 1,
+            EtaRefresh = 2,
+        }
 
-            public BypassHoldCadenceSnapshot(
+        private readonly struct SceneKey : IEquatable<SceneKey>
+        {
+            public readonly Entity Line;
+            public readonly Entity CurrentBypassBuilding;
+            public readonly Entity NextBypassBuilding;
+            public readonly int ProtectedIntervalIndex;
+
+            public SceneKey(
+                Entity line,
+                Entity currentBypassBuilding,
+                Entity nextBypassBuilding,
+                int protectedIntervalIndex)
+            {
+                Line = line;
+                CurrentBypassBuilding = currentBypassBuilding;
+                NextBypassBuilding = nextBypassBuilding;
+                ProtectedIntervalIndex = protectedIntervalIndex;
+            }
+
+            public bool Equals(SceneKey other)
+            {
+                return Line == other.Line
+                    && CurrentBypassBuilding == other.CurrentBypassBuilding
+                    && NextBypassBuilding == other.NextBypassBuilding
+                    && ProtectedIntervalIndex == other.ProtectedIntervalIndex;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is SceneKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = Line.GetHashCode();
+                    hash = (hash * 397) ^ CurrentBypassBuilding.GetHashCode();
+                    hash = (hash * 397) ^ NextBypassBuilding.GetHashCode();
+                    hash = (hash * 397) ^ ProtectedIntervalIndex;
+                    return hash;
+                }
+            }
+        }
+
+        private readonly struct SceneDefinition
+        {
+            public readonly SceneKey Key;
+            public readonly Entity Line;
+            public readonly int WaypointIndex;
+            public readonly Entity CurrentBypassBuilding;
+            public readonly Entity NextBypassBuilding;
+            public readonly int ProtectedIntervalIndex;
+            public readonly BypassProtectedInterval ProtectedInterval;
+            public readonly ProtectedIntervalSummary Summary;
+            public readonly float DepartureReleaseCoordinate;
+            public readonly float IntervalDisplayLength;
+
+            public SceneDefinition(
+                SceneKey key,
                 Entity line,
                 int waypointIndex,
                 Entity currentBypassBuilding,
                 Entity nextBypassBuilding,
-                uint evaluatedFrame,
-                uint reevaluateAfterFrame,
-                bool shouldHold,
-                bool canClearAfterExit,
-                bool lockToBlockerUntilRelease,
-                Entity blocker)
+                int protectedIntervalIndex,
+                BypassProtectedInterval protectedInterval,
+                ProtectedIntervalSummary summary,
+                float departureReleaseCoordinate,
+                float intervalDisplayLength)
             {
+                Key = key;
                 Line = line;
                 WaypointIndex = waypointIndex;
                 CurrentBypassBuilding = currentBypassBuilding;
                 NextBypassBuilding = nextBypassBuilding;
+                ProtectedIntervalIndex = protectedIntervalIndex;
+                ProtectedInterval = protectedInterval;
+                Summary = summary;
+                DepartureReleaseCoordinate = departureReleaseCoordinate;
+                IntervalDisplayLength = intervalDisplayLength;
+            }
+        }
+
+        private readonly struct VehicleSceneBinding
+        {
+            public readonly Entity Vehicle;
+            public readonly SceneKey SceneKey;
+            public readonly int WaypointIndex;
+
+            public VehicleSceneBinding(Entity vehicle, SceneKey sceneKey, int waypointIndex)
+            {
+                Vehicle = vehicle;
+                SceneKey = sceneKey;
+                WaypointIndex = waypointIndex;
+            }
+        }
+
+        private readonly struct BypassConflictEpisode
+        {
+            public readonly Entity LocalVehicle;
+            public readonly SceneKey SceneKey;
+            public readonly Entity ExpressLine;
+            public readonly Entity BlockerVehicle;
+            public readonly BypassConflictMode Mode;
+            public readonly uint AcquiredFrame;
+            public readonly bool CanClearAfterExit;
+            public readonly bool SameStationRequired;
+
+            public BypassConflictEpisode(
+                Entity localVehicle,
+                SceneKey sceneKey,
+                Entity expressLine,
+                Entity blockerVehicle,
+                BypassConflictMode mode,
+                uint acquiredFrame,
+                bool canClearAfterExit,
+                bool sameStationRequired)
+            {
+                LocalVehicle = localVehicle;
+                SceneKey = sceneKey;
+                ExpressLine = expressLine;
+                BlockerVehicle = blockerVehicle;
+                Mode = mode;
+                AcquiredFrame = acquiredFrame;
+                CanClearAfterExit = canClearAfterExit;
+                SameStationRequired = sameStationRequired;
+            }
+        }
+
+        private readonly struct YieldTradeoffEstimate
+        {
+            public readonly float LocalExtraWaitFrames;
+            public readonly float ExpressCatchEtaFrames;
+            public readonly float ExpressReleaseEtaFrames;
+            public readonly float LocalNoYieldClearEtaFrames;
+            public readonly float ExpressSavedFrames;
+            public readonly float SystemCostFrames;
+            public readonly float Confidence;
+
+            public YieldTradeoffEstimate(
+                float localExtraWaitFrames,
+                float expressCatchEtaFrames,
+                float expressReleaseEtaFrames,
+                float localNoYieldClearEtaFrames,
+                float expressSavedFrames,
+                float systemCostFrames,
+                float confidence)
+            {
+                LocalExtraWaitFrames = localExtraWaitFrames;
+                ExpressCatchEtaFrames = expressCatchEtaFrames;
+                ExpressReleaseEtaFrames = expressReleaseEtaFrames;
+                LocalNoYieldClearEtaFrames = localNoYieldClearEtaFrames;
+                ExpressSavedFrames = expressSavedFrames;
+                SystemCostFrames = systemCostFrames;
+                Confidence = confidence;
+            }
+        }
+
+        private readonly struct ConflictPolicy
+        {
+            public readonly bool MustYield;
+            public readonly bool WorthYielding;
+
+            public ConflictPolicy(bool mustYield, bool worthYielding)
+            {
+                MustYield = mustYield;
+                WorthYielding = worthYielding;
+            }
+        }
+
+        private readonly struct VehiclePhysicalTrackPosition
+        {
+            public readonly Entity Vehicle;
+            public readonly Entity Line;
+            public readonly Entity PhysicalTrackAxisId;
+            public readonly float AxisCoordinate;
+            public readonly float Confidence;
+
+            public VehiclePhysicalTrackPosition(
+                Entity vehicle,
+                Entity line,
+                Entity physicalTrackAxisId,
+                float axisCoordinate,
+                float confidence)
+            {
+                Vehicle = vehicle;
+                Line = line;
+                PhysicalTrackAxisId = physicalTrackAxisId;
+                AxisCoordinate = axisCoordinate;
+                Confidence = confidence;
+            }
+        }
+
+        private readonly struct PhysicalTrackAxis
+        {
+            public readonly Entity AxisId;
+            public readonly float DisplayLength;
+            public readonly Entity[] PhysicalLaneKeys;
+
+            public PhysicalTrackAxis(Entity axisId, float displayLength, Entity[] physicalLaneKeys)
+            {
+                AxisId = axisId;
+                DisplayLength = displayLength;
+                PhysicalLaneKeys = physicalLaneKeys ?? Array.Empty<Entity>();
+            }
+        }
+
+        private sealed class PhysicalTrackNetworkSnapshot
+        {
+            public uint Frame;
+            public readonly List<PhysicalTrackAxis> Axes = new List<PhysicalTrackAxis>();
+            public readonly List<VehiclePhysicalTrackPosition> VehiclePositions = new List<VehiclePhysicalTrackPosition>();
+
+            public PhysicalTrackNetworkSnapshot(uint frame = 0)
+            {
+                Frame = frame;
+            }
+        }
+
+        private struct BypassHoldCadenceSnapshot
+        {
+            public SceneKey SceneKey;
+            public int WaypointIndex;
+            public uint EvaluatedFrame;
+            public uint ReevaluateAfterFrame;
+            public bool ShouldHold;
+            public bool CanClearAfterExit;
+            public BypassConflictMode ConflictMode;
+            public Entity Blocker;
+
+            public BypassHoldCadenceSnapshot(
+                SceneKey sceneKey,
+                int waypointIndex,
+                uint evaluatedFrame,
+                uint reevaluateAfterFrame,
+                bool shouldHold,
+                bool canClearAfterExit,
+                BypassConflictMode conflictMode,
+                Entity blocker)
+            {
+                SceneKey = sceneKey;
+                WaypointIndex = waypointIndex;
                 EvaluatedFrame = evaluatedFrame;
                 ReevaluateAfterFrame = reevaluateAfterFrame;
                 ShouldHold = shouldHold;
                 CanClearAfterExit = canClearAfterExit;
-                LockToBlockerUntilRelease = lockToBlockerUntilRelease;
+                ConflictMode = conflictMode;
                 Blocker = blocker;
             }
         }
@@ -124,24 +344,24 @@ namespace RapidTransitMod
         private readonly struct BypassControlScope
         {
             public readonly Entity Vehicle;
-            public readonly Entity Line;
-            public readonly int WaypointIndex;
-            public readonly Entity CurrentBypassBuilding;
-            public readonly Entity NextBypassBuilding;
+            public readonly VehicleSceneBinding SceneBinding;
+            public readonly SceneDefinition Scene;
 
             public BypassControlScope(
                 Entity vehicle,
-                Entity line,
-                int waypointIndex,
-                Entity currentBypassBuilding,
-                Entity nextBypassBuilding)
+                VehicleSceneBinding sceneBinding,
+                SceneDefinition scene)
             {
                 Vehicle = vehicle;
-                Line = line;
-                WaypointIndex = waypointIndex;
-                CurrentBypassBuilding = currentBypassBuilding;
-                NextBypassBuilding = nextBypassBuilding;
+                SceneBinding = sceneBinding;
+                Scene = scene;
             }
+
+            public Entity Line => Scene.Line;
+            public int WaypointIndex => SceneBinding.WaypointIndex;
+            public Entity CurrentBypassBuilding => Scene.CurrentBypassBuilding;
+            public Entity NextBypassBuilding => Scene.NextBypassBuilding;
+            public SceneKey SceneKey => Scene.Key;
         }
 
         private readonly struct LineRunningVehicleSnapshot
@@ -459,6 +679,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
         private readonly Dictionary<ulong, TraversalSliceLapDebugAggregate> m_VehicleTraversalSliceLapDebug = new Dictionary<ulong, TraversalSliceLapDebugAggregate>();
         private readonly Dictionary<Entity, BypassHoldCadenceSnapshot> m_BypassHoldCadenceSnapshots = new Dictionary<Entity, BypassHoldCadenceSnapshot>();
+        private readonly Dictionary<Entity, BypassConflictEpisode> m_BypassConflictEpisodes = new Dictionary<Entity, BypassConflictEpisode>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_WaypointIndexFrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
         private readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_RouteProgressFrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
@@ -474,9 +695,11 @@ namespace RapidTransitMod
         private ulong m_BypassPerfProbeSceneSamples;
         private ulong m_BypassPerfProbeSceneCandidateVehicles;
         private ulong m_BypassPerfProbeSceneAdmittedCandidates;
+        private ulong m_BypassPerfProbeSceneFrontiers;
         private ulong m_BypassPerfProbeSameStationCalls;
         private ulong m_BypassPerfProbeSameStationReusedCandidates;
         private ulong m_BypassPerfProbeDeepCorridorEntries;
+        private ulong m_BypassPerfProbeEpisodeReuses;
 
         // ── 线路状态 ──
         private NativeHashMap<Entity, int> m_SpawningLines;
@@ -1749,16 +1972,6 @@ namespace RapidTransitMod
                 }
             }
 
-            try
-            {
-                ForceConfiguredDepotTransportVehicleRequests();
-            }
-            catch (Exception ex)
-            {
-                log.Info("[运行异常] ForceConfiguredDepotTransportVehicleRequests -> " + ex.GetType().Name + ": " + ex.Message);
-                throw;
-            }
-
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
             {
@@ -1791,9 +2004,11 @@ namespace RapidTransitMod
                 || m_BypassPerfProbeSceneSamples > 0
                 || m_BypassPerfProbeSceneCandidateVehicles > 0
                 || m_BypassPerfProbeSceneAdmittedCandidates > 0
+                || m_BypassPerfProbeSceneFrontiers > 0
                 || m_BypassPerfProbeSameStationCalls > 0
                 || m_BypassPerfProbeSameStationReusedCandidates > 0
-                || m_BypassPerfProbeDeepCorridorEntries > 0)
+                || m_BypassPerfProbeDeepCorridorEntries > 0
+                || m_BypassPerfProbeEpisodeReuses > 0)
             {
                 log.Info("[待避轻量计数] frames=" + elapsedFrames
                     + " cadence=" + m_BypassPerfProbeCadenceCalls
@@ -1805,9 +2020,11 @@ namespace RapidTransitMod
                     + " scenes=" + m_BypassPerfProbeSceneSamples
                     + " cand=" + m_BypassPerfProbeSceneCandidateVehicles
                     + " admitted=" + m_BypassPerfProbeSceneAdmittedCandidates
+                    + " frontiers=" + m_BypassPerfProbeSceneFrontiers
                     + " sameReuse=" + m_BypassPerfProbeSameStationReusedCandidates
                     + " sameCalls=" + m_BypassPerfProbeSameStationCalls
-                    + " deepCorridor=" + m_BypassPerfProbeDeepCorridorEntries);
+                    + " deepCorridor=" + m_BypassPerfProbeDeepCorridorEntries
+                    + " episodeReuse=" + m_BypassPerfProbeEpisodeReuses);
             }
 
             m_BypassPerfProbeLastLogFrame = nowFrame;
@@ -1820,9 +2037,11 @@ namespace RapidTransitMod
             m_BypassPerfProbeSceneSamples = 0;
             m_BypassPerfProbeSceneCandidateVehicles = 0;
             m_BypassPerfProbeSceneAdmittedCandidates = 0;
+            m_BypassPerfProbeSceneFrontiers = 0;
             m_BypassPerfProbeSameStationCalls = 0;
             m_BypassPerfProbeSameStationReusedCandidates = 0;
             m_BypassPerfProbeDeepCorridorEntries = 0;
+            m_BypassPerfProbeEpisodeReuses = 0;
         }
 
         private void SafeClearAll()
@@ -1923,6 +2142,7 @@ namespace RapidTransitMod
                 m_BypassYieldBlocker.Clear();
 
             m_BypassHoldCadenceSnapshots.Clear();
+            m_BypassConflictEpisodes.Clear();
             m_BypassDecisionLogCache.Clear();
             m_BypassQueuedLocalOverrideLogCache.Clear();
             ClearBypassTrackModelRuntimeState();
@@ -1967,7 +2187,7 @@ namespace RapidTransitMod
             List<Entity> cadenceKeysToRemove = null;
             foreach (KeyValuePair<Entity, BypassHoldCadenceSnapshot> entry in m_BypassHoldCadenceSnapshots)
             {
-                if (entry.Value.Line != line)
+                if (entry.Value.SceneKey.Line != line)
                     continue;
 
                 cadenceKeysToRemove ??= new List<Entity>();
@@ -1985,6 +2205,22 @@ namespace RapidTransitMod
                 }
             }
 
+            List<Entity> episodeKeysToRemove = null;
+            foreach (KeyValuePair<Entity, BypassConflictEpisode> entry in m_BypassConflictEpisodes)
+            {
+                if (entry.Value.SceneKey.Line != line && entry.Value.ExpressLine != line)
+                    continue;
+
+                episodeKeysToRemove ??= new List<Entity>();
+                episodeKeysToRemove.Add(entry.Key);
+            }
+
+            if (episodeKeysToRemove != null)
+            {
+                for (int i = 0; i < episodeKeysToRemove.Count; i++)
+                    m_BypassConflictEpisodes.Remove(episodeKeysToRemove[i]);
+            }
+
             ClearBypassTrackModelRuntimeStateForLine(line);
         }
 
@@ -1998,7 +2234,7 @@ namespace RapidTransitMod
             List<Entity> cadenceKeysToRemove = null;
             foreach (KeyValuePair<Entity, BypassHoldCadenceSnapshot> entry in m_BypassHoldCadenceSnapshots)
             {
-                if (entry.Value.Line != line)
+                if (entry.Value.SceneKey.Line != line)
                     continue;
 
                 cadenceKeysToRemove ??= new List<Entity>();
@@ -4035,6 +4271,7 @@ namespace RapidTransitMod
                     m_BVMisfire.Remove(dead);
                     m_BVMisfireStartFrame.Remove(dead);
                     m_BypassHoldCadenceSnapshots.Remove(dead);
+                    m_BypassConflictEpisodes.Remove(dead);
                     ClearVehicleProgressSuspect(dead, "vehicle-removed");
                     ClearForcedMidStopClosingConsist(dead);
                     m_VehicleLine.Remove(dead);
@@ -4055,6 +4292,21 @@ namespace RapidTransitMod
                     m_BvWaypointMismatchLastLogFrame.Remove(dead);
                     m_BypassQueuedLocalOverrideLogCache.Remove(dead);
                     m_LastBoardingAssistSnapshots.Remove(dead);
+                    List<Entity> episodeReleaseKeys = null;
+                    foreach (KeyValuePair<Entity, BypassConflictEpisode> entry in m_BypassConflictEpisodes)
+                    {
+                        if (entry.Value.BlockerVehicle != dead)
+                            continue;
+
+                        episodeReleaseKeys ??= new List<Entity>();
+                        episodeReleaseKeys.Add(entry.Key);
+                    }
+
+                    if (episodeReleaseKeys != null)
+                    {
+                        for (int i = 0; i < episodeReleaseKeys.Count; i++)
+                            m_BypassConflictEpisodes.Remove(episodeReleaseKeys[i]);
+                    }
                     log.Info("[清理] 车辆" + dead.Index + " 消失");
                 }
                 if (deadKeys.Length > 0)
@@ -6670,12 +6922,98 @@ namespace RapidTransitMod
 
             m_BypassYieldBlocker.Remove(vehicle);
             m_BypassHoldCadenceSnapshots.Remove(vehicle);
+            m_BypassConflictEpisodes.Remove(vehicle);
             Entity line = ResolveVehicleLine(vehicle);
             string lineTag = line != Entity.Null ? "线路" + line.Index : "线路?";
             log.Info("[待避解除] " + lineTag + " 车辆" + vehicle.Index
                 + " 解除快车待避"
                 + (!string.IsNullOrWhiteSpace(releaseReason) ? " reason=" + releaseReason : string.Empty)
                 + (blocker != Entity.Null ? " blocker=" + blocker.Index : string.Empty));
+        }
+
+        private static BypassConflictMode InferConflictModeFromDecisionReason(string decisionReason)
+        {
+            if (string.IsNullOrWhiteSpace(decisionReason))
+                return BypassConflictMode.Unknown;
+            if (string.Equals(decisionReason, "track-model-same-direction-shared-express-approaching", StringComparison.Ordinal)
+                || string.Equals(decisionReason, "track-model-same-station-same-direction-express-departing", StringComparison.Ordinal))
+            {
+                return BypassConflictMode.Block;
+            }
+
+            return BypassConflictMode.EtaRefresh;
+        }
+
+        private static bool ShouldConflictEpisodeSustainUntilRelease(BypassConflictMode mode)
+        {
+            return mode == BypassConflictMode.Block;
+        }
+
+        private void StoreBypassConflictEpisode(
+            BypassControlScope scope,
+            Entity blockerVehicle,
+            Entity expressLine,
+            BypassConflictMode conflictMode,
+            uint nowFrame,
+            bool canClearAfterExit,
+            bool sameStationRequired)
+        {
+            if (scope.Vehicle == Entity.Null
+                || blockerVehicle == Entity.Null
+                || !ShouldConflictEpisodeSustainUntilRelease(conflictMode))
+            {
+                m_BypassConflictEpisodes.Remove(scope.Vehicle);
+                return;
+            }
+
+            m_BypassConflictEpisodes[scope.Vehicle] = new BypassConflictEpisode(
+                scope.Vehicle,
+                scope.SceneKey,
+                expressLine,
+                blockerVehicle,
+                conflictMode,
+                nowFrame,
+                canClearAfterExit,
+                sameStationRequired);
+        }
+
+        private bool TryReuseConflictEpisodeUntilRelease(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            out bool shouldHold,
+            out Entity blockerVehicle,
+            out bool canClearAfterExit)
+        {
+            shouldHold = false;
+            blockerVehicle = Entity.Null;
+            canClearAfterExit = true;
+
+            if (!m_BypassConflictEpisodes.TryGetValue(scope.Vehicle, out BypassConflictEpisode episode)
+                || !episode.SceneKey.Equals(scope.SceneKey)
+                || !ShouldConflictEpisodeSustainUntilRelease(episode.Mode)
+                || episode.BlockerVehicle == Entity.Null
+                || !EntityManager.Exists(episode.BlockerVehicle))
+            {
+                return false;
+            }
+
+            blockerVehicle = episode.BlockerVehicle;
+            if (episode.SameStationRequired
+                && !IsExpressBlockerStillWithinBypassStation(blockerVehicle, scope.CurrentBypassBuilding))
+            {
+                return false;
+            }
+
+            if (!TryIsLatchedBypassBlockerBeforeRelease(scope, localWaypoints, blockerVehicle, out bool blockerStillBeforeRelease)
+                || !blockerStillBeforeRelease)
+            {
+                return false;
+            }
+
+            shouldHold = true;
+            canClearAfterExit = episode.CanClearAfterExit;
+            m_BypassPerfProbeEpisodeReuses++;
+            return true;
         }
 
         private bool TryGetCadencedBypassHoldDecision(
@@ -6696,6 +7034,7 @@ namespace RapidTransitMod
             if (!m_BypassRuntimeEnabled)
             {
                 m_BypassHoldCadenceSnapshots.Remove(localVehicle);
+                m_BypassConflictEpisodes.Remove(localVehicle);
                 return true;
             }
 
@@ -6708,6 +7047,7 @@ namespace RapidTransitMod
                     out _))
             {
                 m_BypassHoldCadenceSnapshots.Remove(localVehicle);
+                m_BypassConflictEpisodes.Remove(localVehicle);
                 return true;
             }
 
@@ -6721,7 +7061,7 @@ namespace RapidTransitMod
 
             bool hasLatchedYield = m_BypassYieldBlocker.ContainsKey(localVehicle);
             if (hasLatchedYield
-                && TryReuseLatchedBypassBlockerUntilRelease(scope, localWaypoints, out shouldHold, out blockerVehicle, out canClearAfterExit))
+                && TryReuseConflictEpisodeUntilRelease(scope, localWaypoints, out shouldHold, out blockerVehicle, out canClearAfterExit))
             {
                 return true;
             }
@@ -6735,9 +7075,13 @@ namespace RapidTransitMod
             shouldHold = ShouldHoldLocalVehicleForExpressBypass(scope, localWaypoints, nowFrame, out blockerVehicle, out string decisionReason);
             canClearAfterExit = (hasLatchedYield || shouldHold)
                 && CanClearBypassYieldAfterStationExit(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex);
-            bool lockToBlockerUntilRelease = shouldHold
-                && blockerVehicle != Entity.Null
-                && string.Equals(decisionReason, "track-model-same-station-same-direction-express-departing", StringComparison.Ordinal);
+            BypassConflictMode conflictMode = InferConflictModeFromDecisionReason(decisionReason);
+            Entity expressLine = blockerVehicle != Entity.Null ? ResolveVehicleLine(blockerVehicle) : Entity.Null;
+            bool sameStationRequired = string.Equals(decisionReason, "track-model-same-station-same-direction-express-departing", StringComparison.Ordinal);
+            if (shouldHold && blockerVehicle != Entity.Null)
+                StoreBypassConflictEpisode(scope, blockerVehicle, expressLine, conflictMode, nowFrame, canClearAfterExit, sameStationRequired);
+            else
+                m_BypassConflictEpisodes.Remove(scope.Vehicle);
 
             StoreBypassHoldCadenceSnapshot(
                 scope,
@@ -6745,42 +7089,8 @@ namespace RapidTransitMod
                 nowFrame,
                 shouldHold,
                 canClearAfterExit,
-                lockToBlockerUntilRelease,
+                conflictMode,
                 blockerVehicle);
-            return true;
-        }
-
-        private bool TryReuseLatchedBypassBlockerUntilRelease(
-            BypassControlScope scope,
-            DynamicBuffer<RouteWaypoint> localWaypoints,
-            out bool shouldHold,
-            out Entity blockerVehicle,
-            out bool canClearAfterExit)
-        {
-            shouldHold = false;
-            blockerVehicle = Entity.Null;
-            canClearAfterExit = true;
-
-            if (!m_BypassHoldCadenceSnapshots.TryGetValue(scope.Vehicle, out BypassHoldCadenceSnapshot snapshot)
-                || snapshot.Line != scope.Line
-                || snapshot.WaypointIndex != scope.WaypointIndex
-                || snapshot.CurrentBypassBuilding != scope.CurrentBypassBuilding
-                || snapshot.NextBypassBuilding != scope.NextBypassBuilding
-                || !snapshot.ShouldHold
-                || !snapshot.LockToBlockerUntilRelease
-                || snapshot.Blocker == Entity.Null)
-            {
-                return false;
-            }
-
-            blockerVehicle = snapshot.Blocker;
-            if (!TryIsLatchedBypassBlockerBeforeRelease(scope, localWaypoints, blockerVehicle, out bool blockerStillBeforeRelease))
-                return false;
-            if (!blockerStillBeforeRelease)
-                return false;
-
-            shouldHold = true;
-            canClearAfterExit = CanClearBypassYieldAfterStationExit(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex);
             return true;
         }
 
@@ -6803,23 +7113,25 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (!TryGetBypassWaypointContext(
+            if (!TryGetLocalSceneDefinition(
+                    localLine,
                     localWaypoints,
                     currentWaypointIndex,
-                    out Entity currentBypassBuilding,
                     out _,
-                    out Entity nextBypassBuilding))
+                    out SceneDefinition sceneDefinition))
             {
-                failureReason = "bypass-context-missing";
+                failureReason = "scene-definition-missing";
                 return false;
             }
 
+            VehicleSceneBinding sceneBinding = new VehicleSceneBinding(
+                localVehicle,
+                sceneDefinition.Key,
+                currentWaypointIndex);
             scope = new BypassControlScope(
                 localVehicle,
-                localLine,
-                currentWaypointIndex,
-                currentBypassBuilding,
-                nextBypassBuilding);
+                sceneBinding,
+                sceneDefinition);
             return true;
         }
 
@@ -6836,11 +7148,17 @@ namespace RapidTransitMod
             canClearAfterExit = true;
 
             if (m_BypassHoldCadenceSnapshots.TryGetValue(scope.Vehicle, out BypassHoldCadenceSnapshot snapshot)
-                && snapshot.Line == scope.Line
-                && snapshot.WaypointIndex == scope.WaypointIndex
-                && snapshot.CurrentBypassBuilding == scope.CurrentBypassBuilding
-                && snapshot.NextBypassBuilding == scope.NextBypassBuilding)
+                && snapshot.SceneKey.Equals(scope.SceneKey)
+                && snapshot.WaypointIndex == scope.WaypointIndex)
             {
+                if (snapshot.ShouldHold
+                    && (snapshot.Blocker == Entity.Null
+                        || !EntityManager.Exists(snapshot.Blocker)
+                        || ShouldConflictEpisodeSustainUntilRelease(snapshot.ConflictMode)))
+                {
+                    return false;
+                }
+
                 if (snapshot.EvaluatedFrame == nowFrame
                     || (nowFrame < snapshot.ReevaluateAfterFrame
                         && (hasLatchedYield || !snapshot.ShouldHold)))
@@ -6861,7 +7179,7 @@ namespace RapidTransitMod
             uint nowFrame,
             bool shouldHold,
             bool canClearAfterExit,
-            bool lockToBlockerUntilRelease,
+            BypassConflictMode conflictMode,
             Entity blockerVehicle)
         {
             uint reevaluateAfterFrame = nowFrame + 1;
@@ -6871,15 +7189,13 @@ namespace RapidTransitMod
                 reevaluateAfterFrame = nowFrame + BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES;
 
             m_BypassHoldCadenceSnapshots[scope.Vehicle] = new BypassHoldCadenceSnapshot(
-                scope.Line,
+                scope.SceneKey,
                 scope.WaypointIndex,
-                scope.CurrentBypassBuilding,
-                scope.NextBypassBuilding,
                 nowFrame,
                 reevaluateAfterFrame,
                 shouldHold,
                 canClearAfterExit,
-                lockToBlockerUntilRelease,
+                conflictMode,
                 blockerVehicle);
         }
 
@@ -7269,11 +7585,34 @@ namespace RapidTransitMod
                 return false;
             }
 
-            sceneCoordinate = MapRuntimePositionToReferenceWindowCoordinateExact(
+            if (!TryFindBestCurrentForwardSceneSameDirectionTrunkSegment(
+                    localChain,
+                    localProtectedInterval,
+                    scope.CurrentBypassBuilding,
+                    expressChain,
+                    expressProtectedInterval,
+                    expressPosition.CurrentAtomIndex,
+                    out GlobalSharedTrunkSegment selectedTrunkSegment))
+            {
+                return false;
+            }
+
+            RelativeToTrunkState expressTrunkState = BuildRelativeToTrunkStateFromRuntimePosition(
                 expressPosition,
-                sharedWindowMatch.ExpressSharedWindow,
-                sharedWindowMatch.LocalSharedWindow,
-                localProtectedInterval,
+                expressChain,
+                selectedTrunkSegment,
+                useLocalSide: false);
+            if (!selectedTrunkSegment.HasCanonicalDirection
+                || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
+                || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, selectedTrunkSegment))
+            {
+                return false;
+            }
+
+            sceneCoordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinateExact(
+                expressPosition,
+                expressProtectedInterval,
+                GetProtectedIntervalDisplayLength(localProtectedInterval),
                 includeApproachers: true,
                 out bool includeExpress);
             return includeExpress;

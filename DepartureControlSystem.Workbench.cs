@@ -3504,7 +3504,7 @@ namespace RapidTransitMod
                 return Entity.Null;
 
             string depotId = GetWorkbenchAllowedDepotId(line);
-            return ResolveWorkbenchDepotEntityById(depotId);
+            return CanonicalizeTransportDepotEntity(ResolveWorkbenchDepotEntityById(depotId));
         }
 
         private string NormalizeWorkbenchAllowedDepotId(string depotId)
@@ -3518,7 +3518,41 @@ namespace RapidTransitMod
                 : string.Empty;
         }
 
+        public Entity CanonicalizeTransportDepotEntity(Entity depot)
+        {
+            if (depot == Entity.Null || !EntityManager.Exists(depot))
+                return Entity.Null;
+
+            Entity current = depot;
+            Entity canonical = Entity.Null;
+            for (int i = 0; i < 16 && current != Entity.Null && EntityManager.Exists(current); i++)
+            {
+                if (EntityManager.HasComponent<Game.Buildings.TransportDepot>(current))
+                {
+                    canonical = current;
+                }
+
+                if (!EntityManager.HasComponent<Owner>(current))
+                    break;
+
+                Entity next = EntityManager.GetComponentData<Owner>(current).m_Owner;
+                if (next == current)
+                    break;
+
+                current = next;
+            }
+
+            return canonical != Entity.Null && EntityManager.Exists(canonical)
+                ? canonical
+                : Entity.Null;
+        }
+
         private string BuildWorkbenchDepotPersistentId(Entity depot)
+        {
+            return BuildWorkbenchDepotPersistentIdRaw(CanonicalizeTransportDepotEntity(depot));
+        }
+
+        private string BuildWorkbenchDepotPersistentIdRaw(Entity depot)
         {
             if (depot == Entity.Null || !EntityManager.Exists(depot))
                 return string.Empty;
@@ -3569,16 +3603,21 @@ namespace RapidTransitMod
         private List<DispatchWorkbenchDepotDto> BuildWorkbenchDepots()
         {
             List<DispatchWorkbenchDepotDto> depots = new List<DispatchWorkbenchDepotDto>();
+            HashSet<Entity> seenCanonicalDepots = new HashSet<Entity>();
             EntityQuery depotQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
                 ComponentType.ReadOnly<PrefabRef>(),
-                ComponentType.Exclude<Deleted>());
+                ComponentType.Exclude<Deleted>(),
+                ComponentType.Exclude<Game.Buildings.ServiceUpgrade>());
             NativeArray<Entity> depotEntities = depotQuery.ToEntityArray(Allocator.Temp);
             try
             {
                 for (int i = 0; i < depotEntities.Length; i++)
                 {
-                    Entity depot = depotEntities[i];
+                    Entity depot = CanonicalizeTransportDepotEntity(depotEntities[i]);
+                    if (depot == Entity.Null || !seenCanonicalDepots.Add(depot))
+                        continue;
+
                     string name = ResolveWorkbenchEntityName(depot);
                     if (string.IsNullOrEmpty(name))
                     {
@@ -3616,12 +3655,13 @@ namespace RapidTransitMod
             if (string.IsNullOrEmpty(depotId))
                 return Entity.Null;
 
+            EntityQuery rawDepotQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.Exclude<Deleted>());
+
             if (int.TryParse(depotId, out int legacyDepotIndex))
             {
-                EntityQuery legacyDepotQuery = GetEntityQuery(
-                    ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
-                    ComponentType.Exclude<Deleted>());
-                NativeArray<Entity> legacyDepotEntities = legacyDepotQuery.ToEntityArray(Allocator.Temp);
+                NativeArray<Entity> legacyDepotEntities = rawDepotQuery.ToEntityArray(Allocator.Temp);
                 try
                 {
                     for (int i = 0; i < legacyDepotEntities.Length; i++)
@@ -3629,7 +3669,7 @@ namespace RapidTransitMod
                         Entity depot = legacyDepotEntities[i];
                         if (depot.Index == legacyDepotIndex)
                         {
-                            return depot;
+                            return CanonicalizeTransportDepotEntity(depot);
                         }
                     }
                 }
@@ -3639,18 +3679,17 @@ namespace RapidTransitMod
                 }
             }
 
-            EntityQuery depotQuery = GetEntityQuery(
-                ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
-                ComponentType.Exclude<Deleted>());
-            NativeArray<Entity> depotEntities = depotQuery.ToEntityArray(Allocator.Temp);
+            NativeArray<Entity> depotEntities = rawDepotQuery.ToEntityArray(Allocator.Temp);
             try
             {
                 for (int i = 0; i < depotEntities.Length; i++)
                 {
-                    Entity depot = depotEntities[i];
-                    if (string.Equals(BuildWorkbenchDepotPersistentId(depot), depotId, StringComparison.Ordinal))
+                    Entity rawDepot = depotEntities[i];
+                    Entity canonicalDepot = CanonicalizeTransportDepotEntity(rawDepot);
+                    if (string.Equals(BuildWorkbenchDepotPersistentId(canonicalDepot), depotId, StringComparison.Ordinal)
+                        || string.Equals(BuildWorkbenchDepotPersistentIdRaw(rawDepot), depotId, StringComparison.Ordinal))
                     {
-                        return depot;
+                        return canonicalDepot != Entity.Null ? canonicalDepot : rawDepot;
                     }
                 }
             }
