@@ -1526,5 +1526,197 @@ namespace RapidTransitMod
 
             return true;
         }
+
+        private bool TryBuildSharedCorridorDumpRow(
+            Entity referenceLine,
+            DynamicBuffer<RouteWaypoint> referenceWaypoints,
+            LineTrackChain referenceChain,
+            BypassProtectedInterval referenceInterval,
+            out string dedupeKey,
+            out string row)
+        {
+            dedupeKey = string.Empty;
+            row = string.Empty;
+            if (referenceChain == null)
+                return false;
+
+            Entity startBuilding = referenceChain.ControlPoints[referenceInterval.StartControlPointIndex].Building;
+            Entity endBuilding = referenceChain.ControlPoints[referenceInterval.EndControlPointIndex].Building;
+            if (startBuilding == Entity.Null || endBuilding == Entity.Null)
+                return false;
+
+            List<Entity> corridorLines = new List<Entity> { referenceLine };
+            var routeWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+            var allLines = m_LineQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < allLines.Length; i++)
+                {
+                    Entity otherLine = allLines[i];
+                    if (otherLine == Entity.Null || otherLine == referenceLine || !EntityManager.Exists(otherLine))
+                        continue;
+                    if (!routeWaypointBuffers.TryGetBuffer(otherLine, out DynamicBuffer<RouteWaypoint> otherWaypoints))
+                        continue;
+                    if (!TryGetLineTrackChain(otherLine, otherWaypoints, out LineTrackChain otherChain))
+                        continue;
+
+                    RefreshBypassProtectedIntervals(otherChain);
+                    ProtectedIntervalMatch otherMatch = FindBestMatchingProtectedInterval(referenceChain, referenceInterval, otherChain);
+                    if (otherMatch.Found)
+                        corridorLines.Add(otherLine);
+                }
+
+                corridorLines.Sort((a, b) =>
+                {
+                    int cmp = string.CompareOrdinal(FormatSharedMapLineLabel(a), FormatSharedMapLineLabel(b));
+                    if (cmp != 0)
+                        return cmp;
+                    return a.Index.CompareTo(b.Index);
+                });
+                StringBuilder keyBuilder = new StringBuilder();
+                ulong intervalSignature = ComputeProtectedIntervalAtomSignature(referenceChain, referenceInterval);
+                keyBuilder.Append(intervalSignature).Append("|");
+                for (int i = 0; i < corridorLines.Count; i++)
+                {
+                    if (i > 0)
+                        keyBuilder.Append(",");
+                    keyBuilder.Append(corridorLines[i].Index);
+                }
+                dedupeKey = keyBuilder.ToString();
+
+                float intervalDisplayLength = GetProtectedIntervalDisplayLength(referenceInterval);
+
+                List<TrackModelSequenceItem> items = new List<TrackModelSequenceItem>(referenceWaypoints.Length + 16);
+                for (int controlPointIndex = referenceInterval.StartControlPointIndex; controlPointIndex <= referenceInterval.EndControlPointIndex; controlPointIndex++)
+                {
+                    ControlPointMarker marker = referenceChain.ControlPoints[controlPointIndex];
+
+                    items.Add(new TrackModelSequenceItem(
+                        MapControlPointToProtectedIntervalCoordinate(referenceChain, referenceInterval, controlPointIndex),
+                        0,
+                        FormatSharedMapStationLabel(marker.Building)));
+                }
+
+                for (int lineIndex = 0; lineIndex < corridorLines.Count; lineIndex++)
+                {
+                    Entity corridorLine = corridorLines[lineIndex];
+                    if (!routeWaypointBuffers.TryGetBuffer(corridorLine, out DynamicBuffer<RouteWaypoint> corridorWaypoints))
+                        continue;
+                    if (!routeVehicleBuffers.TryGetBuffer(corridorLine, out DynamicBuffer<RouteVehicle> corridorVehicles))
+                        continue;
+
+                    if (corridorLine == referenceLine)
+                    {
+                        for (int rvIndex = 0; rvIndex < corridorVehicles.Length; rvIndex++)
+                        {
+                            Entity vehicle = corridorVehicles[rvIndex].m_Vehicle;
+                            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                                continue;
+                            string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                                ? vehicleState.ToString()
+                                : "Unknown";
+                            if (!TryProjectTrackModelRuntimePosition(vehicle, corridorLine, corridorWaypoints, referenceInterval, out TrackModelRuntimePosition runtimePosition))
+                            {
+                                items.Add(new TrackModelSequenceItem(
+                                    float.MaxValue,
+                                    1,
+                                    FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)));
+                                continue;
+                            }
+
+                            float coordinate = MapRuntimePositionToOwnProtectedIntervalCoordinate(runtimePosition, referenceInterval, includeApproachers: true, out bool include);
+                            if (!include)
+                                continue;
+
+                            items.Add(new TrackModelSequenceItem(
+                                coordinate,
+                                1,
+                                FormatSharedMapVehicleLabel(vehicle, corridorLine, state, coordinate)));
+                        }
+
+                        continue;
+                    }
+
+                    if (!TryGetLineTrackChain(corridorLine, corridorWaypoints, out LineTrackChain corridorChain))
+                        continue;
+
+                    RefreshBypassProtectedIntervals(corridorChain);
+                    ProtectedIntervalMatch corridorMatch = FindBestMatchingProtectedInterval(referenceChain, referenceInterval, corridorChain);
+                    if (!corridorMatch.Found)
+                        continue;
+
+                    BypassProtectedInterval corridorInterval = corridorChain.BypassProtectedIntervals[corridorMatch.ProtectedIntervalIndex];
+                    for (int rvIndex = 0; rvIndex < corridorVehicles.Length; rvIndex++)
+                    {
+                        Entity vehicle = corridorVehicles[rvIndex].m_Vehicle;
+                        if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                            continue;
+
+                        string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                            ? vehicleState.ToString()
+                            : "Unknown";
+
+                        if (!TryProjectTrackModelRuntimePosition(vehicle, corridorLine, corridorWaypoints, corridorInterval, out TrackModelRuntimePosition runtimePosition))
+                        {
+                            items.Add(new TrackModelSequenceItem(
+                                float.MaxValue,
+                                1,
+                                FormatSharedMapUnknownVehicleLabel(vehicle, corridorLine, state)));
+                            continue;
+                        }
+
+                        float coordinate = MapRuntimePositionToReferenceProtectedIntervalCoordinate(
+                            runtimePosition,
+                            corridorInterval,
+                            intervalDisplayLength,
+                            includeApproachers: true,
+                            out bool include);
+                        if (!include)
+                            continue;
+
+                        items.Add(new TrackModelSequenceItem(
+                            coordinate,
+                            1,
+                            FormatSharedMapVehicleLabel(vehicle, corridorLine, state, coordinate)));
+                    }
+                }
+
+                if (items.Count == 0)
+                    return false;
+
+                items.Sort((a, b) =>
+                {
+                    int cmp = a.DistanceMeters.CompareTo(b.DistanceMeters);
+                    if (cmp != 0)
+                        return cmp;
+
+                    cmp = a.KindOrder.CompareTo(b.KindOrder);
+                    if (cmp != 0)
+                        return cmp;
+
+                    return string.CompareOrdinal(a.Label, b.Label);
+                });
+
+                StringBuilder sb = new StringBuilder();
+                sb.Append(FormatSharedMapStationLabel(startBuilding))
+                  .Append(" -> ")
+                  .Append(FormatSharedMapStationLabel(endBuilding))
+                  .Append(" | ");
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (i > 0)
+                        sb.Append(" -> ");
+                    sb.Append(items[i].Label);
+                }
+
+                row = sb.ToString();
+                return true;
+            }
+            finally
+            {
+                allLines.Dispose();
+            }
+        }
     }
 }
