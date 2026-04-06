@@ -4878,8 +4878,74 @@ namespace RapidTransitMod
             m_ForcedOriginBoardingGraceUntil.Remove(v);
             pt.m_State &= ~PublicTransportFlags.Boarding;
             pt.m_DepartureFrame = m_SimulationSystem.frameIndex - 1;
+            if (TryApplyLaunchSegmentPath(v, ref pt, ref tgt, wps, ecb))
+                return;
+
             tgt.m_Target = wps[1].m_Waypoint;
             RepathVehicle(v, pt, tgt, ecb);
+        }
+
+        private bool TryApplyLaunchSegmentPath(
+            Entity vehicle,
+            ref Game.Vehicles.PublicTransport pt,
+            ref Target tgt,
+            DynamicBuffer<RouteWaypoint> wps,
+            EntityCommandBuffer ecb)
+        {
+            if (wps.Length < 2)
+                return false;
+
+            Entity route = Entity.Null;
+            if (m_VehicleLine.TryGetValue(vehicle, out Entity mappedLine) && mappedLine != Entity.Null)
+            {
+                route = mappedLine;
+            }
+            else if (EntityManager.HasComponent<CurrentRoute>(vehicle))
+            {
+                route = EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route;
+            }
+
+            if (route == Entity.Null
+                || !EntityManager.Exists(route)
+                || !EntityManager.HasBuffer<RouteSegment>(route))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(route, true);
+            if (segments.Length == 0)
+                return false;
+
+            Entity firstSegment = segments[0].m_Segment;
+            if (firstSegment == Entity.Null
+                || !EntityManager.Exists(firstSegment)
+                || !EntityManager.HasBuffer<PathElement>(firstSegment))
+            {
+                return false;
+            }
+
+            DynamicBuffer<PathElement> segmentPath = EntityManager.GetBuffer<PathElement>(firstSegment, true);
+            if (segmentPath.Length == 0)
+                return false;
+
+            tgt.m_Target = wps[1].m_Waypoint;
+            ecb.SetComponent(vehicle, tgt);
+            ecb.SetComponent(vehicle, pt);
+
+            if (EntityManager.HasComponent<PathOwner>(vehicle))
+            {
+                ecb.SetComponent(vehicle, new PathOwner(PathFlags.Updated));
+            }
+
+            DynamicBuffer<PathElement> targetPath = ecb.SetBuffer<PathElement>(vehicle);
+            targetPath.Clear();
+            for (int i = 0; i < segmentPath.Length; i++)
+            {
+                targetPath.Add(segmentPath[i]);
+            }
+
+            ecb.AddComponent<Updated>(vehicle);
+            return true;
         }
 
         private struct BoardingCloseAssistStats
