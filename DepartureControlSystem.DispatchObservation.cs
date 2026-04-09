@@ -713,6 +713,51 @@ namespace RapidTransitMod
             return dwellSinceFrame + (uint)math.round(adjustedFrames);
         }
 
+        private bool TryCaptureTrainHeadSnapshot(Entity vehicle, int waypointIndex, out TrainHeadSnapshot snapshot)
+        {
+            snapshot = default;
+            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                return false;
+
+            Entity headVehicle = vehicle;
+            if (EntityManager.HasBuffer<LayoutElement>(vehicle))
+            {
+                DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+                if (layout.Length > 0 && layout[0].m_Vehicle != Entity.Null)
+                    headVehicle = layout[0].m_Vehicle;
+            }
+
+            if (headVehicle == Entity.Null
+                || !EntityManager.Exists(headVehicle)
+                || !EntityManager.HasComponent<TrainCurrentLane>(headVehicle))
+            {
+                return false;
+            }
+
+            TrainCurrentLane currentLane = EntityManager.GetComponentData<TrainCurrentLane>(headVehicle);
+            bool reversed = EntityManager.HasComponent<Train>(headVehicle)
+                && (EntityManager.GetComponentData<Train>(headVehicle).m_Flags & Game.Vehicles.TrainFlags.Reversed) != 0;
+
+            snapshot = new TrainHeadSnapshot(
+                m_SimulationSystem.frameIndex,
+                headVehicle,
+                currentLane.m_Front.m_Lane,
+                currentLane.m_Rear.m_Lane,
+                reversed,
+                waypointIndex);
+            return true;
+        }
+
+        private static string FormatTrainHeadSnapshotEntity(Entity entity)
+        {
+            return entity == Entity.Null ? "null" : entity.Index.ToString();
+        }
+
+        private static bool HasTrainHeadSnapshotTurned(TrainHeadSnapshot before, TrainHeadSnapshot after)
+        {
+            return before.HeadVehicle != after.HeadVehicle;
+        }
+
         private void TryRecordPreparingArrivalSample(Entity v, Entity line, uint nowFrame)
         {
             if (line == Entity.Null)

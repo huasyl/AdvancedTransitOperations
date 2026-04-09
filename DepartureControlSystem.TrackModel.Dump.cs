@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Colossal.Mathematics;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
@@ -762,6 +763,7 @@ namespace RapidTransitMod
 
             AppendReplayWaypoints(sb, line, waypoints, chain);
             AppendReplayRawSegments(sb, line);
+            AppendReplayOfficialSegmentStructures(sb, line, waypoints);
             AppendReplayTrackAtoms(sb, chain);
             AppendReplaySegmentRanges(sb, chain);
             AppendReplayControlPoints(sb, chain);
@@ -849,6 +851,136 @@ namespace RapidTransitMod
                 sb.Append("]");
             }
             sb.AppendLine();
+        }
+
+        private void AppendReplayOfficialSegmentStructures(
+            StringBuilder sb,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || !EntityManager.HasBuffer<RouteSegment>(line))
+            {
+                return;
+            }
+
+            DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
+            sb.Append("segmentStruct:");
+            for (int i = 0; i < segments.Length; i++)
+            {
+                Entity segmentEntity = segments[i].m_Segment;
+                Entity startWaypoint = i < waypoints.Length ? waypoints[i].m_Waypoint : Entity.Null;
+                Entity endWaypoint = waypoints.Length > 0 ? waypoints[(i + 1) % waypoints.Length].m_Waypoint : Entity.Null;
+                sb.Append(" | seg").Append(i)
+                  .Append(" ent=").Append(segmentEntity.Index)
+                  .Append(" wp=").Append(startWaypoint.Index).Append("->").Append(endWaypoint.Index);
+
+                if (startWaypoint != Entity.Null && EntityManager.HasComponent<RouteLane>(startWaypoint))
+                {
+                    RouteLane startRouteLane = EntityManager.GetComponentData<RouteLane>(startWaypoint);
+                    sb.Append(" routeLaneStart=(")
+                      .Append(FormatEntityRefCompact(startRouteLane.m_StartLane)).Append("->")
+                      .Append(FormatEntityRefCompact(startRouteLane.m_EndLane)).Append(" ")
+                      .Append(startRouteLane.m_StartCurvePos.ToString("0.###")).Append("->")
+                      .Append(startRouteLane.m_EndCurvePos.ToString("0.###")).Append(")");
+                }
+                else
+                {
+                    sb.Append(" routeLaneStart=(-)");
+                }
+
+                if (segmentEntity != Entity.Null && EntityManager.HasComponent<PathTargets>(segmentEntity))
+                {
+                    PathTargets pathTargets = EntityManager.GetComponentData<PathTargets>(segmentEntity);
+                    sb.Append(" pathTargets=(")
+                      .Append(FormatEntityRefCompact(pathTargets.m_StartLane)).Append("->")
+                      .Append(FormatEntityRefCompact(pathTargets.m_EndLane)).Append(" curve=")
+                      .Append(pathTargets.m_CurvePositions.x.ToString("0.###")).Append("->")
+                      .Append(pathTargets.m_CurvePositions.y.ToString("0.###"))
+                      .Append(" ready=").Append(FormatFloat3Compact(pathTargets.m_ReadyStartPosition))
+                      .Append("->").Append(FormatFloat3Compact(pathTargets.m_ReadyEndPosition))
+                      .Append(")");
+                }
+                else
+                {
+                    sb.Append(" pathTargets=(-)");
+                }
+
+                if (segmentEntity != Entity.Null && EntityManager.HasBuffer<CurveElement>(segmentEntity))
+                {
+                    DynamicBuffer<CurveElement> curves = EntityManager.GetBuffer<CurveElement>(segmentEntity, true);
+                    sb.Append(" curves=").Append(curves.Length);
+                    if (curves.Length > 0)
+                    {
+                        CurveElement firstCurve = curves[0];
+                        CurveElement lastCurve = curves[curves.Length - 1];
+                        sb.Append(" first=").Append(FormatFloat3Compact(firstCurve.m_Curve.a))
+                          .Append("->").Append(FormatFloat3Compact(firstCurve.m_Curve.d))
+                          .Append(" tan=").Append(FormatFloat3Compact(math.normalizesafe(MathUtils.StartTangent(firstCurve.m_Curve))))
+                          .Append("->").Append(FormatFloat3Compact(math.normalizesafe(MathUtils.EndTangent(firstCurve.m_Curve))));
+                        sb.Append(" last=").Append(FormatFloat3Compact(lastCurve.m_Curve.a))
+                          .Append("->").Append(FormatFloat3Compact(lastCurve.m_Curve.d))
+                          .Append(" tan=").Append(FormatFloat3Compact(math.normalizesafe(MathUtils.StartTangent(lastCurve.m_Curve))))
+                          .Append("->").Append(FormatFloat3Compact(math.normalizesafe(MathUtils.EndTangent(lastCurve.m_Curve))));
+                    }
+                }
+                else
+                {
+                    sb.Append(" curves=0");
+                }
+
+                if (segmentEntity != Entity.Null && EntityManager.HasBuffer<CurveSource>(segmentEntity))
+                {
+                    DynamicBuffer<CurveSource> sources = EntityManager.GetBuffer<CurveSource>(segmentEntity, true);
+                    sb.Append(" curveSources=").Append(sources.Length);
+                    if (sources.Length > 0)
+                    {
+                        CurveSource firstSource = sources[0];
+                        CurveSource lastSource = sources[sources.Length - 1];
+                        sb.Append(" src0=").Append(FormatEntityRefCompact(firstSource.m_Entity))
+                          .Append("@").Append(firstSource.m_Range.x.ToString("0.###")).Append("->").Append(firstSource.m_Range.y.ToString("0.###"));
+                        sb.Append(" srcN=").Append(FormatEntityRefCompact(lastSource.m_Entity))
+                          .Append("@").Append(lastSource.m_Range.x.ToString("0.###")).Append("->").Append(lastSource.m_Range.y.ToString("0.###"));
+                    }
+                }
+                else
+                {
+                    sb.Append(" curveSources=0");
+                }
+
+                if (segmentEntity != Entity.Null && EntityManager.HasBuffer<PathElement>(segmentEntity))
+                {
+                    DynamicBuffer<PathElement> path = EntityManager.GetBuffer<PathElement>(segmentEntity, true);
+                    sb.Append(" path=").Append(path.Length);
+                    if (path.Length > 0)
+                    {
+                        PathElement firstPath = path[0];
+                        PathElement lastPath = path[path.Length - 1];
+                        sb.Append(" p0=").Append(FormatEntityRefCompact(firstPath.m_Target))
+                          .Append("@").Append(firstPath.m_TargetDelta.x.ToString("0.###")).Append("->").Append(firstPath.m_TargetDelta.y.ToString("0.###"))
+                          .Append("#").Append((int)firstPath.m_Flags);
+                        sb.Append(" pN=").Append(FormatEntityRefCompact(lastPath.m_Target))
+                          .Append("@").Append(lastPath.m_TargetDelta.x.ToString("0.###")).Append("->").Append(lastPath.m_TargetDelta.y.ToString("0.###"))
+                          .Append("#").Append((int)lastPath.m_Flags);
+                    }
+                }
+                else
+                {
+                    sb.Append(" path=0");
+                }
+            }
+            sb.AppendLine();
+        }
+
+        private static string FormatEntityRefCompact(Entity entity)
+        {
+            return entity == Entity.Null ? "null" : entity.Index.ToString();
+        }
+
+        private static string FormatFloat3Compact(float3 value)
+        {
+            return value.x.ToString("0.#") + "," + value.y.ToString("0.#") + "," + value.z.ToString("0.#");
         }
 
         private void AppendReplayTrackAtoms(StringBuilder sb, LineTrackChain chain)

@@ -9,6 +9,7 @@
 // - 新增 m_NearingTerminus：车进入最后一个 waypoint 时打标签，Idle->Holding 前检查本线路有无标签车距始发站 <= 350 米，有则回库疏解
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using Game;
@@ -144,6 +145,10 @@ namespace RapidTransitMod
             public readonly int CurrentControlEdgeIndex;
             public readonly float OwnLineAtomCoordinate;
             public readonly int PhaseEndAtomExclusive;
+            public readonly int TraversalPhaseIndex;
+            public readonly int TraversalPhaseStartAtomIndex;
+            public readonly int TraversalPhaseEndAtomExclusive;
+            public readonly int NextTurnbackBoundaryAtomIndex;
 
             public LineRunningVehicleSnapshot(
                 Entity vehicle,
@@ -155,7 +160,11 @@ namespace RapidTransitMod
                 VehicleTrackCursor trackCursor,
                 int currentControlEdgeIndex,
                 float ownLineAtomCoordinate,
-                int phaseEndAtomExclusive)
+                int phaseEndAtomExclusive,
+                int traversalPhaseIndex,
+                int traversalPhaseStartAtomIndex,
+                int traversalPhaseEndAtomExclusive,
+                int nextTurnbackBoundaryAtomIndex)
             {
                 Vehicle = vehicle;
                 NextWaypointIndex = nextWaypointIndex;
@@ -167,6 +176,10 @@ namespace RapidTransitMod
                 CurrentControlEdgeIndex = currentControlEdgeIndex;
                 OwnLineAtomCoordinate = ownLineAtomCoordinate;
                 PhaseEndAtomExclusive = phaseEndAtomExclusive;
+                TraversalPhaseIndex = traversalPhaseIndex;
+                TraversalPhaseStartAtomIndex = traversalPhaseStartAtomIndex;
+                TraversalPhaseEndAtomExclusive = traversalPhaseEndAtomExclusive;
+                NextTurnbackBoundaryAtomIndex = nextTurnbackBoundaryAtomIndex;
             }
         }
 
@@ -175,6 +188,151 @@ namespace RapidTransitMod
             public uint Frame;
             public Entity Line;
             public readonly List<LineRunningVehicleSnapshot> Vehicles = new List<LineRunningVehicleSnapshot>();
+        }
+
+        private readonly struct OrderedLineVehicleEntry
+        {
+            public readonly Entity Vehicle;
+            public readonly LineRunningVehicleSnapshot RunningVehicle;
+            public readonly float OwnLineAtomCoordinate;
+            public readonly int TraversalPhaseIndex;
+            public readonly int TraversalPhaseStartAtomIndex;
+            public readonly int TraversalPhaseEndAtomExclusive;
+
+            public OrderedLineVehicleEntry(
+                Entity vehicle,
+                LineRunningVehicleSnapshot runningVehicle,
+                float ownLineAtomCoordinate,
+                int traversalPhaseIndex,
+                int traversalPhaseStartAtomIndex,
+                int traversalPhaseEndAtomExclusive)
+            {
+                Vehicle = vehicle;
+                RunningVehicle = runningVehicle;
+                OwnLineAtomCoordinate = ownLineAtomCoordinate;
+                TraversalPhaseIndex = traversalPhaseIndex;
+                TraversalPhaseStartAtomIndex = traversalPhaseStartAtomIndex;
+                TraversalPhaseEndAtomExclusive = traversalPhaseEndAtomExclusive;
+            }
+        }
+
+        private readonly struct OrderedLinePhaseRange
+        {
+            public readonly int TraversalPhaseIndex;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+            public readonly int StartEntryIndex;
+            public readonly int EndEntryIndexExclusive;
+
+            public OrderedLinePhaseRange(
+                int traversalPhaseIndex,
+                int startAtomIndex,
+                int endAtomIndexExclusive,
+                int startEntryIndex,
+                int endEntryIndexExclusive)
+            {
+                TraversalPhaseIndex = traversalPhaseIndex;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+                StartEntryIndex = startEntryIndex;
+                EndEntryIndexExclusive = endEntryIndexExclusive;
+            }
+        }
+
+        private readonly struct OrderedSceneQueryWindow
+        {
+            public readonly int TraversalPhaseIndex;
+            public readonly int StartAtomIndex;
+            public readonly int EndAtomIndexExclusive;
+
+            public OrderedSceneQueryWindow(
+                int traversalPhaseIndex,
+                int startAtomIndex,
+                int endAtomIndexExclusive)
+            {
+                TraversalPhaseIndex = traversalPhaseIndex;
+                StartAtomIndex = startAtomIndex;
+                EndAtomIndexExclusive = endAtomIndexExclusive;
+            }
+        }
+
+        private sealed class LineOrderedRuntimeState
+        {
+            public Entity Line;
+            public ulong ChainSignature;
+            public uint LastRefreshFrame;
+            public uint LastFullSortFrame;
+            public readonly List<OrderedLineVehicleEntry> Entries = new List<OrderedLineVehicleEntry>();
+            public readonly List<OrderedLinePhaseRange> PhaseRanges = new List<OrderedLinePhaseRange>();
+            public readonly Dictionary<Entity, OrderedLineVehicleEntry> ScratchEntriesByVehicle = new Dictionary<Entity, OrderedLineVehicleEntry>();
+            public readonly List<OrderedSceneQueryWindow> ScratchQueryWindows = new List<OrderedSceneQueryWindow>();
+        }
+
+        private sealed class LearnedTurnbackBoundaryCluster
+        {
+            public int AtomIndex;
+            public int HitCount;
+            public ulong ChainSignature;
+            public uint LastHitFrame;
+            public Entity LastVehicle;
+
+            public LearnedTurnbackBoundaryCluster(int atomIndex, ulong chainSignature, uint lastHitFrame, Entity lastVehicle)
+            {
+                AtomIndex = atomIndex;
+                HitCount = 1;
+                ChainSignature = chainSignature;
+                LastHitFrame = lastHitFrame;
+                LastVehicle = lastVehicle;
+            }
+        }
+
+        private sealed class TurnbackLearnVehicleSampleState
+        {
+            public Entity Line;
+            public ulong ChainSignature;
+            public uint LastStrongSampleFrame;
+            public int LastTargetWaypointIndex = -1;
+            public ulong LastObservedPathSignature;
+        }
+
+        private readonly struct TrainHeadSnapshot
+        {
+            public readonly uint Frame;
+            public readonly Entity HeadVehicle;
+            public readonly Entity FrontLane;
+            public readonly Entity RearLane;
+            public readonly bool Reversed;
+            public readonly int WaypointIndex;
+
+            public TrainHeadSnapshot(
+                uint frame,
+                Entity headVehicle,
+                Entity frontLane,
+                Entity rearLane,
+                bool reversed,
+                int waypointIndex)
+            {
+                Frame = frame;
+                HeadVehicle = headVehicle;
+                FrontLane = frontLane;
+                RearLane = rearLane;
+                Reversed = reversed;
+                WaypointIndex = waypointIndex;
+            }
+        }
+
+        private readonly struct PatchedTrainReverseSignal
+        {
+            public readonly Entity Vehicle;
+            public readonly Entity HeadVehicle;
+            public readonly uint Frame;
+
+            public PatchedTrainReverseSignal(Entity vehicle, Entity headVehicle, uint frame)
+            {
+                Vehicle = vehicle;
+                HeadVehicle = headVehicle;
+                Frame = frame;
+            }
         }
 
         private readonly struct WaypointIndexFrameSnapshot
@@ -333,6 +491,7 @@ namespace RapidTransitMod
         }
 
         public static DepartureControlSystem Instance = null!;
+        private static readonly ConcurrentQueue<PatchedTrainReverseSignal> s_PatchedTrainReverseSignals = new ConcurrentQueue<PatchedTrainReverseSignal>();
         private TimedLogger log = Mod.log;
         private SimulationSystem m_SimulationSystem = null!;
         private TimeSystem m_TimeSystem = null!;
@@ -394,6 +553,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BvWaypointMismatchLogCache = new Dictionary<Entity, string>();
         private const bool ENABLE_TRACK_WAYPOINT_ANCHORING = true;
         private readonly Dictionary<Entity, string> m_BvTrackAnchorRecoveryLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, TrainHeadSnapshot> m_LastLaunchHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
+        private readonly Dictionary<Entity, TrainHeadSnapshot> m_LastBoardingHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
         private readonly Dictionary<Entity, BoardingDepartureAuditSnapshot> m_LastBoardingAssistSnapshots = new Dictionary<Entity, BoardingDepartureAuditSnapshot>();
         private readonly Dictionary<Entity, DeferredBoardingTailIgnoreEntry> m_DeferredBoardingTailIgnores = new Dictionary<Entity, DeferredBoardingTailIgnoreEntry>();
         private readonly HashSet<Entity> m_DeferredBoardingHumanTailIgnores = new HashSet<Entity>();
@@ -408,6 +569,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
         private readonly Dictionary<ulong, TraversalSliceLapDebugAggregate> m_VehicleTraversalSliceLapDebug = new Dictionary<ulong, TraversalSliceLapDebugAggregate>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
+        private readonly Dictionary<Entity, LineOrderedRuntimeState> m_LineOrderedRuntimeStates = new Dictionary<Entity, LineOrderedRuntimeState>();
+        private readonly Dictionary<Entity, string> m_LineOrderedRuntimeForceRefreshReasons = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_WaypointIndexFrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
         private readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_RouteProgressFrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
         private bool m_CorridorModelFaulted = false;
@@ -426,6 +589,29 @@ namespace RapidTransitMod
         private ulong m_BypassPerfProbeSameStationReusedCandidates;
         private ulong m_BypassPerfProbeDeepCorridorEntries;
         private ulong m_BypassPerfProbeEpisodeReuses;
+        private ulong m_PerfProbeSceneExpressLineQueries;
+        private ulong m_PerfProbeSceneExpressLineSameFrameRequeries;
+        private ulong m_PerfProbeSceneExpressLineConsecutiveFrameRequeries;
+        private ulong m_PerfProbeSceneExpressLineRecentFrameRequeries;
+        private ulong m_PerfProbeWorkbenchLineFrameSnapshotHits;
+        private ulong m_PerfProbeWorkbenchLineFrameSnapshotMisses;
+        private ulong m_PerfProbeOriginSettleSlowPathEntered;
+        private ulong m_PerfProbeOriginSettlePreSnapshotMisses;
+        private ulong m_PerfProbeOriginSettleWindowHits;
+        private readonly Dictionary<Entity, uint> m_PerfProbeSceneExpressLineLastQueryFrame = new Dictionary<Entity, uint>();
+        private uint m_LineOrderedProbeLastLogFrame;
+        private ulong m_LineOrderedProbeExpressLineQueries;
+        private ulong m_LineOrderedProbeOrderedAttempts;
+        private ulong m_LineOrderedProbeHeadOnlySuccesses;
+        private ulong m_LineOrderedProbeFallbacks;
+        private ulong m_LineOrderedProbeHeadCandidateBuilds;
+        private ulong m_LineOrderedProbeFallbackCandidateBuilds;
+        private uint m_DirectionCompareProbeLastLogFrame;
+        private ulong m_DirectionCompareProbeSamples;
+        private ulong m_DirectionCompareProbeMismatches;
+        private readonly Dictionary<Entity, string> m_DirectionCompareLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_DirectionCompareLastLogFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, string> m_DirectionCompareLatestByVehicle = new Dictionary<Entity, string>();
 
         // ── 线路状态 ──
         private NativeHashMap<Entity, int> m_SpawningLines;
@@ -456,6 +642,26 @@ namespace RapidTransitMod
         private NativeHashSet<Entity> m_JustLaunched;
 
         // ── 诊断 ──
+
+        internal static void EnqueuePatchedTrainReverseSignal(Entity vehicle, Entity headVehicle, uint frame)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            s_PatchedTrainReverseSignals.Enqueue(new PatchedTrainReverseSignal(vehicle, headVehicle, frame));
+        }
+
+        internal uint GetCurrentSimulationFrameIndex()
+        {
+            return m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0;
+        }
+
+        private static void ClearPatchedTrainReverseSignals()
+        {
+            while (s_PatchedTrainReverseSignals.TryDequeue(out _))
+            {
+            }
+        }
         private NativeHashSet<Entity> m_DiagnosedLines;
 
         // ── 启动稳定检测（仅启动阶段执行一次，通过后永久关闭）──
@@ -515,9 +721,27 @@ namespace RapidTransitMod
         private const float ORIGIN_FORCE_IDLE_RADIUS_METERS = 180f;
         private const float ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS = 0.92f;
         private const uint ORIGIN_FORCE_IDLE_SETTLE_FRAMES = 180;
+        private const uint LINE_ORDERED_RUNTIME_FORCE_FULL_SORT_INTERVAL_FRAMES = 360;
+        private const uint LINE_ORDERED_PROBE_LOG_INTERVAL_FRAMES = 3600;
+        private const uint DIRECTION_COMPARE_PROBE_LOG_INTERVAL_FRAMES = 3600;
+        private const uint DIRECTION_COMPARE_LOG_COOLDOWN_FRAMES = 1800;
+        private const int TURNBACK_REPEAT_MIN_PRIMARY_ATOMS = 3;
+        private const int TURNBACK_REPEAT_MIN_UNIQUE_LANES = 2;
+        private const int TURNBACK_ADJACENT_SEGMENT_MAX_EDGE_SKIP = 2;
+        private const int TURNBACK_LEARN_CLUSTER_MERGE_ATOM_RADIUS = 10;
+        private const int TURNBACK_LEARN_CONFIRM_HIT_COUNT = 2;
+        private const int TURNBACK_PATH_RETURN_FORWARD_WINDOW_ATOMS = 48;
+        private const uint TURNBACK_LEARN_SAMPLE_COOLDOWN_FRAMES = 180;
+        private const uint TURNBACK_LEARN_LOG_COOLDOWN_FRAMES = 1800;
+        private const uint TURNBACK_SIGNAL_LOG_COOLDOWN_FRAMES = 1800;
 
         private static bool IsBypassRuntimeLoggingEnabled() => false;
         private static bool IsBypassPerfProbeLoggingEnabled() => false;
+        private static bool IsLineOrderedRuntimeLoggingEnabled() => true;
+        private static bool IsLineOrderedRuntimeProbeLoggingEnabled() => true;
+        private static bool IsTrackModelTurnbackBuildLoggingEnabled() => true;
+        private static bool IsTrackModelTurnbackSignalLoggingEnabled() => true;
+        private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
         private const float ORIGIN_ARRIVAL_HOLD_MINUTES = 2f;
         private static readonly uint FORCED_ORIGIN_MIN_DWELL_FRAMES = (uint)math.round(3f * (float)SIM_FRAMES_PER_MINUTE);
         private const float SPAWN_TRIGGER_BUFFER_SHORT_MINUTES = 10f;

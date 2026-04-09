@@ -43,11 +43,17 @@ namespace RapidTransitMod
                 return true;
             }
 
+            m_PerfProbeOriginSettleSlowPathEntered++;
+            bool hasCurrentSnapshot = m_VehicleTrackCursorFrameSnapshots.TryGetValue(vehicle, out VehicleTrackCursorFrameSnapshot snapshot)
+                && snapshot.Frame == m_SimulationSystem.frameIndex
+                && snapshot.Available;
+            if (!hasCurrentSnapshot)
+                m_PerfProbeOriginSettlePreSnapshotMisses++;
+
             Entity line = ResolveVehicleLine(vehicle);
             if (line == Entity.Null
                 || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
-                || !m_VehicleTrackCursorFrameSnapshots.TryGetValue(vehicle, out VehicleTrackCursorFrameSnapshot snapshot)
-                || snapshot.Frame != m_SimulationSystem.frameIndex
+                || !hasCurrentSnapshot
                 || snapshot.LineEntity != line
                 || snapshot.ChainSignature != chain.Signature
                 || !snapshot.Available)
@@ -60,8 +66,11 @@ namespace RapidTransitMod
                 return false;
 
             const int originAtomWindow = 2;
-            return atomCursorIndex <= originAtomWindow
+            bool inOriginWindow = atomCursorIndex <= originAtomWindow
                 || atomCursorIndex >= math.max(0, chain.TrackAtoms.Count - 1 - originAtomWindow);
+            if (inOriginWindow)
+                m_PerfProbeOriginSettleWindowHits++;
+            return inOriginWindow;
         }
 
         private bool ShouldSettleRunningAtOrigin(

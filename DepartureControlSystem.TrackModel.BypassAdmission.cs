@@ -580,6 +580,652 @@ namespace RapidTransitMod
                 m_SharedTrackIndexVersion);
         }
 
+        private void RecordSceneExpressLineQueryProbe(Entity expressLine, uint nowFrame)
+        {
+            if (expressLine == Entity.Null)
+                return;
+
+            m_PerfProbeSceneExpressLineQueries++;
+            if (m_PerfProbeSceneExpressLineLastQueryFrame.TryGetValue(expressLine, out uint lastQueryFrame))
+            {
+                if (lastQueryFrame == nowFrame)
+                {
+                    m_PerfProbeSceneExpressLineSameFrameRequeries++;
+                }
+                else
+                {
+                    if (lastQueryFrame + 1 == nowFrame)
+                        m_PerfProbeSceneExpressLineConsecutiveFrameRequeries++;
+                    if (nowFrame > lastQueryFrame
+                        && nowFrame - lastQueryFrame <= PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES)
+                    {
+                        m_PerfProbeSceneExpressLineRecentFrameRequeries++;
+                    }
+                }
+            }
+
+            m_PerfProbeSceneExpressLineLastQueryFrame[expressLine] = nowFrame;
+        }
+
+        private static bool TryGetOrderedLinePhaseRange(
+            LineOrderedRuntimeState orderedState,
+            int traversalPhaseIndex,
+            out OrderedLinePhaseRange phaseRange)
+        {
+            phaseRange = default;
+            if (orderedState == null)
+                return false;
+
+            for (int i = 0; i < orderedState.PhaseRanges.Count; i++)
+            {
+                OrderedLinePhaseRange candidate = orderedState.PhaseRanges[i];
+                if (candidate.TraversalPhaseIndex != traversalPhaseIndex)
+                    continue;
+
+                phaseRange = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryBuildOrderedSceneQueryWindows(
+            LineOrderedRuntimeState orderedState,
+            SceneExpressRelation relation,
+            out List<OrderedSceneQueryWindow> queryWindows)
+        {
+            queryWindows = null;
+            if (orderedState == null
+                || relation.TrunkCandidates == null
+                || relation.TrunkCandidates.Segments.Count == 0)
+            {
+                return false;
+            }
+
+            orderedState.ScratchQueryWindows.Clear();
+            for (int segmentIndex = 0; segmentIndex < relation.TrunkCandidates.Segments.Count; segmentIndex++)
+            {
+                GlobalSharedTrunkSegment segment = relation.TrunkCandidates.Segments[segmentIndex];
+                int candidateStartAtomIndex = math.max(segment.ExpressCorridorStartAtomIndex, relation.ExpressProtectedInterval.StartAtomIndex);
+                int candidateEndAtomExclusive = math.min(segment.ExpressCorridorEndAtomIndexExclusive, relation.ExpressProtectedInterval.EndAtomIndexExclusive);
+                if (candidateEndAtomExclusive <= candidateStartAtomIndex)
+                    continue;
+
+                for (int phaseRangeIndex = 0; phaseRangeIndex < orderedState.PhaseRanges.Count; phaseRangeIndex++)
+                {
+                    OrderedLinePhaseRange phaseRange = orderedState.PhaseRanges[phaseRangeIndex];
+                    int overlapStartAtomIndex = math.max(candidateStartAtomIndex, phaseRange.StartAtomIndex);
+                    int overlapEndAtomExclusive = math.min(candidateEndAtomExclusive, phaseRange.EndAtomIndexExclusive);
+                    if (overlapEndAtomExclusive <= overlapStartAtomIndex)
+                        continue;
+
+                    bool merged = false;
+                    for (int windowIndex = 0; windowIndex < orderedState.ScratchQueryWindows.Count; windowIndex++)
+                    {
+                        OrderedSceneQueryWindow window = orderedState.ScratchQueryWindows[windowIndex];
+                        if (window.TraversalPhaseIndex != phaseRange.TraversalPhaseIndex)
+                            continue;
+
+                        orderedState.ScratchQueryWindows[windowIndex] = new OrderedSceneQueryWindow(
+                            window.TraversalPhaseIndex,
+                            math.min(window.StartAtomIndex, overlapStartAtomIndex),
+                            math.max(window.EndAtomIndexExclusive, overlapEndAtomExclusive));
+                        merged = true;
+                        break;
+                    }
+
+                    if (!merged)
+                    {
+                        orderedState.ScratchQueryWindows.Add(new OrderedSceneQueryWindow(
+                            phaseRange.TraversalPhaseIndex,
+                            overlapStartAtomIndex,
+                            overlapEndAtomExclusive));
+                    }
+                }
+            }
+
+            if (orderedState.ScratchQueryWindows.Count == 0)
+                return false;
+
+            queryWindows = orderedState.ScratchQueryWindows;
+            return true;
+        }
+
+        private static bool IsOrderedEntryEligibleForThreatWindow(
+            OrderedLineVehicleEntry orderedEntry,
+            OrderedSceneQueryWindow queryWindow)
+        {
+            return orderedEntry.OwnLineAtomCoordinate < queryWindow.EndAtomIndexExclusive;
+        }
+
+        private static int CompareOrderedThreatHeadCandidate(
+            OrderedLineVehicleEntry leftEntry,
+            OrderedSceneQueryWindow leftWindow,
+            OrderedLineVehicleEntry rightEntry,
+            OrderedSceneQueryWindow rightWindow,
+            bool hasRelevantSharedEntryAtomIndex,
+            int relevantSharedEntryAtomIndex)
+        {
+            float leftAnchor = hasRelevantSharedEntryAtomIndex
+                ? relevantSharedEntryAtomIndex
+                : leftWindow.StartAtomIndex;
+            float rightAnchor = hasRelevantSharedEntryAtomIndex
+                ? relevantSharedEntryAtomIndex
+                : rightWindow.StartAtomIndex;
+            float leftCoordinate = leftEntry.OwnLineAtomCoordinate;
+            float rightCoordinate = rightEntry.OwnLineAtomCoordinate;
+
+            if (hasRelevantSharedEntryAtomIndex)
+            {
+                float leftDistance = math.max(0f, leftAnchor - leftCoordinate);
+                float rightDistance = math.max(0f, rightAnchor - rightCoordinate);
+                if (leftDistance != rightDistance)
+                    return leftDistance.CompareTo(rightDistance);
+                if (leftCoordinate != rightCoordinate)
+                    return rightCoordinate.CompareTo(leftCoordinate);
+                return leftEntry.Vehicle.Index.CompareTo(rightEntry.Vehicle.Index);
+            }
+
+            bool leftOnOrInside = leftCoordinate >= leftAnchor;
+            bool rightOnOrInside = rightCoordinate >= rightAnchor;
+            if (leftOnOrInside != rightOnOrInside)
+                return leftOnOrInside ? -1 : 1;
+
+            float leftDistanceToAnchor = math.abs(leftCoordinate - leftAnchor);
+            float rightDistanceToAnchor = math.abs(rightCoordinate - rightAnchor);
+            if (leftDistanceToAnchor != rightDistanceToAnchor)
+                return leftDistanceToAnchor.CompareTo(rightDistanceToAnchor);
+
+            if (leftOnOrInside)
+            {
+                if (leftCoordinate != rightCoordinate)
+                    return leftCoordinate.CompareTo(rightCoordinate);
+            }
+            else
+            {
+                if (leftCoordinate != rightCoordinate)
+                    return rightCoordinate.CompareTo(leftCoordinate);
+            }
+
+            return leftEntry.Vehicle.Index.CompareTo(rightEntry.Vehicle.Index);
+        }
+
+        private static int GetOrderedThreatDirectionRank(RelativeToTrunkState expressTrunkState)
+        {
+            if (expressTrunkState == RelativeToTrunkState.OnTrunkAlongCanonical
+                || expressTrunkState == RelativeToTrunkState.OnTrunkAgainstCanonical)
+            {
+                return 2;
+            }
+
+            if (expressTrunkState == RelativeToTrunkState.ApproachingTrunkAlongCanonical
+                || expressTrunkState == RelativeToTrunkState.ApproachingTrunkAgainstCanonical)
+            {
+                return 1;
+            }
+
+            return 0;
+        }
+
+        private bool TryGetOrderedThreatDirectionRank(
+            SceneExpressRelation relation,
+            OrderedSceneQueryWindow queryWindow,
+            OrderedLineVehicleEntry orderedEntry,
+            out int directionRank)
+        {
+            directionRank = 0;
+            if (relation.ExpressChain == null
+                || relation.TrunkCandidates == null
+                || relation.TrunkCandidates.Segments.Count == 0
+                || !orderedEntry.RunningVehicle.HasTrackCursor)
+            {
+                return false;
+            }
+
+            for (int segmentIndex = 0; segmentIndex < relation.TrunkCandidates.Segments.Count; segmentIndex++)
+            {
+                GlobalSharedTrunkSegment segment = relation.TrunkCandidates.Segments[segmentIndex];
+                int candidateStartAtomIndex = math.max(segment.ExpressCorridorStartAtomIndex, relation.ExpressProtectedInterval.StartAtomIndex);
+                int candidateEndAtomExclusive = math.min(segment.ExpressCorridorEndAtomIndexExclusive, relation.ExpressProtectedInterval.EndAtomIndexExclusive);
+                int overlapStartAtomIndex = math.max(candidateStartAtomIndex, queryWindow.StartAtomIndex);
+                int overlapEndAtomExclusive = math.min(candidateEndAtomExclusive, queryWindow.EndAtomIndexExclusive);
+                if (overlapEndAtomExclusive <= overlapStartAtomIndex)
+                    continue;
+
+                RelativeToTrunkState expressTrunkState = ResolveVehicleTrunkTravelState(
+                    orderedEntry.RunningVehicle,
+                    segment,
+                    useLocalSide: false);
+                ObserveLegacyVsPhaseTrunkDirection(
+                    orderedEntry.Vehicle,
+                    relation.ExpressLine,
+                    "ordered-head",
+                    BuildRelativeToTrunkStateFromRunningSnapshot(
+                        orderedEntry.RunningVehicle,
+                        relation.ExpressChain,
+                        segment,
+                        useLocalSide: false),
+                    expressTrunkState);
+                if (!IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
+                    || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, segment))
+                {
+                    continue;
+                }
+
+                int candidateRank = GetOrderedThreatDirectionRank(expressTrunkState);
+                if (candidateRank > directionRank)
+                    directionRank = candidateRank;
+            }
+
+            return directionRank > 0;
+        }
+
+        private bool TryBuildOrderedThreatHeadCandidates(
+            LineOrderedRuntimeState orderedState,
+            SceneExpressRelation relation,
+            Entity currentBypassBuilding,
+            out bool hasPrimaryThreat,
+            out OrderedLineVehicleEntry primaryThreat,
+            out OrderedSceneQueryWindow primaryThreatWindow,
+            out bool hasSecondaryThreat,
+            out OrderedLineVehicleEntry secondaryThreat,
+            out OrderedSceneQueryWindow secondaryThreatWindow,
+            out bool hasSameStationThreat,
+            out OrderedLineVehicleEntry sameStationThreat,
+            out OrderedSceneQueryWindow sameStationThreatWindow)
+        {
+            hasPrimaryThreat = false;
+            primaryThreat = default;
+            primaryThreatWindow = default;
+            hasSecondaryThreat = false;
+            secondaryThreat = default;
+            secondaryThreatWindow = default;
+            hasSameStationThreat = false;
+            sameStationThreat = default;
+            sameStationThreatWindow = default;
+            int primaryThreatDirectionRank = 0;
+            int secondaryThreatDirectionRank = 0;
+            int sameStationThreatDirectionRank = 0;
+
+            if (!TryBuildOrderedSceneQueryWindows(orderedState, relation, out List<OrderedSceneQueryWindow> orderedQueryWindows))
+                return false;
+
+            for (int windowIndex = 0; windowIndex < orderedQueryWindows.Count; windowIndex++)
+            {
+                OrderedSceneQueryWindow queryWindow = orderedQueryWindows[windowIndex];
+                if (!TryGetOrderedLinePhaseRange(orderedState, queryWindow.TraversalPhaseIndex, out OrderedLinePhaseRange phaseRange))
+                    continue;
+
+                for (int entryIndex = phaseRange.StartEntryIndex; entryIndex < phaseRange.EndEntryIndexExclusive; entryIndex++)
+                {
+                    OrderedLineVehicleEntry orderedEntry = orderedState.Entries[entryIndex];
+                    if (!IsOrderedEntryEligibleForThreatWindow(orderedEntry, queryWindow))
+                        continue;
+                    if (relation.HasRelevantSharedEntryAtomIndex
+                        && orderedEntry.RunningVehicle.HasTrackCursor
+                        && orderedEntry.RunningVehicle.TrackCursor.AtomCursorIndex > relation.RelevantSharedEntryAtomIndex)
+                    {
+                        continue;
+                    }
+                    if (!TryGetOrderedThreatDirectionRank(
+                            relation,
+                            queryWindow,
+                            orderedEntry,
+                            out int directionRank))
+                    {
+                        continue;
+                    }
+
+                    bool cursorWithinSameStationPresence = orderedEntry.RunningVehicle.HasTrackCursor
+                        && IsTrackCursorWithinBypassStationPhysicalContext(
+                            relation.ExpressChain,
+                            orderedEntry.RunningVehicle.TrackCursor,
+                            currentBypassBuilding);
+
+                    if (!hasPrimaryThreat
+                        || directionRank > primaryThreatDirectionRank
+                        || (directionRank == primaryThreatDirectionRank
+                            && CompareOrderedThreatHeadCandidate(
+                                orderedEntry,
+                                queryWindow,
+                                primaryThreat,
+                                primaryThreatWindow,
+                                relation.HasRelevantSharedEntryAtomIndex,
+                                relation.RelevantSharedEntryAtomIndex) < 0))
+                    {
+                        secondaryThreat = primaryThreat;
+                        secondaryThreatWindow = primaryThreatWindow;
+                        secondaryThreatDirectionRank = primaryThreatDirectionRank;
+                        hasSecondaryThreat = hasPrimaryThreat;
+                        primaryThreat = orderedEntry;
+                        primaryThreatWindow = queryWindow;
+                        primaryThreatDirectionRank = directionRank;
+                        hasPrimaryThreat = true;
+                    }
+                    else if ((!hasSecondaryThreat
+                            || directionRank > secondaryThreatDirectionRank
+                            || (directionRank == secondaryThreatDirectionRank
+                                && CompareOrderedThreatHeadCandidate(
+                                    orderedEntry,
+                                    queryWindow,
+                                    secondaryThreat,
+                                    secondaryThreatWindow,
+                                    relation.HasRelevantSharedEntryAtomIndex,
+                                    relation.RelevantSharedEntryAtomIndex) < 0))
+                        && orderedEntry.Vehicle != primaryThreat.Vehicle)
+                    {
+                        secondaryThreat = orderedEntry;
+                        secondaryThreatWindow = queryWindow;
+                        secondaryThreatDirectionRank = directionRank;
+                        hasSecondaryThreat = true;
+                    }
+
+                    if (cursorWithinSameStationPresence
+                        && (!hasSameStationThreat
+                            || directionRank > sameStationThreatDirectionRank
+                            || (directionRank == sameStationThreatDirectionRank
+                                && CompareOrderedThreatHeadCandidate(
+                                    orderedEntry,
+                                    queryWindow,
+                                    sameStationThreat,
+                                    sameStationThreatWindow,
+                                    relation.HasRelevantSharedEntryAtomIndex,
+                                    relation.RelevantSharedEntryAtomIndex) < 0)))
+                    {
+                        sameStationThreat = orderedEntry;
+                        sameStationThreatWindow = queryWindow;
+                        sameStationThreatDirectionRank = directionRank;
+                        hasSameStationThreat = true;
+                    }
+                }
+            }
+
+            return hasPrimaryThreat || hasSecondaryThreat || hasSameStationThreat;
+        }
+
+        private bool TryBuildAndInsertSceneExpressVehicleCandidate(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            LineTrackChain localChain,
+            int protectedIntervalIndex,
+            BypassProtectedInterval protectedInterval,
+            Entity currentBypassBuilding,
+            TrackModelRuntimePosition localPosition,
+            SceneExpressRelation relation,
+            DynamicBuffer<RouteWaypoint> expressWaypoints,
+            LineRunningVehicleSnapshot runningVehicle,
+            SceneExpressFrontierAccumulator frontier,
+            List<SceneExpressVehicleCandidate> sameStationCandidates,
+            out string diagnosticRejectReason)
+        {
+            diagnosticRejectReason = string.Empty;
+            if (!TryBuildSceneExpressVehicleCandidate(
+                    localVehicle,
+                    localLine,
+                    localWaypoints,
+                    currentWaypointIndex,
+                    localChain,
+                    protectedIntervalIndex,
+                    protectedInterval,
+                    currentBypassBuilding,
+                    localPosition,
+                    relation,
+                    expressWaypoints,
+                    runningVehicle,
+                    out SceneExpressVehicleCandidate candidate,
+                    out diagnosticRejectReason))
+            {
+                return false;
+            }
+
+            InsertSceneExpressFrontierCandidate(frontier, candidate);
+            sameStationCandidates?.Add(candidate);
+            m_BypassPerfProbeSceneAdmittedCandidates++;
+            return true;
+        }
+
+        private bool TryBuildSceneExpressVehicleCandidate(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            LineTrackChain localChain,
+            int protectedIntervalIndex,
+            BypassProtectedInterval protectedInterval,
+            Entity currentBypassBuilding,
+            TrackModelRuntimePosition localPosition,
+            SceneExpressRelation relation,
+            DynamicBuffer<RouteWaypoint> expressWaypoints,
+            LineRunningVehicleSnapshot runningVehicle,
+            out SceneExpressVehicleCandidate candidate,
+            out string diagnosticRejectReason)
+        {
+            candidate = default;
+            diagnosticRejectReason = string.Empty;
+            Entity expressVehicle = runningVehicle.Vehicle;
+            Entity expressLine = relation.ExpressLine;
+            LineTrackChain expressChain = relation.ExpressChain;
+            if (expressVehicle == localVehicle
+                || expressVehicle == Entity.Null
+                || !EntityManager.Exists(expressVehicle)
+                || expressLine == Entity.Null
+                || expressChain == null)
+            {
+                diagnosticRejectReason = "pre-invalid";
+                return false;
+            }
+
+            int expressProtectedIntervalIndex = relation.ExpressProtectedIntervalIndex;
+            BypassProtectedInterval expressProtectedInterval = relation.ExpressProtectedInterval;
+            int overlapCount = relation.OverlapCount;
+            int orderedRun = relation.OrderedRun;
+            string intervalResolutionSource = relation.ResolutionSource;
+            bool hasRelevantSharedEntryAtomIndex = relation.HasRelevantSharedEntryAtomIndex;
+            int relevantSharedEntryAtomIndex = relation.RelevantSharedEntryAtomIndex;
+
+            if (!runningVehicle.HasTrackCursor)
+            {
+                if (intervalResolutionSource == "shared-window")
+                {
+                    LogSharedWindowFinalReject(
+                        localVehicle,
+                        localLine,
+                        localWaypoints,
+                        localChain,
+                        currentWaypointIndex,
+                        currentBypassBuilding,
+                        protectedIntervalIndex,
+                        protectedInterval,
+                        expressVehicle,
+                        "cursor-fail");
+                }
+                diagnosticRejectReason = "cursor-fail";
+                return false;
+            }
+
+            if (hasRelevantSharedEntryAtomIndex
+                && IsVehicleClearlyPastExpressAtom(runningVehicle, relevantSharedEntryAtomIndex))
+            {
+                LogSharedWindowFinalReject(
+                    localVehicle,
+                    localLine,
+                    localWaypoints,
+                    localChain,
+                    currentWaypointIndex,
+                    currentBypassBuilding,
+                    protectedIntervalIndex,
+                    protectedInterval,
+                    expressVehicle,
+                    "past-current-shared-entry atom=" + relevantSharedEntryAtomIndex);
+                diagnosticRejectReason = "past-current-shared-entry";
+                return false;
+            }
+
+            VehicleTrackCursor expressCursor = runningVehicle.TrackCursor;
+            if (intervalResolutionSource == "shared-window")
+            {
+                TryLogTrainLaneSourceDisagreement(
+                    expressVehicle,
+                    expressLine,
+                    expressWaypoints,
+                    expressChain,
+                    expressCursor,
+                    "shared-window-candidate");
+            }
+
+            if (!TryFindBestCurrentSceneRelationTrunkSegment(
+                    relation,
+                    protectedInterval,
+                    localPosition.TraversalPhaseIndex,
+                    expressCursor.AtomCursorIndex,
+                    runningVehicle.TraversalPhaseIndex,
+                    runningVehicle.PhaseEndAtomExclusive,
+                    out GlobalSharedTrunkSegment selectedTrunkSegment))
+            {
+                if (intervalResolutionSource == "shared-window")
+                {
+                    LogSharedWindowFinalReject(
+                        localVehicle,
+                        localLine,
+                        localWaypoints,
+                        localChain,
+                        currentWaypointIndex,
+                        currentBypassBuilding,
+                        protectedIntervalIndex,
+                        protectedInterval,
+                        expressVehicle,
+                        "static-opposite-direction");
+                }
+                diagnosticRejectReason = "static-opposite-direction";
+                return false;
+            }
+
+            RelativeToTrunkState localTrunkState = ResolveVehicleTrunkTravelState(
+                localPosition,
+                selectedTrunkSegment,
+                useLocalSide: true);
+            RelativeToTrunkState expressTrunkState = ResolveVehicleTrunkTravelState(
+                runningVehicle,
+                selectedTrunkSegment,
+                useLocalSide: false);
+            ObserveLegacyVsPhaseTrunkDirection(
+                localVehicle,
+                localLine,
+                "candidate-local",
+                BuildRelativeToTrunkStateFromRuntimePosition(
+                    localPosition,
+                    localChain,
+                    selectedTrunkSegment,
+                    useLocalSide: true),
+                localTrunkState);
+            ObserveLegacyVsPhaseTrunkDirection(
+                expressVehicle,
+                expressLine,
+                "candidate-express",
+                BuildRelativeToTrunkStateFromRunningSnapshot(
+                    runningVehicle,
+                    expressChain,
+                    selectedTrunkSegment,
+                    useLocalSide: false),
+                expressTrunkState);
+            if (!selectedTrunkSegment.HasCanonicalDirection
+                || !IsRelativeToTrunkStateDirectionCompatibleWithCanonicalSide(localTrunkState, selectedTrunkSegment.LocalAlongCanonical)
+                || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
+                || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, selectedTrunkSegment))
+            {
+                if (intervalResolutionSource == "shared-window")
+                {
+                    LogSharedWindowFinalReject(
+                        localVehicle,
+                        localLine,
+                        localWaypoints,
+                        localChain,
+                        currentWaypointIndex,
+                        currentBypassBuilding,
+                        protectedIntervalIndex,
+                        protectedInterval,
+                        expressVehicle,
+                        "trunk-state local=" + FormatRelativeToTrunkState(localTrunkState)
+                            + " express=" + FormatRelativeToTrunkState(expressTrunkState)
+                            + " localCanon=" + FormatCanonicalSide(selectedTrunkSegment.LocalAlongCanonical)
+                            + " expressCanon=" + FormatCanonicalSide(selectedTrunkSegment.ExpressAlongCanonical));
+                }
+                diagnosticRejectReason = "trunk-state";
+                return false;
+            }
+
+            int effectiveRelevantSharedEntryAtomIndex = hasRelevantSharedEntryAtomIndex
+                ? relevantSharedEntryAtomIndex
+                : selectedTrunkSegment.ExpressCorridorStartAtomIndex;
+            int entryDistanceAtoms = ComputeSceneEntryDistanceAtoms(
+                runningVehicle,
+                selectedTrunkSegment,
+                expressTrunkState,
+                effectiveRelevantSharedEntryAtomIndex);
+            int expressWaypointIndex = ComputeWpIndex(expressVehicle, expressWaypoints);
+            bool expressCurrentWaypointMatchesBypassBuilding = expressWaypointIndex >= 0
+                && expressWaypointIndex < expressWaypoints.Length
+                && GetStationBuildingForWaypoint(expressWaypoints, expressWaypointIndex) == currentBypassBuilding;
+            candidate = new SceneExpressVehicleCandidate(
+                relation,
+                expressLine,
+                expressVehicle,
+                expressChain,
+                runningVehicle,
+                expressProtectedIntervalIndex,
+                expressProtectedInterval,
+                overlapCount,
+                orderedRun,
+                intervalResolutionSource,
+                selectedTrunkSegment,
+                BuildTrunkSkeleton(selectedTrunkSegment),
+                localTrunkState,
+                expressTrunkState,
+                expressCurrentWaypointMatchesBypassBuilding,
+                effectiveRelevantSharedEntryAtomIndex,
+                entryDistanceAtoms);
+            return true;
+        }
+
+        private static string FormatOrderedThreatHeadCase(
+            bool available,
+            OrderedLineVehicleEntry orderedEntry,
+            string result)
+        {
+            if (!available || orderedEntry.Vehicle == Entity.Null)
+                return "none";
+
+            return "v=" + orderedEntry.Vehicle.Index
+                + " atom=" + (orderedEntry.RunningVehicle.HasTrackCursor ? orderedEntry.RunningVehicle.TrackCursor.AtomCursorIndex.ToString() : "-")
+                + " coord=" + orderedEntry.OwnLineAtomCoordinate.ToString("0.0")
+                + " phase=" + orderedEntry.TraversalPhaseIndex
+                + " phaseEnd=" + orderedEntry.TraversalPhaseEndAtomExclusive
+                + " result=" + (string.IsNullOrWhiteSpace(result) ? "ok" : result);
+        }
+
+        private void LogLineOrderedFallbackCase(
+            Entity localVehicle,
+            Entity localLine,
+            int currentWaypointIndex,
+            Entity currentBypassBuilding,
+            Entity expressLine,
+            uint nowFrame,
+            bool hasPrimaryThreat,
+            OrderedLineVehicleEntry primaryThreat,
+            string primaryResult,
+            bool hasSecondaryThreat,
+            OrderedLineVehicleEntry secondaryThreat,
+            string secondaryResult,
+            bool hasSameStationThreat,
+            OrderedLineVehicleEntry sameStationThreat,
+            string sameStationResult,
+            string fallbackReason)
+        {
+            return;
+        }
+
         private bool TryCollectSceneExpressFrontiers(
             Entity localVehicle,
             Entity localLine,
@@ -602,6 +1248,7 @@ namespace RapidTransitMod
                 : null;
             fatalReason = string.Empty;
             m_BypassPerfProbeSceneSamples++;
+            EnsureLineBypassExecutionModeReady(localChain, localWaypoints);
 
             List<Entity> candidateExpressLines = GetCandidateExpressLinesForLocalScene(localChain, protectedInterval, currentBypassBuilding);
             if (candidateExpressLines == null || candidateExpressLines.Count == 0)
@@ -644,181 +1291,191 @@ namespace RapidTransitMod
                 if (!TryGetLineRunningVehicleFrameSnapshot(expressLine, expressWaypoints, nowFrame, out LineRunningVehicleFrameSnapshot runningSnapshot))
                     continue;
 
+                int expressProtectedIntervalIndex = relation.ExpressProtectedIntervalIndex;
+                BypassProtectedInterval expressProtectedInterval = relation.ExpressProtectedInterval;
+                int overlapCount = relation.OverlapCount;
+                int orderedRun = relation.OrderedRun;
+                string intervalResolutionSource = relation.ResolutionSource;
+                bool hasRelevantSharedEntryAtomIndex = relation.HasRelevantSharedEntryAtomIndex;
+                int relevantSharedEntryAtomIndex = relation.RelevantSharedEntryAtomIndex;
+
+                if (overlapCount < MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS
+                    || orderedRun < MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
+                {
+                    continue;
+                }
+
+                RecordSceneExpressLineQueryProbe(expressLine, nowFrame);
+                m_LineOrderedProbeExpressLineQueries++;
                 SceneExpressFrontierAccumulator frontier = new SceneExpressFrontierAccumulator(relation);
+                LineOrderedRuntimeState orderedState = null;
+                bool useOrderedRuntime = localChain.ExecutionMode == BypassExecutionMode.ComplexLineModel
+                    && TryGetLineOrderedRuntimeState(expressLine, expressWaypoints, nowFrame, out orderedState);
+                if (useOrderedRuntime)
+                {
+                    m_LineOrderedProbeOrderedAttempts++;
+                    bool usedThreatHeadFallback = false;
+                    SceneExpressFrontierAccumulator threatHeadFrontier = new SceneExpressFrontierAccumulator(relation);
+                    List<SceneExpressVehicleCandidate> threatHeadSameStationCandidates = sameStationCandidates != null
+                        ? new List<SceneExpressVehicleCandidate>()
+                        : null;
+                    string primaryThreatResult = string.Empty;
+                    string secondaryThreatResult = string.Empty;
+                    string sameStationThreatResult = string.Empty;
+                    bool hasPrimaryThreat = false;
+                    OrderedLineVehicleEntry primaryThreat = default;
+                    bool hasSecondaryThreat = false;
+                    OrderedLineVehicleEntry secondaryThreat = default;
+                    bool hasSameStationThreat = false;
+                    OrderedLineVehicleEntry sameStationThreat = default;
+                    if (TryBuildOrderedThreatHeadCandidates(
+                            orderedState,
+                            relation,
+                            currentBypassBuilding,
+                            out hasPrimaryThreat,
+                            out primaryThreat,
+                            out _,
+                            out hasSecondaryThreat,
+                            out secondaryThreat,
+                            out _,
+                            out hasSameStationThreat,
+                            out sameStationThreat,
+                            out _))
+                    {
+                        if (hasPrimaryThreat)
+                        {
+                            m_BypassPerfProbeSceneCandidateVehicles++;
+                            m_LineOrderedProbeHeadCandidateBuilds++;
+                            TryBuildAndInsertSceneExpressVehicleCandidate(
+                                localVehicle,
+                                localLine,
+                                localWaypoints,
+                                currentWaypointIndex,
+                                localChain,
+                                protectedIntervalIndex,
+                                protectedInterval,
+                                currentBypassBuilding,
+                                localPosition,
+                                relation,
+                                expressWaypoints,
+                                primaryThreat.RunningVehicle,
+                                threatHeadFrontier,
+                                threatHeadSameStationCandidates,
+                                out primaryThreatResult);
+                        }
+
+                        if (hasSecondaryThreat && secondaryThreat.Vehicle != primaryThreat.Vehicle)
+                        {
+                            m_BypassPerfProbeSceneCandidateVehicles++;
+                            m_LineOrderedProbeHeadCandidateBuilds++;
+                            TryBuildAndInsertSceneExpressVehicleCandidate(
+                                localVehicle,
+                                localLine,
+                                localWaypoints,
+                                currentWaypointIndex,
+                                localChain,
+                                protectedIntervalIndex,
+                                protectedInterval,
+                                currentBypassBuilding,
+                                localPosition,
+                                relation,
+                                expressWaypoints,
+                                secondaryThreat.RunningVehicle,
+                                threatHeadFrontier,
+                                threatHeadSameStationCandidates,
+                                out secondaryThreatResult);
+                        }
+
+                        if (hasSameStationThreat
+                            && sameStationThreat.Vehicle != primaryThreat.Vehicle
+                            && (!hasSecondaryThreat || sameStationThreat.Vehicle != secondaryThreat.Vehicle))
+                        {
+                            m_BypassPerfProbeSceneCandidateVehicles++;
+                            m_LineOrderedProbeHeadCandidateBuilds++;
+                            TryBuildAndInsertSceneExpressVehicleCandidate(
+                                localVehicle,
+                                localLine,
+                                localWaypoints,
+                                currentWaypointIndex,
+                                localChain,
+                                protectedIntervalIndex,
+                                protectedInterval,
+                                currentBypassBuilding,
+                                localPosition,
+                                relation,
+                                expressWaypoints,
+                                sameStationThreat.RunningVehicle,
+                                threatHeadFrontier,
+                                threatHeadSameStationCandidates,
+                                out sameStationThreatResult);
+                        }
+
+                        if (!threatHeadFrontier.HasPrimaryCandidate)
+                            usedThreatHeadFallback = true;
+                    }
+                    else
+                    {
+                        usedThreatHeadFallback = true;
+                    }
+
+                    if (!usedThreatHeadFallback)
+                    {
+                        m_LineOrderedProbeHeadOnlySuccesses++;
+                        frontier = threatHeadFrontier;
+                        if (sameStationCandidates != null && threatHeadSameStationCandidates != null)
+                            sameStationCandidates.AddRange(threatHeadSameStationCandidates);
+                        if (frontier.HasPrimaryCandidate)
+                            frontiers.Add(BuildSceneExpressFrontier(frontier));
+                        continue;
+                    }
+
+                    m_LineOrderedProbeFallbacks++;
+                    LogLineOrderedFallbackCase(
+                        localVehicle,
+                        localLine,
+                        currentWaypointIndex,
+                        currentBypassBuilding,
+                        expressLine,
+                        nowFrame,
+                        hasPrimaryThreat,
+                        primaryThreat,
+                        primaryThreatResult,
+                        hasSecondaryThreat,
+                        secondaryThreat,
+                        secondaryThreatResult,
+                        hasSameStationThreat,
+                        sameStationThreat,
+                        sameStationThreatResult,
+                        hasPrimaryThreat || hasSecondaryThreat || hasSameStationThreat
+                            ? "head-no-primary"
+                            : "no-threat-head");
+                }
+
                 for (int rvIndex = 0; rvIndex < runningSnapshot.Vehicles.Count; rvIndex++)
                 {
                     LineRunningVehicleSnapshot runningVehicle = runningSnapshot.Vehicles[rvIndex];
-                    Entity expressVehicle = runningVehicle.Vehicle;
-                    if (expressVehicle == localVehicle || expressVehicle == Entity.Null || !EntityManager.Exists(expressVehicle))
-                        continue;
                     m_BypassPerfProbeSceneCandidateVehicles++;
-
-                    int expressProtectedIntervalIndex = relation.ExpressProtectedIntervalIndex;
-                    BypassProtectedInterval expressProtectedInterval = relation.ExpressProtectedInterval;
-                    int overlapCount = relation.OverlapCount;
-                    int orderedRun = relation.OrderedRun;
-                    string intervalResolutionSource = relation.ResolutionSource;
-
-                    if (overlapCount < MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS
-                        || orderedRun < MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
-                    {
-                        if (intervalResolutionSource == "shared-window")
-                        {
-                            LogSharedWindowFinalReject(
-                                localVehicle,
-                                localLine,
-                                localWaypoints,
-                                localChain,
-                                currentWaypointIndex,
-                                currentBypassBuilding,
-                                protectedIntervalIndex,
-                                protectedInterval,
-                                expressVehicle,
-                                "weak-physical-overlap overlap=" + overlapCount + " run=" + orderedRun);
-                        }
-                        continue;
-                    }
-
-                    if (!runningVehicle.HasTrackCursor)
-                    {
-                        if (intervalResolutionSource == "shared-window")
-                        {
-                            LogSharedWindowFinalReject(
-                                localVehicle,
-                                localLine,
-                                localWaypoints,
-                                localChain,
-                                currentWaypointIndex,
-                                currentBypassBuilding,
-                                protectedIntervalIndex,
-                                protectedInterval,
-                                expressVehicle,
-                                "cursor-fail");
-                        }
-                        continue;
-                    }
-
-                    VehicleTrackCursor expressCursor = runningVehicle.TrackCursor;
-                    if (intervalResolutionSource == "shared-window")
-                    {
-                        TryLogTrainLaneSourceDisagreement(
-                            expressVehicle,
-                            expressLine,
-                            expressWaypoints,
-                            expressChain,
-                            expressCursor,
-                            "shared-window-candidate");
-                    }
-
-                    if (!TryFindBestCurrentSceneRelationTrunkSegment(
-                            relation,
-                            protectedInterval,
-                            expressCursor.AtomCursorIndex,
-                            runningVehicle.PhaseEndAtomExclusive,
-                            out GlobalSharedTrunkSegment selectedTrunkSegment))
-                    {
-                        if (intervalResolutionSource == "shared-window")
-                        {
-                            LogSharedWindowFinalReject(
-                                localVehicle,
-                                localLine,
-                                localWaypoints,
-                                localChain,
-                                currentWaypointIndex,
-                                currentBypassBuilding,
-                                protectedIntervalIndex,
-                                protectedInterval,
-                                expressVehicle,
-                                "static-opposite-direction");
-                        }
-                        continue;
-                    }
-
-                    RelativeToTrunkState localTrunkState = BuildRelativeToTrunkStateFromRuntimePosition(
-                        localPosition,
-                        localChain,
-                        selectedTrunkSegment,
-                        useLocalSide: true);
-                    RelativeToTrunkState expressTrunkState = BuildRelativeToTrunkStateFromRunningSnapshot(
-                        runningVehicle,
-                        expressChain,
-                        selectedTrunkSegment,
-                        useLocalSide: false);
-                    if (!selectedTrunkSegment.HasCanonicalDirection
-                        || !IsRelativeToTrunkStateDirectionCompatibleWithCanonicalSide(localTrunkState, selectedTrunkSegment.LocalAlongCanonical)
-                        || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
-                        || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, selectedTrunkSegment))
-                    {
-                        if (intervalResolutionSource == "shared-window")
-                        {
-                            LogSharedWindowFinalReject(
-                                localVehicle,
-                                localLine,
-                                localWaypoints,
-                                localChain,
-                                currentWaypointIndex,
-                                currentBypassBuilding,
-                                protectedIntervalIndex,
-                                protectedInterval,
-                                expressVehicle,
-                                "trunk-state local=" + FormatRelativeToTrunkState(localTrunkState)
-                                    + " express=" + FormatRelativeToTrunkState(expressTrunkState)
-                                    + " localCanon=" + FormatCanonicalSide(selectedTrunkSegment.LocalAlongCanonical)
-                                    + " expressCanon=" + FormatCanonicalSide(selectedTrunkSegment.ExpressAlongCanonical));
-                        }
-                        continue;
-                    }
-
-                    int relevantSharedEntryAtomIndex = relation.HasRelevantSharedEntryAtomIndex
-                        ? relation.RelevantSharedEntryAtomIndex
-                        : selectedTrunkSegment.ExpressCorridorStartAtomIndex;
-                    if (relation.HasRelevantSharedEntryAtomIndex
-                        && IsVehicleClearlyPastExpressAtom(runningVehicle, relevantSharedEntryAtomIndex))
-                    {
-                        LogSharedWindowFinalReject(
+                    if (useOrderedRuntime)
+                        m_LineOrderedProbeFallbackCandidateBuilds++;
+                    if (!TryBuildAndInsertSceneExpressVehicleCandidate(
                             localVehicle,
                             localLine,
                             localWaypoints,
-                            localChain,
                             currentWaypointIndex,
-                            currentBypassBuilding,
+                            localChain,
                             protectedIntervalIndex,
                             protectedInterval,
-                            expressVehicle,
-                            "past-current-shared-entry atom=" + relevantSharedEntryAtomIndex);
+                            currentBypassBuilding,
+                            localPosition,
+                            relation,
+                            expressWaypoints,
+                            runningVehicle,
+                            frontier,
+                            sameStationCandidates,
+                            out _))
+                    {
                         continue;
                     }
-
-                    int entryDistanceAtoms = ComputeSceneEntryDistanceAtoms(
-                        runningVehicle,
-                        selectedTrunkSegment,
-                        expressTrunkState,
-                        relevantSharedEntryAtomIndex);
-                    int expressWaypointIndex = ComputeWpIndex(expressVehicle, expressWaypoints);
-                    bool expressCurrentWaypointMatchesBypassBuilding = expressWaypointIndex >= 0
-                        && expressWaypointIndex < expressWaypoints.Length
-                        && GetStationBuildingForWaypoint(expressWaypoints, expressWaypointIndex) == currentBypassBuilding;
-                    SceneExpressVehicleCandidate candidate = new SceneExpressVehicleCandidate(
-                        relation,
-                        expressLine,
-                        expressVehicle,
-                        expressChain,
-                        runningVehicle,
-                        expressProtectedIntervalIndex,
-                        expressProtectedInterval,
-                        overlapCount,
-                        orderedRun,
-                        intervalResolutionSource,
-                        selectedTrunkSegment,
-                        BuildTrunkSkeleton(selectedTrunkSegment),
-                        localTrunkState,
-                        expressTrunkState,
-                        expressCurrentWaypointMatchesBypassBuilding,
-                        relevantSharedEntryAtomIndex,
-                        entryDistanceAtoms);
-                    InsertSceneExpressFrontierCandidate(frontier, candidate);
-                    sameStationCandidates?.Add(candidate);
-                    m_BypassPerfProbeSceneAdmittedCandidates++;
                 }
 
                 if (frontier.HasPrimaryCandidate)
@@ -2167,6 +2824,86 @@ namespace RapidTransitMod
             }
         }
 
+        private bool TryResolveStaticTraversalPhaseWindow(
+            LineTrackChain chain,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            out int traversalPhaseIndex,
+            out int traversalPhaseStartAtomIndex,
+            out int traversalPhaseEndAtomExclusive)
+        {
+            traversalPhaseIndex = -1;
+            traversalPhaseStartAtomIndex = -1;
+            traversalPhaseEndAtomExclusive = -1;
+            if (chain == null
+                || chain.TrackAtoms.Count == 0
+                || endAtomIndexExclusive <= startAtomIndex)
+            {
+                return false;
+            }
+
+            int startAtom = math.clamp(startAtomIndex, 0, chain.TrackAtoms.Count - 1);
+            int endAtom = math.clamp(endAtomIndexExclusive - 1, 0, chain.TrackAtoms.Count - 1);
+            if (!TryResolveTraversalOrderingPhase(
+                    chain,
+                    startAtom,
+                    out int startPhaseIndex,
+                    out int startPhaseStartAtomIndex,
+                    out int startPhaseEndAtomExclusive,
+                    out _))
+            {
+                return false;
+            }
+
+            if (!TryResolveTraversalOrderingPhase(
+                    chain,
+                    endAtom,
+                    out int endPhaseIndex,
+                    out _,
+                    out _,
+                    out _))
+            {
+                return false;
+            }
+
+            if (startPhaseIndex != endPhaseIndex)
+                return false;
+
+            traversalPhaseIndex = startPhaseIndex;
+            traversalPhaseStartAtomIndex = startPhaseStartAtomIndex;
+            traversalPhaseEndAtomExclusive = startPhaseEndAtomExclusive;
+            return true;
+        }
+
+        private TrunkPhaseAlignment BuildTrunkPhaseAlignment(
+            LineTrackChain localChain,
+            DirectedSharedPairSegment pair,
+            LineTrackChain expressChain)
+        {
+            bool localAvailable = TryResolveStaticTraversalPhaseWindow(
+                localChain,
+                pair.LocalStartAtomIndex,
+                pair.LocalEndAtomIndexExclusive,
+                out int localTraversalPhaseIndex,
+                out int localPhaseStartAtomIndex,
+                out int localPhaseEndAtomExclusive);
+            bool expressAvailable = TryResolveStaticTraversalPhaseWindow(
+                expressChain,
+                pair.ExpressStartAtomIndex,
+                pair.ExpressEndAtomIndexExclusive,
+                out int expressTraversalPhaseIndex,
+                out int expressPhaseStartAtomIndex,
+                out int expressPhaseEndAtomExclusive);
+            return new TrunkPhaseAlignment(
+                localAvailable && expressAvailable,
+                localAvailable ? localTraversalPhaseIndex : -1,
+                localAvailable ? localPhaseStartAtomIndex : -1,
+                localAvailable ? localPhaseEndAtomExclusive : -1,
+                expressAvailable ? expressTraversalPhaseIndex : -1,
+                expressAvailable ? expressPhaseStartAtomIndex : -1,
+                expressAvailable ? expressPhaseEndAtomExclusive : -1);
+        }
+
         private GlobalSharedTrunkSnapshot BuildGlobalSharedTrunkSnapshot(LineTrackChain localChain, LineTrackChain expressChain)
         {
             var snapshot = new GlobalSharedTrunkSnapshot
@@ -2197,6 +2934,7 @@ namespace RapidTransitMod
             for (int i = 0; i < pairSegments.Count; i++)
             {
                 DirectedSharedPairSegment pair = pairSegments[i];
+                TrunkPhaseAlignment phaseAlignment = BuildTrunkPhaseAlignment(localChain, pair, expressChain);
                 snapshot.Segments.Add(new GlobalSharedTrunkSegment(
                     pair.LocalStartAtomIndex,
                     pair.LocalEndAtomIndexExclusive,
@@ -2217,7 +2955,8 @@ namespace RapidTransitMod
                     pair.TraversalRelation,
                     pair.HasCanonicalDirection,
                     pair.LocalAlongCanonical,
-                    pair.ExpressAlongCanonical));
+                    pair.ExpressAlongCanonical,
+                    phaseAlignment));
             }
 
             return snapshot;
@@ -2344,13 +3083,24 @@ namespace RapidTransitMod
             BypassProtectedInterval expressProtectedInterval,
             int expressCurrentAtomIndex)
         {
+            int localTraversalPhaseIndex = TryResolveStaticTraversalPhaseWindow(
+                localChain,
+                localProtectedInterval.StartAtomIndex,
+                localProtectedInterval.EndAtomIndexExclusive,
+                out int resolvedLocalTraversalPhaseIndex,
+                out _,
+                out _)
+                ? resolvedLocalTraversalPhaseIndex
+                : -1;
             return TryFindBestCurrentForwardSceneSameDirectionTrunkSegment(
                 localChain,
                 localProtectedInterval,
                 currentBypassBuilding,
                 expressChain,
                 expressProtectedInterval,
+                localTraversalPhaseIndex,
                 expressCurrentAtomIndex,
+                -1,
                 out _);
         }
 
@@ -2360,7 +3110,9 @@ namespace RapidTransitMod
             Entity currentBypassBuilding,
             LineTrackChain expressChain,
             BypassProtectedInterval expressProtectedInterval,
+            int localTraversalPhaseIndex,
             int expressCurrentAtomIndex,
+            int expressTraversalPhaseIndex,
             out GlobalSharedTrunkSegment segment)
         {
             segment = default;
@@ -2382,6 +3134,20 @@ namespace RapidTransitMod
                     continue;
                 if (candidate.TraversalRelation != SharedTraversalRelation.SameDirection)
                     continue;
+                if (candidate.PhaseAlignment.Available)
+                {
+                    if (localTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.LocalTraversalPhaseIndex != localTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+
+                    if (expressTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.ExpressTraversalPhaseIndex != expressTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+                }
 
                 int candidateLocalStart = math.max(candidate.LocalCorridorStartAtomIndex, localProtectedInterval.StartAtomIndex);
                 int candidateLocalEndExclusive = math.min(candidate.LocalCorridorEndAtomIndexExclusive, localProtectedInterval.EndAtomIndexExclusive);
@@ -2438,6 +3204,20 @@ namespace RapidTransitMod
                     continue;
                 if (candidate.TraversalRelation != SharedTraversalRelation.SameDirection)
                     continue;
+                if (candidate.PhaseAlignment.Available)
+                {
+                    if (localTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.LocalTraversalPhaseIndex != localTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+
+                    if (expressTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.ExpressTraversalPhaseIndex != expressTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+                }
 
                 int candidateLocalStart = math.max(candidate.LocalCorridorStartAtomIndex, localProtectedInterval.StartAtomIndex);
                 int candidateLocalEndExclusive = math.min(candidate.LocalCorridorEndAtomIndexExclusive, localProtectedInterval.EndAtomIndexExclusive);
@@ -2515,13 +3295,24 @@ namespace RapidTransitMod
             TrackModelRuntimePosition expressPosition,
             out GlobalSharedTrunkSegment segment)
         {
+            int localTraversalPhaseIndex = TryResolveStaticTraversalPhaseWindow(
+                localChain,
+                localProtectedInterval.StartAtomIndex,
+                localProtectedInterval.EndAtomIndexExclusive,
+                out int resolvedLocalTraversalPhaseIndex,
+                out _,
+                out _)
+                ? resolvedLocalTraversalPhaseIndex
+                : -1;
             return TryFindBestCurrentForwardSceneSameDirectionTrunkSegment(
                 localChain,
                 localProtectedInterval,
                 currentBypassBuilding,
                 expressChain,
                 expressProtectedInterval,
+                localTraversalPhaseIndex,
                 expressPosition.CurrentAtomIndex,
+                expressPosition.TraversalPhaseIndex,
                 out segment);
         }
 
@@ -2639,7 +3430,9 @@ namespace RapidTransitMod
         private bool TryFindBestCurrentSceneRelationTrunkSegment(
             SceneExpressRelation relation,
             BypassProtectedInterval localProtectedInterval,
+            int localTraversalPhaseIndex,
             int expressCurrentAtomIndex,
+            int expressTraversalPhaseIndex,
             int expressPhaseEndAtomExclusive,
             out GlobalSharedTrunkSegment segment)
         {
@@ -2652,6 +3445,21 @@ namespace RapidTransitMod
             for (int i = 0; i < relation.TrunkCandidates.Segments.Count; i++)
             {
                 GlobalSharedTrunkSegment candidate = relation.TrunkCandidates.Segments[i];
+                if (candidate.PhaseAlignment.Available)
+                {
+                    if (localTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.LocalTraversalPhaseIndex != localTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+
+                    if (expressTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.ExpressTraversalPhaseIndex != expressTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+                }
+
                 int candidateExpressStart = math.max(candidate.ExpressCorridorStartAtomIndex, relation.ExpressProtectedInterval.StartAtomIndex);
                 int candidateExpressEndExclusive = math.min(candidate.ExpressCorridorEndAtomIndexExclusive, relation.ExpressProtectedInterval.EndAtomIndexExclusive);
                 candidateExpressEndExclusive = math.min(candidateExpressEndExclusive, expressPhaseEndAtomExclusive);
@@ -2681,6 +3489,21 @@ namespace RapidTransitMod
             for (int i = 0; i < relation.TrunkCandidates.Segments.Count; i++)
             {
                 GlobalSharedTrunkSegment candidate = relation.TrunkCandidates.Segments[i];
+                if (candidate.PhaseAlignment.Available)
+                {
+                    if (localTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.LocalTraversalPhaseIndex != localTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+
+                    if (expressTraversalPhaseIndex >= 0
+                        && candidate.PhaseAlignment.ExpressTraversalPhaseIndex != expressTraversalPhaseIndex)
+                    {
+                        continue;
+                    }
+                }
+
                 int candidateExpressStart = math.max(candidate.ExpressCorridorStartAtomIndex, relation.ExpressProtectedInterval.StartAtomIndex);
                 int candidateExpressEndExclusive = math.min(candidate.ExpressCorridorEndAtomIndexExclusive, relation.ExpressProtectedInterval.EndAtomIndexExclusive);
                 candidateExpressEndExclusive = math.min(candidateExpressEndExclusive, expressPhaseEndAtomExclusive);
@@ -2788,7 +3611,7 @@ namespace RapidTransitMod
 
         private RelativeToTrunkState ClassifyVehicleRelativeToTrunk(
             int currentAtomIndex,
-            LineTrackChain chain,
+            int nextTurnbackBoundaryAtomIndex,
             int corridorStartAtomIndex,
             int corridorEndAtomIndexExclusive,
             bool alongCanonical)
@@ -2805,8 +3628,8 @@ namespace RapidTransitMod
 
             if (currentAtomIndex < corridorStartAtomIndex)
             {
-                if (TryGetNextTurnbackBoundaryAtomIndex(chain, currentAtomIndex, out int turnbackBoundaryAtomIndex)
-                    && turnbackBoundaryAtomIndex <= corridorStartAtomIndex)
+                if (nextTurnbackBoundaryAtomIndex >= 0
+                    && nextTurnbackBoundaryAtomIndex <= corridorStartAtomIndex)
                     return RelativeToTrunkState.FutureReturnOnly;
 
                 return alongCanonical
@@ -2841,7 +3664,7 @@ namespace RapidTransitMod
 
             return ClassifyVehicleRelativeToTrunk(
                 runningVehicle.TrackCursor.AtomCursorIndex,
-                chain,
+                runningVehicle.NextTurnbackBoundaryAtomIndex,
                 corridorStartAtomIndex,
                 corridorEndAtomIndexExclusive,
                 alongCanonical);
@@ -2868,10 +3691,171 @@ namespace RapidTransitMod
 
             return ClassifyVehicleRelativeToTrunk(
                 runtimePosition.CurrentAtomIndex,
-                chain,
+                runtimePosition.NextTurnbackBoundaryAtomIndex,
                 corridorStartAtomIndex,
                 corridorEndAtomIndexExclusive,
                 alongCanonical);
+        }
+
+        private bool TryResolveVehicleTrunkTravelWindow(
+            GlobalSharedTrunkSegment trunkSegment,
+            bool useLocalSide,
+            int traversalPhaseIndex,
+            out int corridorStartAtomIndex,
+            out int corridorEndAtomIndexExclusive,
+            out bool alongCanonical)
+        {
+            corridorStartAtomIndex = useLocalSide
+                ? trunkSegment.LocalCorridorStartAtomIndex
+                : trunkSegment.ExpressCorridorStartAtomIndex;
+            corridorEndAtomIndexExclusive = useLocalSide
+                ? trunkSegment.LocalCorridorEndAtomIndexExclusive
+                : trunkSegment.ExpressCorridorEndAtomIndexExclusive;
+            alongCanonical = useLocalSide
+                ? trunkSegment.LocalAlongCanonical
+                : trunkSegment.ExpressAlongCanonical;
+            if (!trunkSegment.HasCanonicalDirection)
+                return false;
+
+            if (trunkSegment.PhaseAlignment.Available && traversalPhaseIndex >= 0)
+            {
+                int phaseIndex = useLocalSide
+                    ? trunkSegment.PhaseAlignment.LocalTraversalPhaseIndex
+                    : trunkSegment.PhaseAlignment.ExpressTraversalPhaseIndex;
+                int phaseStartAtomIndex = useLocalSide
+                    ? trunkSegment.PhaseAlignment.LocalPhaseStartAtomIndex
+                    : trunkSegment.PhaseAlignment.ExpressPhaseStartAtomIndex;
+                int phaseEndAtomIndexExclusive = useLocalSide
+                    ? trunkSegment.PhaseAlignment.LocalPhaseEndAtomExclusive
+                    : trunkSegment.PhaseAlignment.ExpressPhaseEndAtomExclusive;
+                if (phaseIndex != traversalPhaseIndex)
+                    return false;
+
+                corridorStartAtomIndex = math.max(corridorStartAtomIndex, phaseStartAtomIndex);
+                corridorEndAtomIndexExclusive = math.min(corridorEndAtomIndexExclusive, phaseEndAtomIndexExclusive);
+            }
+
+            return corridorEndAtomIndexExclusive > corridorStartAtomIndex;
+        }
+
+        private RelativeToTrunkState ResolveVehicleTrunkTravelState(
+            LineRunningVehicleSnapshot runningVehicle,
+            GlobalSharedTrunkSegment trunkSegment,
+            bool useLocalSide)
+        {
+            if (!runningVehicle.HasTrackCursor
+                || !TryResolveVehicleTrunkTravelWindow(
+                    trunkSegment,
+                    useLocalSide,
+                    runningVehicle.TraversalPhaseIndex,
+                    out int corridorStartAtomIndex,
+                    out int corridorEndAtomIndexExclusive,
+                    out bool alongCanonical))
+            {
+                return RelativeToTrunkState.Unknown;
+            }
+
+            return ClassifyVehicleRelativeToTrunk(
+                runningVehicle.TrackCursor.AtomCursorIndex,
+                runningVehicle.NextTurnbackBoundaryAtomIndex,
+                corridorStartAtomIndex,
+                corridorEndAtomIndexExclusive,
+                alongCanonical);
+        }
+
+        private RelativeToTrunkState ResolveVehicleTrunkTravelState(
+            TrackModelRuntimePosition runtimePosition,
+            GlobalSharedTrunkSegment trunkSegment,
+            bool useLocalSide)
+        {
+            if (!TryResolveVehicleTrunkTravelWindow(
+                    trunkSegment,
+                    useLocalSide,
+                    runtimePosition.TraversalPhaseIndex,
+                    out int corridorStartAtomIndex,
+                    out int corridorEndAtomIndexExclusive,
+                    out bool alongCanonical))
+            {
+                return RelativeToTrunkState.Unknown;
+            }
+
+            return ClassifyVehicleRelativeToTrunk(
+                runtimePosition.CurrentAtomIndex,
+                runtimePosition.NextTurnbackBoundaryAtomIndex,
+                corridorStartAtomIndex,
+                corridorEndAtomIndexExclusive,
+                alongCanonical);
+        }
+
+        private void ObserveLegacyVsPhaseTrunkDirection(
+            Entity vehicle,
+            Entity line,
+            string source,
+            RelativeToTrunkState legacyState,
+            RelativeToTrunkState phaseState)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_DirectionCompareProbeSamples++;
+            bool mismatch = legacyState != phaseState;
+            if (mismatch)
+                m_DirectionCompareProbeMismatches++;
+
+            string latest = IsChineseLocale()
+                ? ("旧" + FormatRelativeToTrunkStateCompactZh(legacyState)
+                    + " / 新" + FormatRelativeToTrunkStateCompactZh(phaseState)
+                    + " / " + (mismatch ? "异" : "同"))
+                : ("old " + FormatRelativeToTrunkStateCompactEn(legacyState)
+                    + " / new " + FormatRelativeToTrunkStateCompactEn(phaseState)
+                    + " / " + (mismatch ? "diff" : "match"));
+            m_DirectionCompareLatestByVehicle[vehicle] = latest;
+        }
+
+        private static string FormatRelativeToTrunkStateCompactZh(RelativeToTrunkState state)
+        {
+            switch (state)
+            {
+                case RelativeToTrunkState.OnTrunkAlongCanonical:
+                    return "在同";
+                case RelativeToTrunkState.OnTrunkAgainstCanonical:
+                    return "在反";
+                case RelativeToTrunkState.ApproachingTrunkAlongCanonical:
+                    return "近同";
+                case RelativeToTrunkState.ApproachingTrunkAgainstCanonical:
+                    return "近反";
+                case RelativeToTrunkState.DepartingFromTrunk:
+                    return "离干";
+                case RelativeToTrunkState.FutureReturnOnly:
+                    return "待返";
+                case RelativeToTrunkState.OffTrunk:
+                    return "干外";
+                default:
+                    return "未知";
+            }
+        }
+
+        private static string FormatRelativeToTrunkStateCompactEn(RelativeToTrunkState state)
+        {
+            switch (state)
+            {
+                case RelativeToTrunkState.OnTrunkAlongCanonical:
+                    return "on+";
+                case RelativeToTrunkState.OnTrunkAgainstCanonical:
+                    return "on-";
+                case RelativeToTrunkState.ApproachingTrunkAlongCanonical:
+                    return "app+";
+                case RelativeToTrunkState.ApproachingTrunkAgainstCanonical:
+                    return "app-";
+                case RelativeToTrunkState.DepartingFromTrunk:
+                    return "dep";
+                case RelativeToTrunkState.FutureReturnOnly:
+                    return "ret";
+                case RelativeToTrunkState.OffTrunk:
+                    return "off";
+                default:
+                    return "unk";
+            }
         }
 
         private static string FormatRelativeToTrunkState(RelativeToTrunkState state)

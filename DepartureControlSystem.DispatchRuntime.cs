@@ -145,6 +145,74 @@ namespace RapidTransitMod
             ecb.AddComponent<Updated>(v);
         }
 
+        private string BuildTrainHeadLaunchDiagnostic(
+            Entity vehicle,
+            bool hasCurrentLaunchSnapshot,
+            TrainHeadSnapshot currentLaunchSnapshot)
+        {
+            if (!m_LastLaunchHeadSnapshots.TryGetValue(vehicle, out TrainHeadSnapshot previousLaunchSnapshot))
+            {
+                return hasCurrentLaunchSnapshot
+                    ? " headCheck=no-prev-launch launchHead=" + FormatTrainHeadSnapshotEntity(currentLaunchSnapshot.HeadVehicle)
+                        + " launchRev=" + (currentLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchWp=" + currentLaunchSnapshot.WaypointIndex
+                    : " headCheck=no-prev-launch launchHead=capture-failed";
+            }
+
+            if (!m_LastBoardingHeadSnapshots.TryGetValue(vehicle, out TrainHeadSnapshot boardingSnapshot))
+            {
+                return hasCurrentLaunchSnapshot
+                    ? " headCheck=no-boarding prevHead=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.HeadVehicle)
+                        + " prevRev=" + (previousLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchHead=" + FormatTrainHeadSnapshotEntity(currentLaunchSnapshot.HeadVehicle)
+                        + " launchRev=" + (currentLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchWp=" + currentLaunchSnapshot.WaypointIndex
+                    : " headCheck=no-boarding prevHead=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.HeadVehicle)
+                        + " prevRev=" + (previousLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchHead=capture-failed";
+            }
+
+            if (boardingSnapshot.Frame <= previousLaunchSnapshot.Frame)
+            {
+                return " headCheck=stale"
+                    + " prevLaunchFrame=" + previousLaunchSnapshot.Frame
+                    + " boardFrame=" + boardingSnapshot.Frame
+                    + (hasCurrentLaunchSnapshot
+                        ? " launchFrame=" + currentLaunchSnapshot.Frame
+                        : string.Empty);
+            }
+
+            bool turned =
+                previousLaunchSnapshot.HeadVehicle != boardingSnapshot.HeadVehicle
+                || previousLaunchSnapshot.Reversed != boardingSnapshot.Reversed
+                || previousLaunchSnapshot.FrontLane != boardingSnapshot.FrontLane
+                || previousLaunchSnapshot.RearLane != boardingSnapshot.RearLane;
+
+            string diagnostic = " headCheck=" + (turned ? "turned" : "same")
+                + " prevHead=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.HeadVehicle)
+                + " boardHead=" + FormatTrainHeadSnapshotEntity(boardingSnapshot.HeadVehicle)
+                + " prevRev=" + (previousLaunchSnapshot.Reversed ? "1" : "0")
+                + " boardRev=" + (boardingSnapshot.Reversed ? "1" : "0")
+                + " prevFront=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.FrontLane)
+                + " prevRear=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.RearLane)
+                + " boardFront=" + FormatTrainHeadSnapshotEntity(boardingSnapshot.FrontLane)
+                + " boardRear=" + FormatTrainHeadSnapshotEntity(boardingSnapshot.RearLane)
+                + " boardWp=" + boardingSnapshot.WaypointIndex;
+
+            if (hasCurrentLaunchSnapshot)
+            {
+                diagnostic += " launchHead=" + FormatTrainHeadSnapshotEntity(currentLaunchSnapshot.HeadVehicle)
+                    + " launchRev=" + (currentLaunchSnapshot.Reversed ? "1" : "0")
+                    + " launchWp=" + currentLaunchSnapshot.WaypointIndex;
+            }
+            else
+            {
+                diagnostic += " launchHead=capture-failed";
+            }
+
+            return diagnostic;
+        }
+
         private void EnsurePreparingRoute(
             Entity v,
             ref Game.Vehicles.PublicTransport pt,
@@ -1231,7 +1299,7 @@ namespace RapidTransitMod
                                 {
                                     TryRecordObservedStopDwellOnBoardingEnd(v, lineEnt, previousCachedWpIdx, nowFrame);
                                     RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, false, -1, previousCachedWpIdx);
-                                    if (previousCachedWpIdx >= 0)
+                                    if (state == VehicleState.Running && previousCachedWpIdx >= 0)
                                     {
                                         Entity departedStop = GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
                                         Entity departedStopEntity = ResolveWorkbenchStopEntity(wps[previousCachedWpIdx].m_Waypoint);
@@ -1293,6 +1361,10 @@ namespace RapidTransitMod
 
                             if (curWpIdx >= 0)
                             {
+                                if (TryCaptureTrainHeadSnapshot(v, curWpIdx, out TrainHeadSnapshot boardingHeadSnapshot))
+                                    m_LastBoardingHeadSnapshots[v] = boardingHeadSnapshot;
+                                else
+                                    m_LastBoardingHeadSnapshots.Remove(v);
                                 BeginObservedStopDwellSession(v, lineEnt, curWpIdx, nowFrame);
                                 RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, true, curWpIdx, previousCachedWpIdx);
                                 m_LastBoarding[v] = true;
@@ -1564,10 +1636,17 @@ namespace RapidTransitMod
                                 }
                                 bool isLateDispatch = CanLateDispatchSlot(nowMin, targetMin);
                                 int overdue = isLateDispatch ? GetSlotOverdueMinutes(nowMin, targetMin) : 0;
+                                bool hasLaunchHeadSnapshot = TryCaptureTrainHeadSnapshot(v, curWpIdx, out TrainHeadSnapshot currentLaunchHeadSnapshot);
+                                string headDiagnostic = BuildTrainHeadLaunchDiagnostic(v, hasLaunchHeadSnapshot, currentLaunchHeadSnapshot);
                                 LaunchVehicle(v, pt, tgt, wps, ecb);
                                 m_VehicleState[v] = VehicleState.Running;
+                                RequestLineOrderedRuntimeForceRefresh(routeEnt, "origin-launch");
                                 m_JustLaunched.Add(v);
                                 m_VehicleLastLaunchFrame[v] = nowFrame;
+                                if (hasLaunchHeadSnapshot)
+                                    m_LastLaunchHeadSnapshots[v] = currentLaunchHeadSnapshot;
+                                else
+                                    m_LastLaunchHeadSnapshots.Remove(v);
                                 RecordLapStart(v, isLateDispatch ? "补发" : "计划发车");
                                 m_LastBoarding[v] = false;
                                 m_CachedWpIdx[v] = -1;
@@ -1579,6 +1658,7 @@ namespace RapidTransitMod
                                 m_OriginArrivalCandidateSinceFrame.Remove(v);
                                 m_ForcedOriginReadyFrame.Remove(v);
                                 BeginWorkbenchRealtimeTripAtLaunch(v, lineEnt, wps);
+                                log.Info("[LaunchHeadCheck] " + lineTag + " vehicle" + v.Index + headDiagnostic);
                                 SetUILabel(v, (isLateDispatch ? "运行中 补发 " : "运行中 ") + SlotStr(targetMin) + vTag);
                                 if (isLateDispatch)
                                 {
@@ -1789,6 +1869,7 @@ namespace RapidTransitMod
                                 if (brokenRecoveredRunning)
                                 {
                                     m_VehicleState[v] = VehicleState.Idle;
+                                    RequestLineOrderedRuntimeForceRefresh(lineEnt, "origin-return-recovered-idle");
                                     m_VehicleCurrentSlot.Remove(v);
                                     m_VehicleLapStartFrame.Remove(v);
                                     m_VehicleLapFrames.Remove(v);
@@ -1820,6 +1901,9 @@ namespace RapidTransitMod
                                         bool recoverToHolding = keepAssignedTarget;
 
                                         m_VehicleState[v] = recoverToHolding ? VehicleState.Holding : VehicleState.Idle;
+                                        RequestLineOrderedRuntimeForceRefresh(
+                                            lineEnt,
+                                            recoverToHolding ? "origin-return-holding" : "origin-return-idle");
                                         if (!recoverToHolding)
                                         {
                                             m_VehicleTargetMin[v] = -1;
@@ -1908,6 +1992,7 @@ namespace RapidTransitMod
                                 FinalizeVehicleTraversalSliceObservation(v, nowFrame);
                                 UpdateLapStats(v);
                                 m_VehicleState[v] = VehicleState.Idle;
+                                RequestLineOrderedRuntimeForceRefresh(lineEnt, "origin-return-idle");
                                 if (targetMin >= 0)
                                 {
                                     if (IsCurrentOrRecentDispatchableSlot(nowMin, targetMin))
@@ -2118,6 +2203,8 @@ namespace RapidTransitMod
                     m_BvTrackAnchorRecoveryLogCache.Remove(dead);
                     m_BvWaypointMismatchLastLogFrame.Remove(dead);
                     m_BypassQueuedLocalOverrideLogCache.Remove(dead);
+                    m_LastLaunchHeadSnapshots.Remove(dead);
+                    m_LastBoardingHeadSnapshots.Remove(dead);
                     m_LastBoardingAssistSnapshots.Remove(dead);
                     List<Entity> episodeReleaseKeys = null;
                     foreach (KeyValuePair<Entity, BypassConflictEpisode> entry in m_BypassConflictEpisodes)

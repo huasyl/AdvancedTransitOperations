@@ -9,6 +9,23 @@ namespace RapidTransitMod
 {
     public partial class DepartureControlSystem
     {
+        private readonly struct QueuedLocalReleaseScope
+        {
+            public readonly LineTrackChain LocalChain;
+            public readonly BypassProtectedInterval LocalProtectedInterval;
+            public readonly float PreviousStationSceneCoordinate;
+
+            public QueuedLocalReleaseScope(
+                LineTrackChain localChain,
+                BypassProtectedInterval localProtectedInterval,
+                float previousStationSceneCoordinate)
+            {
+                LocalChain = localChain;
+                LocalProtectedInterval = localProtectedInterval;
+                PreviousStationSceneCoordinate = previousStationSceneCoordinate;
+            }
+        }
+
         private void SetBypassYieldState(Entity vehicle, Entity blocker, string lineTag, string stateTag)
         {
             if (vehicle == Entity.Null || blocker == Entity.Null)
@@ -67,6 +84,7 @@ namespace RapidTransitMod
             m_BypassControlScopeCache.Clear();
             m_BypassDecisionLogCache.Clear();
             m_BypassQueuedLocalOverrideLogCache.Clear();
+            m_PerfProbeSceneExpressLineLastQueryFrame.Clear();
             ClearBypassTrackModelRuntimeState();
         }
 
@@ -511,16 +529,38 @@ namespace RapidTransitMod
             Entity vehicle,
             out float sceneCoordinate)
         {
-            sceneCoordinate = 0f;
-            if (vehicle == Entity.Null
-                || scope.Line == Entity.Null
-                || !TryGetLineTrackChain(scope.Line, localWaypoints, out LineTrackChain localChain))
+            if (!TryGetLineTrackChain(scope.Line, localWaypoints, out LineTrackChain localChain))
             {
+                sceneCoordinate = 0f;
                 return false;
             }
 
-            int localProtectedIntervalIndex = scope.Scene.ProtectedIntervalIndex;
-            BypassProtectedInterval localProtectedInterval = scope.Scene.ProtectedInterval;
+            return TryProjectVehicleToCurrentLocalSceneCoordinate(
+                scope,
+                localWaypoints,
+                localChain,
+                scope.Scene.ProtectedIntervalIndex,
+                scope.Scene.ProtectedInterval,
+                vehicle,
+                out sceneCoordinate);
+        }
+
+        private bool TryProjectVehicleToCurrentLocalSceneCoordinate(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            LineTrackChain localChain,
+            int localProtectedIntervalIndex,
+            BypassProtectedInterval localProtectedInterval,
+            Entity vehicle,
+            out float sceneCoordinate)
+        {
+            sceneCoordinate = 0f;
+            if (vehicle == Entity.Null
+                || scope.Line == Entity.Null
+                || localChain == null)
+            {
+                return false;
+            }
 
             if (ResolveVehicleLine(vehicle) == scope.Line)
             {
@@ -582,23 +622,43 @@ namespace RapidTransitMod
                 return false;
             }
 
+            int localTraversalPhaseIndex = TryResolveStaticTraversalPhaseWindow(
+                localChain,
+                localProtectedInterval.StartAtomIndex,
+                localProtectedInterval.EndAtomIndexExclusive,
+                out int resolvedLocalTraversalPhaseIndex,
+                out _,
+                out _)
+                ? resolvedLocalTraversalPhaseIndex
+                : -1;
             if (!TryFindBestCurrentForwardSceneSameDirectionTrunkSegment(
                     localChain,
                     localProtectedInterval,
                     scope.CurrentBypassBuilding,
                     expressChain,
                     expressProtectedInterval,
+                    localTraversalPhaseIndex,
                     expressPosition.CurrentAtomIndex,
+                    expressPosition.TraversalPhaseIndex,
                     out GlobalSharedTrunkSegment selectedTrunkSegment))
             {
                 return false;
             }
 
-            RelativeToTrunkState expressTrunkState = BuildRelativeToTrunkStateFromRuntimePosition(
+            RelativeToTrunkState expressTrunkState = ResolveVehicleTrunkTravelState(
                 expressPosition,
-                expressChain,
                 selectedTrunkSegment,
                 useLocalSide: false);
+            ObserveLegacyVsPhaseTrunkDirection(
+                vehicle,
+                expressLine,
+                "runtime-project",
+                BuildRelativeToTrunkStateFromRuntimePosition(
+                    expressPosition,
+                    expressChain,
+                    selectedTrunkSegment,
+                    useLocalSide: false),
+                expressTrunkState);
             if (!selectedTrunkSegment.HasCanonicalDirection
                 || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
                 || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, selectedTrunkSegment))
@@ -613,6 +673,55 @@ namespace RapidTransitMod
                 includeApproachers: true,
                 out bool includeExpress);
             return includeExpress;
+        }
+
+        private bool TryBuildQueuedLocalReleaseScope(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out QueuedLocalReleaseScope releaseScope)
+        {
+            releaseScope = default;
+            if (scope.Line == Entity.Null || scope.WaypointIndex < 0 || waypoints.Length == 0)
+                return false;
+
+            if (!TryGetLineTrackChain(scope.Line, waypoints, out LineTrackChain localChain))
+                return false;
+
+            EnsureTrackChainBypassPipelineReady(localChain);
+            BypassProtectedInterval localProtectedInterval = scope.Scene.ProtectedInterval;
+            int currentControlPointIndex = localProtectedInterval.StartControlPointIndex;
+            if (currentControlPointIndex < 0 || currentControlPointIndex >= localChain.ControlPoints.Count)
+                return false;
+
+            Entity currentBuilding = scope.CurrentBypassBuilding != Entity.Null
+                ? scope.CurrentBypassBuilding
+                : localChain.ControlPoints[currentControlPointIndex].Building;
+            int previousStationControlPointIndex = -1;
+            for (int controlPointIndex = currentControlPointIndex - 1; controlPointIndex >= 0; controlPointIndex--)
+            {
+                ControlPointMarker marker = localChain.ControlPoints[controlPointIndex];
+                if ((marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass)
+                    || marker.Building == Entity.Null
+                    || marker.Building == currentBuilding)
+                {
+                    continue;
+                }
+
+                previousStationControlPointIndex = controlPointIndex;
+                break;
+            }
+
+            if (previousStationControlPointIndex < 0)
+                return false;
+
+            float previousStationSceneCoordinate = MapAtomIndexToProtectedIntervalCoordinateExact(
+                localProtectedInterval,
+                localChain.ControlPoints[previousStationControlPointIndex].AtomIndex);
+            releaseScope = new QueuedLocalReleaseScope(
+                localChain,
+                localProtectedInterval,
+                previousStationSceneCoordinate);
+            return true;
         }
 
         private bool TryProjectLatchedBlockerToCurrentLocalSceneCoordinate(
@@ -651,11 +760,20 @@ namespace RapidTransitMod
                 return false;
             }
 
-            RelativeToTrunkState expressTrunkState = BuildRelativeToTrunkStateFromRuntimePosition(
+            RelativeToTrunkState expressTrunkState = ResolveVehicleTrunkTravelState(
                 expressPosition,
-                expressChain,
                 latchedProjection.SelectedTrunkSegment,
                 useLocalSide: false);
+            ObserveLegacyVsPhaseTrunkDirection(
+                blockerVehicle,
+                expressLine,
+                "runtime-latched",
+                BuildRelativeToTrunkStateFromRuntimePosition(
+                    expressPosition,
+                    expressChain,
+                    latchedProjection.SelectedTrunkSegment,
+                    useLocalSide: false),
+                expressTrunkState);
             if (!latchedProjection.SelectedTrunkSegment.HasCanonicalDirection
                 || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
                 || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, latchedProjection.SelectedTrunkSegment))
@@ -852,6 +970,7 @@ namespace RapidTransitMod
 
         private bool TryFindNearestLocalVehicleInApproachSegment(
             BypassControlScope scope,
+            QueuedLocalReleaseScope releaseScope,
             DynamicBuffer<RouteWaypoint> waypoints,
             float currentLocalSceneCoordinate,
             out Entity nearestVehicle,
@@ -862,49 +981,61 @@ namespace RapidTransitMod
 
             if (scope.Line == Entity.Null || scope.WaypointIndex < 0 || waypoints.Length == 0)
                 return false;
-
-            if (!TryGetLineTrackChain(scope.Line, waypoints, out LineTrackChain localChain))
+            float approachUpperBound = math.min(currentLocalSceneCoordinate, 0f);
+            if (!(releaseScope.PreviousStationSceneCoordinate < approachUpperBound))
                 return false;
 
-            EnsureTrackChainBypassPipelineReady(localChain);
-            if (!TryResolveBypassProtectedInterval(localChain, waypoints, scope.WaypointIndex, out _, out BypassProtectedInterval localProtectedInterval))
-                return false;
-
-            int currentControlPointIndex = localProtectedInterval.StartControlPointIndex;
-            if (currentControlPointIndex < 0 || currentControlPointIndex >= localChain.ControlPoints.Count)
-                return false;
-
-            Entity currentBuilding = localChain.ControlPoints[currentControlPointIndex].Building;
-            int previousStationControlPointIndex = -1;
-            for (int controlPointIndex = currentControlPointIndex - 1; controlPointIndex >= 0; controlPointIndex--)
+            float bestSceneCoordinate = float.MinValue;
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (TryGetLineRunningVehicleFrameSnapshot(scope.Line, waypoints, nowFrame, out LineRunningVehicleFrameSnapshot runningSnapshot))
             {
-                ControlPointMarker marker = localChain.ControlPoints[controlPointIndex];
-                if ((marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass)
-                    || marker.Building == Entity.Null
-                    || marker.Building == currentBuilding)
+                for (int i = 0; i < runningSnapshot.Vehicles.Count; i++)
                 {
-                    continue;
+                    LineRunningVehicleSnapshot runningVehicle = runningSnapshot.Vehicles[i];
+                    Entity otherVehicle = runningVehicle.Vehicle;
+                    if (otherVehicle == Entity.Null
+                        || otherVehicle == scope.Vehicle
+                        || !EntityManager.Exists(otherVehicle))
+                    {
+                        continue;
+                    }
+
+                    if (!TryBuildTrackModelRuntimePositionFromLineRunningSnapshot(
+                            runningVehicle,
+                            releaseScope.LocalProtectedInterval,
+                            out TrackModelRuntimePosition otherPosition)
+                        || otherPosition.Confidence < 0.6f)
+                    {
+                        continue;
+                    }
+
+                    float otherSceneCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
+                        otherPosition,
+                        releaseScope.LocalProtectedInterval,
+                        includeApproachers: true,
+                        out bool includeOther);
+                    if (!includeOther
+                        || otherSceneCoordinate < releaseScope.PreviousStationSceneCoordinate
+                        || otherSceneCoordinate >= approachUpperBound)
+                    {
+                        continue;
+                    }
+
+                    if (otherSceneCoordinate <= bestSceneCoordinate)
+                        continue;
+
+                    bestSceneCoordinate = otherSceneCoordinate;
+                    nearestVehicle = otherVehicle;
+                    nearestVehicleMeters = otherSceneCoordinate;
                 }
 
-                previousStationControlPointIndex = controlPointIndex;
-                break;
+                return nearestVehicle != Entity.Null;
             }
-
-            if (previousStationControlPointIndex < 0)
-                return false;
-
-            float previousStationSceneCoordinate = MapAtomIndexToProtectedIntervalCoordinateExact(
-                localProtectedInterval,
-                localChain.ControlPoints[previousStationControlPointIndex].AtomIndex);
-            float approachUpperBound = math.min(currentLocalSceneCoordinate, 0f);
-            if (!(previousStationSceneCoordinate < approachUpperBound))
-                return false;
 
             var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
             if (!routeVehicleBuffers.TryGetBuffer(scope.Line, out DynamicBuffer<RouteVehicle> routeVehicles))
                 return false;
 
-            float bestSceneCoordinate = float.MinValue;
             for (int i = 0; i < routeVehicles.Length; i++)
             {
                 Entity otherVehicle = routeVehicles[i].m_Vehicle;
@@ -917,7 +1048,7 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                if (!TryProjectTrackModelRuntimePosition(otherVehicle, scope.Line, waypoints, localProtectedInterval, out TrackModelRuntimePosition otherPosition)
+                if (!TryProjectTrackModelRuntimePosition(otherVehicle, scope.Line, waypoints, releaseScope.LocalProtectedInterval, out TrackModelRuntimePosition otherPosition)
                     || otherPosition.Confidence < 0.6f)
                 {
                     continue;
@@ -925,11 +1056,11 @@ namespace RapidTransitMod
 
                 float otherSceneCoordinate = MapRuntimePositionToOwnProtectedIntervalCoordinateExact(
                     otherPosition,
-                    localProtectedInterval,
+                    releaseScope.LocalProtectedInterval,
                     includeApproachers: true,
                     out bool includeOther);
                 if (!includeOther
-                    || otherSceneCoordinate < previousStationSceneCoordinate
+                    || otherSceneCoordinate < releaseScope.PreviousStationSceneCoordinate
                     || otherSceneCoordinate >= approachUpperBound)
                 {
                     continue;
@@ -1174,6 +1305,16 @@ namespace RapidTransitMod
 
             if (blockerVehicle == Entity.Null)
                 return false;
+            if (!TryBuildQueuedLocalReleaseScope(scope, localWaypoints, out QueuedLocalReleaseScope releaseScope))
+            {
+                LogQueuedLocalBypassOverrideOnce(
+                    scope.Vehicle,
+                    scope.Line,
+                    blockerVehicle,
+                    "skip",
+                    "queued-local-release-scope-failed");
+                return false;
+            }
 
             if (IsExpressBlockerStillWithinBypassStation(blockerVehicle, scope.CurrentBypassBuilding))
             {
@@ -1189,6 +1330,9 @@ namespace RapidTransitMod
             if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
                     scope,
                     localWaypoints,
+                    releaseScope.LocalChain,
+                    scope.Scene.ProtectedIntervalIndex,
+                    releaseScope.LocalProtectedInterval,
                     scope.Vehicle,
                     out localSceneCoordinate))
             {
@@ -1203,6 +1347,7 @@ namespace RapidTransitMod
 
             bool hasQueuedLocalInApproach = TryFindNearestLocalVehicleInApproachSegment(
                 scope,
+                releaseScope,
                 localWaypoints,
                 localSceneCoordinate,
                 out _,
@@ -1221,6 +1366,9 @@ namespace RapidTransitMod
             if (!TryProjectVehicleToCurrentLocalSceneCoordinate(
                     scope,
                     localWaypoints,
+                    releaseScope.LocalChain,
+                    scope.Scene.ProtectedIntervalIndex,
+                    releaseScope.LocalProtectedInterval,
                     blockerVehicle,
                     out expressSceneCoordinate))
             {

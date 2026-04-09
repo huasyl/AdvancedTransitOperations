@@ -524,6 +524,8 @@ namespace RapidTransitMod
             snapshot.Detail5Value = BuildVehicleStopDwellValue(vehicle);
             snapshot.Detail6LabelKey = "inboundTime";
             snapshot.Detail6Value = BuildVehicleInboundTimeValue(vehicle);
+            snapshot.Detail7LabelKey = IsChineseLocale() ? "方向对照" : "Direction Compare";
+            snapshot.Detail7Value = BuildVehicleDirectionCompareValue(vehicle, line);
             snapshot.AlertText = alertText;
             snapshot.ShowRetireAction = isManagedVehicle;
             snapshot.ShowForceDepartAction = isManagedVehicle;
@@ -602,6 +604,20 @@ namespace RapidTransitMod
                 "UI请求");
             InvalidatePanelData();
             return true;
+        }
+
+        private string BuildVehicleDirectionCompareValue(Entity vehicle, Entity line)
+        {
+            if (vehicle == Entity.Null)
+                return "-";
+
+            if (m_DirectionCompareLatestByVehicle.TryGetValue(vehicle, out string latest)
+                && !string.IsNullOrWhiteSpace(latest))
+            {
+                return latest;
+            }
+
+            return IsChineseLocale() ? "无活跃方向对照" : "no-active-direction-compare";
         }
 
         public bool RequestVehicleReevaluate(Entity vehicle)

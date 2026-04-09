@@ -399,12 +399,45 @@ namespace RapidTransitMod
             public readonly List<WorkbenchRealtimeTripRecord> Trips = new List<WorkbenchRealtimeTripRecord>();
         }
 
+        private readonly struct WorkbenchLineFrameSnapshot
+        {
+            public readonly Entity Line;
+            public readonly uint Frame;
+            public readonly string LineId;
+            public readonly string LineKey;
+            public readonly bool TimetableApplied;
+            public readonly string ConfiguredServiceKind;
+            public readonly string AppliedServiceKind;
+            public readonly string EffectiveServiceKind;
+
+            public WorkbenchLineFrameSnapshot(
+                Entity line,
+                uint frame,
+                string lineId,
+                string lineKey,
+                bool timetableApplied,
+                string configuredServiceKind,
+                string appliedServiceKind,
+                string effectiveServiceKind)
+            {
+                Line = line;
+                Frame = frame;
+                LineId = lineId ?? string.Empty;
+                LineKey = lineKey ?? string.Empty;
+                TimetableApplied = timetableApplied;
+                ConfiguredServiceKind = configuredServiceKind ?? string.Empty;
+                AppliedServiceKind = appliedServiceKind ?? string.Empty;
+                EffectiveServiceKind = effectiveServiceKind ?? string.Empty;
+            }
+        }
+
         private readonly Dictionary<string, DispatchWorkbenchDraftState> m_WorkbenchDrafts = new Dictionary<string, DispatchWorkbenchDraftState>();
         private readonly Dictionary<string, int> m_WorkbenchLineOriginHoldLimits = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, int> m_WorkbenchLineMaxStationDwellMinutes = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_WorkbenchLineAllowedDepots = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_WorkbenchLineServiceKinds = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, AppliedWorkbenchLineState> m_AppliedWorkbenchLines = new Dictionary<string, AppliedWorkbenchLineState>(StringComparer.Ordinal);
+        private readonly Dictionary<Entity, WorkbenchLineFrameSnapshot> m_WorkbenchLineFrameSnapshots = new Dictionary<Entity, WorkbenchLineFrameSnapshot>();
         private readonly Dictionary<Entity, WorkbenchRealtimeVehicleRecord> m_WorkbenchRealtimeVehicles = new Dictionary<Entity, WorkbenchRealtimeVehicleRecord>();
         private ulong m_WorkbenchSnapshotVersion = 1;
         private string m_LastWorkbenchSnapshotLogKey = string.Empty;
@@ -961,6 +994,55 @@ namespace RapidTransitMod
             return line.Index.ToString();
         }
 
+        private bool TryGetWorkbenchLineFrameSnapshot(Entity line, out WorkbenchLineFrameSnapshot snapshot)
+        {
+            EnsureAppliedWorkbenchPersistenceLoaded();
+            snapshot = default;
+            if (line == Entity.Null || !EntityManager.Exists(line))
+            {
+                m_WorkbenchLineFrameSnapshots.Remove(line);
+                return false;
+            }
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (m_WorkbenchLineFrameSnapshots.TryGetValue(line, out snapshot)
+                && snapshot.Line == line
+                && snapshot.Frame == nowFrame)
+            {
+                m_PerfProbeWorkbenchLineFrameSnapshotHits++;
+                return true;
+            }
+
+            m_PerfProbeWorkbenchLineFrameSnapshotMisses++;
+            string lineId = GetWorkbenchLineId(line);
+            string lineKey = GetDraftKey(lineId);
+            bool timetableApplied = m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState appliedState);
+            string configuredServiceKind = GetWorkbenchConfiguredLineServiceKind(lineId);
+            string appliedServiceKind = timetableApplied
+                ? GetAppliedWorkbenchLineServiceKind(appliedState)
+                : string.Empty;
+            string effectiveServiceKind = !string.IsNullOrEmpty(configuredServiceKind)
+                ? configuredServiceKind
+                : appliedServiceKind;
+
+            snapshot = new WorkbenchLineFrameSnapshot(
+                line,
+                nowFrame,
+                lineId,
+                lineKey,
+                timetableApplied,
+                configuredServiceKind,
+                appliedServiceKind,
+                effectiveServiceKind);
+            m_WorkbenchLineFrameSnapshots[line] = snapshot;
+            return true;
+        }
+
+        private void InvalidateWorkbenchLineFrameSnapshots()
+        {
+            m_WorkbenchLineFrameSnapshots.Clear();
+        }
+
         private void EnsureWorkbenchPersistenceLoaded()
         {
             if (m_WorkbenchPersistenceLoaded)
@@ -1155,6 +1237,7 @@ namespace RapidTransitMod
                 }
 
                 SyncWorkbenchDraftsFromAppliedState();
+                InvalidateWorkbenchLineFrameSnapshots();
                 InvalidateAppliedWorkbenchTrackModelState();
                 m_AppliedWorkbenchPersistenceLoaded = true;
                 return true;
@@ -1277,6 +1360,7 @@ namespace RapidTransitMod
             }
 
             SyncWorkbenchDraftsFromAppliedState();
+            InvalidateWorkbenchLineFrameSnapshots();
             InvalidateAppliedWorkbenchTrackModelState();
         }
 
@@ -1801,22 +1885,19 @@ namespace RapidTransitMod
 
         private bool IsWorkbenchTimetableApplied(Entity line)
         {
-            EnsureAppliedWorkbenchPersistenceLoaded();
-            if (line == Entity.Null)
+            if (!TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot))
                 return false;
 
-            string lineKey = GetDraftKey(GetWorkbenchLineId(line));
-            return m_AppliedWorkbenchLines.ContainsKey(lineKey);
+            return snapshot.TimetableApplied;
         }
 
         private int[] GetAppliedWorkbenchDepartureMinutes(Entity line)
         {
-            EnsureAppliedWorkbenchPersistenceLoaded();
-            if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
+            if (!TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
+                || !snapshot.TimetableApplied)
                 return Array.Empty<int>();
 
-            string lineKey = GetDraftKey(GetWorkbenchLineId(line));
-            if (!m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState state)
+            if (!m_AppliedWorkbenchLines.TryGetValue(snapshot.LineKey, out AppliedWorkbenchLineState state)
                 || state.StagedRows == null
                 || state.StagedRows.Count == 0)
             {
@@ -1825,7 +1906,7 @@ namespace RapidTransitMod
 
             if (state.DepartureMinutesCache == null || state.DepartureMinutesCache.Length == 0)
             {
-                state.DepartureMinutesCache = BuildAppliedDepartureMinutes(state.StagedRows, GetWorkbenchLineId(line));
+                state.DepartureMinutesCache = BuildAppliedDepartureMinutes(state.StagedRows, snapshot.LineId);
             }
 
             return state.DepartureMinutesCache;
@@ -1882,25 +1963,18 @@ namespace RapidTransitMod
 
         private string GetAppliedWorkbenchLineServiceKind(Entity line)
         {
-            EnsureAppliedWorkbenchPersistenceLoaded();
-            if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
+            if (!TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
+                || !snapshot.TimetableApplied)
                 return string.Empty;
 
-            string lineKey = GetDraftKey(GetWorkbenchLineId(line));
-            string configuredKind = GetWorkbenchConfiguredLineServiceKind(line);
-            if (!string.IsNullOrEmpty(configuredKind))
-            {
-                return configuredKind;
-            }
-
-            if (!m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState state)
+            if (!m_AppliedWorkbenchLines.TryGetValue(snapshot.LineKey, out AppliedWorkbenchLineState state)
                 || state.StagedRows == null
                 || state.StagedRows.Count == 0)
             {
                 return string.Empty;
             }
 
-            return GetAppliedWorkbenchLineServiceKind(state);
+            return snapshot.EffectiveServiceKind;
         }
 
         private static string GetAppliedWorkbenchLineServiceKind(AppliedWorkbenchLineState state)
@@ -1956,12 +2030,16 @@ namespace RapidTransitMod
 
         private bool IsAppliedWorkbenchLocalLine(Entity line)
         {
-            return string.Equals(GetAppliedWorkbenchLineServiceKind(line), "local", StringComparison.Ordinal);
+            return TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
+                && snapshot.TimetableApplied
+                && string.Equals(snapshot.EffectiveServiceKind, "local", StringComparison.Ordinal);
         }
 
         private bool IsAppliedWorkbenchExpressLine(Entity line)
         {
-            return string.Equals(GetAppliedWorkbenchLineServiceKind(line), "express", StringComparison.Ordinal);
+            return TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
+                && snapshot.TimetableApplied
+                && string.Equals(snapshot.EffectiveServiceKind, "express", StringComparison.Ordinal);
         }
 
         private DispatchWorkbenchDraftState GetOrCreateWorkbenchDraft(string lineKey)
@@ -3345,6 +3423,8 @@ namespace RapidTransitMod
                     m_WorkbenchLineServiceKinds[setting.lineId] = normalizedKind;
                 }
             }
+
+            InvalidateWorkbenchLineFrameSnapshots();
         }
 
         private bool AreWorkbenchLineSettingsEquivalent(IEnumerable<DispatchWorkbenchLineSettingDto> settings)
@@ -3442,7 +3522,9 @@ namespace RapidTransitMod
             if (line == Entity.Null)
                 return DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
 
-            string stableLineId = GetWorkbenchLineId(line);
+            string stableLineId = TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
+                ? snapshot.LineId
+                : GetWorkbenchLineId(line);
             if (!string.IsNullOrEmpty(stableLineId)
                 && m_WorkbenchLineOriginHoldLimits.TryGetValue(stableLineId, out int stableMinutes))
             {
@@ -3457,6 +3539,12 @@ namespace RapidTransitMod
         {
             if (line == Entity.Null)
                 return string.Empty;
+
+            if (TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
+                && !string.IsNullOrEmpty(snapshot.ConfiguredServiceKind))
+            {
+                return snapshot.ConfiguredServiceKind;
+            }
 
             string stableLineId = GetWorkbenchLineId(line);
             if (!string.IsNullOrEmpty(stableLineId)
@@ -3473,7 +3561,9 @@ namespace RapidTransitMod
             if (line == Entity.Null)
                 return DEFAULT_MAX_STATION_DWELL_MINUTES;
 
-            string stableLineId = GetWorkbenchLineId(line);
+            string stableLineId = TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
+                ? snapshot.LineId
+                : GetWorkbenchLineId(line);
             if (!string.IsNullOrEmpty(stableLineId)
                 && m_WorkbenchLineMaxStationDwellMinutes.TryGetValue(stableLineId, out int stableMinutes))
             {

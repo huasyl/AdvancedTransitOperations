@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Game;
 using Game.Buildings;
 using Game.Common;
+using Game.Net;
 using Game.Pathfind;
 using Game.Prefabs;
 using Game.Routes;
@@ -17,6 +18,7 @@ namespace RapidTransitMod
     public sealed class DepotSourceLockSystem : GameSystemBase
     {
         private EntityQuery m_PendingRequestQuery;
+        private EntityQuery m_ConfiguredDispatchRequestQuery;
         private EntityQuery m_DepotQuery;
         private EntityQuery m_LineQuery;
         private NameSystem m_NameSystem = null!;
@@ -27,6 +29,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, Entity> m_PendingConfiguredRequestSources = new Dictionary<Entity, Entity>();
         private readonly HashSet<Entity> m_ConfiguredRequestParkedFallbacks = new HashSet<Entity>();
         private readonly List<Entity> m_RequestCleanupScratch = new List<Entity>();
+        private const byte CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN = 16;
+        private const int CONFIGURED_DEPOT_OUTBOUND_PATH_LOOKAHEAD = 8;
 
         protected override void OnCreate()
         {
@@ -38,6 +42,12 @@ namespace RapidTransitMod
                 ComponentType.ReadOnly<TransportVehicleRequest>(),
                 ComponentType.Exclude<Dispatched>(),
                 ComponentType.Exclude<PathInformation>(),
+                ComponentType.Exclude<Deleted>());
+            m_ConfiguredDispatchRequestQuery = GetEntityQuery(
+                ComponentType.ReadOnly<ServiceRequest>(),
+                ComponentType.ReadOnly<TransportVehicleRequest>(),
+                ComponentType.ReadOnly<PathInformation>(),
+                ComponentType.Exclude<Dispatched>(),
                 ComponentType.Exclude<Deleted>());
             m_DepotQuery = GetEntityQuery(
                 ComponentType.ReadWrite<Game.Buildings.TransportDepot>(),
@@ -53,11 +63,14 @@ namespace RapidTransitMod
         protected override void OnUpdate()
         {
             CleanupConfiguredRequestTracking();
-            if (m_PendingRequestQuery.IsEmptyIgnoreFilter || m_DepotQuery.IsEmptyIgnoreFilter || m_LineQuery.IsEmptyIgnoreFilter)
+            if ((m_PendingRequestQuery.IsEmptyIgnoreFilter && m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
+                || m_DepotQuery.IsEmptyIgnoreFilter
+                || m_LineQuery.IsEmptyIgnoreFilter)
                 return;
 
             UpdateLineDepotAffinity();
             QueueConfiguredDepotRequests();
+            GateConfiguredDepotDispatchRequests();
             ApplyDepotSourceLocks();
         }
 
@@ -129,6 +142,8 @@ namespace RapidTransitMod
                     ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(request);
                     if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
                         continue;
+                    if (serviceRequest.m_Cooldown > 0)
+                        continue;
 
                     TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
                     Entity line = vehicleRequest.m_Route;
@@ -189,6 +204,51 @@ namespace RapidTransitMod
 
                     pathfindQueue.Enqueue(new SetupQueueItem(request, parameters, origin, destination));
                     m_PendingConfiguredRequestSources[request] = source;
+                }
+            }
+        }
+
+        private void GateConfiguredDepotDispatchRequests()
+        {
+            if (m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
+                return;
+
+            using (NativeArray<Entity> requests = m_ConfiguredDispatchRequestQuery.ToEntityArray(Allocator.Temp))
+            {
+                for (int i = 0; i < requests.Length; i++)
+                {
+                    Entity requestEntity = requests[i];
+                    if (!EntityManager.Exists(requestEntity)
+                        || !EntityManager.HasComponent<ServiceRequest>(requestEntity)
+                        || !EntityManager.HasComponent<TransportVehicleRequest>(requestEntity)
+                        || !EntityManager.HasComponent<PathInformation>(requestEntity)
+                        || !EntityManager.HasBuffer<PathElement>(requestEntity))
+                    {
+                        continue;
+                    }
+
+                    ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(requestEntity);
+                    if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
+                        continue;
+
+                    TransportVehicleRequest request = EntityManager.GetComponentData<TransportVehicleRequest>(requestEntity);
+                    Entity line = request.m_Route;
+                    if (line == Entity.Null || !EntityManager.Exists(line))
+                        continue;
+
+                    Entity configuredDepot = DepartureControlSystem.Instance?.GetConfiguredAllowedDepot(line) ?? Entity.Null;
+                    if (!IsDepotCompatibleWithLine(configuredDepot, line))
+                        continue;
+
+                    if (!IsConfiguredRequestPathOrigin(requestEntity, configuredDepot))
+                        continue;
+
+                    if (!IsConfiguredDepotOutboundPathBlocked(requestEntity, configuredDepot, out Entity blocker, out Entity blockedLane))
+                        continue;
+
+                    BlockConfiguredDispatchRequest(requestEntity);
+                    LogConfiguredDepotGate(line, requestEntity, configuredDepot, blocker, blockedLane);
+                    LogRequestDecision(line, request, configuredDepot, configuredDepot, blocker, false, "configured-depot-lane-blocked");
                 }
             }
         }
@@ -584,6 +644,177 @@ namespace RapidTransitMod
             return m_PreferredDepotByLine.TryGetValue(line, out Entity inferredDepot) ? inferredDepot : Entity.Null;
         }
 
+        private void DelayBlockedConfiguredRequest(Entity request)
+        {
+            if (request == Entity.Null
+                || !EntityManager.Exists(request)
+                || !EntityManager.HasComponent<ServiceRequest>(request))
+            {
+                return;
+            }
+
+            ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(request);
+            if (serviceRequest.m_Cooldown < CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN)
+            {
+                serviceRequest.m_Cooldown = CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN;
+                EntityManager.SetComponentData(request, serviceRequest);
+            }
+        }
+
+        private void BlockConfiguredDispatchRequest(Entity request)
+        {
+            if (request == Entity.Null || !EntityManager.Exists(request))
+                return;
+
+            if (EntityManager.HasBuffer<PathElement>(request))
+            {
+                EntityManager.GetBuffer<PathElement>(request).Clear();
+            }
+
+            if (EntityManager.HasComponent<PathInformation>(request))
+            {
+                EntityManager.RemoveComponent<PathInformation>(request);
+            }
+
+            DelayBlockedConfiguredRequest(request);
+        }
+
+        private bool IsConfiguredRequestPathOrigin(Entity request, Entity configuredDepot)
+        {
+            if (request == Entity.Null
+                || configuredDepot == Entity.Null
+                || !EntityManager.Exists(request)
+                || !EntityManager.HasComponent<PathInformation>(request))
+            {
+                return false;
+            }
+
+            DepartureControlSystem control = DepartureControlSystem.Instance;
+            if (control == null)
+                return false;
+
+            PathInformation pathInformation = EntityManager.GetComponentData<PathInformation>(request);
+            Entity origin = pathInformation.m_Origin;
+            if (origin == Entity.Null || !EntityManager.Exists(origin))
+                return false;
+
+            Entity canonicalOrigin = control.CanonicalizeTransportDepotEntity(origin);
+            if (canonicalOrigin == configuredDepot)
+                return true;
+
+            if (EntityManager.HasComponent<Owner>(origin))
+            {
+                Entity originOwner = control.CanonicalizeTransportDepotEntity(EntityManager.GetComponentData<Owner>(origin).m_Owner);
+                if (originOwner == configuredDepot)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool IsConfiguredDepotOutboundPathBlocked(Entity request, Entity configuredDepot, out Entity blocker, out Entity blockedLane)
+        {
+            blocker = Entity.Null;
+            blockedLane = Entity.Null;
+            if (request == Entity.Null
+                || configuredDepot == Entity.Null
+                || !EntityManager.Exists(request)
+                || !EntityManager.HasBuffer<PathElement>(request))
+            {
+                return false;
+            }
+
+            DynamicBuffer<PathElement> path = EntityManager.GetBuffer<PathElement>(request, true);
+            int laneChecks = 0;
+            for (int i = 0; i < path.Length && laneChecks < CONFIGURED_DEPOT_OUTBOUND_PATH_LOOKAHEAD; i++)
+            {
+                Entity lane = path[i].m_Target;
+                if (lane == Entity.Null || !EntityManager.Exists(lane))
+                    continue;
+
+                if (!EntityManager.HasComponent<LaneReservation>(lane))
+                    continue;
+
+                laneChecks++;
+
+                if (TryGetInboundDepotReservationBlocker(lane, configuredDepot, out blocker))
+                {
+                    blockedLane = lane;
+                    return true;
+                }
+
+                if (!EntityManager.HasBuffer<LaneOverlap>(lane))
+                    continue;
+
+                DynamicBuffer<LaneOverlap> overlaps = EntityManager.GetBuffer<LaneOverlap>(lane, true);
+                for (int overlapIndex = 0; overlapIndex < overlaps.Length; overlapIndex++)
+                {
+                    Entity otherLane = overlaps[overlapIndex].m_Other;
+                    if (TryGetInboundDepotReservationBlocker(otherLane, configuredDepot, out blocker))
+                    {
+                        blockedLane = otherLane;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryGetInboundDepotReservationBlocker(Entity lane, Entity configuredDepot, out Entity blocker)
+        {
+            blocker = Entity.Null;
+            if (lane == Entity.Null
+                || configuredDepot == Entity.Null
+                || !EntityManager.Exists(lane)
+                || !EntityManager.HasComponent<LaneReservation>(lane))
+            {
+                return false;
+            }
+
+            LaneReservation reservation = EntityManager.GetComponentData<LaneReservation>(lane);
+            if (reservation.GetPriority() == 0 || reservation.m_Blocker == Entity.Null)
+                return false;
+
+            if (!IsInboundDepotBlocker(reservation.m_Blocker, configuredDepot, out blocker))
+                return false;
+
+            return true;
+        }
+
+        private bool IsInboundDepotBlocker(Entity blockerCandidate, Entity configuredDepot, out Entity blocker)
+        {
+            blocker = Entity.Null;
+            if (blockerCandidate == Entity.Null || configuredDepot == Entity.Null)
+                return false;
+
+            DepartureControlSystem control = DepartureControlSystem.Instance;
+            if (control == null)
+                return false;
+
+            Entity vehicle = ResolveTransportVehicleController(blockerCandidate);
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || EntityManager.HasComponent<ParkedCar>(vehicle)
+                || EntityManager.HasComponent<ParkedTrain>(vehicle)
+                || !EntityManager.HasComponent<Owner>(vehicle)
+                || !EntityManager.HasComponent<Target>(vehicle))
+            {
+                return false;
+            }
+
+            Entity ownerDepot = control.CanonicalizeTransportDepotEntity(EntityManager.GetComponentData<Owner>(vehicle).m_Owner);
+            if (ownerDepot != configuredDepot)
+                return false;
+
+            Entity targetDepot = control.CanonicalizeTransportDepotEntity(EntityManager.GetComponentData<Target>(vehicle).m_Target);
+            if (targetDepot != configuredDepot)
+                return false;
+
+            blocker = vehicle;
+            return true;
+        }
+
         private void LogRequestDecision(
             Entity line,
             TransportVehicleRequest request,
@@ -610,6 +841,32 @@ namespace RapidTransitMod
                 + " effective=" + FormatDepotLabel(effectiveDepot)
                 + " lock=" + (willLock ? "yes" : "no")
                 + " reason=" + reason);
+        }
+
+        private void LogConfiguredDepotGate(
+            Entity line,
+            Entity request,
+            Entity configuredDepot,
+            Entity blocker,
+            Entity blockedLane)
+        {
+            string key = "gate|req=" + request.Index
+                + "|depot=" + configuredDepot.Index
+                + "|blocker=" + blocker.Index
+                + "|lane=" + blockedLane.Index;
+            if (m_RequestDecisionLogCache.TryGetValue(line, out string existing)
+                && string.Equals(existing, key, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            m_RequestDecisionLogCache[line] = key;
+            Mod.log.Info("[ConfiguredDepotGate] line=" + line.Index
+                + " request=" + request.Index
+                + " depot=" + FormatDepotLabel(configuredDepot)
+                + " blocker=" + FormatDepotLabel(blocker)
+                + " lane=" + (blockedLane == Entity.Null ? "-" : ("#" + blockedLane.Index))
+                + " cooldown=" + CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN);
         }
 
         private string FormatDepotLabel(Entity depot)

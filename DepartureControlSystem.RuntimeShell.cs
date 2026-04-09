@@ -84,6 +84,7 @@ namespace RapidTransitMod
             var ecb = m_EndFrameBarrier.CreateCommandBuffer();
             CleanupDeferredBoardingTailIgnores(m_SimulationSystem.frameIndex);
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
+            DrainPatchedTrainReverseSignals();
 
             EnsureLapCacheBuffer();
             EnsureVehicleCacheBuffer();
@@ -156,6 +157,8 @@ namespace RapidTransitMod
             }
 
             FlushBypassPerfProbeIfDue(nowFrame);
+            FlushLineOrderedProbeIfDue(nowFrame);
+            FlushDirectionCompareProbeIfDue(nowFrame);
 
         }
 
@@ -187,7 +190,16 @@ namespace RapidTransitMod
                 || m_BypassPerfProbeSameStationCalls > 0
                 || m_BypassPerfProbeSameStationReusedCandidates > 0
                 || m_BypassPerfProbeDeepCorridorEntries > 0
-                || m_BypassPerfProbeEpisodeReuses > 0)
+                || m_BypassPerfProbeEpisodeReuses > 0
+                || m_PerfProbeSceneExpressLineQueries > 0
+                || m_PerfProbeSceneExpressLineSameFrameRequeries > 0
+                || m_PerfProbeSceneExpressLineConsecutiveFrameRequeries > 0
+                || m_PerfProbeSceneExpressLineRecentFrameRequeries > 0
+                || m_PerfProbeWorkbenchLineFrameSnapshotHits > 0
+                || m_PerfProbeWorkbenchLineFrameSnapshotMisses > 0
+                || m_PerfProbeOriginSettleSlowPathEntered > 0
+                || m_PerfProbeOriginSettlePreSnapshotMisses > 0
+                || m_PerfProbeOriginSettleWindowHits > 0)
             {
                 log.Info("[待避轻量计数] frames=" + elapsedFrames
                     + " cadence=" + m_BypassPerfProbeCadenceCalls
@@ -203,7 +215,16 @@ namespace RapidTransitMod
                     + " sameReuse=" + m_BypassPerfProbeSameStationReusedCandidates
                     + " sameCalls=" + m_BypassPerfProbeSameStationCalls
                     + " deepCorridor=" + m_BypassPerfProbeDeepCorridorEntries
-                    + " episodeReuse=" + m_BypassPerfProbeEpisodeReuses);
+                    + " episodeReuse=" + m_BypassPerfProbeEpisodeReuses
+                    + " expressLineQ=" + m_PerfProbeSceneExpressLineQueries
+                    + " expressLineSameFrame=" + m_PerfProbeSceneExpressLineSameFrameRequeries
+                    + " expressLineConsecutive=" + m_PerfProbeSceneExpressLineConsecutiveFrameRequeries
+                    + " expressLineRecent=" + m_PerfProbeSceneExpressLineRecentFrameRequeries
+                    + " wbHit=" + m_PerfProbeWorkbenchLineFrameSnapshotHits
+                    + " wbMiss=" + m_PerfProbeWorkbenchLineFrameSnapshotMisses
+                    + " settleSlow=" + m_PerfProbeOriginSettleSlowPathEntered
+                    + " settleSnapMiss=" + m_PerfProbeOriginSettlePreSnapshotMisses
+                    + " settleWindowHit=" + m_PerfProbeOriginSettleWindowHits);
             }
 
             m_BypassPerfProbeLastLogFrame = nowFrame;
@@ -221,6 +242,79 @@ namespace RapidTransitMod
             m_BypassPerfProbeSameStationReusedCandidates = 0;
             m_BypassPerfProbeDeepCorridorEntries = 0;
             m_BypassPerfProbeEpisodeReuses = 0;
+            m_PerfProbeSceneExpressLineQueries = 0;
+            m_PerfProbeSceneExpressLineSameFrameRequeries = 0;
+            m_PerfProbeSceneExpressLineConsecutiveFrameRequeries = 0;
+            m_PerfProbeSceneExpressLineRecentFrameRequeries = 0;
+            m_PerfProbeWorkbenchLineFrameSnapshotHits = 0;
+            m_PerfProbeWorkbenchLineFrameSnapshotMisses = 0;
+            m_PerfProbeOriginSettleSlowPathEntered = 0;
+            m_PerfProbeOriginSettlePreSnapshotMisses = 0;
+            m_PerfProbeOriginSettleWindowHits = 0;
+        }
+
+        private void FlushLineOrderedProbeIfDue(uint nowFrame)
+        {
+            if (!IsLineOrderedRuntimeProbeLoggingEnabled())
+                return;
+
+            if (m_LineOrderedProbeLastLogFrame == 0)
+            {
+                m_LineOrderedProbeLastLogFrame = nowFrame;
+                return;
+            }
+
+            uint elapsedFrames = nowFrame - m_LineOrderedProbeLastLogFrame;
+            if (elapsedFrames < LINE_ORDERED_PROBE_LOG_INTERVAL_FRAMES)
+                return;
+
+            if (m_LineOrderedProbeExpressLineQueries > 0
+                || m_LineOrderedProbeOrderedAttempts > 0
+                || m_LineOrderedProbeHeadOnlySuccesses > 0
+                || m_LineOrderedProbeFallbacks > 0
+                || m_LineOrderedProbeHeadCandidateBuilds > 0
+                || m_LineOrderedProbeFallbackCandidateBuilds > 0)
+            {
+                log.Info("[LineOrderedProbe] frames=" + elapsedFrames
+                    + " expressLineQ=" + m_LineOrderedProbeExpressLineQueries
+                    + " orderedAttempts=" + m_LineOrderedProbeOrderedAttempts
+                    + " headOnly=" + m_LineOrderedProbeHeadOnlySuccesses
+                    + " fallback=" + m_LineOrderedProbeFallbacks
+                    + " headBuilds=" + m_LineOrderedProbeHeadCandidateBuilds
+                    + " fallbackBuilds=" + m_LineOrderedProbeFallbackCandidateBuilds);
+            }
+
+            m_LineOrderedProbeLastLogFrame = nowFrame;
+            m_LineOrderedProbeExpressLineQueries = 0;
+            m_LineOrderedProbeOrderedAttempts = 0;
+            m_LineOrderedProbeHeadOnlySuccesses = 0;
+            m_LineOrderedProbeFallbacks = 0;
+            m_LineOrderedProbeHeadCandidateBuilds = 0;
+            m_LineOrderedProbeFallbackCandidateBuilds = 0;
+        }
+
+        private void FlushDirectionCompareProbeIfDue(uint nowFrame)
+        {
+            if (m_DirectionCompareProbeLastLogFrame == 0)
+            {
+                m_DirectionCompareProbeLastLogFrame = nowFrame;
+                return;
+            }
+
+            uint elapsedFrames = nowFrame - m_DirectionCompareProbeLastLogFrame;
+            if (elapsedFrames < DIRECTION_COMPARE_PROBE_LOG_INTERVAL_FRAMES)
+                return;
+
+            if (m_DirectionCompareProbeSamples > 0 || m_DirectionCompareProbeMismatches > 0)
+            {
+                log.Info("[DirectionCompareProbe] frames=" + elapsedFrames
+                    + " samples=" + m_DirectionCompareProbeSamples
+                    + " mismatches=" + m_DirectionCompareProbeMismatches);
+            }
+
+            m_DirectionCompareProbeLastLogFrame = nowFrame;
+            m_DirectionCompareProbeSamples = 0;
+            m_DirectionCompareProbeMismatches = 0;
         }
 
         private void SafeClearAll()
@@ -286,11 +380,14 @@ namespace RapidTransitMod
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
+            m_LastLaunchHeadSnapshots.Clear();
+            m_LastBoardingHeadSnapshots.Clear();
             m_DeferredBoardingTailIgnores.Clear();
             m_DeferredBoardingHumanTailIgnores.Clear();
             m_DeferredBoardingPetTailIgnores.Clear();
             m_DeferredBoardingTailScratch.Clear();
             m_MidStopTimeoutLogCache.Clear();
+            ClearPatchedTrainReverseSignals();
             m_SystemReady = false;
             m_StartupRuntimeStateCleared = false;
             m_StableFrameCount = 0;
@@ -356,11 +453,14 @@ namespace RapidTransitMod
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
+            m_LastLaunchHeadSnapshots.Clear();
+            m_LastBoardingHeadSnapshots.Clear();
             m_DeferredBoardingTailIgnores.Clear();
             m_DeferredBoardingHumanTailIgnores.Clear();
             m_DeferredBoardingPetTailIgnores.Clear();
             m_DeferredBoardingTailScratch.Clear();
             m_MidStopTimeoutLogCache.Clear();
+            ClearPatchedTrainReverseSignals();
             m_LastPuppetMasterMinute = -1;
             m_LastRegisterSweepMinute = -1;
             m_LastSchedulerTickMinute = -1;

@@ -979,7 +979,10 @@ namespace RapidTransitMod
             }
 
             return boundaryLabel
-                + " slices=" + boundary.BeforeSliceIndex + "->" + boundary.AfterSliceIndex;
+                + " slices=" + boundary.BeforeSliceIndex + "->" + boundary.AfterSliceIndex
+                + (boundary.IsLearned
+                    ? " learnedHits=" + boundary.MatchedAtomCount
+                    : " match=" + boundary.MatchedAtomCount + " unique=" + boundary.MatchedUniqueLaneCount);
         }
 
         private void TryLogTrainLaneSourceDisagreement(
@@ -1497,13 +1500,24 @@ namespace RapidTransitMod
                 return false;
             }
 
+            int localTraversalPhaseIndex = TryResolveStaticTraversalPhaseWindow(
+                localChain,
+                protectedInterval.StartAtomIndex,
+                protectedInterval.EndAtomIndexExclusive,
+                out int resolvedLocalTraversalPhaseIndex,
+                out _,
+                out _)
+                ? resolvedLocalTraversalPhaseIndex
+                : -1;
             if (!TryFindBestCurrentForwardSceneSameDirectionTrunkSegment(
                     localChain,
                     protectedInterval,
                     currentBypassBuilding,
                     expressChain,
                     expressProtectedInterval,
+                    localTraversalPhaseIndex,
                     expressCursor.AtomCursorIndex,
+                    -1,
                     out GlobalSharedTrunkSegment selectedTrunkSegment))
             {
                 if (lineAudit != null)
@@ -1524,9 +1538,8 @@ namespace RapidTransitMod
                 return false;
             }
 
-            RelativeToTrunkState expressTrunkState = BuildRelativeToTrunkStateFromRuntimePosition(
+            RelativeToTrunkState expressTrunkState = ResolveVehicleTrunkTravelState(
                 expressPosition,
-                expressChain,
                 selectedTrunkSegment,
                 useLocalSide: false);
             if (!selectedTrunkSegment.HasCanonicalDirection

@@ -261,23 +261,38 @@ namespace RapidTransitMod
             public readonly List<TraversalRunSlice> RunSlices = new List<TraversalRunSlice>();
         }
 
+        private enum BypassExecutionMode : byte
+        {
+            SimpleSceneScan = 0,
+            ComplexLineModel = 1,
+        }
+
         private readonly struct TurnbackBoundary
         {
             public readonly int AtomIndex;
             public readonly int BeforeSliceIndex;
             public readonly int AfterSliceIndex;
             public readonly int BoundaryEventIndex;
+            public readonly bool IsLearned;
+            public readonly int MatchedAtomCount;
+            public readonly int MatchedUniqueLaneCount;
 
             public TurnbackBoundary(
                 int atomIndex,
                 int beforeSliceIndex,
                 int afterSliceIndex,
-                int boundaryEventIndex)
+                int boundaryEventIndex,
+                bool isLearned,
+                int matchedAtomCount,
+                int matchedUniqueLaneCount)
             {
                 AtomIndex = atomIndex;
                 BeforeSliceIndex = beforeSliceIndex;
                 AfterSliceIndex = afterSliceIndex;
                 BoundaryEventIndex = boundaryEventIndex;
+                IsLearned = isLearned;
+                MatchedAtomCount = matchedAtomCount;
+                MatchedUniqueLaneCount = matchedUniqueLaneCount;
             }
         }
 
@@ -314,12 +329,20 @@ namespace RapidTransitMod
             public List<TurnbackBoundary> TurnbackBoundaries = new List<TurnbackBoundary>();
             public LocalBypassWaypointSceneBinding[] LocalBypassWaypointScenes = System.Array.Empty<LocalBypassWaypointSceneBinding>();
             public uint LocalBypassWaypointScenesVersion;
+            public uint BypassExecutionModeVersion;
+            public int LocalBypassSceneCount;
+            public int MaxExpressLinesPerScene;
+            public int MultiTrunkSceneCount;
+            public BypassExecutionMode ExecutionMode;
             public uint SharedRunsVersion;
             public uint BypassPipelineReadyVersion;
             public bool ControlEdgeSharedSpansReady;
             public bool BypassProtectedIntervalsReady;
             public bool ProtectedSharedIntervalsReady;
             public bool ProtectedIntervalSummariesReady;
+            public string TurnbackBuildMode = string.Empty;
+            public string TurnbackBuildNote = string.Empty;
+            public int TurnbackBuildSegmentPairIndex = -1;
         }
 
         private readonly struct LocalBypassWaypointSceneBinding
@@ -486,19 +509,31 @@ namespace RapidTransitMod
             public readonly float AtomPosition01;
             public readonly TrackModelRelativeToProtectedInterval RelativeToProtectedInterval;
             public readonly float Confidence;
+            public readonly int TraversalPhaseIndex;
+            public readonly int TraversalPhaseStartAtomIndex;
+            public readonly int TraversalPhaseEndAtomExclusive;
+            public readonly int NextTurnbackBoundaryAtomIndex;
 
             public TrackModelRuntimePosition(
                 int currentControlEdgeIndex,
                 int currentAtomIndex,
                 float atomPosition01,
                 TrackModelRelativeToProtectedInterval relativeToProtectedInterval,
-                float confidence)
+                float confidence,
+                int traversalPhaseIndex,
+                int traversalPhaseStartAtomIndex,
+                int traversalPhaseEndAtomExclusive,
+                int nextTurnbackBoundaryAtomIndex)
             {
                 CurrentControlEdgeIndex = currentControlEdgeIndex;
                 CurrentAtomIndex = currentAtomIndex;
                 AtomPosition01 = atomPosition01;
                 RelativeToProtectedInterval = relativeToProtectedInterval;
                 Confidence = confidence;
+                TraversalPhaseIndex = traversalPhaseIndex;
+                TraversalPhaseStartAtomIndex = traversalPhaseStartAtomIndex;
+                TraversalPhaseEndAtomExclusive = traversalPhaseEndAtomExclusive;
+                NextTurnbackBoundaryAtomIndex = nextTurnbackBoundaryAtomIndex;
             }
         }
 
@@ -862,6 +897,66 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct TrunkPhaseAlignment : IEquatable<TrunkPhaseAlignment>
+        {
+            public readonly bool Available;
+            public readonly int LocalTraversalPhaseIndex;
+            public readonly int LocalPhaseStartAtomIndex;
+            public readonly int LocalPhaseEndAtomExclusive;
+            public readonly int ExpressTraversalPhaseIndex;
+            public readonly int ExpressPhaseStartAtomIndex;
+            public readonly int ExpressPhaseEndAtomExclusive;
+
+            public TrunkPhaseAlignment(
+                bool available,
+                int localTraversalPhaseIndex,
+                int localPhaseStartAtomIndex,
+                int localPhaseEndAtomExclusive,
+                int expressTraversalPhaseIndex,
+                int expressPhaseStartAtomIndex,
+                int expressPhaseEndAtomExclusive)
+            {
+                Available = available;
+                LocalTraversalPhaseIndex = localTraversalPhaseIndex;
+                LocalPhaseStartAtomIndex = localPhaseStartAtomIndex;
+                LocalPhaseEndAtomExclusive = localPhaseEndAtomExclusive;
+                ExpressTraversalPhaseIndex = expressTraversalPhaseIndex;
+                ExpressPhaseStartAtomIndex = expressPhaseStartAtomIndex;
+                ExpressPhaseEndAtomExclusive = expressPhaseEndAtomExclusive;
+            }
+
+            public bool Equals(TrunkPhaseAlignment other)
+            {
+                return Available == other.Available
+                    && LocalTraversalPhaseIndex == other.LocalTraversalPhaseIndex
+                    && LocalPhaseStartAtomIndex == other.LocalPhaseStartAtomIndex
+                    && LocalPhaseEndAtomExclusive == other.LocalPhaseEndAtomExclusive
+                    && ExpressTraversalPhaseIndex == other.ExpressTraversalPhaseIndex
+                    && ExpressPhaseStartAtomIndex == other.ExpressPhaseStartAtomIndex
+                    && ExpressPhaseEndAtomExclusive == other.ExpressPhaseEndAtomExclusive;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is TrunkPhaseAlignment other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = Available.GetHashCode();
+                    hash = (hash * 397) ^ LocalTraversalPhaseIndex;
+                    hash = (hash * 397) ^ LocalPhaseStartAtomIndex;
+                    hash = (hash * 397) ^ LocalPhaseEndAtomExclusive;
+                    hash = (hash * 397) ^ ExpressTraversalPhaseIndex;
+                    hash = (hash * 397) ^ ExpressPhaseStartAtomIndex;
+                    hash = (hash * 397) ^ ExpressPhaseEndAtomExclusive;
+                    return hash;
+                }
+            }
+        }
+
         private readonly struct GlobalSharedTrunkSegment : IEquatable<GlobalSharedTrunkSegment>
         {
             public readonly int LocalCorridorStartAtomIndex;
@@ -884,6 +979,7 @@ namespace RapidTransitMod
             public readonly bool HasCanonicalDirection;
             public readonly bool LocalAlongCanonical;
             public readonly bool ExpressAlongCanonical;
+            public readonly TrunkPhaseAlignment PhaseAlignment;
 
             public GlobalSharedTrunkSegment(
                 int localCorridorStartAtomIndex,
@@ -905,7 +1001,8 @@ namespace RapidTransitMod
                 SharedTraversalRelation traversalRelation,
                 bool hasCanonicalDirection,
                 bool localAlongCanonical,
-                bool expressAlongCanonical)
+                bool expressAlongCanonical,
+                TrunkPhaseAlignment phaseAlignment)
             {
                 LocalCorridorStartAtomIndex = localCorridorStartAtomIndex;
                 LocalCorridorEndAtomIndexExclusive = localCorridorEndAtomIndexExclusive;
@@ -927,6 +1024,7 @@ namespace RapidTransitMod
                 HasCanonicalDirection = hasCanonicalDirection;
                 LocalAlongCanonical = localAlongCanonical;
                 ExpressAlongCanonical = expressAlongCanonical;
+                PhaseAlignment = phaseAlignment;
             }
 
             public bool Equals(GlobalSharedTrunkSegment other)
@@ -950,7 +1048,8 @@ namespace RapidTransitMod
                     && TraversalRelation == other.TraversalRelation
                     && HasCanonicalDirection == other.HasCanonicalDirection
                     && LocalAlongCanonical == other.LocalAlongCanonical
-                    && ExpressAlongCanonical == other.ExpressAlongCanonical;
+                    && ExpressAlongCanonical == other.ExpressAlongCanonical
+                    && PhaseAlignment.Equals(other.PhaseAlignment);
             }
 
             public override bool Equals(object obj)
@@ -982,6 +1081,7 @@ namespace RapidTransitMod
                     hash = (hash * 397) ^ HasCanonicalDirection.GetHashCode();
                     hash = (hash * 397) ^ LocalAlongCanonical.GetHashCode();
                     hash = (hash * 397) ^ ExpressAlongCanonical.GetHashCode();
+                    hash = (hash * 397) ^ PhaseAlignment.GetHashCode();
                     return hash;
                 }
             }

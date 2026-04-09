@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Game.Common;
+using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using Unity.Entities;
@@ -50,6 +51,192 @@ namespace RapidTransitMod
             }
 
             return atomIndex >= 0;
+        }
+
+        private static bool TryFindClosestForwardAtomIndexForLane(
+            LineTrackChain chain,
+            Entity lane,
+            int referenceAtomIndex,
+            out int atomIndex)
+        {
+            atomIndex = -1;
+            if (chain == null
+                || lane == Entity.Null
+                || chain.TrackAtoms.Count == 0
+                || referenceAtomIndex < 0
+                || !chain.AtomIndicesByLane.TryGetValue(lane, out List<int> candidateAtomIndices)
+                || candidateAtomIndices == null
+                || candidateAtomIndices.Count == 0)
+            {
+                return false;
+            }
+
+            int clampedReference = math.clamp(referenceAtomIndex, 0, chain.TrackAtoms.Count - 1);
+            int bestForwardDistance = int.MaxValue;
+            for (int candidateIndex = 0; candidateIndex < candidateAtomIndices.Count; candidateIndex++)
+            {
+                int index = candidateAtomIndices[candidateIndex];
+                int forwardDistance = index - clampedReference;
+                if (forwardDistance < 0 || forwardDistance > TURNBACK_PATH_RETURN_FORWARD_WINDOW_ATOMS)
+                    continue;
+
+                if (forwardDistance >= bestForwardDistance)
+                    continue;
+
+                bestForwardDistance = forwardDistance;
+                atomIndex = index;
+            }
+
+            return atomIndex >= 0;
+        }
+
+        private bool TryFindClosestForwardAtomIndexForEntityOrOwnerChain(
+            LineTrackChain chain,
+            Entity entity,
+            int referenceAtomIndex,
+            out int atomIndex)
+        {
+            atomIndex = -1;
+            if (chain == null || entity == Entity.Null)
+                return false;
+
+            Entity current = entity;
+            for (int depth = 0; depth < 5 && current != Entity.Null; depth++)
+            {
+                if (TryFindClosestForwardAtomIndexForLane(chain, current, referenceAtomIndex, out atomIndex))
+                    return true;
+                if (TryFindClosestAtomIndexForLane(chain, current, 0, chain.TrackAtoms.Count, referenceAtomIndex, out atomIndex))
+                    return true;
+
+                if (!EntityManager.HasComponent<Owner>(current))
+                    break;
+
+                Entity owner = EntityManager.GetComponentData<Owner>(current).m_Owner;
+                if (owner == Entity.Null || owner == current)
+                    break;
+
+                current = owner;
+            }
+
+            return false;
+        }
+
+        private static ulong ComputeTurnbackPathSignature(
+            PathOwner pathOwner,
+            DynamicBuffer<PathElement> pathElements)
+        {
+            unchecked
+            {
+                ulong hash = 1469598103934665603UL;
+                hash = (hash * 1099511628211UL) ^ (ulong)pathElements.Length;
+                for (int i = 0; i < pathElements.Length; i++)
+                {
+                    PathElement element = pathElements[i];
+                    hash = (hash * 1099511628211UL) ^ (ulong)element.m_Target.Index;
+                    hash = (hash * 1099511628211UL) ^ (ulong)(uint)element.m_Flags;
+                    hash = (hash * 1099511628211UL) ^ (ulong)math.asint(element.m_TargetDelta.x);
+                    hash = (hash * 1099511628211UL) ^ (ulong)math.asint(element.m_TargetDelta.y);
+                }
+
+                return hash;
+            }
+        }
+
+        private bool TryInspectReturnOnUpdatedPath(
+            Entity vehicle,
+            Entity line,
+            LineTrackChain chain,
+            TurnbackLearnVehicleSampleState learnState,
+            int currentTargetWaypointIndex)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || chain == null
+                || learnState == null
+                || !EntityManager.HasComponent<PathOwner>(vehicle)
+                || !EntityManager.HasBuffer<PathElement>(vehicle))
+            {
+                return false;
+            }
+
+            PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
+            DynamicBuffer<PathElement> pathElements = EntityManager.GetBuffer<PathElement>(vehicle, true);
+            if (pathElements.Length == 0)
+                return false;
+
+            ulong pathSignature = ComputeTurnbackPathSignature(pathOwner, pathElements);
+            if (learnState.LastObservedPathSignature == pathSignature)
+                return false;
+
+            learnState.LastObservedPathSignature = pathSignature;
+
+            int returnElementIndex = -1;
+            for (int pathIndex = 0; pathIndex < pathElements.Length; pathIndex++)
+            {
+                if ((pathElements[pathIndex].m_Flags & PathElementFlags.Return) == 0)
+                    continue;
+
+                returnElementIndex = pathIndex;
+                break;
+            }
+
+            if (returnElementIndex < 0)
+                return false;
+
+            int referenceAtomIndex = m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+                && hint.LineEntity == line
+                && hint.ChainSignature == chain.Signature
+                ? hint.AtomCursorIndex
+                : -1;
+
+            if (referenceAtomIndex < 0)
+            {
+                TryLogTrackModelTurnbackSignal(
+                    line,
+                    vehicle,
+                    "path-return-no-reference",
+                    "[TrackModelTurnbackSignal] line=" + line.Index
+                        + " vehicle=" + vehicle.Index
+                        + " status=path-return-no-reference"
+                        + " targetWp=" + currentTargetWaypointIndex
+                        + " returnIndex=" + returnElementIndex);
+                return true;
+            }
+
+            if (TryResolvePathElementReturnCursor(
+                    line,
+                    chain,
+                    referenceAtomIndex,
+                    pathElements,
+                    returnElementIndex,
+                    out VehicleTrackCursor returnCursor))
+            {
+                TryLogTrackModelTurnbackSignal(
+                    line,
+                    vehicle,
+                    "path-return-mapped",
+                    "[TrackModelTurnbackSignal] line=" + line.Index
+                        + " vehicle=" + vehicle.Index
+                        + " status=path-return-mapped"
+                        + " targetWp=" + currentTargetWaypointIndex
+                        + " atom=" + returnCursor.AtomCursorIndex
+                        + " returnIndex=" + returnElementIndex);
+                return true;
+            }
+
+            Entity returnTarget = pathElements[returnElementIndex].m_Target;
+            TryLogTrackModelTurnbackSignal(
+                line,
+                vehicle,
+                "path-return-unmapped",
+                "[TrackModelTurnbackSignal] line=" + line.Index
+                    + " vehicle=" + vehicle.Index
+                    + " status=path-return-unmapped"
+                    + " targetWp=" + currentTargetWaypointIndex
+                    + " target=" + (returnTarget == Entity.Null ? "null" : returnTarget.Index.ToString())
+                    + " refAtom=" + referenceAtomIndex
+                    + " returnIndex=" + returnElementIndex);
+            return true;
         }
 
         private static int ResolveSegmentIndexForAtom(LineTrackChain chain, int atomIndex)
@@ -277,6 +464,78 @@ namespace RapidTransitMod
                 atomIndex,
                 atomPosition01,
                 1f);
+            return true;
+        }
+
+        private bool TryResolvePathElementReturnCursor(
+            Entity line,
+            LineTrackChain chain,
+            int referenceAtomIndex,
+            DynamicBuffer<PathElement> pathElements,
+            int returnElementIndex,
+            out VehicleTrackCursor cursor)
+        {
+            cursor = default;
+            if (line == Entity.Null
+                || chain == null
+                || referenceAtomIndex < 0
+                || pathElements.Length == 0
+                || returnElementIndex < 0
+                || returnElementIndex >= pathElements.Length)
+            {
+                return false;
+            }
+
+            PathElement returnElement = pathElements[returnElementIndex];
+            Entity previousTarget = returnElementIndex > 0
+                ? pathElements[returnElementIndex - 1].m_Target
+                : Entity.Null;
+            Entity nextTarget = returnElementIndex + 1 < pathElements.Length
+                ? pathElements[returnElementIndex + 1].m_Target
+                : Entity.Null;
+            Entity[] candidateTargets = new[]
+            {
+                returnElement.m_Target,
+                previousTarget,
+                nextTarget
+            };
+
+            int atomIndex = -1;
+            bool found = false;
+            for (int candidateIndex = 0; candidateIndex < candidateTargets.Length; candidateIndex++)
+            {
+                Entity candidateTarget = candidateTargets[candidateIndex];
+                if (candidateTarget == Entity.Null)
+                    continue;
+
+                if (TryFindClosestForwardAtomIndexForLane(
+                        chain,
+                        candidateTarget,
+                        referenceAtomIndex,
+                        out atomIndex))
+                {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+                return false;
+
+            int segmentIndex = ResolveSegmentIndexForAtom(chain, atomIndex);
+            if (segmentIndex < 0 || segmentIndex >= chain.SegmentRanges.Count)
+                return false;
+
+            TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
+            cursor = new VehicleTrackCursor(
+                line,
+                chain.Signature,
+                segmentIndex,
+                segmentRange.StartAtomIndex,
+                segmentRange.EndAtomIndexExclusive,
+                atomIndex,
+                math.saturate(returnElement.m_TargetDelta.y),
+                0.95f);
             return true;
         }
 
@@ -580,6 +839,180 @@ namespace RapidTransitMod
             return available;
         }
 
+        private void TrySampleOriginalTrainTurnbackFromRuntime(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || waypoints.Length == 0
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+            {
+                return;
+            }
+
+            TurnbackLearnVehicleSampleState learnState = GetOrCreateTurnbackLearnVehicleSampleState(vehicle, line, chain.Signature);
+            if (learnState == null)
+                return;
+
+            int currentTargetWaypointIndex = ResolveVehicleTargetWaypointIndex(vehicle);
+            bool inspectLaunchPath = m_JustLaunched.Contains(vehicle);
+            if (inspectLaunchPath)
+            {
+                learnState.LastObservedPathSignature = 0;
+                TryInspectReturnOnUpdatedPath(
+                    vehicle,
+                    line,
+                    chain,
+                    learnState,
+                    currentTargetWaypointIndex);
+                m_JustLaunched.Remove(vehicle);
+            }
+
+            bool hasReturnFlag = false;
+            bool hasReturnEndReached = false;
+            if (EntityManager.HasComponent<TrainCurrentLane>(vehicle))
+            {
+                TrainCurrentLane currentLane = EntityManager.GetComponentData<TrainCurrentLane>(vehicle);
+                hasReturnFlag =
+                    (currentLane.m_Front.m_LaneFlags & TrainLaneFlags.Return) != 0
+                    || (currentLane.m_Rear.m_LaneFlags & TrainLaneFlags.Return) != 0;
+                hasReturnEndReached = VehicleUtils.ReturnEndReached(currentLane);
+            }
+
+            if (!hasReturnEndReached)
+                return;
+
+            if (!TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+                return;
+
+            TryLearnTurnbackBoundaryFromOriginalReturn(
+                vehicle,
+                line,
+                chain,
+                cursor,
+                learnState,
+                currentTargetWaypointIndex,
+                hasReturnEndReached,
+                hasReturnFlag ? "return-end+return-flag" : "return-end");
+        }
+
+        private void DrainPatchedTrainReverseSignals()
+        {
+            while (s_PatchedTrainReverseSignals.TryDequeue(out PatchedTrainReverseSignal signal))
+                TryLearnTurnbackBoundaryFromPatchedReverseSignal(signal);
+        }
+
+        private void TryLearnTurnbackBoundaryFromPatchedReverseSignal(PatchedTrainReverseSignal signal)
+        {
+            Entity vehicle = signal.Vehicle;
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || !m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                || vehicleState != VehicleState.Running)
+            {
+                return;
+            }
+
+            Entity line = ResolveVehicleLine(vehicle);
+            if (line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return;
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypoints.Length == 0 || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+                return;
+
+            TurnbackLearnVehicleSampleState learnState = GetOrCreateTurnbackLearnVehicleSampleState(vehicle, line, chain.Signature);
+            if (learnState == null)
+                return;
+
+            int currentTargetWaypointIndex = ResolveVehicleTargetWaypointIndex(vehicle);
+            if (!TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            {
+                TryLogTrackModelTurnbackSignal(
+                    line,
+                    vehicle,
+                    "patch-return-end-no-cursor",
+                    "[TrackModelTurnbackSignal] line=" + line.Index
+                        + " vehicle=" + vehicle.Index
+                        + " status=patch-return-end-no-cursor"
+                        + " targetWp=" + currentTargetWaypointIndex
+                        + " signalFrame=" + signal.Frame
+                        + " head=" + FormatTrainHeadSnapshotEntity(signal.HeadVehicle));
+                return;
+            }
+
+            TryLogTrackModelTurnbackSignal(
+                line,
+                vehicle,
+                "patch-return-end",
+                "[TrackModelTurnbackSignal] line=" + line.Index
+                    + " vehicle=" + vehicle.Index
+                    + " status=patch-return-end"
+                    + " targetWp=" + currentTargetWaypointIndex
+                    + " signalFrame=" + signal.Frame
+                    + " atom=" + cursor.AtomCursorIndex
+                    + " head=" + FormatTrainHeadSnapshotEntity(signal.HeadVehicle));
+
+            TryLearnTurnbackBoundaryFromStrongSignal(
+                vehicle,
+                line,
+                chain,
+                cursor,
+                learnState,
+                currentTargetWaypointIndex,
+                "patch-return-end");
+        }
+
+        private void TryLearnTurnbackBoundaryFromDepartureHeadChange(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int departedWaypointIndex,
+            TrainHeadSnapshot boardingSnapshot,
+            TrainHeadSnapshot departureSnapshot)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || departedWaypointIndex < 0
+                || !m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                || vehicleState != VehicleState.Running
+                || !HasTrainHeadSnapshotTurned(boardingSnapshot, departureSnapshot)
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+            {
+                return;
+            }
+
+            TurnbackLearnVehicleSampleState learnState = GetOrCreateTurnbackLearnVehicleSampleState(vehicle, line, chain.Signature);
+            if (learnState == null)
+                return;
+
+            if (!TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            {
+                TryLogTrackModelTurnbackSignal(
+                    line,
+                    vehicle,
+                    "head-change-no-cursor",
+                    "[TrackModelTurnbackSignal] line=" + line.Index
+                        + " vehicle=" + vehicle.Index
+                        + " status=head-change-no-cursor"
+                        + " stopWp=" + departedWaypointIndex
+                        + " boardHead=" + FormatTrainHeadSnapshotEntity(boardingSnapshot.HeadVehicle)
+                        + " departHead=" + FormatTrainHeadSnapshotEntity(departureSnapshot.HeadVehicle));
+                return;
+            }
+
+            TryLearnTurnbackBoundaryFromStrongSignal(
+                vehicle,
+                line,
+                chain,
+                cursor,
+                learnState,
+                departedWaypointIndex,
+                "head-change-departure");
+        }
+
         private bool TryBuildLineRunningVehicleOwnLineRuntimeSnapshot(
             Entity vehicle,
             Entity line,
@@ -588,12 +1021,20 @@ namespace RapidTransitMod
             out VehicleTrackCursor cursor,
             out int currentControlEdgeIndex,
             out float ownLineAtomCoordinate,
-            out int phaseEndAtomExclusive)
+            out int phaseEndAtomExclusive,
+            out int traversalPhaseIndex,
+            out int traversalPhaseStartAtomIndex,
+            out int traversalPhaseEndAtomExclusive,
+            out int nextTurnbackBoundaryAtomIndex)
         {
             cursor = default;
             currentControlEdgeIndex = -1;
             ownLineAtomCoordinate = 0f;
             phaseEndAtomExclusive = -1;
+            traversalPhaseIndex = -1;
+            traversalPhaseStartAtomIndex = -1;
+            traversalPhaseEndAtomExclusive = -1;
+            nextTurnbackBoundaryAtomIndex = -1;
 
             if (!TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor))
                 return false;
@@ -601,6 +1042,16 @@ namespace RapidTransitMod
             currentControlEdgeIndex = ResolveControlEdgeIndexForAtom(chain, cursor.AtomCursorIndex);
             ownLineAtomCoordinate = math.max(0f, cursor.AtomCursorIndex + math.saturate(cursor.AtomPosition01));
             TryGetExpressCurrentForwardPhaseWindow(chain, cursor.AtomCursorIndex, out phaseEndAtomExclusive);
+            if (!TryResolveTraversalOrderingPhase(
+                    chain,
+                    cursor.AtomCursorIndex,
+                    out traversalPhaseIndex,
+                    out traversalPhaseStartAtomIndex,
+                    out traversalPhaseEndAtomExclusive,
+                    out nextTurnbackBoundaryAtomIndex))
+            {
+                return false;
+            }
             return true;
         }
 
@@ -885,7 +1336,27 @@ namespace RapidTransitMod
             int currentControlEdgeIndex = ResolveControlEdgeIndexForAtom(chain, cursor.AtomCursorIndex);
             TrackModelRelativeToProtectedInterval relative = ResolveRelativeToProtectedInterval(currentControlEdgeIndex, cursor.AtomCursorIndex, protectedInterval);
             float confidence = cursor.Confidence;
-            runtimePosition = new TrackModelRuntimePosition(currentControlEdgeIndex, cursor.AtomCursorIndex, cursor.AtomPosition01, relative, confidence);
+            if (!TryResolveTraversalOrderingPhase(
+                    chain,
+                    cursor.AtomCursorIndex,
+                    out int traversalPhaseIndex,
+                    out int traversalPhaseStartAtomIndex,
+                    out int traversalPhaseEndAtomExclusive,
+                    out int nextTurnbackBoundaryAtomIndex))
+            {
+                return false;
+            }
+
+            runtimePosition = new TrackModelRuntimePosition(
+                currentControlEdgeIndex,
+                cursor.AtomCursorIndex,
+                cursor.AtomPosition01,
+                relative,
+                confidence,
+                traversalPhaseIndex,
+                traversalPhaseStartAtomIndex,
+                traversalPhaseEndAtomExclusive,
+                nextTurnbackBoundaryAtomIndex);
             return true;
         }
 
@@ -906,7 +1377,11 @@ namespace RapidTransitMod
                     runningVehicle.CurrentControlEdgeIndex,
                     runningVehicle.TrackCursor.AtomCursorIndex,
                     protectedInterval),
-                runningVehicle.TrackCursor.Confidence);
+                runningVehicle.TrackCursor.Confidence,
+                runningVehicle.TraversalPhaseIndex,
+                runningVehicle.TraversalPhaseStartAtomIndex,
+                runningVehicle.TraversalPhaseEndAtomExclusive,
+                runningVehicle.NextTurnbackBoundaryAtomIndex);
             return true;
         }
 
