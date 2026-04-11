@@ -119,6 +119,7 @@ namespace RapidTransitMod
             public readonly Entity BlockerVehicle;
             public readonly BypassConflictMode Mode;
             public readonly uint AcquiredFrame;
+            public readonly uint LastQueuedLocalReleaseCheckFrame;
             public readonly bool CanClearAfterExit;
             public readonly bool SameStationRequired;
             public readonly bool HasLatchedBlockerProjection;
@@ -131,6 +132,7 @@ namespace RapidTransitMod
                 Entity blockerVehicle,
                 BypassConflictMode mode,
                 uint acquiredFrame,
+                uint lastQueuedLocalReleaseCheckFrame,
                 bool canClearAfterExit,
                 bool sameStationRequired,
                 bool hasLatchedBlockerProjection = false,
@@ -142,6 +144,7 @@ namespace RapidTransitMod
                 BlockerVehicle = blockerVehicle;
                 Mode = mode;
                 AcquiredFrame = acquiredFrame;
+                LastQueuedLocalReleaseCheckFrame = lastQueuedLocalReleaseCheckFrame;
                 CanClearAfterExit = canClearAfterExit;
                 SameStationRequired = sameStationRequired;
                 HasLatchedBlockerProjection = hasLatchedBlockerProjection;

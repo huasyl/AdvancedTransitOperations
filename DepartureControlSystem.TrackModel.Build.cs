@@ -19,6 +19,8 @@ namespace RapidTransitMod
                 return;
 
             m_DirtyTrackLines.Add(line);
+            m_LineTrackChainFrameSnapshots.Remove(line);
+            m_LineWaypointIndexLookups.Remove(line);
             if (m_LineTrackChains.TryGetValue(line, out LineTrackChain existingChain) && existingChain != null)
                 RemoveDevSightLaneIndexForChain(existingChain);
             m_LineTrackChains.Remove(line);
@@ -30,6 +32,8 @@ namespace RapidTransitMod
         {
             m_DirtyTrackLines.Clear();
             m_LineTrackChains.Clear();
+            m_LineTrackChainFrameSnapshots.Clear();
+            m_LineWaypointIndexLookups.Clear();
             m_DevSightLaneIndex.Clear();
             m_SharedTrackIndex.Clear();
             m_SharedPhysicalTrackIndex.Clear();
@@ -49,9 +53,9 @@ namespace RapidTransitMod
 
         private void ClearBypassTrackModelRuntimeState()
         {
-            m_BypassTrackModelShadowLogCache.Clear();
-            m_BypassTrackModelShadowThrottleCache.Clear();
-            m_BypassTrackModelShadowLastLogFrame.Clear();
+            m_BypassTrackModelDecisionLogCache.Clear();
+            m_BypassTrackModelDecisionThrottleCache.Clear();
+            m_BypassTrackModelDecisionLastLogFrame.Clear();
             m_BypassTrackModelCompareLogCache.Clear();
             m_BypassTrackModelCompareThrottleCache.Clear();
             m_BypassTrackModelCompareLastLogFrame.Clear();
@@ -72,7 +76,7 @@ namespace RapidTransitMod
             m_ActiveConflictCorridorSnapshots.Clear();
             m_ActiveConflictCorridorSnapshotFrame = 0;
             m_TrackModelSequenceLogCache.Clear();
-            m_BypassTrackModelShadowSnapshots.Clear();
+            m_BypassTrackModelDecisionSnapshots.Clear();
             m_LineOrderedRuntimeStates.Clear();
             m_LineOrderedRuntimeForceRefreshReasons.Clear();
             m_LineBypassExecutionModeLogCache.Clear();
@@ -86,9 +90,6 @@ namespace RapidTransitMod
             m_TrackModelTurnbackLearnLastLogFrame.Clear();
             m_LearnedTurnbackBoundaryClustersByLine.Clear();
             m_TurnbackLearnVehicleStates.Clear();
-            m_DirectionCompareLogCache.Clear();
-            m_DirectionCompareLastLogFrame.Clear();
-            m_DirectionCompareLatestByVehicle.Clear();
         }
 
         private void ClearBypassTrackModelRuntimeStateForLine(Entity line)
@@ -183,25 +184,25 @@ namespace RapidTransitMod
                     m_ActiveConflictCorridorSnapshots.Remove(activeCorridorKeysToRemove[i]);
             }
 
-            List<Entity> shadowSnapshotKeysToRemove = null;
-            foreach (KeyValuePair<Entity, BypassTrackModelShadowSnapshot> entry in m_BypassTrackModelShadowSnapshots)
+            List<Entity> decisionSnapshotKeysToRemove = null;
+            foreach (KeyValuePair<Entity, BypassTrackModelDecisionSnapshot> entry in m_BypassTrackModelDecisionSnapshots)
             {
                 if (entry.Value.Line != line)
                     continue;
 
-                shadowSnapshotKeysToRemove ??= new List<Entity>();
-                shadowSnapshotKeysToRemove.Add(entry.Key);
+                decisionSnapshotKeysToRemove ??= new List<Entity>();
+                decisionSnapshotKeysToRemove.Add(entry.Key);
             }
 
-            if (shadowSnapshotKeysToRemove != null)
+            if (decisionSnapshotKeysToRemove != null)
             {
-                for (int i = 0; i < shadowSnapshotKeysToRemove.Count; i++)
+                for (int i = 0; i < decisionSnapshotKeysToRemove.Count; i++)
                 {
-                    Entity vehicle = shadowSnapshotKeysToRemove[i];
-                    m_BypassTrackModelShadowSnapshots.Remove(vehicle);
-                    m_BypassTrackModelShadowLogCache.Remove(vehicle);
-                    m_BypassTrackModelShadowThrottleCache.Remove(vehicle);
-                    m_BypassTrackModelShadowLastLogFrame.Remove(vehicle);
+                    Entity vehicle = decisionSnapshotKeysToRemove[i];
+                    m_BypassTrackModelDecisionSnapshots.Remove(vehicle);
+                    m_BypassTrackModelDecisionLogCache.Remove(vehicle);
+                    m_BypassTrackModelDecisionThrottleCache.Remove(vehicle);
+                    m_BypassTrackModelDecisionLastLogFrame.Remove(vehicle);
                     m_BypassSelectedBlockerDetailLogCache.Remove(vehicle);
                     m_BypassSelectedBlockerDetailLastLogFrame.Remove(vehicle);
                     m_TrainLaneSourceDiagnosticLogCache.Remove(vehicle);
@@ -307,9 +308,25 @@ namespace RapidTransitMod
                 return false;
             }
 
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (m_LineTrackChainFrameSnapshots.TryGetValue(line, out LineTrackChainFrameSnapshot frameSnapshot)
+                && frameSnapshot.Frame == nowFrame
+                && frameSnapshot.WaypointCount == waypoints.Length)
+            {
+                chain = frameSnapshot.Chain;
+                return frameSnapshot.Available;
+            }
+
             DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
             if (segments.Length != waypoints.Length)
+            {
+                m_LineTrackChainFrameSnapshots[line] = new LineTrackChainFrameSnapshot(
+                    nowFrame,
+                    waypoints.Length,
+                    false,
+                    null);
                 return false;
+            }
 
             ulong signature = ComputeLineTrackChainSignature(line, waypoints, segments);
             LineTrackChain previousChain = null;
@@ -317,18 +334,36 @@ namespace RapidTransitMod
                 && chain != null
                 && chain.Signature == signature)
             {
-                return chain.TrackAtoms.Count > 0;
+                bool available = chain.TrackAtoms.Count > 0;
+                m_LineTrackChainFrameSnapshots[line] = new LineTrackChainFrameSnapshot(
+                    nowFrame,
+                    waypoints.Length,
+                    available,
+                    available ? chain : null);
+                return available;
             }
 
             previousChain = chain;
 
             chain = BuildLineTrackChain(line, waypoints, segments, signature);
             if (chain == null || chain.TrackAtoms.Count == 0)
+            {
+                m_LineTrackChainFrameSnapshots[line] = new LineTrackChainFrameSnapshot(
+                    nowFrame,
+                    waypoints.Length,
+                    false,
+                    null);
                 return false;
+            }
 
             if (previousChain != null)
                 RemoveDevSightLaneIndexForChain(previousChain);
             m_LineTrackChains[line] = chain;
+            m_LineTrackChainFrameSnapshots[line] = new LineTrackChainFrameSnapshot(
+                nowFrame,
+                waypoints.Length,
+                true,
+                chain);
             AddDevSightLaneIndexForChain(chain);
             m_DirtyTrackLines.Remove(line);
             m_SharedTrackIndexDirty = true;
@@ -560,6 +595,8 @@ namespace RapidTransitMod
 
             chain.TraversalProfile.Events.Clear();
             chain.TraversalProfile.RunSlices.Clear();
+            chain.TraversalProfile.AtomToRunSliceIndex = Array.Empty<int>();
+            chain.TraversalProfile.SegmentSliceCutPointProgresses = Array.Empty<float[]>();
             if (chain.TrackAtoms.Count == 0)
                 return;
 
@@ -642,6 +679,81 @@ namespace RapidTransitMod
                         timeProfile,
                         lineFrames)));
             }
+
+            int[] atomToRunSliceIndex = new int[chain.TrackAtoms.Count];
+            for (int atomIndex = 0; atomIndex < atomToRunSliceIndex.Length; atomIndex++)
+                atomToRunSliceIndex[atomIndex] = -1;
+            for (int sliceIndex = 0; sliceIndex < chain.TraversalProfile.RunSlices.Count; sliceIndex++)
+            {
+                TraversalRunSlice slice = chain.TraversalProfile.RunSlices[sliceIndex];
+                int startAtomIndex = math.clamp(slice.StartAtomIndex, 0, atomToRunSliceIndex.Length);
+                int endAtomIndexExclusive = math.clamp(slice.EndAtomIndexExclusive, startAtomIndex, atomToRunSliceIndex.Length);
+                for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
+                    atomToRunSliceIndex[atomIndex] = sliceIndex;
+            }
+
+            chain.TraversalProfile.AtomToRunSliceIndex = atomToRunSliceIndex;
+
+            List<float>[] segmentCutPoints = new List<float>[chain.SegmentRanges.Count];
+            void AddSegmentCutPoint(int boundaryAtomIndex)
+            {
+                if (boundaryAtomIndex < 0 || boundaryAtomIndex > chain.TrackAtoms.Count)
+                    return;
+
+                for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
+                {
+                    TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
+                    int segmentStartAtomIndex = segmentRange.StartAtomIndex;
+                    int segmentEndAtomExclusive = segmentRange.EndAtomIndexExclusive;
+                    if (segmentEndAtomExclusive <= segmentStartAtomIndex)
+                        continue;
+
+                    bool insideSegment = boundaryAtomIndex > segmentStartAtomIndex && boundaryAtomIndex < segmentEndAtomExclusive;
+                    bool atSegmentStart = boundaryAtomIndex == segmentStartAtomIndex;
+                    bool atSegmentEnd = boundaryAtomIndex == segmentEndAtomExclusive;
+                    if (!insideSegment && !atSegmentStart && !atSegmentEnd)
+                        continue;
+
+                    float segmentLength = math.max(1f, segmentEndAtomExclusive - segmentStartAtomIndex);
+                    float progress = math.saturate((boundaryAtomIndex - segmentStartAtomIndex) / (float)segmentLength);
+                    segmentCutPoints[segmentIndex] ??= new List<float>();
+
+                    bool duplicate = false;
+                    for (int progressIndex = 0; progressIndex < segmentCutPoints[segmentIndex].Count; progressIndex++)
+                    {
+                        if (math.abs(segmentCutPoints[segmentIndex][progressIndex] - progress) <= 0.01f)
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!duplicate)
+                        segmentCutPoints[segmentIndex].Add(progress);
+                }
+            }
+
+            for (int sliceIndex = 0; sliceIndex < chain.TraversalProfile.RunSlices.Count; sliceIndex++)
+            {
+                TraversalRunSlice slice = chain.TraversalProfile.RunSlices[sliceIndex];
+                AddSegmentCutPoint(slice.StartAtomIndex);
+                AddSegmentCutPoint(slice.EndAtomIndexExclusive);
+            }
+
+            float[][] segmentSliceCutPointProgresses = new float[chain.SegmentRanges.Count][];
+            for (int segmentIndex = 0; segmentIndex < segmentCutPoints.Length; segmentIndex++)
+            {
+                if (segmentCutPoints[segmentIndex] == null || segmentCutPoints[segmentIndex].Count == 0)
+                {
+                    segmentSliceCutPointProgresses[segmentIndex] = Array.Empty<float>();
+                    continue;
+                }
+
+                segmentCutPoints[segmentIndex].Sort();
+                segmentSliceCutPointProgresses[segmentIndex] = segmentCutPoints[segmentIndex].ToArray();
+            }
+
+            chain.TraversalProfile.SegmentSliceCutPointProgresses = segmentSliceCutPointProgresses;
         }
 
         private static bool HasOppositeTraversalDirection(TrackAtom previousAtom, TrackAtom currentAtom)
@@ -1997,6 +2109,51 @@ namespace RapidTransitMod
             log.Info(summary);
         }
 
+        private void LogTraversalSliceCutPointsBuild(LineTrackChain chain)
+        {
+            if (!IsTrackModelTurnbackBuildLoggingEnabled()
+                || chain == null
+                || chain.TraversalProfile == null
+                || chain.SegmentRanges.Count == 0
+                || chain.TraversalProfile.SegmentSliceCutPointProgresses == null)
+            {
+                return;
+            }
+
+            StringBuilder sb = new StringBuilder(256);
+            sb.Append("[TraversalSliceCutPoints] line=").Append(chain.LineEntity.Index);
+            for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
+            {
+                if (segmentIndex >= chain.TraversalProfile.SegmentSliceCutPointProgresses.Length)
+                    break;
+
+                float[] cutPoints = chain.TraversalProfile.SegmentSliceCutPointProgresses[segmentIndex];
+                if (cutPoints == null || cutPoints.Length == 0)
+                    continue;
+
+                TrackSegmentRange segmentRange = chain.SegmentRanges[segmentIndex];
+                int segmentStartAtomIndex = segmentRange.StartAtomIndex;
+                int segmentLengthAtoms = math.max(1, segmentRange.EndAtomIndexExclusive - segmentStartAtomIndex);
+                sb.Append(" | seg").Append(segmentIndex).Append('=');
+                for (int cutPointIndex = 0; cutPointIndex < cutPoints.Length; cutPointIndex++)
+                {
+                    if (cutPointIndex > 0)
+                        sb.Append(',');
+
+                    float progress = cutPoints[cutPointIndex];
+                    int atomIndex = math.clamp(
+                        segmentStartAtomIndex + (int)math.round(progress * segmentLengthAtoms),
+                        segmentStartAtomIndex,
+                        math.max(segmentStartAtomIndex, segmentRange.EndAtomIndexExclusive - 1));
+                    sb.Append(progress.ToString("0.00"))
+                        .Append("@a")
+                        .Append(atomIndex);
+                }
+            }
+
+            log.Info(sb.ToString());
+        }
+
         private List<StationPassRange> CollectStationPassRanges(
             LineTrackChain chain,
             Entity line,
@@ -3181,7 +3338,7 @@ namespace RapidTransitMod
                 + "]";
         }
 
-        private static string ClassifyProtectedIntervalShadowRisk(ProtectedIntervalSummary summary)
+        private static string ClassifyProtectedIntervalTrackModelRisk(ProtectedIntervalSummary summary)
         {
             if (summary.SharedSegmentCount <= 0)
                 return "none";

@@ -2109,7 +2109,7 @@ namespace RapidTransitMod
 
         private void EnsureMergedViewDefaults(DispatchWorkbenchDraftState draft, List<WorkbenchLineRuntime> lines, WorkbenchLineRuntime activeRuntime)
         {
-            WorkbenchLineRuntime localLine = lines.FirstOrDefault() ?? activeRuntime;
+            WorkbenchLineRuntime localLine = activeRuntime ?? lines.FirstOrDefault();
 
             if (draft.MergedView == null)
             {
@@ -2138,7 +2138,7 @@ namespace RapidTransitMod
 
         private void EnsureMergedViewDefaultsStable(DispatchWorkbenchDraftState draft, List<WorkbenchLineRuntime> lines, WorkbenchLineRuntime activeRuntime)
         {
-            WorkbenchLineRuntime localLine = lines.FirstOrDefault() ?? activeRuntime;
+            WorkbenchLineRuntime localLine = activeRuntime ?? lines.FirstOrDefault();
 
             if (draft.MergedView == null)
             {

@@ -149,6 +149,8 @@ namespace RapidTransitMod
                 }
             }
 
+            ProcessPendingRetireHandoffs(ecb);
+
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
             {
@@ -158,8 +160,6 @@ namespace RapidTransitMod
 
             FlushBypassPerfProbeIfDue(nowFrame);
             FlushLineOrderedProbeIfDue(nowFrame);
-            FlushDirectionCompareProbeIfDue(nowFrame);
-
         }
 
         private void FlushBypassPerfProbeIfDue(uint nowFrame)
@@ -197,6 +197,8 @@ namespace RapidTransitMod
                 || m_PerfProbeSceneExpressLineRecentFrameRequeries > 0
                 || m_PerfProbeWorkbenchLineFrameSnapshotHits > 0
                 || m_PerfProbeWorkbenchLineFrameSnapshotMisses > 0
+                || m_PerfProbeOriginSettleCalls > 0
+                || m_PerfProbeOriginSettleFastPathHits > 0
                 || m_PerfProbeOriginSettleSlowPathEntered > 0
                 || m_PerfProbeOriginSettlePreSnapshotMisses > 0
                 || m_PerfProbeOriginSettleWindowHits > 0)
@@ -222,6 +224,8 @@ namespace RapidTransitMod
                     + " expressLineRecent=" + m_PerfProbeSceneExpressLineRecentFrameRequeries
                     + " wbHit=" + m_PerfProbeWorkbenchLineFrameSnapshotHits
                     + " wbMiss=" + m_PerfProbeWorkbenchLineFrameSnapshotMisses
+                    + " settleCalls=" + m_PerfProbeOriginSettleCalls
+                    + " settleFast=" + m_PerfProbeOriginSettleFastPathHits
                     + " settleSlow=" + m_PerfProbeOriginSettleSlowPathEntered
                     + " settleSnapMiss=" + m_PerfProbeOriginSettlePreSnapshotMisses
                     + " settleWindowHit=" + m_PerfProbeOriginSettleWindowHits);
@@ -248,6 +252,8 @@ namespace RapidTransitMod
             m_PerfProbeSceneExpressLineRecentFrameRequeries = 0;
             m_PerfProbeWorkbenchLineFrameSnapshotHits = 0;
             m_PerfProbeWorkbenchLineFrameSnapshotMisses = 0;
+            m_PerfProbeOriginSettleCalls = 0;
+            m_PerfProbeOriginSettleFastPathHits = 0;
             m_PerfProbeOriginSettleSlowPathEntered = 0;
             m_PerfProbeOriginSettlePreSnapshotMisses = 0;
             m_PerfProbeOriginSettleWindowHits = 0;
@@ -293,30 +299,6 @@ namespace RapidTransitMod
             m_LineOrderedProbeFallbackCandidateBuilds = 0;
         }
 
-        private void FlushDirectionCompareProbeIfDue(uint nowFrame)
-        {
-            if (m_DirectionCompareProbeLastLogFrame == 0)
-            {
-                m_DirectionCompareProbeLastLogFrame = nowFrame;
-                return;
-            }
-
-            uint elapsedFrames = nowFrame - m_DirectionCompareProbeLastLogFrame;
-            if (elapsedFrames < DIRECTION_COMPARE_PROBE_LOG_INTERVAL_FRAMES)
-                return;
-
-            if (m_DirectionCompareProbeSamples > 0 || m_DirectionCompareProbeMismatches > 0)
-            {
-                log.Info("[DirectionCompareProbe] frames=" + elapsedFrames
-                    + " samples=" + m_DirectionCompareProbeSamples
-                    + " mismatches=" + m_DirectionCompareProbeMismatches);
-            }
-
-            m_DirectionCompareProbeLastLogFrame = nowFrame;
-            m_DirectionCompareProbeSamples = 0;
-            m_DirectionCompareProbeMismatches = 0;
-        }
-
         private void SafeClearAll()
         {
             var ecb = m_EndFrameBarrier.CreateCommandBuffer();
@@ -346,6 +328,10 @@ namespace RapidTransitMod
             m_ForcedMidStopBoardingGraceUntil.Clear();
             m_ForcedMidStopBoardingHardCloseAfter.Clear();
             m_VehicleLine.Clear();
+            m_PendingRetireHandoffs.Clear();
+            m_RetireShadowHistory.Clear();
+            m_RetireShadowLastSnapshot.Clear();
+            m_RetireShadowLastFrame.Clear();
             m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
@@ -363,17 +349,22 @@ namespace RapidTransitMod
             m_TraversalRunSliceObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
+            m_VehicleTraversalSliceLastSampleFrame.Clear();
+            m_VehicleTraversalSliceSamplingPlans.Clear();
             m_JustLaunched.Clear();
             m_DiagnosedLines.Clear();
             m_RestoredRunning.Clear();
             m_OriginArrivalCandidateSinceFrame.Clear();
             m_ForcedOriginReadyFrame.Clear();
             m_ForcedOriginBoardingGraceUntil.Clear();
+            m_AssistLaunchPendingByVehicle.Clear();
             m_StopDwellStartFrame.Clear();
             m_StopDwellStartFrame.Clear();
             m_WaypointStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
             ClearBypassRuntimeState();
+            m_LineTrackChainFrameSnapshots.Clear();
+            m_LineWaypointIndexLookups.Clear();
             m_LineRunningVehicleFrameSnapshots.Clear();
             m_WaypointIndexFrameSnapshots.Clear();
             m_RouteProgressFrameSnapshots.Clear();
@@ -421,6 +412,10 @@ namespace RapidTransitMod
             m_ForcedMidStopBoardingGraceUntil.Clear();
             m_ForcedMidStopBoardingHardCloseAfter.Clear();
             m_VehicleLine.Clear();
+            m_PendingRetireHandoffs.Clear();
+            m_RetireShadowHistory.Clear();
+            m_RetireShadowLastSnapshot.Clear();
+            m_RetireShadowLastFrame.Clear();
             m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
@@ -438,6 +433,8 @@ namespace RapidTransitMod
             m_TraversalRunSliceObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
+            m_VehicleTraversalSliceLastSampleFrame.Clear();
+            m_VehicleTraversalSliceSamplingPlans.Clear();
             m_JustLaunched.Clear();
             m_DiagnosedLines.Clear();
             m_NearingTerminus.Clear();
@@ -445,10 +442,14 @@ namespace RapidTransitMod
             m_OriginArrivalCandidateSinceFrame.Clear();
             m_ForcedOriginReadyFrame.Clear();
             m_ForcedOriginBoardingGraceUntil.Clear();
+            m_AssistLaunchPendingByVehicle.Clear();
             m_WaypointStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
             ClearBypassRuntimeState();
+            m_LineTrackChainFrameSnapshots.Clear();
+            m_LineWaypointIndexLookups.Clear();
             m_LineRunningVehicleFrameSnapshots.Clear();
+            m_WaypointIndexFrameSnapshots.Clear();
             m_RouteProgressFrameSnapshots.Clear();
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();

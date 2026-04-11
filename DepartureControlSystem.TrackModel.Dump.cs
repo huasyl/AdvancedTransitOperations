@@ -1207,9 +1207,9 @@ namespace RapidTransitMod
                           .Append("->")
                           .Append(FormatTrackModelDisplayStationLabel(nextBypassBuilding, nextBypassWaypointIndex));
 
-                        if (TryEvaluateBypassTrackModelShadowDecision(vehicle, line, waypoints, currentWaypointIndex, m_SimulationSystem.frameIndex, out BypassTrackModelShadowDecision decision))
+                        if (TryEvaluateBypassTrackModelDecision(vehicle, line, waypoints, currentWaypointIndex, m_SimulationSystem.frameIndex, out BypassTrackModelDecision decision))
                         {
-                            sb.Append(" shadow=").Append(decision.ShouldYield ? "yield" : "pass")
+                            sb.Append(" trackModel=").Append(decision.ShouldYield ? "yield" : "pass")
                               .Append("/").Append(decision.ReasonCode);
                             if (decision.BlockerVehicle != Entity.Null)
                             {

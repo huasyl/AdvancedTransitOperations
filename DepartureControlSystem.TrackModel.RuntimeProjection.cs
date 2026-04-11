@@ -658,6 +658,20 @@ namespace RapidTransitMod
                 return false;
             }
 
+            return TryProjectVehicleTrackCursor(vehicle, line, waypoints, chain, out cursor);
+        }
+
+        private bool TryProjectVehicleTrackCursor(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            out VehicleTrackCursor cursor)
+        {
+            cursor = default;
+            if (chain == null || chain.SegmentRanges.Count == 0)
+                return false;
+
             if (TryResolveTrainCurrentLaneCursor(
                     vehicle,
                     line,
@@ -821,7 +835,7 @@ namespace RapidTransitMod
                 return snapshot.Available;
             }
 
-            bool available = TryProjectVehicleTrackCursor(vehicle, line, waypoints, out cursor);
+            bool available = TryProjectVehicleTrackCursor(vehicle, line, waypoints, chain, out cursor);
             if (available)
             {
                 m_VehicleTrackCursorFrameSnapshots[vehicle] = new VehicleTrackCursorFrameSnapshot(

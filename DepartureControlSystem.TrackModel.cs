@@ -28,9 +28,9 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, int> m_SuspectProgressRecoveryWaypoint = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, int> m_SuspectProgressValidationCount = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, SuspectProgressSample> m_SuspectProgressFirstSample = new Dictionary<Entity, SuspectProgressSample>();
-        private readonly Dictionary<Entity, string> m_BypassTrackModelShadowLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, string> m_BypassTrackModelShadowThrottleCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, uint> m_BypassTrackModelShadowLastLogFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, string> m_BypassTrackModelDecisionLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassTrackModelDecisionThrottleCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_BypassTrackModelDecisionLastLogFrame = new Dictionary<Entity, uint>();
         private static bool IsTrackModelDiagnosticLoggingEnabled() => false;
         private readonly Dictionary<Entity, string> m_BypassSelectedBlockerDetailLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BypassSelectedBlockerDetailLastLogFrame = new Dictionary<Entity, uint>();
@@ -52,7 +52,7 @@ namespace RapidTransitMod
         private readonly Dictionary<ActiveConflictCorridorCacheKey, ActiveConflictCorridorSnapshot> m_ActiveConflictCorridorSnapshots = new Dictionary<ActiveConflictCorridorCacheKey, ActiveConflictCorridorSnapshot>();
         private uint m_ActiveConflictCorridorSnapshotFrame;
         private readonly Dictionary<Entity, string> m_TrackModelSequenceLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, BypassTrackModelShadowSnapshot> m_BypassTrackModelShadowSnapshots = new Dictionary<Entity, BypassTrackModelShadowSnapshot>();
+        private readonly Dictionary<Entity, BypassTrackModelDecisionSnapshot> m_BypassTrackModelDecisionSnapshots = new Dictionary<Entity, BypassTrackModelDecisionSnapshot>();
         private readonly Dictionary<Entity, string> m_LineBypassExecutionModeLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LineOrderedRuntimeLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LineOrderedFallbackCaseLogCache = new Dictionary<Entity, string>();

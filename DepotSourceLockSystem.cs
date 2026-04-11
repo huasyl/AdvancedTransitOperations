@@ -166,6 +166,8 @@ namespace RapidTransitMod
                     Entity source = ResolveConfiguredRequestSource(request, configuredDepot, line);
                     if (source == Entity.Null)
                         continue;
+                    if (!TryGetConfiguredRequestDestinationWaypoint(line, out Entity destinationWaypoint))
+                        continue;
 
                     if (!hasPathfindQueue)
                     {
@@ -195,11 +197,11 @@ namespace RapidTransitMod
                     };
                     SetupQueueTarget destination = new SetupQueueTarget
                     {
-                        m_Type = SetupTargetType.RouteWaypoints,
+                        m_Type = SetupTargetType.CurrentLocation,
                         m_Methods = pathMethods,
                         m_TrackTypes = routeConnectionData.m_RouteTrackType,
                         m_RoadTypes = routeConnectionData.m_RouteRoadType,
-                        m_Entity = line
+                        m_Entity = destinationWaypoint
                     };
 
                     pathfindQueue.Enqueue(new SetupQueueItem(request, parameters, origin, destination));
@@ -420,6 +422,30 @@ namespace RapidTransitMod
             }
 
             EntityManager.GetBuffer<PathElement>(request).Clear();
+        }
+
+        private bool TryGetConfiguredRequestDestinationWaypoint(Entity line, out Entity destinationWaypoint)
+        {
+            destinationWaypoint = Entity.Null;
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || !EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                if (waypoint == Entity.Null || !EntityManager.Exists(waypoint))
+                    continue;
+
+                destinationWaypoint = waypoint;
+                return true;
+            }
+
+            return false;
         }
 
         private bool TryGetRouteConnectionData(Entity line, out RouteConnectionData routeConnectionData, out PathMethod pathMethods)

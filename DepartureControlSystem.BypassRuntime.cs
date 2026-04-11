@@ -253,6 +253,7 @@ namespace RapidTransitMod
                 blockerVehicle,
                 conflictMode,
                 nowFrame,
+                nowFrame,
                 canClearAfterExit,
                 sameStationRequired,
                 hasLatchedBlockerProjection,
@@ -262,6 +263,7 @@ namespace RapidTransitMod
         private bool TryReuseConflictEpisodeUntilRelease(
             BypassControlScope scope,
             DynamicBuffer<RouteWaypoint> localWaypoints,
+            uint nowFrame,
             out bool shouldHold,
             out Entity blockerVehicle,
             out bool canClearAfterExit)
@@ -292,16 +294,38 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (!episode.SameStationRequired
-                && TryShouldReleaseForQueuedLocalAhead(
-                    scope,
-                    localWaypoints,
-                    blockerVehicle,
-                    out _,
-                    out _,
-                    out _))
+            if (!episode.SameStationRequired)
             {
-                return false;
+                bool shouldRecheckQueuedLocalRelease = nowFrame <= episode.LastQueuedLocalReleaseCheckFrame
+                    || (nowFrame - episode.LastQueuedLocalReleaseCheckFrame) >= BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES;
+                if (shouldRecheckQueuedLocalRelease)
+                {
+                    if (TryShouldReleaseForQueuedLocalAhead(
+                            scope,
+                            localWaypoints,
+                            blockerVehicle,
+                            out _,
+                            out _,
+                            out _))
+                    {
+                        m_BypassConflictEpisodes.Remove(scope.Vehicle);
+                        m_BypassHoldCadenceSnapshots.Remove(scope.Vehicle);
+                        return false;
+                    }
+
+                    m_BypassConflictEpisodes[scope.Vehicle] = new BypassConflictEpisode(
+                        episode.LocalVehicle,
+                        episode.SceneKey,
+                        episode.ExpressLine,
+                        episode.BlockerVehicle,
+                        episode.Mode,
+                        episode.AcquiredFrame,
+                        nowFrame,
+                        episode.CanClearAfterExit,
+                        episode.SameStationRequired,
+                        episode.HasLatchedBlockerProjection,
+                        episode.LatchedBlockerProjection);
+                }
             }
 
             shouldHold = true;
@@ -355,7 +379,7 @@ namespace RapidTransitMod
 
             bool hasLatchedYield = m_BypassYieldBlocker.ContainsKey(localVehicle);
             if (hasLatchedYield
-                && TryReuseConflictEpisodeUntilRelease(scope, localWaypoints, out shouldHold, out blockerVehicle, out canClearAfterExit))
+                && TryReuseConflictEpisodeUntilRelease(scope, localWaypoints, nowFrame, out shouldHold, out blockerVehicle, out canClearAfterExit))
             {
                 return true;
             }
@@ -649,16 +673,6 @@ namespace RapidTransitMod
                 expressPosition,
                 selectedTrunkSegment,
                 useLocalSide: false);
-            ObserveLegacyVsPhaseTrunkDirection(
-                vehicle,
-                expressLine,
-                "runtime-project",
-                BuildRelativeToTrunkStateFromRuntimePosition(
-                    expressPosition,
-                    expressChain,
-                    selectedTrunkSegment,
-                    useLocalSide: false),
-                expressTrunkState);
             if (!selectedTrunkSegment.HasCanonicalDirection
                 || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
                 || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, selectedTrunkSegment))
@@ -764,16 +778,6 @@ namespace RapidTransitMod
                 expressPosition,
                 latchedProjection.SelectedTrunkSegment,
                 useLocalSide: false);
-            ObserveLegacyVsPhaseTrunkDirection(
-                blockerVehicle,
-                expressLine,
-                "runtime-latched",
-                BuildRelativeToTrunkStateFromRuntimePosition(
-                    expressPosition,
-                    expressChain,
-                    latchedProjection.SelectedTrunkSegment,
-                    useLocalSide: false),
-                expressTrunkState);
             if (!latchedProjection.SelectedTrunkSegment.HasCanonicalDirection
                 || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
                 || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, latchedProjection.SelectedTrunkSegment))
@@ -985,8 +989,22 @@ namespace RapidTransitMod
             if (!(releaseScope.PreviousStationSceneCoordinate < approachUpperBound))
                 return false;
 
-            float bestSceneCoordinate = float.MinValue;
             uint nowFrame = m_SimulationSystem.frameIndex;
+            EnsureLineBypassExecutionModeReady(releaseScope.LocalChain, waypoints);
+            if (releaseScope.LocalChain.ExecutionMode == BypassExecutionMode.ComplexLineModel
+                && TryGetLineOrderedRuntimeState(scope.Line, waypoints, nowFrame, out LineOrderedRuntimeState orderedState)
+                && TryFindNearestOrderedLocalVehicleInApproachSegment(
+                    scope,
+                    releaseScope,
+                    orderedState,
+                    approachUpperBound,
+                    out nearestVehicle,
+                    out nearestVehicleMeters))
+            {
+                return true;
+            }
+
+            float bestSceneCoordinate = float.MinValue;
             if (TryGetLineRunningVehicleFrameSnapshot(scope.Line, waypoints, nowFrame, out LineRunningVehicleFrameSnapshot runningSnapshot))
             {
                 for (int i = 0; i < runningSnapshot.Vehicles.Count; i++)
@@ -1077,6 +1095,67 @@ namespace RapidTransitMod
             return nearestVehicle != Entity.Null;
         }
 
+        private bool TryFindNearestOrderedLocalVehicleInApproachSegment(
+            BypassControlScope scope,
+            QueuedLocalReleaseScope releaseScope,
+            LineOrderedRuntimeState orderedState,
+            float approachUpperBound,
+            out Entity nearestVehicle,
+            out float nearestVehicleMeters)
+        {
+            nearestVehicle = Entity.Null;
+            nearestVehicleMeters = 0f;
+            if (orderedState == null || orderedState.Entries.Count == 0)
+                return false;
+
+            OrderedLineVehicleEntry currentEntry = default;
+            bool foundCurrentEntry = false;
+            for (int i = 0; i < orderedState.Entries.Count; i++)
+            {
+                OrderedLineVehicleEntry candidate = orderedState.Entries[i];
+                if (candidate.Vehicle != scope.Vehicle)
+                    continue;
+
+                currentEntry = candidate;
+                foundCurrentEntry = true;
+                break;
+            }
+
+            if (!foundCurrentEntry)
+                return false;
+
+            float absoluteLowerBound = releaseScope.LocalProtectedInterval.StartAtomIndex + releaseScope.PreviousStationSceneCoordinate;
+            float absoluteUpperBound = releaseScope.LocalProtectedInterval.StartAtomIndex + approachUpperBound;
+            if (!(absoluteLowerBound < absoluteUpperBound))
+                return false;
+
+            for (int phaseRangeIndex = 0; phaseRangeIndex < orderedState.PhaseRanges.Count; phaseRangeIndex++)
+            {
+                OrderedLinePhaseRange phaseRange = orderedState.PhaseRanges[phaseRangeIndex];
+                if (phaseRange.TraversalPhaseIndex != currentEntry.TraversalPhaseIndex)
+                    continue;
+
+                for (int entryIndex = phaseRange.EndEntryIndexExclusive - 1; entryIndex >= phaseRange.StartEntryIndex; entryIndex--)
+                {
+                    OrderedLineVehicleEntry candidate = orderedState.Entries[entryIndex];
+                    if (candidate.Vehicle == scope.Vehicle)
+                        continue;
+                    if (candidate.OwnLineAtomCoordinate >= absoluteUpperBound)
+                        continue;
+                    if (candidate.OwnLineAtomCoordinate < absoluteLowerBound)
+                        break;
+
+                    nearestVehicle = candidate.Vehicle;
+                    nearestVehicleMeters = candidate.OwnLineAtomCoordinate - releaseScope.LocalProtectedInterval.StartAtomIndex;
+                    return true;
+                }
+
+                break;
+            }
+
+            return false;
+        }
+
         private bool FinalizeBypassDecision(
             Entity localVehicle,
             Entity localLine,
@@ -1089,11 +1168,11 @@ namespace RapidTransitMod
             Entity blockerVehicle)
         {
             if (shouldYield
-                && ShouldShadowVetoLiveBypassYield(localVehicle, out string shadowReason))
+                && ShouldTrackModelVetoLiveBypassYield(localVehicle, out string trackModelReason))
             {
                 shouldYield = false;
                 blockerVehicle = Entity.Null;
-                reason = "shadow-veto-" + shadowReason;
+                reason = "track-model-veto-" + trackModelReason;
             }
 
             LogBypassDecisionOnce(localVehicle, currentBypassBuilding, nextBypassBuilding, shouldYield, reason, blockerVehicle);
@@ -1436,13 +1515,13 @@ namespace RapidTransitMod
             hasLatchedBlockerProjection = false;
             latchedBlockerProjection = default;
 
-            if (!TryEvaluateBypassTrackModelShadowDecision(
+            if (!TryEvaluateBypassTrackModelDecision(
                     scope.Vehicle,
                     scope.Line,
                     localWaypoints,
                     scope.WaypointIndex,
                     nowFrame,
-                    out BypassTrackModelShadowDecision liveDecision)
+                    out BypassTrackModelDecision liveDecision)
                 || !liveDecision.Available)
             {
                 return false;

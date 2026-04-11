@@ -237,6 +237,48 @@ namespace RapidTransitMod
             return Entity.Null;
         }
 
+        private Entity ResolveRuntimeControllerVehicle(Entity vehicle)
+        {
+            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                return Entity.Null;
+
+            Entity current = vehicle;
+            Entity fallbackVehicle = Entity.Null;
+            int guard = 0;
+            while (current != Entity.Null && EntityManager.Exists(current) && guard++ < 16)
+            {
+                if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(current))
+                    fallbackVehicle = current;
+
+                if (EntityManager.HasBuffer<LayoutElement>(current)
+                    && EntityManager.HasComponent<Game.Vehicles.PublicTransport>(current))
+                {
+                    return current;
+                }
+
+                if (EntityManager.HasComponent<Controller>(current))
+                {
+                    Entity controller = EntityManager.GetComponentData<Controller>(current).m_Controller;
+                    if (controller != Entity.Null && controller != current)
+                    {
+                        current = controller;
+                        continue;
+                    }
+                }
+
+                if (!EntityManager.HasComponent<Owner>(current))
+                    break;
+
+                Entity owner = EntityManager.GetComponentData<Owner>(current).m_Owner;
+                if (owner == Entity.Null || owner == current)
+                    break;
+
+                current = owner;
+            }
+
+            return fallbackVehicle;
+        }
+
 
     }
 }

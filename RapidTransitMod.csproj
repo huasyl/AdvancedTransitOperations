@@ -121,6 +121,7 @@
   <Target Name="DeployRapidTransitMod" AfterTargets="Build">
     <ItemGroup>
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.dll" />
+      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.pdb" />
       <RapidTransitDeployFiles Include="$(OutputPath)0Harmony.dll" />
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.mjs" />
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.l10n.*.json" />

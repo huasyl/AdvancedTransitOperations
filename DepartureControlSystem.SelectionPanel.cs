@@ -46,7 +46,7 @@ namespace RapidTransitMod
 
         private ulong m_PanelDataVersion = 1;
         private uint m_LastPanelVersionBucket;
-        private const uint PANEL_VERSION_REFRESH_FRAMES = 256;
+        private const uint PANEL_VERSION_REFRESH_FRAMES = 30;
 
         public void FillDebugInfo(Entity entity, InfoList list)
         {
@@ -514,18 +514,18 @@ namespace RapidTransitMod
             snapshot.PrimaryValueKind = "state";
             snapshot.Detail1LabelKey = "line";
             snapshot.Detail1Value = line != Entity.Null ? line.Index.ToString() : "-";
-            snapshot.Detail2LabelKey = "managed";
-            snapshot.Detail2Value = isManagedVehicle ? "yes" : "no";
+            snapshot.Detail2LabelKey = "progress";
+            snapshot.Detail2Value = BuildVehicleTraversalProgressValue(vehicle);
             snapshot.Detail3LabelKey = "currentSlot";
             snapshot.Detail3Value = currentMin >= 0 ? SlotStr(currentMin) : "-";
             snapshot.Detail4LabelKey = "targetSlot";
             snapshot.Detail4Value = targetMin >= 0 ? SlotStr(targetMin) : "-";
             snapshot.Detail5LabelKey = "stopDwell";
             snapshot.Detail5Value = BuildVehicleStopDwellValue(vehicle);
-            snapshot.Detail6LabelKey = "inboundTime";
-            snapshot.Detail6Value = BuildVehicleInboundTimeValue(vehicle);
-            snapshot.Detail7LabelKey = IsChineseLocale() ? "方向对照" : "Direction Compare";
-            snapshot.Detail7Value = BuildVehicleDirectionCompareValue(vehicle, line);
+            snapshot.Detail6LabelKey = "sliceSamplingBand";
+            snapshot.Detail6Value = BuildVehicleTraversalSamplingBandValue(vehicle, line);
+            snapshot.Detail7LabelKey = "sliceSamplingRate";
+            snapshot.Detail7Value = BuildVehicleTraversalSamplingRateValue(vehicle, line);
             snapshot.AlertText = alertText;
             snapshot.ShowRetireAction = isManagedVehicle;
             snapshot.ShowForceDepartAction = isManagedVehicle;
@@ -606,20 +606,6 @@ namespace RapidTransitMod
             return true;
         }
 
-        private string BuildVehicleDirectionCompareValue(Entity vehicle, Entity line)
-        {
-            if (vehicle == Entity.Null)
-                return "-";
-
-            if (m_DirectionCompareLatestByVehicle.TryGetValue(vehicle, out string latest)
-                && !string.IsNullOrWhiteSpace(latest))
-            {
-                return latest;
-            }
-
-            return IsChineseLocale() ? "无活跃方向对照" : "no-active-direction-compare";
-        }
-
         public bool RequestVehicleReevaluate(Entity vehicle)
         {
             vehicle = ResolveSelectedVehicleEntity(vehicle);
@@ -680,6 +666,104 @@ namespace RapidTransitMod
                 + " " + FormatBoardingCloseAssistStats(assistStats)
                 + " wp=" + currentWaypointIndex);
             InvalidatePanelData();
+            return true;
+        }
+
+        private string BuildVehicleTraversalProgressValue(Entity vehicle)
+        {
+            vehicle = ResolveSelectedVehicleEntity(vehicle);
+            if (vehicle == Entity.Null)
+                return "-";
+
+            if (!TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition))
+                return IsChineseLocale() ? "未知" : "unknown";
+
+            int progressPercent = (int)math.round(math.saturate(segmentPosition) * 100f);
+            return "wp" + nextWaypointIndex + " / " + progressPercent + "%";
+        }
+
+        private string BuildVehicleTraversalSamplingBandValue(Entity vehicle, Entity line)
+        {
+            if (!TryBuildVehicleTraversalSamplingDisplay(vehicle, line, out TraversalSliceSamplingPlan plan, out _, out _, out _))
+                return "-";
+
+            if (plan.IsHighSampling)
+                return IsChineseLocale() ? "高" : "high";
+            if (plan.IsMediumSampling)
+                return IsChineseLocale() ? "中" : "medium";
+            return IsChineseLocale() ? "低" : "low";
+        }
+
+        private string BuildVehicleTraversalSamplingRateValue(Entity vehicle, Entity line)
+        {
+            if (!TryBuildVehicleTraversalSamplingDisplay(vehicle, line, out TraversalSliceSamplingPlan plan, out _, out _, out _))
+                return "-";
+
+            if (plan.SampleIntervalFrames <= 1)
+                return IsChineseLocale() ? "每帧" : "every frame";
+
+            return IsChineseLocale()
+                ? ("每" + plan.SampleIntervalFrames + "帧")
+                : ("every " + plan.SampleIntervalFrames + "f");
+        }
+
+        private string BuildVehicleTraversalNextCutPointValue(Entity vehicle, Entity line)
+        {
+            if (!TryBuildVehicleTraversalSamplingDisplay(vehicle, line, out TraversalSliceSamplingPlan plan, out LineTrackChain chain, out _, out int segmentAtomStart))
+                return "-";
+
+            if (!plan.HasUpcomingCutPoint)
+                return IsChineseLocale() ? "本段无后续切换点" : "none in segment";
+
+            int cutPointPercent = (int)math.round(plan.UpcomingCutPointProgress * 100f);
+            int deltaPercent = (int)math.round(plan.UpcomingCutPointDistance * 100f);
+            int segmentLengthAtoms = 1;
+            if (chain != null
+                && plan.SegmentIndex >= 0
+                && plan.SegmentIndex < chain.SegmentRanges.Count)
+            {
+                TrackSegmentRange segmentRange = chain.SegmentRanges[plan.SegmentIndex];
+                segmentLengthAtoms = math.max(1, segmentRange.EndAtomIndexExclusive - segmentRange.StartAtomIndex);
+            }
+            int cutPointAtom = math.clamp(
+                segmentAtomStart + (int)math.round(plan.UpcomingCutPointProgress * segmentLengthAtoms),
+                segmentAtomStart,
+                segmentAtomStart + math.max(0, segmentLengthAtoms - 1));
+            return "seg" + plan.SegmentIndex
+                + " / " + cutPointPercent + "%"
+                + " / a" + cutPointAtom
+                + " / +" + deltaPercent + "%";
+        }
+
+        private bool TryBuildVehicleTraversalSamplingDisplay(
+            Entity vehicle,
+            Entity line,
+            out TraversalSliceSamplingPlan plan,
+            out LineTrackChain chain,
+            out DynamicBuffer<RouteWaypoint> waypoints,
+            out int segmentAtomStart)
+        {
+            plan = default;
+            chain = null;
+            waypoints = default;
+            segmentAtomStart = 0;
+
+            vehicle = ResolveSelectedVehicleEntity(vehicle);
+            if (vehicle == Entity.Null || line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+
+            waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypoints.Length == 0
+                || !TryBuildTraversalSliceSamplingPlan(vehicle, line, waypoints, out plan)
+                || !m_LineTrackChains.TryGetValue(line, out chain)
+                || chain == null
+                || plan.SegmentIndex < 0
+                || plan.SegmentIndex >= chain.SegmentRanges.Count)
+            {
+                return false;
+            }
+
+            segmentAtomStart = chain.SegmentRanges[plan.SegmentIndex].StartAtomIndex;
             return true;
         }
 

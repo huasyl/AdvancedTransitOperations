@@ -1172,14 +1172,14 @@ namespace RapidTransitMod
             LogVehicleStateOnce(m_SameStationMissLogCache, localVehicle, key, message);
         }
 
-        private bool TryBuildBypassTrackModelShadowSummary(
+        private bool TryBuildBypassTrackModelSummary(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             int currentWaypointIndex,
             out string summary)
         {
             summary = string.Empty;
-            if (!TryEvaluateBypassTrackModelShadow(line, waypoints, currentWaypointIndex, out _, out _, out summary))
+            if (!TryEvaluateBypassTrackModelSummary(line, waypoints, currentWaypointIndex, out _, out _, out summary))
                 return false;
             return true;
         }
@@ -1767,7 +1767,7 @@ namespace RapidTransitMod
             return sharedWindowAudit.ToString();
         }
 
-        private static bool ShouldIncludeBypassSequenceForShadowLog(bool hasDecision, BypassTrackModelShadowDecision decision)
+        private static bool ShouldIncludeBypassSequenceForDecisionLog(bool hasDecision, BypassTrackModelDecision decision)
         {
             if (!hasDecision)
                 return false;
@@ -1783,12 +1783,12 @@ namespace RapidTransitMod
             return decision.UsedFallbackResolution;
         }
 
-        private static bool ShouldIncludeBypassSequenceForCompareLog(string alignment, BypassTrackModelShadowDecision decision)
+        private static bool ShouldIncludeBypassSequenceForCompareLog(string alignment, BypassTrackModelDecision decision)
         {
-            return alignment != "match" || ShouldIncludeBypassSequenceForShadowLog(true, decision);
+            return alignment != "match" || ShouldIncludeBypassSequenceForDecisionLog(true, decision);
         }
 
-        private void LogBypassTrackModelShadowOnce(
+        private void LogBypassTrackModelDecisionOnce(
             Entity localVehicle,
             Entity localLine,
             DynamicBuffer<RouteWaypoint> localWaypoints,
@@ -1799,31 +1799,31 @@ namespace RapidTransitMod
             if (localVehicle == Entity.Null || localLine == Entity.Null)
                 return;
 
-            EnsureBypassTrackModelShadowSnapshotCurrent(
+            EnsureBypassTrackModelDecisionSnapshotCurrent(
                 localVehicle,
                 localLine,
                 localWaypoints,
                 currentWaypointIndex,
                 currentBypassBuilding,
                 nextBypassBuilding,
-                out BypassTrackModelShadowDecision shadowDecision);
+                out BypassTrackModelDecision trackModelDecision);
 
-            bool hasDecision = shadowDecision.Available;
+            bool hasDecision = trackModelDecision.Available;
             uint nowFrame = m_SimulationSystem.frameIndex;
-            string coarseKey = (hasDecision ? (shadowDecision.ShouldYield ? "Y" : "N") : "U")
+            string coarseKey = (hasDecision ? (trackModelDecision.ShouldYield ? "Y" : "N") : "U")
                 + "|"
-                + (hasDecision ? shadowDecision.ReasonCode : "decision-unavailable")
+                + (hasDecision ? trackModelDecision.ReasonCode : "decision-unavailable")
                 + "|"
-                + (hasDecision ? shadowDecision.ProtectedIntervalIndex : -1)
+                + (hasDecision ? trackModelDecision.ProtectedIntervalIndex : -1)
                 + "|"
                 + currentBypassBuilding.Index
                 + "|"
                 + nextBypassBuilding.Index
                 + "|"
-                + (hasDecision ? shadowDecision.BlockerVehicle.Index : -1);
+                + (hasDecision ? trackModelDecision.BlockerVehicle.Index : -1);
             if (!ShouldEmitVehicleLogWithCooldown(
-                    m_BypassTrackModelShadowThrottleCache,
-                    m_BypassTrackModelShadowLastLogFrame,
+                    m_BypassTrackModelDecisionThrottleCache,
+                    m_BypassTrackModelDecisionLastLogFrame,
                     localVehicle,
                     coarseKey,
                     nowFrame,
@@ -1833,11 +1833,11 @@ namespace RapidTransitMod
             }
 
             string summary = "trackModel[unavailable]";
-            string shadowRisk = "unavailable";
-            if (TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out _, out string risk, out string builtSummary))
+            string trackModelRisk = "unavailable";
+            if (TryEvaluateBypassTrackModelSummary(localLine, localWaypoints, currentWaypointIndex, out _, out string risk, out string builtSummary))
             {
                 summary = builtSummary;
-                shadowRisk = risk;
+                trackModelRisk = risk;
             }
 
             string localPositionText = "pos[unknown]";
@@ -1849,14 +1849,14 @@ namespace RapidTransitMod
                 if (TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition))
                     localPositionText = FormatRuntimePosition(localPosition);
 
-                if (shadowDecision.BlockerVehicle != Entity.Null
-                    && ResolveVehicleLine(shadowDecision.BlockerVehicle) is Entity blockerLine
+                if (trackModelDecision.BlockerVehicle != Entity.Null
+                    && ResolveVehicleLine(trackModelDecision.BlockerVehicle) is Entity blockerLine
                     && blockerLine != Entity.Null
                     && GetBufferLookup<RouteWaypoint>(true).TryGetBuffer(blockerLine, out DynamicBuffer<RouteWaypoint> blockerWaypoints)
                     && TryGetLineTrackChain(blockerLine, blockerWaypoints, out LineTrackChain blockerChain)
                     && localProtectedIntervalIndex >= 0
                     && TryResolveVehicleCurrentProtectedIntervalForLocalConflict(
-                        shadowDecision.BlockerVehicle,
+                        trackModelDecision.BlockerVehicle,
                         blockerLine,
                         blockerWaypoints,
                         blockerChain,
@@ -1866,7 +1866,7 @@ namespace RapidTransitMod
                         out _,
                         out BypassProtectedInterval blockerProtectedInterval,
                         out string intervalResolutionSource)
-                    && TryProjectTrackModelRuntimePosition(shadowDecision.BlockerVehicle, blockerLine, blockerWaypoints, blockerProtectedInterval, out TrackModelRuntimePosition blockerPosition))
+                    && TryProjectTrackModelRuntimePosition(trackModelDecision.BlockerVehicle, blockerLine, blockerWaypoints, blockerProtectedInterval, out TrackModelRuntimePosition blockerPosition))
                 {
                     blockerPositionText = FormatRuntimePosition(blockerPosition);
                     if (intervalResolutionSource == "fallback")
@@ -1874,100 +1874,100 @@ namespace RapidTransitMod
                 }
             }
 
-            bool includeDecisionSequence = hasDecision && ShouldIncludeBypassSequenceForShadowLog(hasDecision, shadowDecision);
-            string decisionSequence = includeDecisionSequence
+                bool includeDecisionSequence = hasDecision && ShouldIncludeBypassSequenceForDecisionLog(hasDecision, trackModelDecision);
+                string decisionSequence = includeDecisionSequence
                 ? BuildBypassDecisionSequenceSummaryForLogging(
                     localVehicle,
                     localLine,
                     localWaypoints,
                     currentWaypointIndex,
-                    shadowDecision.ProtectedIntervalIndex)
-                : string.Empty;
+                        trackModelDecision.ProtectedIntervalIndex)
+                    : string.Empty;
             string key = summary
                 + "|"
-                + shadowRisk
+                + trackModelRisk
                 + "|"
-                + (hasDecision ? shadowDecision.ProtectedIntervalIndex : -1)
+                + (hasDecision ? trackModelDecision.ProtectedIntervalIndex : -1)
                 + "|"
-                + (hasDecision ? (shadowDecision.ShouldYield ? "Y" : "N") + "|" + shadowDecision.ReasonCode : "decision-unavailable")
+                + (hasDecision ? (trackModelDecision.ShouldYield ? "Y" : "N") + "|" + trackModelDecision.ReasonCode : "decision-unavailable")
                 + "|"
                 + currentBypassBuilding.Index
                 + "|"
                 + nextBypassBuilding.Index
                 + "|"
-                + (hasDecision ? shadowDecision.BlockerVehicle.Index : -1)
+                + (hasDecision ? trackModelDecision.BlockerVehicle.Index : -1)
                 + "|"
                 + localPositionText
                 + "|"
                 + blockerPositionText
                 + "|"
                 + decisionSequence;
-            if (m_BypassTrackModelShadowLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
+            if (m_BypassTrackModelDecisionLogCache.TryGetValue(localVehicle, out string previous) && previous == key)
                 return;
 
-            m_BypassTrackModelShadowLogCache[localVehicle] = key;
+            m_BypassTrackModelDecisionLogCache[localVehicle] = key;
 
-            log.Info("[BypassTrackModelShadow] vehicle=" + localVehicle.Index
+            log.Info("[BypassTrackModelDecision] vehicle=" + localVehicle.Index
                 + " line=" + localLine.Index
                 + " current=" + currentBypassBuilding.Index
                 + " next=" + nextBypassBuilding.Index
-                + " risk=" + shadowRisk
-                + " shadow=" + (hasDecision ? (shadowDecision.ShouldYield ? "yield" : "pass") : "unavailable")
-                + " reason=" + (hasDecision ? shadowDecision.ReasonCode : "decision-unavailable")
+                + " risk=" + trackModelRisk
+                + " decision=" + (hasDecision ? (trackModelDecision.ShouldYield ? "yield" : "pass") : "unavailable")
+                + " reason=" + (hasDecision ? trackModelDecision.ReasonCode : "decision-unavailable")
                 + " local=" + localPositionText
                 + " blocker=" + blockerPositionText
                 + (!string.IsNullOrEmpty(decisionSequence) ? " " + decisionSequence : string.Empty)
                 + " " + summary);
         }
 
-        private void EnsureBypassTrackModelShadowSnapshotCurrent(
+        private void EnsureBypassTrackModelDecisionSnapshotCurrent(
             Entity localVehicle,
             Entity localLine,
             DynamicBuffer<RouteWaypoint> localWaypoints,
             int currentWaypointIndex,
             Entity currentBypassBuilding,
             Entity nextBypassBuilding,
-            out BypassTrackModelShadowDecision shadowDecision)
+            out BypassTrackModelDecision trackModelDecision)
         {
-            shadowDecision = new BypassTrackModelShadowDecision(false, false, "decision-unavailable", -1, false, Entity.Null, false);
+            trackModelDecision = new BypassTrackModelDecision(false, false, "decision-unavailable", -1, false, Entity.Null, false);
 
             if (localVehicle == Entity.Null || localLine == Entity.Null)
                 return;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
-            if (m_BypassTrackModelShadowSnapshots.TryGetValue(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+            if (m_BypassTrackModelDecisionSnapshots.TryGetValue(localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
                 && snapshot.Frame == nowFrame
                 && snapshot.Line == localLine
                 && snapshot.CurrentWaypointIndex == currentWaypointIndex
                 && snapshot.CurrentBypassBuilding == currentBypassBuilding
                 && snapshot.NextBypassBuilding == nextBypassBuilding)
             {
-                shadowDecision = snapshot.Decision;
+                trackModelDecision = snapshot.Decision;
                 return;
             }
 
-            TryEvaluateBypassTrackModelShadowDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, nowFrame, out shadowDecision);
+            TryEvaluateBypassTrackModelDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, nowFrame, out trackModelDecision);
 
-            m_BypassTrackModelShadowSnapshots[localVehicle] = new BypassTrackModelShadowSnapshot(
+            m_BypassTrackModelDecisionSnapshots[localVehicle] = new BypassTrackModelDecisionSnapshot(
                 nowFrame,
                 localLine,
                 currentWaypointIndex,
                 currentBypassBuilding,
                 nextBypassBuilding,
-                shadowDecision);
+                trackModelDecision);
         }
 
-        private string GetBypassTrackModelDecisionShadowSuffix(Entity localVehicle, bool shouldYield)
+        private string GetBypassTrackModelDecisionSuffix(Entity localVehicle, bool shouldYield)
         {
-            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot))
+            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot))
             {
                 return string.Empty;
             }
 
-            BypassTrackModelShadowDecision decision = snapshot.Decision;
-            string shadowDecision = decision.ShouldYield ? "yield" : "pass";
-            string alignment = shadowDecision == (shouldYield ? "yield" : "pass") ? "match" : "diff";
-            return " shadow=" + shadowDecision + "/" + decision.ReasonCode + "/" + alignment;
+            BypassTrackModelDecision decision = snapshot.Decision;
+            string trackModelDecision = decision.ShouldYield ? "yield" : "pass";
+            string alignment = trackModelDecision == (shouldYield ? "yield" : "pass") ? "match" : "diff";
+            return " trackModel=" + trackModelDecision + "/" + decision.ReasonCode + "/" + alignment;
         }
 
         private void LogBypassTrackModelDecisionComparison(
@@ -1977,15 +1977,15 @@ namespace RapidTransitMod
             int currentWaypointIndex,
             bool shouldYield)
         {
-            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot))
+            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot))
             {
                 return;
             }
 
-            BypassTrackModelShadowDecision decision = snapshot.Decision;
+            BypassTrackModelDecision decision = snapshot.Decision;
             string summary = "trackModel[unavailable]";
             string risk = "unavailable";
-            if (TryEvaluateBypassTrackModelShadow(localLine, localWaypoints, currentWaypointIndex, out _, out string builtRisk, out string builtSummary))
+            if (TryEvaluateBypassTrackModelSummary(localLine, localWaypoints, currentWaypointIndex, out _, out string builtRisk, out string builtSummary))
             {
                 summary = builtSummary;
                 risk = builtRisk;
@@ -1995,12 +1995,12 @@ namespace RapidTransitMod
                 ? (decision.UsedFallbackResolution ? "blocker src=fallback" : "blocker")
                 : string.Empty;
             string liveDecision = shouldYield ? "yield" : "pass";
-            string shadowDecision = decision.ShouldYield ? "yield" : "pass";
-            string alignment = shadowDecision == liveDecision ? "match" : "diff";
+            string trackModelDecision = decision.ShouldYield ? "yield" : "pass";
+            string alignment = trackModelDecision == liveDecision ? "match" : "diff";
             uint nowFrame = m_SimulationSystem.frameIndex;
             string coarseKey = liveDecision
                 + "|"
-                + shadowDecision
+                + trackModelDecision
                 + "|"
                 + alignment
                 + "|"
@@ -2031,7 +2031,7 @@ namespace RapidTransitMod
                 : string.Empty;
             string key = liveDecision
                 + "|"
-                + shadowDecision
+                + trackModelDecision
                 + "|"
                 + decision.ReasonCode
                 + "|"
@@ -2050,7 +2050,7 @@ namespace RapidTransitMod
             m_BypassTrackModelCompareLogCache[localVehicle] = key;
             log.Info("[BypassTrackModelCompare] vehicle=" + localVehicle.Index
                 + " live=" + liveDecision
-                + " shadow=" + shadowDecision
+                + " trackModel=" + trackModelDecision
                 + " reason=" + decision.ReasonCode
                 + " risk=" + risk
                 + " compare=" + alignment

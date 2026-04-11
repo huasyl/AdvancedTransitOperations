@@ -259,6 +259,8 @@ namespace RapidTransitMod
         {
             public readonly List<TraversalEvent> Events = new List<TraversalEvent>();
             public readonly List<TraversalRunSlice> RunSlices = new List<TraversalRunSlice>();
+            public int[] AtomToRunSliceIndex = Array.Empty<int>();
+            public float[][] SegmentSliceCutPointProgresses = Array.Empty<float[]>();
         }
 
         private enum BypassExecutionMode : byte
@@ -754,7 +756,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct BypassTrackModelShadowDecision
+        private readonly struct BypassTrackModelDecision
         {
             public readonly bool Available;
             public readonly bool ShouldYield;
@@ -766,7 +768,7 @@ namespace RapidTransitMod
             public readonly bool HasLatchedBlockerProjection;
             public readonly BypassLatchedBlockerProjection LatchedBlockerProjection;
 
-            public BypassTrackModelShadowDecision(
+            public BypassTrackModelDecision(
                 bool available,
                 bool shouldYield,
                 string reasonCode,
@@ -1087,22 +1089,22 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct BypassTrackModelShadowSnapshot
+        private readonly struct BypassTrackModelDecisionSnapshot
         {
             public readonly uint Frame;
             public readonly Entity Line;
             public readonly int CurrentWaypointIndex;
             public readonly Entity CurrentBypassBuilding;
             public readonly Entity NextBypassBuilding;
-            public readonly BypassTrackModelShadowDecision Decision;
+            public readonly BypassTrackModelDecision Decision;
 
-            public BypassTrackModelShadowSnapshot(
+            public BypassTrackModelDecisionSnapshot(
                 uint frame,
                 Entity line,
                 int currentWaypointIndex,
                 Entity currentBypassBuilding,
                 Entity nextBypassBuilding,
-                BypassTrackModelShadowDecision decision)
+                BypassTrackModelDecision decision)
             {
                 Frame = frame;
                 Line = line;

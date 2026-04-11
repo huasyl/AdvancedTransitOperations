@@ -31,6 +31,7 @@ namespace RapidTransitMod
             bool lastBoarding,
             int targetMin)
         {
+            m_PerfProbeOriginSettleCalls++;
             if (vehicle == Entity.Null || waypoints.Length == 0)
                 return false;
 
@@ -40,6 +41,7 @@ namespace RapidTransitMod
                 || targetMin >= 0
                 || m_OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
             {
+                m_PerfProbeOriginSettleFastPathHits++;
                 return true;
             }
 

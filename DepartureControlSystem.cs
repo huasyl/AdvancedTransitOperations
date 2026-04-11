@@ -78,6 +78,18 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct AssistLaunchPendingRecord
+        {
+            public readonly Entity Line;
+            public readonly int TargetMin;
+
+            public AssistLaunchPendingRecord(Entity line, int targetMin)
+            {
+                Line = line;
+                TargetMin = targetMin;
+            }
+        }
+
         private struct DeferredBoardingTailIgnoreEntry
         {
             public Entity Vehicle;
@@ -268,6 +280,13 @@ namespace RapidTransitMod
             public readonly List<OrderedSceneQueryWindow> ScratchQueryWindows = new List<OrderedSceneQueryWindow>();
         }
 
+        private sealed class LineWaypointIndexLookup
+        {
+            public ulong Signature;
+            public readonly Dictionary<Entity, int> WaypointIndexByWaypoint = new Dictionary<Entity, int>();
+            public readonly Dictionary<Entity, int> WaypointIndexByStop = new Dictionary<Entity, int>();
+        }
+
         private sealed class LearnedTurnbackBoundaryCluster
         {
             public int AtomIndex;
@@ -351,6 +370,22 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct LineTrackChainFrameSnapshot
+        {
+            public readonly uint Frame;
+            public readonly int WaypointCount;
+            public readonly bool Available;
+            public readonly LineTrackChain Chain;
+
+            public LineTrackChainFrameSnapshot(uint frame, int waypointCount, bool available, LineTrackChain chain)
+            {
+                Frame = frame;
+                WaypointCount = waypointCount;
+                Available = available;
+                Chain = chain;
+            }
+        }
+
         private readonly struct RouteProgressFrameSnapshot
         {
             public readonly uint Frame;
@@ -387,6 +422,24 @@ namespace RapidTransitMod
                 FastBaselineFrames = fastBaselineFrames;
                 SampleCount = sampleCount;
                 LastObservedFrame = lastObservedFrame;
+            }
+        }
+
+        private readonly struct TraversalSliceSamplingPlanCache
+        {
+            public readonly Entity Line;
+            public readonly ulong ChainSignature;
+            public readonly int SliceIndex;
+            public readonly uint NextRefreshFrame;
+            public readonly TraversalSliceSamplingPlan Plan;
+
+            public TraversalSliceSamplingPlanCache(Entity line, ulong chainSignature, int sliceIndex, uint nextRefreshFrame, TraversalSliceSamplingPlan plan)
+            {
+                Line = line;
+                ChainSignature = chainSignature;
+                SliceIndex = sliceIndex;
+                NextRefreshFrame = nextRefreshFrame;
+                Plan = plan;
             }
         }
 
@@ -537,6 +590,7 @@ namespace RapidTransitMod
         private NativeHashMap<Entity, uint> m_OriginArrivalCandidateSinceFrame;
         private NativeHashMap<Entity, uint> m_ForcedOriginReadyFrame;
         private NativeHashMap<Entity, uint> m_ForcedOriginBoardingGraceUntil;
+        private readonly Dictionary<Entity, AssistLaunchPendingRecord> m_AssistLaunchPendingByVehicle = new Dictionary<Entity, AssistLaunchPendingRecord>();
         private NativeHashMap<Entity, uint> m_StopDwellStartFrame;
         private NativeHashMap<Entity, uint> m_VehicleDispatchRequestStartFrame;
         private readonly Dictionary<ulong, StopDwellObservation> m_WaypointStopDwellObservations = new Dictionary<ulong, StopDwellObservation>();
@@ -560,17 +614,25 @@ namespace RapidTransitMod
         private readonly HashSet<Entity> m_DeferredBoardingHumanTailIgnores = new HashSet<Entity>();
         private readonly HashSet<Entity> m_DeferredBoardingPetTailIgnores = new HashSet<Entity>();
         private readonly List<Entity> m_DeferredBoardingTailScratch = new List<Entity>();
+        private readonly HashSet<Entity> m_PendingRetireHandoffs = new HashSet<Entity>();
         private readonly Dictionary<Entity, string> m_MidStopTimeoutLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, List<string>> m_RetireShadowHistory = new Dictionary<Entity, List<string>>();
+        private readonly Dictionary<Entity, string> m_RetireShadowLastSnapshot = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_RetireShadowLastFrame = new Dictionary<Entity, uint>();
         private uint m_LastDeferredBoardingTailCleanupFrame;
         private static bool IsTraversalSliceObservationPersistenceEnabled() => true;
         private static bool IsStopDwellObservationPersistenceEnabled() => true;
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
+        private readonly Dictionary<Entity, uint> m_VehicleTraversalSliceLastSampleFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, TraversalSliceSamplingPlanCache> m_VehicleTraversalSliceSamplingPlans = new Dictionary<Entity, TraversalSliceSamplingPlanCache>();
         private readonly Dictionary<ulong, TraversalSliceLapDebugAggregate> m_VehicleTraversalSliceLapDebug = new Dictionary<ulong, TraversalSliceLapDebugAggregate>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
         private readonly Dictionary<Entity, LineOrderedRuntimeState> m_LineOrderedRuntimeStates = new Dictionary<Entity, LineOrderedRuntimeState>();
         private readonly Dictionary<Entity, string> m_LineOrderedRuntimeForceRefreshReasons = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, LineTrackChainFrameSnapshot> m_LineTrackChainFrameSnapshots = new Dictionary<Entity, LineTrackChainFrameSnapshot>();
+        private readonly Dictionary<Entity, LineWaypointIndexLookup> m_LineWaypointIndexLookups = new Dictionary<Entity, LineWaypointIndexLookup>();
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_WaypointIndexFrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
         private readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_RouteProgressFrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
         private bool m_CorridorModelFaulted = false;
@@ -595,6 +657,8 @@ namespace RapidTransitMod
         private ulong m_PerfProbeSceneExpressLineRecentFrameRequeries;
         private ulong m_PerfProbeWorkbenchLineFrameSnapshotHits;
         private ulong m_PerfProbeWorkbenchLineFrameSnapshotMisses;
+        private ulong m_PerfProbeOriginSettleCalls;
+        private ulong m_PerfProbeOriginSettleFastPathHits;
         private ulong m_PerfProbeOriginSettleSlowPathEntered;
         private ulong m_PerfProbeOriginSettlePreSnapshotMisses;
         private ulong m_PerfProbeOriginSettleWindowHits;
@@ -606,13 +670,6 @@ namespace RapidTransitMod
         private ulong m_LineOrderedProbeFallbacks;
         private ulong m_LineOrderedProbeHeadCandidateBuilds;
         private ulong m_LineOrderedProbeFallbackCandidateBuilds;
-        private uint m_DirectionCompareProbeLastLogFrame;
-        private ulong m_DirectionCompareProbeSamples;
-        private ulong m_DirectionCompareProbeMismatches;
-        private readonly Dictionary<Entity, string> m_DirectionCompareLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, uint> m_DirectionCompareLastLogFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<Entity, string> m_DirectionCompareLatestByVehicle = new Dictionary<Entity, string>();
-
         // ── 线路状态 ──
         private NativeHashMap<Entity, int> m_SpawningLines;
         private NativeHashMap<Entity, uint> m_LineSpawnRequestFrame;
@@ -708,6 +765,7 @@ namespace RapidTransitMod
         private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
+        private const uint BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES = 60;
         internal const float BOARDING_CLOSE_BYPASS_MIN_WAITING_DISTANCE_SENTINEL = -1f;
         private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 6;
         private const uint BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES = 60;
@@ -742,11 +800,18 @@ namespace RapidTransitMod
         private static bool IsTrackModelTurnbackBuildLoggingEnabled() => true;
         private static bool IsTrackModelTurnbackSignalLoggingEnabled() => true;
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
+        private const uint RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES = 30;
+        private const int RETIRE_SHADOW_HISTORY_LIMIT = 4;
         private const float ORIGIN_ARRIVAL_HOLD_MINUTES = 2f;
         private static readonly uint FORCED_ORIGIN_MIN_DWELL_FRAMES = (uint)math.round(3f * (float)SIM_FRAMES_PER_MINUTE);
+        private static readonly uint PREPARING_ORIGIN_SETTLE_FRAMES = (uint)math.max(1f, math.round(2f * (float)SIM_FRAMES_PER_MINUTE));
         private const float SPAWN_TRIGGER_BUFFER_SHORT_MINUTES = 10f;
         private const float SPAWN_TRIGGER_BUFFER_LONG_MINUTES = 15f;
         private const float SPAWN_TRIGGER_BUFFER_THRESHOLD_MINUTES = 20f;
+        private const uint TRAVERSAL_SLICE_SAMPLE_INTERVAL_MEDIUM_FRAMES = 20;
+        private const uint TRAVERSAL_SLICE_SAMPLE_INTERVAL_LOW_FRAMES = 60;
+        private const float TRAVERSAL_SLICE_SAMPLE_HIGH_THRESHOLD = 0.03f;
+        private const float TRAVERSAL_SLICE_SAMPLE_MEDIUM_THRESHOLD = 0.05f;
         private const int YIELD_PROTECT_MINUTES = 5;
         private const int LATE_DISPATCH_WINDOW_MINUTES = 8;
         private const float ETA_SCALE_MIN = 0.5f;
@@ -928,19 +993,6 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null || waypoints.Length == 0 || currentWaypointIndex != 0)
                 return false;
 
-            float originDistance = GetDistanceToOriginMeters(vehicle, waypoints);
-            if (originDistance > ORIGIN_FORCE_IDLE_RADIUS_METERS)
-                return false;
-
-            if (TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition))
-            {
-                bool settlingIntoOrigin = nextWaypointIndex == 0
-                    && segmentPosition >= ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS;
-                bool dwellingAtOrigin = boarding
-                    && (nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.10f));
-                return settlingIntoOrigin || dwellingAtOrigin;
-            }
-
             return boarding;
         }
 
@@ -1082,7 +1134,7 @@ namespace RapidTransitMod
 
             for (int i = 0; i < rvs.Length; i++)
             {
-                Entity other = rvs[i].m_Vehicle;
+                Entity other = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
                 if (other == v) continue;
                 if (!EntityManager.Exists(other)) continue;
                 if (!m_VehicleTargetMin.TryGetValue(other, out int otherTarget) || otherTarget != prevSlot) continue;
@@ -1174,7 +1226,7 @@ namespace RapidTransitMod
 
             for (int i = 0; i < rvs.Length; i++)
             {
-                Entity other = rvs[i].m_Vehicle;
+                Entity other = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
                 if (other == v) continue;
                 if (!EntityManager.Exists(other)) continue;
                 if (!m_VehicleTargetMin.TryGetValue(other, out int otherTarget) || otherTarget != prevTarget) continue;
@@ -1262,14 +1314,8 @@ namespace RapidTransitMod
             {
                 float nearOriginDist = GetDistanceToOriginMeters(v, wps);
                 bool nearOriginProgress = nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.05f);
-                bool targetOriginLike = false;
-                if (EntityManager.HasComponent<Target>(v))
-                {
-                    Entity routeTarget = EntityManager.GetComponentData<Target>(v).m_Target;
-                    targetOriginLike = routeTarget == Entity.Null || routeTarget == wps[0].m_Waypoint;
-                }
                 if (nearOriginProgress && nearOriginDist <= ORIGIN_FORCE_IDLE_RADIUS_METERS
-                    && (boarding0 || arriving0 || targetOriginLike))
+                    && (boarding0 || arriving0))
                 {
                     reason = "route-progress-origin-fallback wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
                     return VehicleState.Holding;

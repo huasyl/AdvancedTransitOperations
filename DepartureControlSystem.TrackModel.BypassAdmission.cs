@@ -796,16 +796,6 @@ namespace RapidTransitMod
                     orderedEntry.RunningVehicle,
                     segment,
                     useLocalSide: false);
-                ObserveLegacyVsPhaseTrunkDirection(
-                    orderedEntry.Vehicle,
-                    relation.ExpressLine,
-                    "ordered-head",
-                    BuildRelativeToTrunkStateFromRunningSnapshot(
-                        orderedEntry.RunningVehicle,
-                        relation.ExpressChain,
-                        segment,
-                        useLocalSide: false),
-                    expressTrunkState);
                 if (!IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
                     || !IsRelativeToTrunkStateDirectionCompatibleWithLocal(expressTrunkState, segment))
                 {
@@ -1110,26 +1100,6 @@ namespace RapidTransitMod
                 runningVehicle,
                 selectedTrunkSegment,
                 useLocalSide: false);
-            ObserveLegacyVsPhaseTrunkDirection(
-                localVehicle,
-                localLine,
-                "candidate-local",
-                BuildRelativeToTrunkStateFromRuntimePosition(
-                    localPosition,
-                    localChain,
-                    selectedTrunkSegment,
-                    useLocalSide: true),
-                localTrunkState);
-            ObserveLegacyVsPhaseTrunkDirection(
-                expressVehicle,
-                expressLine,
-                "candidate-express",
-                BuildRelativeToTrunkStateFromRunningSnapshot(
-                    runningVehicle,
-                    expressChain,
-                    selectedTrunkSegment,
-                    useLocalSide: false),
-                expressTrunkState);
             if (!selectedTrunkSegment.HasCanonicalDirection
                 || !IsRelativeToTrunkStateDirectionCompatibleWithCanonicalSide(localTrunkState, selectedTrunkSegment.LocalAlongCanonical)
                 || !IsRelativeToTrunkStateBlockerEligible(expressTrunkState)
@@ -3643,60 +3613,6 @@ namespace RapidTransitMod
             return RelativeToTrunkState.OffTrunk;
         }
 
-        private RelativeToTrunkState BuildRelativeToTrunkStateFromRunningSnapshot(
-            LineRunningVehicleSnapshot runningVehicle,
-            LineTrackChain chain,
-            GlobalSharedTrunkSegment trunkSegment,
-            bool useLocalSide)
-        {
-            if (!runningVehicle.HasTrackCursor || !trunkSegment.HasCanonicalDirection)
-                return RelativeToTrunkState.Unknown;
-
-            int corridorStartAtomIndex = useLocalSide
-                ? trunkSegment.LocalCorridorStartAtomIndex
-                : trunkSegment.ExpressCorridorStartAtomIndex;
-            int corridorEndAtomIndexExclusive = useLocalSide
-                ? trunkSegment.LocalCorridorEndAtomIndexExclusive
-                : trunkSegment.ExpressCorridorEndAtomIndexExclusive;
-            bool alongCanonical = useLocalSide
-                ? trunkSegment.LocalAlongCanonical
-                : trunkSegment.ExpressAlongCanonical;
-
-            return ClassifyVehicleRelativeToTrunk(
-                runningVehicle.TrackCursor.AtomCursorIndex,
-                runningVehicle.NextTurnbackBoundaryAtomIndex,
-                corridorStartAtomIndex,
-                corridorEndAtomIndexExclusive,
-                alongCanonical);
-        }
-
-        private RelativeToTrunkState BuildRelativeToTrunkStateFromRuntimePosition(
-            TrackModelRuntimePosition runtimePosition,
-            LineTrackChain chain,
-            GlobalSharedTrunkSegment trunkSegment,
-            bool useLocalSide)
-        {
-            if (!trunkSegment.HasCanonicalDirection)
-                return RelativeToTrunkState.Unknown;
-
-            int corridorStartAtomIndex = useLocalSide
-                ? trunkSegment.LocalCorridorStartAtomIndex
-                : trunkSegment.ExpressCorridorStartAtomIndex;
-            int corridorEndAtomIndexExclusive = useLocalSide
-                ? trunkSegment.LocalCorridorEndAtomIndexExclusive
-                : trunkSegment.ExpressCorridorEndAtomIndexExclusive;
-            bool alongCanonical = useLocalSide
-                ? trunkSegment.LocalAlongCanonical
-                : trunkSegment.ExpressAlongCanonical;
-
-            return ClassifyVehicleRelativeToTrunk(
-                runtimePosition.CurrentAtomIndex,
-                runtimePosition.NextTurnbackBoundaryAtomIndex,
-                corridorStartAtomIndex,
-                corridorEndAtomIndexExclusive,
-                alongCanonical);
-        }
-
         private bool TryResolveVehicleTrunkTravelWindow(
             GlobalSharedTrunkSegment trunkSegment,
             bool useLocalSide,
@@ -3785,77 +3701,6 @@ namespace RapidTransitMod
                 corridorStartAtomIndex,
                 corridorEndAtomIndexExclusive,
                 alongCanonical);
-        }
-
-        private void ObserveLegacyVsPhaseTrunkDirection(
-            Entity vehicle,
-            Entity line,
-            string source,
-            RelativeToTrunkState legacyState,
-            RelativeToTrunkState phaseState)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_DirectionCompareProbeSamples++;
-            bool mismatch = legacyState != phaseState;
-            if (mismatch)
-                m_DirectionCompareProbeMismatches++;
-
-            string latest = IsChineseLocale()
-                ? ("旧" + FormatRelativeToTrunkStateCompactZh(legacyState)
-                    + " / 新" + FormatRelativeToTrunkStateCompactZh(phaseState)
-                    + " / " + (mismatch ? "异" : "同"))
-                : ("old " + FormatRelativeToTrunkStateCompactEn(legacyState)
-                    + " / new " + FormatRelativeToTrunkStateCompactEn(phaseState)
-                    + " / " + (mismatch ? "diff" : "match"));
-            m_DirectionCompareLatestByVehicle[vehicle] = latest;
-        }
-
-        private static string FormatRelativeToTrunkStateCompactZh(RelativeToTrunkState state)
-        {
-            switch (state)
-            {
-                case RelativeToTrunkState.OnTrunkAlongCanonical:
-                    return "在同";
-                case RelativeToTrunkState.OnTrunkAgainstCanonical:
-                    return "在反";
-                case RelativeToTrunkState.ApproachingTrunkAlongCanonical:
-                    return "近同";
-                case RelativeToTrunkState.ApproachingTrunkAgainstCanonical:
-                    return "近反";
-                case RelativeToTrunkState.DepartingFromTrunk:
-                    return "离干";
-                case RelativeToTrunkState.FutureReturnOnly:
-                    return "待返";
-                case RelativeToTrunkState.OffTrunk:
-                    return "干外";
-                default:
-                    return "未知";
-            }
-        }
-
-        private static string FormatRelativeToTrunkStateCompactEn(RelativeToTrunkState state)
-        {
-            switch (state)
-            {
-                case RelativeToTrunkState.OnTrunkAlongCanonical:
-                    return "on+";
-                case RelativeToTrunkState.OnTrunkAgainstCanonical:
-                    return "on-";
-                case RelativeToTrunkState.ApproachingTrunkAlongCanonical:
-                    return "app+";
-                case RelativeToTrunkState.ApproachingTrunkAgainstCanonical:
-                    return "app-";
-                case RelativeToTrunkState.DepartingFromTrunk:
-                    return "dep";
-                case RelativeToTrunkState.FutureReturnOnly:
-                    return "ret";
-                case RelativeToTrunkState.OffTrunk:
-                    return "off";
-                default:
-                    return "unk";
-            }
         }
 
         private static string FormatRelativeToTrunkState(RelativeToTrunkState state)
@@ -4365,7 +4210,7 @@ namespace RapidTransitMod
             return atomBuilding == bypassBuilding;
         }
 
-        private bool TryEvaluateBypassTrackModelShadow(
+        private bool TryEvaluateBypassTrackModelSummary(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             int currentWaypointIndex,
@@ -4388,21 +4233,21 @@ namespace RapidTransitMod
                 return false;
 
             ProtectedIntervalSummary intervalSummary = chain.ProtectedIntervalSummaries[protectedIntervalIndex];
-            risk = ClassifyProtectedIntervalShadowRisk(intervalSummary);
+            risk = ClassifyProtectedIntervalTrackModelRisk(intervalSummary);
             summary = FormatProtectedIntervalSummary(intervalSummary, protectedInterval);
             return true;
         }
 
-        private bool TryEvaluateBypassTrackModelShadowDecision(
+        private bool TryEvaluateBypassTrackModelDecision(
             Entity localVehicle,
             Entity localLine,
             DynamicBuffer<RouteWaypoint> localWaypoints,
             int currentWaypointIndex,
             uint nowFrame,
-            out BypassTrackModelShadowDecision shadowDecision)
+            out BypassTrackModelDecision trackModelDecision)
         {
             m_BypassPerfProbeTrackDecisionCalls++;
-            shadowDecision = default;
+            trackModelDecision = default;
             if (!TryGetLocalBypassSceneStaticSnapshot(
                     localLine,
                     localWaypoints,
@@ -4410,7 +4255,7 @@ namespace RapidTransitMod
                     out LineTrackChain localChain,
                     out LocalBypassSceneStaticSnapshot localScene))
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-chain-missing", -1, false, Entity.Null, false);
+                trackModelDecision = new BypassTrackModelDecision(false, false, "local-chain-missing", -1, false, Entity.Null, false);
                 return false;
             }
 
@@ -4423,18 +4268,18 @@ namespace RapidTransitMod
 
             if (localSummary.SharedSegmentCount <= 0)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-shared-protected-interval", protectedIntervalIndex, hasLocalPosition, Entity.Null, false);
+                trackModelDecision = new BypassTrackModelDecision(true, false, "no-shared-protected-interval", protectedIntervalIndex, hasLocalPosition, Entity.Null, false);
                 return true;
             }
 
             if (!hasLocalPosition)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-unknown", protectedIntervalIndex, false, Entity.Null, false);
+                trackModelDecision = new BypassTrackModelDecision(false, false, "local-runtime-position-unknown", protectedIntervalIndex, false, Entity.Null, false);
                 return false;
             }
             if (localPosition.Confidence < 0.6f)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, "local-runtime-position-low-confidence", protectedIntervalIndex, false, Entity.Null, false);
+                trackModelDecision = new BypassTrackModelDecision(false, false, "local-runtime-position-low-confidence", protectedIntervalIndex, false, Entity.Null, false);
                 return false;
             }
             float departureReleaseCoordinate = localScene.DepartureReleaseCoordinate;
@@ -4477,13 +4322,13 @@ namespace RapidTransitMod
                     out List<SceneExpressVehicleCandidate> sameStationCandidates,
                     out string candidateCollectionFatalReason))
             {
-                shadowDecision = new BypassTrackModelShadowDecision(false, false, candidateCollectionFatalReason, protectedIntervalIndex, true, Entity.Null, false);
+                trackModelDecision = new BypassTrackModelDecision(false, false, candidateCollectionFatalReason, protectedIntervalIndex, true, Entity.Null, false);
                 return false;
             }
 
             if (frontiers.Count == 0)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-express-in-shared-window", protectedIntervalIndex, true, Entity.Null, false);
+                trackModelDecision = new BypassTrackModelDecision(true, false, "no-express-in-shared-window", protectedIntervalIndex, true, Entity.Null, false);
                 return true;
             }
             for (int frontierIndex = 0; frontierIndex < frontiers.Count; frontierIndex++)
@@ -4683,7 +4528,7 @@ namespace RapidTransitMod
                     bestExpressPhaseEndAtomExclusive,
                     bestExpressPositionText);
                 m_SharedWindowAuditPairStateCache[new SharedWindowPairStateKey(localVehicle, protectedIntervalIndex, bestExpressVehicle)] = "blocker";
-                shadowDecision = new BypassTrackModelShadowDecision(
+                trackModelDecision = new BypassTrackModelDecision(
                     true,
                     true,
                     bestConflictReason,
@@ -4711,7 +4556,7 @@ namespace RapidTransitMod
                     out Entity sameStationBlocker))
             {
                 m_SharedWindowAuditPairStateCache[new SharedWindowPairStateKey(localVehicle, protectedIntervalIndex, sameStationBlocker)] = "blocker|same-station";
-                shadowDecision = new BypassTrackModelShadowDecision(
+                trackModelDecision = new BypassTrackModelDecision(
                     true,
                     true,
                     "same-station-same-direction-express-departing",
@@ -4728,7 +4573,7 @@ namespace RapidTransitMod
 
             if (sawReleaseClearedExpress)
             {
-                shadowDecision = new BypassTrackModelShadowDecision(true, false, "express-cleared-bypass-release-window", protectedIntervalIndex, true, Entity.Null, releaseClearedUsedFallbackResolution);
+                trackModelDecision = new BypassTrackModelDecision(true, false, "express-cleared-bypass-release-window", protectedIntervalIndex, true, Entity.Null, releaseClearedUsedFallbackResolution);
                 return true;
             }
 
@@ -4741,7 +4586,7 @@ namespace RapidTransitMod
                 currentBypassBuilding,
                 protectedIntervalIndex,
                 protectedInterval);
-            shadowDecision = new BypassTrackModelShadowDecision(true, false, "no-express-in-shared-window", protectedIntervalIndex, true, Entity.Null, false);
+            trackModelDecision = new BypassTrackModelDecision(true, false, "no-express-in-shared-window", protectedIntervalIndex, true, Entity.Null, false);
             return true;
         }
 
@@ -4755,13 +4600,13 @@ namespace RapidTransitMod
             shouldYield = false;
             reason = "track-model-decision-unavailable";
             blockerVehicle = Entity.Null;
-            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
                 || !snapshot.Decision.Available)
             {
                 return false;
             }
 
-            BypassTrackModelShadowDecision decision = snapshot.Decision;
+            BypassTrackModelDecision decision = snapshot.Decision;
             shouldYield = decision.ShouldYield;
             reason = "track-model-" + decision.ReasonCode;
             blockerVehicle = decision.BlockerVehicle;
@@ -4770,7 +4615,7 @@ namespace RapidTransitMod
 
         private string GetTrackModelLiveDecisionLogSuffix(Entity localVehicle)
         {
-            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
                 || !snapshot.Decision.Available)
             {
                 return string.Empty;
@@ -4778,10 +4623,10 @@ namespace RapidTransitMod
             return string.Empty;
         }
 
-        private bool ShouldShadowVetoLiveBypassYield(Entity localVehicle, out string shadowReason)
+        private bool ShouldTrackModelVetoLiveBypassYield(Entity localVehicle, out string trackModelReason)
         {
-            shadowReason = string.Empty;
-            if (!TryGetLatestBypassTrackModelShadowSnapshot(localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+            trackModelReason = string.Empty;
+            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
                 || !snapshot.Decision.Available
                 || snapshot.Decision.ShouldYield
                 || !snapshot.Decision.HasReliableLocalPosition)
@@ -4789,25 +4634,25 @@ namespace RapidTransitMod
                 return false;
             }
 
-            BypassTrackModelShadowDecision decision = snapshot.Decision;
+            BypassTrackModelDecision decision = snapshot.Decision;
             switch (decision.ReasonCode)
             {
                 case "no-shared-protected-interval":
                 case "local-cleared-protected-interval":
                 case "no-express-in-protected-interval":
                 case "no-express-in-shared-window":
-                    shadowReason = decision.ReasonCode;
+                    trackModelReason = decision.ReasonCode;
                     return true;
                 default:
                     return false;
             }
         }
 
-        private bool TryGetLatestBypassTrackModelShadowSnapshot(Entity localVehicle, out BypassTrackModelShadowSnapshot snapshot)
+        private bool TryGetLatestBypassTrackModelDecisionSnapshot(Entity localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
         {
             snapshot = default;
             return localVehicle != Entity.Null
-                && m_BypassTrackModelShadowSnapshots.TryGetValue(localVehicle, out snapshot);
+                && m_BypassTrackModelDecisionSnapshots.TryGetValue(localVehicle, out snapshot);
         }
 
 

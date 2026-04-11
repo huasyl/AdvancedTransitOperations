@@ -21,6 +21,11 @@ namespace RapidTransitMod
             EntityCommandBuffer ecb,
             string reason = "")
         {
+            v = ResolveRuntimeControllerVehicle(v);
+            if (v == Entity.Null || !EntityManager.Exists(v))
+                return;
+
+            ResetRetireShadowSnapshots(v);
             m_VehicleState[v] = VehicleState.Retiring;
             m_VehicleTargetMin[v] = -1;
             m_VehicleIdleStartFrame.Remove(v);
@@ -34,24 +39,15 @@ namespace RapidTransitMod
             m_NearingTerminus.Remove(v);
             m_OriginArrivalCandidateSinceFrame.Remove(v);
             m_ForcedOriginReadyFrame.Remove(v);
+            ClearAssistLaunchPending(v);
             m_RetireFixCount[v] = 0;
 
             string lineTag = m_VehicleLine.TryGetValue(v, out Entity le) ? "线路" + le.Index : "线路?";
             SetUILabel(v, "回库中" + (reason.Length > 0 ? "(" + reason + ")" : ""));
             log.Info("[回库] " + lineTag + " 车辆" + v.Index
                 + (reason.Length > 0 ? " 原因:" + reason : "") + " -> 车库");
-
-            if (!EntityManager.HasComponent<Owner>(v))
-            {
-                log.Info("[回库] " + lineTag + " 车辆" + v.Index + " 无Owner，标记删除");
-                ecb.AddComponent<Deleted>(v);
-                return;
-            }
-            tgt.m_Target = EntityManager.GetComponentData<Owner>(v).m_Owner;
-            pt.m_DepartureFrame = 0;
-            pt.m_State &= ~PublicTransportFlags.Boarding;
-            RepathVehicle(v, pt, tgt, ecb);
-            m_RetireFixCooldownUntil[v] = m_SimulationSystem.frameIndex + RETIREFIX_REPATH_COOLDOWN_FRAMES;
+            RecordRetireShadowSnapshot(v, "retire-request");
+            m_PendingRetireHandoffs.Add(v);
         }
 
         private void LaunchVehicle(
@@ -61,6 +57,7 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> wps,
             EntityCommandBuffer ecb)
         {
+            ClearAssistLaunchPending(v);
             m_ForcedOriginBoardingGraceUntil.Remove(v);
             pt.m_State &= ~PublicTransportFlags.Boarding;
             pt.m_DepartureFrame = m_SimulationSystem.frameIndex - 1;
@@ -69,6 +66,41 @@ namespace RapidTransitMod
 
             tgt.m_Target = wps[1].m_Waypoint;
             RepathVehicle(v, pt, tgt, ecb);
+        }
+
+        private void ArmAssistLaunchPending(Entity vehicle, Entity line, int targetMin)
+        {
+            if (vehicle == Entity.Null || line == Entity.Null || targetMin < 0)
+                return;
+
+            m_AssistLaunchPendingByVehicle[vehicle] = new AssistLaunchPendingRecord(line, targetMin);
+        }
+
+        private void ClearAssistLaunchPending(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_AssistLaunchPendingByVehicle.Remove(vehicle);
+        }
+
+        private bool TryGetAssistLaunchPending(
+            Entity vehicle,
+            Entity line,
+            int targetMin,
+            out AssistLaunchPendingRecord pending)
+        {
+            if (vehicle != Entity.Null
+                && m_AssistLaunchPendingByVehicle.TryGetValue(vehicle, out pending)
+                && pending.Line == line
+                && pending.TargetMin >= 0
+                && targetMin == pending.TargetMin)
+            {
+                return true;
+            }
+
+            pending = default;
+            return false;
         }
 
         private bool TryApplyLaunchSegmentPath(
@@ -277,7 +309,7 @@ namespace RapidTransitMod
             pt.m_State &= ~PublicTransportFlags.Boarding;
             pt.m_DepartureFrame = 0;
             tgt.m_Target = depot;
-            RepathVehicle(v, pt, tgt, ecb);
+            RepathVehicleImmediate(v, pt, tgt);
             m_RetireFixCooldownUntil[v] = nowFrame + RETIREFIX_REPATH_COOLDOWN_FRAMES;
             byte fixCount = m_RetireFixCount.TryGetValue(v, out byte oldCount)
                 ? (byte)(oldCount + 1)
@@ -320,6 +352,48 @@ namespace RapidTransitMod
             ecb.AddComponent<Updated>(v);
         }
 
+        private void RepathVehicleImmediate(
+            Entity v,
+            Game.Vehicles.PublicTransport pt,
+            Target tgt)
+        {
+            if (v == Entity.Null || !EntityManager.Exists(v))
+                return;
+
+            if (EntityManager.HasComponent<PathOwner>(v))
+            {
+                PathOwner po = EntityManager.GetComponentData<PathOwner>(v);
+                po.m_State = PathFlags.Obsolete;
+                po.m_ElementIndex = 0;
+                EntityManager.SetComponentData(v, po);
+            }
+
+            if (EntityManager.HasBuffer<PathElement>(v))
+            {
+                EntityManager.GetBuffer<PathElement>(v).Clear();
+            }
+
+            if (EntityManager.HasComponent<Target>(v))
+            {
+                EntityManager.SetComponentData(v, tgt);
+            }
+
+            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v))
+            {
+                EntityManager.SetComponentData(v, pt);
+            }
+
+            if (!EntityManager.HasComponent<PathfindUpdated>(v))
+            {
+                EntityManager.AddComponent<PathfindUpdated>(v);
+            }
+
+            if (!EntityManager.HasComponent<Updated>(v))
+            {
+                EntityManager.AddComponent<Updated>(v);
+            }
+        }
+
         private void ForceRetireOne(EntityCommandBuffer ecb)
         {
             var lines = m_LineQuery.ToEntityArray(Allocator.Temp);
@@ -329,10 +403,12 @@ namespace RapidTransitMod
                 foreach (var line in lines)
                 {
                     if (!rvBuffers.TryGetBuffer(line, out var rvs)) continue;
+                    HashSet<Entity> seenVehicles = new HashSet<Entity>();
                     for (int i = 0; i < rvs.Length; i++)
                     {
-                        Entity v = rvs[i].m_Vehicle;
+                        Entity v = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
                         if (!EntityManager.Exists(v)) continue;
+                        if (!seenVehicles.Add(v)) continue;
                         if (!m_VehicleState.TryGetValue(v, out var st)) continue;
                         if (st == VehicleState.Retiring) continue;
                         var pt = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v);
@@ -345,6 +421,437 @@ namespace RapidTransitMod
                 }
             }
             finally { lines.Dispose(); }
+        }
+
+        private void ReleaseRuntimeOwnershipAfterRetireHandoff(Entity vehicle, string reason)
+        {
+            m_VehicleState.Remove(vehicle);
+            m_VehicleTargetMin.Remove(vehicle);
+            m_VehicleLapDistance.Remove(vehicle);
+            m_VehicleIdleStartFrame.Remove(vehicle);
+            m_VehiclePreparingStartFrame.Remove(vehicle);
+            m_VehicleDispatchRequestStartFrame.Remove(vehicle);
+            m_VehicleCurrentSlot.Remove(vehicle);
+            m_VehicleLastLaunchFrame.Remove(vehicle);
+            m_LastBoarding.Remove(vehicle);
+            m_CachedWpIdx.Remove(vehicle);
+            m_VehicleLine.Remove(vehicle);
+            m_UICache.Remove(vehicle);
+            m_LastRetireFixLogFrame.Remove(vehicle);
+            m_RetireFixCooldownUntil.Remove(vehicle);
+            m_PreparingFixCooldownUntil.Remove(vehicle);
+            m_RetireFixCount.Remove(vehicle);
+            m_NearingTerminus.Remove(vehicle);
+            m_OriginArrivalCandidateSinceFrame.Remove(vehicle);
+            m_ForcedOriginReadyFrame.Remove(vehicle);
+            m_ForcedOriginBoardingGraceUntil.Remove(vehicle);
+            m_StopDwellStartFrame.Remove(vehicle);
+            m_StopDwellSessions.Remove(vehicle);
+            m_BVMisfire.Remove(vehicle);
+            m_BVMisfireStartFrame.Remove(vehicle);
+            ClearBypassYieldState(vehicle, reason);
+            ClearVehicleProgressSuspect(vehicle, reason);
+            FlushRetireShadowSnapshots(vehicle, reason);
+            ResetRetireShadowSnapshots(vehicle);
+        }
+
+        private void ResetRetireShadowSnapshots(Entity vehicle)
+        {
+            m_RetireShadowHistory.Remove(vehicle);
+            m_RetireShadowLastSnapshot.Remove(vehicle);
+            m_RetireShadowLastFrame.Remove(vehicle);
+        }
+
+        private void FlushRetireShadowSnapshots(Entity vehicle, string reason)
+        {
+            if (!m_RetireShadowHistory.TryGetValue(vehicle, out List<string> history) || history == null || history.Count == 0)
+                return;
+
+            for (int i = 0; i < history.Count; i++)
+            {
+                log.Info("[RetireShadow] 车辆" + vehicle.Index
+                    + " reason=" + reason
+                    + " step=" + (i + 1) + "/" + history.Count
+                    + " " + history[i]);
+            }
+        }
+
+        private void RecordRetireShadowSnapshot(Entity vehicle, string phase)
+        {
+            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                return;
+
+            string snapshot = BuildRetireShadowSnapshot(vehicle, phase);
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            bool shouldSample = true;
+            if (phase == "retiring"
+                && m_RetireShadowLastSnapshot.TryGetValue(vehicle, out string lastSnapshot)
+                && lastSnapshot == snapshot
+                && m_RetireShadowLastFrame.TryGetValue(vehicle, out uint lastFrame)
+                && (nowFrame - lastFrame) < RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES)
+            {
+                shouldSample = false;
+            }
+
+            if (!shouldSample)
+                return;
+
+            m_RetireShadowLastSnapshot[vehicle] = snapshot;
+            m_RetireShadowLastFrame[vehicle] = nowFrame;
+
+            if (!m_RetireShadowHistory.TryGetValue(vehicle, out List<string> history) || history == null)
+            {
+                history = new List<string>(RETIRE_SHADOW_HISTORY_LIMIT);
+                m_RetireShadowHistory[vehicle] = history;
+            }
+
+            if (history.Count >= RETIRE_SHADOW_HISTORY_LIMIT)
+                history.RemoveAt(0);
+            history.Add(snapshot);
+        }
+
+        private string BuildRetireShadowSnapshot(Entity vehicle, string phase)
+        {
+            string state = m_VehicleState.TryGetValue(vehicle, out VehicleState runtimeState)
+                ? runtimeState.ToString()
+                : "-";
+            Entity controllerEntity = EntityManager.HasComponent<Controller>(vehicle)
+                ? EntityManager.GetComponentData<Controller>(vehicle).m_Controller
+                : Entity.Null;
+            Entity ownerDepot = EntityManager.HasComponent<Owner>(vehicle)
+                ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
+                : Entity.Null;
+            Entity targetEntity = EntityManager.HasComponent<Target>(vehicle)
+                ? EntityManager.GetComponentData<Target>(vehicle).m_Target
+                : Entity.Null;
+            Entity currentRoute = EntityManager.HasComponent<CurrentRoute>(vehicle)
+                ? EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
+                : Entity.Null;
+            string publicFlags = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
+                ? EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State.ToString()
+                : "-";
+            string cargoFlags = EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle)
+                ? EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle).m_State.ToString()
+                : "-";
+
+            int pathLen = EntityManager.HasBuffer<PathElement>(vehicle)
+                ? EntityManager.GetBuffer<PathElement>(vehicle, true).Length
+                : -1;
+            string pathFlags = "-";
+            int pathElementIndex = -1;
+            PathFlags pathFlagBits = 0;
+            if (EntityManager.HasComponent<PathOwner>(vehicle))
+            {
+                PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
+                pathFlags = pathOwner.m_State.ToString();
+                pathElementIndex = pathOwner.m_ElementIndex;
+                pathFlagBits = pathOwner.m_State;
+            }
+
+            int navLen = EntityManager.HasBuffer<TrainNavigationLane>(vehicle)
+                ? EntityManager.GetBuffer<TrainNavigationLane>(vehicle, true).Length
+                : -1;
+            string lastNavFlags = "-";
+            Entity lastNavLane = Entity.Null;
+            if (navLen > 0)
+            {
+                DynamicBuffer<TrainNavigationLane> navigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(vehicle, true);
+                lastNavFlags = navigationLanes[navLen - 1].m_Flags.ToString();
+                lastNavLane = navigationLanes[navLen - 1].m_Lane;
+            }
+
+            string frontLaneFlags = EntityManager.HasComponent<TrainCurrentLane>(vehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(vehicle).m_Front.m_LaneFlags.ToString()
+                : "-";
+            Entity frontLane = EntityManager.HasComponent<TrainCurrentLane>(vehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(vehicle).m_Front.m_Lane
+                : Entity.Null;
+            Entity rearLane = EntityManager.HasComponent<TrainCurrentLane>(vehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(vehicle).m_Rear.m_Lane
+                : Entity.Null;
+            int layoutLen = EntityManager.HasBuffer<LayoutElement>(vehicle)
+                ? EntityManager.GetBuffer<LayoutElement>(vehicle, true).Length
+                : -1;
+            Entity headVehicle = vehicle;
+            if (layoutLen > 0)
+            {
+                DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+                headVehicle = layout[0].m_Vehicle;
+            }
+
+            int headNavLen = EntityManager.HasBuffer<TrainNavigationLane>(headVehicle)
+                ? EntityManager.GetBuffer<TrainNavigationLane>(headVehicle, true).Length
+                : -1;
+            string headLastNavFlags = "-";
+            Entity headLastNavLane = Entity.Null;
+            if (headNavLen > 0)
+            {
+                DynamicBuffer<TrainNavigationLane> headNavigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(headVehicle, true);
+                headLastNavFlags = headNavigationLanes[headNavLen - 1].m_Flags.ToString();
+                headLastNavLane = headNavigationLanes[headNavLen - 1].m_Lane;
+            }
+            int headPathLen = EntityManager.HasBuffer<PathElement>(headVehicle)
+                ? EntityManager.GetBuffer<PathElement>(headVehicle, true).Length
+                : -1;
+            string headFrontFlags = EntityManager.HasComponent<TrainCurrentLane>(headVehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(headVehicle).m_Front.m_LaneFlags.ToString()
+                : "-";
+            Entity headFrontLane = EntityManager.HasComponent<TrainCurrentLane>(headVehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(headVehicle).m_Front.m_Lane
+                : Entity.Null;
+            Entity headRearLane = EntityManager.HasComponent<TrainCurrentLane>(headVehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(headVehicle).m_Rear.m_Lane
+                : Entity.Null;
+            string headPathFlags = "-";
+            PathFlags headPathFlagBits = 0;
+            if (EntityManager.HasComponent<PathOwner>(headVehicle))
+            {
+                PathOwner headPathOwner = EntityManager.GetComponentData<PathOwner>(headVehicle);
+                headPathFlags = headPathOwner.m_State.ToString();
+                headPathFlagBits = headPathOwner.m_State;
+            }
+
+            Entity pathInfoDest = EntityManager.HasComponent<PathInformation>(vehicle)
+                ? EntityManager.GetComponentData<PathInformation>(vehicle).m_Destination
+                : Entity.Null;
+            string pathInfoState = EntityManager.HasComponent<PathInformation>(vehicle)
+                ? EntityManager.GetComponentData<PathInformation>(vehicle).m_State.ToString()
+                : "-";
+            Entity headPathInfoDest = EntityManager.HasComponent<PathInformation>(headVehicle)
+                ? EntityManager.GetComponentData<PathInformation>(headVehicle).m_Destination
+                : Entity.Null;
+            string headPathInfoState = EntityManager.HasComponent<PathInformation>(headVehicle)
+                ? EntityManager.GetComponentData<PathInformation>(headVehicle).m_State.ToString()
+                : "-";
+
+            string ownerDepotFlags = EntityManager.HasComponent<Game.Buildings.TransportDepot>(ownerDepot)
+                ? EntityManager.GetComponentData<Game.Buildings.TransportDepot>(ownerDepot).m_Flags.ToString()
+                : "-";
+            int ownerDepotAvailable = EntityManager.HasComponent<Game.Buildings.TransportDepot>(ownerDepot)
+                ? EntityManager.GetComponentData<Game.Buildings.TransportDepot>(ownerDepot).m_AvailableVehicles
+                : -1;
+
+            string targetKind = DescribeRetireShadowTargetKind(targetEntity);
+            string guess = ClassifyRetireShadowGuess(
+                targetEntity,
+                ownerDepot,
+                pathFlagBits,
+                headPathFlagBits,
+                navLen,
+                headNavLen,
+                lastNavFlags,
+                headLastNavFlags,
+                frontLaneFlags,
+                headFrontFlags,
+                pathLen,
+                pathElementIndex,
+                headPathLen,
+                EntityManager.HasComponent<ParkedTrain>(vehicle),
+                EntityManager.HasComponent<Deleted>(vehicle));
+
+            return "frame=" + m_SimulationSystem.frameIndex
+                + " phase=" + phase
+                + " state=" + state
+                + " pending=" + (m_PendingRetireHandoffs.Contains(vehicle) ? "1" : "0")
+                + " guess=" + guess
+                + " ctrl=" + DescribeRetireShadowEntity(controllerEntity)
+                + " owner=" + DescribeRetireShadowEntity(ownerDepot)
+                + " ownerFlags=" + ownerDepotFlags
+                + " ownerAvail=" + ownerDepotAvailable
+                + " target=" + DescribeRetireShadowEntity(targetEntity)
+                + " targetKind=" + targetKind
+                + " targetExists=" + ((targetEntity != Entity.Null && EntityManager.Exists(targetEntity)) ? "1" : "0")
+                + " targetIsOwner=" + ((targetEntity != Entity.Null && targetEntity == ownerDepot) ? "1" : "0")
+                + " route=" + DescribeRetireShadowEntity(currentRoute)
+                + " deleted=" + (EntityManager.HasComponent<Deleted>(vehicle) ? "1" : "0")
+                + " parked=" + (EntityManager.HasComponent<ParkedTrain>(vehicle) ? "1" : "0")
+                + " pfu=" + (EntityManager.HasComponent<PathfindUpdated>(vehicle) ? "1" : "0")
+                + " upd=" + (EntityManager.HasComponent<Updated>(vehicle) ? "1" : "0")
+                + " pt=" + publicFlags
+                + " cargo=" + cargoFlags
+                + " path=" + pathFlags
+                + " pathLen=" + pathLen
+                + " pathIdx=" + pathElementIndex
+                + " piDest=" + DescribeRetireShadowEntity(pathInfoDest)
+                + " piState=" + pathInfoState
+                + " navLen=" + navLen
+                + " navLane=" + DescribeRetireShadowEntity(lastNavLane)
+                + " navLast=" + lastNavFlags
+                + " front=" + frontLaneFlags
+                + " frontLane=" + DescribeRetireShadowEntity(frontLane)
+                + " rearLane=" + DescribeRetireShadowEntity(rearLane)
+                + " layout=" + layoutLen
+                + " head=" + DescribeRetireShadowEntity(headVehicle)
+                + " headSelf=" + (headVehicle == vehicle ? "1" : "0")
+                + " headPfu=" + (EntityManager.HasComponent<PathfindUpdated>(headVehicle) ? "1" : "0")
+                + " headUpd=" + (EntityManager.HasComponent<Updated>(headVehicle) ? "1" : "0")
+                + " headNav=" + headNavLen
+                + " headNavLane=" + DescribeRetireShadowEntity(headLastNavLane)
+                + " headNavLast=" + headLastNavFlags
+                + " headPath=" + headPathLen
+                + " headPathFlags=" + headPathFlags
+                + " headPiDest=" + DescribeRetireShadowEntity(headPathInfoDest)
+                + " headPiState=" + headPathInfoState
+                + " headFront=" + headFrontFlags
+                + " headFrontLane=" + DescribeRetireShadowEntity(headFrontLane)
+                + " headRearLane=" + DescribeRetireShadowEntity(headRearLane);
+        }
+
+        private static string DescribeRetireShadowEntity(Entity entity)
+        {
+            return entity == Entity.Null ? "-" : entity.Index.ToString();
+        }
+
+        private string DescribeRetireShadowTargetKind(Entity entity)
+        {
+            if (entity == Entity.Null || !EntityManager.Exists(entity))
+                return "-";
+            if (EntityManager.HasComponent<Game.Buildings.TransportDepot>(entity))
+                return "depot";
+            if (EntityManager.HasComponent<Waypoint>(entity))
+                return "waypoint";
+            if (EntityManager.HasComponent<Game.Objects.SpawnLocation>(entity))
+                return "spawn";
+            if (EntityManager.HasComponent<Connected>(entity))
+                return "connected";
+            return "other";
+        }
+
+        private static bool HasFlagText(string text, string flag)
+        {
+            return !string.IsNullOrEmpty(text) && text.IndexOf(flag, StringComparison.Ordinal) >= 0;
+        }
+
+        private string ClassifyRetireShadowGuess(
+            Entity targetEntity,
+            Entity ownerDepot,
+            PathFlags pathFlags,
+            PathFlags headPathFlags,
+            int navLen,
+            int headNavLen,
+            string navLastFlags,
+            string headNavLastFlags,
+            string frontLaneFlags,
+            string headFrontFlags,
+            int pathLen,
+            int pathElementIndex,
+            int headPathLen,
+            bool parked,
+            bool deleted)
+        {
+            if (parked)
+                return "parked";
+            if (deleted)
+                return "deleted-marked";
+            if (targetEntity == Entity.Null || !EntityManager.Exists(targetEntity))
+                return "target-invalid";
+            if ((pathFlags & PathFlags.Stuck) != 0 || (headPathFlags & PathFlags.Stuck) != 0)
+                return "path-stuck";
+            if ((pathFlags & PathFlags.Failed) != 0 || (headPathFlags & PathFlags.Failed) != 0)
+                return "path-failed";
+            if (navLen == 0 && headNavLen > 0)
+                return "root-nav-missing-head-nav-present";
+            if (navLen == 0
+                && (HasFlagText(frontLaneFlags, "EndOfPath") || HasFlagText(headFrontFlags, "EndOfPath")))
+                return "end-of-path-without-nav";
+            if (navLen > 0 && HasFlagText(navLastFlags, "ParkingSpace") && !parked)
+                return "parking-space-not-parked";
+            if (headNavLen > 0 && HasFlagText(headNavLastFlags, "ParkingSpace") && !parked)
+                return "head-parking-space-not-parked";
+            if (navLen > 0
+                && !HasFlagText(navLastFlags, "ParkingSpace")
+                && HasFlagText(frontLaneFlags, "EndOfPath"))
+                return "end-of-path-non-parking";
+            if (navLen == 0 && pathLen >= 0 && pathElementIndex >= pathLen)
+                return "path-consumed-no-nav";
+            if (headNavLen == 0 && headPathLen >= 0 && headPathLen > 0 && targetEntity == ownerDepot)
+                return "head-path-consumed-no-nav";
+            return "unknown";
+        }
+
+        private void ProcessPendingRetireHandoffs(EntityCommandBuffer ecb)
+        {
+            if (m_PendingRetireHandoffs.Count == 0)
+                return;
+
+            List<Entity> processed = new List<Entity>(m_PendingRetireHandoffs.Count);
+            foreach (Entity vehicle in m_PendingRetireHandoffs)
+            {
+                if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                {
+                    processed.Add(vehicle);
+                    continue;
+                }
+
+                string lineTag = m_VehicleLine.TryGetValue(vehicle, out Entity lineEntity)
+                    ? "线路" + lineEntity.Index
+                    : "线路?";
+
+                if (!EntityManager.HasComponent<Owner>(vehicle))
+                {
+                    RecordRetireShadowSnapshot(vehicle, "handoff-no-owner");
+                    log.Info("[回库] " + lineTag + " 车辆" + vehicle.Index + " 无Owner，标记删除");
+                    if (!EntityManager.HasComponent<Deleted>(vehicle))
+                        ecb.AddComponent<Deleted>(vehicle);
+                    processed.Add(vehicle);
+                    continue;
+                }
+
+                if (EntityManager.HasBuffer<ServiceDispatch>(vehicle))
+                {
+                    DynamicBuffer<ServiceDispatch> dispatchBuffer = ecb.SetBuffer<ServiceDispatch>(vehicle);
+                    dispatchBuffer.Clear();
+                }
+
+                if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
+                {
+                    Game.Vehicles.CargoTransport cargoTransport = EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
+                    cargoTransport.m_RequestCount = 0;
+                    cargoTransport.m_State &= ~(CargoTransportFlags.EnRoute
+                        | CargoTransportFlags.Refueling
+                        | CargoTransportFlags.AbandonRoute);
+                    ecb.SetComponent(vehicle, cargoTransport);
+                }
+
+                if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+                {
+                    Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                    publicTransport.m_RequestCount = 0;
+                    publicTransport.m_State &= ~(PublicTransportFlags.EnRoute
+                        | PublicTransportFlags.Refueling
+                        | PublicTransportFlags.AbandonRoute);
+                    ecb.SetComponent(vehicle, publicTransport);
+                }
+
+                if (EntityManager.HasComponent<Train>(vehicle))
+                {
+                    Train train = EntityManager.GetComponentData<Train>(vehicle);
+                    train.m_Flags &= ~Game.Vehicles.TrainFlags.IgnoreParkedVehicle;
+                    ecb.SetComponent(vehicle, train);
+                }
+
+                Target target = EntityManager.GetComponentData<Target>(vehicle);
+                target.m_Target = EntityManager.GetComponentData<Owner>(vehicle).m_Owner;
+
+                if (EntityManager.HasComponent<PathOwner>(vehicle))
+                {
+                    PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
+                    pathOwner.m_State &= ~PathFlags.Failed;
+                    pathOwner.m_State |= PathFlags.Obsolete;
+                    ecb.SetComponent(vehicle, pathOwner);
+                }
+
+                ecb.SetComponent(vehicle, target);
+                if (!EntityManager.HasComponent<PathfindUpdated>(vehicle))
+                    ecb.AddComponent<PathfindUpdated>(vehicle);
+                if (!EntityManager.HasComponent<Updated>(vehicle))
+                    ecb.AddComponent<Updated>(vehicle);
+                RecordRetireShadowSnapshot(vehicle, "handoff-queued");
+                processed.Add(vehicle);
+            }
+
+            for (int i = 0; i < processed.Count; i++)
+                m_PendingRetireHandoffs.Remove(processed[i]);
         }
 
         private void PuppetMasterControl(int nowMin)
@@ -460,12 +967,22 @@ namespace RapidTransitMod
                     uint nowFrame = m_SimulationSystem.frameIndex;
                     string lineTag = "线路" + line.Index;
                     float cachedLapFrames = ReadLineLapCache(line);
-
-                    bool lineHasHistory = false;
+                    List<Entity> runtimeVehicles = new List<Entity>(rvs.Length);
+                    HashSet<Entity> seenRuntimeVehicles = new HashSet<Entity>();
                     for (int i = 0; i < rvs.Length; i++)
                     {
-                        Entity v0 = rvs[i].m_Vehicle;
-                        if (!EntityManager.Exists(v0)) continue;
+                        Entity runtimeVehicle = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
+                        if (runtimeVehicle == Entity.Null || !EntityManager.Exists(runtimeVehicle))
+                            continue;
+                        if (!seenRuntimeVehicles.Add(runtimeVehicle))
+                            continue;
+                        runtimeVehicles.Add(runtimeVehicle);
+                    }
+
+                    bool lineHasHistory = false;
+                    for (int i = 0; i < runtimeVehicles.Count; i++)
+                    {
+                        Entity v0 = runtimeVehicles[i];
                         if (m_VehicleLapFrames.TryGetValue(v0, out uint lf0) && lf0 > 0)
                         {
                             lineHasHistory = true;
@@ -475,10 +992,9 @@ namespace RapidTransitMod
                     if (!lineHasHistory && cachedLapFrames > 0f)
                         lineHasHistory = true;
 
-                    for (int i = 0; i < rvs.Length; i++)
+                    for (int i = 0; i < runtimeVehicles.Count; i++)
                     {
-                        Entity v = rvs[i].m_Vehicle;
-                        if (!EntityManager.Exists(v)) continue;
+                        Entity v = runtimeVehicles[i];
                         if (!m_VehicleState.TryGetValue(v, out var st)) continue;
                         if (st != VehicleState.Idle && st != VehicleState.Holding) continue;
                         if (!NeedsMaintenance(v) && CanFinishNextLap(v)) continue;
@@ -504,10 +1020,9 @@ namespace RapidTransitMod
                     float lineDurationFrames = 0f;
                     {
                         float maxLapFrames = 0f;
-                        for (int i = 0; i < rvs.Length; i++)
+                        for (int i = 0; i < runtimeVehicles.Count; i++)
                         {
-                            Entity v0 = rvs[i].m_Vehicle;
-                            if (!EntityManager.Exists(v0)) continue;
+                            Entity v0 = runtimeVehicles[i];
                             if (m_VehicleLapFrames.TryGetValue(v0, out uint lf0) && lf0 > maxLapFrames)
                                 maxLapFrames = lf0;
                         }
@@ -520,10 +1035,9 @@ namespace RapidTransitMod
                             if (cachedLapFrames > 0f)
                             {
                                 lineDurationFrames = cachedLapFrames;
-                                for (int i = 0; i < rvs.Length; i++)
+                                for (int i = 0; i < runtimeVehicles.Count; i++)
                                 {
-                                    Entity v0 = rvs[i].m_Vehicle;
-                                    if (!EntityManager.Exists(v0)) continue;
+                                    Entity v0 = runtimeVehicles[i];
                                     if (!m_VehicleLapFrames.TryGetValue(v0, out uint lf0) || lf0 == 0)
                                         m_VehicleLapFrames[v0] = (uint)cachedLapFrames;
                                 }
@@ -571,10 +1085,9 @@ namespace RapidTransitMod
                         }
 
                         Entity currentOccupier = Entity.Null;
-                        for (int i = 0; i < rvs.Length; i++)
+                        for (int i = 0; i < runtimeVehicles.Count; i++)
                         {
-                            Entity v = rvs[i].m_Vehicle;
-                            if (!EntityManager.Exists(v)) continue;
+                            Entity v = runtimeVehicles[i];
                             if (!m_VehicleCurrentSlot.TryGetValue(v, out int vcs) || vcs != slot) continue;
                             if (!m_VehicleState.TryGetValue(v, out var currentState)) continue;
                             if (currentState != VehicleState.Running) continue;
@@ -589,10 +1102,9 @@ namespace RapidTransitMod
 
                         Entity currentHolder = Entity.Null;
                         int currentHolderTier = 99;
-                        for (int i = 0; i < rvs.Length; i++)
+                        for (int i = 0; i < runtimeVehicles.Count; i++)
                         {
-                            Entity v = rvs[i].m_Vehicle;
-                            if (!EntityManager.Exists(v)) continue;
+                            Entity v = runtimeVehicles[i];
                             if (!m_VehicleTargetMin.TryGetValue(v, out int vtm) || vtm != slot) continue;
                             currentHolder = v;
                             if (m_VehicleState.TryGetValue(v, out var hst) &&
@@ -634,10 +1146,9 @@ namespace RapidTransitMod
                         float nearestETA = float.MaxValue;
                         string nearestReason = "none";
 
-                        for (int i = 0; i < rvs.Length; i++)
+                        for (int i = 0; i < runtimeVehicles.Count; i++)
                         {
-                            Entity v = rvs[i].m_Vehicle;
-                            if (!EntityManager.Exists(v)) continue;
+                            Entity v = runtimeVehicles[i];
                             if (!m_VehicleState.TryGetValue(v, out var st)) continue;
                             if (st == VehicleState.Retiring) continue;
                             if (m_BVMisfire.Contains(v)) continue;
@@ -763,10 +1274,9 @@ namespace RapidTransitMod
                                 if (bestPrevTarget < 0)
                                 {
                                     int holdingCount = 0;
-                                    for (int i = 0; i < rvs.Length; i++)
+                                    for (int i = 0; i < runtimeVehicles.Count; i++)
                                     {
-                                        Entity rv = rvs[i].m_Vehicle;
-                                        if (!EntityManager.Exists(rv)) continue;
+                                        Entity rv = runtimeVehicles[i];
                                         if (!m_VehicleState.TryGetValue(rv, out var rst)) continue;
                                         if (rst == VehicleState.Holding) { holdingCount++; continue; }
                                         if (rst == VehicleState.Idle
@@ -800,10 +1310,9 @@ namespace RapidTransitMod
                         else
                         {
                             bool hasIdleOrHoldingUnassigned = false;
-                            for (int i = 0; i < rvs.Length; i++)
+                            for (int i = 0; i < runtimeVehicles.Count; i++)
                             {
-                                Entity v = rvs[i].m_Vehicle;
-                                if (!EntityManager.Exists(v)) continue;
+                                Entity v = runtimeVehicles[i];
                                 if (!m_VehicleState.TryGetValue(v, out var st2)) continue;
                                 if (st2 != VehicleState.Holding && st2 != VehicleState.Idle) continue;
                                 if (m_VehicleTargetMin.TryGetValue(v, out int vtm2) && vtm2 >= 0) continue;
@@ -819,10 +1328,9 @@ namespace RapidTransitMod
                             int canMakeItCount = 0;
                             int inTransitCount = 0;
 
-                            for (int i = 0; i < rvs.Length; i++)
+                            for (int i = 0; i < runtimeVehicles.Count; i++)
                             {
-                                Entity v = rvs[i].m_Vehicle;
-                                if (!EntityManager.Exists(v)) continue;
+                                Entity v = runtimeVehicles[i];
                                 if (!m_VehicleState.TryGetValue(v, out var st2)) continue;
                                 if (st2 != VehicleState.Preparing && st2 != VehicleState.Running) continue;
                                 inTransitCount++;
@@ -1051,6 +1559,7 @@ namespace RapidTransitMod
                     if (!fullSweep && !isHotLine) continue;
 
                     string lineTag = "线路" + line.Index;
+                    HashSet<Entity> seenVehicles = new HashSet<Entity>();
 
                     if (!adoptExistingVehicles && !m_DiagnosedLines.Contains(line))
                     {
@@ -1062,12 +1571,15 @@ namespace RapidTransitMod
 
                     for (int i = 0; i < rvs.Length; i++)
                     {
-                        Entity v = rvs[i].m_Vehicle;
+                        Entity v = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
                         if (!EntityManager.Exists(v)) continue;
+                        if (!seenVehicles.Add(v)) continue;
                         if (m_VehicleState.ContainsKey(v)) continue;
 
                         var pt0 = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v);
                         bool boarding0 = (pt0.m_State & PublicTransportFlags.Boarding) != 0;
+                        if ((pt0.m_State & PublicTransportFlags.Returning) != 0)
+                            continue;
 
                         int initWpIdx = boarding0 ? ComputeWpIndex(v, wps) : -1;
                         bool atA0 = (initWpIdx == 0);
@@ -1163,8 +1675,12 @@ namespace RapidTransitMod
 
             try
             {
-                foreach (var v in vehicles)
+                HashSet<Entity> seenVehicles = new HashSet<Entity>();
+                foreach (var rawVehicle in vehicles)
                 {
+                    Entity v = ResolveRuntimeControllerVehicle(rawVehicle);
+                    if (v == Entity.Null || !EntityManager.Exists(v)) continue;
+                    if (!seenVehicles.Add(v)) continue;
                     if (!EntityManager.Exists(v)) continue;
                     Entity line = ResolveVehicleLine(v);
                     if (!IsWorkbenchTimetableApplied(line)) continue;
@@ -1485,6 +2001,7 @@ namespace RapidTransitMod
                                     break;
                                 }
                                 m_VehicleState[v] = VehicleState.Holding;
+                                m_ForcedOriginReadyFrame[v] = nowFrame + PREPARING_ORIGIN_SETTLE_FRAMES;
                                 TryRecordPreparingArrivalSample(v, lineEnt, nowFrame);
                                 RecordLineHoldingSummary(lineEnt, nowMin, v, targetMin);
                                 pt.m_DepartureFrame = nowFrame + 9999;
@@ -1510,6 +2027,37 @@ namespace RapidTransitMod
                         case VehicleState.Holding:
                             if (!atA)
                             {
+                                if (TryGetAssistLaunchPending(v, routeEnt, targetMin, out AssistLaunchPendingRecord assistPending))
+                                {
+                                    int assistedTargetMin = assistPending.TargetMin;
+                                    bool isLateAssistLaunch = CanLateDispatchSlot(nowMin, assistedTargetMin);
+                                    m_VehicleState[v] = VehicleState.Running;
+                                    m_VehiclePreparingStartFrame.Remove(v);
+                                    m_ForcedOriginReadyFrame.Remove(v);
+                                    RequestLineOrderedRuntimeForceRefresh(routeEnt, "origin-assist-launch-sync");
+                                    m_JustLaunched.Add(v);
+                                    m_VehicleLastLaunchFrame[v] = nowFrame;
+                                    RecordLapStart(v, isLateAssistLaunch ? "协助补发确认" : "协助发车确认");
+                                    m_LastBoarding[v] = false;
+                                    m_CachedWpIdx[v] = -1;
+                                    m_BVMisfire.Remove(v);
+                                    m_BVMisfireStartFrame.Remove(v);
+                                    m_LaunchCooldownUntil[v] = nowFrame + LAUNCH_COOLDOWN_FRAMES;
+                                    m_VehicleCurrentSlot[v] = assistedTargetMin;
+                                    m_VehicleTargetMin[v] = -1;
+                                    m_OriginArrivalCandidateSinceFrame.Remove(v);
+                                    m_ForcedOriginReadyFrame.Remove(v);
+                                    ClearAssistLaunchPending(v);
+                                    pt.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
+                                    pt.m_State &= ~PublicTransportFlags.Boarding;
+                                    ecb.SetComponent(v, pt);
+                                    SetUILabel(v, (isLateAssistLaunch ? "运行中 补发 " : "运行中 ") + SlotStr(assistedTargetMin) + vTag);
+                                    log.Info("[AssistLaunchSync] " + lineTag + " 车辆" + v.Index
+                                        + " 在始发发车协助后已离站，补记班次" + SlotStr(assistedTargetMin)
+                                        + " 于 " + SlotStr(nowMin)
+                                        + (isLateAssistLaunch ? " late=1" : " late=0"));
+                                    break;
+                                }
                                 if (IsWaitingForcedOriginDwell(v, nowFrame))
                                 {
                                     pt.m_DepartureFrame = nowFrame + 9999;
@@ -1631,6 +2179,7 @@ namespace RapidTransitMod
                                             + " " + FormatBoardingCloseAssistStats(assistStats)
                                             + " wp=" + curWpIdx);
                                     }
+                                    ArmAssistLaunchPending(v, routeEnt, targetMin);
                                     SetUILabel(v, "结束上客 " + SlotStr(targetMin) + vTag);
                                     break;
                                 }
@@ -1951,8 +2500,6 @@ namespace RapidTransitMod
                                         break;
                                     }
 
-                                    if (!settleAtOrigin)
-                                        m_OriginArrivalCandidateSinceFrame.Remove(v);
                                     pt.m_DepartureFrame = midStopBoarding && midStopDwellDeadlineFrame > 0
                                         ? midStopDwellDeadlineFrame
                                         : nowFrame + 9999;
@@ -2149,12 +2696,53 @@ namespace RapidTransitMod
                             break;
 
                         case VehicleState.Retiring:
-                            ClearBypassYieldState(v);
                             SetUILabel(v, "回库中" + vTag);
-                            EnsureRetiringRoute(v, ref pt, ref tgt, ecb);
                             break;
                     }
                 }
+
+                var handedOffKeys = new NativeList<Entity>(Allocator.Temp);
+                foreach (var kv in m_VehicleState)
+                {
+                    Entity vehicle = kv.Key;
+                    if (kv.Value != VehicleState.Retiring)
+                        continue;
+                    if (!EntityManager.Exists(vehicle))
+                        continue;
+                    RecordRetireShadowSnapshot(vehicle, "retiring");
+                    if (EntityManager.HasComponent<Deleted>(vehicle)
+                        || EntityManager.HasComponent<ParkedTrain>(vehicle))
+                    {
+                        RecordRetireShadowSnapshot(
+                            vehicle,
+                            EntityManager.HasComponent<ParkedTrain>(vehicle) ? "parked" : "deleted-marked");
+                        if (EntityManager.HasComponent<ParkedTrain>(vehicle))
+                        {
+                            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+                            {
+                                Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                                publicTransport.m_State &= ~PublicTransportFlags.Disabled;
+                                EntityManager.SetComponentData(vehicle, publicTransport);
+                            }
+                            if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
+                            {
+                                Game.Vehicles.CargoTransport cargoTransport = EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
+                                cargoTransport.m_State &= ~CargoTransportFlags.Disabled;
+                                EntityManager.SetComponentData(vehicle, cargoTransport);
+                            }
+                        }
+                        handedOffKeys.Add(vehicle);
+                    }
+                }
+                foreach (var handedOff in handedOffKeys)
+                {
+                    ReleaseRuntimeOwnershipAfterRetireHandoff(
+                        handedOff,
+                        EntityManager.HasComponent<ParkedTrain>(handedOff)
+                            ? "retire-handoff-parked"
+                            : "retire-handoff-deleted");
+                }
+                handedOffKeys.Dispose();
 
                 var deadKeys = new NativeList<Entity>(Allocator.Temp);
                 foreach (var kv in m_VehicleState)
@@ -2163,6 +2751,8 @@ namespace RapidTransitMod
                 }
                 foreach (var dead in deadKeys)
                 {
+                    FlushRetireShadowSnapshots(dead, "entity-removed");
+                    ResetRetireShadowSnapshots(dead);
                     m_VehicleState.Remove(dead);
                     m_VehicleTargetMin.Remove(dead);
                     m_VehicleLapStartOdometer.Remove(dead);
@@ -2195,9 +2785,12 @@ namespace RapidTransitMod
                     m_OriginArrivalCandidateSinceFrame.Remove(dead);
                     m_ForcedOriginReadyFrame.Remove(dead);
                     m_ForcedOriginBoardingGraceUntil.Remove(dead);
+                    m_AssistLaunchPendingByVehicle.Remove(dead);
                     m_StopDwellStartFrame.Remove(dead);
                     m_BypassYieldBlocker.Remove(dead);
                     m_VehicleTraversalSliceSessions.Remove(dead);
+                    m_VehicleTraversalSliceLastSampleFrame.Remove(dead);
+                    m_VehicleTraversalSliceSamplingPlans.Remove(dead);
                     ClearVehicleTraversalSliceLapDebug(dead);
                     m_BvWaypointMismatchLogCache.Remove(dead);
                     m_BvTrackAnchorRecoveryLogCache.Remove(dead);
@@ -2241,21 +2834,14 @@ namespace RapidTransitMod
                 return cachedWaypointIndex;
 
             int computedWaypointIndex = ComputeWpIndexUncached(v, wps);
-            if (computedWaypointIndex >= 0)
-            {
-                Entity route = ResolveVehicleLine(v);
-                bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v)
-                    && (EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v).m_State & PublicTransportFlags.Boarding) != 0;
-                m_WaypointIndexFrameSnapshots[v] = new WaypointIndexFrameSnapshot(
-                    m_SimulationSystem.frameIndex,
-                    route,
-                    boarding,
-                    computedWaypointIndex);
-            }
-            else
-            {
-                m_WaypointIndexFrameSnapshots.Remove(v);
-            }
+            Entity route = ResolveVehicleLine(v);
+            bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v)
+                && (EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v).m_State & PublicTransportFlags.Boarding) != 0;
+            m_WaypointIndexFrameSnapshots[v] = new WaypointIndexFrameSnapshot(
+                m_SimulationSystem.frameIndex,
+                route,
+                boarding,
+                computedWaypointIndex);
 
             return computedWaypointIndex;
         }
@@ -2285,102 +2871,118 @@ namespace RapidTransitMod
             return true;
         }
 
+        private bool TryGetLineWaypointIndexLookup(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out LineWaypointIndexLookup lookup)
+        {
+            lookup = null;
+            if (line == Entity.Null || waypoints.Length == 0)
+                return false;
+
+            ulong signature = ComputeLineWaypointSignature(waypoints);
+            if (!m_LineWaypointIndexLookups.TryGetValue(line, out lookup)
+                || lookup == null
+                || lookup.Signature != signature)
+            {
+                lookup = new LineWaypointIndexLookup
+                {
+                    Signature = signature
+                };
+
+                for (int waypointIndex = 0; waypointIndex < waypoints.Length; waypointIndex++)
+                {
+                    Entity waypoint = waypoints[waypointIndex].m_Waypoint;
+                    if (waypoint == Entity.Null || !EntityManager.Exists(waypoint))
+                        continue;
+
+                    lookup.WaypointIndexByWaypoint[waypoint] = waypointIndex;
+                    if (EntityManager.HasComponent<Connected>(waypoint))
+                    {
+                        Entity stop = EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
+                        if (stop != Entity.Null)
+                            lookup.WaypointIndexByStop[stop] = waypointIndex;
+                    }
+                }
+
+                m_LineWaypointIndexLookups[line] = lookup;
+            }
+
+            return true;
+        }
+
         private int ComputeWpIndexUncached(Entity v, DynamicBuffer<RouteWaypoint> wps)
         {
-            if (!EntityManager.HasComponent<Game.Objects.Transform>(v)) return -1;
-            float3 vPos = EntityManager.GetComponentData<Game.Objects.Transform>(v).m_Position;
+            Entity line = ResolveVehicleLine(v);
             bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v)
                 && (EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v).m_State & PublicTransportFlags.Boarding) != 0;
             int targetWaypointIndex = -1;
+            LineWaypointIndexLookup lookup = null;
+            if (line != Entity.Null)
+                TryGetLineWaypointIndexLookup(line, wps, out lookup);
             if (EntityManager.HasComponent<Target>(v))
             {
                 Entity targetWaypoint = EntityManager.GetComponentData<Target>(v).m_Target;
-                if (EntityManager.HasComponent<Waypoint>(targetWaypoint))
+                if (lookup != null
+                    && targetWaypoint != Entity.Null
+                    && lookup.WaypointIndexByWaypoint.TryGetValue(targetWaypoint, out int indexedTargetWaypointIndex))
+                {
+                    targetWaypointIndex = indexedTargetWaypointIndex;
+                }
+                else if (EntityManager.HasComponent<Waypoint>(targetWaypoint))
                     targetWaypointIndex = EntityManager.GetComponentData<Waypoint>(targetWaypoint).m_Index;
             }
 
             int bvWi = -1;
-            float bvDist = float.MaxValue;
-            int closestWi = -1;
-            float closestDist = AT_STOP_MAX_DIST;
-
-            for (int wi = 0; wi < wps.Length; wi++)
+            if (lookup != null && boarding)
             {
-                Entity wp = wps[wi].m_Waypoint;
-                Entity stop = EntityManager.HasComponent<Connected>(wp)
-                    ? EntityManager.GetComponentData<Connected>(wp).m_Connected : Entity.Null;
-                if (stop == Entity.Null) continue;
-                if (!EntityManager.HasComponent<Game.Objects.Transform>(stop)) continue;
-
-                float3 sPos = EntityManager.GetComponentData<Game.Objects.Transform>(stop).m_Position;
-                float dist = math.distance(vPos, sPos);
-
-                if (dist < closestDist)
+                foreach (KeyValuePair<Entity, int> entry in lookup.WaypointIndexByStop)
                 {
-                    closestDist = dist;
-                    closestWi = wi;
+                    Entity stop = entry.Key;
+                    if (!EntityManager.Exists(stop)
+                        || !EntityManager.HasComponent<BoardingVehicle>(stop)
+                        || EntityManager.GetComponentData<BoardingVehicle>(stop).m_Vehicle != v)
+                    {
+                        continue;
+                    }
+
+                    bvWi = entry.Value;
+                    break;
                 }
-
-                if (!EntityManager.HasComponent<BoardingVehicle>(stop)) continue;
-                if (EntityManager.GetComponentData<BoardingVehicle>(stop).m_Vehicle != v) continue;
-                bvWi = wi;
-                bvDist = dist;
             }
+            else
+            {
+                for (int wi = 0; wi < wps.Length; wi++)
+                {
+                    Entity wp = wps[wi].m_Waypoint;
+                    Entity stop = EntityManager.HasComponent<Connected>(wp)
+                        ? EntityManager.GetComponentData<Connected>(wp).m_Connected : Entity.Null;
+                    if (stop == Entity.Null) continue;
 
-            if (bvWi >= 0 && bvDist <= AT_STOP_MAX_DIST) return bvWi;
+                    if (!EntityManager.HasComponent<BoardingVehicle>(stop)) continue;
+                    if (EntityManager.GetComponentData<BoardingVehicle>(stop).m_Vehicle != v) continue;
+                    bvWi = wi;
+                    break;
+                }
+            }
 
             bool allowTrackWaypointAnchoring = ENABLE_TRACK_WAYPOINT_ANCHORING && m_VehicleState.ContainsKey(v);
 
-            if (bvWi >= 0)
-            {
-                if (EntityManager.HasComponent<Target>(v))
-                {
-                    Target target = EntityManager.GetComponentData<Target>(v);
-                    if (IsSuppressedForcedMidStopBoardingGhost(v, target, wps, m_SimulationSystem.frameIndex, out _))
-                        return closestWi >= 0 ? closestWi : -1;
-                }
-
-                if (allowTrackWaypointAnchoring
-                    && TryResolveWaypointIndexByTrackCursor(v, wps, targetWaypointIndex, bvWi, closestWi, out int anchoredWaypointIndex, out string anchorDetail))
-                {
-                    LogVehicleStateOnce(
-                        m_BvTrackAnchorRecoveryLogCache,
-                        v,
-                        "bv-mismatch|" + anchorDetail,
-                        "[定位接管] 车辆" + v.Index + " BV误写后按track锚定 wp[" + anchoredWaypointIndex + "] " + anchorDetail);
-                    return anchoredWaypointIndex;
-                }
-
-                uint nowFrame = m_SimulationSystem.frameIndex;
-                string mismatchKey = "wps[" + bvWi + "]|closest[" + closestWi + "]";
-                if (ShouldEmitVehicleLogWithCooldown(
-                        m_BvWaypointMismatchLogCache,
-                        m_BvWaypointMismatchLastLogFrame,
-                        v,
-                        mismatchKey,
-                        nowFrame,
-                        BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES))
-                {
-                    log.Info("[定位] 车辆" + v.Index
-                        + " BV误写 wps[" + bvWi + "] dist=" + bvDist.ToString("F0") + "m > " + AT_STOP_MAX_DIST + "m");
-                }
-                return -1;
-            }
-
             if (allowTrackWaypointAnchoring
-                && boarding
-                && TryResolveWaypointIndexByTrackCursor(v, wps, targetWaypointIndex, -1, closestWi, out int boardingWaypointIndex, out string boardingAnchorDetail))
+                && TryResolveWaypointIndexByTrackCursor(v, wps, targetWaypointIndex, bvWi, -1, out int anchoredWaypointIndex, out string anchorDetail, out string anchorStableKey))
             {
                 LogVehicleStateOnce(
                     m_BvTrackAnchorRecoveryLogCache,
                     v,
-                    "boarding-track|" + boardingAnchorDetail,
-                    "[定位接管] 车辆" + v.Index + " boarding无站位按track锚定 wp[" + boardingWaypointIndex + "] " + boardingAnchorDetail);
-                return boardingWaypointIndex;
+                    "track-anchor|" + anchorStableKey,
+                    "[定位接管] 车辆" + v.Index + " 按track锚定 wp[" + anchoredWaypointIndex + "] " + anchorDetail);
+                return anchoredWaypointIndex;
             }
 
-            if (closestWi >= 0)
-                return closestWi;
+            // Fallback when track cursor is temporarily unavailable:
+            // trust explicit boarding-stop ownership only, never world-distance nearest-stop.
+            if (boarding && bvWi >= 0)
+                return bvWi;
 
             return -1;
         }
@@ -2392,10 +2994,12 @@ namespace RapidTransitMod
             int boardingWaypointIndex,
             int closestWaypointIndex,
             out int waypointIndex,
-            out string detail)
+            out string detail,
+            out string stableKey)
         {
             waypointIndex = -1;
             detail = string.Empty;
+            stableKey = string.Empty;
             Entity line = ResolveVehicleLine(vehicle);
             if (vehicle == Entity.Null
                 || line == Entity.Null
@@ -2457,6 +3061,12 @@ namespace RapidTransitMod
                 return false;
 
             waypointIndex = bestWaypointIndex;
+            stableKey = "wp=" + bestWaypointIndex
+                + " seg=" + cursor.SegmentIndex
+                + " targetWp=" + targetWaypointIndex
+                + " bvWp=" + boardingWaypointIndex
+                + " closestWp=" + closestWaypointIndex
+                + " window=" + bestWindowStart + ".." + bestWindowEndExclusive;
             detail = "atom=" + cursor.AtomCursorIndex
                 + " seg=" + cursor.SegmentIndex
                 + " targetWp=" + targetWaypointIndex
@@ -2682,7 +3292,7 @@ namespace RapidTransitMod
 
             for (int i = 0; i < rvs.Length; i++)
             {
-                Entity nearV = rvs[i].m_Vehicle;
+                Entity nearV = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
                 if (nearV == ignoreVehicle) continue;
                 if (!EntityManager.Exists(nearV)) continue;
                 if (!m_VehicleState.TryGetValue(nearV, out var nearState)) continue;
@@ -2718,7 +3328,7 @@ namespace RapidTransitMod
             if (!rvBuffers.TryGetBuffer(line, out var rvs)) return 0;
             for (int i = 0; i < rvs.Length; i++)
             {
-                Entity v = rvs[i].m_Vehicle;
+                Entity v = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
                 if (!EntityManager.Exists(v)) continue;
                 if (m_VehicleState.TryGetValue(v, out var st) && st == VehicleState.Retiring) continue;
                 count++;
