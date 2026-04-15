@@ -6,6 +6,7 @@
   "scripts": {
     "validate:euis": "node ./scripts/validate-euis-frontend.mjs",
     "build:euis": "npm run validate:euis && vite build --config vite.euis.config.js",
+    "build:native-schedule": "vite build --config vite.native-schedule.config.js",
     "build": "npm run build:euis"
   },
   "dependencies": {

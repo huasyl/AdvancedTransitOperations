@@ -9,6 +9,7 @@ using Game.Simulation;
 using Game.Tools;
 using Game.UI.InGame;
 using HarmonyLib;
+using Unity.Entities;
 
 namespace RapidTransitMod
 {
@@ -72,6 +73,11 @@ namespace RapidTransitMod
                 I18n.LoadAll(Path.Combine(modRootPath, "Locales"));
                 DispatchWorkbenchEuisBridge.Initialize(modRootPath);
             }
+
+            World.DefaultGameObjectInjectionWorld
+                .GetOrCreateSystemManaged<GamePanelUISystem>()
+                .SetDefaultArgs(new DispatchWorkbenchNativePanel());
+            log.Info("Registered native workbench panel: " + typeof(DispatchWorkbenchNativePanel).FullName);
 
             log.Info("RapidTransitMod initialized.");
         }

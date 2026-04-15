@@ -24,13 +24,227 @@ namespace RapidTransitMod
         private NameSystem m_NameSystem = null!;
         private PathfindSetupSystem m_PathfindSetupSystem = null!;
 
+        private readonly struct PendingRequestRouteSetupCacheEntry
+        {
+            public readonly bool Available;
+            public readonly RouteConnectionData RouteConnectionData;
+            public readonly PathMethod PathMethods;
+            public readonly Entity DestinationWaypoint;
+
+            public PendingRequestRouteSetupCacheEntry(
+                bool available,
+                RouteConnectionData routeConnectionData,
+                PathMethod pathMethods,
+                Entity destinationWaypoint)
+            {
+                Available = available;
+                RouteConnectionData = routeConnectionData;
+                PathMethods = pathMethods;
+                DestinationWaypoint = destinationWaypoint;
+            }
+        }
+
+        private readonly struct PendingRequestFrameEntry
+        {
+            public readonly Entity Request;
+            public readonly ServiceRequest ServiceRequest;
+            public readonly TransportVehicleRequest VehicleRequest;
+            public readonly Entity Line;
+
+            public PendingRequestFrameEntry(
+                Entity request,
+                ServiceRequest serviceRequest,
+                TransportVehicleRequest vehicleRequest,
+                Entity line)
+            {
+                Request = request;
+                ServiceRequest = serviceRequest;
+                VehicleRequest = vehicleRequest;
+                Line = line;
+            }
+        }
+
+        private readonly struct PendingRequestLineFrameState
+        {
+            public readonly Entity Line;
+            public readonly Entity ConfiguredDepot;
+            public readonly bool ConfiguredDepotCompatible;
+            public readonly bool HasRouteSetup;
+            public readonly RouteConnectionData RouteConnectionData;
+            public readonly PathMethod PathMethods;
+            public readonly Entity DestinationWaypoint;
+            public readonly Entity PreferredDepot;
+
+            public PendingRequestLineFrameState(
+                Entity line,
+                Entity configuredDepot,
+                bool configuredDepotCompatible,
+                bool hasRouteSetup,
+                RouteConnectionData routeConnectionData,
+                PathMethod pathMethods,
+                Entity destinationWaypoint,
+                Entity preferredDepot)
+            {
+                Line = line;
+                ConfiguredDepot = configuredDepot;
+                ConfiguredDepotCompatible = configuredDepotCompatible;
+                HasRouteSetup = hasRouteSetup;
+                RouteConnectionData = routeConnectionData;
+                PathMethods = pathMethods;
+                DestinationWaypoint = destinationWaypoint;
+                PreferredDepot = preferredDepot;
+            }
+
+            public PendingRequestLineFrameState WithPreferredDepot(Entity preferredDepot)
+            {
+                return new PendingRequestLineFrameState(
+                    Line,
+                    ConfiguredDepot,
+                    ConfiguredDepotCompatible,
+                    HasRouteSetup,
+                    RouteConnectionData,
+                    PathMethods,
+                    DestinationWaypoint,
+                    preferredDepot);
+            }
+        }
+
+        private readonly struct LineRuntimeSnapshot
+        {
+            public readonly Entity Line;
+            public readonly ulong SettingsVersion;
+            public readonly Entity LinePrefab;
+            public readonly Entity ConfiguredDepot;
+            public readonly bool ConfiguredDepotCompatible;
+            public readonly bool HasRouteSetup;
+            public readonly RouteConnectionData RouteConnectionData;
+            public readonly PathMethod PathMethods;
+            public readonly Entity DestinationWaypoint;
+            public readonly int DestinationWaypointIndex;
+
+            public LineRuntimeSnapshot(
+                Entity line,
+                ulong settingsVersion,
+                Entity linePrefab,
+                Entity configuredDepot,
+                bool configuredDepotCompatible,
+                bool hasRouteSetup,
+                RouteConnectionData routeConnectionData,
+                PathMethod pathMethods,
+                Entity destinationWaypoint,
+                int destinationWaypointIndex)
+            {
+                Line = line;
+                SettingsVersion = settingsVersion;
+                LinePrefab = linePrefab;
+                ConfiguredDepot = configuredDepot;
+                ConfiguredDepotCompatible = configuredDepotCompatible;
+                HasRouteSetup = hasRouteSetup;
+                RouteConnectionData = routeConnectionData;
+                PathMethods = pathMethods;
+                DestinationWaypoint = destinationWaypoint;
+                DestinationWaypointIndex = destinationWaypointIndex;
+            }
+        }
+
+        private readonly struct DepotLineCacheKey : IEquatable<DepotLineCacheKey>
+        {
+            public readonly Entity Depot;
+            public readonly Entity Line;
+
+            public DepotLineCacheKey(Entity depot, Entity line)
+            {
+                Depot = depot;
+                Line = line;
+            }
+
+            public bool Equals(DepotLineCacheKey other)
+            {
+                return Depot == other.Depot && Line == other.Line;
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is DepotLineCacheKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    return (Depot.GetHashCode() * 397) ^ Line.GetHashCode();
+                }
+            }
+        }
+
+        private readonly struct ConfiguredDepotBlockedRequestState
+        {
+            public readonly Entity Request;
+            public readonly Entity Line;
+            public readonly Entity ConfiguredDepot;
+            public readonly Entity BlockedLane;
+            public readonly ulong SettingsVersion;
+            public readonly uint NextRetryFrame;
+
+            public ConfiguredDepotBlockedRequestState(
+                Entity request,
+                Entity line,
+                Entity configuredDepot,
+                Entity blockedLane,
+                ulong settingsVersion,
+                uint nextRetryFrame)
+            {
+                Request = request;
+                Line = line;
+                ConfiguredDepot = configuredDepot;
+                BlockedLane = blockedLane;
+                SettingsVersion = settingsVersion;
+                NextRetryFrame = nextRetryFrame;
+            }
+
+            public ConfiguredDepotBlockedRequestState WithRetry(uint nextRetryFrame)
+            {
+                return new ConfiguredDepotBlockedRequestState(
+                    Request,
+                    Line,
+                    ConfiguredDepot,
+                    BlockedLane,
+                    SettingsVersion,
+                    nextRetryFrame);
+            }
+        }
+
         private readonly Dictionary<Entity, Entity> m_PreferredDepotByLine = new Dictionary<Entity, Entity>();
         private readonly Dictionary<Entity, string> m_RequestDecisionLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, Entity> m_PendingConfiguredRequestSources = new Dictionary<Entity, Entity>();
+        private readonly Dictionary<Entity, ConfiguredDepotBlockedRequestState> m_ConfiguredDepotBlockedRequests = new Dictionary<Entity, ConfiguredDepotBlockedRequestState>();
         private readonly HashSet<Entity> m_ConfiguredRequestParkedFallbacks = new HashSet<Entity>();
         private readonly List<Entity> m_RequestCleanupScratch = new List<Entity>();
+        private readonly HashSet<Entity> m_LineAffinityScratch = new HashSet<Entity>();
+        private readonly List<Entity> m_LineRuntimeSnapshotCleanupScratch = new List<Entity>();
+        private readonly List<PendingRequestFrameEntry> m_FramePendingRequests = new List<PendingRequestFrameEntry>();
+        private readonly List<Entity> m_FramePendingLines = new List<Entity>();
+        private readonly HashSet<Entity> m_FramePendingLineSet = new HashSet<Entity>();
+        private readonly Dictionary<Entity, PendingRequestLineFrameState> m_FramePendingLineStates = new Dictionary<Entity, PendingRequestLineFrameState>();
+        private readonly Dictionary<Entity, Entity> m_FrameConfiguredDepotByLine = new Dictionary<Entity, Entity>();
+        private readonly Dictionary<Entity, PendingRequestRouteSetupCacheEntry> m_FramePendingRequestRouteSetupByLine = new Dictionary<Entity, PendingRequestRouteSetupCacheEntry>();
+        private readonly Dictionary<DepotLineCacheKey, Entity> m_FrameReusableConfiguredSourceByDepotLine = new Dictionary<DepotLineCacheKey, Entity>();
+        private readonly Dictionary<Entity, LineRuntimeSnapshot> m_LineRuntimeSnapshots = new Dictionary<Entity, LineRuntimeSnapshot>();
+        private int m_FrameCacheLogCountdown = DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES;
+        private int m_ConfiguredDepotFrameCacheHits;
+        private int m_ConfiguredDepotFrameCacheMisses;
+        private int m_RouteSetupFrameCacheHits;
+        private int m_RouteSetupFrameCacheMisses;
+        private int m_ReusableSourceFrameCacheHits;
+        private int m_ReusableSourceFrameCacheMisses;
+        private int m_LineRuntimeSnapshotHits;
+        private int m_LineRuntimeSnapshotMisses;
+        private int m_BlockedRequestFreezeSkips;
+        private int m_BlockedRequestProbeExtends;
+        private int m_BlockedRequestProbeReleases;
         private const byte CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN = 16;
         private const int CONFIGURED_DEPOT_OUTBOUND_PATH_LOOKAHEAD = 8;
+        private const int DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES = 3600;
 
         protected override void OnCreate()
         {
@@ -62,16 +276,406 @@ namespace RapidTransitMod
 
         protected override void OnUpdate()
         {
+            ClearFrameDepotCaches();
             CleanupConfiguredRequestTracking();
             if ((m_PendingRequestQuery.IsEmptyIgnoreFilter && m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
                 || m_DepotQuery.IsEmptyIgnoreFilter
                 || m_LineQuery.IsEmptyIgnoreFilter)
+            {
+                TickDepotFrameCacheLogging();
                 return;
+            }
 
+            BuildPendingRequestFrameState();
             UpdateLineDepotAffinity();
+            FinalizePendingRequestPreferredDepots();
             QueueConfiguredDepotRequests();
             GateConfiguredDepotDispatchRequests();
             ApplyDepotSourceLocks();
+            TickDepotFrameCacheLogging();
+        }
+
+        private void ClearFrameDepotCaches()
+        {
+            m_FramePendingRequests.Clear();
+            m_FramePendingLines.Clear();
+            m_FramePendingLineSet.Clear();
+            m_FramePendingLineStates.Clear();
+            m_FrameConfiguredDepotByLine.Clear();
+            m_FramePendingRequestRouteSetupByLine.Clear();
+            m_FrameReusableConfiguredSourceByDepotLine.Clear();
+        }
+
+        private void TickDepotFrameCacheLogging()
+        {
+            m_FrameCacheLogCountdown--;
+            if (m_FrameCacheLogCountdown > 0)
+                return;
+
+            CleanupLineRuntimeSnapshots();
+
+            int configuredDepotLookups = m_ConfiguredDepotFrameCacheHits + m_ConfiguredDepotFrameCacheMisses;
+            int routeSetupLookups = m_RouteSetupFrameCacheHits + m_RouteSetupFrameCacheMisses;
+            int reusableSourceLookups = m_ReusableSourceFrameCacheHits + m_ReusableSourceFrameCacheMisses;
+            int lineRuntimeLookups = m_LineRuntimeSnapshotHits + m_LineRuntimeSnapshotMisses;
+            int blockedRequestEvents = m_BlockedRequestFreezeSkips + m_BlockedRequestProbeExtends + m_BlockedRequestProbeReleases;
+            if (configuredDepotLookups > 0 || routeSetupLookups > 0 || reusableSourceLookups > 0 || lineRuntimeLookups > 0 || blockedRequestEvents > 0)
+            {
+                Mod.log.Info(
+                    "[DepotSourceLockCache] intervalFrames=" + DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES
+                    + " lineRuntimeHit=" + m_LineRuntimeSnapshotHits
+                    + " lineRuntimeMiss=" + m_LineRuntimeSnapshotMisses
+                    + " configuredDepotHit=" + m_ConfiguredDepotFrameCacheHits
+                    + " configuredDepotMiss=" + m_ConfiguredDepotFrameCacheMisses
+                    + " routeSetupHit=" + m_RouteSetupFrameCacheHits
+                    + " routeSetupMiss=" + m_RouteSetupFrameCacheMisses
+                    + " reusableSourceHit=" + m_ReusableSourceFrameCacheHits
+                    + " reusableSourceMiss=" + m_ReusableSourceFrameCacheMisses
+                    + " blockedFreezeSkip=" + m_BlockedRequestFreezeSkips
+                    + " blockedProbeExtend=" + m_BlockedRequestProbeExtends
+                    + " blockedProbeRelease=" + m_BlockedRequestProbeReleases);
+            }
+
+            m_FrameCacheLogCountdown = DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES;
+            m_ConfiguredDepotFrameCacheHits = 0;
+            m_ConfiguredDepotFrameCacheMisses = 0;
+            m_RouteSetupFrameCacheHits = 0;
+            m_RouteSetupFrameCacheMisses = 0;
+            m_ReusableSourceFrameCacheHits = 0;
+            m_ReusableSourceFrameCacheMisses = 0;
+            m_LineRuntimeSnapshotHits = 0;
+            m_LineRuntimeSnapshotMisses = 0;
+            m_BlockedRequestFreezeSkips = 0;
+            m_BlockedRequestProbeExtends = 0;
+            m_BlockedRequestProbeReleases = 0;
+        }
+
+        private void CleanupLineRuntimeSnapshots()
+        {
+            if (m_LineRuntimeSnapshots.Count == 0)
+                return;
+
+            DepartureControlSystem control = DepartureControlSystem.Instance;
+            ulong settingsVersion = control != null
+                ? control.GetWorkbenchLineSettingsVersion()
+                : 0ul;
+
+            m_LineRuntimeSnapshotCleanupScratch.Clear();
+            foreach (KeyValuePair<Entity, LineRuntimeSnapshot> entry in m_LineRuntimeSnapshots)
+            {
+                Entity line = entry.Key;
+                LineRuntimeSnapshot snapshot = entry.Value;
+                if (line == Entity.Null
+                    || !EntityManager.Exists(line)
+                    || snapshot.Line != line
+                    || snapshot.SettingsVersion != settingsVersion
+                    || !EntityManager.HasComponent<PrefabRef>(line))
+                {
+                    m_LineRuntimeSnapshotCleanupScratch.Add(line);
+                    continue;
+                }
+
+                Entity linePrefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+                if (snapshot.LinePrefab != linePrefab)
+                {
+                    m_LineRuntimeSnapshotCleanupScratch.Add(line);
+                    continue;
+                }
+
+                if (snapshot.ConfiguredDepot != Entity.Null
+                    && (!EntityManager.Exists(snapshot.ConfiguredDepot)
+                        || !EntityManager.HasComponent<Game.Buildings.TransportDepot>(snapshot.ConfiguredDepot)
+                        || EntityManager.HasComponent<Deleted>(snapshot.ConfiguredDepot)))
+                {
+                    m_LineRuntimeSnapshotCleanupScratch.Add(line);
+                    continue;
+                }
+
+                if (snapshot.DestinationWaypoint != Entity.Null
+                    && !EntityManager.Exists(snapshot.DestinationWaypoint))
+                {
+                    m_LineRuntimeSnapshotCleanupScratch.Add(line);
+                }
+            }
+
+            for (int i = 0; i < m_LineRuntimeSnapshotCleanupScratch.Count; i++)
+            {
+                m_LineRuntimeSnapshots.Remove(m_LineRuntimeSnapshotCleanupScratch[i]);
+            }
+        }
+
+        private uint GetCurrentFrame()
+        {
+            return DepartureControlSystem.Instance?.GetCurrentSimulationFrameIndex() ?? 0u;
+        }
+
+        private void RememberConfiguredDepotBlockedRequest(
+            Entity request,
+            Entity line,
+            Entity configuredDepot,
+            Entity blockedLane)
+        {
+            DepartureControlSystem control = DepartureControlSystem.Instance;
+            if (request == Entity.Null
+                || line == Entity.Null
+                || configuredDepot == Entity.Null
+                || blockedLane == Entity.Null
+                || control == null)
+            {
+                return;
+            }
+
+            uint nextRetryFrame = GetCurrentFrame() + CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN;
+            m_ConfiguredDepotBlockedRequests[request] = new ConfiguredDepotBlockedRequestState(
+                request,
+                line,
+                configuredDepot,
+                blockedLane,
+                control.GetWorkbenchLineSettingsVersion(),
+                nextRetryFrame);
+        }
+
+        private bool ShouldSkipFrozenConfiguredDepotRequest(Entity request, Entity line)
+        {
+            if (!m_ConfiguredDepotBlockedRequests.TryGetValue(request, out ConfiguredDepotBlockedRequestState state))
+                return false;
+
+            DepartureControlSystem control = DepartureControlSystem.Instance;
+            if (control == null
+                || state.Request != request
+                || state.Line != line
+                || !EntityManager.Exists(request)
+                || !EntityManager.HasComponent<ServiceRequest>(request)
+                || !EntityManager.HasComponent<TransportVehicleRequest>(request)
+                || state.SettingsVersion != control.GetWorkbenchLineSettingsVersion()
+                || state.ConfiguredDepot == Entity.Null
+                || !EntityManager.Exists(state.ConfiguredDepot)
+                || !EntityManager.HasComponent<Game.Buildings.TransportDepot>(state.ConfiguredDepot)
+                || EntityManager.HasComponent<Deleted>(state.ConfiguredDepot))
+            {
+                m_ConfiguredDepotBlockedRequests.Remove(request);
+                return false;
+            }
+
+            uint nowFrame = GetCurrentFrame();
+            if (nowFrame < state.NextRetryFrame)
+            {
+                m_BlockedRequestFreezeSkips++;
+                return true;
+            }
+
+            if (state.BlockedLane != Entity.Null
+                && TryGetInboundDepotReservationBlocker(state.BlockedLane, state.ConfiguredDepot, out _))
+            {
+                m_ConfiguredDepotBlockedRequests[request] = state.WithRetry(nowFrame + CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN);
+                m_BlockedRequestProbeExtends++;
+                return true;
+            }
+
+            m_ConfiguredDepotBlockedRequests.Remove(request);
+            m_BlockedRequestProbeReleases++;
+            return false;
+        }
+
+        private void BuildPendingRequestFrameState()
+        {
+            var lineLookup = GetComponentLookup<TransportLine>(true);
+            using (NativeArray<Entity> requests = m_PendingRequestQuery.ToEntityArray(Allocator.Temp))
+            {
+                for (int i = 0; i < requests.Length; i++)
+                {
+                    Entity request = requests[i];
+                    if (!EntityManager.Exists(request)
+                        || !EntityManager.HasComponent<ServiceRequest>(request)
+                        || !EntityManager.HasComponent<TransportVehicleRequest>(request))
+                    {
+                        continue;
+                    }
+
+                    ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(request);
+                    TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
+                    Entity line = vehicleRequest.m_Route;
+                    if (line == Entity.Null
+                        || !EntityManager.Exists(line)
+                        || !lineLookup.HasComponent(line))
+                    {
+                        continue;
+                    }
+
+                    if (ShouldSkipFrozenConfiguredDepotRequest(request, line))
+                        continue;
+
+                    m_FramePendingRequests.Add(new PendingRequestFrameEntry(request, serviceRequest, vehicleRequest, line));
+                    if (!m_FramePendingLineSet.Add(line))
+                        continue;
+
+                    m_FramePendingLines.Add(line);
+                    if (TryBuildPendingRequestLineFrameState(line, out PendingRequestLineFrameState lineState))
+                        m_FramePendingLineStates[line] = lineState;
+                }
+            }
+        }
+
+        private void FinalizePendingRequestPreferredDepots()
+        {
+            for (int i = 0; i < m_FramePendingLines.Count; i++)
+            {
+                Entity line = m_FramePendingLines[i];
+                if (!m_FramePendingLineStates.TryGetValue(line, out PendingRequestLineFrameState state))
+                    continue;
+
+                Entity preferredDepot = state.ConfiguredDepot != Entity.Null
+                    ? state.ConfiguredDepot
+                    : (m_PreferredDepotByLine.TryGetValue(line, out Entity inferredDepot) ? inferredDepot : Entity.Null);
+                m_FramePendingLineStates[line] = state.WithPreferredDepot(preferredDepot);
+            }
+        }
+
+        private bool TryGetPendingRequestLineFrameState(Entity line, out PendingRequestLineFrameState state)
+        {
+            return m_FramePendingLineStates.TryGetValue(line, out state);
+        }
+
+        private bool TryBuildPendingRequestLineFrameState(Entity line, out PendingRequestLineFrameState state)
+        {
+            state = default;
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return false;
+
+            DepartureControlSystem control = DepartureControlSystem.Instance;
+            if (control == null)
+                return false;
+
+            ulong settingsVersion = control.GetWorkbenchLineSettingsVersion();
+            if (TryGetLineRuntimeSnapshot(line, settingsVersion, out LineRuntimeSnapshot snapshot))
+            {
+                m_LineRuntimeSnapshotHits++;
+                state = new PendingRequestLineFrameState(
+                    line,
+                    snapshot.ConfiguredDepot,
+                    snapshot.ConfiguredDepotCompatible,
+                    snapshot.HasRouteSetup,
+                    snapshot.RouteConnectionData,
+                    snapshot.PathMethods,
+                    snapshot.DestinationWaypoint,
+                    Entity.Null);
+                return true;
+            }
+
+            m_LineRuntimeSnapshotMisses++;
+            if (!TryRebuildLineRuntimeSnapshot(line, settingsVersion, out snapshot))
+                return false;
+
+            state = new PendingRequestLineFrameState(
+                line,
+                snapshot.ConfiguredDepot,
+                snapshot.ConfiguredDepotCompatible,
+                snapshot.HasRouteSetup,
+                snapshot.RouteConnectionData,
+                snapshot.PathMethods,
+                snapshot.DestinationWaypoint,
+                Entity.Null);
+            return true;
+        }
+
+        private bool TryGetLineRuntimeSnapshot(Entity line, ulong settingsVersion, out LineRuntimeSnapshot snapshot)
+        {
+            snapshot = default;
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || !m_LineRuntimeSnapshots.TryGetValue(line, out snapshot)
+                || snapshot.Line != line
+                || snapshot.SettingsVersion != settingsVersion)
+            {
+                return false;
+            }
+
+            if (!EntityManager.HasComponent<PrefabRef>(line))
+                return false;
+
+            Entity linePrefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+            if (snapshot.LinePrefab != linePrefab)
+                return false;
+
+            if (snapshot.ConfiguredDepot != Entity.Null
+                && (!EntityManager.Exists(snapshot.ConfiguredDepot)
+                    || !EntityManager.HasComponent<Game.Buildings.TransportDepot>(snapshot.ConfiguredDepot)
+                    || EntityManager.HasComponent<Deleted>(snapshot.ConfiguredDepot)))
+            {
+                return false;
+            }
+
+            if (!snapshot.HasRouteSetup)
+                return true;
+
+            if (snapshot.DestinationWaypoint == Entity.Null
+                || !EntityManager.Exists(snapshot.DestinationWaypoint)
+                || !EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            int waypointIndex = snapshot.DestinationWaypointIndex;
+            if (waypointIndex < 0
+                || waypointIndex >= waypoints.Length
+                || waypoints[waypointIndex].m_Waypoint != snapshot.DestinationWaypoint)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool TryRebuildLineRuntimeSnapshot(Entity line, ulong settingsVersion, out LineRuntimeSnapshot snapshot)
+        {
+            snapshot = default;
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || !EntityManager.HasComponent<PrefabRef>(line))
+            {
+                m_LineRuntimeSnapshots.Remove(line);
+                return false;
+            }
+
+            Entity linePrefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+            Entity configuredDepot = GetConfiguredDepotForLine(line);
+            bool configuredDepotCompatible = IsDepotCompatibleWithLine(configuredDepot, line);
+            RouteConnectionData routeConnectionData = default;
+            PathMethod pathMethods = default;
+            Entity destinationWaypoint = Entity.Null;
+            int destinationWaypointIndex = -1;
+            bool hasRouteSetup = configuredDepotCompatible
+                && TryGetPendingRequestRouteSetup(
+                    line,
+                    out routeConnectionData,
+                    out pathMethods,
+                    out destinationWaypoint,
+                    out destinationWaypointIndex);
+
+            snapshot = new LineRuntimeSnapshot(
+                line,
+                settingsVersion,
+                linePrefab,
+                configuredDepot,
+                configuredDepotCompatible,
+                hasRouteSetup,
+                routeConnectionData,
+                pathMethods,
+                destinationWaypoint,
+                destinationWaypointIndex);
+            if (snapshot.ConfiguredDepot != Entity.Null
+                && snapshot.ConfiguredDepotCompatible
+                && snapshot.HasRouteSetup)
+            {
+                m_LineRuntimeSnapshots[line] = snapshot;
+            }
+            else
+            {
+                m_LineRuntimeSnapshots.Remove(line);
+            }
+
+            return true;
         }
 
         private void CleanupConfiguredRequestTracking()
@@ -100,12 +704,34 @@ namespace RapidTransitMod
                 }
             }
 
-            if (m_ConfiguredRequestParkedFallbacks.Count == 0)
+            if (m_ConfiguredRequestParkedFallbacks.Count > 0)
+            {
+                m_RequestCleanupScratch.Clear();
+                foreach (Entity request in m_ConfiguredRequestParkedFallbacks)
+                {
+                    if (request == Entity.Null
+                        || !EntityManager.Exists(request)
+                        || EntityManager.HasComponent<Dispatched>(request)
+                        || !EntityManager.HasComponent<TransportVehicleRequest>(request)
+                        || !EntityManager.HasComponent<ServiceRequest>(request))
+                    {
+                        m_RequestCleanupScratch.Add(request);
+                    }
+                }
+
+                for (int i = 0; i < m_RequestCleanupScratch.Count; i++)
+                {
+                    m_ConfiguredRequestParkedFallbacks.Remove(m_RequestCleanupScratch[i]);
+                }
+            }
+
+            if (m_ConfiguredDepotBlockedRequests.Count == 0)
                 return;
 
             m_RequestCleanupScratch.Clear();
-            foreach (Entity request in m_ConfiguredRequestParkedFallbacks)
+            foreach (KeyValuePair<Entity, ConfiguredDepotBlockedRequestState> entry in m_ConfiguredDepotBlockedRequests)
             {
+                Entity request = entry.Key;
                 if (request == Entity.Null
                     || !EntityManager.Exists(request)
                     || EntityManager.HasComponent<Dispatched>(request)
@@ -118,7 +744,7 @@ namespace RapidTransitMod
 
             for (int i = 0; i < m_RequestCleanupScratch.Count; i++)
             {
-                m_ConfiguredRequestParkedFallbacks.Remove(m_RequestCleanupScratch[i]);
+                m_ConfiguredDepotBlockedRequests.Remove(m_RequestCleanupScratch[i]);
             }
         }
 
@@ -126,87 +752,67 @@ namespace RapidTransitMod
         {
             NativeQueue<SetupQueueItem> pathfindQueue = default;
             bool hasPathfindQueue = false;
-
-            using (NativeArray<Entity> requests = m_PendingRequestQuery.ToEntityArray(Allocator.Temp))
+            for (int i = 0; i < m_FramePendingRequests.Count; i++)
             {
-                for (int i = 0; i < requests.Length; i++)
+                PendingRequestFrameEntry entry = m_FramePendingRequests[i];
+                Entity request = entry.Request;
+                ServiceRequest serviceRequest = entry.ServiceRequest;
+                if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
+                    continue;
+                if (serviceRequest.m_Cooldown > 0)
+                    continue;
+
+                if (!TryGetPendingRequestLineFrameState(entry.Line, out PendingRequestLineFrameState lineState)
+                    || !lineState.ConfiguredDepotCompatible)
                 {
-                    Entity request = requests[i];
-                    if (!EntityManager.Exists(request)
-                        || !EntityManager.HasComponent<ServiceRequest>(request)
-                        || !EntityManager.HasComponent<TransportVehicleRequest>(request))
-                    {
-                        continue;
-                    }
-
-                    ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(request);
-                    if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
-                        continue;
-                    if (serviceRequest.m_Cooldown > 0)
-                        continue;
-
-                    TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
-                    Entity line = vehicleRequest.m_Route;
-                    if (line == Entity.Null
-                        || !EntityManager.Exists(line)
-                        || !EntityManager.HasComponent<TransportLine>(line))
-                    {
-                        continue;
-                    }
-
-                    Entity configuredDepot = DepartureControlSystem.Instance?.GetConfiguredAllowedDepot(line) ?? Entity.Null;
-                    if (!IsDepotCompatibleWithLine(configuredDepot, line))
-                        continue;
-
-                    PromoteConfiguredRequestFallbackIfNeeded(request, configuredDepot);
-
-                    if (!TryGetRouteConnectionData(line, out RouteConnectionData routeConnectionData, out PathMethod pathMethods))
-                        continue;
-
-                    Entity source = ResolveConfiguredRequestSource(request, configuredDepot, line);
-                    if (source == Entity.Null)
-                        continue;
-                    if (!TryGetConfiguredRequestDestinationWaypoint(line, out Entity destinationWaypoint))
-                        continue;
-
-                    if (!hasPathfindQueue)
-                    {
-                        pathfindQueue = m_PathfindSetupSystem.GetQueue(this, 64);
-                        hasPathfindQueue = true;
-                    }
-
-                    EnsurePendingRequestPathContainer(request);
-
-                    PathfindParameters parameters = new PathfindParameters
-                    {
-                        m_MaxSpeed = 277.77777f,
-                        m_WalkSpeed = 5.555556f,
-                        m_Weights = new PathfindWeights(1f, 1f, 1f, 1f),
-                        m_Methods = pathMethods,
-                        m_IgnoredRules = (RuleFlags.ForbidCombustionEngines | RuleFlags.ForbidHeavyTraffic | RuleFlags.ForbidPrivateTraffic | RuleFlags.ForbidSlowTraffic | RuleFlags.AvoidBicycles),
-                        m_PathfindFlags = PathfindFlags.IgnoreExtraEndAccessRequirements
-                    };
-
-                    SetupQueueTarget origin = new SetupQueueTarget
-                    {
-                        m_Type = SetupTargetType.CurrentLocation,
-                        m_Methods = pathMethods,
-                        m_Entity = source,
-                        m_TrackTypes = routeConnectionData.m_RouteTrackType,
-                        m_RoadTypes = routeConnectionData.m_RouteRoadType
-                    };
-                    SetupQueueTarget destination = new SetupQueueTarget
-                    {
-                        m_Type = SetupTargetType.CurrentLocation,
-                        m_Methods = pathMethods,
-                        m_TrackTypes = routeConnectionData.m_RouteTrackType,
-                        m_RoadTypes = routeConnectionData.m_RouteRoadType,
-                        m_Entity = destinationWaypoint
-                    };
-
-                    pathfindQueue.Enqueue(new SetupQueueItem(request, parameters, origin, destination));
-                    m_PendingConfiguredRequestSources[request] = source;
+                    continue;
                 }
+
+                Entity configuredDepot = lineState.ConfiguredDepot;
+                PromoteConfiguredRequestFallbackIfNeeded(request, configuredDepot);
+
+                Entity source = ResolveConfiguredRequestSource(request, configuredDepot, entry.Line);
+                if (source == Entity.Null || !lineState.HasRouteSetup)
+                    continue;
+
+                if (!hasPathfindQueue)
+                {
+                    pathfindQueue = m_PathfindSetupSystem.GetQueue(this, 64);
+                    hasPathfindQueue = true;
+                }
+
+                EnsurePendingRequestPathContainer(request);
+
+                PathfindParameters parameters = new PathfindParameters
+                {
+                    m_MaxSpeed = 277.77777f,
+                    m_WalkSpeed = 5.555556f,
+                    m_Weights = new PathfindWeights(1f, 1f, 1f, 1f),
+                    m_Methods = lineState.PathMethods,
+                    m_IgnoredRules = (RuleFlags.ForbidCombustionEngines | RuleFlags.ForbidHeavyTraffic | RuleFlags.ForbidPrivateTraffic | RuleFlags.ForbidSlowTraffic | RuleFlags.AvoidBicycles),
+                    m_PathfindFlags = PathfindFlags.IgnoreExtraEndAccessRequirements
+                };
+
+                SetupQueueTarget origin = new SetupQueueTarget
+                {
+                    m_Type = SetupTargetType.CurrentLocation,
+                    m_Methods = lineState.PathMethods,
+                    m_Entity = source,
+                    m_TrackTypes = lineState.RouteConnectionData.m_RouteTrackType,
+                    m_RoadTypes = lineState.RouteConnectionData.m_RouteRoadType
+                };
+                SetupQueueTarget destination = new SetupQueueTarget
+                {
+                    m_Type = SetupTargetType.CurrentLocation,
+                    m_Methods = lineState.PathMethods,
+                    m_TrackTypes = lineState.RouteConnectionData.m_RouteTrackType,
+                    m_RoadTypes = lineState.RouteConnectionData.m_RouteRoadType,
+                    m_Entity = lineState.DestinationWaypoint
+                };
+
+                pathfindQueue.Enqueue(new SetupQueueItem(request, parameters, origin, destination));
+                m_PendingConfiguredRequestSources[request] = source;
+                m_ConfiguredDepotBlockedRequests.Remove(request);
             }
         }
 
@@ -238,7 +844,7 @@ namespace RapidTransitMod
                     if (line == Entity.Null || !EntityManager.Exists(line))
                         continue;
 
-                    Entity configuredDepot = DepartureControlSystem.Instance?.GetConfiguredAllowedDepot(line) ?? Entity.Null;
+                    Entity configuredDepot = GetConfiguredDepotForLine(line);
                     if (!IsDepotCompatibleWithLine(configuredDepot, line))
                         continue;
 
@@ -248,6 +854,7 @@ namespace RapidTransitMod
                     if (!IsConfiguredDepotOutboundPathBlocked(requestEntity, configuredDepot, out Entity blocker, out Entity blockedLane))
                         continue;
 
+                    RememberConfiguredDepotBlockedRequest(requestEntity, line, configuredDepot, blockedLane);
                     BlockConfiguredDispatchRequest(requestEntity);
                     LogConfiguredDepotGate(line, requestEntity, configuredDepot, blocker, blockedLane);
                     LogRequestDecision(line, request, configuredDepot, configuredDepot, blocker, false, "configured-depot-lane-blocked");
@@ -272,7 +879,18 @@ namespace RapidTransitMod
         {
             if (!m_ConfiguredRequestParkedFallbacks.Contains(request))
             {
-                Entity parkedSource = FindReusableConfiguredDepotVehicle(configuredDepot, line);
+                DepotLineCacheKey cacheKey = new DepotLineCacheKey(configuredDepot, line);
+                if (!m_FrameReusableConfiguredSourceByDepotLine.TryGetValue(cacheKey, out Entity parkedSource))
+                {
+                    m_ReusableSourceFrameCacheMisses++;
+                    parkedSource = FindReusableConfiguredDepotVehicle(configuredDepot, line);
+                    m_FrameReusableConfiguredSourceByDepotLine[cacheKey] = parkedSource;
+                }
+                else
+                {
+                    m_ReusableSourceFrameCacheHits++;
+                }
+
                 if (parkedSource != Entity.Null)
                     return parkedSource;
             }
@@ -426,7 +1044,13 @@ namespace RapidTransitMod
 
         private bool TryGetConfiguredRequestDestinationWaypoint(Entity line, out Entity destinationWaypoint)
         {
+            return TryGetConfiguredRequestDestinationWaypoint(line, out destinationWaypoint, out _);
+        }
+
+        private bool TryGetConfiguredRequestDestinationWaypoint(Entity line, out Entity destinationWaypoint, out int destinationWaypointIndex)
+        {
             destinationWaypoint = Entity.Null;
+            destinationWaypointIndex = -1;
             if (line == Entity.Null
                 || !EntityManager.Exists(line)
                 || !EntityManager.HasBuffer<RouteWaypoint>(line))
@@ -442,6 +1066,7 @@ namespace RapidTransitMod
                     continue;
 
                 destinationWaypoint = waypoint;
+                destinationWaypointIndex = i;
                 return true;
             }
 
@@ -506,50 +1131,53 @@ namespace RapidTransitMod
             var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
             var ownerLookup = GetComponentLookup<Owner>(true);
             var depotLookup = GetComponentLookup<Game.Buildings.TransportDepot>(true);
-            using (NativeArray<Entity> lines = m_LineQuery.ToEntityArray(Allocator.Temp))
+            m_LineAffinityScratch.Clear();
+            for (int i = 0; i < m_FramePendingLines.Count; i++)
             {
-                for (int i = 0; i < lines.Length; i++)
+                Entity line = m_FramePendingLines[i];
+                if (!m_LineAffinityScratch.Add(line)
+                    || !TryGetPendingRequestLineFrameState(line, out PendingRequestLineFrameState lineState)
+                    || lineState.ConfiguredDepot != Entity.Null)
                 {
-                    Entity line = lines[i];
-                    if (!routeVehicleBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
+                    continue;
+                }
+
+                if (!routeVehicleBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
+                    continue;
+
+                Dictionary<Entity, int> counts = null;
+                Entity bestDepot = Entity.Null;
+                int bestCount = 0;
+
+                for (int j = 0; j < vehicles.Length; j++)
+                {
+                    Entity vehicle = vehicles[j].m_Vehicle;
+                    if (vehicle == Entity.Null || !EntityManager.Exists(vehicle) || !ownerLookup.HasComponent(vehicle))
                         continue;
 
-                    Dictionary<Entity, int> counts = null;
-                    Entity bestDepot = Entity.Null;
-                    int bestCount = 0;
+                    Entity depot = ownerLookup[vehicle].m_Owner;
+                    if (depot == Entity.Null || !EntityManager.Exists(depot) || !depotLookup.HasComponent(depot))
+                        continue;
 
-                    for (int j = 0; j < vehicles.Length; j++)
+                    counts ??= new Dictionary<Entity, int>();
+                    int nextCount = counts.TryGetValue(depot, out int currentCount) ? currentCount + 1 : 1;
+                    counts[depot] = nextCount;
+                    if (nextCount > bestCount)
                     {
-                        Entity vehicle = vehicles[j].m_Vehicle;
-                        if (vehicle == Entity.Null || !EntityManager.Exists(vehicle) || !ownerLookup.HasComponent(vehicle))
-                            continue;
-
-                        Entity depot = ownerLookup[vehicle].m_Owner;
-                        if (depot == Entity.Null || !EntityManager.Exists(depot) || !depotLookup.HasComponent(depot))
-                            continue;
-
-                        counts ??= new Dictionary<Entity, int>();
-                        int nextCount = counts.TryGetValue(depot, out int currentCount) ? currentCount + 1 : 1;
-                        counts[depot] = nextCount;
-                        if (nextCount > bestCount)
-                        {
-                            bestCount = nextCount;
-                            bestDepot = depot;
-                        }
+                        bestCount = nextCount;
+                        bestDepot = depot;
                     }
+                }
 
-                    if (bestDepot != Entity.Null)
-                    {
-                        m_PreferredDepotByLine[line] = bestDepot;
-                    }
+                if (bestDepot != Entity.Null)
+                {
+                    m_PreferredDepotByLine[line] = bestDepot;
                 }
             }
         }
 
         private void ApplyDepotSourceLocks()
         {
-            var requestLookup = GetComponentLookup<TransportVehicleRequest>(true);
-            var lineLookup = GetComponentLookup<TransportLine>(true);
             var depotLookup = GetComponentLookup<Game.Buildings.TransportDepot>(false);
             var prefabLookup = GetComponentLookup<PrefabRef>(true);
             var lineDataLookup = GetComponentLookup<TransportLineData>(true);
@@ -558,67 +1186,61 @@ namespace RapidTransitMod
             Dictionary<TransportType, (Entity depot, float priority)> lockedDepotByType =
                 new Dictionary<TransportType, (Entity depot, float priority)>();
 
-            using (var requests = m_PendingRequestQuery.ToEntityArray(Unity.Collections.Allocator.Temp))
+            for (int i = 0; i < m_FramePendingRequests.Count; i++)
             {
-                for (int i = 0; i < requests.Length; i++)
+                PendingRequestFrameEntry entry = m_FramePendingRequests[i];
+                TransportVehicleRequest request = entry.VehicleRequest;
+                Entity line = entry.Line;
+                if (!TryGetPendingRequestLineFrameState(line, out PendingRequestLineFrameState lineState))
+                    continue;
+
+                Entity configuredDepot = lineState.ConfiguredDepot;
+                Entity preferredDepot = lineState.PreferredDepot;
+                if (preferredDepot == Entity.Null
+                    || !EntityManager.Exists(preferredDepot)
+                    || !depotLookup.HasComponent(preferredDepot))
                 {
-                    Entity requestEntity = requests[i];
-                    if (!requestLookup.HasComponent(requestEntity))
-                        continue;
-
-                    TransportVehicleRequest request = requestLookup[requestEntity];
-                    Entity line = request.m_Route;
-                    if (line == Entity.Null || !EntityManager.Exists(line) || !lineLookup.HasComponent(line))
-                        continue;
-
-                    Entity configuredDepot = DepartureControlSystem.Instance?.GetConfiguredAllowedDepot(line) ?? Entity.Null;
-                    Entity preferredDepot = ResolvePreferredDepot(line);
-                    if (preferredDepot == Entity.Null
-                        || !EntityManager.Exists(preferredDepot)
-                        || !depotLookup.HasComponent(preferredDepot))
-                    {
-                        LogRequestDecision(line, request, configuredDepot, preferredDepot, Entity.Null, false, "no-eligible-preferred-depot");
-                        continue;
-                    }
-
-                    if (!prefabLookup.HasComponent(line) || !prefabLookup.HasComponent(preferredDepot))
-                        continue;
-
-                    Entity linePrefab = prefabLookup[line].m_Prefab;
-                    Entity depotPrefab = prefabLookup[preferredDepot].m_Prefab;
-                    if (linePrefab == Entity.Null
-                        || depotPrefab == Entity.Null
-                        || !lineDataLookup.HasComponent(linePrefab)
-                        || !depotDataLookup.HasComponent(depotPrefab))
-                    {
-                        continue;
-                    }
-
-                    TransportLineData lineData = lineDataLookup[linePrefab];
-                    TransportDepotData depotData = depotDataLookup[depotPrefab];
-                    if (lineData.m_TransportType != depotData.m_TransportType)
-                    {
-                        LogRequestDecision(line, request, configuredDepot, preferredDepot, preferredDepot, false, "transport-type-mismatch");
-                        continue;
-                    }
-
-                    Game.Buildings.TransportDepot depotState = depotLookup[preferredDepot];
-                    bool preferredDepotAvailable = (depotState.m_Flags & TransportDepotFlags.HasAvailableVehicles) != 0
-                        && depotState.m_AvailableVehicles > 0;
-                    if (!preferredDepotAvailable)
-                    {
-                        LogRequestDecision(line, request, configuredDepot, preferredDepot, preferredDepot, false, "preferred-depot-unavailable");
-                        continue;
-                    }
-
-                    if (!lockedDepotByType.TryGetValue(lineData.m_TransportType, out var existing)
-                        || request.m_Priority > existing.priority)
-                    {
-                        lockedDepotByType[lineData.m_TransportType] = (preferredDepot, request.m_Priority);
-                    }
-
-                    LogRequestDecision(line, request, configuredDepot, preferredDepot, preferredDepot, true, "lock-candidate");
+                    LogRequestDecision(line, request, configuredDepot, preferredDepot, Entity.Null, false, "no-eligible-preferred-depot");
+                    continue;
                 }
+
+                if (!prefabLookup.HasComponent(line) || !prefabLookup.HasComponent(preferredDepot))
+                    continue;
+
+                Entity linePrefab = prefabLookup[line].m_Prefab;
+                Entity depotPrefab = prefabLookup[preferredDepot].m_Prefab;
+                if (linePrefab == Entity.Null
+                    || depotPrefab == Entity.Null
+                    || !lineDataLookup.HasComponent(linePrefab)
+                    || !depotDataLookup.HasComponent(depotPrefab))
+                {
+                    continue;
+                }
+
+                TransportLineData lineData = lineDataLookup[linePrefab];
+                TransportDepotData depotData = depotDataLookup[depotPrefab];
+                if (lineData.m_TransportType != depotData.m_TransportType)
+                {
+                    LogRequestDecision(line, request, configuredDepot, preferredDepot, preferredDepot, false, "transport-type-mismatch");
+                    continue;
+                }
+
+                Game.Buildings.TransportDepot depotState = depotLookup[preferredDepot];
+                bool preferredDepotAvailable = (depotState.m_Flags & TransportDepotFlags.HasAvailableVehicles) != 0
+                    && depotState.m_AvailableVehicles > 0;
+                if (!preferredDepotAvailable)
+                {
+                    LogRequestDecision(line, request, configuredDepot, preferredDepot, preferredDepot, false, "preferred-depot-unavailable");
+                    continue;
+                }
+
+                if (!lockedDepotByType.TryGetValue(lineData.m_TransportType, out var existing)
+                    || request.m_Priority > existing.priority)
+                {
+                    lockedDepotByType[lineData.m_TransportType] = (preferredDepot, request.m_Priority);
+                }
+
+                LogRequestDecision(line, request, configuredDepot, preferredDepot, preferredDepot, true, "lock-candidate");
             }
 
             if (lockedDepotByType.Count == 0)
@@ -655,19 +1277,82 @@ namespace RapidTransitMod
             }
         }
 
-        private Entity ResolvePreferredDepot(Entity line)
+        private Entity GetConfiguredDepotForLine(Entity line)
         {
-            DepartureControlSystem control = DepartureControlSystem.Instance;
-            if (control != null)
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return Entity.Null;
+
+            if (m_FrameConfiguredDepotByLine.TryGetValue(line, out Entity configuredDepot))
             {
-                Entity configuredDepot = control.GetConfiguredAllowedDepot(line);
-                if (configuredDepot != Entity.Null)
-                {
-                    return configuredDepot;
-                }
+                m_ConfiguredDepotFrameCacheHits++;
+                return configuredDepot;
             }
 
-            return m_PreferredDepotByLine.TryGetValue(line, out Entity inferredDepot) ? inferredDepot : Entity.Null;
+            m_ConfiguredDepotFrameCacheMisses++;
+            configuredDepot = DepartureControlSystem.Instance?.GetConfiguredAllowedDepot(line) ?? Entity.Null;
+            m_FrameConfiguredDepotByLine[line] = configuredDepot;
+            return configuredDepot;
+        }
+
+        private bool TryGetPendingRequestRouteSetup(
+            Entity line,
+            out RouteConnectionData routeConnectionData,
+            out PathMethod pathMethods,
+            out Entity destinationWaypoint)
+        {
+            return TryGetPendingRequestRouteSetup(line, out routeConnectionData, out pathMethods, out destinationWaypoint, out _);
+        }
+
+        private bool TryGetPendingRequestRouteSetup(
+            Entity line,
+            out RouteConnectionData routeConnectionData,
+            out PathMethod pathMethods,
+            out Entity destinationWaypoint,
+            out int destinationWaypointIndex)
+        {
+            routeConnectionData = default;
+            pathMethods = default;
+            destinationWaypoint = Entity.Null;
+            destinationWaypointIndex = -1;
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return false;
+
+            if (!m_FramePendingRequestRouteSetupByLine.TryGetValue(line, out PendingRequestRouteSetupCacheEntry cached))
+            {
+                m_RouteSetupFrameCacheMisses++;
+                bool available = TryGetRouteConnectionData(line, out routeConnectionData, out pathMethods)
+                    && TryGetConfiguredRequestDestinationWaypoint(line, out destinationWaypoint, out destinationWaypointIndex);
+                cached = new PendingRequestRouteSetupCacheEntry(
+                    available,
+                    routeConnectionData,
+                    pathMethods,
+                    destinationWaypoint);
+                m_FramePendingRequestRouteSetupByLine[line] = cached;
+            }
+            else
+            {
+                m_RouteSetupFrameCacheHits++;
+            }
+
+            if (!cached.Available)
+                return false;
+
+            routeConnectionData = cached.RouteConnectionData;
+            pathMethods = cached.PathMethods;
+            destinationWaypoint = cached.DestinationWaypoint;
+            if (destinationWaypoint != Entity.Null && EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                for (int i = 0; i < waypoints.Length; i++)
+                {
+                    if (waypoints[i].m_Waypoint != destinationWaypoint)
+                        continue;
+
+                    destinationWaypointIndex = i;
+                    break;
+                }
+            }
+            return true;
         }
 
         private void DelayBlockedConfiguredRequest(Entity request)

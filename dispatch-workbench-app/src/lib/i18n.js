@@ -114,7 +114,8 @@ async function fetchLocaleCatalog(locale) {
     `../locales/${resourceName}.json`,
     `/locales/${resourceName}.json`,
     `/UI/dispatch-workbench-app/dist/locales/${resourceName}.json`,
-    `/UI/dispatch-workbench-euis/locales/${resourceName}.json`
+    `/UI/dispatch-workbench-euis/locales/${resourceName}.json`,
+    `/UI/dispatch-workbench-native/locales/${resourceName}.json`
   ];
 
   if (typeof window === "undefined" || typeof window.fetch !== "function") {

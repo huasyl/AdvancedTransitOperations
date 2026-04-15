@@ -396,6 +396,26 @@ export function useWorkbenchController() {
     }
   }
 
+  async function refreshWorkbenchSnapshot() {
+    try {
+      const snapshot = await workbenchApi.refreshSnapshot?.();
+      if (!snapshot) {
+        return null;
+      }
+
+      applySnapshot(snapshot);
+      return snapshot;
+    } catch (error) {
+      setSaveState({
+        status: "error",
+        message: t("message.loadFailed", {
+          message: error instanceof Error ? error.message : "unknown error"
+        })
+      });
+      return null;
+    }
+  }
+
   const filteredTrips = useMemo(
     () => getFilteredTrips({ viewMode, selectedLineId, mergedView, trips: tripOptions }),
     [viewMode, selectedLineId, mergedView, tripOptions]
@@ -857,6 +877,7 @@ export function useWorkbenchController() {
     lineOptions,
     depotOptions,
     refreshWorkbenchMetadata,
+    refreshWorkbenchSnapshot,
     stationOptions,
     filteredTrips,
     selectedTrip,

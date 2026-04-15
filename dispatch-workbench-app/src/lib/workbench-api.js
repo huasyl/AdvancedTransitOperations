@@ -32,22 +32,34 @@ function parsePayload(payload, fallbackValue) {
   return payload;
 }
 
+function getEngineCall() {
+  if (typeof window === "undefined" || typeof window.engine?.call !== "function") {
+    throw new Error("window.engine.call is unavailable in the current host UI context.");
+  }
+
+  return window.engine.call.bind(window.engine);
+}
+
 function createLiveApi() {
   return {
     async loadSnapshot() {
-      const payload = await window.engine.call(CALLS.loadSnapshot);
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadSnapshot);
       return parsePayload(payload, createEmptySnapshot());
     },
     async refreshSnapshot() {
-      const payload = await window.engine.call(CALLS.refreshSnapshot);
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.refreshSnapshot);
       return parsePayload(payload, createEmptySnapshot());
     },
     async refreshMetadata() {
-      const payload = await window.engine.call(CALLS.refreshMetadata);
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.refreshMetadata);
       return parsePayload(payload, createEmptySnapshot());
     },
     async saveDraft(request) {
-      const payload = await window.engine.call(CALLS.saveWorkbenchDraft, JSON.stringify(request ?? {}));
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.saveWorkbenchDraft, JSON.stringify(request ?? {}));
       return parsePayload(payload, {
         success: false,
         errors: [],
@@ -58,7 +70,8 @@ function createLiveApi() {
     },
     async getLocale() {
       try {
-        const payload = await window.engine.call(CALLS.getLocale);
+        const engineCall = getEngineCall();
+        const payload = await engineCall(CALLS.getLocale);
         return typeof payload === "string" ? payload : "";
       } catch {
         return "";
@@ -86,20 +99,7 @@ function createLiveApi() {
   };
 }
 
-function isHostedBackend() {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.engine?.call === "function" &&
-    window.location?.protocol === "coui:"
-  );
-}
-
-// The shipped workbench only supports the backend path.
 export function getWorkbenchApi() {
-  if (isHostedBackend()) {
-    return createLiveApi();
-  }
-
-  throw new Error("Workbench API is unavailable outside EUIS. Use the in-game EUIS workbench.");
+  return createLiveApi();
 }
 

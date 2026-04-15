@@ -431,6 +431,29 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct ConfiguredAllowedDepotCacheEntry
+        {
+            public readonly Entity Line;
+            public readonly string LineId;
+            public readonly string AllowedDepotId;
+            public readonly Entity CanonicalDepot;
+            public readonly ulong SettingsVersion;
+
+            public ConfiguredAllowedDepotCacheEntry(
+                Entity line,
+                string lineId,
+                string allowedDepotId,
+                Entity canonicalDepot,
+                ulong settingsVersion)
+            {
+                Line = line;
+                LineId = lineId ?? string.Empty;
+                AllowedDepotId = allowedDepotId ?? string.Empty;
+                CanonicalDepot = canonicalDepot;
+                SettingsVersion = settingsVersion;
+            }
+        }
+
         private readonly Dictionary<string, DispatchWorkbenchDraftState> m_WorkbenchDrafts = new Dictionary<string, DispatchWorkbenchDraftState>();
         private readonly Dictionary<string, int> m_WorkbenchLineOriginHoldLimits = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, int> m_WorkbenchLineMaxStationDwellMinutes = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -438,8 +461,18 @@ namespace RapidTransitMod
         private readonly Dictionary<string, string> m_WorkbenchLineServiceKinds = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, AppliedWorkbenchLineState> m_AppliedWorkbenchLines = new Dictionary<string, AppliedWorkbenchLineState>(StringComparer.Ordinal);
         private readonly Dictionary<Entity, WorkbenchLineFrameSnapshot> m_WorkbenchLineFrameSnapshots = new Dictionary<Entity, WorkbenchLineFrameSnapshot>();
+        private readonly Dictionary<Entity, ConfiguredAllowedDepotCacheEntry> m_ConfiguredAllowedDepotCacheByLine = new Dictionary<Entity, ConfiguredAllowedDepotCacheEntry>();
         private readonly Dictionary<Entity, WorkbenchRealtimeVehicleRecord> m_WorkbenchRealtimeVehicles = new Dictionary<Entity, WorkbenchRealtimeVehicleRecord>();
         private ulong m_WorkbenchSnapshotVersion = 1;
+        private ulong m_WorkbenchLineSettingsVersion = 1;
+        private uint m_ConfiguredAllowedDepotCacheLastLogFrame;
+        private int m_ConfiguredAllowedDepotCacheCalls;
+        private int m_ConfiguredAllowedDepotCacheHits;
+        private int m_ConfiguredAllowedDepotCacheSettingsVersionMisses;
+        private int m_ConfiguredAllowedDepotCacheLineIdMisses;
+        private int m_ConfiguredAllowedDepotCacheAllowedDepotIdMisses;
+        private int m_ConfiguredAllowedDepotCacheEntityInvalidations;
+        private int m_ConfiguredAllowedDepotCacheFallbackResolves;
         private string m_LastWorkbenchSnapshotLogKey = string.Empty;
         private string m_LastAppliedWorkbenchInspectLogKey = string.Empty;
         private string m_WorkbenchPreferredLineId = string.Empty;
@@ -449,6 +482,7 @@ namespace RapidTransitMod
         private const int DEFAULT_MAX_STATION_DWELL_MINUTES = 10;
         private const int MIN_ORIGIN_HOLD_LIMIT_MINUTES = 1;
         private const int MAX_ORIGIN_HOLD_LIMIT_MINUTES = 120;
+        private const uint CONFIGURED_ALLOWED_DEPOT_CACHE_LOG_INTERVAL_FRAMES = 3600u;
 
         protected override void OnGameLoaded(Context serializationContext)
         {
@@ -1041,6 +1075,43 @@ namespace RapidTransitMod
         private void InvalidateWorkbenchLineFrameSnapshots()
         {
             m_WorkbenchLineFrameSnapshots.Clear();
+        }
+
+        private void InvalidateConfiguredAllowedDepotCache()
+        {
+            m_ConfiguredAllowedDepotCacheByLine.Clear();
+            m_WorkbenchLineSettingsVersion++;
+        }
+
+        private void MaybeLogConfiguredAllowedDepotCacheStats(uint nowFrame)
+        {
+            if (m_ConfiguredAllowedDepotCacheLastLogFrame != 0
+                && (nowFrame - m_ConfiguredAllowedDepotCacheLastLogFrame) < CONFIGURED_ALLOWED_DEPOT_CACHE_LOG_INTERVAL_FRAMES)
+            {
+                return;
+            }
+
+            if (m_ConfiguredAllowedDepotCacheCalls > 0)
+            {
+                Mod.log.Info(
+                    "[ConfiguredDepotCache] intervalFrames=" + CONFIGURED_ALLOWED_DEPOT_CACHE_LOG_INTERVAL_FRAMES
+                    + " calls=" + m_ConfiguredAllowedDepotCacheCalls
+                    + " hits=" + m_ConfiguredAllowedDepotCacheHits
+                    + " settingsMiss=" + m_ConfiguredAllowedDepotCacheSettingsVersionMisses
+                    + " lineIdMiss=" + m_ConfiguredAllowedDepotCacheLineIdMisses
+                    + " depotIdMiss=" + m_ConfiguredAllowedDepotCacheAllowedDepotIdMisses
+                    + " entityInvalid=" + m_ConfiguredAllowedDepotCacheEntityInvalidations
+                    + " fallbackResolve=" + m_ConfiguredAllowedDepotCacheFallbackResolves);
+            }
+
+            m_ConfiguredAllowedDepotCacheLastLogFrame = nowFrame;
+            m_ConfiguredAllowedDepotCacheCalls = 0;
+            m_ConfiguredAllowedDepotCacheHits = 0;
+            m_ConfiguredAllowedDepotCacheSettingsVersionMisses = 0;
+            m_ConfiguredAllowedDepotCacheLineIdMisses = 0;
+            m_ConfiguredAllowedDepotCacheAllowedDepotIdMisses = 0;
+            m_ConfiguredAllowedDepotCacheEntityInvalidations = 0;
+            m_ConfiguredAllowedDepotCacheFallbackResolves = 0;
         }
 
         private void EnsureWorkbenchPersistenceLoaded()
@@ -1669,6 +1740,7 @@ namespace RapidTransitMod
             m_WorkbenchLineMaxStationDwellMinutes.Clear();
             m_WorkbenchLineAllowedDepots.Clear();
             m_WorkbenchLineServiceKinds.Clear();
+            InvalidateConfiguredAllowedDepotCache();
             m_WorkbenchPreferredLineId = persisted?.preferredLineId ?? string.Empty;
 
             if (persisted?.lineSettings != null)
@@ -3424,6 +3496,7 @@ namespace RapidTransitMod
                 }
             }
 
+            InvalidateConfiguredAllowedDepotCache();
             InvalidateWorkbenchLineFrameSnapshots();
         }
 
@@ -3590,11 +3663,94 @@ namespace RapidTransitMod
 
         public Entity GetConfiguredAllowedDepot(Entity line)
         {
-            if (line == Entity.Null)
-                return Entity.Null;
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            MaybeLogConfiguredAllowedDepotCacheStats(nowFrame);
+            m_ConfiguredAllowedDepotCacheCalls++;
 
-            string depotId = GetWorkbenchAllowedDepotId(line);
-            return CanonicalizeTransportDepotEntity(ResolveWorkbenchDepotEntityById(depotId));
+            if (line == Entity.Null || !EntityManager.Exists(line))
+            {
+                m_ConfiguredAllowedDepotCacheByLine.Remove(line);
+                return Entity.Null;
+            }
+
+            string lineId = GetWorkbenchLineId(line);
+            string depotId = !string.IsNullOrEmpty(lineId)
+                && m_WorkbenchLineAllowedDepots.TryGetValue(lineId, out string stableDepotId)
+                ? stableDepotId ?? string.Empty
+                : GetWorkbenchAllowedDepotId(line.Index.ToString());
+
+            if (m_ConfiguredAllowedDepotCacheByLine.TryGetValue(line, out ConfiguredAllowedDepotCacheEntry cached)
+                && cached.Line == line)
+            {
+                if (cached.SettingsVersion != m_WorkbenchLineSettingsVersion)
+                {
+                    m_ConfiguredAllowedDepotCacheSettingsVersionMisses++;
+                    m_ConfiguredAllowedDepotCacheByLine.Remove(line);
+                }
+                else if (!string.Equals(cached.LineId, lineId, StringComparison.Ordinal))
+                {
+                    m_ConfiguredAllowedDepotCacheLineIdMisses++;
+                    m_ConfiguredAllowedDepotCacheByLine.Remove(line);
+                }
+                else if (!string.Equals(cached.AllowedDepotId, depotId, StringComparison.Ordinal))
+                {
+                    m_ConfiguredAllowedDepotCacheAllowedDepotIdMisses++;
+                    m_ConfiguredAllowedDepotCacheByLine.Remove(line);
+                }
+                else
+                {
+                    if (cached.CanonicalDepot == Entity.Null)
+                    {
+                        m_ConfiguredAllowedDepotCacheHits++;
+                        return Entity.Null;
+                    }
+
+                    if (EntityManager.Exists(cached.CanonicalDepot)
+                        && EntityManager.HasComponent<Game.Buildings.TransportDepot>(cached.CanonicalDepot)
+                        && !EntityManager.HasComponent<Deleted>(cached.CanonicalDepot))
+                    {
+                        m_ConfiguredAllowedDepotCacheHits++;
+                        return cached.CanonicalDepot;
+                    }
+
+                    m_ConfiguredAllowedDepotCacheEntityInvalidations++;
+                    m_ConfiguredAllowedDepotCacheByLine.Remove(line);
+                }
+            }
+
+            if (string.IsNullOrEmpty(depotId))
+            {
+                m_ConfiguredAllowedDepotCacheByLine[line] = new ConfiguredAllowedDepotCacheEntry(
+                    line,
+                    lineId,
+                    string.Empty,
+                    Entity.Null,
+                    m_WorkbenchLineSettingsVersion);
+                return Entity.Null;
+            }
+
+            m_ConfiguredAllowedDepotCacheFallbackResolves++;
+            Entity resolvedDepot = CanonicalizeTransportDepotEntity(ResolveWorkbenchDepotEntityById(depotId));
+            if (resolvedDepot != Entity.Null)
+            {
+                m_ConfiguredAllowedDepotCacheByLine[line] = new ConfiguredAllowedDepotCacheEntry(
+                    line,
+                    lineId,
+                    depotId,
+                    resolvedDepot,
+                    m_WorkbenchLineSettingsVersion);
+            }
+            else
+            {
+                m_ConfiguredAllowedDepotCacheByLine.Remove(line);
+            }
+
+            return resolvedDepot;
+        }
+
+        public ulong GetWorkbenchLineSettingsVersion()
+        {
+            return m_WorkbenchLineSettingsVersion;
         }
 
         private string NormalizeWorkbenchAllowedDepotId(string depotId)
