@@ -9,6 +9,7 @@ const CALLS = {
   refreshSnapshot: "suhua::rt.workbench.refreshSnapshot",
   refreshMetadata: "suhua::rt.workbench.refreshMetadata",
   saveWorkbenchDraft: "suhua::rt.workbench.saveWorkbenchDraft",
+  saveNativeWorkbenchDraft: "suhua::rt.workbench.saveNativeWorkbenchDraft",
   getLocale: "suhua::rt.workbench.getLocale"
 };
 
@@ -60,6 +61,17 @@ function createLiveApi() {
     async saveDraft(request) {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.saveWorkbenchDraft, JSON.stringify(request ?? {}));
+      return parsePayload(payload, {
+        success: false,
+        errors: [],
+        warnings: [],
+        version: "",
+        snapshot: createEmptySnapshot()
+      });
+    },
+    async saveNativeDraft(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.saveNativeWorkbenchDraft, JSON.stringify(request ?? {}));
       return parsePayload(payload, {
         success: false,
         errors: [],

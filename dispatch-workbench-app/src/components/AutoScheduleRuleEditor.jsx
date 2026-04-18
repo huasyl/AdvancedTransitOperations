@@ -35,7 +35,8 @@ export default function AutoScheduleRuleEditor({
   selectedLineName,
   selectedLineKind = "local",
   previewPlan,
-  onAddToStaged
+  onAddToStaged,
+  readOnly = false
 }) {
   const { locale } = useI18n();
   const rulesForLine = useMemo(
@@ -148,13 +149,13 @@ export default function AutoScheduleRuleEditor({
         </div>
 
         <div className="dw-schedule-toolbar">
-          <button type="button" className="dw-btn dw-btn-primary" onClick={addRule}>
+          <button type="button" className="dw-btn dw-btn-primary" onClick={addRule} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "添加规则" : "Add rule"}</ControlText>
           </button>
-          <button type="button" className="dw-btn" onClick={clearCurrentLine}>
+          <button type="button" className="dw-btn" onClick={clearCurrentLine} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "清空当前线路" : "Clear current line"}</ControlText>
           </button>
-          <button type="button" className="dw-btn is-toolbar-end" onClick={() => onAddToStaged?.(rulesForLine)}>
+          <button type="button" className="dw-btn is-toolbar-end" onClick={() => onAddToStaged?.(rulesForLine)} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "添加到时刻表" : "Add to timetable"}</ControlText>
           </button>
         </div>
@@ -200,6 +201,7 @@ export default function AutoScheduleRuleEditor({
                             ref={setInputRef(startInputRefs, rule.id)}
                             value={rule.start}
                             placeholder="HH:mm"
+                            readOnly={readOnly}
                             onChange={(event) => {
                               const nextValue = normalizeCompactTimeInput(event.target.value);
                               updateRule(rule.id, { start: nextValue });
@@ -215,6 +217,7 @@ export default function AutoScheduleRuleEditor({
                             ref={setInputRef(endInputRefs, rule.id)}
                             value={rule.end}
                             placeholder="HH:mm"
+                            readOnly={readOnly}
                             onChange={(event) => updateRule(rule.id, { end: normalizeCompactTimeInput(event.target.value) })}
                           />
                         </span>
@@ -226,6 +229,7 @@ export default function AutoScheduleRuleEditor({
                     <WorkbenchInput
                       value={rule.departuresPerHour}
                       inputMode="decimal"
+                      readOnly={readOnly}
                       onChange={(event) => updateRule(rule.id, { departuresPerHour: event.target.value })}
                     />
                   </div>
@@ -237,6 +241,7 @@ export default function AutoScheduleRuleEditor({
                         className="is-rule-offset-buttons"
                         options={offsetOptions}
                         value={rule.expressOffsetMode}
+                        disabled={readOnly}
                         onChange={(value) => updateRule(rule.id, { expressOffsetMode: value })}
                       />
                     ) : (
@@ -251,6 +256,7 @@ export default function AutoScheduleRuleEditor({
                       <WorkbenchInput
                         value={rule.expressOffsetMinutes}
                         inputMode="numeric"
+                        readOnly={readOnly}
                         onChange={(event) => updateRule(rule.id, { expressOffsetMinutes: event.target.value })}
                       />
                     ) : (
@@ -261,7 +267,7 @@ export default function AutoScheduleRuleEditor({
                   </div>
 
                   <div className="dw-rule-cell is-action">
-                    <button type="button" className="dw-link-btn dw-btn-danger" onClick={() => removeRule(rule.id)}>
+                    <button type="button" className="dw-link-btn dw-btn-danger" onClick={() => removeRule(rule.id)} disabled={readOnly}>
                       <ControlText>{locale === "zh-CN" ? "删除" : "Delete"}</ControlText>
                     </button>
                   </div>

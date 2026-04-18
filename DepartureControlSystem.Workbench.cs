@@ -107,6 +107,8 @@ namespace RapidTransitMod
             public bool markRulesApplied;
             [DataMember]
             public bool applyDraft;
+            [DataMember]
+            public bool nativeScheduleWriter;
         }
 
         [DataContract]
@@ -1773,8 +1775,8 @@ namespace RapidTransitMod
                 selectedLineId = draft?.SelectedLineId ?? string.Empty,
                 selectedEditLine = draft?.SelectedEditLine ?? string.Empty,
                 mergedView = CloneMergedViewForPersistence(draft?.MergedView),
-                manualRows = Array.Empty<DispatchWorkbenchManualRowDto>(),
-                autoRules = Array.Empty<DispatchWorkbenchAutoRuleDto>(),
+                manualRows = draft?.ManualRows?.Select(CloneManualRow).ToArray() ?? Array.Empty<DispatchWorkbenchManualRowDto>(),
+                autoRules = draft?.AutoRules?.Select(CloneAutoRule).ToArray() ?? Array.Empty<DispatchWorkbenchAutoRuleDto>(),
                 stagedRows = draft?.StagedRows?.Select(CloneStagedRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
                 rulesApplied = draft?.RulesApplied == true,
                 draftApplied = draft?.DraftApplied == true
@@ -4089,7 +4091,7 @@ namespace RapidTransitMod
                 request.mergedView.expressLineId,
                 runtimeLines);
 
-            if (localIds.Count == 0)
+            if (!request.nativeScheduleWriter && localIds.Count == 0)
             {
                 errors.Add("At least one local line must be selected.");
             }
@@ -4309,6 +4311,9 @@ namespace RapidTransitMod
             DispatchWorkbenchSaveRequest request,
             List<WorkbenchLineRuntime> runtimeLines)
         {
+            if (request?.nativeScheduleWriter == true)
+                return;
+
             if (request?.mergedView == null || request.lineSettings == null || request.lineSettings.Length == 0)
                 return;
 

@@ -18,6 +18,7 @@ namespace RapidTransitMod
         private const string AppId = "dispatch-workbench";
         private const string SnapshotChangedEvent = EuisModder + "::" + EuisAcronym + ".workbench.onSnapshotChanged";
         private const string DevServerConfigFile = "dispatch-workbench-euis-dev-url.txt";
+        private const string LegacyReadonlyMessage = "Legacy EUIS workbench is now read-only. Use the native Schedule panel to edit and apply timetables.";
 
         private static bool s_IsInitialized;
         private static bool s_IsRegistered;
@@ -120,6 +121,7 @@ namespace RapidTransitMod
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getLocale", new Func<string>(HandleGetLocale));
         }
 
@@ -144,9 +146,32 @@ namespace RapidTransitMod
 
         private static string HandleSaveDraft(string requestJson)
         {
+            string resultJson = BuildLegacyReadonlySaveResultJson();
+            DispatchWorkbenchUISystem.PublishSaveResultJson(resultJson);
+            return resultJson;
+        }
+
+        private static string HandleSaveNativeDraft(string requestJson)
+        {
             string resultJson = DepartureControlSystem.Instance?.SaveWorkbenchDraftJson(requestJson) ?? string.Empty;
             DispatchWorkbenchUISystem.PublishSaveResultJson(resultJson);
             return resultJson;
+        }
+
+        private static string BuildLegacyReadonlySaveResultJson()
+        {
+            string snapshotJson = DepartureControlSystem.Instance?.RefreshWorkbenchSnapshotJson() ?? string.Empty;
+            DepartureControlSystem.DispatchWorkbenchSnapshot snapshot =
+                DispatchWorkbenchJson.Deserialize<DepartureControlSystem.DispatchWorkbenchSnapshot>(snapshotJson);
+            DepartureControlSystem.DispatchWorkbenchSaveResult result = new DepartureControlSystem.DispatchWorkbenchSaveResult
+            {
+                success = false,
+                errors = new[] { LegacyReadonlyMessage },
+                warnings = Array.Empty<string>(),
+                version = snapshot?.version ?? string.Empty,
+                snapshot = snapshot
+            };
+            return DispatchWorkbenchJson.Serialize(result);
         }
 
         private static string HandleGetLocale()
@@ -274,6 +299,7 @@ namespace RapidTransitMod
             registerCall("workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
             registerCall("workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             registerCall("workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
+            registerCall("workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
             registerCall("workbench.getLocale", new Func<string>(HandleGetLocale));
         }
 

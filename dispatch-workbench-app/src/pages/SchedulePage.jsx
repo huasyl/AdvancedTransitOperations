@@ -31,7 +31,8 @@ export default function SchedulePage({
   onAllowedDepotChange,
   onMaxStationDwellChange,
   onRefreshMetadata,
-  saveState
+  saveState,
+  isReadonly = false
 }) {
   const { locale, t } = useI18n();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -80,6 +81,11 @@ export default function SchedulePage({
   }, [selectedLine?.id, selectedLine?.maxStationDwellMinutes]);
 
   function commitOriginHoldLimit() {
+    if (isReadonly) {
+      setOriginHoldInput(String(selectedLine?.originHoldLimitMinutes ?? 20));
+      return;
+    }
+
     const normalizedValue =
       Number.isFinite(Number(originHoldInput)) && Number(originHoldInput) > 0
         ? Math.max(1, Math.min(120, Math.round(Number(originHoldInput))))
@@ -89,6 +95,11 @@ export default function SchedulePage({
   }
 
   function commitMaxStationDwell() {
+    if (isReadonly) {
+      setMaxStationDwellInput(String(selectedLine?.maxStationDwellMinutes ?? 10));
+      return;
+    }
+
     const normalizedValue =
       Number.isFinite(Number(maxStationDwellInput)) && Number(maxStationDwellInput) > 0
         ? Math.max(1, Math.min(120, Math.round(Number(maxStationDwellInput))))
@@ -161,7 +172,12 @@ export default function SchedulePage({
                   { value: "express", label: locale === "zh-CN" ? "\u5feb\u8f66" : "Express" }
                 ]}
                 value={draftLineKind}
+                disabled={isReadonly}
                 onChange={(nextValue) => {
+                  if (isReadonly) {
+                    return;
+                  }
+
                   setDraftLineKind(nextValue);
                   onSelectedLineKindChange?.(nextValue);
                 }}
@@ -183,7 +199,12 @@ export default function SchedulePage({
                   type="button"
                   className={`dw-line-dropdown-trigger ${depotDropdownOpen ? "is-open" : ""}`}
                   title={selectedDepotName}
+                  disabled={isReadonly}
                   onClick={() => {
+                    if (isReadonly) {
+                      return;
+                    }
+
                     if (!depotDropdownOpen) {
                       onRefreshMetadata?.();
                     }
@@ -202,6 +223,7 @@ export default function SchedulePage({
                     <button
                       type="button"
                       className={`dw-line-dropdown-option ${!selectedLine?.allowedDepotId ? "is-active" : ""}`}
+                      disabled={isReadonly}
                       onClick={() => {
                         onAllowedDepotChange?.(selectedEditLine, "");
                         setDepotDropdownOpen(false);
@@ -215,6 +237,7 @@ export default function SchedulePage({
                         type="button"
                         className={`dw-line-dropdown-option ${depot.id === selectedLine?.allowedDepotId ? "is-active" : ""}`}
                         title={depot.name}
+                        disabled={isReadonly}
                         onClick={() => {
                           onAllowedDepotChange?.(selectedEditLine, depot.id);
                           setDepotDropdownOpen(false);
@@ -243,6 +266,7 @@ export default function SchedulePage({
                 type="text"
                 inputMode="numeric"
                 value={originHoldInput}
+                readOnly={isReadonly}
                 onChange={(event) => setOriginHoldInput(event.target.value.replace(/[^0-9]/g, ""))}
                 onBlur={commitOriginHoldLimit}
               />
@@ -255,6 +279,7 @@ export default function SchedulePage({
                 type="text"
                 inputMode="numeric"
                 value={maxStationDwellInput}
+                readOnly={isReadonly}
                 onChange={(event) => setMaxStationDwellInput(event.target.value.replace(/[^0-9]/g, ""))}
                 onBlur={commitMaxStationDwell}
               />
@@ -271,6 +296,7 @@ export default function SchedulePage({
               selectedLineName={selectedLine?.name || t("schedule.noLineSelected")}
               currentLineKind={draftLineKind}
               onAddToStaged={onAddManualToStaged}
+              readOnly={isReadonly}
             />
           </div>
 
@@ -285,6 +311,7 @@ export default function SchedulePage({
               onClearCurrentLine={onClearStagedLine}
               onRemoveRow={onRemoveStagedRow}
               stagedRows={stagedRows}
+              readOnly={isReadonly}
             />
           </div>
 
@@ -297,6 +324,7 @@ export default function SchedulePage({
               selectedLineKind={draftLineKind}
               previewPlan={autoPreviewPlan}
               onAddToStaged={onAddAutoToStaged}
+              readOnly={isReadonly}
             />
           </div>
         </div>

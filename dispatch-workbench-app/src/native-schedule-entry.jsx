@@ -1,18 +1,20 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import DispatchWorkbenchNativeScheduleApp from "./DispatchWorkbenchNativeScheduleApp.jsx";
+import { NativeScheduleI18nProvider } from "./native-schedule-i18n";
 import "./styles/native-schedule-demo.css";
 
 const GLOBAL_MOUNT_KEY = "RTDispatchWorkbenchNativeSchedule";
 const mountedEntries = new WeakMap();
 
-function NativeScheduleErrorFallback({ error }) {
+function NativeScheduleErrorFallback({ error, title = "RT Dispatch Workbench", body = "Native schedule mount failed." }) {
+
   return (
     <div className="dw-native-schedule-root">
       <div className="dw-native-schedule-error">
-        <div className="dw-native-schedule-error-title">RT Dispatch Workbench</div>
+        <div className="dw-native-schedule-error-title">{title}</div>
         <div className="dw-native-schedule-error-text">
-          Native schedule mount failed.
+          {body}
         </div>
         <div className="dw-native-schedule-error-detail">
           {error?.message || "Unknown error"}
@@ -45,11 +47,7 @@ class NativeScheduleErrorBoundary extends React.Component {
   }
 }
 
-function renderNativeSchedule(container) {
-  if (!(container instanceof HTMLElement)) {
-    throw new Error("Native schedule mount target is unavailable.");
-  }
-
+function ensureEntry(container) {
   let entry = mountedEntries.get(container);
   if (!entry) {
     entry = {
@@ -59,15 +57,42 @@ function renderNativeSchedule(container) {
     mountedEntries.set(container, entry);
   }
 
-  entry.root.render(
-    <NativeScheduleErrorBoundary>
-      <DispatchWorkbenchNativeScheduleApp
-        registerHostActions={(actions) => {
-          entry.hostActions = actions || null;
-        }}
-      />
-    </NativeScheduleErrorBoundary>
-  );
+  return entry;
+}
+
+function renderNativeScheduleStartupError(container, error) {
+  const entry = ensureEntry(container);
+  entry.hostActions = null;
+  entry.root.render(<NativeScheduleErrorFallback error={error} />);
+  return {
+    refreshData: async () => undefined,
+    unmount: () => unmountNativeSchedule(container)
+  };
+}
+
+function renderNativeSchedule(container) {
+  if (!(container instanceof HTMLElement)) {
+    throw new Error("Native schedule mount target is unavailable.");
+  }
+
+  const entry = ensureEntry(container);
+
+  try {
+    entry.root.render(
+      <NativeScheduleI18nProvider>
+        <NativeScheduleErrorBoundary>
+          <DispatchWorkbenchNativeScheduleApp
+            registerHostActions={(actions) => {
+              entry.hostActions = actions || null;
+            }}
+          />
+        </NativeScheduleErrorBoundary>
+      </NativeScheduleI18nProvider>
+    );
+  } catch (error) {
+    console.error("[RT Native Schedule] startup render failed", error);
+    return renderNativeScheduleStartupError(container, error);
+  }
 
   return {
     refreshData: async () => entry.hostActions?.refreshData?.(),
@@ -87,13 +112,19 @@ function unmountNativeSchedule(container) {
 }
 
 if (typeof window !== "undefined") {
-  window[GLOBAL_MOUNT_KEY] = {
+  const mountApi = {
     mount: renderNativeSchedule,
     unmount: unmountNativeSchedule
   };
+  window[GLOBAL_MOUNT_KEY] = mountApi;
 }
 
 const rootElement = document.getElementById("root");
 if (rootElement) {
-  renderNativeSchedule(rootElement);
+  try {
+    renderNativeSchedule(rootElement);
+  } catch (error) {
+    console.error("[RT Native Schedule] bootstrap render failed", error);
+    renderNativeScheduleStartupError(rootElement, error);
+  }
 }

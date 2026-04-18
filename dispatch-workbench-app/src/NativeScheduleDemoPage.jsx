@@ -1,66 +1,147 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { buildAutoStagedPlan, getLineKinds, hasMinimumDepartureGapForOrigin, MIN_DEPARTURE_INTERVAL_MINUTES } from "./lib/auto-schedule";
+import { getWorkbenchApi } from "./lib/workbench-api";
+import { minutesToTime, timeToMinutes } from "./lib/time";
+import { useNativeScheduleI18n } from "./native-schedule-i18n";
+import { validateManualRows } from "./lib/validation";
+
+const NATIVE_SCHEDULE_PERSIST_KEY = "rtm.nativeSchedule.frontendDraft.v1";
+const NATIVE_SCHEDULE_PERSIST_SCHEMA_VERSION = 3;
 
 function DemoDropdown({
   label,
-  labelIcon,
   value,
   options,
   onSelect,
   className,
-  title
+  title,
+  triggerClassName = "",
+  menuClassName = "",
+  triggerContent = null,
+  portalHostRef = null,
+  menuWidth = null
 }) {
   const [open, setOpen] = useState(false);
+  const [menuRect, setMenuRect] = useState(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function updateMenuRect() {
+      const triggerElement = triggerRef.current;
+      if (!(triggerElement instanceof HTMLElement)) {
+        return;
+      }
+
+      const rect = triggerElement.getBoundingClientRect();
+      setMenuRect({
+        left: rect.left,
+        top: rect.bottom,
+        width: menuWidth || rect.width
+      });
+    }
+
+    function handlePointerDown(event) {
+      const triggerElement = triggerRef.current;
+      const menuElement = menuRef.current;
+      const target = event.target;
+      if (
+        (triggerElement && triggerElement.contains(target)) ||
+        (menuElement && menuElement.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    updateMenuRect();
+    window.addEventListener("resize", updateMenuRect);
+    window.addEventListener("scroll", updateMenuRect, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener("resize", updateMenuRect);
+      window.removeEventListener("scroll", updateMenuRect, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [open, menuWidth]);
+
+  const menuContent = open ? (
+    <div
+      ref={menuRef}
+      className={`dw-demo-dropdown-menu ${portalHostRef?.current ? "is-portal" : ""} ${menuClassName}`}
+      style={portalHostRef?.current && menuRect ? {
+        left: `${menuRect.left}px`,
+        top: `${menuRect.top}px`,
+        width: `${menuRect.width}px`
+      } : undefined}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={`dw-demo-dropdown-option ${option.active ? "is-active" : ""}`}
+          onClick={() => {
+            onSelect(option.value);
+            setOpen(false);
+          }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  ) : null;
 
   return (
-    <div
-      className={`dw-demo-field ${className || ""}`}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setOpen(false);
-        }
-      }}
-    >
-      <label className="dw-demo-label">
-        <span className="dw-demo-label-content">
-          {labelIcon ? <span className="dw-demo-label-icon" aria-hidden="true">{labelIcon}</span> : null}
-          <span>{label}</span>
-        </span>
-      </label>
+    <div className={`dw-demo-field ${className || ""}`}>
+      {label ? (
+        <label className="dw-demo-label">
+          <span className="dw-demo-label-content">
+            <span>{label}</span>
+          </span>
+        </label>
+      ) : null}
       <div className="dw-demo-dropdown">
         <button
+          ref={triggerRef}
           type="button"
-          className={`dw-demo-input dw-demo-dropdown-trigger ${open ? "is-open" : ""}`}
+          className={`dw-demo-input dw-demo-dropdown-trigger ${triggerClassName} ${open ? "is-open" : ""}`}
           title={title || value}
           onClick={() => setOpen((current) => !current)}
         >
-          <span>{value}</span>
-          <span className="dw-demo-dropdown-caret">v</span>
+          {triggerContent || (
+            <>
+              <span>{value}</span>
+              <span className="dw-demo-dropdown-caret" aria-hidden="true">
+                <svg viewBox="0 0 16 16" className="dw-demo-dropdown-caret-icon">
+                  <path d="M4.2 6.2 8 10l3.8-3.8" fill="none" stroke="#c7d4dc" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </span>
+            </>
+          )}
         </button>
-        {open ? (
-          <div className="dw-demo-dropdown-menu">
-            {options.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`dw-demo-dropdown-option ${option.active ? "is-active" : ""}`}
-                onClick={() => {
-                  onSelect(option.value);
-                  setOpen(false);
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        {!portalHostRef?.current ? menuContent : null}
       </div>
+      {portalHostRef?.current && menuContent ? createPortal(menuContent, portalHostRef.current) : null}
     </div>
   );
 }
 
 function DemoTextField({
   label,
-  labelIcon,
   value,
   onCommit,
   className,
@@ -68,7 +149,12 @@ function DemoTextField({
   readOnly = false,
   inputRef,
   timeMode = false,
-  nextInputRef
+  nextInputRef,
+  onDraftChange,
+  errorText = "",
+  preserveInvalidTime = false,
+  reserveErrorSpace = false,
+  suffix = ""
 }) {
   const localInputRef = useRef(null);
   const resolvedInputRef = inputRef || localInputRef;
@@ -88,7 +174,9 @@ function DemoTextField({
     if (timeMode) {
       nextValue = normalizeTimeInput(nextValue);
       if (!isValidTimeValue(nextValue)) {
-        setDraftValue(String(value ?? ""));
+        if (!preserveInvalidTime) {
+          setDraftValue(String(value ?? ""));
+        }
         return;
       }
       setDraftValue(nextValue);
@@ -101,78 +189,90 @@ function DemoTextField({
     <div className={`dw-demo-field ${className || ""}`}>
       <label className="dw-demo-label">
         <span className="dw-demo-label-content">
-          {labelIcon ? <span className="dw-demo-label-icon" aria-hidden="true">{labelIcon}</span> : null}
           <span>{label}</span>
         </span>
       </label>
-      <input
-        ref={resolvedInputRef}
-        type="text"
-        value={draftValue}
-        placeholder={placeholder}
-        readOnly={readOnly}
-        className={`dw-demo-input ${readOnly ? "is-readonly" : ""}`}
-        inputMode={timeMode ? "numeric" : "text"}
-        maxLength={timeMode ? 5 : undefined}
-        onChange={(event) => {
-          const rawValue = event.currentTarget.value;
-          setDraftValue(timeMode ? normalizeTimeInput(rawValue) : rawValue);
-        }}
-        onPaste={(event) => {
-          if (!timeMode) {
-            return;
-          }
-
-          event.preventDefault();
-          const pastedText = event.clipboardData?.getData("text") || "";
-          setDraftValue(normalizeTimeInput(pastedText));
-        }}
-        onBlur={commitCurrentValue}
-        onKeyDown={(event) => {
-          if (timeMode) {
-            const allowedKeys = [
-              "Backspace",
-              "Delete",
-              "Tab",
-              "ArrowLeft",
-              "ArrowRight",
-              "ArrowUp",
-              "ArrowDown",
-              "Home",
-              "End",
-              "Enter"
-            ];
-            const isDigitKey = event.key >= "0" && event.key <= "9";
-            const isCtrlCommand = event.ctrlKey || event.metaKey;
-            if (!isDigitKey && !allowedKeys.includes(event.key) && !isCtrlCommand) {
-              event.preventDefault();
+      <div className={`dw-demo-input-row ${suffix ? "has-suffix" : ""}`}>
+        <input
+          ref={resolvedInputRef}
+          type="text"
+          value={draftValue}
+          placeholder={placeholder}
+          readOnly={readOnly}
+          className={`dw-demo-input ${suffix ? "has-suffix" : ""} ${readOnly ? "is-readonly" : ""} ${errorText ? "is-error" : ""}`}
+          inputMode={timeMode ? "numeric" : "text"}
+          maxLength={timeMode ? 5 : undefined}
+          onChange={(event) => {
+            const rawValue = event.currentTarget.value;
+            const nextDraftValue = timeMode ? normalizeTimeInput(rawValue) : rawValue;
+            setDraftValue(nextDraftValue);
+            if (typeof onDraftChange === "function") {
+              onDraftChange(nextDraftValue);
+            }
+          }}
+          onPaste={(event) => {
+            if (!timeMode) {
               return;
             }
-          }
 
-          if (event.key === "Tab" && nextInputRef?.current) {
             event.preventDefault();
-            commitCurrentValue();
-            nextInputRef.current.focus();
-            if (typeof nextInputRef.current.select === "function") {
-              nextInputRef.current.select();
+            const pastedText = event.clipboardData?.getData("text") || "";
+            const nextDraftValue = normalizeTimeInput(pastedText);
+            setDraftValue(nextDraftValue);
+            if (typeof onDraftChange === "function") {
+              onDraftChange(nextDraftValue);
             }
-            return;
-          }
+          }}
+          onBlur={commitCurrentValue}
+          onKeyDown={(event) => {
+            if (timeMode) {
+              const allowedKeys = [
+                "Backspace",
+                "Delete",
+                "Tab",
+                "ArrowLeft",
+                "ArrowRight",
+                "ArrowUp",
+                "ArrowDown",
+                "Home",
+                "End",
+                "Enter"
+              ];
+              const isDigitKey = event.key >= "0" && event.key <= "9";
+              const isCtrlCommand = event.ctrlKey || event.metaKey;
+              if (!isDigitKey && !allowedKeys.includes(event.key) && !isCtrlCommand) {
+                event.preventDefault();
+                return;
+              }
+            }
 
-          if (event.key === "Enter") {
-            commitCurrentValue();
-            event.currentTarget.blur();
-          }
-        }}
-      />
+            if (event.key === "Tab" && nextInputRef?.current) {
+              event.preventDefault();
+              commitCurrentValue();
+              nextInputRef.current.focus();
+              if (typeof nextInputRef.current.select === "function") {
+                nextInputRef.current.select();
+              }
+              return;
+            }
+
+            if (event.key === "Enter") {
+              commitCurrentValue();
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        {suffix ? <span className="dw-demo-input-suffix">{suffix}</span> : null}
+      </div>
+      <div className={`dw-demo-field-error-slot ${reserveErrorSpace ? "is-reserved" : ""} ${errorText ? "has-error" : ""}`}>
+        {errorText ? <div className="dw-demo-field-error">{errorText}</div> : null}
+      </div>
     </div>
   );
 }
 
 function DemoDisplayField({
   label,
-  labelIcon,
   value,
   className
 }) {
@@ -180,7 +280,6 @@ function DemoDisplayField({
     <div className={`dw-demo-field ${className || ""}`}>
       <label className="dw-demo-label">
         <span className="dw-demo-label-content">
-          {labelIcon ? <span className="dw-demo-label-icon" aria-hidden="true">{labelIcon}</span> : null}
           <span>{label}</span>
         </span>
       </label>
@@ -191,31 +290,52 @@ function DemoDisplayField({
   );
 }
 
-function DemoLineIcon() {
+function DemoEmptyScheduleIcon() {
   return (
-    <svg viewBox="0 0 16 16" className="dw-demo-inline-icon">
-      <path d="M3 3.5h10v6.5H3z" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M5.5 12.5h5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <circle cx="5" cy="10.5" r="1" fill="currentColor" />
-      <circle cx="11" cy="10.5" r="1" fill="currentColor" />
+    <svg viewBox="0 0 56 48" className="dw-demo-empty-icon">
+      <rect x="12" y="10" width="32" height="28" rx="4" fill="none" stroke="#e6ecf0" strokeWidth="2.6" />
+      <path d="M20 8v5" fill="none" stroke="#e6ecf0" strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M36 8v5" fill="none" stroke="#e6ecf0" strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M12 17h32" fill="none" stroke="#e6ecf0" strokeWidth="2.6" />
+      <circle cx="20" cy="23" r="1.8" fill="#e6ecf0" />
+      <path d="M25 23h11" fill="none" stroke="#e6ecf0" strokeWidth="2.6" strokeLinecap="round" />
+      <circle cx="20" cy="29" r="1.8" fill="#e6ecf0" />
+      <path d="M25 29h9" fill="none" stroke="#e6ecf0" strokeWidth="2.6" strokeLinecap="round" />
     </svg>
   );
 }
 
-function DemoDepotIcon() {
+function DemoPlayIcon() {
   return (
-    <svg viewBox="0 0 16 16" className="dw-demo-inline-icon">
-      <path d="M2.5 6.5 8 2.5l5.5 4v7H2.5z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M6 13.5v-3h4v3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" className="dw-demo-button-icon is-play" aria-hidden="true">
+      <path d="M7 4.5 18 12 7 19.5Z" fill="currentColor" />
     </svg>
   );
 }
 
-function DemoOriginIcon() {
+function DemoAlertIcon() {
   return (
-    <svg viewBox="0 0 16 16" className="dw-demo-inline-icon">
-      <path d="M8 13.2s3.3-3.7 3.3-6A3.3 3.3 0 1 0 4.7 7.2c0 2.3 3.3 6 3.3 6Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <circle cx="8" cy="7.1" r="1.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    <svg viewBox="0 0 24 24" className="dw-demo-button-icon is-play" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2.2" />
+      <path d="M12 7.2v6.1" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+      <circle cx="12" cy="16.8" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function DemoAppliedStateIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dw-demo-button-icon is-play" aria-hidden="true">
+      <path d="M6.6 12.4 10.4 16.2 17.8 8.8" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function DemoImportLeftIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dw-demo-button-icon is-import" aria-hidden="true">
+      <path d="M11 7 7 12l4 5" fill="none" stroke="#5ab4c5" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M17 7 13 12l4 5" fill="none" stroke="#5ab4c5" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" opacity="0.92" />
     </svg>
   );
 }
@@ -229,6 +349,8 @@ function DemoOffsetField({
   className,
   hint
 }) {
+  const { t } = useNativeScheduleI18n();
+
   return (
     <div className={`dw-demo-field dw-demo-offset-field ${className || ""}`}>
       <label className="dw-demo-label">{label}</label>
@@ -239,14 +361,14 @@ function DemoOffsetField({
             className={`dw-demo-offset-toggle-button ${direction === "early" ? "is-active" : ""}`}
             onClick={() => onDirectionChange(direction === "early" ? "" : "early")}
           >
-            早
+            {t("nativeSchedule.toggle.early")}
           </button>
           <button
             type="button"
             className={`dw-demo-offset-toggle-button ${direction === "late" ? "is-active" : ""}`}
             onClick={() => onDirectionChange(direction === "late" ? "" : "late")}
           >
-            晚
+            {t("nativeSchedule.toggle.late")}
           </button>
         </div>
         <div className="dw-demo-offset-minutes-wrap">
@@ -267,24 +389,151 @@ function DemoOffsetField({
   );
 }
 
-function SummaryBadge({ kind }) {
+function chunkItemsBySize(items, chunkSize) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  const nextChunkSize = Math.max(1, Number(chunkSize) || items.length);
+  const nextRows = [];
+
+  for (let index = 0; index < items.length; index += nextChunkSize) {
+    nextRows.push(items.slice(index, index + nextChunkSize));
+  }
+
+  return nextRows;
+}
+
+function getTopPreviewMaxItemsPerRow(script, hasMeta) {
+  const isLatin = script === "latin";
+  if (isLatin) {
+    return hasMeta ? 6 : 7;
+  }
+
+  return hasMeta ? 7 : 8;
+}
+
+function getRulePreviewMaxItemsPerRow(script, showOffsetColumn) {
+  const isLatin = script === "latin";
+  if (isLatin) {
+    return showOffsetColumn ? 10 : 11;
+  }
+
+  return showOffsetColumn ? 11 : 12;
+}
+
+function DemoTopPreviewTimes({
+  times,
+  maxItemsPerRow
+}) {
+  const previewTimes = Array.isArray(times) ? times : [];
+  if (previewTimes.length === 0) {
+    return <span className="dw-demo-preview-empty">--</span>;
+  }
+
+  const groupedRows = chunkItemsBySize(previewTimes, maxItemsPerRow);
+
   return (
-    <span className={`dw-demo-badge ${kind === "快车" ? "is-express" : "is-local"}`}>
-      {kind}
+    <span className="dw-demo-preview-grouped">
+      {groupedRows.map((rowTimes, rowIndex) => (
+        <span key={`row-${rowIndex}`} className="dw-demo-preview-rule-row">
+          {rowTimes.map((time, index) => (
+            <span key={`${time}-${rowIndex}-${index}`} className="dw-demo-preview-item">
+              {index > 0 ? <span className="dw-demo-preview-separator" aria-hidden="true">·</span> : null}
+              <span className="dw-demo-preview-token">
+                <span className="dw-demo-preview-time">{time}</span>
+              </span>
+            </span>
+          ))}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function DemoRuleTextPreviewTimes({
+  entries,
+  showSkipped = false,
+  moveSkippedToEnd = false,
+  maxItemsPerRow
+}) {
+  const sourceEntries = Array.isArray(entries) ? entries : [];
+  const previewEntries = !moveSkippedToEnd || sourceEntries.length <= 1
+    ? sourceEntries
+    : [
+      ...sourceEntries.filter((entry) => !entry?.skipped),
+      ...sourceEntries.filter((entry) => entry?.skipped)
+    ];
+
+  if (previewEntries.length === 0) {
+    return <span className="dw-demo-preview-empty">--</span>;
+  }
+
+  const keptEntries = showSkipped ? previewEntries.filter((entry) => !entry?.skipped) : previewEntries;
+  const skippedEntries = showSkipped ? previewEntries.filter((entry) => entry?.skipped) : [];
+  const rowsToRender = [
+    ...chunkItemsBySize(keptEntries, maxItemsPerRow),
+    ...chunkItemsBySize(skippedEntries, maxItemsPerRow)
+  ];
+
+  return (
+    <span className="dw-demo-preview-grouped">
+      {rowsToRender.map((rowEntries, rowIndex) => {
+        const rowText = rowEntries.map((entry) => entry.time).join(" · ");
+        const isSkippedRow = showSkipped && rowEntries.every((entry) => entry?.skipped);
+
+        return (
+          <span key={`row-${rowIndex}`} className={`dw-demo-preview-rule-row is-text ${isSkippedRow ? "is-skipped-row" : ""}`}>
+            <span className={`dw-demo-preview-rule-text-part ${isSkippedRow ? "is-skipped is-block" : ""}`}>{rowText}</span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function SummaryBadge({ kind }) {
+  const { t } = useNativeScheduleI18n();
+
+  return (
+    <span className={`dw-demo-badge ${kind === "express" ? "is-express" : "is-local"}`}>
+      {getLocalizedLineType(kind, t, "compact")}
     </span>
   );
 }
 
 function normalizeTimeInput(rawValue) {
-  const digitsOnly = String(rawValue || "").replace(/\D/g, "").slice(0, 4);
+  const rawText = String(rawValue || "");
+  const digitsOnly = rawText.replace(/\D/g, "").slice(0, 4);
   if (digitsOnly.length < 2) {
     return digitsOnly;
   }
   if (digitsOnly.length === 2) {
-    return digitsOnly + ":";
+    return rawText.indexOf(":") >= 0 ? digitsOnly + ":" : digitsOnly;
   }
 
   return digitsOnly.slice(0, 2) + ":" + digitsOnly.slice(2);
+}
+
+function normalizeFrequencyInput(rawValue) {
+  const source = String(rawValue || "");
+  let result = "";
+  let dotSeen = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char >= "0" && char <= "9") {
+      result += char;
+      continue;
+    }
+
+    if (char === "." && !dotSeen) {
+      result += char;
+      dotSeen = true;
+    }
+  }
+
+  return result;
 }
 
 function isValidTimeValue(value) {
@@ -298,117 +547,709 @@ function isValidTimeValue(value) {
   return Number.isFinite(hours) && Number.isFinite(minutes) && hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
 }
 
-const LINE_OPTIONS = [
+function parseFrequencyValue(value) {
+  const numeric = Number(String(value || "").trim());
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+
+  return numeric;
+}
+
+const DEFAULT_DEPOT_OPTIONS = [
+  { id: "any-depot", labelKey: "nativeSchedule.data.depot.any" },
+  { id: "north-depot", labelKey: "nativeSchedule.data.depot.north" }
+];
+
+const DEFAULT_ORIGIN_OPTIONS = [
+  { id: "origin-industrial", labelKey: "nativeSchedule.data.origin.industrial" }
+];
+
+const DEFAULT_LINE_OPTIONS = [
   {
     id: "line-local",
-    name: "区间线",
-    type: "普通",
-    depot: "任意车库",
-    origin: "工业区",
+    corridorId: "industrial-corridor",
+    nameKey: "nativeSchedule.data.line.local",
+    kind: "local",
+    transportType: "",
+    color: "#5ab4c5",
+    depotId: "any-depot",
+    originId: "origin-industrial",
+    originStationId: "origin-industrial",
     hold: "15",
     dwell: "6"
   },
   {
     id: "line-express",
-    name: "直达线",
-    type: "快车",
-    depot: "北区车库",
-    origin: "工业区",
+    corridorId: "industrial-corridor",
+    nameKey: "nativeSchedule.data.line.express",
+    kind: "express",
+    transportType: "",
+    color: "#c084fc",
+    depotId: "north-depot",
+    originId: "origin-industrial",
+    originStationId: "origin-industrial",
     hold: "10",
     dwell: "4"
   }
 ];
 
-const SUMMARY_ROWS = [
-  { id: 1, time: "00:00", line: "区间线", origin: "工业区", type: "普通", status: "待应用", isConflict: false, isExpress: false },
-  { id: 2, time: "00:30", line: "区间线", origin: "工业区", type: "普通", status: "待应用", isConflict: false, isExpress: false },
-  { id: 3, time: "01:00", line: "直达线", origin: "工业区", type: "快车", status: "待应用", isConflict: false, isExpress: true },
-  { id: 4, time: "01:00", line: "区间线", origin: "工业区", type: "普通", status: "冲突", isConflict: true, isExpress: false },
-  { id: 5, time: "01:30", line: "区间线", origin: "工业区", type: "普通", status: "待应用", isConflict: false, isExpress: false },
-  { id: 6, time: "02:00", line: "区间线", origin: "工业区", type: "普通", status: "待应用", isConflict: false, isExpress: false },
-  { id: 7, time: "02:30", line: "直达线", origin: "工业区", type: "快车", status: "待应用", isConflict: false, isExpress: true },
-  { id: 8, time: "03:00", line: "区间线", origin: "工业区", type: "普通", status: "待应用", isConflict: false, isExpress: false },
-  { id: 9, time: "03:30", line: "直达线", origin: "工业区", type: "快车", status: "待应用", isConflict: false, isExpress: true },
-  { id: 10, time: "04:00", line: "区间线", origin: "工业区", type: "普通", status: "待应用", isConflict: false, isExpress: false },
-  { id: 11, time: "04:30", line: "区间线", origin: "工业区", type: "普通", status: "待应用", isConflict: false, isExpress: false }
-];
+const DEPOT_OPTIONS = DEFAULT_DEPOT_OPTIONS.map((option) => ({ ...option }));
+const ORIGIN_OPTIONS = DEFAULT_ORIGIN_OPTIONS.map((option) => ({ ...option }));
+const LINE_OPTIONS = DEFAULT_LINE_OPTIONS.map((option) => ({ ...option }));
 
-const INITIAL_AUTO_RULES = [
-  { id: 1, window: "00:00 - 06:00", freq: "2", offset: "无", preview: "00:00 · 00:30 · 01:00 · 01:30 · 02:00 · 02:30", type: "普通" },
-  { id: 2, window: "06:00 - 09:00", freq: "4", offset: "晚 5 分", preview: "06:05 · 06:20 · 06:35 · 06:50 · 07:05 · 07:20 · 07:35 · 07:50", type: "快车" },
-  { id: 3, window: "09:00 - 17:00", freq: "3", offset: "无", preview: "09:00 · 09:20 · 09:40 · 10:00 · 10:20 · 10:40 · 11:00 · 11:20", type: "普通" }
-];
+function cloneOptions(options) {
+  return (Array.isArray(options) ? options : []).map((option) => ({ ...option }));
+}
 
-const INITIAL_MANUAL_DRAFTS = [
-  { id: 1, time: "12:20" },
-  { id: 2, time: "12:30" }
-];
+function replaceRuntimeOptions(target, nextOptions) {
+  target.splice(0, target.length, ...cloneOptions(nextOptions));
+}
 
-function buildSummaryRowsWithConflicts(rows) {
-  const orderedRows = [...rows].sort((left, right) => {
-    const leftMinutes = timeToMinutes(left.time) ?? 9999;
-    const rightMinutes = timeToMinutes(right.time) ?? 9999;
-    if (leftMinutes !== rightMinutes) {
-      return leftMinutes - rightMinutes;
-    }
-    return String(left.id).localeCompare(String(right.id));
-  });
+function replaceRuntimeCatalog({ lines, depots, origins }) {
+  replaceRuntimeOptions(LINE_OPTIONS, lines);
+  replaceRuntimeOptions(DEPOT_OPTIONS, depots);
+  replaceRuntimeOptions(ORIGIN_OPTIONS, origins);
+}
 
-  return orderedRows.map((row, index, sourceRows) => {
-    const hasConflict = sourceRows.some((candidate, candidateIndex) => {
-      if (candidateIndex === index) {
-        return false;
-      }
+function clampPositiveMinutes(value, fallbackValue) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallbackValue;
+  }
 
-      return candidate.time === row.time && candidate.origin === row.origin;
-    });
+  return Math.max(1, Math.min(120, Math.round(numeric)));
+}
+
+function buildNativeDepotOptions(snapshotDepots = []) {
+  if (!Array.isArray(snapshotDepots) || snapshotDepots.length === 0) {
+    return cloneOptions(DEFAULT_DEPOT_OPTIONS);
+  }
+
+  return snapshotDepots.map((depot, index) => ({
+    id: depot?.id || `depot-${index + 1}`,
+    label: depot?.name || depot?.id || `Depot ${index + 1}`,
+    transportType: depot?.transportType || ""
+  }));
+}
+
+function buildNativeLineOptions(snapshotLines = [], t) {
+  if (!Array.isArray(snapshotLines) || snapshotLines.length === 0) {
+    return cloneOptions(DEFAULT_LINE_OPTIONS);
+  }
+
+  return snapshotLines.map((line, index) => {
+    const fallbackKey = line?.sourceLineId || line?.id || String(index + 1);
+    const fallbackName = (line?.kind === "express" ? "Rapid " : "Local ") + fallbackKey;
 
     return {
-      ...row,
-      status: hasConflict ? "冲突" : "待应用",
-      isConflict: hasConflict,
-      isExpress: row.type === "快车"
+      id: line?.id || `line-${index + 1}`,
+      corridorId: line?.sourceLineId || line?.id || `corridor-${index + 1}`,
+      name: line?.name || fallbackName,
+      nameKey: "",
+      kind: line?.kind === "express" ? "express" : "local",
+      transportType: line?.transportType || "",
+      color: line?.color || (line?.kind === "express" ? "#c084fc" : "#5ab4c5"),
+      depotId: line?.allowedDepotId || "",
+      originId: line?.originStationId || `origin-${index + 1}`,
+      originStationId: line?.originStationId || `origin-${index + 1}`,
+      originStationName: line?.originStationName || line?.originStationId || `Origin ${index + 1}`,
+      hold: String(clampPositiveMinutes(line?.originHoldLimitMinutes, 20)),
+      dwell: String(clampPositiveMinutes(line?.maxStationDwellMinutes, 10))
     };
   });
 }
 
-function timeToMinutes(value) {
-  if (!isValidTimeValue(value)) {
+function buildNativeOriginOptions(lineOptions = []) {
+  const seen = new Set();
+  const origins = [];
+
+  lineOptions.forEach((line, index) => {
+    const originId = line?.originId || line?.originStationId || `origin-${index + 1}`;
+    if (!originId || seen.has(originId)) {
+      return;
+    }
+
+    seen.add(originId);
+    origins.push({
+      id: originId,
+      label: line?.originStationName || line?.originName || line?.originId || originId
+    });
+  });
+
+  return origins.length > 0 ? origins : cloneOptions(DEFAULT_ORIGIN_OPTIONS);
+}
+
+function overlayPersistedLineSettings(lineOptions = [], persistedLineSettings = []) {
+  const settingsById = new Map(
+    (Array.isArray(persistedLineSettings) ? persistedLineSettings : [])
+      .filter((entry) => entry?.id)
+      .map((entry) => [entry.id, entry])
+  );
+
+  return lineOptions.map((line) => {
+    const persisted = settingsById.get(line.id);
+    if (!persisted) {
+      return line;
+    }
+
+    return {
+      ...line,
+      depotId: persisted.depotId || line.depotId,
+      hold: String(clampPositiveMinutes(persisted.hold, Number(line.hold) || 20)),
+      dwell: String(clampPositiveMinutes(persisted.dwell, Number(line.dwell) || 10))
+    };
+  });
+}
+
+function buildRuntimeCatalog(snapshot, metadataSnapshot, persistedState, t) {
+  const sourceSnapshot =
+    Array.isArray(snapshot?.lines) && snapshot.lines.length > 0
+      ? snapshot
+      : metadataSnapshot;
+
+  const lineOptions = overlayPersistedLineSettings(
+    buildNativeLineOptions(sourceSnapshot?.lines, t),
+    persistedState?.lineSettings
+  );
+  const depotOptions = buildNativeDepotOptions(sourceSnapshot?.depots);
+  const originOptions = buildNativeOriginOptions(lineOptions);
+
+  return {
+    lineOptions,
+    depotOptions,
+    originOptions
+  };
+}
+
+function createNativeMergedViewForSave(selectedLineId, snapshotMergedView = null) {
+  const sourceView =
+    snapshotMergedView && typeof snapshotMergedView === "object"
+      ? snapshotMergedView
+      : {};
+
+  return {
+    localLineId: typeof sourceView.localLineId === "string" ? sourceView.localLineId : (selectedLineId || ""),
+    expressLineId: typeof sourceView.expressLineId === "string" ? sourceView.expressLineId : "",
+    localLineIds:
+      Array.isArray(sourceView.localLineIds) && sourceView.localLineIds.length > 0
+        ? sourceView.localLineIds.filter((lineId) => typeof lineId === "string" && lineId.length > 0)
+        : (selectedLineId ? [selectedLineId] : []),
+    expressLineIds:
+      Array.isArray(sourceView.expressLineIds)
+        ? sourceView.expressLineIds.filter((lineId) => typeof lineId === "string" && lineId.length > 0)
+        : [],
+    isLoop: typeof sourceView.isLoop === "boolean" ? sourceView.isLoop : true,
+    turnbackStationId: typeof sourceView.turnbackStationId === "string" ? sourceView.turnbackStationId : "",
+    direction: typeof sourceView.direction === "string" && sourceView.direction ? sourceView.direction : "up",
+    windowStart: typeof sourceView.windowStart === "string" && sourceView.windowStart ? sourceView.windowStart : "06:00",
+    windowEnd: typeof sourceView.windowEnd === "string" && sourceView.windowEnd ? sourceView.windowEnd : "06:30"
+  };
+}
+
+function serializeNativeLineSettings(lines = LINE_OPTIONS) {
+  return (Array.isArray(lines) ? lines : [])
+    .filter((line) => line && typeof line === "object" && line.id)
+    .map((line) => ({
+      lineId: line.id,
+      originHoldLimitMinutes: clampPositiveMinutes(line.hold, 20),
+      maxStationDwellMinutes: clampPositiveMinutes(line.dwell, 10),
+      allowedDepotId: line.depotId === "any-depot" ? "" : (line.depotId || ""),
+      serviceKind: normalizeKind(line.kind)
+    }));
+}
+
+function serializeNativeManualRows(rows = []) {
+  return sortManualDraftRows(Array.isArray(rows) ? rows : [])
+    .filter((row) => row?.lineId)
+    .map((row, index) => ({
+      id: String(row?.id || `manual-${index + 1}`),
+      lineId: row.lineId,
+      time: row?.time || "",
+      kind: normalizeKind(row?.kind),
+      offsetMode: row?.offsetMode || "none",
+      offsetMinutes: row?.offsetMinutes === 0 ? "0" : String(row?.offsetMinutes || "")
+    }));
+}
+
+function serializeNativeAutoRules(rows = []) {
+  return sortAutoRuleRows(Array.isArray(rows) ? rows : [])
+    .filter((rule) => rule?.lineId)
+    .map((rule, index) => {
+      const kind = normalizeKind(rule?.kind);
+      const departuresPerHour = parseFrequencyValue(rule?.departuresPerHour);
+      const expressOffsetMinutes = Math.max(0, Math.round(Math.abs(Number(rule?.expressOffsetMinutes) || 0)));
+      return {
+        id: String(rule?.id || `rule-${index + 1}`),
+        lineId: rule.lineId,
+        enabled: rule?.enabled !== false,
+        start: rule?.start || "08:00",
+        end: rule?.end || "10:00",
+        kind,
+        departuresPerHour,
+        localPerHour: kind === "local" ? departuresPerHour : 0,
+        expressPerHour: kind === "express" ? departuresPerHour : 0,
+        expressOffsetMode: kind === "express" ? (rule?.expressOffsetMode || "after") : "after",
+        expressOffsetMinutes: kind === "express" ? expressOffsetMinutes : 0
+      };
+    });
+}
+
+function serializeNativeStagedRows(rows = []) {
+  return [...(Array.isArray(rows) ? rows : [])]
+    .filter((row) => row?.lineId)
+    .sort((left, right) => {
+      const leftMinutes = timeToMinutes(left?.time) ?? 9999;
+      const rightMinutes = timeToMinutes(right?.time) ?? 9999;
+      if (leftMinutes !== rightMinutes) {
+        return leftMinutes - rightMinutes;
+      }
+
+      if ((left?.lineId || "") !== (right?.lineId || "")) {
+        return String(left?.lineId || "").localeCompare(String(right?.lineId || ""));
+      }
+
+      if (normalizeKind(left?.kind) !== normalizeKind(right?.kind)) {
+        return normalizeKind(left?.kind).localeCompare(normalizeKind(right?.kind));
+      }
+
+      return String(left?.id || "").localeCompare(String(right?.id || ""));
+    })
+    .map((row, index) => ({
+      id: String(row?.id || `staged-${index + 1}`),
+      lineId: row.lineId,
+      time: row?.time || "",
+      kind: normalizeKind(row?.kind),
+      source: row?.source || "manual",
+      note: row?.note || ""
+    }));
+}
+
+function mapSnapshotManualRows(rows = [], fallbackLineId = "") {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => ({
+    id: row?.id || `manual-${index + 1}`,
+    lineId: row?.lineId || fallbackLineId,
+    serviceId: row?.lineId || fallbackLineId,
+    time: row?.time || "",
+    kind: row?.kind === "express" ? "express" : "local",
+    offsetMode: row?.offsetMode || "none",
+    offsetMinutes: row?.offsetMinutes === 0 ? "0" : String(row?.offsetMinutes || "")
+  }));
+}
+
+function mapSnapshotAutoRules(rows = [], fallbackLineId = "") {
+  return (Array.isArray(rows) ? rows : []).map((rule, index) => {
+    const kind = rule?.kind === "express" ? "express" : "local";
+    const departuresPerHour =
+      Number(rule?.departuresPerHour) > 0
+        ? Number(rule.departuresPerHour)
+        : kind === "express"
+          ? Number(rule?.expressPerHour) || 0
+          : Number(rule?.localPerHour) || 0;
+
+    return {
+      id: rule?.id || `rule-${index + 1}`,
+      lineId: rule?.lineId || fallbackLineId,
+      serviceId: rule?.lineId || fallbackLineId,
+      kind,
+      enabled: rule?.enabled !== false,
+      start: rule?.start || "08:00",
+      end: rule?.end || "10:00",
+      departuresPerHour,
+      expressOffsetMode: rule?.expressOffsetMode || "after",
+      expressOffsetMinutes: Number(rule?.expressOffsetMinutes) || 0,
+      localPerHour: kind === "local" ? departuresPerHour : 0,
+      expressPerHour: kind === "express" ? departuresPerHour : 0
+    };
+  });
+}
+
+function mapSnapshotSummaryRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => ({
+    id: row?.id || `summary-${index + 1}`,
+    serviceId: row?.lineId || "",
+    lineId: row?.lineId || "",
+    time: row?.time || "",
+    kind: row?.kind === "express" ? "express" : "local",
+    source: row?.source || "manual",
+    note: row?.note || ""
+  }));
+}
+
+function readPersistedNativeScheduleState() {
+  if (typeof window === "undefined" || !window.localStorage) {
     return null;
   }
 
-  const [hours, minutes] = String(value).split(":").map(Number);
-  return hours * 60 + minutes;
+  try {
+    const raw = window.localStorage.getItem(NATIVE_SCHEDULE_PERSIST_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    return Number(parsed.schemaVersion) === NATIVE_SCHEDULE_PERSIST_SCHEMA_VERSION
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
 }
 
-function minutesToTime(totalMinutes) {
-  if (!Number.isFinite(totalMinutes)) {
-    return "--:--";
+function writePersistedNativeScheduleState(nextState) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
   }
 
-  const wrapped = (((Math.round(totalMinutes) % 1440) + 1440) % 1440);
-  const hours = String(Math.floor(wrapped / 60)).padStart(2, "0");
-  const minutes = String(wrapped % 60).padStart(2, "0");
-  return `${hours}:${minutes}`;
+  try {
+    window.localStorage.setItem(
+      NATIVE_SCHEDULE_PERSIST_KEY,
+      JSON.stringify({
+        schemaVersion: NATIVE_SCHEDULE_PERSIST_SCHEMA_VERSION,
+        ...(nextState && typeof nextState === "object" ? nextState : {})
+      })
+    );
+  } catch {}
 }
 
-function buildDemoAutoPreview(startText, endText, departuresPerHour, offsetMinutes = 0) {
-  const startMinutes = timeToMinutes(startText);
-  const endMinutes = timeToMinutes(endText);
-  const rate = Number(departuresPerHour) || 0;
-  if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes || rate <= 0) {
-    return [];
+function normalizeKind(value) {
+  if (value === "express") {
+    return "express";
   }
 
-  const interval = 60 / rate;
-  const result = [];
-  for (let minute = startMinutes; minute < endMinutes; minute += interval) {
-    const candidateMinute = Math.round(minute) + offsetMinutes;
-    if (candidateMinute >= startMinutes && candidateMinute < endMinutes) {
-      result.push(minutesToTime(candidateMinute));
+  return "local";
+}
+
+function getLocalizedLineType(kind, t, variant = "regular") {
+  const normalizedKind = normalizeKind(kind);
+  if (variant === "compact") {
+    return t(`nativeSchedule.type.${normalizedKind}.compact`);
+  }
+
+  return t(`nativeSchedule.type.${normalizedKind}`);
+}
+
+function getDepotOptionById(depotId) {
+  return DEPOT_OPTIONS.find((depot) => depot.id === depotId) ?? null;
+}
+
+function getOriginOptionById(originId) {
+  return ORIGIN_OPTIONS.find((origin) => origin.id === originId) ?? ORIGIN_OPTIONS[0];
+}
+
+function getLocalizedDepotLabel(depotId, t) {
+  if (!depotId) {
+    return t("nativeSchedule.data.depot.any");
+  }
+
+  const depot = getDepotOptionById(depotId);
+  if (!depot) {
+    return t("nativeSchedule.data.depot.any");
+  }
+
+  return depot.label || t(depot.labelKey);
+}
+
+function getLocalizedOriginLabel(originId, t) {
+  const origin = getOriginOptionById(originId);
+  if (!origin) {
+    return "";
+  }
+
+  return origin.label || t(origin.labelKey);
+}
+
+function getLocalizedLineName(line, t) {
+  if (line?.name) {
+    return line.name;
+  }
+
+  return t(line?.nameKey || LINE_OPTIONS[0]?.nameKey || "nativeSchedule.data.line.local");
+}
+
+function directionFromOffsetMode(offsetMode) {
+  return offsetMode === "before" ? "early" : "late";
+}
+
+function offsetModeFromDirection(direction) {
+  return direction === "early" ? "before" : "after";
+}
+
+function getLineOptionById(lineId) {
+  return LINE_OPTIONS.find((line) => line.id === lineId) ?? LINE_OPTIONS[0];
+}
+
+function getLineOptionByKind(kind, corridorId = "", fallbackToAny = true) {
+  const normalizedKind = normalizeKind(kind);
+  const exactMatch = LINE_OPTIONS.find((line) => line.kind === normalizedKind && (!corridorId || line.corridorId === corridorId));
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (!fallbackToAny) {
+    return null;
+  }
+
+  return LINE_OPTIONS.find((line) => line.kind === normalizedKind) ?? LINE_OPTIONS[0];
+}
+
+function getReferenceLineIdsForLine(lineOption, kind) {
+  if (normalizeKind(kind) !== "express") {
+    return [lineOption.id];
+  }
+
+  return LINE_OPTIONS
+    .filter((line) => line.corridorId === lineOption.corridorId && line.kind === "local")
+    .map((line) => line.id);
+}
+
+function buildCombinedNote(noteType, t, values = {}) {
+  if (noteType === "before") {
+    return t("combined.note.beforePaired", values);
+  }
+
+  if (noteType === "after") {
+    return t("combined.note.afterPaired", values);
+  }
+
+  if (noteType === "generated") {
+    return t("combined.note.generated", values);
+  }
+
+  return t("combined.note.direct");
+}
+
+function createSummaryEntry({
+  id,
+  time,
+  serviceId,
+  kind,
+  source = "manual",
+  note = ""
+}, t) {
+  const fallbackOption = getLineOptionByKind(kind);
+  const selectedOption = getLineOptionById(serviceId);
+  const resolvedKind = normalizeKind(kind || selectedOption.kind || fallbackOption.kind);
+  const lineOption =
+    selectedOption.kind === resolvedKind
+      ? selectedOption
+      : getLineOptionByKind(resolvedKind) || selectedOption || fallbackOption;
+
+  return {
+    id,
+    lineId: lineOption.id,
+    serviceId: lineOption.id,
+    lineNameKey: lineOption.nameKey,
+    lineName: getLocalizedLineName(lineOption, t),
+    lineColor: lineOption.color,
+    time,
+    kind: resolvedKind,
+    source,
+    note: note || t("combined.note.direct"),
+    originId: lineOption.originId,
+    originStationId: lineOption.originStationId,
+    origin: getLocalizedOriginLabel(lineOption.originId, t)
+  };
+}
+
+function getSummaryRowKey(row) {
+  return `${row?.lineId || row?.serviceId || ""}|${normalizeKind(row?.kind)}|${row?.time || ""}`;
+}
+
+function getSummaryRowsSignature(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => getSummaryRowKey(row))
+    .sort()
+    .join("||");
+}
+
+function normalizeSummaryEntries(rows, t) {
+  const seen = new Set();
+
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => createSummaryEntry({
+      id: row?.id || `summary-${index + 1}`,
+      time: row?.time || "",
+      serviceId: row?.serviceId || getLineOptionByKind(normalizeKind(row?.type)).id,
+      kind: row?.kind || normalizeKind(row?.type),
+      source: row?.source || "manual",
+      note: row?.note || t("combined.note.direct")
+    }, t))
+    .filter((row) => {
+      if (timeToMinutes(row.time) === null) {
+        return false;
+      }
+
+      const key = `${row.lineId}|${row.kind}|${row.time}|${row.source}`;
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
+}
+
+const SUMMARY_ROWS = [
+  { id: 1, serviceId: "line-local", time: "00:00", kind: "local", source: "manual" },
+  { id: 2, serviceId: "line-local", time: "00:30", kind: "local", source: "manual" },
+  { id: 3, serviceId: "line-express", time: "01:00", kind: "express", source: "auto" },
+  { id: 4, serviceId: "line-local", time: "01:00", kind: "local", source: "manual" },
+  { id: 5, serviceId: "line-local", time: "01:30", kind: "local", source: "manual" },
+  { id: 6, serviceId: "line-local", time: "02:00", kind: "local", source: "manual" },
+  { id: 7, serviceId: "line-express", time: "02:30", kind: "express", source: "auto" },
+  { id: 8, serviceId: "line-local", time: "03:00", kind: "local", source: "manual" },
+  { id: 9, serviceId: "line-express", time: "03:30", kind: "express", source: "auto" },
+  { id: 10, serviceId: "line-local", time: "04:00", kind: "local", source: "manual" },
+  { id: 11, serviceId: "line-local", time: "04:30", kind: "local", source: "manual" }
+];
+
+const INITIAL_AUTO_RULES = [
+  {
+    id: 1,
+    lineId: "line-local",
+    serviceId: "line-local",
+    kind: "local",
+    enabled: true,
+    start: "00:00",
+    end: "06:00",
+    departuresPerHour: 2,
+    expressOffsetMode: "after",
+    expressOffsetMinutes: 0
+  },
+  {
+    id: 2,
+    lineId: "line-express",
+    serviceId: "line-express",
+    kind: "express",
+    enabled: true,
+    start: "06:00",
+    end: "09:00",
+    departuresPerHour: 4,
+    expressOffsetMode: "after",
+    expressOffsetMinutes: 5
+  },
+  {
+    id: 3,
+    lineId: "line-local",
+    serviceId: "line-local",
+    kind: "local",
+    enabled: true,
+    start: "09:00",
+    end: "17:00",
+    departuresPerHour: 3,
+    expressOffsetMode: "after",
+    expressOffsetMinutes: 0
+  }
+];
+
+const INITIAL_MANUAL_DRAFTS = [
+  {
+    id: 1,
+    lineId: "line-local",
+    serviceId: "line-local",
+    kind: "local",
+    time: "12:20",
+    offsetMode: "none",
+    offsetMinutes: ""
+  },
+  {
+    id: 2,
+    lineId: "line-local",
+    serviceId: "line-local",
+    kind: "local",
+    time: "12:30",
+    offsetMode: "none",
+    offsetMinutes: ""
+  }
+];
+
+function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) {
+  const duplicateCounts = new Map();
+  const lineKinds = new Map();
+  const rowsWithMinutes = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({ row, minute: timeToMinutes(row.time) }))
+    .filter((entry) => entry.minute !== null);
+
+  rowsWithMinutes.forEach(({ row }) => {
+    const duplicateKey = `${row.lineId}|${row.kind}|${row.time}`;
+    duplicateCounts.set(duplicateKey, (duplicateCounts.get(duplicateKey) || 0) + 1);
+    const kinds = lineKinds.get(row.lineId) ?? new Set();
+    kinds.add(row.kind);
+    lineKinds.set(row.lineId, kinds);
+  });
+
+  rowsWithMinutes.sort((left, right) => left.minute - right.minute);
+  const tooCloseIds = new Set();
+  for (let index = 1; index < rowsWithMinutes.length; index += 1) {
+    const current = rowsWithMinutes[index];
+    const previous = rowsWithMinutes[index - 1];
+    if (!current.row.originStationId || current.row.originStationId !== previous.row.originStationId) {
+      continue;
+    }
+
+    if (current.minute - previous.minute < MIN_DEPARTURE_INTERVAL_MINUTES) {
+      tooCloseIds.add(current.row?.id);
+      tooCloseIds.add(previous.row?.id);
     }
   }
-  return result;
+
+  return rowsWithMinutes
+    .map(({ row }) => {
+      const duplicateKey = `${row.lineId}|${row.kind}|${row.time}`;
+      const isDuplicate = (duplicateCounts.get(duplicateKey) || 0) > 1;
+      const hasKindConflict = (lineKinds.get(row.lineId)?.size || 0) > 1;
+      const isTooClose = tooCloseIds.has(row.id);
+      const isConflict = isDuplicate || hasKindConflict || isTooClose;
+      const conflictReasons = [];
+
+      if (isDuplicate) {
+        conflictReasons.push(formatConflictReason("duplicate", t, "compact"));
+      }
+
+      if (hasKindConflict) {
+        conflictReasons.push(formatConflictReason("kind", t, "compact"));
+      }
+
+      if (isTooClose) {
+        conflictReasons.push(formatConflictReason("gap", t, "compact", { minutes: MIN_DEPARTURE_INTERVAL_MINUTES }));
+      }
+
+      const lineOption = getLineOptionById(row.lineId);
+
+      return {
+        ...row,
+        sourceLabel: row.source === "auto" ? t("schedule.source.auto") : t("schedule.source.manual"),
+        note: row.note || t("combined.note.direct"),
+        lineName: row.lineName || getLocalizedLineName(lineOption, t),
+        origin: getLocalizedOriginLabel(row.originId || lineOption.originId, t),
+        isApplied: appliedRowKeySet instanceof Set && appliedRowKeySet.has(getSummaryRowKey(row)),
+        isConflict,
+        conflictReasonLabel: conflictReasons.join("/"),
+        isExpress: row.kind === "express"
+      };
+    })
+    .sort((left, right) => {
+      const leftMinutes = timeToMinutes(left.time) ?? 9999;
+      const rightMinutes = timeToMinutes(right.time) ?? 9999;
+      if (leftMinutes !== rightMinutes) {
+        return leftMinutes - rightMinutes;
+      }
+
+      if (left.kind !== right.kind) {
+        return left.kind.localeCompare(right.kind);
+      }
+
+      if (left.lineName !== right.lineName) {
+        return left.lineName.localeCompare(right.lineName);
+      }
+
+      return left.source.localeCompare(right.source);
+    });
 }
 
 function resolveOffsetMinutes(direction, minutesText) {
@@ -428,13 +1269,108 @@ function resolveOffsetMinutes(direction, minutesText) {
   return 0;
 }
 
-function formatOffsetLabel(direction, minutesText) {
+function formatOffsetLabel(direction, minutesText, t, variant = "regular") {
   const minutes = Math.abs(resolveOffsetMinutes(direction, minutesText));
   if (minutes === 0) {
-    return "无";
+    return t(variant === "compact" ? "nativeSchedule.offset.none.compact" : "nativeSchedule.offset.none");
   }
 
-  return `${direction === "early" ? "早" : "晚"} ${minutes} 分`;
+  const directionLabel =
+    variant === "compact"
+      ? t(direction === "early" ? "nativeSchedule.offset.direction.early.compact" : "nativeSchedule.offset.direction.late.compact")
+      : t(direction === "early" ? "nativeSchedule.toggle.early" : "nativeSchedule.toggle.late");
+
+  return t(variant === "compact" ? "nativeSchedule.offset.label.compact" : "nativeSchedule.offset.label", {
+    direction: directionLabel,
+    minutes
+  });
+}
+
+function formatConflictReason(kind, t, variant = "regular", values = {}) {
+  const suffix = variant === "compact" ? ".compact" : "";
+  return t(`nativeSchedule.conflict.${kind}${suffix}`, values);
+}
+
+function buildPreviewMetaText(preview, hasKindConflict = false, t, { detailedSkipReason = false } = {}) {
+  if (hasKindConflict) {
+    return t("nativeSchedule.preview.meta.kindConflict");
+  }
+
+  if (!preview) {
+    return "";
+  }
+
+  if (preview.reason === "invalid") {
+    return t("nativeSchedule.preview.meta.invalidWindow");
+  }
+
+  if (preview.reason === "frequencyLimit") {
+    return t("nativeSchedule.preview.meta.frequencyLimit");
+  }
+
+  if (preview.reason === "tripLimit") {
+    return t("nativeSchedule.preview.meta.tripLimit");
+  }
+
+  if (preview.skippedCount > 0) {
+    if (!detailedSkipReason) {
+      return t("nativeSchedule.preview.meta.skipped", {
+        count: preview.skippedCount
+      });
+    }
+
+    const reasons = Array.isArray(preview.skipReasons) ? preview.skipReasons : [];
+    const reasonText = reasons
+      .map((reason) => t(`nativeSchedule.preview.reason.${reason}`))
+      .filter(Boolean)
+      .join(" / ");
+    return t("nativeSchedule.preview.meta.skippedDetailed", {
+      count: preview.skippedCount,
+      reason: reasonText || t("nativeSchedule.preview.reason.gap")
+    });
+  }
+
+  return "";
+}
+
+function sortManualDraftRows(rows) {
+  return [...rows].sort((left, right) => {
+    const leftMinutes = timeToMinutes(left.time) ?? 9999;
+    const rightMinutes = timeToMinutes(right.time) ?? 9999;
+    if (leftMinutes !== rightMinutes) {
+      return leftMinutes - rightMinutes;
+    }
+
+    return String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
+  });
+}
+
+function sortAutoRuleRows(rows) {
+  return [...rows].sort((left, right) => {
+    const leftStart = timeToMinutes(left.start) ?? 9999;
+    const rightStart = timeToMinutes(right.start) ?? 9999;
+    if (leftStart !== rightStart) {
+      return leftStart - rightStart;
+    }
+
+    const leftEnd = timeToMinutes(left.end) ?? 9999;
+    const rightEnd = timeToMinutes(right.end) ?? 9999;
+    if (leftEnd !== rightEnd) {
+      return leftEnd - rightEnd;
+    }
+
+    return String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
+  });
+}
+
+function buildPlanLineOptions(lines = LINE_OPTIONS) {
+  return lines
+    .filter((line) => line && typeof line === "object")
+    .map((line) => ({
+      id: line.id || "",
+      originStationId: line.originStationId || "",
+      originStationName: line.originStationName || line.originId || ""
+    }));
 }
 
 function DemoSectionHeader({
@@ -442,10 +1378,24 @@ function DemoSectionHeader({
   applied = false,
   metrics
 }) {
+  const statusColor = applied ? "#87d59a" : "#5ab4c5";
+
   return (
     <div className={`dw-demo-section-header ${applied ? "is-applied" : ""}`}>
       <div className="dw-demo-section-title-wrap">
-        <span className="dw-demo-section-accent" aria-hidden="true" />
+        <span className="dw-demo-section-status-icon" aria-hidden="true">
+          <svg key={applied ? "applied" : "draft"} viewBox="0 0 24 24" className="dw-demo-section-status-svg">
+            <circle cx="12" cy="12" r="9" fill="none" stroke={statusColor} strokeWidth="2" className="dw-demo-section-status-ring" />
+            {applied ? (
+              <path d="M8.2 12.4 10.8 15l5-5.4" fill="none" stroke={statusColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="dw-demo-section-status-mark" />
+            ) : (
+              <>
+                <path d="M12 7.4v5.6" fill="none" stroke={statusColor} strokeWidth="2.2" strokeLinecap="round" className="dw-demo-section-status-mark" />
+                <circle cx="12" cy="16.7" r="1.2" fill={statusColor} className="dw-demo-section-status-dot" />
+              </>
+            )}
+          </svg>
+        </span>
         <div className="dw-demo-section-title">{title}</div>
       </div>
       <div className="dw-demo-summary-metrics">{metrics}</div>
@@ -453,10 +1403,387 @@ function DemoSectionHeader({
   );
 }
 
+function DemoPreviewTimes({
+  times,
+  entries = null,
+  showSkipped = false,
+  trimWrappedSeparators = false,
+  moveSkippedToEnd = false,
+  groupIntoRows = false,
+  renderGroupedRowsAsText = false
+}) {
+  const previewEntries = useMemo(() => {
+    const sourceEntries = Array.isArray(entries) && entries.length > 0
+      ? entries
+      : Array.isArray(times)
+        ? times.map((time) => ({ time, skipped: false, reason: "" }))
+        : [];
+
+    if (!moveSkippedToEnd || sourceEntries.length <= 1) {
+      return sourceEntries;
+    }
+
+    const keptEntries = [];
+    const skippedEntries = [];
+
+    sourceEntries.forEach((entry) => {
+      if (entry?.skipped) {
+        skippedEntries.push(entry);
+      } else {
+        keptEntries.push(entry);
+      }
+    });
+
+    return [...keptEntries, ...skippedEntries];
+  }, [entries, moveSkippedToEnd, times]);
+  const itemRefs = useRef([]);
+  const measureTokenRefs = useRef([]);
+  const measureSeparatorRef = useRef(null);
+  const groupContainerRef = useRef(null);
+  const [groupContainerWidth, setGroupContainerWidth] = useState(0);
+  const [wrappedRowIndexes, setWrappedRowIndexes] = useState([]);
+  const [groupedRows, setGroupedRows] = useState([]);
+
+  itemRefs.current.length = previewEntries.length;
+  measureTokenRefs.current.length = previewEntries.length;
+
+  useEffect(() => {
+    if (!groupIntoRows || !renderGroupedRowsAsText) {
+      setGroupContainerWidth((current) => (current === 0 ? current : 0));
+      return undefined;
+    }
+
+    let resizeObserver = null;
+
+    const updateContainerWidth = () => {
+      const containerElement = groupContainerRef.current;
+      if (!(containerElement instanceof HTMLElement)) {
+        return;
+      }
+
+      const nextWidth = Math.round(containerElement.getBoundingClientRect().width || containerElement.clientWidth || 0);
+      setGroupContainerWidth((current) => (current === nextWidth ? current : nextWidth));
+    };
+
+    updateContainerWidth();
+
+    const containerElement = groupContainerRef.current;
+    if (typeof ResizeObserver !== "undefined" && containerElement instanceof HTMLElement) {
+      resizeObserver = new ResizeObserver(updateContainerWidth);
+      resizeObserver.observe(containerElement);
+    } else {
+      window.addEventListener("resize", updateContainerWidth);
+    }
+
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      } else {
+        window.removeEventListener("resize", updateContainerWidth);
+      }
+    };
+  }, [groupIntoRows, renderGroupedRowsAsText]);
+
+  useLayoutEffect(() => {
+    if (!groupIntoRows) {
+      setGroupedRows((current) => (current.length === 0 ? current : []));
+      return undefined;
+    }
+
+    if (previewEntries.length === 0) {
+      setGroupedRows((current) => (current.length === 0 ? current : []));
+      return undefined;
+    }
+
+    if (renderGroupedRowsAsText) {
+      const nextRows = showSkipped
+        ? [
+          ...chunkPreviewEntries(previewEntries.filter((entry) => !entry?.skipped), groupContainerWidth, RULE_PREVIEW_TOKEN_WIDTH, RULE_PREVIEW_SEPARATOR_WIDTH),
+          ...chunkPreviewEntries(previewEntries.filter((entry) => entry?.skipped), groupContainerWidth, RULE_PREVIEW_TOKEN_WIDTH, RULE_PREVIEW_SEPARATOR_WIDTH)
+        ]
+        : chunkPreviewEntries(previewEntries, groupContainerWidth, RULE_PREVIEW_TOKEN_WIDTH, RULE_PREVIEW_SEPARATOR_WIDTH);
+
+      setGroupedRows((current) => (
+        current.length === nextRows.length &&
+        current.every((row, rowIndex) => (
+          row.length === nextRows[rowIndex].length &&
+          row.every((entry, entryIndex) => entry === nextRows[rowIndex][entryIndex])
+        ))
+          ? current
+          : nextRows
+      ));
+      return undefined;
+    }
+
+    let frameHandle = 0;
+    let resizeObserver = null;
+
+    const updateGroupedRows = () => {
+      frameHandle = 0;
+      const containerElement = groupContainerRef.current;
+      if (!(containerElement instanceof HTMLElement)) {
+        return;
+      }
+
+      const availableWidth = containerElement.clientWidth;
+      if (availableWidth <= 0) {
+        setGroupedRows((current) => (
+          current.length === 1 && current[0]?.length === previewEntries.length
+            ? current
+            : [previewEntries]
+        ));
+        return;
+      }
+
+      const separatorElement = measureSeparatorRef.current;
+      const separatorWidth = separatorElement instanceof HTMLElement
+        ? Math.ceil(separatorElement.getBoundingClientRect().width || separatorElement.offsetWidth || 14)
+        : 14;
+      const indexedEntries = previewEntries.map((entry, index) => ({
+        entry,
+        index
+      }));
+      const groupIndexedEntries = (entriesToGroup) => {
+        const nextRows = [];
+        let currentRow = [];
+        let currentRowWidth = 0;
+
+        entriesToGroup.forEach(({ entry, index }) => {
+          const tokenElement = measureTokenRefs.current[index];
+          const tokenWidth = tokenElement instanceof HTMLElement
+            ? Math.ceil(tokenElement.getBoundingClientRect().width || tokenElement.offsetWidth || 0)
+            : 0;
+          const entryWidth = tokenWidth + (currentRow.length > 0 ? separatorWidth : 0);
+
+          if (currentRow.length > 0 && currentRowWidth + entryWidth > availableWidth) {
+            nextRows.push(currentRow);
+            currentRow = [entry];
+            currentRowWidth = tokenWidth;
+            return;
+          }
+
+          currentRow.push(entry);
+          currentRowWidth += currentRow.length === 1 ? tokenWidth : entryWidth;
+        });
+
+        if (currentRow.length > 0) {
+          nextRows.push(currentRow);
+        }
+
+        return nextRows;
+      };
+
+      let nextRows = [];
+      if (renderGroupedRowsAsText && showSkipped) {
+        const keptEntries = indexedEntries.filter(({ entry }) => !entry?.skipped);
+        const skippedEntries = indexedEntries.filter(({ entry }) => entry?.skipped);
+        nextRows = [
+          ...groupIndexedEntries(keptEntries),
+          ...groupIndexedEntries(skippedEntries)
+        ];
+      } else {
+        nextRows = groupIndexedEntries(indexedEntries);
+      }
+
+      setGroupedRows((current) => {
+        if (
+          current.length === nextRows.length &&
+          current.every((row, rowIndex) => (
+            row.length === nextRows[rowIndex].length &&
+            row.every((entry, entryIndex) => entry === nextRows[rowIndex][entryIndex])
+          ))
+        ) {
+          return current;
+        }
+        return nextRows;
+      });
+    };
+
+    const scheduleUpdate = () => {
+      if (frameHandle !== 0) {
+        window.cancelAnimationFrame(frameHandle);
+      }
+      frameHandle = window.requestAnimationFrame(updateGroupedRows);
+    };
+
+    scheduleUpdate();
+
+    const containerElement = groupContainerRef.current;
+    if (typeof ResizeObserver !== "undefined" && containerElement instanceof HTMLElement) {
+      resizeObserver = new ResizeObserver(scheduleUpdate);
+      resizeObserver.observe(containerElement);
+    } else {
+      window.addEventListener("resize", scheduleUpdate);
+    }
+
+    return () => {
+      if (frameHandle !== 0) {
+        window.cancelAnimationFrame(frameHandle);
+      }
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      } else {
+        window.removeEventListener("resize", scheduleUpdate);
+      }
+    };
+  }, [groupContainerWidth, groupIntoRows, previewEntries, renderGroupedRowsAsText, showSkipped]);
+
+  useLayoutEffect(() => {
+    if (groupIntoRows || !trimWrappedSeparators || previewEntries.length <= 1) {
+      setWrappedRowIndexes((current) => (current.length === 0 ? current : []));
+      return undefined;
+    }
+
+    let frameHandle = 0;
+    let resizeObserver = null;
+
+    const updateWrappedRows = () => {
+      frameHandle = 0;
+      const nextRowIndexes = [];
+      let currentRowIndex = 0;
+      let previousTop = null;
+
+      previewEntries.forEach((_, index) => {
+        const itemElement = itemRefs.current[index];
+        if (!(itemElement instanceof HTMLElement)) {
+          return;
+        }
+
+        const currentTop = itemElement.offsetTop;
+        if (index > 0 && previousTop !== null && Math.abs(currentTop - previousTop) > 1) {
+          currentRowIndex += 1;
+        }
+        nextRowIndexes.push(currentRowIndex);
+        previousTop = currentTop;
+      });
+
+      setWrappedRowIndexes((current) => (
+        current.length === nextRowIndexes.length && current.every((value, index) => value === nextRowIndexes[index])
+          ? current
+          : nextRowIndexes
+      ));
+    };
+
+    const scheduleUpdate = () => {
+      if (frameHandle !== 0) {
+        window.cancelAnimationFrame(frameHandle);
+      }
+      frameHandle = window.requestAnimationFrame(updateWrappedRows);
+    };
+
+    scheduleUpdate();
+
+    const containerElement = itemRefs.current[0]?.parentElement;
+    if (typeof ResizeObserver !== "undefined" && containerElement instanceof HTMLElement) {
+      resizeObserver = new ResizeObserver(scheduleUpdate);
+      resizeObserver.observe(containerElement);
+    } else {
+      window.addEventListener("resize", scheduleUpdate);
+    }
+
+    return () => {
+      if (frameHandle !== 0) {
+        window.cancelAnimationFrame(frameHandle);
+      }
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      } else {
+        window.removeEventListener("resize", scheduleUpdate);
+      }
+    };
+  }, [previewEntries, trimWrappedSeparators]);
+
+  if (previewEntries.length === 0) {
+    return <span className="dw-demo-preview-empty">--</span>;
+  }
+
+  if (groupIntoRows) {
+    const rowsToRender = groupedRows.length > 0 ? groupedRows : [previewEntries];
+
+    return (
+      <>
+        <span className="dw-demo-preview-measure" aria-hidden="true">
+          <span ref={measureSeparatorRef} className="dw-demo-preview-separator">·</span>
+          {previewEntries.map((entry, index) => (
+            <span
+              key={`measure-${entry.time}-${index}-${entry.skipped ? "skipped" : "kept"}`}
+              ref={(element) => {
+                measureTokenRefs.current[index] = element;
+              }}
+              className={`dw-demo-preview-token ${showSkipped && entry.skipped ? "is-skipped" : ""}`}
+            >
+              <span className={`dw-demo-preview-time ${showSkipped && entry.skipped ? "is-skipped" : ""}`}>{entry.time}</span>
+            </span>
+          ))}
+        </span>
+        <span ref={groupContainerRef} className="dw-demo-preview-grouped">
+          {rowsToRender.map((rowEntries, rowIndex) => {
+            if (renderGroupedRowsAsText) {
+              const rowText = rowEntries.map((entry) => entry.time).join(" · ");
+              const isSkippedRow = showSkipped && rowEntries.every((entry) => entry?.skipped);
+
+              return (
+                <span key={`row-${rowIndex}`} className={`dw-demo-preview-rule-row is-text ${isSkippedRow ? "is-skipped-row" : ""}`}>
+                  <span className={`dw-demo-preview-rule-text-part ${isSkippedRow ? "is-skipped is-block" : ""}`}>{rowText}</span>
+                </span>
+              );
+            }
+
+            return (
+              <span key={`row-${rowIndex}`} className="dw-demo-preview-rule-row">
+                {rowEntries.map((entry, index) => (
+                  <span key={`${entry.time}-${rowIndex}-${index}-${entry.skipped ? "skipped" : "kept"}`} className="dw-demo-preview-item">
+                    {index > 0 ? <span className="dw-demo-preview-separator" aria-hidden="true">·</span> : null}
+                    <span
+                      className={`dw-demo-preview-token ${showSkipped && entry.skipped ? "is-skipped" : ""}`}
+                      title={showSkipped && entry.skipped && entry.reason ? entry.reason : undefined}
+                    >
+                      <span className={`dw-demo-preview-time ${showSkipped && entry.skipped ? "is-skipped" : ""}`}>{entry.time}</span>
+                    </span>
+                  </span>
+                ))}
+              </span>
+            );
+          })}
+        </span>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {previewEntries.map((entry, index) => {
+        const currentRowIndex = wrappedRowIndexes[index] || 0;
+        const previousRowIndex = index > 0 ? (wrappedRowIndexes[index - 1] || 0) : 0;
+        const isRowStart = index > 0 && currentRowIndex !== previousRowIndex;
+
+        return (
+        <span
+          key={`${entry.time}-${index}-${entry.skipped ? "skipped" : "kept"}`}
+          className={`dw-demo-preview-item ${trimWrappedSeparators && currentRowIndex > 0 ? "is-wrapped-row" : ""} ${trimWrappedSeparators && isRowStart ? "is-row-start" : ""}`}
+          ref={trimWrappedSeparators ? (element) => {
+            itemRefs.current[index] = element;
+          } : undefined}
+        >
+          {index > 0 ? <span className="dw-demo-preview-separator" aria-hidden="true">·</span> : null}
+          <span
+            className={`dw-demo-preview-token ${showSkipped && entry.skipped ? "is-skipped" : ""}`}
+            title={showSkipped && entry.skipped && entry.reason ? entry.reason : undefined}
+          >
+            <span className={`dw-demo-preview-time ${showSkipped && entry.skipped ? "is-skipped" : ""}`}>{entry.time}</span>
+          </span>
+        </span>
+        );
+      })}
+    </>
+  );
+}
+
 function DemoScrollArea({
   className,
   metricsKey,
-  children
+  children,
+  externalScrollRef
 }) {
   const scrollRef = useRef(null);
   const indicatorRef = useRef(null);
@@ -703,7 +2030,17 @@ function DemoScrollArea({
 
   return (
     <div className="dw-demo-scroll-shell">
-      <div ref={scrollRef} className={`dw-demo-scroll-body ${className}`}>
+      <div
+        ref={(node) => {
+          scrollRef.current = node;
+          if (typeof externalScrollRef === "function") {
+            externalScrollRef(node);
+          } else if (externalScrollRef && typeof externalScrollRef === "object") {
+            externalScrollRef.current = node;
+          }
+        }}
+        className={`dw-demo-scroll-body ${className}`}
+      >
         {children}
       </div>
       <div
@@ -730,44 +2067,108 @@ function DemoScrollArea({
 
 function SummaryTable({
   rows,
-  hasAppliedSchedule,
-  onRemoveRow
+  onRemoveRow,
+  summaryScrollRef,
+  summaryFilter,
+  onSummaryFilterChange,
+  dropdownPortalHostRef
 }) {
+  const { t, script } = useNativeScheduleI18n();
+  const isLatin = script === "latin";
+
   return (
     <>
       <div className="dw-demo-summary-head">
-        <div className="is-time">时间</div>
-        <div className="is-line">线路与类型</div>
-        <div className="is-origin">始发站</div>
-        <div className="is-status">状态</div>
+        <div className="is-time">{t("nativeSchedule.summary.head.time")}</div>
+        <DemoDropdown
+          value=""
+          title={t("nativeSchedule.summary.filter.title")}
+          options={[
+            { value: "all", label: t("nativeSchedule.summary.filter.all"), active: summaryFilter === "all" },
+            { value: "current", label: t("nativeSchedule.summary.filter.current"), active: summaryFilter === "current" },
+            { value: "local", label: t("nativeSchedule.summary.filter.local"), active: summaryFilter === "local" },
+            { value: "express", label: t("nativeSchedule.summary.filter.express"), active: summaryFilter === "express" }
+          ]}
+          onSelect={onSummaryFilterChange}
+          className="is-line dw-demo-summary-head-line"
+          triggerClassName={`dw-demo-summary-head-filter-trigger ${summaryFilter !== "all" ? "is-filtered" : ""}`}
+          menuClassName="dw-demo-summary-head-filter-menu"
+          portalHostRef={dropdownPortalHostRef}
+          menuWidth={144}
+          triggerContent={(
+            <>
+              <span className="dw-demo-summary-head-filter-label">{t("nativeSchedule.summary.filter.label")}</span>
+              <span className="dw-demo-summary-head-filter-caret" aria-hidden="true">
+                <svg viewBox="0 0 16 16" className="dw-demo-summary-head-filter-icon">
+                  <path className="dw-demo-summary-head-filter-path" d="M4.2 6.2 8 10l3.8-3.8" fill="none" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </span>
+            </>
+          )}
+        />
+        <div className="is-origin">{t("nativeSchedule.summary.head.origin")}</div>
+        <div className="is-status">{t("nativeSchedule.summary.head.status")}</div>
         <div className="is-action" aria-hidden="true" />
       </div>
 
-      <DemoScrollArea className="dw-demo-summary-scroll" metricsKey={rows.length}>
+      <DemoScrollArea className="dw-demo-summary-scroll" metricsKey={rows.length} externalScrollRef={summaryScrollRef}>
         <div className="dw-demo-summary-table">
-          {rows.map((row) => (
-            <div key={row.id} className={`dw-demo-summary-row ${row.isConflict ? "is-conflict" : ""} ${row.isExpress ? "is-express" : ""}`}>
-              <div className="is-time">{row.time}</div>
-              <div className="is-line">
-                <span className={`dw-demo-dot ${row.isConflict ? "is-conflict" : ""}`} />
-                <div className="dw-demo-line-meta-top">
-                  <span className="dw-demo-line-name">{row.line}</span>
-                  <SummaryBadge kind={row.type} />
+          {rows.length === 0 ? (
+            <div className="dw-demo-empty-state">
+              <div className="dw-demo-empty-icon-wrap" aria-hidden="true">
+                <DemoEmptyScheduleIcon />
+              </div>
+              <div className="dw-demo-empty-title">{t("nativeSchedule.summary.empty.title")}</div>
+              <div className="dw-demo-empty-text">{t("nativeSchedule.summary.empty.body")}</div>
+              <div className="dw-demo-empty-text">{t("nativeSchedule.summary.empty.next")}</div>
+            </div>
+          ) : (
+            rows.map((row) => (
+              <div key={row.id} className={`dw-demo-summary-row ${row.isConflict ? "is-conflict" : ""} ${row.isExpress ? "is-express" : ""}`}>
+                <div className="is-time">{row.time}</div>
+                <div className="is-line">
+                  <span
+                    className={`dw-demo-dot ${row.isConflict ? "is-conflict" : ""}`}
+                    style={row.isConflict ? undefined : { backgroundColor: row.lineColor || undefined }}
+                  />
+                  <div className="dw-demo-line-meta">
+                    <div className="dw-demo-line-meta-top">
+                      <span className="dw-demo-line-name">{row.lineName}</span>
+                      <SummaryBadge kind={row.kind} />
+                    </div>
+                  </div>
+                </div>
+                <div className="is-origin dw-demo-origin-cell">
+                  {row.origin}
+                </div>
+                <div className="is-status">
+                  {row.isConflict && isLatin ? (
+                    <div className="dw-demo-status-stack is-conflict">
+                      <span className="dw-demo-status-text is-conflict">
+                        {t("nativeSchedule.summary.status.conflictTitle")}
+                      </span>
+                      <span className="dw-demo-status-subtext is-conflict">
+                        {row.conflictReasonLabel || t("nativeSchedule.summary.status.conflictUnknown")}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className={`dw-demo-status-text ${row.isConflict ? "is-conflict" : row.isApplied ? "is-applied" : "is-pending"}`}>
+                      {row.isConflict
+                        ? t("nativeSchedule.summary.status.conflict.compact", {
+                          reason: row.conflictReasonLabel || t("nativeSchedule.summary.status.conflictUnknown")
+                        })
+                        : row.isApplied
+                          ? t("nativeSchedule.summary.status.applied")
+                          : t("nativeSchedule.summary.status.pending")}
+                    </span>
+                  )}
+                </div>
+                <div className="is-action">
+                  <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveRow(row.id)}>{t("nativeSchedule.summary.action.remove")}</button>
                 </div>
               </div>
-              <div className="is-origin dw-demo-origin-cell">
-                {row.origin}
-              </div>
-              <div className="is-status">
-                <span className={`dw-demo-status-text ${row.isConflict ? "is-conflict" : hasAppliedSchedule ? "is-applied" : "is-pending"}`}>
-                  {row.isConflict ? "冲突" : hasAppliedSchedule ? "已应用" : "待应用"}
-                </span>
-              </div>
-              <div className="is-action">
-                <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveRow(row.id)}>移除</button>
-              </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </DemoScrollArea>
     </>
@@ -780,34 +2181,54 @@ function SummarySection({
   summaryRows,
   earliestStart,
   conflictCount,
+  summaryFilter,
+  onSummaryFilterChange,
+  summaryScrollRef,
   onRemoveRow,
   onClearSummary,
-  onApplySchedule
+  onApplySchedule,
+  onLocateConflict,
+  dropdownPortalHostRef
 }) {
+  const { t } = useNativeScheduleI18n();
+  const hasConflicts = conflictCount > 0;
+
   return (
     <section className="dw-demo-left">
       <DemoSectionHeader
         title={summaryStateLabel}
         applied={hasAppliedSchedule}
         metrics={(
-          <>
-            <span>总数 {summaryRows.length}</span>
-            <span>最早 {earliestStart}</span>
-            <span>冲突 {conflictCount}</span>
-          </>
+          <div className="dw-demo-summary-metrics-group">
+            <span>{t("nativeSchedule.summary.metric.total", { count: summaryRows.length })}</span>
+            <span>{t("nativeSchedule.summary.metric.earliest", { time: earliestStart })}</span>
+            <span>{t("nativeSchedule.summary.metric.conflict", { count: conflictCount })}</span>
+          </div>
         )}
       />
 
       <SummaryTable
         rows={summaryRows}
-        hasAppliedSchedule={hasAppliedSchedule}
+        summaryScrollRef={summaryScrollRef}
+        summaryFilter={summaryFilter}
+        onSummaryFilterChange={onSummaryFilterChange}
         onRemoveRow={onRemoveRow}
+        dropdownPortalHostRef={dropdownPortalHostRef}
       />
 
       <div className="dw-demo-footer">
-        <button type="button" className="dw-demo-flat-button is-muted" onClick={onClearSummary}>清空时刻表</button>
-        <button type="button" className={`dw-demo-primary dw-demo-cta ${hasAppliedSchedule ? "is-applied" : ""}`} onClick={onApplySchedule}>
-          {hasAppliedSchedule ? "已应用至游戏模拟" : "应用至游戏模拟"}
+        <button type="button" className="dw-demo-flat-button is-muted" onClick={onClearSummary}>{t("nativeSchedule.summary.action.clear")}</button>
+        <button
+          type="button"
+          className={`dw-demo-primary dw-demo-cta ${hasConflicts ? "is-conflict" : hasAppliedSchedule ? "is-applied" : ""}`}
+          onClick={hasConflicts ? onLocateConflict : onApplySchedule}
+        >
+          <span className="dw-demo-button-content">
+            <span className="dw-demo-button-icon-wrap" aria-hidden="true">
+              {hasConflicts ? <DemoAlertIcon /> : hasAppliedSchedule ? <DemoAppliedStateIcon /> : <DemoPlayIcon />}
+            </span>
+            <span>{hasConflicts ? t("nativeSchedule.summary.action.locateConflict") : hasAppliedSchedule ? t("nativeSchedule.summary.action.applied") : t("nativeSchedule.summary.action.apply")}</span>
+          </span>
         </button>
       </div>
     </section>
@@ -817,6 +2238,7 @@ function SummarySection({
 function AutoRuleEditor({
   editorStart,
   editorEnd,
+  autoFrequencyText,
   autoFrequencyPerHour,
   showOffsetField,
   autoOffsetDirection,
@@ -826,58 +2248,72 @@ function AutoRuleEditor({
   frequencyInputRef,
   onEditorStartChange,
   onEditorEndChange,
+  onAutoFrequencyChange,
   onAutoOffsetDirectionChange,
   onAutoOffsetMinutesChange,
   onAddAutoRule
 }) {
+  const { t, script } = useNativeScheduleI18n();
+  const topPreviewMaxItemsPerRow = getTopPreviewMaxItemsPerRow(script, Boolean(liveAutoPreview.meta));
+
   return (
     <div className="dw-demo-rule-editor">
       <div className="dw-demo-rule-editor-row">
         <DemoTextField
-          label="开始时间"
+          label={t("nativeSchedule.auto.field.start")}
           value={editorStart}
           onCommit={onEditorStartChange}
+          onDraftChange={onEditorStartChange}
           className="is-window-start"
           timeMode
+          preserveInvalidTime
           nextInputRef={editorEndInputRef}
         />
         <DemoTextField
-          label="结束时间"
+          label={t("nativeSchedule.auto.field.end")}
           value={editorEnd}
           onCommit={onEditorEndChange}
+          onDraftChange={onEditorEndChange}
           className="is-window-end"
           timeMode
+          preserveInvalidTime
           inputRef={editorEndInputRef}
           nextInputRef={frequencyInputRef}
         />
         <DemoTextField
-          label="频率 (班/h)"
-          value={String(autoFrequencyPerHour)}
+          label={t("nativeSchedule.auto.field.rate")}
+          value={autoFrequencyText}
+          onCommit={onAutoFrequencyChange}
+          onDraftChange={onAutoFrequencyChange}
           className="is-rate"
-          readOnly
           inputRef={frequencyInputRef}
         />
         {showOffsetField ? (
           <DemoOffsetField
-            label="发车偏移"
+            label={t("nativeSchedule.auto.field.offset")}
             direction={autoOffsetDirection}
             minutes={autoOffsetMinutesText}
             onDirectionChange={onAutoOffsetDirectionChange}
             onMinutesChange={onAutoOffsetMinutesChange}
             className="is-offset"
-            hint="早于或晚于慢车"
+            hint={t("nativeSchedule.auto.field.offsetHint")}
           />
         ) : null}
       </div>
 
       <div className="dw-demo-preview-panel">
-        <div className="dw-demo-preview-inline is-window">
-          <span className="dw-demo-preview-tag">预计</span>
-          <span className="dw-demo-preview-values">{liveAutoPreview.length > 0 ? liveAutoPreview.join(" · ") : "--"}</span>
+        <div className="dw-demo-preview-content">
+          <div className="dw-demo-preview-inline is-window">
+            <span className="dw-demo-preview-tag">{t("nativeSchedule.auto.preview.tag")}</span>
+            <span className="dw-demo-preview-values-slot">
+              <span className="dw-demo-preview-values"><DemoTopPreviewTimes times={liveAutoPreview.times} maxItemsPerRow={topPreviewMaxItemsPerRow} /></span>
+            </span>
+            {liveAutoPreview.meta ? <span className="dw-demo-preview-meta is-inline">{liveAutoPreview.meta}</span> : null}
+          </div>
         </div>
         <div className="dw-demo-preview-spacer is-rate" />
         <div className="dw-demo-preview-spacer is-offset" />
-        <button type="button" className="dw-demo-flat-button is-theme" onClick={onAddAutoRule}>添加</button>
+        <button type="button" className="dw-demo-flat-button is-theme" onClick={onAddAutoRule}>{t("nativeSchedule.auto.button.add")}</button>
       </div>
     </div>
   );
@@ -888,13 +2324,16 @@ function AutoRuleTable({
   showOffsetColumn,
   onRemoveAutoRule
 }) {
+  const { t, script } = useNativeScheduleI18n();
+  const rulePreviewMaxItemsPerRow = getRulePreviewMaxItemsPerRow(script, showOffsetColumn);
+
   return (
     <>
       <div className={`dw-demo-rule-list-head ${showOffsetColumn ? "is-with-offset" : "is-no-offset"}`}>
-        <div className="is-window">时间窗</div>
-        <div className="is-rate">频率</div>
-        {showOffsetColumn ? <div className="is-offset">偏移</div> : null}
-        <div className="is-action">操作</div>
+        <div className="is-window">{t("nativeSchedule.auto.table.window")}</div>
+        <div className="is-rate">{t("nativeSchedule.auto.table.rate")}</div>
+        {showOffsetColumn ? <div className="is-offset">{t("nativeSchedule.auto.table.offset")}</div> : null}
+        <div className="is-action">{t("nativeSchedule.auto.table.action")}</div>
       </div>
 
       <DemoScrollArea className="dw-demo-rule-list-scroll" metricsKey={autoRules.length}>
@@ -902,21 +2341,24 @@ function AutoRuleTable({
           <div key={rule.id} className="dw-demo-rule-row">
             <div className={`dw-demo-rule-row-main ${showOffsetColumn ? "is-with-offset" : "is-no-offset"}`}>
               <div className="is-window">
-                <span className="dw-demo-rule-window">{rule.window}</span>
+                <span className="dw-demo-rule-window">{rule.windowLabel}</span>
               </div>
               <div className="is-rate">
-                <span className="dw-demo-rule-rate">{rule.freq} 班</span>
+                <span className="dw-demo-rule-rate">{rule.rateLabel}</span>
               </div>
               {showOffsetColumn ? (
                 <div className="is-offset">
-                  <span className="dw-demo-rule-offset">{rule.offset}</span>
+                  <span className="dw-demo-rule-offset">{rule.offsetLabel}</span>
                 </div>
               ) : null}
               <div className="is-action">
-                <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveAutoRule(rule.id)}>移除</button>
+                <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveAutoRule(rule.id)}>{t("nativeSchedule.summary.action.remove")}</button>
               </div>
             </div>
-            <div className="dw-demo-rule-preview">{rule.preview}</div>
+            <div className="dw-demo-rule-preview">
+              <span className="dw-demo-preview-values is-rule"><DemoRuleTextPreviewTimes entries={rule.previewEntries} showSkipped moveSkippedToEnd maxItemsPerRow={rulePreviewMaxItemsPerRow} /></span>
+              {rule.previewMeta ? <span className="dw-demo-rule-preview-meta">{rule.previewMeta}</span> : null}
+            </div>
           </div>
         ))}
       </DemoScrollArea>
@@ -928,38 +2370,60 @@ function ManualDraftSection({
   manualInput,
   manualInputRef,
   manualDrafts,
+  manualInputError,
+  isAddManualDisabled,
+  footerNote,
   onManualInputChange,
   onAddManualDraft,
   onRemoveManualDraft,
-  onImportDraftsToSummary
+  onImportManualToSummary
 }) {
+  const { t } = useNativeScheduleI18n();
+
   return (
     <div className="dw-demo-right-body">
       <div className="dw-demo-rule-editor">
         <div className="dw-demo-rule-editor-row is-manual">
           <DemoTextField
-            label="发车时间 (单班次)"
+            label={t("nativeSchedule.manual.field.departure")}
             value={manualInput}
             onCommit={onManualInputChange}
+            onDraftChange={onManualInputChange}
             className="is-manual-time"
             inputRef={manualInputRef}
             timeMode
+            errorText={manualInputError}
+            preserveInvalidTime
+            reserveErrorSpace
           />
-          <button type="button" className="dw-demo-flat-button is-theme" onClick={onAddManualDraft}>添加</button>
+          <button type="button" className="dw-demo-flat-button is-theme is-manual-add" onClick={onAddManualDraft} disabled={isAddManualDisabled}>{t("nativeSchedule.manual.button.add")}</button>
         </div>
       </div>
 
       <DemoScrollArea className="dw-demo-rule-list-scroll" metricsKey={manualDrafts.length}>
         {manualDrafts.map((draft) => (
           <div key={draft.id} className="dw-demo-manual-row">
-            <span className="dw-demo-manual-time">{draft.time}</span>
-            <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveManualDraft(draft.id)}>移除</button>
+            <div className="dw-demo-manual-meta">
+              <span className="dw-demo-manual-time">{draft.time}</span>
+              {draft.validation?.status !== "ok" ? (
+                <span className={`dw-demo-manual-validation is-${draft.validation.status}`}>{draft.validation.message}</span>
+              ) : null}
+            </div>
+            <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveManualDraft(draft.id)}>{t("nativeSchedule.summary.action.remove")}</button>
           </div>
         ))}
       </DemoScrollArea>
 
       <div className="dw-demo-footer">
-        <button type="button" className="dw-demo-primary dw-demo-cta is-secondary" onClick={onImportDraftsToSummary}>《《 导入左侧汇总表</button>
+        {footerNote ? <span className={`dw-demo-footer-note ${footerNote.tone ? `is-${footerNote.tone}` : ""}`}>{footerNote.text}</span> : <span />}
+        <button type="button" className="dw-demo-primary dw-demo-cta is-secondary" onClick={onImportManualToSummary}>
+          <span className="dw-demo-button-content">
+            <span className="dw-demo-button-icon-wrap" aria-hidden="true">
+              <DemoImportLeftIcon />
+            </span>
+            <span>{t("nativeSchedule.manual.button.import")}</span>
+          </span>
+        </button>
       </div>
     </div>
   );
@@ -968,29 +2432,35 @@ function ManualDraftSection({
 function AutoRuleSection({
   editorStart,
   editorEnd,
+  autoFrequencyText,
   autoFrequencyPerHour,
   selectedLineType,
   autoOffsetDirection,
   autoOffsetMinutesText,
   liveAutoPreview,
   autoRules,
+  footerNote,
   editorEndInputRef,
   frequencyInputRef,
   onEditorStartChange,
   onEditorEndChange,
+  onAutoFrequencyChange,
   onAutoOffsetDirectionChange,
   onAutoOffsetMinutesChange,
   onAddAutoRule,
   onRemoveAutoRule,
-  onImportDraftsToSummary
+  onImportAutoToSummary
 }) {
+  const { t } = useNativeScheduleI18n();
+
   return (
     <div className="dw-demo-right-body">
       <AutoRuleEditor
         editorStart={editorStart}
         editorEnd={editorEnd}
+        autoFrequencyText={autoFrequencyText}
         autoFrequencyPerHour={autoFrequencyPerHour}
-        showOffsetField={selectedLineType === "快车"}
+        showOffsetField={selectedLineType === "express"}
         autoOffsetDirection={autoOffsetDirection}
         autoOffsetMinutesText={autoOffsetMinutesText}
         liveAutoPreview={liveAutoPreview}
@@ -998,6 +2468,7 @@ function AutoRuleSection({
         frequencyInputRef={frequencyInputRef}
         onEditorStartChange={onEditorStartChange}
         onEditorEndChange={onEditorEndChange}
+        onAutoFrequencyChange={onAutoFrequencyChange}
         onAutoOffsetDirectionChange={onAutoOffsetDirectionChange}
         onAutoOffsetMinutesChange={onAutoOffsetMinutesChange}
         onAddAutoRule={onAddAutoRule}
@@ -1005,64 +2476,494 @@ function AutoRuleSection({
 
       <AutoRuleTable
         autoRules={autoRules}
-        showOffsetColumn={selectedLineType === "快车"}
+        showOffsetColumn={selectedLineType === "express"}
         onRemoveAutoRule={onRemoveAutoRule}
       />
 
       <div className="dw-demo-footer">
-        <button type="button" className="dw-demo-primary dw-demo-cta is-secondary" onClick={onImportDraftsToSummary}>《《 导入左侧汇总表</button>
+        {footerNote ? <span className={`dw-demo-footer-note ${footerNote.tone ? `is-${footerNote.tone}` : ""}`}>{footerNote.text}</span> : <span />}
+        <button type="button" className="dw-demo-primary dw-demo-cta is-secondary" onClick={onImportAutoToSummary}>
+          <span className="dw-demo-button-content">
+            <span className="dw-demo-button-icon-wrap" aria-hidden="true">
+              <DemoImportLeftIcon />
+            </span>
+            <span>{t("nativeSchedule.auto.button.import")}</span>
+          </span>
+        </button>
       </div>
     </div>
   );
 }
 
-export default function NativeScheduleDemoPage() {
+export default function NativeScheduleDemoPage({ registerHostActions }) {
+  const { t } = useNativeScheduleI18n();
+  const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
-  const [selectedLineId, setSelectedLineId] = useState(LINE_OPTIONS[0].id);
-  const [selectedLineType, setSelectedLineType] = useState(LINE_OPTIONS[0].type);
-  const [selectedDepot, setSelectedDepot] = useState(LINE_OPTIONS[0].depot);
-  const [origin, setOrigin] = useState(LINE_OPTIONS[0].origin);
-  const [holdMinutes, setHoldMinutes] = useState(LINE_OPTIONS[0].hold);
-  const [dwellMinutes, setDwellMinutes] = useState(LINE_OPTIONS[0].dwell);
-  const [summaryRows, setSummaryRows] = useState(() => buildSummaryRowsWithConflicts(SUMMARY_ROWS));
-  const [autoRules, setAutoRules] = useState(INITIAL_AUTO_RULES);
-  const [manualDrafts, setManualDrafts] = useState(INITIAL_MANUAL_DRAFTS);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const dropdownPortalHostRef = useRef(null);
+  const [selectedLineId, setSelectedLineId] = useState(LINE_OPTIONS[0]?.id || "");
+  const [selectedLineType, setSelectedLineType] = useState(LINE_OPTIONS[0]?.kind || "local");
+  const [selectedDepot, setSelectedDepot] = useState(LINE_OPTIONS[0]?.depotId || "");
+  const [origin, setOrigin] = useState(LINE_OPTIONS[0]?.originId || "");
+  const [holdMinutes, setHoldMinutes] = useState(LINE_OPTIONS[0]?.hold || "");
+  const [dwellMinutes, setDwellMinutes] = useState(LINE_OPTIONS[0]?.dwell || "");
+  const [summaryEntries, setSummaryEntries] = useState(() => normalizeSummaryEntries([], t));
+  const [autoRules, setAutoRules] = useState([]);
+  const [manualDrafts, setManualDrafts] = useState([]);
   const [manualInput, setManualInput] = useState("12:00");
   const [editorStart, setEditorStart] = useState("08:00");
   const [editorEnd, setEditorEnd] = useState("10:00");
+  const [autoFrequencyText, setAutoFrequencyText] = useState("4");
   const [autoOffsetDirection, setAutoOffsetDirection] = useState("");
   const [autoOffsetMinutesText, setAutoOffsetMinutesText] = useState("");
-  const [hasAppliedSchedule, setHasAppliedSchedule] = useState(false);
+  const [appliedSummarySignature, setAppliedSummarySignature] = useState("");
+  const [appliedSummaryRowKeys, setAppliedSummaryRowKeys] = useState([]);
+  const [summaryFilter, setSummaryFilter] = useState("all");
+  const [panelMessage, setPanelMessage] = useState(null);
+  const summaryScrollRef = useRef(null);
   const manualInputRef = useRef(null);
   const editorEndInputRef = useRef(null);
   const frequencyInputRef = useRef(null);
+  const hasHydratedRuntimeRef = useRef(false);
+  const lastHydratedSnapshotRef = useRef(null);
+  const suppressNextSnapshotRef = useRef(false);
+  const skipNextBackendSaveRef = useRef(false);
+
+  const planLineOptions = useMemo(
+    () => buildPlanLineOptions(LINE_OPTIONS),
+    [catalogRevision]
+  );
 
   const selectedLine = useMemo(
-    () => LINE_OPTIONS.find((line) => line.id === selectedLineId) ?? LINE_OPTIONS[0],
-    [selectedLineId]
+    () => LINE_OPTIONS.find((line) => line?.id === selectedLineId) ?? LINE_OPTIONS[0] ?? DEFAULT_LINE_OPTIONS[0],
+    [catalogRevision, selectedLineId]
   );
-  const autoFrequencyPerHour = 4;
+  const availableDepots = useMemo(() => {
+    if (!selectedLine?.transportType) {
+      return DEPOT_OPTIONS;
+    }
+
+    return DEPOT_OPTIONS.filter((depot) => !depot?.transportType || depot.transportType === selectedLine.transportType);
+  }, [catalogRevision, selectedLine]);
+  const autoFrequencyPerHour = useMemo(
+    () => parseFrequencyValue(autoFrequencyText),
+    [autoFrequencyText]
+  );
   const autoOffsetMinutes = useMemo(
     () => resolveOffsetMinutes(autoOffsetDirection, autoOffsetMinutesText),
     [autoOffsetDirection, autoOffsetMinutesText]
   );
-  const autoOffsetLabel = useMemo(
-    () => formatOffsetLabel(autoOffsetDirection, autoOffsetMinutesText),
-    [autoOffsetDirection, autoOffsetMinutesText]
+  const currentKind = useMemo(() => normalizeKind(selectedLineType), [selectedLineType]);
+  const normalizedManualInput = useMemo(
+    () => normalizeTimeInput(String(manualInput || "").trim()),
+    [manualInput]
   );
-  const effectiveAutoOffsetMinutes = selectedLineType === "快车" ? autoOffsetMinutes : 0;
-  const effectiveAutoOffsetLabel = selectedLineType === "快车" ? autoOffsetLabel : "无";
-  const liveAutoPreview = useMemo(
-    () => buildDemoAutoPreview(editorStart, editorEnd, autoFrequencyPerHour, effectiveAutoOffsetMinutes),
-    [editorEnd, editorStart, autoFrequencyPerHour, effectiveAutoOffsetMinutes]
+  const manualInputError = useMemo(() => {
+    if (!normalizedManualInput) {
+      return "";
+    }
+
+    if (normalizedManualInput.length < 5) {
+      return "";
+    }
+
+    return isValidTimeValue(normalizedManualInput) ? "" : t("nativeSchedule.manual.inputError");
+  }, [normalizedManualInput, t]);
+  const isAddManualDisabled = !!manualInputError || !isValidTimeValue(normalizedManualInput);
+  const currentManualDrafts = useMemo(
+    () => sortManualDraftRows(manualDrafts.filter((draft) => draft?.serviceId === selectedLine.id)),
+    [manualDrafts, selectedLine.id]
   );
+  const validatedManualDrafts = useMemo(
+    () => validateManualRows(currentManualDrafts, t),
+    [currentManualDrafts, t]
+  );
+  const currentAutoRules = useMemo(
+    () => sortAutoRuleRows(autoRules.filter((rule) => rule?.serviceId === selectedLine.id)),
+    [autoRules, selectedLine.id]
+  );
+  const currentAutoPlan = useMemo(() => {
+    if (currentAutoRules.length === 0) {
+      return {
+        retainedRows: summaryEntries,
+        plannedRows: [],
+        skippedCount: 0,
+        previewsByRule: {},
+        hasKindConflict: false
+      };
+    }
 
-  const conflictCount = summaryRows.filter((row) => row.isConflict).length;
-  const earliestStart = summaryRows[0]?.time || "--:--";
-  const summaryStateLabel = hasAppliedSchedule ? "已应用时刻表" : "待应用汇总";
+    return buildAutoStagedPlan({
+      currentRows: summaryEntries,
+      rowsForLine: currentAutoRules,
+      selectedEditLine: selectedLine.id,
+      referenceLineIds: getReferenceLineIdsForLine(selectedLine, currentKind),
+      lineOptions: planLineOptions,
+      replaceExistingAutoRows: false
+    });
+  }, [currentAutoRules, currentKind, planLineOptions, selectedLine, summaryEntries]);
+  const renderedAutoRules = useMemo(
+    () => currentAutoRules.map((rule) => {
+      const preview = currentAutoPlan.previewsByRule[rule.id] || { times: [], entries: [], skippedCount: 0, skipReasons: [], reason: "" };
+      return {
+        ...rule,
+        windowLabel: `${rule.start} - ${rule.end}`,
+        rateLabel: t("nativeSchedule.preview.rateLabel.compact", { count: rule.departuresPerHour }),
+        offsetLabel: rule.kind === "express" ? formatOffsetLabel(directionFromOffsetMode(rule.expressOffsetMode), String(rule.expressOffsetMinutes || ""), t, "compact") : t("nativeSchedule.offset.none.compact"),
+        previewTimes: preview.times,
+        previewEntries: preview.entries,
+        previewMeta: buildPreviewMetaText(preview, currentAutoPlan.hasKindConflict, t, { detailedSkipReason: true })
+      };
+    }),
+    [currentAutoPlan.hasKindConflict, currentAutoPlan.previewsByRule, currentAutoRules, t]
+  );
+  const liveAutoPreview = useMemo(() => {
+    const previewRule = {
+      id: "editor-preview",
+      lineId: selectedLine.id,
+      serviceId: selectedLine.id,
+      kind: currentKind,
+      enabled: true,
+      start: editorStart,
+      end: editorEnd,
+      departuresPerHour: autoFrequencyPerHour,
+      expressOffsetMode: offsetModeFromDirection(autoOffsetDirection),
+      expressOffsetMinutes: currentKind === "express" ? Math.abs(autoOffsetMinutes) : 0
+    };
+    const plan = buildAutoStagedPlan({
+      currentRows: summaryEntries,
+      rowsForLine: [previewRule],
+      selectedEditLine: selectedLine.id,
+      referenceLineIds: getReferenceLineIdsForLine(selectedLine, currentKind),
+      lineOptions: planLineOptions,
+      replaceExistingAutoRows: false
+    });
+    const preview = plan.previewsByRule[previewRule.id] || { times: [], entries: [], skippedCount: 0, skipReasons: [], reason: "" };
+    return {
+      times: preview.times,
+      entries: preview.entries,
+      meta: buildPreviewMetaText(preview, plan.hasKindConflict, t)
+    };
+  }, [
+    autoFrequencyPerHour,
+    autoOffsetDirection,
+    autoOffsetMinutes,
+    currentKind,
+    editorEnd,
+    editorStart,
+    selectedLine.id,
+    selectedLine,
+    summaryEntries,
+    planLineOptions,
+    t
+  ]);
+  const currentSummarySignature = useMemo(
+    () => getSummaryRowsSignature(summaryEntries),
+    [summaryEntries]
+  );
+  const appliedSummaryRowKeySet = useMemo(
+    () => new Set(Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []),
+    [appliedSummaryRowKeys]
+  );
+  const hasAppliedSchedule = summaryEntries.length > 0 && currentSummarySignature === appliedSummarySignature;
+  const summaryRows = useMemo(
+    () => buildSummaryRowsWithConflicts(summaryEntries, t, appliedSummaryRowKeySet),
+    [appliedSummaryRowKeySet, summaryEntries, t]
+  );
+  const visibleSummaryRows = useMemo(() => {
+    if (summaryFilter === "current") {
+      return summaryRows.filter((row) => row.serviceId === selectedLine.id);
+    }
 
-  function markDraftDirty() {
-    setHasAppliedSchedule(false);
+    if (summaryFilter === "local") {
+      return summaryRows.filter((row) => row.kind === "local");
+    }
+
+    if (summaryFilter === "express") {
+      return summaryRows.filter((row) => row.kind === "express");
+    }
+
+    return summaryRows;
+  }, [selectedLine.id, summaryFilter, summaryRows]);
+  const conflictCount = visibleSummaryRows.filter((row) => row.isConflict).length;
+  const earliestStart = visibleSummaryRows[0]?.time || "--:--";
+  const summaryStateLabel = hasAppliedSchedule ? t("nativeSchedule.summary.section.applied") : t("nativeSchedule.summary.section.pending");
+  const autoFooterNote =
+    panelMessage?.scope === "auto"
+      ? panelMessage
+      : currentAutoPlan.hasKindConflict
+        ? { scope: "auto", tone: "error", text: t("nativeSchedule.message.auto.kindConflict") }
+        : null;
+  const manualFooterNote = panelMessage?.scope === "manual" ? panelMessage : null;
+
+  function bumpCatalogRevision() {
+    setCatalogRevision((current) => current + 1);
+  }
+
+  function serializePersistedLineSettings() {
+    return LINE_OPTIONS
+      .filter((line) => line && typeof line === "object")
+      .map((line) => ({
+        id: line.id || "",
+        depotId: line.depotId || "",
+        hold: line.hold || "",
+        dwell: line.dwell || ""
+      }));
+  }
+
+  function updateRuntimeLineOption(lineId, updates) {
+    const nextIndex = LINE_OPTIONS.findIndex((line) => line?.id === lineId);
+    if (nextIndex < 0) {
+      return;
+    }
+
+    LINE_OPTIONS[nextIndex] = {
+      ...LINE_OPTIONS[nextIndex],
+      ...updates
+    };
+    bumpCatalogRevision();
+  }
+
+  function applyHydratedState(snapshot, metadataSnapshot = null) {
+    lastHydratedSnapshotRef.current = snapshot ?? null;
+    skipNextBackendSaveRef.current = true;
+    const persistedState = readPersistedNativeScheduleState();
+    const runtimeCatalog = buildRuntimeCatalog(
+      snapshot,
+      metadataSnapshot,
+      null,
+      t
+    );
+    replaceRuntimeCatalog({
+      lines: runtimeCatalog.lineOptions,
+      depots: runtimeCatalog.depotOptions,
+      origins: runtimeCatalog.originOptions
+    });
+    bumpCatalogRevision();
+    const sourceLineId =
+      (snapshot?.selectedEditLine && runtimeCatalog.lineOptions.some((line) => line?.id === snapshot.selectedEditLine)
+        ? snapshot.selectedEditLine
+        : "") ||
+      (snapshot?.selectedLineId && runtimeCatalog.lineOptions.some((line) => line?.id === snapshot.selectedLineId)
+        ? snapshot.selectedLineId
+        : "") ||
+      runtimeCatalog.lineOptions[0]?.id ||
+      DEFAULT_LINE_OPTIONS[0].id;
+    const sourceLine =
+      runtimeCatalog.lineOptions.find((line) => line?.id === sourceLineId) ??
+      runtimeCatalog.lineOptions[0] ??
+      DEFAULT_LINE_OPTIONS[0];
+
+    const nextManualDrafts = mapSnapshotManualRows(snapshot?.manualRows, sourceLine.id);
+    const nextAutoRules = mapSnapshotAutoRules(snapshot?.autoRules, sourceLine.id);
+    const nextSummaryEntries = normalizeSummaryEntries(mapSnapshotSummaryRows(snapshot?.stagedRows), t);
+    const nextSummarySignature = getSummaryRowsSignature(nextSummaryEntries);
+    const currentSummaryRowKeys = nextSummaryEntries.map((row) => getSummaryRowKey(row));
+    const previousAppliedRowKeySet = new Set(
+      Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []
+    );
+    const nextAppliedSummarySignature =
+      snapshot?.rulesApplied || snapshot?.draftApplied
+        ? nextSummarySignature
+        : (appliedSummarySignature || "");
+    const nextAppliedSummaryRowKeys =
+      snapshot?.rulesApplied || snapshot?.draftApplied
+        ? currentSummaryRowKeys
+        : currentSummaryRowKeys.filter((rowKey) => previousAppliedRowKeySet.has(rowKey));
+
+    setActiveRightTab((current) => (current === "manual" ? "manual" : "auto"));
+    setSelectedLineId(sourceLine.id);
+    setSelectedLineType(sourceLine.kind);
+    setSelectedDepot(sourceLine.depotId);
+    setOrigin(sourceLine.originId);
+    setHoldMinutes(sourceLine.hold);
+    setDwellMinutes(sourceLine.dwell);
+    setSummaryEntries(nextSummaryEntries);
+    setAutoRules(nextAutoRules);
+    setManualDrafts(nextManualDrafts);
+    setManualInput(typeof persistedState?.manualInput === "string" ? persistedState.manualInput : "12:00");
+    setEditorStart(typeof persistedState?.editorStart === "string" ? persistedState.editorStart : "08:00");
+    setEditorEnd(typeof persistedState?.editorEnd === "string" ? persistedState.editorEnd : "10:00");
+    setAutoFrequencyText(typeof persistedState?.autoFrequencyText === "string" ? persistedState.autoFrequencyText : "4");
+    setAutoOffsetDirection(typeof persistedState?.autoOffsetDirection === "string" ? persistedState.autoOffsetDirection : "");
+    setAutoOffsetMinutesText(typeof persistedState?.autoOffsetMinutesText === "string" ? persistedState.autoOffsetMinutesText : "");
+    setAppliedSummarySignature(nextAppliedSummarySignature);
+    setAppliedSummaryRowKeys(nextAppliedSummaryRowKeys);
+    setSummaryFilter(
+      persistedState?.summaryFilter === "current" || persistedState?.summaryFilter === "local" || persistedState?.summaryFilter === "express"
+        ? persistedState.summaryFilter
+        : "all"
+    );
+    setPanelMessage(null);
+    hasHydratedRuntimeRef.current = true;
+  }
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function hydrateFromBackend({ forceRefresh = false } = {}) {
+      try {
+        const snapshot = forceRefresh
+          ? await workbenchApi.refreshSnapshot?.()
+          : await workbenchApi.loadSnapshot?.();
+        let metadata = null;
+
+        try {
+          metadata = await workbenchApi.refreshMetadata?.();
+        } catch {}
+
+        if (!disposed) {
+          applyHydratedState(snapshot, metadata);
+        }
+      } catch (error) {
+        if (!disposed) {
+          console.error("[RT Native Schedule] backend hydrate failed", error);
+        }
+      }
+    }
+
+    hydrateFromBackend();
+    const unsubscribe = workbenchApi.onSnapshotChanged?.((snapshot) => {
+      if (suppressNextSnapshotRef.current) {
+        suppressNextSnapshotRef.current = false;
+        return;
+      }
+
+      if (!disposed) {
+        applyHydratedState(snapshot, null);
+      }
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [t, workbenchApi]);
+
+  useEffect(() => {
+    if (typeof registerHostActions !== "function") {
+      return undefined;
+    }
+
+    registerHostActions({
+      refreshData: async () => {
+        const snapshot = await workbenchApi.refreshSnapshot?.();
+        let metadata = null;
+
+        try {
+          metadata = await workbenchApi.refreshMetadata?.();
+        } catch {}
+
+        applyHydratedState(snapshot, metadata);
+      }
+    });
+
+    return () => {
+      registerHostActions(null);
+    };
+  }, [registerHostActions, t, workbenchApi]);
+
+  useEffect(() => {
+    if (!hasHydratedRuntimeRef.current) {
+      return;
+    }
+
+    writePersistedNativeScheduleState({
+      manualInput,
+      editorStart,
+      editorEnd,
+      autoFrequencyText,
+      autoOffsetDirection,
+      autoOffsetMinutesText,
+      summaryFilter
+    });
+  }, [
+    autoFrequencyText,
+    autoOffsetDirection,
+    autoOffsetMinutesText,
+    editorEnd,
+    editorStart,
+    manualInput,
+    summaryFilter
+  ]);
+
+  async function saveNativeWorkbenchDraft({ applyDraft = false } = {}) {
+    const request = {
+      selectedLineId,
+      selectedEditLine: selectedLineId,
+      mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
+      manualRows: serializeNativeManualRows(manualDrafts),
+      autoRules: serializeNativeAutoRules(autoRules),
+      stagedRows: serializeNativeStagedRows(summaryEntries),
+      lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
+      applyDraft,
+      nativeScheduleWriter: true
+    };
+
+    suppressNextSnapshotRef.current = true;
+    try {
+      const result = await workbenchApi.saveNativeDraft?.(request);
+      if (result?.snapshot) {
+        applyHydratedState(result.snapshot, null);
+      } else {
+        suppressNextSnapshotRef.current = false;
+      }
+
+      return result;
+    } catch (error) {
+      suppressNextSnapshotRef.current = false;
+      throw error;
+    }
+  }
+
+  useEffect(() => {
+    if (!hasHydratedRuntimeRef.current) {
+      return undefined;
+    }
+
+    if (skipNextBackendSaveRef.current) {
+      skipNextBackendSaveRef.current = false;
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        await saveNativeWorkbenchDraft({ applyDraft: false });
+      } catch {}
+    }, 400);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    autoRules,
+    catalogRevision,
+    manualDrafts,
+    selectedLineId,
+    summaryEntries,
+    t,
+    workbenchApi
+  ]);
+
+  function clearPanelMessage() {
+    setPanelMessage(null);
+  }
+
+  function markLocalDataDirty() {
+    clearPanelMessage();
+  }
+
+  function applySelectedLine(nextLine) {
+    if (!nextLine) {
+      return;
+    }
+
+    setSelectedLineId(nextLine.id);
+    setSelectedLineType(nextLine.kind);
+    setSelectedDepot(nextLine.depotId);
+    setOrigin(nextLine.originId);
+    setHoldMinutes(nextLine.hold);
+    setDwellMinutes(nextLine.dwell);
   }
 
   function handleSelectLine(lineId) {
@@ -1071,108 +2972,152 @@ export default function NativeScheduleDemoPage() {
       return;
     }
 
-    markDraftDirty();
-    setSelectedLineId(nextLine.id);
-    setSelectedLineType(nextLine.type);
-    setSelectedDepot(nextLine.depot);
-    setOrigin(nextLine.origin);
-    setHoldMinutes(nextLine.hold);
-    setDwellMinutes(nextLine.dwell);
+    clearPanelMessage();
+    applySelectedLine(nextLine);
   }
 
   function handleLineTypeSelect(nextType) {
-    if (nextType !== "普通" && nextType !== "快车") {
+    if (nextType !== "local" && nextType !== "express") {
       return;
     }
 
-    markDraftDirty();
+    if (selectedLine.kind === nextType) {
+      clearPanelMessage();
+      return;
+    }
+
+    markLocalDataDirty();
+    updateRuntimeLineOption(selectedLine.id, { kind: nextType });
     setSelectedLineType(nextType);
+    setManualDrafts((current) => sortManualDraftRows(
+      current.map((draft) => (
+        draft?.lineId === selectedLine.id
+          ? { ...draft, kind: nextType }
+          : draft
+      ))
+    ));
+    setAutoRules((current) => sortAutoRuleRows(
+      current.map((rule) => (
+        rule?.lineId === selectedLine.id
+          ? { ...rule, kind: nextType }
+          : rule
+      ))
+    ));
+    setSummaryEntries((current) => normalizeSummaryEntries(
+      current.map((row) => (
+        row?.lineId === selectedLine.id || row?.serviceId === selectedLine.id
+          ? { ...row, kind: nextType }
+          : row
+      )),
+      t
+    ));
   }
 
   function handleDepotChange(value) {
-    markDraftDirty();
+    markLocalDataDirty();
     setSelectedDepot(value);
+    updateRuntimeLineOption(selectedLine.id, { depotId: value });
   }
 
   function handleHoldMinutesChange(value) {
-    markDraftDirty();
+    markLocalDataDirty();
     setHoldMinutes(value);
+    updateRuntimeLineOption(selectedLine.id, { hold: value });
   }
 
   function handleDwellMinutesChange(value) {
-    markDraftDirty();
+    markLocalDataDirty();
     setDwellMinutes(value);
+    updateRuntimeLineOption(selectedLine.id, { dwell: value });
   }
 
   function handleEditorStartChange(value) {
-    markDraftDirty();
-    setEditorStart(value);
+    clearPanelMessage();
+    if (!value || (value.length === 5 && isValidTimeValue(value))) {
+      setEditorStart(value);
+    }
   }
 
   function handleEditorEndChange(value) {
-    markDraftDirty();
-    setEditorEnd(value);
+    clearPanelMessage();
+    if (!value || (value.length === 5 && isValidTimeValue(value))) {
+      setEditorEnd(value);
+    }
+  }
+
+  function handleAutoFrequencyChange(value) {
+    clearPanelMessage();
+    setAutoFrequencyText(normalizeFrequencyInput(value));
   }
 
   function handleManualInputChange(value) {
-    markDraftDirty();
-    setManualInput(value);
+    clearPanelMessage();
+    setManualInput(normalizeTimeInput(value));
   }
 
   function handleAutoOffsetDirectionChange(nextDirection) {
-    markDraftDirty();
+    clearPanelMessage();
     setAutoOffsetDirection(nextDirection);
   }
 
   function handleAutoOffsetMinutesChange(nextValue) {
-    markDraftDirty();
+    clearPanelMessage();
     setAutoOffsetMinutesText(nextValue);
   }
 
   function addAutoRule() {
     if (!isValidTimeValue(editorStart) || !isValidTimeValue(editorEnd)) {
+      setPanelMessage({ scope: "auto", tone: "error", text: t("nativeSchedule.message.auto.invalidWindow") });
       return;
     }
 
-    const previewTimes = buildDemoAutoPreview(editorStart, editorEnd, autoFrequencyPerHour, effectiveAutoOffsetMinutes);
-    if (previewTimes.length === 0) {
+    if ((!Array.isArray(liveAutoPreview.entries) || liveAutoPreview.entries.length === 0) && liveAutoPreview.meta) {
+      setPanelMessage({ scope: "auto", tone: "warning", text: liveAutoPreview.meta });
       return;
     }
 
-    markDraftDirty();
-    setAutoRules((current) => [
+    markLocalDataDirty();
+    setAutoRules((current) => sortAutoRuleRows([
       ...current,
       {
         id: Date.now(),
-        window: editorStart + " - " + editorEnd,
-        freq: String(autoFrequencyPerHour),
-        offset: effectiveAutoOffsetLabel,
-        preview: previewTimes.join(" · "),
-        type: selectedLineType
+        lineId: selectedLine.id,
+        serviceId: selectedLine.id,
+        kind: currentKind,
+        enabled: true,
+        start: editorStart,
+        end: editorEnd,
+        departuresPerHour: autoFrequencyPerHour,
+        expressOffsetMode: offsetModeFromDirection(autoOffsetDirection),
+        expressOffsetMinutes: currentKind === "express" ? Math.abs(autoOffsetMinutes) : 0
       }
-    ]);
+    ]));
   }
 
   function removeAutoRule(ruleId) {
-    markDraftDirty();
+    markLocalDataDirty();
     setAutoRules((current) => current.filter((rule) => rule.id !== ruleId));
   }
 
   function addManualDraft() {
-    const rawValue = manualInputRef.current ? manualInputRef.current.value : manualInput;
-    const normalized = normalizeTimeInput(String(rawValue || "").trim());
-    if (!isValidTimeValue(normalized)) {
-      if (manualInputRef.current) {
-        manualInputRef.current.value = manualInput;
-      }
+    if (isAddManualDisabled || !isValidTimeValue(normalizedManualInput)) {
+      setPanelMessage({ scope: "manual", tone: "error", text: t("nativeSchedule.message.manual.invalidTime") });
       return;
     }
 
-    markDraftDirty();
-    setManualDrafts((current) => [
+    markLocalDataDirty();
+    setManualDrafts((current) => sortManualDraftRows([
       ...current,
-      { id: Date.now(), time: normalized }
-    ]);
+      {
+        id: Date.now(),
+        lineId: selectedLine.id,
+        serviceId: selectedLine.id,
+        kind: currentKind,
+        time: normalizedManualInput,
+        offsetMode: "none",
+        offsetMinutes: ""
+      }
+    ]));
     setManualInput("");
     if (manualInputRef.current) {
       manualInputRef.current.value = "";
@@ -1180,135 +3125,279 @@ export default function NativeScheduleDemoPage() {
   }
 
   function removeManualDraft(draftId) {
-    markDraftDirty();
+    markLocalDataDirty();
     setManualDrafts((current) => current.filter((draft) => draft.id !== draftId));
   }
 
   function removeSummaryRow(rowId) {
-    markDraftDirty();
-    setSummaryRows((current) => buildSummaryRowsWithConflicts(current.filter((row) => row.id !== rowId)));
+    markLocalDataDirty();
+    setSummaryEntries((current) => current.filter((row) => row.id !== rowId));
   }
 
   function clearSummaryTable() {
-    markDraftDirty();
-    setSummaryRows([]);
-  }
-
-  function importDraftsToSummary() {
-    const importedRows = [];
-
-    manualDrafts.forEach((draft) => {
-      if (!isValidTimeValue(draft.time)) {
-        return;
+    markLocalDataDirty();
+    setSummaryEntries((current) => {
+      if (summaryFilter === "current") {
+        return current.filter((row) => row.serviceId !== selectedLine.id);
       }
 
-      importedRows.push({
-        id: `summary-manual-${draft.id}-${Date.now()}`,
-        time: draft.time,
-        line: selectedLine.name,
-        origin,
-        type: selectedLineType
-      });
+      if (summaryFilter === "local") {
+        return current.filter((row) => row.kind !== "local");
+      }
+
+      if (summaryFilter === "express") {
+        return current.filter((row) => row.kind !== "express");
+      }
+
+      return [];
     });
+  }
 
-    autoRules
-      .filter((rule) => (rule.type || "普通") === selectedLineType)
-      .forEach((rule) => {
-        String(rule.preview || "")
-          .split("·")
-          .map((entry) => entry.trim())
-          .filter((entry) => isValidTimeValue(entry))
-          .forEach((time, previewIndex) => {
-            importedRows.push({
-              id: `summary-auto-${rule.id}-${previewIndex}-${Date.now()}`,
-              time,
-              line: selectedLine.name,
-              origin,
-              type: selectedLineType
-            });
-          });
-      });
-
-    if (importedRows.length === 0) {
+  function importManualToSummary() {
+    const sortedDrafts = [...currentManualDrafts].sort((left, right) => (left.time || "").localeCompare(right.time || ""));
+    const validatedRows = validateManualRows(sortedDrafts, t);
+    const validRows = validatedRows.filter((row) => row.validation.status !== "error");
+    const invalidRows = validatedRows.length - validRows.length;
+    if (validRows.length === 0) {
+      setPanelMessage({ scope: "manual", tone: "neutral", text: t("nativeSchedule.message.manual.noValid") });
       return;
     }
 
-    markDraftDirty();
-    setSummaryRows((current) => buildSummaryRowsWithConflicts([...current, ...importedRows]));
+    const nextKinds = new Set(validRows.map((row) => row.kind));
+    const existingKinds = getLineKinds(summaryEntries, selectedLine.id);
+    const hasKindConflict = [...nextKinds].some((kind) => existingKinds.size > 0 && !existingKinds.has(kind));
+    if (hasKindConflict) {
+      setPanelMessage({ scope: "manual", tone: "error", text: t("nativeSchedule.message.manual.kindConflict") });
+      return;
+    }
+
+    const selectedOriginStationId = selectedLine.originStationId || "";
+    const occupiedRows = summaryEntries
+      .map((row) => ({
+        minute: timeToMinutes(row.time),
+        originStationId: row.originStationId || ""
+      }))
+      .filter((row) => row.minute !== null);
+    const importedRows = [];
+    let blockedRows = 0;
+
+    validRows.forEach((row) => {
+      const candidateMinute = timeToMinutes(row.time);
+      if (candidateMinute === null) {
+        blockedRows += 1;
+        return;
+      }
+
+      if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows)) {
+        blockedRows += 1;
+        return;
+      }
+
+      occupiedRows.push({
+        minute: candidateMinute,
+        originStationId: selectedOriginStationId
+      });
+      importedRows.push(createSummaryEntry({
+        id: `summary-manual-${selectedLine.id}-${row.id}`,
+        time: row.time,
+        serviceId: row.serviceId,
+        kind: row.kind,
+        source: "manual",
+        note: buildCombinedNote("direct", t)
+      }, t));
+    });
+
+    if (importedRows.length === 0) {
+      setPanelMessage({
+        scope: "manual",
+        tone: "neutral",
+        text: blockedRows > 0
+          ? t("nativeSchedule.message.manual.blockedAll", { count: blockedRows })
+          : t("nativeSchedule.message.manual.noValid")
+      });
+      return;
+    }
+
+    markLocalDataDirty();
+    setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
+    setPanelMessage({
+      scope: "manual",
+      tone: "neutral",
+      text: blockedRows > 0 || invalidRows > 0
+        ? t("nativeSchedule.message.manual.importedWithCounts", {
+          count: importedRows.length,
+          skipped: blockedRows,
+          invalid: invalidRows
+        })
+        : t("nativeSchedule.message.manual.imported", { count: importedRows.length })
+    });
   }
 
-  function handleApplySchedule() {
-    setHasAppliedSchedule(true);
+  function importAutoToSummary() {
+    if (currentAutoRules.length === 0) {
+      setPanelMessage({ scope: "auto", tone: "warning", text: t("nativeSchedule.message.auto.noRules") });
+      return;
+    }
+
+    const plan = buildAutoStagedPlan({
+      currentRows: summaryEntries,
+      rowsForLine: currentAutoRules,
+      selectedEditLine: selectedLine.id,
+      referenceLineIds: getReferenceLineIdsForLine(selectedLine, currentKind),
+      lineOptions: planLineOptions,
+      replaceExistingAutoRows: false
+    });
+    if (plan.hasKindConflict) {
+      setPanelMessage({ scope: "auto", tone: "error", text: t("nativeSchedule.message.auto.kindConflict") });
+      return;
+    }
+
+    const importedRows = plan.plannedRows.map((row) => {
+      const sourceRule = currentAutoRules.find((rule) => rule.id === row.ruleId);
+      return createSummaryEntry({
+        id: `summary-auto-${selectedLine.id}-${row.ruleId}-${row.generatedIndex}`,
+        time: minutesToTime(row.timeMinutes),
+        serviceId: sourceRule?.serviceId || selectedLine.id,
+        kind: row.kind,
+        source: "auto",
+        note: buildCombinedNote(row.noteType, t, {
+          minutes: row.offsetMinutes,
+          start: row.start,
+          end: row.end
+        })
+      }, t);
+    });
+    if (importedRows.length === 0) {
+      const issuePreview = currentAutoRules
+        .map((rule) => currentAutoPlan.previewsByRule[rule.id])
+        .find((preview) => preview?.reason);
+      setPanelMessage({
+        scope: "auto",
+        tone: "warning",
+        text: issuePreview
+          ? buildPreviewMetaText(issuePreview, false, t)
+          : plan.skippedCount > 0
+            ? t("nativeSchedule.message.auto.noTrips.skipped", { count: plan.skippedCount })
+            : t("nativeSchedule.message.auto.noRules")
+      });
+      return;
+    }
+
+    markLocalDataDirty();
+    setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
+    setPanelMessage({
+      scope: "auto",
+      tone: "neutral",
+      text: plan.skippedCount > 0
+        ? t("nativeSchedule.message.auto.importedWithSkipped", { count: importedRows.length, skipped: plan.skippedCount })
+        : t("nativeSchedule.message.auto.imported", { count: importedRows.length })
+    });
+  }
+
+  async function handleApplySchedule() {
+    try {
+      const result = await saveNativeWorkbenchDraft({ applyDraft: true });
+      if (!result?.success) {
+        return;
+      }
+    } catch {}
+  }
+
+  function handleLocateConflict() {
+    const scrollContainer = summaryScrollRef.current;
+    const firstConflictRow = scrollContainer?.querySelector(".dw-demo-summary-row.is-conflict");
+    if (!scrollContainer || !firstConflictRow) {
+      return;
+    }
+
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const rowRect = firstConflictRow.getBoundingClientRect();
+    const deltaTop = rowRect.top - containerRect.top;
+    const nextScrollTop =
+      scrollContainer.scrollTop + deltaTop - Math.max(0, Math.round((scrollContainer.clientHeight - firstConflictRow.clientHeight) / 2));
+    scrollContainer.scrollTop = Math.max(0, nextScrollTop);
   }
 
   return (
-    <div className="dw-demo-shell">
-      <div className="dw-demo-topbar">
+    <div className="dw-demo-page-root">
+      <div className="dw-demo-shell">
+        <div className="dw-demo-topbar">
         <DemoDropdown
-          label="当前线路"
-          labelIcon={<DemoLineIcon />}
-          value={selectedLine.name}
+          label={t("nativeSchedule.topbar.line")}
+          value={getLocalizedLineName(selectedLine, t)}
           options={LINE_OPTIONS.map((line) => ({
-            value: line.id,
-            label: line.name,
-            active: line.id === selectedLineId
+            value: line?.id || "",
+            label: getLocalizedLineName(line, t),
+            active: line?.id === selectedLineId
           }))}
           onSelect={handleSelectLine}
           className="is-line"
+          portalHostRef={dropdownPortalHostRef}
         />
 
         <div className="dw-demo-field is-kind">
-          <label className="dw-demo-label">类型</label>
+          <label className="dw-demo-label">{t("nativeSchedule.topbar.kind")}</label>
           <div className="dw-demo-toggle-group">
             <button
               type="button"
-              className={`dw-demo-toggle ${selectedLineType === "普通" ? "is-active" : ""}`}
-              onClick={() => handleLineTypeSelect("普通")}
+              className={`dw-demo-toggle ${selectedLineType === "local" ? "is-active" : ""}`}
+              onClick={() => handleLineTypeSelect("local")}
             >
-              普通
+              {t("nativeSchedule.type.local")}
             </button>
             <button
               type="button"
-              className={`dw-demo-toggle ${selectedLineType === "快车" ? "is-active is-express" : ""}`}
-              onClick={() => handleLineTypeSelect("快车")}
+              className={`dw-demo-toggle ${selectedLineType === "express" ? "is-active is-express" : ""}`}
+              onClick={() => handleLineTypeSelect("express")}
             >
-              快车
+              {t("nativeSchedule.type.express")}
             </button>
           </div>
         </div>
 
         <DemoDisplayField
-          label="始发站"
-          labelIcon={<DemoOriginIcon />}
-          value={origin}
+          label={t("nativeSchedule.topbar.origin")}
+          value={getLocalizedOriginLabel(origin, t)}
           className="is-origin"
         />
         <DemoDropdown
-          label="停放车库"
-          labelIcon={<DemoDepotIcon />}
-          value={selectedDepot}
+          label={t("nativeSchedule.topbar.depot")}
+          value={getLocalizedDepotLabel(selectedDepot, t)}
           options={[
-            { value: "任意车库", label: "任意车库", active: selectedDepot === "任意车库" },
-            { value: "北区车库", label: "北区车库", active: selectedDepot === "北区车库" }
+            {
+              value: "",
+              label: t("nativeSchedule.data.depot.any"),
+              active: !selectedDepot
+            },
+            ...availableDepots.map((depot) => ({
+              value: depot?.id || "",
+              label: depot.label || t(depot.labelKey),
+              active: selectedDepot === depot?.id
+            }))
           ]}
           onSelect={handleDepotChange}
           className="is-depot"
+          portalHostRef={dropdownPortalHostRef}
         />
 
-        <DemoTextField label="候车(分)" value={holdMinutes} onCommit={handleHoldMinutesChange} className="is-hold" />
-        <DemoTextField label="最长停站" value={dwellMinutes} onCommit={handleDwellMinutesChange} className="is-dwell" />
-      </div>
-
-      <div className="dw-demo-main">
+        <DemoTextField label={t("nativeSchedule.topbar.holdMinutes")} value={holdMinutes} onCommit={handleHoldMinutesChange} className="is-hold" suffix={t("nativeSchedule.unit.minutes")} />
+        <DemoTextField label={t("nativeSchedule.topbar.dwellMinutes")} value={dwellMinutes} onCommit={handleDwellMinutesChange} className="is-dwell" suffix={t("nativeSchedule.unit.minutes")} />
+        </div>
+        <div className="dw-demo-main">
         <SummarySection
           summaryStateLabel={summaryStateLabel}
           hasAppliedSchedule={hasAppliedSchedule}
-          summaryRows={summaryRows}
+          summaryRows={visibleSummaryRows}
           earliestStart={earliestStart}
           conflictCount={conflictCount}
+          summaryFilter={summaryFilter}
+          onSummaryFilterChange={setSummaryFilter}
+          summaryScrollRef={summaryScrollRef}
           onRemoveRow={removeSummaryRow}
           onClearSummary={clearSummaryTable}
           onApplySchedule={handleApplySchedule}
+          onLocateConflict={handleLocateConflict}
+          dropdownPortalHostRef={dropdownPortalHostRef}
         />
 
         <section className="dw-demo-right">
@@ -1318,50 +3407,58 @@ export default function NativeScheduleDemoPage() {
               className={`dw-demo-tab ${activeRightTab === "auto" ? "is-active" : ""}`}
               onClick={() => setActiveRightTab("auto")}
             >
-              自动规则
+              {t("nativeSchedule.tab.auto")}
             </button>
             <button
               type="button"
               className={`dw-demo-tab ${activeRightTab === "manual" ? "is-active" : ""}`}
               onClick={() => setActiveRightTab("manual")}
             >
-              单点微调
+              {t("nativeSchedule.tab.manual")}
             </button>
           </div>
 
           {activeRightTab === "auto" ? (
-            <AutoRuleSection
-              editorStart={editorStart}
-              editorEnd={editorEnd}
-              autoFrequencyPerHour={autoFrequencyPerHour}
-              selectedLineType={selectedLineType}
-              autoOffsetDirection={autoOffsetDirection}
+      <AutoRuleSection
+        editorStart={editorStart}
+        editorEnd={editorEnd}
+        autoFrequencyText={autoFrequencyText}
+        autoFrequencyPerHour={autoFrequencyPerHour}
+        selectedLineType={selectedLineType}
+        autoOffsetDirection={autoOffsetDirection}
               autoOffsetMinutesText={autoOffsetMinutesText}
               liveAutoPreview={liveAutoPreview}
-              autoRules={autoRules}
+              autoRules={renderedAutoRules}
+              footerNote={autoFooterNote}
               editorEndInputRef={editorEndInputRef}
-              frequencyInputRef={frequencyInputRef}
-              onEditorStartChange={handleEditorStartChange}
-              onEditorEndChange={handleEditorEndChange}
-              onAutoOffsetDirectionChange={handleAutoOffsetDirectionChange}
-              onAutoOffsetMinutesChange={handleAutoOffsetMinutesChange}
-              onAddAutoRule={addAutoRule}
+        frequencyInputRef={frequencyInputRef}
+        onEditorStartChange={handleEditorStartChange}
+        onEditorEndChange={handleEditorEndChange}
+        onAutoFrequencyChange={handleAutoFrequencyChange}
+        onAutoOffsetDirectionChange={handleAutoOffsetDirectionChange}
+        onAutoOffsetMinutesChange={handleAutoOffsetMinutesChange}
+        onAddAutoRule={addAutoRule}
               onRemoveAutoRule={removeAutoRule}
-              onImportDraftsToSummary={importDraftsToSummary}
+              onImportAutoToSummary={importAutoToSummary}
             />
           ) : (
             <ManualDraftSection
               manualInput={manualInput}
               manualInputRef={manualInputRef}
-              manualDrafts={manualDrafts}
+              manualDrafts={validatedManualDrafts}
+              manualInputError={manualInputError}
+              isAddManualDisabled={isAddManualDisabled}
+              footerNote={manualFooterNote}
               onManualInputChange={handleManualInputChange}
               onAddManualDraft={addManualDraft}
               onRemoveManualDraft={removeManualDraft}
-              onImportDraftsToSummary={importDraftsToSummary}
+              onImportManualToSummary={importManualToSummary}
             />
           )}
         </section>
+        </div>
       </div>
+      <div ref={dropdownPortalHostRef} className="dw-demo-dropdown-portal-layer" />
     </div>
   );
 }

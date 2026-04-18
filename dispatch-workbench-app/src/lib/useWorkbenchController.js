@@ -301,6 +301,7 @@ function normalizeStagedRows(rows) {
 export function useWorkbenchController() {
   const { locale, t } = useI18n();
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
+  const legacyWorkbenchReadOnly = true;
   const [activeTab, setActiveTab] = useState("overview");
   const [viewMode, setViewMode] = useState("merged");
   const [selectedLineId, setSelectedLineId] = useState("line3-local");
@@ -319,6 +320,51 @@ export function useWorkbenchController() {
   const suppressNextSnapshotRef = useRef(false);
 
   const skipNextAutosaveRef = useRef(false);
+  function reportLegacyReadonly() {
+    setSaveState({
+      status: "idle",
+      message: t("message.workbenchReadonly")
+    });
+  }
+
+  function setManualRowsGuarded(nextValue) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
+    setManualRows(nextValue);
+  }
+
+  function setAutoRulesGuarded(nextValue) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
+    setAutoRules(nextValue);
+  }
+
+  function setStagedRowsGuarded(nextValue) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
+    setStagedRows(nextValue);
+  }
+
+  useEffect(() => {
+    if (!legacyWorkbenchReadOnly) {
+      return;
+    }
+
+    setSaveState({
+      status: "idle",
+      message: t("message.workbenchReadonly")
+    });
+  }, [legacyWorkbenchReadOnly, t]);
+
   function applySnapshot(snapshot) {
     if (!snapshot) {
       return;
@@ -561,6 +607,10 @@ export function useWorkbenchController() {
       return undefined;
     }
 
+    if (legacyWorkbenchReadOnly) {
+      return undefined;
+    }
+
     if (skipNextAutosaveRef.current) {
       skipNextAutosaveRef.current = false;
       return undefined;
@@ -601,6 +651,11 @@ export function useWorkbenchController() {
   ]);
 
   function saveDraftImmediately(nextState) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     if (!hasLoadedSnapshotRef.current) {
       return;
     }
@@ -627,6 +682,11 @@ export function useWorkbenchController() {
   }
 
   function handleOriginHoldLimitChange(lineId, nextValue) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     const normalizedValue =
       Number.isFinite(Number(nextValue)) && Number(nextValue) > 0
         ? Math.max(1, Math.min(120, Math.round(Number(nextValue))))
@@ -642,6 +702,11 @@ export function useWorkbenchController() {
   }
 
   function handleSelectedLineKindChange(nextKind) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     const normalizedKind = nextKind === "express" ? "express" : "local";
     if (!selectedEditLine) {
       return;
@@ -693,6 +758,11 @@ export function useWorkbenchController() {
   }
 
   function handleAllowedDepotChange(lineId, nextDepotId) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     const nextLineOptions = lineOptions.map((line) =>
       line.id === lineId
         ? { ...line, allowedDepotId: nextDepotId || "" }
@@ -705,6 +775,11 @@ export function useWorkbenchController() {
   }
 
   function handleMaxStationDwellChange(lineId, nextValue) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     const normalizedValue =
       Number.isFinite(Number(nextValue)) && Number(nextValue) > 0
         ? Math.max(1, Math.min(120, Math.round(Number(nextValue))))
@@ -740,12 +815,22 @@ export function useWorkbenchController() {
   }
 
   function handleScheduleContextAction(action) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     if (action === "sort-manual-rows") {
       setManualRows((current) => [...current].sort((left, right) => left.time.localeCompare(right.time)));
     }
   }
 
   function handleAddManualToStaged(rowsForLine) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     const nextRows = validateManualRows(
       [...rowsForLine].sort((left, right) => (left.time || "").localeCompare(right.time || "")),
       t
@@ -780,6 +865,11 @@ export function useWorkbenchController() {
   }
 
   function handleAddAutoToStaged(rowsForLine) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     setStagedRows((current) => {
       const plan = buildAutoStagedPlan({
         currentRows: current,
@@ -825,14 +915,29 @@ export function useWorkbenchController() {
   }
 
   function handleClearStagedLine() {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     setStagedRows((current) => current.filter((row) => row.lineId !== selectedEditLine));
   }
 
   function handleRemoveStagedRow(rowId) {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return;
+    }
+
     setStagedRows((current) => current.filter((row) => row.id !== rowId));
   }
 
   async function handleApplyDraft() {
+    if (legacyWorkbenchReadOnly) {
+      reportLegacyReadonly();
+      return t("message.workbenchReadonly");
+    }
+
     try {
       setSaveState({ status: "saving", message: t("message.savingDraft") });
       const result = await workbenchApi.saveDraft({
@@ -878,6 +983,7 @@ export function useWorkbenchController() {
     depotOptions,
     refreshWorkbenchMetadata,
     refreshWorkbenchSnapshot,
+    isReadonly: legacyWorkbenchReadOnly,
     stationOptions,
     filteredTrips,
     selectedTrip,
@@ -885,11 +991,11 @@ export function useWorkbenchController() {
     handleOriginHoldLimitChange,
     handleMaxStationDwellChange,
     manualRows,
-    setManualRows,
+    setManualRows: setManualRowsGuarded,
     autoRules,
-    setAutoRules,
+    setAutoRules: setAutoRulesGuarded,
     stagedRows,
-    setStagedRows,
+    setStagedRows: setStagedRowsGuarded,
     validatedRows,
     overviewSideContext,
     scheduleSideContext,

@@ -17,6 +17,7 @@ export default function DispatchWorkbenchContent({
   lineOptions,
   depotOptions,
   refreshWorkbenchMetadata,
+  isReadonly,
   stationOptions,
   filteredTrips,
   selectedTrip,
@@ -105,6 +106,7 @@ export default function DispatchWorkbenchContent({
       onOriginHoldLimitChange={handleOriginHoldLimitChange}
       onMaxStationDwellChange={handleMaxStationDwellChange}
       saveState={saveState}
+      isReadonly={isReadonly}
     />
   );
 }

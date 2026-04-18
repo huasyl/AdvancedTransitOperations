@@ -4,7 +4,7 @@ export function validateManualRows(rows, t) {
   const sourceRows = Array.isArray(rows) ? rows : [];
   const seen = new Set();
 
-  return sourceRows.map((row, index) => {
+  return sourceRows.map((row) => {
     let status = "ok";
     let message = t("validation.ok");
     const timeMinutes = timeToMinutes(row.time);
@@ -20,29 +20,6 @@ export function validateManualRows(rows, t) {
       message = t("validation.error.duplicate");
     } else if (status === "ok") {
       seen.add(duplicateKey);
-    }
-
-    if (status === "ok" && index > 0) {
-      const previous = timeToMinutes(sourceRows[index - 1].time);
-      if (previous !== null && timeMinutes !== null && timeMinutes < previous) {
-        status = "error";
-        message = t("validation.error.order");
-      }
-    }
-
-    if (
-      status === "ok" &&
-      row.offsetMode !== "none" &&
-      row.offsetMinutes !== "" &&
-      !/^\d+$/.test(String(row.offsetMinutes))
-    ) {
-      status = "error";
-      message = t("validation.error.offsetInteger");
-    }
-
-    if (status === "ok" && row.offsetMode === "none" && row.offsetMinutes !== "") {
-      status = "warning";
-      message = t("validation.warning.offsetIgnored");
     }
 
     return {

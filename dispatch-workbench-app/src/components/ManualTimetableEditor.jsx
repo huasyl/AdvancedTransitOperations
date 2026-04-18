@@ -15,7 +15,8 @@ export default function ManualTimetableEditor({
   selectedEditLine,
   selectedLineName,
   currentLineKind = "local",
-  onAddToStaged
+  onAddToStaged,
+  readOnly = false
 }) {
   const { locale } = useI18n();
   const [draft, setDraft] = useState(emptyDraft);
@@ -96,16 +97,16 @@ export default function ManualTimetableEditor({
         </div>
 
         <div className="dw-schedule-toolbar">
-          <button type="button" className="dw-btn dw-btn-primary" onClick={addDraftRow}>
+          <button type="button" className="dw-btn dw-btn-primary" onClick={addDraftRow} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "添加草稿行" : "Add draft row"}</ControlText>
           </button>
-          <button type="button" className="dw-btn" onClick={sortCurrentLine}>
+          <button type="button" className="dw-btn" onClick={sortCurrentLine} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "排序当前线路" : "Sort current line"}</ControlText>
           </button>
-          <button type="button" className="dw-btn" onClick={clearCurrentLine}>
+          <button type="button" className="dw-btn" onClick={clearCurrentLine} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "清空当前线路" : "Clear current line"}</ControlText>
           </button>
-          <button type="button" className="dw-btn is-toolbar-end" onClick={() => onAddToStaged?.(rowsForLine)}>
+          <button type="button" className="dw-btn is-toolbar-end" onClick={() => onAddToStaged?.(rowsForLine)} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "添加到时刻表" : "Add to timetable"}</ControlText>
           </button>
         </div>
@@ -118,6 +119,7 @@ export default function ManualTimetableEditor({
             <TimeInput
               placeholder="HH:mm"
               value={draft.time}
+              readOnly={readOnly}
               onChange={(event) =>
                 setDraft((current) => ({
                   ...current,
@@ -163,6 +165,7 @@ export default function ManualTimetableEditor({
                 <div className="dw-grid-cell is-departure">
                   <TimeInput
                     value={row.time}
+                    readOnly={readOnly}
                     onChange={(event) =>
                       updateRow(row.id, {
                         time: normalizeCompactTimeInput(event.target.value)
@@ -197,7 +200,7 @@ export default function ManualTimetableEditor({
                   </span>
                 </div>
                 <div className="dw-grid-cell is-action">
-                  <button type="button" className="dw-link-btn dw-btn-danger" onClick={() => removeRow(row.id)}>
+                  <button type="button" className="dw-link-btn dw-btn-danger" onClick={() => removeRow(row.id)} disabled={readOnly}>
                     <ControlText>{locale === "zh-CN" ? "删除" : "Delete"}</ControlText>
                   </button>
                 </div>

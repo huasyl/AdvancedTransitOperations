@@ -17,7 +17,8 @@ export function ChoiceButtons({
   value,
   onChange,
   className = "",
-  compact = false
+  compact = false,
+  disabled = false
 }) {
   const groupClassName = `dw-choice-group${compact ? " is-compact" : ""}${className ? ` ${className}` : ""}`;
 
@@ -29,7 +30,14 @@ export function ChoiceButtons({
           type="button"
           className={`dw-choice-btn ${value === option.value ? "is-active" : ""}`}
           title={option.title || option.label}
-          onClick={() => onChange?.(option.value)}
+          disabled={disabled}
+          onClick={() => {
+            if (disabled) {
+              return;
+            }
+
+            onChange?.(option.value);
+          }}
         >
           <ControlText>{option.label}</ControlText>
         </button>

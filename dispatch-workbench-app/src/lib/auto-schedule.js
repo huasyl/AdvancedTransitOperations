@@ -1,21 +1,50 @@
 ﻿import { timeToMinutes } from "./time";
 
 export const MIN_DEPARTURE_INTERVAL_MINUTES = 5;
+export const MAX_AUTO_RULE_TRIPS_PER_HOUR = 240;
+export const MAX_AUTO_RULE_GENERATED_TRIPS = 720;
 
-export function enumerateRuleMinutes(rule) {
-  const start = Number.parseInt(rule.start?.slice(0, 2), 10) * 60 + Number.parseInt(rule.start?.slice(3, 5), 10);
-  const end = Number.parseInt(rule.end?.slice(0, 2), 10) * 60 + Number.parseInt(rule.end?.slice(3, 5), 10);
+function analyzeAutoRuleGeneration(rule) {
+  const start = timeToMinutes(rule.start);
+  const end = timeToMinutes(rule.end);
   const departuresPerHour = Number(rule.departuresPerHour) || 0;
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || departuresPerHour <= 0) {
-    return [];
+    return { ok: false, reason: "invalid" };
   }
 
-  const interval = 60 / departuresPerHour;
+  if (departuresPerHour > MAX_AUTO_RULE_TRIPS_PER_HOUR) {
+    return { ok: false, reason: "frequencyLimit" };
+  }
+
+  const estimatedCount = Math.ceil(((end - start) * departuresPerHour) / 60);
+  if (!Number.isFinite(estimatedCount) || estimatedCount > MAX_AUTO_RULE_GENERATED_TRIPS) {
+    return { ok: false, reason: "tripLimit" };
+  }
+
+  return {
+    ok: true,
+    start,
+    end,
+    departuresPerHour
+  };
+}
+
+function enumerateRuleMinutesFromAnalysis(analysis) {
+  const interval = 60 / analysis.departuresPerHour;
   const result = [];
-  for (let minute = start; minute < end; minute += interval) {
+  for (let minute = analysis.start; minute < analysis.end; minute += interval) {
     result.push(Math.round(minute));
   }
   return result;
+}
+
+export function enumerateRuleMinutes(rule) {
+  const analysis = analyzeAutoRuleGeneration(rule);
+  if (!analysis.ok) {
+    return [];
+  }
+
+  return enumerateRuleMinutesFromAnalysis(analysis);
 }
 
 export function minutesToTime(totalMinutes) {
@@ -77,9 +106,12 @@ export function buildAutoStagedPlan({
   rowsForLine = [],
   selectedEditLine,
   referenceLineIds = [],
-  lineOptions = []
+  lineOptions = [],
+  replaceExistingAutoRows = true
 }) {
-  const retainedRows = currentRows.filter((row) => !(row.lineId === selectedEditLine && row.source === "auto"));
+  const retainedRows = replaceExistingAutoRows
+    ? currentRows.filter((row) => !(row.lineId === selectedEditLine && row.source === "auto"))
+    : currentRows;
   const activeKinds = new Set(
     rowsForLine.filter((rule) => rule.enabled).map((rule) => (rule.kind === "express" ? "express" : "local"))
   );
@@ -115,13 +147,28 @@ export function buildAutoStagedPlan({
   rowsForLine
     .filter((rule) => rule.enabled)
     .forEach((rule) => {
-      const baseMinutes = enumerateRuleMinutes(rule);
-      const preview = { times: [], skippedCount: 0, reason: "" };
-      if (baseMinutes.length === 0) {
-        preview.reason = "invalid";
+      const generation = analyzeAutoRuleGeneration(rule);
+      const preview = { times: [], entries: [], skippedCount: 0, skipReasons: [], reason: "" };
+      const pushPreviewEntry = (minute, { skipped = false, reason = "" } = {}) => {
+        const time = Number.isFinite(minute) ? minutesToTime(minute) : "--";
+        preview.entries.push({ time, skipped, reason });
+        if (skipped) {
+          preview.skippedCount += 1;
+          if (reason && !preview.skipReasons.includes(reason)) {
+            preview.skipReasons.push(reason);
+          }
+          skippedCount += 1;
+          return;
+        }
+
+        preview.times.push(time);
+      };
+      if (!generation.ok) {
+        preview.reason = generation.reason;
         previewsByRule[rule.id] = preview;
         return;
       }
+      const baseMinutes = enumerateRuleMinutesFromAnalysis(generation);
 
       if (rule.kind === "express") {
         const windowStart = timeToMinutes(rule.start);
@@ -129,60 +176,56 @@ export function buildAutoStagedPlan({
         const localReferenceMinutes = currentLineReferenceRows
           .map((row) => timeToMinutes(row.time))
           .filter((value) => value !== null && value >= windowStart && value < windowEnd);
-                const offsetMinutes = Number(rule.expressOffsetMinutes) || 0;
+        const offsetMinutes = Number(rule.expressOffsetMinutes) || 0;
         const referenceMinutes = localReferenceMinutes.length > 0 ? localReferenceMinutes : baseMinutes;
-        const candidatePairs = referenceMinutes
-          .map((referenceMinute) => {
-            if (!Number.isFinite(referenceMinute)) {
-              return null;
-            }
+        const evaluatedCandidates = referenceMinutes.map((referenceMinute) => {
+          if (!Number.isFinite(referenceMinute)) {
+            return null;
+          }
 
-            const candidateMinute =
-              rule.expressOffsetMode === "before" ? referenceMinute - offsetMinutes : referenceMinute + offsetMinutes;
-            if (candidateMinute < windowStart || candidateMinute >= windowEnd) {
-              return null;
-            }
-
-            return {
-              referenceMinute,
-              candidateMinute
-            };
-          })
-          .filter((entry) => entry !== null);
+          const candidateMinute =
+            rule.expressOffsetMode === "before" ? referenceMinute - offsetMinutes : referenceMinute + offsetMinutes;
+          return {
+            referenceMinute,
+            candidateMinute,
+            inWindow: candidateMinute >= windowStart && candidateMinute < windowEnd
+          };
+        });
+        const candidatePairs = evaluatedCandidates.filter((entry) => entry && entry.inWindow);
 
         if (candidatePairs.length === 0) {
-          preview.skippedCount += baseMinutes.length;
-          skippedCount += baseMinutes.length;
+          baseMinutes.forEach((baseMinute, generatedIndex) => {
+            const referenceMinute = referenceMinutes[generatedIndex] ?? baseMinute;
+            const candidateMinute =
+              rule.expressOffsetMode === "before" ? referenceMinute - offsetMinutes : referenceMinute + offsetMinutes;
+            pushPreviewEntry(candidateMinute, { skipped: true, reason: "offset" });
+          });
           previewsByRule[rule.id] = preview;
           return;
         }
 
         const targetIndexes = pickEvenlyDistributedIndexes(candidatePairs.length, baseMinutes.length);
-        if (targetIndexes.length < baseMinutes.length) {
-          const missingCount = baseMinutes.length - targetIndexes.length;
-          preview.skippedCount += missingCount;
-          skippedCount += missingCount;
-        }
-
-        targetIndexes.forEach((referenceIndex, generatedIndex) => {
-          const candidate = candidatePairs[referenceIndex];
+        for (let generatedIndex = 0; generatedIndex < baseMinutes.length; generatedIndex += 1) {
+          const referenceIndex = targetIndexes[generatedIndex];
+          const candidate = Number.isInteger(referenceIndex) ? candidatePairs[referenceIndex] : null;
           if (!candidate) {
-            preview.skippedCount += 1;
-            skippedCount += 1;
-            return;
+            const referenceMinute = referenceMinutes[generatedIndex] ?? baseMinutes[generatedIndex];
+            const candidateMinute =
+              rule.expressOffsetMode === "before" ? referenceMinute - offsetMinutes : referenceMinute + offsetMinutes;
+            pushPreviewEntry(candidateMinute, { skipped: true, reason: "offset" });
+            continue;
           }
 
           if (!hasMinimumDepartureGapForOrigin(candidate.candidateMinute, selectedOriginStationId, occupiedRows)) {
-            preview.skippedCount += 1;
-            skippedCount += 1;
-            return;
+            pushPreviewEntry(candidate.candidateMinute, { skipped: true, reason: "gap" });
+            continue;
           }
 
           occupiedRows.push({
             minute: candidate.candidateMinute,
             originStationId: selectedOriginStationId
           });
-          preview.times.push(minutesToTime(candidate.candidateMinute));
+          pushPreviewEntry(candidate.candidateMinute);
           plannedRows.push({
             ruleId: rule.id,
             lineId: rule.lineId,
@@ -192,7 +235,7 @@ export function buildAutoStagedPlan({
             noteType: rule.expressOffsetMode === "before" ? "before" : "after",
             offsetMinutes
           });
-        });
+        }
 
         previewsByRule[rule.id] = preview;
         return;
@@ -200,8 +243,7 @@ export function buildAutoStagedPlan({
 
       baseMinutes.forEach((candidateMinute, generatedIndex) => {
         if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows)) {
-          preview.skippedCount += 1;
-          skippedCount += 1;
+          pushPreviewEntry(candidateMinute, { skipped: true, reason: "gap" });
           return;
         }
 
@@ -209,7 +251,7 @@ export function buildAutoStagedPlan({
           minute: candidateMinute,
           originStationId: selectedOriginStationId
         });
-        preview.times.push(minutesToTime(candidateMinute));
+        pushPreviewEntry(candidateMinute);
         plannedRows.push({
           ruleId: rule.id,
           lineId: rule.lineId,

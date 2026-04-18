@@ -10,7 +10,8 @@ export default function CombinedScheduleTable({
   actionMessage,
   onApply,
   onClearCurrentLine,
-  onRemoveRow
+  onRemoveRow,
+  readOnly = false
 }) {
   const { locale } = useI18n();
   const [filterMode, setFilterMode] = useState("all");
@@ -28,6 +29,10 @@ export default function CombinedScheduleTable({
   const visibleEarliestStart = filteredRows[0]?.time || previewSummary?.earliestStart || "--:--";
 
   function handleApplyClick() {
+    if (readOnly) {
+      return;
+    }
+
     if (conflictCount > 0) {
       return;
     }
@@ -159,7 +164,7 @@ export default function CombinedScheduleTable({
                   <SafeControlText>{row.originStationName || (row.lineId === selectedEditLine ? fallbackOriginStationName : "") || (locale === "zh-CN" ? "待刷新" : "-")}</SafeControlText>
                 </div>
                 <div className="dw-grid-cell is-action">
-                  <button type="button" className="dw-link-btn dw-btn-danger" onClick={() => onRemoveRow?.(row.id)}>
+                  <button type="button" className="dw-link-btn dw-btn-danger" onClick={() => onRemoveRow?.(row.id)} disabled={readOnly}>
                     <ControlText>{locale === "zh-CN" ? "删除" : "Delete"}</ControlText>
                   </button>
                 </div>
@@ -185,10 +190,10 @@ export default function CombinedScheduleTable({
         ) : null}
 
         <div className="dw-schedule-toolbar is-merged-bottom">
-          <button type="button" className="dw-btn" onClick={onClearCurrentLine}>
+          <button type="button" className="dw-btn" onClick={onClearCurrentLine} disabled={readOnly}>
             <ControlText>{locale === "zh-CN" ? "移除当前线路" : "Remove current line"}</ControlText>
           </button>
-          <button type="button" className="dw-btn dw-btn-primary is-toolbar-end" onClick={handleApplyClick}>
+          <button type="button" className="dw-btn dw-btn-primary is-toolbar-end" onClick={handleApplyClick} disabled={readOnly || conflictCount > 0}>
             <ControlText>{locale === "zh-CN" ? "应用时刻表" : "Apply timetable"}</ControlText>
           </button>
         </div>
