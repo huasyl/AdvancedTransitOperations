@@ -53,6 +53,304 @@
   content: none;
 }
 
+.dw-bc-import-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: #1b2327;
+}
+
+.dw-bc-import-head {
+  display: flex;
+  align-items: center;
+  padding: 28px 48px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.dw-bc-import-back-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-right: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.dw-bc-import-back-icon {
+  width: 24px;
+  height: 24px;
+  color: #81d4d4;
+  stroke: #81d4d4;
+}
+
+.dw-bc-import-head-copy {
+  display: flex;
+  flex-direction: column;
+}
+
+.dw-bc-import-head-title {
+  color: #ffffff;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 300;
+}
+
+.dw-bc-import-head-subtitle {
+  margin-top: 6px;
+  color: rgba(255, 255, 255, 0.40);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.dw-bc-import-toolbar {
+  display: flex;
+  align-items: center;
+  padding: 16px 48px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.dw-bc-import-parent-button {
+  display: flex;
+  align-items: center;
+  margin-right: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  padding: 10px 20px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+  font-size: 18px;
+  line-height: 24px;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, opacity 180ms ease;
+}
+
+.dw-bc-import-parent-button.is-disabled {
+  background: transparent;
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.dw-bc-import-parent-icon-shell {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+}
+
+.dw-bc-import-parent-icon {
+  width: 20px;
+  height: 20px;
+  color: #81d4d4;
+  stroke: #81d4d4;
+}
+
+.dw-bc-import-breadcrumbs {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  padding: 10px 20px;
+  background: rgba(0, 0, 0, 0.20);
+}
+
+.dw-bc-import-breadcrumb-icon-shell {
+  display: flex;
+  align-items: center;
+  margin-right: 10px;
+}
+
+.dw-bc-import-breadcrumb-icon {
+  width: 20px;
+  height: 20px;
+  color: #e0c3f8;
+  stroke: #e0c3f8;
+}
+
+.dw-bc-import-breadcrumb-copy {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.dw-bc-import-breadcrumb-part {
+  display: flex;
+  align-items: center;
+}
+
+.dw-bc-import-breadcrumb-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.40);
+  font-size: 18px;
+  line-height: 24px;
+  cursor: pointer;
+  transition: color 180ms ease;
+}
+
+.dw-bc-import-breadcrumb-button.is-current {
+  color: rgba(255, 255, 255, 0.90);
+  cursor: default;
+}
+
+.dw-bc-import-breadcrumb-sep {
+  margin: 0 10px;
+  color: rgba(255, 255, 255, 0.20);
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.dw-bc-import-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.dw-bc-import-select-all {
+  display: flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
+  font-size: 18px;
+  line-height: 24px;
+  cursor: pointer;
+  transition: opacity 180ms ease;
+}
+
+.dw-bc-import-select-all-icon-shell {
+  display: flex;
+  align-items: center;
+  margin-right: 10px;
+}
+
+.dw-bc-import-select-all-icon,
+.dw-bc-import-card-check-icon {
+  width: 20px;
+  height: 20px;
+  color: rgba(255, 255, 255, 0.30);
+  stroke: rgba(255, 255, 255, 0.30);
+}
+
+.dw-bc-import-select-all-icon.is-checked,
+.dw-bc-import-card-check-icon.is-checked {
+  color: #81d4d4;
+  stroke: #81d4d4;
+}
+
+.dw-bc-import-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 32px 48px;
+}
+
+.dw-bc-import-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.dw-bc-import-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 240px;
+  margin-right: 20px;
+  margin-bottom: 20px;
+  border: 1px solid transparent;
+  padding: 32px 16px 24px;
+  background: rgba(0, 0, 0, 0.20);
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.dw-bc-import-card.is-file {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.10);
+}
+
+.dw-bc-import-card.is-file.is-selected {
+  background: rgba(129, 212, 212, 0.15);
+  border-color: #81d4d4;
+}
+
+.dw-bc-import-card-check-shell {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+}
+
+.dw-bc-import-card-icon-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.dw-bc-import-card-folder-icon {
+  width: 48px;
+  height: 48px;
+  color: #81b581;
+  stroke: #81b581;
+}
+
+.dw-bc-import-card-file-icon {
+  width: 48px;
+  height: 48px;
+  color: #e0c3f8;
+  stroke: #e0c3f8;
+}
+
+.dw-bc-import-card-name {
+  color: rgba(255, 255, 255, 0.90);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 500;
+  text-align: center;
+  word-break: break-all;
+}
+
+.dw-bc-import-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 80px;
+  padding: 0 48px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(0, 0, 0, 0.20);
+}
+
+.dw-bc-import-foot-note {
+  color: rgba(255, 255, 255, 0.40);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.dw-bc-import-foot-actions {
+  display: flex;
+  align-items: center;
+}
+
+.dw-bc-import-text-button {
+  margin-right: 16px;
+  border: 1px solid transparent;
+  padding: 10px 32px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.60);
+  font-size: 18px;
+  line-height: 24px;
+  cursor: pointer;
+  transition: color 180ms ease;
+}
+
 .dw-bc-sidebar {
   display: flex;
   flex-direction: column;
@@ -1444,6 +1742,43 @@
   border-color: rgba(79, 158, 171, 0.36);
   background: rgba(79, 158, 171, 0.16);
   color: #82cfdc;
+}
+
+.dw-bc-import-back-button:hover {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dw-bc-import-parent-button:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.dw-bc-import-parent-button.is-disabled:hover {
+  background: transparent;
+}
+
+.dw-bc-import-breadcrumb-button:hover {
+  color: #ffffff;
+}
+
+.dw-bc-import-breadcrumb-button.is-current:hover {
+  color: rgba(255, 255, 255, 0.90);
+}
+
+.dw-bc-import-select-all:hover {
+  opacity: 0.8;
+}
+
+.dw-bc-import-card.is-folder:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.dw-bc-import-card.is-file:hover {
+  background: rgba(129, 212, 212, 0.10);
+}
+
+.dw-bc-import-text-button:hover {
+  color: #ffffff;
 }
 
 .dw-bc-outline-button:hover .dw-bc-outline-button-icon-shell {

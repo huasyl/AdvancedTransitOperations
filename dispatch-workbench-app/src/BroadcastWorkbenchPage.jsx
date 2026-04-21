@@ -39,6 +39,48 @@ const LINE_OPTIONS = [
   { id: "loop_test", labelKey: "broadcast.line.loop" }
 ];
 
+const EXTERNAL_ASSET_FILE_SYSTEM = {
+  "C:\\Mods\\Audio\\": {
+    folders: ["BGM", "SFX", "Voice_Packs"],
+    files: [
+      { id: "root_f1", name: "Global_Config_Ping.wav" }
+    ]
+  },
+  "C:\\Mods\\Audio\\BGM\\": {
+    folders: [],
+    files: [
+      { id: "bgm_1", name: "Ambient_City.wav" },
+      { id: "bgm_2", name: "Menu_Theme.ogg" }
+    ]
+  },
+  "C:\\Mods\\Audio\\SFX\\": {
+    folders: ["Vehicles", "UI"],
+    files: []
+  },
+  "C:\\Mods\\Audio\\SFX\\Vehicles\\": {
+    folders: [],
+    files: [
+      { id: "veh_1", name: "Train_Whistle.ogg" },
+      { id: "veh_2", name: "Bus_Brake.wav" }
+    ]
+  },
+  "C:\\Mods\\Audio\\SFX\\UI\\": {
+    folders: [],
+    files: [
+      { id: "ui_1", name: "Notification_Ping.mp3" }
+    ]
+  },
+  "C:\\Mods\\Audio\\Voice_Packs\\": {
+    folders: [],
+    files: [
+      { id: "vp_1", name: "Station_Jingmai.wav" },
+      { id: "vp_2", name: "Next_Stop_Is.wav" }
+    ]
+  }
+};
+
+const DEFAULT_EXTERNAL_ASSET_PATH = "C:\\Mods\\Audio\\";
+
 const TAB_TRANSITION_MS = 300;
 const INLINE_PANEL_TRANSITION_MS = 650;
 const INLINE_PANEL_EASING = "cubic-bezier(0.19, 1, 0.22, 1)";
@@ -91,6 +133,60 @@ function PlayIcon() {
   return (
     <svg viewBox="0 0 24 24" className="dw-bc-icon dw-bc-play-icon is-fill">
       <polygon points="8 5 19 12 8 19 8 5" />
+    </svg>
+  );
+}
+
+function ArrowLeftIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`dw-bc-icon ${className}`.trim()}>
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
+    </svg>
+  );
+}
+
+function FolderIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`dw-bc-icon ${className}`.trim()}>
+      <path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+      <path d="M3 7V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function ReturnUpIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`dw-bc-icon ${className}`.trim()}>
+      <polyline points="9 10 4 15 9 20" />
+      <path d="M20 4v8a3 3 0 0 1-3 3H4" />
+    </svg>
+  );
+}
+
+function FileAudioIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`dw-bc-icon ${className}`.trim()}>
+      <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+      <polyline points="14 2 14 7 19 7" />
+      <path d="M10 16a2 2 0 1 0 2 2v-5l4-1v4a2 2 0 1 0 2 2v-7l-8 2z" />
+    </svg>
+  );
+}
+
+function SquareIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`dw-bc-icon ${className}`.trim()}>
+      <rect x="4" y="4" width="16" height="16" rx="1.5" ry="1.5" />
+    </svg>
+  );
+}
+
+function CheckSquareIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`dw-bc-icon ${className}`.trim()}>
+      <rect x="4" y="4" width="16" height="16" rx="1.5" ry="1.5" />
+      <polyline points="8 12 11 15 16 9" />
     </svg>
   );
 }
@@ -601,6 +697,9 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   const [mappingTray, setMappingTray] = useState(null);
   const [catalogAssetLibrary, setCatalogAssetLibrary] = useState([]);
   const [hasCatalogHydrated, setHasCatalogHydrated] = useState(false);
+  const [isAssetExplorerOpen, setIsAssetExplorerOpen] = useState(false);
+  const [selectedExternalFiles, setSelectedExternalFiles] = useState([]);
+  const [currentExternalPath, setCurrentExternalPath] = useState(DEFAULT_EXTERNAL_ASSET_PATH);
   const [lineOptions, setLineOptions] = useState(fallbackLineOptions);
   const [selectedLineId, setSelectedLineId] = useState(fallbackLineOptions[0]?.id ?? LINE_OPTIONS[0].id);
   const [lineDropdownOpen, setLineDropdownOpen] = useState(false);
@@ -1024,12 +1123,58 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     setMappingTray(null);
   }
 
-  async function handleImportAssetDirectory() {
-    try {
-      await workbenchApi.openBroadcastAssetDirectoryPicker?.();
-    } catch (error) {
-      console.error("[RT Broadcast Workbench] open asset directory picker failed", error);
+  function handleImportAssetDirectory() {
+    setIsAssetExplorerOpen(true);
+  }
+
+  function handleCloseAssetExplorer() {
+    setIsAssetExplorerOpen(false);
+    setSelectedExternalFiles([]);
+    setCurrentExternalPath(DEFAULT_EXTERNAL_ASSET_PATH);
+  }
+
+  function handleExternalPathChange(path) {
+    if (EXTERNAL_ASSET_FILE_SYSTEM[path]) {
+      setCurrentExternalPath(path);
     }
+  }
+
+  function handleExternalBack() {
+    if (currentExternalPath === DEFAULT_EXTERNAL_ASSET_PATH) {
+      return;
+    }
+
+    const parts = currentExternalPath.split("\\").filter(Boolean);
+    if (parts.length <= 1) {
+      return;
+    }
+
+    parts.pop();
+    const nextPath = `${parts.join("\\")}\\`;
+    if (EXTERNAL_ASSET_FILE_SYSTEM[nextPath]) {
+      setCurrentExternalPath(nextPath);
+    }
+  }
+
+  function handleToggleExternalFile(fileId) {
+    setSelectedExternalFiles((current) =>
+      current.includes(fileId)
+        ? current.filter((id) => id !== fileId)
+        : [...current, fileId]
+    );
+  }
+
+  function handleToggleAllExternalFiles() {
+    const currentViewFiles = EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || [];
+    const currentViewIds = currentViewFiles.map((file) => file.id);
+    const allSelected = currentViewIds.length > 0 && currentViewIds.every((id) => selectedExternalFiles.includes(id));
+
+    if (allSelected) {
+      setSelectedExternalFiles((current) => current.filter((id) => !currentViewIds.includes(id)));
+      return;
+    }
+
+    setSelectedExternalFiles((current) => Array.from(new Set([...current, ...currentViewIds])));
   }
 
   return (
@@ -1271,6 +1416,118 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
           </footer>
         </section>
         </div>
+        {isAssetExplorerOpen ? (
+          <div className="dw-bc-import-overlay">
+            <div className="dw-bc-import-head">
+              <button type="button" className="dw-bc-import-back-button" onClick={handleCloseAssetExplorer}>
+                <ArrowLeftIcon className="dw-bc-import-back-icon" />
+              </button>
+              <div className="dw-bc-import-head-copy">
+                <span className="dw-bc-import-head-title">{broadcastLabels.importAsset}</span>
+                <span className="dw-bc-import-head-subtitle">本地磁盘 / 音频库 / 扫描到 2 个新音效</span>
+              </div>
+            </div>
+
+            <div className="dw-bc-import-toolbar">
+              <button
+                type="button"
+                className={`dw-bc-import-parent-button ${currentExternalPath === DEFAULT_EXTERNAL_ASSET_PATH ? "is-disabled" : ""}`}
+                onClick={handleExternalBack}
+              >
+                <span className="dw-bc-import-parent-icon-shell">
+                  <ReturnUpIcon className="dw-bc-import-parent-icon" />
+                </span>
+                <span>返回上一层</span>
+              </button>
+
+              <div className="dw-bc-import-breadcrumbs">
+                <span className="dw-bc-import-breadcrumb-icon-shell">
+                  <FolderIcon className="dw-bc-import-breadcrumb-icon" />
+                </span>
+                <div className="dw-bc-import-breadcrumb-copy">
+                  {currentExternalPath.split("\\").filter(Boolean).map((part, index, parts) => {
+                    const buildPath = `${parts.slice(0, index + 1).join("\\")}\\`;
+                    const isLast = index === parts.length - 1;
+                    return (
+                      <div key={buildPath} className="dw-bc-import-breadcrumb-part">
+                        <button
+                          type="button"
+                          className={`dw-bc-import-breadcrumb-button ${isLast ? "is-current" : ""}`}
+                          onClick={() => handleExternalPathChange(buildPath)}
+                        >
+                          {part}
+                        </button>
+                        {isLast ? null : <span className="dw-bc-import-breadcrumb-sep">\</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="dw-bc-import-toolbar-spacer" />
+
+              <button type="button" className="dw-bc-import-select-all" onClick={handleToggleAllExternalFiles}>
+                <span className="dw-bc-import-select-all-icon-shell">
+                  {(EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || []).length > 0
+                  && (EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || []).every((file) => selectedExternalFiles.includes(file.id))
+                    ? <CheckSquareIcon className="dw-bc-import-select-all-icon is-checked" />
+                    : <SquareIcon className="dw-bc-import-select-all-icon" />}
+                </span>
+                <span>全选本项目</span>
+              </button>
+            </div>
+
+            <div className="dw-bc-import-body">
+              <div className="dw-bc-import-grid">
+                {(EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.folders || []).map((folderName) => (
+                  <button
+                    key={folderName}
+                    type="button"
+                    className="dw-bc-import-card is-folder"
+                    onClick={() => handleExternalPathChange(`${currentExternalPath}${folderName}\\`)}
+                  >
+                    <span className="dw-bc-import-card-icon-shell">
+                      <FolderIcon className="dw-bc-import-card-folder-icon" />
+                    </span>
+                    <span className="dw-bc-import-card-name">{folderName}</span>
+                  </button>
+                ))}
+
+                {(EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || []).map((file) => {
+                  const isSelected = selectedExternalFiles.includes(file.id);
+                  return (
+                    <button
+                      key={file.id}
+                      type="button"
+                      className={`dw-bc-import-card is-file ${isSelected ? "is-selected" : ""}`}
+                      onClick={() => handleToggleExternalFile(file.id)}
+                    >
+                      <span className="dw-bc-import-card-check-shell">
+                        {isSelected
+                          ? <CheckSquareIcon className="dw-bc-import-card-check-icon is-checked" />
+                          : <SquareIcon className="dw-bc-import-card-check-icon" />}
+                      </span>
+                      <span className="dw-bc-import-card-icon-shell">
+                        <FileAudioIcon className="dw-bc-import-card-file-icon" />
+                      </span>
+                      <span className="dw-bc-import-card-name">{file.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="dw-bc-import-foot">
+              <span className="dw-bc-import-foot-note">支持 .wav, .mp3, .ogg 格式文件</span>
+              <div className="dw-bc-import-foot-actions">
+                <button type="button" className="dw-bc-import-text-button" onClick={handleCloseAssetExplorer}>取消</button>
+                <button type="button" className="dw-bc-primary-button" onClick={handleCloseAssetExplorer}>
+                  导入选中项{selectedExternalFiles.length > 0 ? ` (${selectedExternalFiles.length})` : ""}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
       <div ref={dropdownPortalHostRef} className="dw-demo-dropdown-portal-layer" />
     </div>
