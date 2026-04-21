@@ -17,6 +17,7 @@ namespace RapidTransitMod
         private const string EuisAcronym = "rt";
         private const string AppId = "dispatch-workbench";
         private const string SnapshotChangedEvent = EuisModder + "::" + EuisAcronym + ".workbench.onSnapshotChanged";
+        private const string BroadcastSnapshotChangedEvent = EuisModder + "::" + EuisAcronym + ".workbench.onBroadcastSnapshotChanged";
         private const string DevServerConfigFile = "dispatch-workbench-euis-dev-url.txt";
         private const string LegacyReadonlyMessage = "Legacy EUIS workbench is now read-only. Use the native Schedule panel to edit and apply timetables.";
 
@@ -73,6 +74,37 @@ namespace RapidTransitMod
             }
         }
 
+        internal static void NotifyBroadcastWorkbenchSnapshotChanged(DepartureControlSystem.BroadcastWorkbenchSnapshot snapshot)
+        {
+            string snapshotJson = snapshot != null ? DispatchWorkbenchJson.Serialize(snapshot) : string.Empty;
+
+            if (!s_IsRegistered || GameManager.instance?.userInterface?.view?.View == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (GameManager.instance.userInterface.view.View.IsReadyForBindings())
+                {
+                    GameManager.instance.userInterface.view.View.TriggerEvent<string>(BroadcastSnapshotChangedEvent, snapshotJson);
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("Broadcast snapshot event push failed: " + ex.Message);
+            }
+
+            try
+            {
+                s_EuisCaller?.Invoke("workbench.onBroadcastSnapshotChanged", new object[] { snapshotJson });
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("Broadcast EUIS callback push failed: " + ex.Message);
+            }
+        }
+
         private static bool RegisterOnce()
         {
             if (s_IsRegistered)
@@ -119,6 +151,9 @@ namespace RapidTransitMod
             var view = GameManager.instance.userInterface.view.View;
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadSnapshot", new Func<string>(HandleLoadSnapshot));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadBroadcastSnapshot", new Func<string, string>(HandleLoadBroadcastSnapshot));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshBroadcastSnapshot", new Func<string, string>(HandleRefreshBroadcastSnapshot));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.openBroadcastAssetDirectoryPicker", new Func<string>(HandleOpenBroadcastAssetDirectoryPicker));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
@@ -137,6 +172,21 @@ namespace RapidTransitMod
             string snapshotJson = DepartureControlSystem.Instance?.RefreshWorkbenchSnapshotJson() ?? string.Empty;
             DispatchWorkbenchUISystem.PublishSnapshotJson(snapshotJson);
             return snapshotJson;
+        }
+
+        private static string HandleLoadBroadcastSnapshot(string preferredLineId)
+        {
+            return DepartureControlSystem.Instance?.LoadBroadcastWorkbenchSnapshotJson(preferredLineId) ?? string.Empty;
+        }
+
+        private static string HandleRefreshBroadcastSnapshot(string preferredLineId)
+        {
+            return DepartureControlSystem.Instance?.RefreshBroadcastWorkbenchSnapshotJson(preferredLineId) ?? string.Empty;
+        }
+
+        private static string HandleOpenBroadcastAssetDirectoryPicker()
+        {
+            return DepartureControlSystem.Instance?.OpenBroadcastAssetDirectoryPickerJson() ?? string.Empty;
         }
 
         private static string HandleRefreshMetadata()
@@ -286,6 +336,7 @@ namespace RapidTransitMod
             }
 
             registerEvent("workbench.onSnapshotChanged", new Action<string>(_ => { }));
+            registerEvent("workbench.onBroadcastSnapshotChanged", new Action<string>(_ => { }));
         }
 
         private static void SetupCallBinder(Action<string, Delegate> registerCall)
@@ -297,6 +348,9 @@ namespace RapidTransitMod
 
             registerCall("workbench.loadSnapshot", new Func<string>(HandleLoadSnapshot));
             registerCall("workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
+            registerCall("workbench.loadBroadcastSnapshot", new Func<string, string>(HandleLoadBroadcastSnapshot));
+            registerCall("workbench.refreshBroadcastSnapshot", new Func<string, string>(HandleRefreshBroadcastSnapshot));
+            registerCall("workbench.openBroadcastAssetDirectoryPicker", new Func<string>(HandleOpenBroadcastAssetDirectoryPicker));
             registerCall("workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             registerCall("workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             registerCall("workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));

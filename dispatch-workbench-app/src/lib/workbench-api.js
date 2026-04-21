@@ -7,6 +7,9 @@ import { createEmptySnapshot } from "./workbench-defaults";
 const CALLS = {
   loadSnapshot: "suhua::rt.workbench.loadSnapshot",
   refreshSnapshot: "suhua::rt.workbench.refreshSnapshot",
+  loadBroadcastSnapshot: "suhua::rt.workbench.loadBroadcastSnapshot",
+  refreshBroadcastSnapshot: "suhua::rt.workbench.refreshBroadcastSnapshot",
+  openBroadcastAssetDirectoryPicker: "suhua::rt.workbench.openBroadcastAssetDirectoryPicker",
   refreshMetadata: "suhua::rt.workbench.refreshMetadata",
   saveWorkbenchDraft: "suhua::rt.workbench.saveWorkbenchDraft",
   saveNativeWorkbenchDraft: "suhua::rt.workbench.saveNativeWorkbenchDraft",
@@ -14,7 +17,8 @@ const CALLS = {
 };
 
 const EVENTS = {
-  snapshotChanged: "suhua::rt.workbench.onSnapshotChanged"
+  snapshotChanged: "suhua::rt.workbench.onSnapshotChanged",
+  broadcastSnapshotChanged: "suhua::rt.workbench.onBroadcastSnapshotChanged"
 };
 
 function parsePayload(payload, fallbackValue) {
@@ -41,6 +45,26 @@ function getEngineCall() {
   return window.engine.call.bind(window.engine);
 }
 
+function createEmptyBroadcastSnapshot() {
+  return {
+    selectedLineId: "",
+    lines: [],
+    stations: [],
+    assetDirectory: "",
+    assets: [],
+    version: "",
+    sourceMode: "game-backend"
+  };
+}
+
+function createBroadcastDirectoryPickerResult() {
+  return {
+    success: false,
+    pending: false,
+    error: ""
+  };
+}
+
 function createLiveApi() {
   return {
     async loadSnapshot() {
@@ -52,6 +76,21 @@ function createLiveApi() {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.refreshSnapshot);
       return parsePayload(payload, createEmptySnapshot());
+    },
+    async loadBroadcastSnapshot(selectedLineId = "") {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadBroadcastSnapshot, selectedLineId || "");
+      return parsePayload(payload, createEmptyBroadcastSnapshot());
+    },
+    async refreshBroadcastSnapshot(selectedLineId = "") {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.refreshBroadcastSnapshot, selectedLineId || "");
+      return parsePayload(payload, createEmptyBroadcastSnapshot());
+    },
+    async openBroadcastAssetDirectoryPicker() {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.openBroadcastAssetDirectoryPicker);
+      return parsePayload(payload, createBroadcastDirectoryPickerResult());
     },
     async refreshMetadata() {
       const engineCall = getEngineCall();
@@ -105,6 +144,25 @@ function createLiveApi() {
       return () => {
         if (typeof window.engine.off === "function") {
           window.engine.off(EVENTS.snapshotChanged, handler);
+        }
+      };
+    },
+    onBroadcastSnapshotChanged(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const snapshot = parsePayload(payload, null);
+        if (snapshot) {
+          callback(snapshot);
+        }
+      };
+
+      window.engine.on(EVENTS.broadcastSnapshotChanged, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.broadcastSnapshotChanged, handler);
         }
       };
     }

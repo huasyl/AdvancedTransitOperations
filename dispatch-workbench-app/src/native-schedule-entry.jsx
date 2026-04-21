@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import DispatchWorkbenchNativeScheduleApp from "./DispatchWorkbenchNativeScheduleApp.jsx";
 import { NativeScheduleI18nProvider } from "./native-schedule-i18n";
 import "./styles/native-schedule-demo.css";
+import "./styles/native-broadcast-page.css";
 
 const GLOBAL_MOUNT_KEY = "RTDispatchWorkbenchNativeSchedule";
 const mountedEntries = new WeakMap();

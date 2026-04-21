@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { buildAutoStagedPlan, getLineKinds, hasMinimumDepartureGapForOrigin, MIN_DEPARTURE_INTERVAL_MINUTES } from "./lib/auto-schedule";
 import { getWorkbenchApi } from "./lib/workbench-api";
@@ -404,6 +404,26 @@ function chunkItemsBySize(items, chunkSize) {
   return nextRows;
 }
 
+const TOP_PREVIEW_ROW_CACHE = new Map();
+const RULE_PREVIEW_ROW_CACHE = new Map();
+const PREVIEW_ROW_CACHE_LIMIT = 128;
+
+function rememberPreviewRows(cache, key, value) {
+  if (cache.has(key)) {
+    const existingValue = cache.get(key);
+    cache.delete(key);
+    cache.set(key, existingValue);
+    return existingValue;
+  }
+
+  cache.set(key, value);
+  if (cache.size > PREVIEW_ROW_CACHE_LIMIT) {
+    const firstKey = cache.keys().next().value;
+    cache.delete(firstKey);
+  }
+  return value;
+}
+
 function getTopPreviewMaxItemsPerRow(script, hasMeta) {
   const isLatin = script === "latin";
   if (isLatin) {
@@ -422,6 +442,54 @@ function getRulePreviewMaxItemsPerRow(script, showOffsetColumn) {
   return showOffsetColumn ? 11 : 12;
 }
 
+function getCachedTopPreviewRows(times, maxItemsPerRow) {
+  const previewTimes = Array.isArray(times) ? times : [];
+  if (previewTimes.length === 0) {
+    return [];
+  }
+
+  const cacheKey = `${maxItemsPerRow}|${previewTimes.join("|")}`;
+  if (TOP_PREVIEW_ROW_CACHE.has(cacheKey)) {
+    return rememberPreviewRows(TOP_PREVIEW_ROW_CACHE, cacheKey);
+  }
+
+  return rememberPreviewRows(
+    TOP_PREVIEW_ROW_CACHE,
+    cacheKey,
+    chunkItemsBySize(previewTimes, maxItemsPerRow)
+  );
+}
+
+function getCachedRulePreviewRows(entries, showSkipped, moveSkippedToEnd, maxItemsPerRow) {
+  const sourceEntries = Array.isArray(entries) ? entries : [];
+  const cacheKey = `${maxItemsPerRow}|${showSkipped ? 1 : 0}|${moveSkippedToEnd ? 1 : 0}|${sourceEntries.map((entry) => `${entry?.time || ""}:${entry?.skipped ? 1 : 0}`).join("|")}`;
+  if (RULE_PREVIEW_ROW_CACHE.has(cacheKey)) {
+    return rememberPreviewRows(RULE_PREVIEW_ROW_CACHE, cacheKey);
+  }
+
+  const previewEntries = !moveSkippedToEnd || sourceEntries.length <= 1
+    ? sourceEntries
+    : [
+      ...sourceEntries.filter((entry) => !entry?.skipped),
+      ...sourceEntries.filter((entry) => entry?.skipped)
+    ];
+
+  const keptEntries = showSkipped ? previewEntries.filter((entry) => !entry?.skipped) : previewEntries;
+  const skippedEntries = showSkipped ? previewEntries.filter((entry) => entry?.skipped) : [];
+  const nextRows = [
+    ...chunkItemsBySize(keptEntries, maxItemsPerRow).map((rowEntries) => ({
+      text: rowEntries.map((entry) => entry.time).join(" · "),
+      isSkipped: false
+    })),
+    ...chunkItemsBySize(skippedEntries, maxItemsPerRow).map((rowEntries) => ({
+      text: rowEntries.map((entry) => entry.time).join(" · "),
+      isSkipped: true
+    }))
+  ];
+
+  return rememberPreviewRows(RULE_PREVIEW_ROW_CACHE, cacheKey, nextRows);
+}
+
 function DemoTopPreviewTimes({
   times,
   maxItemsPerRow
@@ -431,7 +499,7 @@ function DemoTopPreviewTimes({
     return <span className="dw-demo-preview-empty">--</span>;
   }
 
-  const groupedRows = chunkItemsBySize(previewTimes, maxItemsPerRow);
+  const groupedRows = getCachedTopPreviewRows(previewTimes, maxItemsPerRow);
 
   return (
     <span className="dw-demo-preview-grouped">
@@ -457,34 +525,17 @@ function DemoRuleTextPreviewTimes({
   moveSkippedToEnd = false,
   maxItemsPerRow
 }) {
-  const sourceEntries = Array.isArray(entries) ? entries : [];
-  const previewEntries = !moveSkippedToEnd || sourceEntries.length <= 1
-    ? sourceEntries
-    : [
-      ...sourceEntries.filter((entry) => !entry?.skipped),
-      ...sourceEntries.filter((entry) => entry?.skipped)
-    ];
-
-  if (previewEntries.length === 0) {
+  const rowsToRender = getCachedRulePreviewRows(entries, showSkipped, moveSkippedToEnd, maxItemsPerRow);
+  if (rowsToRender.length === 0) {
     return <span className="dw-demo-preview-empty">--</span>;
   }
 
-  const keptEntries = showSkipped ? previewEntries.filter((entry) => !entry?.skipped) : previewEntries;
-  const skippedEntries = showSkipped ? previewEntries.filter((entry) => entry?.skipped) : [];
-  const rowsToRender = [
-    ...chunkItemsBySize(keptEntries, maxItemsPerRow),
-    ...chunkItemsBySize(skippedEntries, maxItemsPerRow)
-  ];
-
   return (
     <span className="dw-demo-preview-grouped">
-      {rowsToRender.map((rowEntries, rowIndex) => {
-        const rowText = rowEntries.map((entry) => entry.time).join(" · ");
-        const isSkippedRow = showSkipped && rowEntries.every((entry) => entry?.skipped);
-
+      {rowsToRender.map((row, rowIndex) => {
         return (
-          <span key={`row-${rowIndex}`} className={`dw-demo-preview-rule-row is-text ${isSkippedRow ? "is-skipped-row" : ""}`}>
-            <span className={`dw-demo-preview-rule-text-part ${isSkippedRow ? "is-skipped is-block" : ""}`}>{rowText}</span>
+          <span key={`row-${rowIndex}`} className={`dw-demo-preview-rule-row is-text ${row.isSkipped ? "is-skipped-row" : ""}`}>
+            <span className={`dw-demo-preview-rule-text-part ${row.isSkipped ? "is-skipped is-block" : ""}`}>{row.text}</span>
           </span>
         );
       })}
@@ -2495,7 +2546,7 @@ function AutoRuleSection({
   );
 }
 
-export default function NativeScheduleDemoPage({ registerHostActions }) {
+function NativeScheduleDemoPage({ registerHostActions }) {
   const { t } = useNativeScheduleI18n();
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
@@ -3462,3 +3513,5 @@ export default function NativeScheduleDemoPage({ registerHostActions }) {
     </div>
   );
 }
+
+export default memo(NativeScheduleDemoPage);
