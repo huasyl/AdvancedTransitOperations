@@ -30,6 +30,7 @@ namespace RapidTransitMod
 
     public class Mod : IMod
     {
+        public const string Id = "RapidTransitMod";
         private static readonly ILog s_RawLog = LogManager.GetLogger(nameof(RapidTransitMod)).SetShowsErrorsInUI(false);
         private Harmony m_Harmony;
         public static TimedLogger log = new TimedLogger(s_RawLog);

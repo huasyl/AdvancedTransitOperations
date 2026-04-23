@@ -171,6 +171,8 @@ function areLineOptionsEquivalent(left, right) {
       current?.name !== next?.name ||
       current?.rawName !== next?.rawName ||
       current?.kind !== next?.kind ||
+      current?.originStationId !== next?.originStationId ||
+      current?.originStationName !== next?.originStationName ||
       current?.transportType !== next?.transportType ||
       current?.originHoldLimitMinutes !== next?.originHoldLimitMinutes ||
       current?.maxStationDwellMinutes !== next?.maxStationDwellMinutes ||

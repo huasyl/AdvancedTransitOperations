@@ -18,6 +18,8 @@ namespace RapidTransitMod
         private const string AppId = "dispatch-workbench";
         private const string SnapshotChangedEvent = EuisModder + "::" + EuisAcronym + ".workbench.onSnapshotChanged";
         private const string BroadcastSnapshotChangedEvent = EuisModder + "::" + EuisAcronym + ".workbench.onBroadcastSnapshotChanged";
+        private const string BroadcastAssetPreviewStateChangedEvent = EuisModder + "::" + EuisAcronym + ".workbench.onBroadcastAssetPreviewStateChanged";
+        private const string BroadcastRulePreviewStateChangedEvent = EuisModder + "::" + EuisAcronym + ".workbench.onBroadcastRulePreviewStateChanged";
         private const string DevServerConfigFile = "dispatch-workbench-euis-dev-url.txt";
         private const string LegacyReadonlyMessage = "Legacy EUIS workbench is now read-only. Use the native Schedule panel to edit and apply timetables.";
 
@@ -29,6 +31,8 @@ namespace RapidTransitMod
         private static DateTime s_NextEuisAssetLookupUtc;
         private static string s_ModRootPath = string.Empty;
         private static Action<string, object[]> s_EuisCaller;
+
+        internal static string ModRootPath => s_ModRootPath;
 
         internal static void Initialize(string modRootPath)
         {
@@ -105,6 +109,68 @@ namespace RapidTransitMod
             }
         }
 
+        internal static void NotifyBroadcastAssetPreviewStateChanged(DepartureControlSystem.BroadcastWorkbenchAssetPreviewStateDto state)
+        {
+            string stateJson = state != null ? DispatchWorkbenchJson.Serialize(state) : string.Empty;
+
+            if (!s_IsRegistered || GameManager.instance?.userInterface?.view?.View == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (GameManager.instance.userInterface.view.View.IsReadyForBindings())
+                {
+                    GameManager.instance.userInterface.view.View.TriggerEvent<string>(BroadcastAssetPreviewStateChangedEvent, stateJson);
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("Broadcast asset preview event push failed: " + ex.Message);
+            }
+
+            try
+            {
+                s_EuisCaller?.Invoke("workbench.onBroadcastAssetPreviewStateChanged", new object[] { stateJson });
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("Broadcast asset preview callback push failed: " + ex.Message);
+            }
+        }
+
+        internal static void NotifyBroadcastRulePreviewStateChanged(DepartureControlSystem.BroadcastWorkbenchRulePreviewStateDto state)
+        {
+            string stateJson = state != null ? DispatchWorkbenchJson.Serialize(state) : string.Empty;
+
+            if (!s_IsRegistered || GameManager.instance?.userInterface?.view?.View == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (GameManager.instance.userInterface.view.View.IsReadyForBindings())
+                {
+                    GameManager.instance.userInterface.view.View.TriggerEvent<string>(BroadcastRulePreviewStateChangedEvent, stateJson);
+                }
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("Broadcast rule preview event push failed: " + ex.Message);
+            }
+
+            try
+            {
+                s_EuisCaller?.Invoke("workbench.onBroadcastRulePreviewStateChanged", new object[] { stateJson });
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("Broadcast rule preview callback push failed: " + ex.Message);
+            }
+        }
+
         private static bool RegisterOnce()
         {
             if (s_IsRegistered)
@@ -153,7 +219,22 @@ namespace RapidTransitMod
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadBroadcastSnapshot", new Func<string, string>(HandleLoadBroadcastSnapshot));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshBroadcastSnapshot", new Func<string, string>(HandleRefreshBroadcastSnapshot));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadBroadcastBindingSlotHints", new Func<string, string>(HandleLoadBroadcastBindingSlotHints));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadBroadcastAssetBrowser", new Func<string, string>(HandleLoadBroadcastAssetBrowser));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.importBroadcastExternalAssets", new Func<string, string>(HandleImportBroadcastExternalAssets));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.deleteBroadcastAsset", new Func<string, string>(HandleDeleteBroadcastAsset));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.deleteAllBroadcastAssets", new Func<string>(HandleDeleteAllBroadcastAssets));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveBroadcastStationBinding", new Func<string, string>(HandleSaveBroadcastStationBinding));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveBroadcastStationBindings", new Func<string, string>(HandleSaveBroadcastStationBindings));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.autoBindBroadcastStationMappings", new Func<string, string>(HandleAutoBindBroadcastStationMappings));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveBroadcastRules", new Func<string, string>(HandleSaveBroadcastRules));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.applyBroadcastConfig", new Func<string, string>(HandleApplyBroadcastConfig));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.openBroadcastAssetDirectoryPicker", new Func<string>(HandleOpenBroadcastAssetDirectoryPicker));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.playBroadcastAssetPreview", new Func<string, string>(HandlePlayBroadcastAssetPreview));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.stopBroadcastAssetPreview", new Func<string, string>(HandleStopBroadcastAssetPreview));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.playBroadcastRulePreview", new Func<string, string>(HandlePlayBroadcastRulePreview));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.stopBroadcastRulePreview", new Func<string, string>(HandleStopBroadcastRulePreview));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.setBroadcastPreviewVolume", new Func<string, string>(HandleSetBroadcastPreviewVolume));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
@@ -184,9 +265,84 @@ namespace RapidTransitMod
             return DepartureControlSystem.Instance?.RefreshBroadcastWorkbenchSnapshotJson(preferredLineId) ?? string.Empty;
         }
 
+        private static string HandleLoadBroadcastBindingSlotHints(string lineId)
+        {
+            return DepartureControlSystem.Instance?.LoadBroadcastBindingSlotHintsJson(lineId) ?? string.Empty;
+        }
+
+        private static string HandleLoadBroadcastAssetBrowser(string requestedPath)
+        {
+            return DepartureControlSystem.Instance?.LoadBroadcastAssetBrowserJson(requestedPath) ?? string.Empty;
+        }
+
+        private static string HandleImportBroadcastExternalAssets(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.ImportBroadcastExternalAssetsJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleDeleteBroadcastAsset(string assetName)
+        {
+            return DepartureControlSystem.Instance?.DeleteBroadcastAssetJson(assetName) ?? string.Empty;
+        }
+
+        private static string HandleDeleteAllBroadcastAssets()
+        {
+            return DepartureControlSystem.Instance?.DeleteAllBroadcastAssetsJson() ?? string.Empty;
+        }
+
+        private static string HandleSaveBroadcastStationBinding(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.SaveBroadcastStationBindingJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleSaveBroadcastStationBindings(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.SaveBroadcastStationBindingsJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleAutoBindBroadcastStationMappings(string lineId)
+        {
+            return DepartureControlSystem.Instance?.AutoBindBroadcastStationMappingsJson(lineId) ?? string.Empty;
+        }
+
+        private static string HandleSaveBroadcastRules(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.SaveBroadcastRulesJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleApplyBroadcastConfig(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.ApplyBroadcastConfigJson(requestJson) ?? string.Empty;
+        }
+
         private static string HandleOpenBroadcastAssetDirectoryPicker()
         {
             return DepartureControlSystem.Instance?.OpenBroadcastAssetDirectoryPickerJson() ?? string.Empty;
+        }
+
+        private static string HandlePlayBroadcastAssetPreview(string assetName)
+        {
+            return DepartureControlSystem.Instance?.PlayBroadcastAssetPreviewJson(assetName) ?? string.Empty;
+        }
+
+        private static string HandlePlayBroadcastRulePreview(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.PlayBroadcastRulePreviewJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleStopBroadcastAssetPreview(string assetName)
+        {
+            return DepartureControlSystem.Instance?.StopBroadcastAssetPreviewJson(assetName) ?? string.Empty;
+        }
+
+        private static string HandleStopBroadcastRulePreview(string ruleId)
+        {
+            return DepartureControlSystem.Instance?.StopBroadcastRulePreviewJson(ruleId) ?? string.Empty;
+        }
+
+        private static string HandleSetBroadcastPreviewVolume(string volumeJson)
+        {
+            return DepartureControlSystem.Instance?.SetBroadcastPreviewVolumeJson(volumeJson) ?? string.Empty;
         }
 
         private static string HandleRefreshMetadata()
@@ -337,6 +493,8 @@ namespace RapidTransitMod
 
             registerEvent("workbench.onSnapshotChanged", new Action<string>(_ => { }));
             registerEvent("workbench.onBroadcastSnapshotChanged", new Action<string>(_ => { }));
+            registerEvent("workbench.onBroadcastAssetPreviewStateChanged", new Action<string>(_ => { }));
+            registerEvent("workbench.onBroadcastRulePreviewStateChanged", new Action<string>(_ => { }));
         }
 
         private static void SetupCallBinder(Action<string, Delegate> registerCall)
@@ -350,7 +508,22 @@ namespace RapidTransitMod
             registerCall("workbench.refreshSnapshot", new Func<string>(HandleRefreshSnapshot));
             registerCall("workbench.loadBroadcastSnapshot", new Func<string, string>(HandleLoadBroadcastSnapshot));
             registerCall("workbench.refreshBroadcastSnapshot", new Func<string, string>(HandleRefreshBroadcastSnapshot));
+            registerCall("workbench.loadBroadcastBindingSlotHints", new Func<string, string>(HandleLoadBroadcastBindingSlotHints));
+            registerCall("workbench.loadBroadcastAssetBrowser", new Func<string, string>(HandleLoadBroadcastAssetBrowser));
+            registerCall("workbench.importBroadcastExternalAssets", new Func<string, string>(HandleImportBroadcastExternalAssets));
+            registerCall("workbench.deleteBroadcastAsset", new Func<string, string>(HandleDeleteBroadcastAsset));
+            registerCall("workbench.deleteAllBroadcastAssets", new Func<string>(HandleDeleteAllBroadcastAssets));
+            registerCall("workbench.saveBroadcastStationBinding", new Func<string, string>(HandleSaveBroadcastStationBinding));
+            registerCall("workbench.saveBroadcastStationBindings", new Func<string, string>(HandleSaveBroadcastStationBindings));
+            registerCall("workbench.autoBindBroadcastStationMappings", new Func<string, string>(HandleAutoBindBroadcastStationMappings));
+            registerCall("workbench.saveBroadcastRules", new Func<string, string>(HandleSaveBroadcastRules));
+            registerCall("workbench.applyBroadcastConfig", new Func<string, string>(HandleApplyBroadcastConfig));
             registerCall("workbench.openBroadcastAssetDirectoryPicker", new Func<string>(HandleOpenBroadcastAssetDirectoryPicker));
+            registerCall("workbench.playBroadcastAssetPreview", new Func<string, string>(HandlePlayBroadcastAssetPreview));
+            registerCall("workbench.stopBroadcastAssetPreview", new Func<string, string>(HandleStopBroadcastAssetPreview));
+            registerCall("workbench.playBroadcastRulePreview", new Func<string, string>(HandlePlayBroadcastRulePreview));
+            registerCall("workbench.stopBroadcastRulePreview", new Func<string, string>(HandleStopBroadcastRulePreview));
+            registerCall("workbench.setBroadcastPreviewVolume", new Func<string, string>(HandleSetBroadcastPreviewVolume));
             registerCall("workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             registerCall("workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             registerCall("workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));

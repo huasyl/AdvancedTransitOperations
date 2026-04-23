@@ -425,6 +425,7 @@ namespace RapidTransitMod
 
         private void ReleaseRuntimeOwnershipAfterRetireHandoff(Entity vehicle, string reason)
         {
+            ClearBroadcastRuntimeState(vehicle);
             m_VehicleState.Remove(vehicle);
             m_VehicleTargetMin.Remove(vehicle);
             m_VehicleLapDistance.Remove(vehicle);
@@ -1815,6 +1816,7 @@ namespace RapidTransitMod
                                 {
                                     TryRecordObservedStopDwellOnBoardingEnd(v, lineEnt, previousCachedWpIdx, nowFrame);
                                     RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, false, -1, previousCachedWpIdx);
+                                    HandleBroadcastLeaveStationTrigger(v, lineEnt, wps, previousCachedWpIdx);
                                     if (state == VehicleState.Running && previousCachedWpIdx >= 0)
                                     {
                                         Entity departedStop = GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
@@ -1883,6 +1885,7 @@ namespace RapidTransitMod
                                     m_LastBoardingHeadSnapshots.Remove(v);
                                 BeginObservedStopDwellSession(v, lineEnt, curWpIdx, nowFrame);
                                 RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, true, curWpIdx, previousCachedWpIdx);
+                                HandleBroadcastStopAndOpenTrigger(v, lineEnt, wps, curWpIdx);
                                 m_LastBoarding[v] = true;
                                 NoteVehicleProgressSuspectRecoveryBoarding(v, curWpIdx);
                                 m_BVMisfire.Remove(v);
@@ -2262,6 +2265,8 @@ namespace RapidTransitMod
                             if (IsAppliedWorkbenchExpressLine(lineEnt))
                                 UpdateVehicleTraversalSliceObservation(v, lineEnt, wps, nowFrame);
 
+                            TickBroadcastProgressTriggers(v, routeEnt, wps, boarding);
+
                             int bypassControlWaypointIndex = curWpIdx >= 0 ? curWpIdx : previousCachedWpIdx;
                             bool runningShouldHoldBypass = false;
                             bool runningCanClearAfterExit = true;
@@ -2369,6 +2374,7 @@ namespace RapidTransitMod
                                 pt.m_DepartureFrame = nowFrame + 9999;
                                 ecb.SetComponent(v, pt);
                                 SetBypassYieldState(v, runningBypassBlocker, lineTag, "运行中");
+                                HandleBroadcastBypassWaitingTrigger(v, routeEnt, wps, bypassControlWaypointIndex);
                                 SetUILabel(v, "待避快车" + vTag);
                                 break;
                             }
@@ -2701,6 +2707,7 @@ namespace RapidTransitMod
                     }
                 }
 
+                TickBroadcastRuntime(m_SimulationSystem.frameIndex);
                 var handedOffKeys = new NativeList<Entity>(Allocator.Temp);
                 foreach (var kv in m_VehicleState)
                 {
@@ -2751,6 +2758,7 @@ namespace RapidTransitMod
                 }
                 foreach (var dead in deadKeys)
                 {
+                    ClearBroadcastRuntimeState(dead);
                     FlushRetireShadowSnapshots(dead, "entity-removed");
                     ResetRetireShadowSnapshots(dead);
                     m_VehicleState.Remove(dead);
@@ -3031,7 +3039,7 @@ namespace RapidTransitMod
             int bestWindowStart = -1;
             int bestWindowEndExclusive = -1;
             int bestDistance = int.MaxValue;
-            const int anchorSlackAtoms = 6;
+            const int anchorSlackAtoms = 3;
 
             foreach (int candidateIndex in candidateIndices)
             {

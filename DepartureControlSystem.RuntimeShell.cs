@@ -393,6 +393,7 @@ namespace RapidTransitMod
 
         private void ClearRuntimeTrackingState()
         {
+            ClearAllBroadcastRuntimeState();
             m_VehicleState.Clear();
             m_VehicleTargetMin.Clear();
             m_VehicleLapStartOdometer.Clear();

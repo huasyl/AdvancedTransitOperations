@@ -187,6 +187,8 @@ namespace RapidTransitMod
             AppendJsonString(sb, "detail6Value", snapshot.Detail6Value);
             AppendJsonString(sb, "detail7LabelKey", snapshot.Detail7LabelKey);
             AppendJsonString(sb, "detail7Value", snapshot.Detail7Value);
+            AppendJsonString(sb, "detail8LabelKey", snapshot.Detail8LabelKey);
+            AppendJsonString(sb, "detail8Value", snapshot.Detail8Value);
             AppendJsonString(sb, "alertText", snapshot.AlertText);
             AppendJsonBool(sb, "showAlerts", snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);

@@ -1,144 +1,14 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { buildAutoStagedPlan, getLineKinds, hasMinimumDepartureGapForOrigin, MIN_DEPARTURE_INTERVAL_MINUTES } from "./lib/auto-schedule";
 import { getWorkbenchApi } from "./lib/workbench-api";
 import { minutesToTime, timeToMinutes } from "./lib/time";
 import { useNativeScheduleI18n } from "./native-schedule-i18n";
 import { validateManualRows } from "./lib/validation";
+import WorkbenchDropdown from "./components/WorkbenchDropdown";
+import WorkbenchScrollArea from "./components/WorkbenchScrollArea";
 
 const NATIVE_SCHEDULE_PERSIST_KEY = "rtm.nativeSchedule.frontendDraft.v1";
 const NATIVE_SCHEDULE_PERSIST_SCHEMA_VERSION = 3;
-
-function DemoDropdown({
-  label,
-  value,
-  options,
-  onSelect,
-  className,
-  title,
-  triggerClassName = "",
-  menuClassName = "",
-  triggerContent = null,
-  portalHostRef = null,
-  menuWidth = null
-}) {
-  const [open, setOpen] = useState(false);
-  const [menuRect, setMenuRect] = useState(null);
-  const triggerRef = useRef(null);
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-
-    function updateMenuRect() {
-      const triggerElement = triggerRef.current;
-      if (!(triggerElement instanceof HTMLElement)) {
-        return;
-      }
-
-      const rect = triggerElement.getBoundingClientRect();
-      setMenuRect({
-        left: rect.left,
-        top: rect.bottom,
-        width: menuWidth || rect.width
-      });
-    }
-
-    function handlePointerDown(event) {
-      const triggerElement = triggerRef.current;
-      const menuElement = menuRef.current;
-      const target = event.target;
-      if (
-        (triggerElement && triggerElement.contains(target)) ||
-        (menuElement && menuElement.contains(target))
-      ) {
-        return;
-      }
-      setOpen(false);
-    }
-
-    function handleKeyDown(event) {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    }
-
-    updateMenuRect();
-    window.addEventListener("resize", updateMenuRect);
-    window.addEventListener("scroll", updateMenuRect, true);
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown, true);
-
-    return () => {
-      window.removeEventListener("resize", updateMenuRect);
-      window.removeEventListener("scroll", updateMenuRect, true);
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [open, menuWidth]);
-
-  const menuContent = open ? (
-    <div
-      ref={menuRef}
-      className={`dw-demo-dropdown-menu ${portalHostRef?.current ? "is-portal" : ""} ${menuClassName}`}
-      style={portalHostRef?.current && menuRect ? {
-        left: `${menuRect.left}px`,
-        top: `${menuRect.top}px`,
-        width: `${menuRect.width}px`
-      } : undefined}
-    >
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className={`dw-demo-dropdown-option ${option.active ? "is-active" : ""}`}
-          onClick={() => {
-            onSelect(option.value);
-            setOpen(false);
-          }}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  ) : null;
-
-  return (
-    <div className={`dw-demo-field ${className || ""}`}>
-      {label ? (
-        <label className="dw-demo-label">
-          <span className="dw-demo-label-content">
-            <span>{label}</span>
-          </span>
-        </label>
-      ) : null}
-      <div className="dw-demo-dropdown">
-        <button
-          ref={triggerRef}
-          type="button"
-          className={`dw-demo-input dw-demo-dropdown-trigger ${triggerClassName} ${open ? "is-open" : ""}`}
-          title={title || value}
-          onClick={() => setOpen((current) => !current)}
-        >
-          {triggerContent || (
-            <>
-              <span>{value}</span>
-              <span className="dw-demo-dropdown-caret" aria-hidden="true">
-                <svg viewBox="0 0 16 16" className="dw-demo-dropdown-caret-icon">
-                  <path d="M4.2 6.2 8 10l3.8-3.8" fill="none" stroke="#c7d4dc" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </span>
-            </>
-          )}
-        </button>
-        {!portalHostRef?.current ? menuContent : null}
-      </div>
-      {portalHostRef?.current && menuContent ? createPortal(menuContent, portalHostRef.current) : null}
-    </div>
-  );
-}
 
 function DemoTextField({
   label,
@@ -1830,292 +1700,6 @@ function DemoPreviewTimes({
   );
 }
 
-function DemoScrollArea({
-  className,
-  metricsKey,
-  children,
-  externalScrollRef
-}) {
-  const scrollRef = useRef(null);
-  const indicatorRef = useRef(null);
-  const hideTimerRef = useRef(0);
-  const hoverRef = useRef(false);
-  const dragRef = useRef({
-    dragging: false,
-    pointerId: null,
-    pointerOffset: 0
-  });
-  const [scrollMetrics, setScrollMetrics] = useState({
-    visible: false,
-    thumbTop: 0,
-    thumbHeight: 0
-  });
-  const [indicatorActive, setIndicatorActive] = useState(false);
-
-  useEffect(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) {
-      return undefined;
-    }
-
-    let frameId = 0;
-    let timeoutId = 0;
-
-    function showIndicatorTemporarily() {
-      setIndicatorActive(true);
-
-      if (hideTimerRef.current) {
-        window.clearTimeout(hideTimerRef.current);
-      }
-
-      hideTimerRef.current = window.setTimeout(() => {
-        if (!hoverRef.current && !dragRef.current.dragging) {
-          setIndicatorActive(false);
-        }
-      }, 1400);
-    }
-
-    function updateMetrics() {
-      frameId = 0;
-
-      const clientHeight = scrollElement.clientHeight;
-      const scrollHeight = scrollElement.scrollHeight;
-      const scrollTop = scrollElement.scrollTop;
-      const maxScroll = scrollHeight - clientHeight;
-
-      if (clientHeight <= 0 || maxScroll <= 0) {
-        setScrollMetrics({
-          visible: false,
-          thumbTop: 0,
-          thumbHeight: 0
-        });
-        return;
-      }
-
-      const thumbHeight = Math.max(24, Math.round((clientHeight * clientHeight) / scrollHeight));
-      const maxThumbTop = Math.max(0, clientHeight - thumbHeight);
-      const thumbTop = Math.round((scrollTop / maxScroll) * maxThumbTop);
-
-      setScrollMetrics({
-        visible: true,
-        thumbTop,
-        thumbHeight
-      });
-    }
-
-    function scheduleUpdate() {
-      if (frameId) {
-        return;
-      }
-      frameId = window.requestAnimationFrame(updateMetrics);
-    }
-
-    scheduleUpdate();
-    timeoutId = window.setTimeout(updateMetrics, 80);
-
-    function handleScroll() {
-      scheduleUpdate();
-      showIndicatorTemporarily();
-    }
-
-    scrollElement.addEventListener("scroll", handleScroll);
-    window.addEventListener("resize", scheduleUpdate);
-
-    return () => {
-      if (frameId) {
-        window.cancelAnimationFrame(frameId);
-      }
-      if (timeoutId) {
-        window.clearTimeout(timeoutId);
-      }
-      if (hideTimerRef.current) {
-        window.clearTimeout(hideTimerRef.current);
-      }
-      scrollElement.removeEventListener("scroll", handleScroll);
-      window.removeEventListener("resize", scheduleUpdate);
-    };
-  }, [metricsKey]);
-
-  function handleIndicatorMouseEnter() {
-    hoverRef.current = true;
-    setIndicatorActive(true);
-    if (hideTimerRef.current) {
-      window.clearTimeout(hideTimerRef.current);
-    }
-  }
-
-  function handleIndicatorMouseLeave() {
-    hoverRef.current = false;
-    if (!dragRef.current.dragging) {
-      setIndicatorActive(false);
-    }
-  }
-
-  function applyDragPosition(clientY, pointerOffset) {
-    const scrollElement = scrollRef.current;
-    const indicatorElement = indicatorRef.current;
-    if (!scrollElement || !indicatorElement) {
-      return;
-    }
-
-    const indicatorRect = indicatorElement.getBoundingClientRect();
-    const trackHeight = indicatorRect.height;
-    const clientHeight = scrollElement.clientHeight;
-    const scrollHeight = scrollElement.scrollHeight;
-    const scrollRange = scrollHeight - clientHeight;
-
-    if (clientHeight <= 0 || scrollRange <= 0) {
-      setScrollMetrics({
-        visible: false,
-        thumbTop: 0,
-        thumbHeight: 0
-      });
-      return;
-    }
-
-    const thumbHeight = Math.max(24, Math.round((clientHeight * clientHeight) / scrollHeight));
-    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
-    const rawTop = clientY - indicatorRect.top - pointerOffset;
-    const nextThumbTop = Math.max(0, Math.min(maxThumbTop, rawTop));
-    const nextScrollTop = maxThumbTop <= 0 ? 0 : (nextThumbTop / maxThumbTop) * scrollRange;
-    scrollElement.scrollTop = nextScrollTop;
-
-    setScrollMetrics({
-      visible: true,
-      thumbTop: Math.round(nextThumbTop),
-      thumbHeight
-    });
-  }
-
-  function handleIndicatorMouseDown(event) {
-    const indicatorElement = indicatorRef.current;
-    if (!indicatorElement || !scrollMetrics.visible) {
-      return;
-    }
-
-    event.preventDefault();
-
-    const thumbOffset = event.target === indicatorElement
-      ? scrollMetrics.thumbHeight / 2
-      : event.clientY - indicatorElement.getBoundingClientRect().top - scrollMetrics.thumbTop;
-
-    dragRef.current = {
-      dragging: true,
-      pointerId: null,
-      pointerOffset: thumbOffset
-    };
-    setIndicatorActive(true);
-
-    applyDragPosition(event.clientY, thumbOffset);
-
-    function handleMouseMove(moveEvent) {
-      applyDragPosition(moveEvent.clientY, dragRef.current.pointerOffset);
-    }
-
-    function handleMouseUp() {
-      dragRef.current.dragging = false;
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-
-      if (!hoverRef.current) {
-        setIndicatorActive(false);
-      }
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-  }
-
-  function handleIndicatorPointerDown(event) {
-    const scrollElement = scrollRef.current;
-    const indicatorElement = indicatorRef.current;
-    if (!scrollElement || !indicatorElement || !scrollMetrics.visible) {
-      return;
-    }
-
-    event.preventDefault();
-    if (typeof indicatorElement.setPointerCapture === "function") {
-      indicatorElement.setPointerCapture(event.pointerId);
-    }
-
-    const thumbOffset = event.target === indicatorElement
-      ? scrollMetrics.thumbHeight / 2
-      : event.clientY - indicatorElement.getBoundingClientRect().top - scrollMetrics.thumbTop;
-
-    dragRef.current = {
-      dragging: true,
-      pointerId: event.pointerId,
-      pointerOffset: thumbOffset
-    };
-    setIndicatorActive(true);
-    applyDragPosition(event.clientY, thumbOffset);
-  }
-
-  function handleIndicatorPointerMove(event) {
-    const scrollElement = scrollRef.current;
-    const indicatorElement = indicatorRef.current;
-    if (!scrollElement || !indicatorElement || !dragRef.current.dragging || dragRef.current.pointerId !== event.pointerId) {
-      return;
-    }
-
-    applyDragPosition(event.clientY, dragRef.current.pointerOffset);
-  }
-
-  function handleIndicatorPointerUp(event) {
-    const indicatorElement = indicatorRef.current;
-    if (dragRef.current.pointerId !== event.pointerId) {
-      return;
-    }
-
-    if (indicatorElement && typeof indicatorElement.releasePointerCapture === "function") {
-      indicatorElement.releasePointerCapture(event.pointerId);
-    }
-
-    dragRef.current.dragging = false;
-    dragRef.current.pointerId = null;
-
-    if (!hoverRef.current) {
-      setIndicatorActive(false);
-    }
-  }
-
-  return (
-    <div className="dw-demo-scroll-shell">
-      <div
-        ref={(node) => {
-          scrollRef.current = node;
-          if (typeof externalScrollRef === "function") {
-            externalScrollRef(node);
-          } else if (externalScrollRef && typeof externalScrollRef === "object") {
-            externalScrollRef.current = node;
-          }
-        }}
-        className={`dw-demo-scroll-body ${className}`}
-      >
-        {children}
-      </div>
-      <div
-        ref={indicatorRef}
-        className={`dw-demo-scroll-indicator ${scrollMetrics.visible ? "is-visible" : ""} ${indicatorActive ? "is-active" : ""}`}
-        onMouseEnter={handleIndicatorMouseEnter}
-        onMouseLeave={handleIndicatorMouseLeave}
-        onMouseDown={handleIndicatorMouseDown}
-        onPointerDown={handleIndicatorPointerDown}
-        onPointerMove={handleIndicatorPointerMove}
-        onPointerUp={handleIndicatorPointerUp}
-      >
-        <div
-          className="dw-demo-scroll-thumb"
-          style={{
-            height: `${scrollMetrics.thumbHeight}px`,
-            transform: `translateY(${scrollMetrics.thumbTop}px)`
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
 function SummaryTable({
   rows,
   onRemoveRow,
@@ -2131,7 +1715,7 @@ function SummaryTable({
     <>
       <div className="dw-demo-summary-head">
         <div className="is-time">{t("nativeSchedule.summary.head.time")}</div>
-        <DemoDropdown
+        <WorkbenchDropdown
           value=""
           title={t("nativeSchedule.summary.filter.title")}
           options={[
@@ -2142,6 +1726,8 @@ function SummaryTable({
           ]}
           onSelect={onSummaryFilterChange}
           className="is-line dw-demo-summary-head-line"
+          variant="filter"
+          positioning="portal"
           triggerClassName={`dw-demo-summary-head-filter-trigger ${summaryFilter !== "all" ? "is-filtered" : ""}`}
           menuClassName="dw-demo-summary-head-filter-menu"
           portalHostRef={dropdownPortalHostRef}
@@ -2162,7 +1748,7 @@ function SummaryTable({
         <div className="is-action" aria-hidden="true" />
       </div>
 
-      <DemoScrollArea className="dw-demo-summary-scroll" metricsKey={rows.length} externalScrollRef={summaryScrollRef}>
+      <WorkbenchScrollArea className="dw-demo-summary-scroll" metricsKey={rows.length} externalScrollRef={summaryScrollRef}>
         <div className="dw-demo-summary-table">
           {rows.length === 0 ? (
             <div className="dw-demo-empty-state">
@@ -2221,7 +1807,7 @@ function SummaryTable({
             ))
           )}
         </div>
-      </DemoScrollArea>
+      </WorkbenchScrollArea>
     </>
   );
 }
@@ -2387,7 +1973,7 @@ function AutoRuleTable({
         <div className="is-action">{t("nativeSchedule.auto.table.action")}</div>
       </div>
 
-      <DemoScrollArea className="dw-demo-rule-list-scroll" metricsKey={autoRules.length}>
+      <WorkbenchScrollArea className="dw-demo-rule-list-scroll" metricsKey={autoRules.length}>
         {autoRules.map((rule) => (
           <div key={rule.id} className="dw-demo-rule-row">
             <div className={`dw-demo-rule-row-main ${showOffsetColumn ? "is-with-offset" : "is-no-offset"}`}>
@@ -2412,7 +1998,7 @@ function AutoRuleTable({
             </div>
           </div>
         ))}
-      </DemoScrollArea>
+      </WorkbenchScrollArea>
     </>
   );
 }
@@ -2451,7 +2037,7 @@ function ManualDraftSection({
         </div>
       </div>
 
-      <DemoScrollArea className="dw-demo-rule-list-scroll" metricsKey={manualDrafts.length}>
+      <WorkbenchScrollArea className="dw-demo-rule-list-scroll" metricsKey={manualDrafts.length}>
         {manualDrafts.map((draft) => (
           <div key={draft.id} className="dw-demo-manual-row">
             <div className="dw-demo-manual-meta">
@@ -2463,7 +2049,7 @@ function ManualDraftSection({
             <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveManualDraft(draft.id)}>{t("nativeSchedule.summary.action.remove")}</button>
           </div>
         ))}
-      </DemoScrollArea>
+      </WorkbenchScrollArea>
 
       <div className="dw-demo-footer">
         {footerNote ? <span className={`dw-demo-footer-note ${footerNote.tone ? `is-${footerNote.tone}` : ""}`}>{footerNote.text}</span> : <span />}
@@ -3373,7 +2959,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     <div className="dw-demo-page-root">
       <div className="dw-demo-shell">
         <div className="dw-demo-topbar">
-        <DemoDropdown
+        <WorkbenchDropdown
           label={t("nativeSchedule.topbar.line")}
           value={getLocalizedLineName(selectedLine, t)}
           options={LINE_OPTIONS.map((line) => ({
@@ -3383,6 +2969,8 @@ function NativeScheduleDemoPage({ registerHostActions }) {
           }))}
           onSelect={handleSelectLine}
           className="is-line"
+          variant="field"
+          positioning="portal"
           portalHostRef={dropdownPortalHostRef}
         />
 
@@ -3411,7 +2999,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
           value={getLocalizedOriginLabel(origin, t)}
           className="is-origin"
         />
-        <DemoDropdown
+        <WorkbenchDropdown
           label={t("nativeSchedule.topbar.depot")}
           value={getLocalizedDepotLabel(selectedDepot, t)}
           options={[
@@ -3428,6 +3016,8 @@ function NativeScheduleDemoPage({ registerHostActions }) {
           ]}
           onSelect={handleDepotChange}
           className="is-depot"
+          variant="field"
+          positioning="portal"
           portalHostRef={dropdownPortalHostRef}
         />
 

@@ -1,15 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNativeScheduleI18n } from "./native-schedule-i18n";
 import { getWorkbenchApi } from "./lib/workbench-api";
-
-const ASSET_LIBRARY = [
-  { name: "JR_Water_Crown.wav", descKey: "broadcast.assetType.prompt", length: "00:05" },
-  { name: "Next_Station_Is.mp3", descKey: "broadcast.assetType.voice", length: "00:02" },
-  { name: "Doors_Closing.mp3", descKey: "broadcast.assetType.voice", length: "00:03" },
-  { name: "Station_Bantian.wav", descKey: "broadcast.assetType.station", length: "00:01" },
-  { name: "Station_Gongye.wav", descKey: "broadcast.assetType.station", length: "00:01" }
-];
+import WorkbenchDropdown from "./components/WorkbenchDropdown";
+import WorkbenchScrollArea from "./components/WorkbenchScrollArea";
 
 const VARIABLE_LIBRARY = [
   { id: "current_station", nameKey: "broadcast.variable.current", descKey: "" },
@@ -18,19 +11,49 @@ const VARIABLE_LIBRARY = [
 ];
 
 const DELAY_LIBRARY = [
-  { id: "delay_03", nameKey: "broadcast.delay.03", descKey: "broadcast.delay.label" },
-  { id: "delay_05", nameKey: "broadcast.delay.05", descKey: "broadcast.delay.label" },
-  { id: "delay_08", nameKey: "broadcast.delay.08", descKey: "broadcast.delay.label" },
-  { id: "delay_10", nameKey: "broadcast.delay.10", descKey: "broadcast.delay.label" },
-  { id: "delay_20", nameKey: "broadcast.delay.20", descKey: "broadcast.delay.label" }
+  { id: "delay_03", nameKey: "broadcast.delay.03", descKey: "broadcast.delay.label", delaySeconds: 3 },
+  { id: "delay_05", nameKey: "broadcast.delay.05", descKey: "broadcast.delay.label", delaySeconds: 5 },
+  { id: "delay_08", nameKey: "broadcast.delay.08", descKey: "broadcast.delay.label", delaySeconds: 8 },
+  { id: "delay_10", nameKey: "broadcast.delay.10", descKey: "broadcast.delay.label", delaySeconds: 10 },
+  { id: "delay_20", nameKey: "broadcast.delay.20", descKey: "broadcast.delay.label", delaySeconds: 20 }
 ];
+
+const BROADCAST_LANGUAGE_ALIASES = {
+  en: ["eng", "en", "english"],
+  zh: ["zh", "cn", "chi", "chs", "cht", "chinese", "mandarin"],
+  ja: ["ja", "jp", "jpn", "japanese"],
+  ko: ["ko", "kr", "kor", "korean"],
+  yue: ["yue", "cantonese"],
+  fr: ["fr", "fre", "fra", "french"],
+  de: ["de", "ger", "deu", "german"],
+  es: ["es", "spa", "spanish"],
+  ru: ["ru", "rus", "russian"],
+  pt: ["pt", "por", "portuguese"],
+  th: ["th", "tha", "thai"],
+  ar: ["ar", "ara", "arabic"]
+};
+
+const BROADCAST_LANGUAGE_LABEL_KEYS = {
+  en: "broadcast.language.short.en",
+  zh: "broadcast.language.short.zh",
+  ja: "broadcast.language.short.ja",
+  ko: "broadcast.language.short.ko",
+  yue: "broadcast.language.short.yue",
+  fr: "broadcast.language.short.fr",
+  de: "broadcast.language.short.de",
+  es: "broadcast.language.short.es",
+  ru: "broadcast.language.short.ru",
+  pt: "broadcast.language.short.pt",
+  th: "broadcast.language.short.th",
+  ar: "broadcast.language.short.ar"
+};
 
 const TRIGGER_OPTIONS = [
   { id: "approach_station", labelKey: "broadcast.trigger.approachStation" },
   { id: "stop_and_open", labelKey: "broadcast.trigger.stopAndOpen" },
-  { id: "departure_close", labelKey: "broadcast.trigger.departureClose" },
   { id: "leave_station", labelKey: "broadcast.trigger.leaveStation" },
-  { id: "mid_route", labelKey: "broadcast.trigger.midRoute" }
+  { id: "mid_route", labelKey: "broadcast.trigger.midRoute" },
+  { id: "bypass_waiting", labelKey: "broadcast.trigger.bypassWaiting" }
 ];
 
 const LINE_OPTIONS = [
@@ -80,11 +103,33 @@ const EXTERNAL_ASSET_FILE_SYSTEM = {
 };
 
 const DEFAULT_EXTERNAL_ASSET_PATH = "C:\\Mods\\Audio\\";
-
 const TAB_TRANSITION_MS = 300;
 const INLINE_PANEL_TRANSITION_MS = 650;
 const INLINE_PANEL_EASING = "cubic-bezier(0.19, 1, 0.22, 1)";
 const PAGE_ENTER_ANIMATION_MS = 850;
+const IMPORT_OVERLAY_TRANSITION_MS = 350;
+
+function createEmptyExternalAssetBrowserState() {
+  return {
+    rootPath: "",
+    currentPath: "",
+    parentPath: "",
+    folders: [],
+    files: [],
+    allowedExtensions: [],
+    error: ""
+  };
+}
+
+function extractBackendLineOptions(snapshot) {
+  const sourceLines = Array.isArray(snapshot?.lines) ? snapshot.lines : [];
+  return sourceLines
+    .filter((line) => line && typeof line.id === "string" && line.id)
+    .map((line) => ({
+      id: line.id,
+      label: typeof line.name === "string" && line.name ? line.name : line.id
+    }));
+}
 
 function splitIntoColumns(items, count = 2) {
   const columns = Array.from({ length: count }, () => []);
@@ -92,6 +137,413 @@ function splitIntoColumns(items, count = 2) {
     columns[index % count].push(item);
   });
   return columns;
+}
+
+function normalizeLangIndex(value) {
+  return Number.isFinite(Number(value)) && Number(value) > 0
+    ? Math.round(Number(value))
+    : 1;
+}
+
+function formatVariableSlotLabel(langIndex, labels) {
+  return labels.t("broadcast.variable.slot", { index: String(normalizeLangIndex(langIndex)) });
+}
+
+function formatVariableDisplayName(nameKey, langIndex, labels) {
+  const baseName = labels.t(nameKey || "");
+  const slotLabel = formatVariableSlotLabel(langIndex, labels);
+  if (!baseName) {
+    return slotLabel;
+  }
+
+  if (baseName.endsWith("】")) {
+    return `${baseName.slice(0, -1)}_${slotLabel}】`;
+  }
+
+  if (baseName.endsWith("]")) {
+    return `${baseName.slice(0, -1)}_${slotLabel}]`;
+  }
+
+  return `${baseName}_${slotLabel}`;
+}
+
+function normalizeSlotHintEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const langIndex = normalizeLangIndex(entry.langIndex);
+  const labels = Array.isArray(entry.labels)
+    ? entry.labels
+      .filter((label) => typeof label === "string")
+      .map((label) => label.trim())
+      .filter(Boolean)
+    : [];
+
+  return {
+    langIndex,
+    labels: Array.from(new Set(labels))
+  };
+}
+
+function mergeBindingSlotHints(...collections) {
+  const labelsBySlot = new Map();
+  collections.forEach((items) => {
+    (Array.isArray(items) ? items : []).forEach((entry) => {
+      const normalized = normalizeSlotHintEntry(entry);
+      if (!normalized) {
+        return;
+      }
+
+      if (!labelsBySlot.has(normalized.langIndex)) {
+        labelsBySlot.set(normalized.langIndex, new Set());
+      }
+
+      normalized.labels.forEach((label) => labelsBySlot.get(normalized.langIndex)?.add(label));
+    });
+  });
+
+  return Array.from(labelsBySlot.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([langIndex, labels]) => ({
+      langIndex,
+      labels: Array.from(labels).sort((left, right) => left.localeCompare(right))
+    }));
+}
+
+function deriveBindingSlotHintsFromStations(stations) {
+  const labelsBySlot = new Map();
+  (Array.isArray(stations) ? stations : []).forEach((station) => {
+    const orderedAudios = (Array.isArray(station?.audios) ? station.audios : [])
+      .filter((audio) => audio && typeof audio.assetName === "string" && audio.assetName)
+      .slice()
+      .sort((left, right) => normalizeLangIndex(left?.langIndex) - normalizeLangIndex(right?.langIndex));
+    orderedAudios.forEach((audio, index) => {
+      const langIndex = index + 1;
+      const label = typeof audio?.lang === "string" ? audio.lang.trim() : "";
+      if (!label) {
+        return;
+      }
+
+      if (!labelsBySlot.has(langIndex)) {
+        labelsBySlot.set(langIndex, new Set());
+      }
+
+      labelsBySlot.get(langIndex)?.add(label);
+    });
+  });
+
+  return Array.from(labelsBySlot.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([langIndex, labels]) => ({
+      langIndex,
+      labels: Array.from(labels).sort((left, right) => left.localeCompare(right))
+    }));
+}
+
+function buildVariableLibrary(baseLibrary, slotHints, labels) {
+  const normalizedHints = Array.isArray(slotHints)
+    ? slotHints.map(normalizeSlotHintEntry).filter(Boolean)
+    : [];
+  const maxSlotIndex = Math.max(
+    1,
+    ...normalizedHints.map((entry) => normalizeLangIndex(entry.langIndex))
+  );
+  const slotHintByIndex = new Map(normalizedHints.map((entry) => [entry.langIndex, entry]));
+  const result = [];
+
+  baseLibrary.forEach((variable) => {
+    for (let langIndex = 1; langIndex <= maxSlotIndex; langIndex += 1) {
+      const hint = slotHintByIndex.get(langIndex);
+      const slotLabel = formatVariableSlotLabel(langIndex, labels);
+      const joinedLabels = Array.isArray(hint?.labels) && hint.labels.length > 0
+        ? hint.labels.join(" / ")
+        : "";
+      result.push({
+        ...variable,
+        id: `${variable.id}__slot_${langIndex}`,
+        langIndex,
+        name: formatVariableDisplayName(variable.nameKey, langIndex, labels),
+        desc: joinedLabels ? `${slotLabel}: ${joinedLabels}` : slotLabel
+      });
+    }
+  });
+
+  return result;
+}
+
+function resolveVariableNodeDisplayName(node, labels) {
+  if (!node || node.type !== "variable" || !node.nameKey) {
+    return node?.name || "";
+  }
+
+  return formatVariableDisplayName(node.nameKey, node.langIndex, labels);
+}
+
+function normalizeRuleNode(node) {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+
+  return {
+    id: typeof node.id === "string" ? node.id : "",
+    type: typeof node.type === "string" ? node.type : "",
+    name: typeof node.name === "string" ? node.name : "",
+    nameKey: typeof node.nameKey === "string" ? node.nameKey : "",
+    desc: typeof node.desc === "string" ? node.desc : "",
+    descKey: typeof node.descKey === "string" ? node.descKey : "",
+    langIndex: normalizeLangIndex(node.langIndex),
+    delaySeconds:
+      Number.isFinite(Number(node.delaySeconds)) && Number(node.delaySeconds) >= 0
+        ? Math.round(Number(node.delaySeconds))
+        : 0
+  };
+}
+
+function normalizeBroadcastRule(rule) {
+  if (!rule || typeof rule !== "object") {
+    return null;
+  }
+
+  const normalizedNodes = Array.isArray(rule.nodes)
+    ? rule.nodes.map(normalizeRuleNode).filter((node) => node && node.id && node.type)
+    : [];
+
+  return {
+    id: typeof rule.id === "string" ? rule.id : "",
+    title: typeof rule.title === "string" ? rule.title : "",
+    titleKey: typeof rule.titleKey === "string" ? rule.titleKey : "",
+    triggerId: typeof rule.triggerId === "string" ? rule.triggerId : "",
+    trigger: typeof rule.trigger === "string" ? rule.trigger : "",
+    triggerKey: typeof rule.triggerKey === "string" ? rule.triggerKey : "",
+    nodes: normalizedNodes
+  };
+}
+
+function cloneBroadcastRules(rules) {
+  return Array.isArray(rules)
+    ? rules.map(normalizeBroadcastRule).filter((rule) => rule && rule.id)
+    : [];
+}
+
+function resolveRuleTriggerLabel(rule, labels) {
+  if (!rule) {
+    return "";
+  }
+
+  if (rule.triggerId) {
+    const option = TRIGGER_OPTIONS.find((entry) => entry.id === rule.triggerId);
+    if (option?.labelKey) {
+      return labels.t(option.labelKey);
+    }
+  }
+
+  if (rule.triggerKey) {
+    return labels.t(rule.triggerKey);
+  }
+
+  return rule.trigger || "";
+}
+
+function normalizeBroadcastMatchKey(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+
+  const source = value
+    .replace(/^.*[\\/]/, "")
+    .replace(/\.[^.]+$/, "")
+    .trim();
+  if (!source) {
+    return "";
+  }
+
+  let normalized = "";
+  let lastWasSeparator = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const ch = source[index].toLowerCase();
+    const code = ch.charCodeAt(0);
+    const isAsciiDigit = code >= 48 && code <= 57;
+    const isAsciiLetter = code >= 97 && code <= 122;
+    const isNonAsciiWord = code > 127 && !(/\s/.test(ch) || ch === "_" || ch === "-");
+    if (isAsciiDigit || isAsciiLetter || isNonAsciiWord) {
+      normalized += ch;
+      lastWasSeparator = false;
+      continue;
+    }
+
+    if ((/\s/u.test(ch) || ch === "_" || ch === "-") && !lastWasSeparator && normalized) {
+      normalized += " ";
+      lastWasSeparator = true;
+    }
+  }
+
+  return normalized.trim();
+}
+
+function formatBroadcastAssetDisplayName(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.replace(/\.[^.\\/]+$/, "");
+}
+
+function getBroadcastLocaleLanguageKey(locale) {
+  const normalizedLocale = String(locale || "").toLowerCase();
+  if (normalizedLocale.startsWith("zh")) {
+    return "zh";
+  }
+  if (normalizedLocale.startsWith("ja")) {
+    return "ja";
+  }
+  return "en";
+}
+
+function resolveBroadcastLanguageLabel(languageKey, labels) {
+  const translationKey = BROADCAST_LANGUAGE_LABEL_KEYS[languageKey];
+  if (!translationKey) {
+    return "";
+  }
+
+  return labels.t(translationKey);
+}
+
+function extractBroadcastLanguageHint(assetName, stationName, fallbackLanguageKey, labels) {
+  const normalizedAsset = normalizeBroadcastMatchKey(assetName);
+  const normalizedStation = normalizeBroadcastMatchKey(stationName);
+  const stationTokens = new Set(normalizedStation.split(" ").filter(Boolean));
+  const genericTokens = new Set(["station", "audio", "voice", "stop"]);
+  const stationIndex = normalizedStation ? normalizedAsset.indexOf(normalizedStation) : -1;
+  const remainingSource = stationIndex >= 0
+    ? `${normalizedAsset.slice(0, stationIndex)} ${normalizedAsset.slice(stationIndex + normalizedStation.length)}`
+    : normalizedAsset;
+  const remainingTokens = remainingSource
+    .split(" ")
+    .filter((token) => token && !stationTokens.has(token) && !genericTokens.has(token));
+
+  if (remainingTokens.length === 0) {
+    return resolveBroadcastLanguageLabel(fallbackLanguageKey, labels);
+  }
+
+  const alias = remainingTokens.join(" ");
+  const languageKeys = Object.keys(BROADCAST_LANGUAGE_ALIASES);
+  for (let index = 0; index < languageKeys.length; index += 1) {
+    const languageKey = languageKeys[index];
+    if (BROADCAST_LANGUAGE_ALIASES[languageKey]?.includes(alias)) {
+      return resolveBroadcastLanguageLabel(languageKey, labels);
+    }
+  }
+
+  return resolveBroadcastLanguageLabel(fallbackLanguageKey, labels);
+}
+
+function deriveBroadcastStationStatus(audios, conflictAssets) {
+  if (Array.isArray(conflictAssets) && conflictAssets.length > 0) {
+    return "conflict";
+  }
+
+  if (Array.isArray(audios) && audios.length > 0) {
+    return "ready";
+  }
+
+  return "missing";
+}
+
+function sortBroadcastConflictAssets(conflictAssets, stationName, fallbackLanguageKey, labels) {
+  const entries = Array.isArray(conflictAssets) ? [...conflictAssets] : [];
+  const currentLocaleLabel = resolveBroadcastLanguageLabel(fallbackLanguageKey, labels);
+  const resolveSuggestedLabel = (entry) => (
+    typeof entry?.suggestedLang === "string" && entry.suggestedLang
+      ? entry.suggestedLang
+      : extractBroadcastLanguageHint(entry?.assetName || "", stationName, fallbackLanguageKey, labels)
+  );
+
+  entries.sort((left, right) => {
+    const leftSuggested = resolveSuggestedLabel(left);
+    const rightSuggested = resolveSuggestedLabel(right);
+    const leftPriority = leftSuggested === currentLocaleLabel ? 0 : 1;
+    const rightPriority = rightSuggested === currentLocaleLabel ? 0 : 1;
+    if (leftPriority !== rightPriority) {
+      return leftPriority - rightPriority;
+    }
+
+    return String(left?.assetName || "").localeCompare(String(right?.assetName || ""));
+  });
+
+  return entries.map((entry) => ({
+    ...entry,
+    suggestedLang: resolveSuggestedLabel(entry)
+  }));
+}
+
+function collectBroadcastVariableSlotRequirements(rules) {
+  const slotIndexes = new Set();
+  (Array.isArray(rules) ? rules : []).forEach((rule) => {
+    (Array.isArray(rule?.nodes) ? rule.nodes : []).forEach((node) => {
+      if (node?.type !== "variable" || !node?.nameKey) {
+        return;
+      }
+
+      slotIndexes.add(normalizeLangIndex(node.langIndex));
+    });
+  });
+  return Array.from(slotIndexes).sort((left, right) => left - right);
+}
+
+function collectBroadcastStationSlotIndexes(station) {
+  const slotIndexes = new Set();
+  const orderedAudios = (Array.isArray(station?.audios) ? station.audios : [])
+    .filter((audio) => audio && typeof audio.assetName === "string" && audio.assetName)
+    .slice()
+    .sort((left, right) => normalizeLangIndex(left?.langIndex) - normalizeLangIndex(right?.langIndex));
+  orderedAudios.forEach((audio, index) => {
+    if (!audio || typeof audio.assetName !== "string" || !audio.assetName) {
+      return;
+    }
+
+    slotIndexes.add(index + 1);
+  });
+  return slotIndexes;
+}
+
+function buildBroadcastVariableMappingIssue(rules, stations) {
+  const requiredSlots = collectBroadcastVariableSlotRequirements(rules);
+  if (requiredSlots.length === 0) {
+    return null;
+  }
+
+  const stationList = Array.isArray(stations) ? stations : [];
+  for (let index = 0; index < stationList.length; index += 1) {
+    const station = stationList[index];
+    if (!station || !station.id) {
+      continue;
+    }
+
+    if (Array.isArray(station.conflictAssets) && station.conflictAssets.length > 0) {
+      return {
+        type: "conflict",
+        stationId: station.id,
+        stationName: station.name || "",
+        requiredSlots
+      };
+    }
+
+    const availableSlots = collectBroadcastStationSlotIndexes(station);
+    const missingSlot = requiredSlots.find((slot) => !availableSlots.has(slot));
+    if (missingSlot) {
+      return {
+        type: "missing",
+        stationId: station.id,
+        stationName: station.name || "",
+        requiredSlots,
+        missingSlot
+      };
+    }
+  }
+
+  return null;
 }
 
 function SearchIcon() {
@@ -129,10 +581,41 @@ function CloseIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dw-bc-icon dw-bc-action-icon">
+      <path d="M4 7h16" />
+      <path d="M9 7V5h6v2" />
+      <path d="M7 7l1 12h8l1-12" />
+      <line x1="10" y1="10" x2="10" y2="16" />
+      <line x1="14" y1="10" x2="14" y2="16" />
+    </svg>
+  );
+}
+
+function VolumeIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`dw-bc-icon ${className}`.trim()}>
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <path d="M15 9a4 4 0 0 1 0 6" />
+      <path d="M18 6a8 8 0 0 1 0 12" />
+    </svg>
+  );
+}
+
 function PlayIcon() {
   return (
     <svg viewBox="0 0 24 24" className="dw-bc-icon dw-bc-play-icon is-fill">
       <polygon points="8 5 19 12 8 19 8 5" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="dw-bc-icon dw-bc-play-icon is-fill">
+      <rect x="7" y="5" width="3.5" height="14" rx="0.8" />
+      <rect x="13.5" y="5" width="3.5" height="14" rx="0.8" />
     </svg>
   );
 }
@@ -217,6 +700,94 @@ function DelayIcon({ className = "" }) {
       <circle cx="12" cy="12" r="8" />
       <path d="M12 8v4l2.5 2.5" />
     </svg>
+  );
+}
+
+function ImportCardName({ children }) {
+  const textRef = useRef(null);
+  const [displayText, setDisplayText] = useState(String(children || ""));
+
+  useLayoutEffect(() => {
+    const node = textRef.current;
+    if (!(node instanceof HTMLElement)) {
+      return undefined;
+    }
+
+    function fitsWithinTwoLines(text, width, style, maxHeight) {
+      const measureNode = document.createElement("div");
+      measureNode.style.position = "absolute";
+      measureNode.style.visibility = "hidden";
+      measureNode.style.pointerEvents = "none";
+      measureNode.style.left = "-99999px";
+      measureNode.style.top = "0";
+      measureNode.style.width = `${width}px`;
+      measureNode.style.fontFamily = style.fontFamily;
+      measureNode.style.fontSize = style.fontSize;
+      measureNode.style.fontWeight = style.fontWeight;
+      measureNode.style.lineHeight = style.lineHeight;
+      measureNode.style.letterSpacing = style.letterSpacing;
+      measureNode.style.whiteSpace = "normal";
+      measureNode.style.overflowWrap = "anywhere";
+      measureNode.style.wordBreak = "break-word";
+      measureNode.textContent = text;
+      document.body.appendChild(measureNode);
+      const fits = measureNode.scrollHeight <= maxHeight + 1;
+      document.body.removeChild(measureNode);
+      return fits;
+    }
+
+    function syncTruncation() {
+      const sourceText = String(children || "");
+      const computedStyle = window.getComputedStyle(node);
+      const availableWidth = Math.max(0, Math.floor(node.clientWidth));
+      const maxHeight = Math.max(48, Math.ceil(node.clientHeight || 48));
+
+      if (!sourceText || availableWidth <= 0) {
+        setDisplayText(sourceText);
+        return;
+      }
+
+      if (fitsWithinTwoLines(sourceText, availableWidth, computedStyle, maxHeight)) {
+        setDisplayText(sourceText);
+        return;
+      }
+
+      let low = 0;
+      let high = sourceText.length;
+      let best = "...";
+
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const candidate = `${sourceText.slice(0, middle).trimEnd()}...`;
+        if (fitsWithinTwoLines(candidate, availableWidth, computedStyle, maxHeight)) {
+          best = candidate;
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+
+      setDisplayText(best);
+    }
+
+    syncTruncation();
+
+    if (typeof ResizeObserver === "undefined") {
+      return undefined;
+    }
+
+    const observer = new ResizeObserver(() => {
+      syncTruncation();
+    });
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, [children]);
+
+  return (
+    <span ref={textRef} className="dw-bc-import-card-name" title={String(children || "")}>
+      {displayText}
+    </span>
   );
 }
 
@@ -353,134 +924,6 @@ function AnimatedFadePresence({ visible, className, children }) {
   );
 }
 
-function BroadcastDropdown({
-  open,
-  setOpen,
-  onSelect,
-  options,
-  value,
-  label = "",
-  className = "",
-  triggerClassName = "",
-  menuClassName = "",
-  optionClassName = "",
-  title = "",
-  portalHostRef = null,
-  menuWidth = null
-}) {
-  const triggerRef = useRef(null);
-  const menuRef = useRef(null);
-  const [menuRect, setMenuRect] = useState(null);
-
-  useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-
-    function updateMenuRect() {
-      const triggerElement = triggerRef.current;
-      if (!(triggerElement instanceof HTMLElement)) {
-        return;
-      }
-
-      const rect = triggerElement.getBoundingClientRect();
-      setMenuRect({
-        left: rect.left,
-        top: rect.bottom,
-        width: menuWidth || rect.width
-      });
-    }
-
-    function handlePointerDown(event) {
-      const triggerElement = triggerRef.current;
-      const menuElement = menuRef.current;
-      const target = event.target;
-      if (
-        (triggerElement && triggerElement.contains(target)) ||
-        (menuElement && menuElement.contains(target))
-      ) {
-        return;
-      }
-      setOpen(false);
-    }
-
-    function handleKeyDown(event) {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    }
-
-    updateMenuRect();
-    window.addEventListener("resize", updateMenuRect);
-    window.addEventListener("scroll", updateMenuRect, true);
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown, true);
-
-    return () => {
-      window.removeEventListener("resize", updateMenuRect);
-      window.removeEventListener("scroll", updateMenuRect, true);
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [menuWidth, open, setOpen]);
-
-  const menuContent = open ? (
-    <div
-      ref={menuRef}
-      className={`dw-demo-dropdown-menu ${portalHostRef?.current ? "is-portal" : ""} ${menuClassName}`.trim()}
-      style={portalHostRef?.current && menuRect ? {
-        left: `${menuRect.left}px`,
-        top: `${menuRect.top}px`,
-        width: `${menuRect.width}px`
-      } : undefined}
-    >
-      {options.map((option) => (
-        <button
-          key={option.key || option.value || option.label}
-          type="button"
-          className={`dw-demo-dropdown-option ${option.active ? "is-active" : ""} ${optionClassName}`.trim()}
-          onClick={() => {
-            onSelect(option);
-            setOpen(false);
-          }}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  ) : null;
-
-  return (
-    <div className={`dw-demo-field ${className}`.trim()} onClick={(event) => event.stopPropagation()}>
-      {label ? (
-        <label className="dw-demo-label">
-          <span className="dw-demo-label-content">
-            <span>{label}</span>
-          </span>
-        </label>
-      ) : null}
-      <div className="dw-demo-dropdown">
-        <button
-          ref={triggerRef}
-          type="button"
-          title={title || value}
-          className={`dw-demo-input dw-demo-dropdown-trigger ${triggerClassName} ${open ? "is-open" : ""}`.trim()}
-          onClick={() => setOpen((current) => !current)}
-        >
-          <span>{value}</span>
-          <span className="dw-demo-dropdown-caret" aria-hidden="true">
-            <svg viewBox="0 0 16 16" className="dw-demo-dropdown-caret-icon">
-              <path d="M4.2 6.2 8 10l3.8-3.8" fill="none" stroke="#c7d4dc" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-        </button>
-        {!portalHostRef?.current ? menuContent : null}
-      </div>
-      {portalHostRef?.current && menuContent ? createPortal(menuContent, portalHostRef.current) : null}
-    </div>
-  );
-}
-
 function SequenceRule({
   rule,
   trayContext,
@@ -499,11 +942,14 @@ function SequenceRule({
   assetLibrary,
   variableLibrary,
   delayLibrary,
+  previewingRuleId,
+  onToggleRulePreview,
   labels
 }) {
   const isTrayVisible = trayContext?.ruleId === rule.id;
   const [displayAction, setDisplayAction] = useState(null);
   const assetColumns = splitIntoColumns(assetLibrary);
+  const variableColumns = splitIntoColumns(variableLibrary);
   const delayColumns = splitIntoColumns(delayLibrary);
 
   useEffect(() => {
@@ -514,10 +960,18 @@ function SequenceRule({
 
   return (
     <div className={`dw-bc-rule ${removingRule ? "is-removing" : ""}`}>
-      <div className="dw-bc-rule-head">
+        <div className="dw-bc-rule-head">
         <div>
-          <h2>{rule.title}</h2>
-          <p>{labels.triggerPrefix}{rule.trigger}</p>
+          <h2>{rule.title || (rule.titleKey ? labels.t(rule.titleKey) : "")}</h2>
+          <div className="dw-bc-rule-meta">
+            <p>{labels.triggerPrefix}{resolveRuleTriggerLabel(rule, labels)}</p>
+            <button type="button" className="dw-bc-rule-preview" onClick={() => onToggleRulePreview(rule.id)}>
+              <span className="dw-bc-rule-preview-icon-shell">
+                {previewingRuleId === rule.id ? <PauseIcon /> : <PlayIcon />}
+              </span>
+              <span>{labels.previewRule}</span>
+            </button>
+          </div>
         </div>
         <button type="button" className="dw-bc-link-muted" onClick={() => onRemoveRule(rule.id)}>{labels.removeRule}</button>
       </div>
@@ -535,7 +989,7 @@ function SequenceRule({
                     : node.type === "delay"
                       ? <DelayIcon className="dw-bc-node-kind-icon is-delay" />
                       : <SpeakerIcon className="dw-bc-node-kind-icon is-asset" />}
-                  {node.desc}
+                  {node.desc || (node.descKey ? labels.t(node.descKey) : "")}
                 </span>
                 <div className="dw-bc-node-value-wrap">
                   <button
@@ -543,7 +997,9 @@ function SequenceRule({
                     className={`dw-bc-node-value ${node.type === "variable" ? "is-variable" : ""} ${isEditing ? "is-active" : ""}`}
                     onClick={() => onToggleTray(rule.id, node.id)}
                   >
-                    {node.name}
+                    {node.type === "variable"
+                      ? resolveVariableNodeDisplayName(node, labels)
+                      : (node.name || (node.nameKey ? labels.t(node.nameKey) : ""))}
                   </button>
                   <button type="button" className="dw-bc-node-remove" onClick={() => onRemoveNode(rule.id, node.id)}>
                     <CloseIcon />
@@ -602,7 +1058,7 @@ function SequenceRule({
                 <div key={`asset-col-${columnIndex}`} className="dw-bc-tray-column">
                   {column.map((asset) => (
                     <button key={asset.name} type="button" className="dw-bc-tray-item anim-stagger-slide-up" style={{ animationDelay: `${assetLibrary.findIndex((entry) => entry.name === asset.name) * 0.05}s` }} onClick={() => onAddAsset(rule.id, asset)}>
-                      <span>{asset.name}</span>
+                      <span>{formatBroadcastAssetDisplayName(asset.name)}</span>
                       <span>{asset.desc}</span>
                     </button>
                   ))}
@@ -610,11 +1066,22 @@ function SequenceRule({
               ))}
             </div>
           ) : trayCategory === "variable" ? (
-            <div className="dw-bc-tray-list">
-              {variableLibrary.map((variable, index) => (
-                <button key={variable.id} type="button" className="dw-bc-tray-item is-variable anim-stagger-slide-up" style={{ animationDelay: `${index * 0.05}s` }} onClick={() => onAddVariable(rule.id, variable)}>
-                  <span>{variable.name}</span>
-                </button>
+            <div className="dw-bc-tray-columns">
+              {variableColumns.map((column, columnIndex) => (
+                <div key={`variable-col-${columnIndex}`} className="dw-bc-tray-column">
+                  {column.map((variable) => (
+                    <button
+                      key={variable.id}
+                      type="button"
+                      className="dw-bc-tray-item is-variable anim-stagger-slide-up"
+                      style={{ animationDelay: `${variableLibrary.findIndex((entry) => entry.id === variable.id) * 0.05}s` }}
+                      onClick={() => onAddVariable(rule.id, variable)}
+                    >
+                      <span>{variable.name}</span>
+                      <span>{variable.desc}</span>
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
           ) : (
@@ -638,16 +1105,8 @@ function SequenceRule({
 }
 
 export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
-  const { t } = useNativeScheduleI18n();
+  const { locale, t } = useNativeScheduleI18n();
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
-  const demoAssetLibrary = useMemo(
-    () => ASSET_LIBRARY.map((asset) => ({ ...asset, desc: t(asset.descKey) })),
-    [t]
-  );
-  const variableLibrary = useMemo(
-    () => VARIABLE_LIBRARY.map((variable) => ({ ...variable, name: t(variable.nameKey), desc: variable.descKey ? t(variable.descKey) : "" })),
-    [t]
-  );
   const delayLibrary = useMemo(
     () => DELAY_LIBRARY.map((delay) => ({ ...delay, name: t(delay.nameKey), desc: t(delay.descKey) })),
     [t]
@@ -660,48 +1119,36 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     () => LINE_OPTIONS.map((line) => ({ ...line, label: t(line.labelKey) })),
     [t]
   );
-  const defaultAsset = demoAssetLibrary[0];
-  const nextStationAsset = demoAssetLibrary[1];
-  const bantianAsset = demoAssetLibrary[3];
-  const gongyeAsset = demoAssetLibrary[4];
   const [activeTab, setActiveTab] = useState("sequence");
   const [renderedTab, setRenderedTab] = useState("sequence");
   const [tabStage, setTabStage] = useState("entered");
   const [pageEnterState, setPageEnterState] = useState("entered");
-  const [rules, setRules] = useState([
-    {
-      id: "r1",
-      title: t("broadcast.rule.default.departureWarning"),
-      trigger: t("broadcast.trigger.departureClose"),
-      nodes: [
-        { id: "1", type: "asset", name: defaultAsset.name, desc: defaultAsset.desc }
-      ]
-    },
-    {
-      id: "r2",
-      title: t("broadcast.rule.default.afterDeparture"),
-      trigger: t("broadcast.trigger.leaveStation"),
-      nodes: [
-        { id: "2", type: "asset", name: nextStationAsset.name, desc: nextStationAsset.desc },
-        { id: "3", type: "variable", name: variableLibrary[1].name, desc: t("broadcast.node.dynamicVariable") }
-      ]
-    }
-  ]);
-  const [stations, setStations] = useState([
-    { id: "L1-01", name: "工业区", audio: gongyeAsset.name, status: "ready" },
-    { id: "L1-02", name: "坂田", audio: bantianAsset.name, status: "ready" },
-    { id: "L1-03", name: "开发区", audio: null, status: "missing" }
-  ]);
+  const [rules, setRules] = useState([]);
+  const [stations, setStations] = useState([]);
   const [trayContext, setTrayContext] = useState(null);
   const [trayCategory, setTrayCategory] = useState("asset");
   const [mappingTray, setMappingTray] = useState(null);
+  const [stationBindingDraftsByLine, setStationBindingDraftsByLine] = useState({});
+  const [bindingLangDraftsByLine, setBindingLangDraftsByLine] = useState({});
+  const [disambiguationNamesByLine, setDisambiguationNamesByLine] = useState({});
   const [catalogAssetLibrary, setCatalogAssetLibrary] = useState([]);
-  const [hasCatalogHydrated, setHasCatalogHydrated] = useState(false);
+  const [previewingAssetName, setPreviewingAssetName] = useState("");
+  const [previewingRuleId, setPreviewingRuleId] = useState("");
+  const [broadcastPreviewVolume, setBroadcastPreviewVolume] = useState(80);
+  const [isDraggingBroadcastVolume, setIsDraggingBroadcastVolume] = useState(false);
+  const [broadcastDraftApplied, setBroadcastDraftApplied] = useState(false);
+  const [broadcastDraftDirty, setBroadcastDraftDirty] = useState(false);
+  const [isApplyingBroadcastConfig, setIsApplyingBroadcastConfig] = useState(false);
+  const [broadcastApplyError, setBroadcastApplyError] = useState("");
   const [isAssetExplorerOpen, setIsAssetExplorerOpen] = useState(false);
+  const [shouldRenderAssetExplorer, setShouldRenderAssetExplorer] = useState(false);
+  const [assetExplorerStage, setAssetExplorerStage] = useState("closed");
+  const [externalAssetBrowser, setExternalAssetBrowser] = useState(createEmptyExternalAssetBrowserState());
   const [selectedExternalFiles, setSelectedExternalFiles] = useState([]);
-  const [currentExternalPath, setCurrentExternalPath] = useState(DEFAULT_EXTERNAL_ASSET_PATH);
+  const [currentExternalPath, setCurrentExternalPath] = useState("");
   const [lineOptions, setLineOptions] = useState(fallbackLineOptions);
   const [selectedLineId, setSelectedLineId] = useState(fallbackLineOptions[0]?.id ?? LINE_OPTIONS[0].id);
+  const [bindingSlotHints, setBindingSlotHints] = useState([]);
   const [lineDropdownOpen, setLineDropdownOpen] = useState(false);
   const [isCreatingRule, setIsCreatingRule] = useState(false);
   const [newRuleTitle, setNewRuleTitle] = useState("");
@@ -711,21 +1158,46 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   const [removingNodeIds, setRemovingNodeIds] = useState({});
   const pageRootRef = useRef(null);
   const trayRef = useRef(null);
+  const previewVolumeTrackRef = useRef(null);
   const dropdownPortalHostRef = useRef(null);
   const removeTimersRef = useRef([]);
   const pageEnterTimerRef = useRef(null);
   const hasBroadcastHydratedRef = useRef(false);
+  const hasBackendLineHydratedRef = useRef(false);
+  const hasBroadcastRulesHydratedRef = useRef(false);
   const lastHydratedLineIdRef = useRef("");
-  const availableAssetLibrary = hasCatalogHydrated ? catalogAssetLibrary : demoAssetLibrary;
+  const lastHydratedRulesLineIdRef = useRef("");
+  const lineOptionsRef = useRef(lineOptions);
+  const selectedLineIdRef = useRef(selectedLineId);
+  const skipNextRulesSaveRef = useRef(false);
+  const availableAssetLibrary = catalogAssetLibrary;
   const mappingAssetColumns = splitIntoColumns(availableAssetLibrary);
+  const currentExternalFolders = Array.isArray(externalAssetBrowser?.folders) ? externalAssetBrowser.folders : [];
+  const currentExternalFiles = Array.isArray(externalAssetBrowser?.files) ? externalAssetBrowser.files : [];
+  const currentExternalAllowedExtensions = Array.isArray(externalAssetBrowser?.allowedExtensions) && externalAssetBrowser.allowedExtensions.length > 0
+    ? externalAssetBrowser.allowedExtensions
+    : [".wav", ".mp3", ".ogg"];
   const selectedLine = lineOptions.find((line) => line.id === selectedLineId) ?? lineOptions[0];
   const newRuleTrigger = triggerOptions.find((option) => option.id === newRuleTriggerId) ?? triggerOptions[0];
+  const fallbackLanguageKey = useMemo(
+    () => getBroadcastLocaleLanguageKey(locale),
+    [locale]
+  );
+  const defaultBindingLanguageLabel = useMemo(
+    () => resolveBroadcastLanguageLabel(fallbackLanguageKey, { t }),
+    [fallbackLanguageKey, t]
+  );
+  lineOptionsRef.current = lineOptions;
+  selectedLineIdRef.current = selectedLineId;
   const broadcastLabels = {
+    t,
     sidebarTitle: t("broadcast.sidebar.title"),
     localAssets: t("broadcast.sidebar.localAssets"),
     assetFileName: t("broadcast.sidebar.fileName"),
     assetDuration: t("broadcast.sidebar.duration"),
     importAsset: t("broadcast.sidebar.import"),
+    deleteAsset: t("broadcast.sidebar.deleteAsset"),
+    deleteAllAssets: t("broadcast.sidebar.deleteAllAssets"),
     sequenceTab: t("broadcast.tabs.sequence"),
     mappingTab: t("broadcast.tabs.mapping"),
     lineLabel: t("broadcast.topbar.line"),
@@ -735,7 +1207,6 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     ruleNamePlaceholder: t("broadcast.createRule.namePlaceholder"),
     triggerLabel: t("broadcast.createRule.trigger"),
     saveRule: t("broadcast.createRule.save"),
-    defaultRuleDepartureWarning: t("broadcast.rule.default.departureWarning"),
     defaultRuleAfterDeparture: t("broadcast.rule.default.afterDeparture"),
     mappingTitle: t("broadcast.mapping.title"),
     autoBind: t("broadcast.mapping.autoBind"),
@@ -746,8 +1217,32 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     mapMissing: t("broadcast.mapping.missing"),
     mapChooseAudio: t("broadcast.mapping.chooseAudio"),
     mapReady: t("broadcast.mapping.ready"),
+    mapReadyCount: t("broadcast.mapping.readyCount", { count: "{count}" }),
+    mapConflictPending: t("broadcast.mapping.conflictPending", { count: "{count}" }),
+    mapDisambiguate: t("broadcast.mapping.disambiguate", { count: "{count}" }),
     mapBindTitle: t("broadcast.mapping.bindTitle", { station: "{station}" }),
+    mapDisambiguationTitle: t("broadcast.mapping.disambiguationTitle", { station: "{station}", count: "{count}" }),
+    mapBindingTitle: t("broadcast.mapping.bindingTitle", { station: "{station}" }),
+    mapCurrentBindings: t("broadcast.mapping.currentBindings"),
+    mapLanguageLabel: t("broadcast.mapping.languageLabel"),
+    mapLanguagePlaceholder: t("broadcast.mapping.languagePlaceholder"),
+    mapLanguageHint: t("broadcast.mapping.languageHint"),
+    mapSystemLanguage: t("broadcast.mapping.systemLanguage"),
+    mapSuggestedLabel: t("broadcast.mapping.suggestedLabel"),
+    mapIgnoreCandidate: t("broadcast.mapping.ignoreCandidate"),
+    mapConfirmDisambiguation: t("broadcast.mapping.confirmDisambiguation"),
+    mapBindLanguageAudio: t("broadcast.mapping.bindLanguageAudio"),
+    variableSlot: t("broadcast.variable.slot", { index: "{index}" }),
+    previewRule: t("broadcast.rule.preview"),
     applyConfig: t("broadcast.footer.apply"),
+    appliedConfig: t("broadcast.footer.applied"),
+    footerStatusApplied: t("broadcast.footer.statusApplied"),
+    footerStatusDirty: t("broadcast.footer.statusDirty"),
+    footerStatusClean: t("broadcast.footer.statusClean"),
+    footerStatusApplying: t("broadcast.footer.statusApplying"),
+    footerStatusMappingRequired: t("broadcast.footer.statusMappingRequired", { station: "{station}" }),
+    footerLocateMapping: t("broadcast.footer.locateMapping"),
+    previewVolume: t("broadcast.footer.previewVolume"),
     removeRule: t("broadcast.rule.remove"),
     triggerPrefix: t("broadcast.rule.triggerPrefix"),
     dynamicVariable: t("broadcast.node.dynamicVariable"),
@@ -760,54 +1255,250 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     variableTab: t("broadcast.tray.tab.variable"),
     delayTab: t("broadcast.tray.tab.delay")
   };
+  const derivedBindingSlotHints = useMemo(
+    () => deriveBindingSlotHintsFromStations(stations),
+    [stations]
+  );
+  const effectiveBindingSlotHints = useMemo(
+    () => mergeBindingSlotHints(bindingSlotHints, derivedBindingSlotHints),
+    [bindingSlotHints, derivedBindingSlotHints]
+  );
+  const variableLibrary = useMemo(
+    () => buildVariableLibrary(VARIABLE_LIBRARY, effectiveBindingSlotHints, broadcastLabels),
+    [effectiveBindingSlotHints, broadcastLabels]
+  );
+  const variableColumns = useMemo(
+    () => splitIntoColumns(variableLibrary),
+    [variableLibrary]
+  );
+  const broadcastVariableMappingIssue = useMemo(
+    () => buildBroadcastVariableMappingIssue(rules, stations),
+    [rules, stations]
+  );
+
+  function getActiveBroadcastLineId() {
+    return selectedLineIdRef.current || selectedLineId || "";
+  }
+
+  function getPrimaryStationAssetName(audios) {
+    if (!Array.isArray(audios) || audios.length === 0) {
+      return "";
+    }
+
+    const systemBinding = audios.find((entry) => entry.lang === defaultBindingLanguageLabel && entry.assetName);
+    return systemBinding?.assetName || audios[0]?.assetName || "";
+  }
+
+  function persistStationBindingDraft(stationId, nextAudios, nextConflictAssets) {
+    const lineId = getActiveBroadcastLineId();
+    if (!lineId || !stationId) {
+      return;
+    }
+
+    setStationBindingDraftsByLine((current) => ({
+      ...current,
+      [lineId]: {
+        ...(current[lineId] || {}),
+        [stationId]: {
+          audios: Array.isArray(nextAudios) ? nextAudios : [],
+          conflictAssets: Array.isArray(nextConflictAssets) ? nextConflictAssets : []
+        }
+      }
+    }));
+  }
+
+  function updateBindingLanguageDraft(stationId, value) {
+    const lineId = getActiveBroadcastLineId();
+    if (!lineId || !stationId) {
+      return;
+    }
+
+    setBindingLangDraftsByLine((current) => ({
+      ...current,
+      [lineId]: {
+        ...(current[lineId] || {}),
+        [stationId]: value
+      }
+    }));
+  }
+
+  function updateDisambiguationNameDraft(stationId, assetName, value) {
+    const lineId = getActiveBroadcastLineId();
+    if (!lineId || !stationId || !assetName) {
+      return;
+    }
+
+    const draftKey = `${stationId}:${assetName}`;
+    setDisambiguationNamesByLine((current) => ({
+      ...current,
+      [lineId]: {
+        ...(current[lineId] || {}),
+        [draftKey]: value
+      }
+    }));
+  }
+
+  function getBindingLanguageDraft(stationId) {
+    const lineId = getActiveBroadcastLineId();
+    return bindingLangDraftsByLine[lineId]?.[stationId] || defaultBindingLanguageLabel;
+  }
+
+  function getDisambiguationNameDraft(stationId, assetName, fallbackValue = "") {
+    const lineId = getActiveBroadcastLineId();
+    return disambiguationNamesByLine[lineId]?.[`${stationId}:${assetName}`] || fallbackValue;
+  }
+
+  async function syncStationBindings(stationId, audios) {
+    const lineId = getActiveBroadcastLineId();
+    if (!lineId || !stationId) {
+      return;
+    }
+
+    try {
+      await workbenchApi.saveBroadcastStationBindings?.({
+        lineId,
+        stationId,
+        bindings: (Array.isArray(audios) ? audios : [])
+          .filter((entry) => entry && typeof entry.assetName === "string" && entry.assetName)
+          .map((entry, index) => ({
+            lang: typeof entry.lang === "string" ? entry.lang : "",
+            langIndex: normalizeLangIndex(entry?.langIndex ?? index + 1),
+            assetName: entry.assetName
+          }))
+      });
+      setStationBindingDraftsByLine((current) => {
+        const lineDrafts = current[lineId];
+        if (!lineDrafts || !Object.prototype.hasOwnProperty.call(lineDrafts, stationId)) {
+          return current;
+        }
+
+        const nextLineDrafts = { ...lineDrafts };
+        delete nextLineDrafts[stationId];
+
+        if (Object.keys(nextLineDrafts).length === 0) {
+          const next = { ...current };
+          delete next[lineId];
+          return next;
+        }
+
+        return {
+          ...current,
+          [lineId]: nextLineDrafts
+        };
+      });
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] sync station binding failed", error);
+    }
+  }
 
   function applyBroadcastSnapshot(snapshot) {
-    const sourceLines = Array.isArray(snapshot?.lines) ? snapshot.lines : [];
-    const backendLines = Array.isArray(snapshot?.lines)
-      ? sourceLines
-        .filter((line) => line && typeof line.id === "string" && line.id)
-        .map((line) => ({
-          id: line.id,
-          label: typeof line.name === "string" && line.name ? line.name : line.id
-        }))
-      : [];
-    const nextLineOptions = backendLines.length > 0 ? backendLines : fallbackLineOptions;
+    const backendLines = extractBackendLineOptions(snapshot);
+    const hasBackendLines = backendLines.length > 0;
+    const nextLineOptions = hasBackendLines
+      ? backendLines
+      : hasBackendLineHydratedRef.current
+        ? lineOptionsRef.current
+        : fallbackLineOptions;
     const fallbackSelectedLineId = nextLineOptions[0]?.id ?? "";
+    const preservedSelectedLineId =
+      selectedLineIdRef.current && nextLineOptions.some((line) => line.id === selectedLineIdRef.current)
+        ? selectedLineIdRef.current
+        : "";
     const nextSelectedLineId =
       typeof snapshot?.selectedLineId === "string"
       && nextLineOptions.some((line) => line.id === snapshot.selectedLineId)
         ? snapshot.selectedLineId
-        : fallbackSelectedLineId;
+        : (preservedSelectedLineId || fallbackSelectedLineId);
 
-    setLineOptions(nextLineOptions);
-    lastHydratedLineIdRef.current = nextSelectedLineId;
-    setSelectedLineId(nextSelectedLineId);
-
-    if (Array.isArray(snapshot?.assets)) {
-      setCatalogAssetLibrary(
-        snapshot.assets
-          .filter((asset) => asset && typeof asset.name === "string" && asset.name)
-          .map((asset) => ({
-            name: asset.name,
-            desc: asset.desc || asset.extension || "",
-            length: asset.length || ""
-          }))
-      );
-      setHasCatalogHydrated(true);
+    if (hasBackendLines) {
+      hasBackendLineHydratedRef.current = true;
+      setLineOptions(nextLineOptions);
+      lastHydratedLineIdRef.current = nextSelectedLineId;
+    } else if (!hasBackendLineHydratedRef.current) {
+      setLineOptions(nextLineOptions);
     }
+
+    setSelectedLineId(nextSelectedLineId);
+    setBroadcastDraftApplied(Boolean(snapshot?.draftApplied));
+    setBroadcastDraftDirty(Boolean(snapshot?.draftDirty));
+    setBroadcastPreviewVolume(Number.isFinite(snapshot?.volume) ? snapshot.volume : 80);
+    setIsApplyingBroadcastConfig(false);
+    setBroadcastApplyError("");
+
+    const hasBackendRules = Array.isArray(snapshot?.rules);
+    const nextRules = cloneBroadcastRules(hasBackendRules ? snapshot.rules : []);
+    skipNextRulesSaveRef.current = hasBackendRules;
+    hasBroadcastRulesHydratedRef.current = true;
+    lastHydratedRulesLineIdRef.current = nextSelectedLineId;
+    setRules(nextRules);
+
+    const nextCatalogAssetLibrary = Array.isArray(snapshot?.assets)
+      ? snapshot.assets
+        .filter((asset) => asset && typeof asset.name === "string" && asset.name)
+        .map((asset) => ({
+          name: asset.name,
+          desc: asset.desc || asset.extension || "",
+          length: asset.length || ""
+        }))
+      : [];
+    setCatalogAssetLibrary(nextCatalogAssetLibrary);
 
     if (!Array.isArray(snapshot?.stations)) {
       return;
     }
 
-    setStations((current) =>
+    const assetNameSet = new Set(nextCatalogAssetLibrary.map((asset) => asset.name));
+    const stationBindingsByStationId = new Map();
+    (Array.isArray(snapshot?.stationBindings) ? snapshot.stationBindings : [])
+      .filter((binding) => binding && typeof binding.stationId === "string" && binding.stationId)
+      .forEach((binding) => {
+        const assetName = typeof binding.assetName === "string" ? binding.assetName : "";
+        if (!assetName || !assetNameSet.has(assetName)) {
+          return;
+        }
+
+        const currentBindings = stationBindingsByStationId.get(binding.stationId) || [];
+        currentBindings.push({
+          lang: typeof binding.lang === "string" && binding.lang ? binding.lang : defaultBindingLanguageLabel,
+          langIndex: normalizeLangIndex(binding.langIndex),
+          assetName
+        });
+        stationBindingsByStationId.set(binding.stationId, currentBindings);
+      });
+
+    const lineDrafts = stationBindingDraftsByLine[nextSelectedLineId] || {};
+
+    setStations(
       snapshot.stations.map((station) => {
-        const existing = current.find((entry) => entry.id === station.id || entry.name === station.name);
+        const backendAudios = Array.isArray(stationBindingsByStationId.get(station.id))
+          ? stationBindingsByStationId.get(station.id)
+          : [];
+        const snapshotConflicts = Array.isArray(station?.conflictAssets)
+          ? station.conflictAssets
+            .filter((entry) => entry && typeof entry.assetName === "string" && entry.assetName)
+            .map((entry) => ({
+              assetName: entry.assetName,
+              suggestedLang:
+                typeof entry.suggestedLang === "string" && entry.suggestedLang
+                  ? entry.suggestedLang
+                  : extractBroadcastLanguageHint(entry.assetName, station.name, fallbackLanguageKey, broadcastLabels)
+            }))
+          : [];
+        const override = lineDrafts[station.id];
+        const audios = Array.isArray(override?.audios) ? override.audios : backendAudios;
+        const conflictAssets = sortBroadcastConflictAssets(
+          Array.isArray(override?.conflictAssets) ? override.conflictAssets : snapshotConflicts,
+          station.name,
+          fallbackLanguageKey,
+          broadcastLabels
+        );
+
         return {
           id: station.id,
           name: station.name,
-          audio: existing?.audio ?? null,
-          status: existing?.status ?? "missing"
+          audios,
+          conflictAssets,
+          status: deriveBroadcastStationStatus(audios, conflictAssets)
         };
       })
     );
@@ -819,15 +1510,97 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   }, []);
 
   useEffect(() => {
+    const unsubscribe = workbenchApi.onBroadcastAssetPreviewStateChanged?.((payload) => {
+      const assetName = payload?.assetName || "";
+      const state = payload?.state || "";
+      if (state === "ended" || state === "stopped" || state === "error") {
+        setPreviewingAssetName((current) => (assetName && current && current !== assetName ? current : ""));
+      }
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [workbenchApi]);
+
+  useEffect(() => {
+    const unsubscribe = workbenchApi.onBroadcastRulePreviewStateChanged?.((payload) => {
+      const ruleId = payload?.ruleId || "";
+      const state = payload?.state || "";
+      if (state === "ended" || state === "stopped" || state === "error") {
+        setPreviewingRuleId((current) => (ruleId && current && current !== ruleId ? current : ""));
+      }
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [workbenchApi]);
+
+  useEffect(() => {
+    if (!isDraggingBroadcastVolume) {
+      return undefined;
+    }
+
+    function updateVolumeFromClientX(clientX) {
+      const track = previewVolumeTrackRef.current;
+      if (!(track instanceof HTMLElement)) {
+        return;
+      }
+
+      const rect = track.getBoundingClientRect();
+      if (rect.width <= 0) {
+        return;
+      }
+
+      const progress = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const nextVolume = Math.round(progress * 100);
+      setBroadcastPreviewVolume(nextVolume);
+      workbenchApi.setBroadcastPreviewVolume?.(nextVolume);
+    }
+
+    function handleMouseMove(event) {
+      updateVolumeFromClientX(event.clientX);
+    }
+
+    function handleMouseUp() {
+      setIsDraggingBroadcastVolume(false);
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDraggingBroadcastVolume, workbenchApi]);
+
+  useEffect(() => {
     let disposed = false;
 
     async function hydrateBroadcastSnapshot() {
       try {
-        const snapshot = await workbenchApi.loadSnapshot?.();
-        if (!disposed) {
-          applyBroadcastSnapshot(snapshot);
-          hasBroadcastHydratedRef.current = true;
+        const snapshot = await workbenchApi.loadBroadcastSnapshot?.(selectedLineIdRef.current);
+        if (disposed) {
+          return;
         }
+
+        applyBroadcastSnapshot(snapshot);
+
+        if (extractBackendLineOptions(snapshot).length === 0) {
+          try {
+            const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current);
+            if (!disposed && extractBackendLineOptions(refreshedSnapshot).length > 0) {
+              applyBroadcastSnapshot(refreshedSnapshot);
+            }
+          } catch (refreshError) {
+            if (!disposed) {
+              console.error("[RT Broadcast Workbench] backend hydrate refresh failed", refreshError);
+            }
+          }
+        }
+
+        hasBroadcastHydratedRef.current = true;
       } catch (error) {
         if (!disposed) {
           console.error("[RT Broadcast Workbench] backend hydrate failed", error);
@@ -885,6 +1658,109 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
       disposed = true;
     };
   }, [selectedLineId, workbenchApi]);
+
+  useEffect(() => {
+    const lineId = selectedLineId || selectedLineIdRef.current || "";
+    if (!lineId) {
+      setBindingSlotHints([]);
+      return undefined;
+    }
+
+    let disposed = false;
+
+    async function refreshBindingSlotHints() {
+      try {
+        const result = await workbenchApi.loadBroadcastBindingSlotHints?.(lineId);
+        if (!disposed) {
+          setBindingSlotHints(Array.isArray(result?.slotHints) ? result.slotHints : []);
+        }
+      } catch (error) {
+        if (!disposed) {
+          console.error("[RT Broadcast Workbench] load binding slot hints failed", error);
+        }
+      }
+    }
+
+    refreshBindingSlotHints();
+
+    return () => {
+      disposed = true;
+    };
+  }, [selectedLineId, workbenchApi]);
+
+  useEffect(() => {
+    if (!hasBroadcastRulesHydratedRef.current
+      || !selectedLineId
+      || selectedLineId !== lastHydratedRulesLineIdRef.current) {
+      return undefined;
+    }
+
+    if (skipNextRulesSaveRef.current) {
+      skipNextRulesSaveRef.current = false;
+      return undefined;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        await workbenchApi.saveBroadcastRules?.({
+          lineId: selectedLineId,
+          rules: cloneBroadcastRules(rules)
+        });
+      } catch (error) {
+        console.error("[RT Broadcast Workbench] save rules failed", error);
+      }
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [rules, selectedLineId, workbenchApi]);
+
+  useEffect(() => {
+    if (pageEnterSequence <= 0) {
+      return undefined;
+    }
+
+    let disposed = false;
+    const retryDelays = [0, 120, 360, 720];
+
+    async function refreshBroadcastLinesOnEnter() {
+      for (let index = 0; index < retryDelays.length; index += 1) {
+        const delay = retryDelays[index];
+        if (delay > 0) {
+          await new Promise((resolve) => {
+            window.setTimeout(resolve, delay);
+          });
+        }
+
+        if (disposed) {
+          return;
+        }
+
+        try {
+          const snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
+          if (disposed || !snapshot) {
+            return;
+          }
+
+          applyBroadcastSnapshot(snapshot);
+          if (extractBackendLineOptions(snapshot).length > 0) {
+            return;
+          }
+        } catch (error) {
+          if (!disposed && index === retryDelays.length - 1) {
+            console.error("[RT Broadcast Workbench] page-enter refresh failed", error);
+          }
+        }
+      }
+    }
+
+    refreshBroadcastLinesOnEnter();
+
+    return () => {
+      disposed = true;
+    };
+  }, [pageEnterSequence, workbenchApi]);
 
   useLayoutEffect(() => {
     if (pageEnterSequence <= 0) {
@@ -989,6 +1865,37 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
 
     return () => window.clearTimeout(timer);
   }, [activeTab, renderedTab]);
+
+  useEffect(() => {
+    let timer = null;
+    let raf = null;
+
+    if (isAssetExplorerOpen) {
+      setShouldRenderAssetExplorer(true);
+      setAssetExplorerStage("entering");
+      raf = window.requestAnimationFrame(() => {
+        setAssetExplorerStage("entered");
+      });
+    } else if (shouldRenderAssetExplorer) {
+      setAssetExplorerStage("exiting");
+      timer = window.setTimeout(() => {
+        setShouldRenderAssetExplorer(false);
+        setAssetExplorerStage("closed");
+        setSelectedExternalFiles([]);
+        setCurrentExternalPath("");
+        setExternalAssetBrowser(createEmptyExternalAssetBrowserState());
+      }, IMPORT_OVERLAY_TRANSITION_MS);
+    }
+
+    return () => {
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [isAssetExplorerOpen, shouldRenderAssetExplorer]);
 
   function closeInlineMenus() {
     setTriggerDropdownOpen(false);
@@ -1106,6 +2013,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
       {
         id: Date.now().toString(),
         title: newRuleTitle.trim(),
+        triggerId: newRuleTrigger.id,
         trigger: newRuleTrigger.label,
         nodes: []
       }
@@ -1116,44 +2024,359 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     setTriggerDropdownOpen(false);
   }
 
-  function handleBindStation(stationId, assetName) {
-    setStations((current) =>
-      current.map((station) => (station.id === stationId ? { ...station, audio: assetName, status: "ready" } : station))
-    );
+  async function handleBindStation(stationId, assetName) {
+    const targetStation = stations.find((station) => station.id === stationId);
+    if (!targetStation || !assetName) {
+      return;
+    }
+
+    const nextLang = (getBindingLanguageDraft(stationId) || "").trim() || defaultBindingLanguageLabel;
+    const nextAudios = [
+      ...targetStation.audios.filter((entry) => entry.lang !== nextLang),
+      { lang: nextLang, assetName }
+    ];
+    const nextStation = {
+      ...targetStation,
+      audios: nextAudios,
+      conflictAssets: [],
+      status: deriveBroadcastStationStatus(nextAudios, [])
+    };
+
+    setStations((current) => current.map((station) => (station.id === stationId ? nextStation : station)));
+    persistStationBindingDraft(stationId, nextStation.audios, nextStation.conflictAssets);
+    updateBindingLanguageDraft(stationId, nextLang);
+    await syncStationBindings(stationId, nextStation.audios);
+    setMappingTray(stationId);
+  }
+
+  async function handleRemoveStationAudio(stationId, lang) {
+    const targetStation = stations.find((station) => station.id === stationId);
+    if (!targetStation) {
+      return;
+    }
+
+    const nextAudios = targetStation.audios.filter((entry) => entry.lang !== lang);
+    const nextStation = {
+      ...targetStation,
+      audios: nextAudios,
+      conflictAssets: [],
+      status: deriveBroadcastStationStatus(nextAudios, [])
+    };
+
+    setStations((current) => current.map((station) => (station.id === stationId ? nextStation : station)));
+    persistStationBindingDraft(stationId, nextStation.audios, nextStation.conflictAssets);
+    await syncStationBindings(stationId, nextStation.audios);
     setMappingTray(null);
   }
 
+  function handleDiscardConflict(stationId, assetName) {
+    const targetStation = stations.find((station) => station.id === stationId);
+    if (!targetStation) {
+      return;
+    }
+
+    const nextConflictAssets = targetStation.conflictAssets.filter((entry) => entry.assetName !== assetName);
+    const nextStation = {
+      ...targetStation,
+      conflictAssets: nextConflictAssets,
+      status: deriveBroadcastStationStatus(targetStation.audios, nextConflictAssets)
+    };
+
+    setStations((current) => current.map((station) => (station.id === stationId ? nextStation : station)));
+    persistStationBindingDraft(stationId, nextStation.audios, nextStation.conflictAssets);
+  }
+
+  async function handleResolveStationConflicts(stationId) {
+    const targetStation = stations.find((station) => station.id === stationId);
+    if (!targetStation || targetStation.conflictAssets.length === 0) {
+      return;
+    }
+
+    const existingAudios = Array.isArray(targetStation.audios)
+      ? targetStation.audios.filter((entry) => entry && entry.assetName)
+      : [];
+    const existingAssetNames = new Set(existingAudios.map((entry) => entry.assetName));
+    const resolvedAudios = targetStation.conflictAssets
+      .filter((entry) => entry && entry.assetName && !existingAssetNames.has(entry.assetName))
+      .map((entry) => ({
+        lang: (
+          getDisambiguationNameDraft(
+            stationId,
+            entry.assetName,
+            extractBroadcastLanguageHint(entry.assetName, targetStation.name, fallbackLanguageKey, broadcastLabels)
+          ) || ""
+        ).trim() || defaultBindingLanguageLabel,
+        assetName: entry.assetName
+      }));
+    const nextAudios = [...existingAudios, ...resolvedAudios];
+    const nextStation = {
+      ...targetStation,
+      audios: nextAudios,
+      conflictAssets: [],
+      status: deriveBroadcastStationStatus(nextAudios, [])
+    };
+
+    setStations((current) => current.map((station) => (station.id === stationId ? nextStation : station)));
+    persistStationBindingDraft(stationId, nextStation.audios, nextStation.conflictAssets);
+    setMappingTray(null);
+    await syncStationBindings(stationId, nextStation.audios);
+  }
+
+  async function loadExternalAssetBrowser(path = "") {
+    try {
+      const browserSnapshot = await workbenchApi.loadBroadcastAssetBrowser?.(path || currentExternalPath || "");
+      if (!browserSnapshot) {
+        return;
+      }
+
+      setExternalAssetBrowser(browserSnapshot);
+      setCurrentExternalPath(browserSnapshot.currentPath || "");
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] load asset browser failed", error);
+    }
+  }
+
   function handleImportAssetDirectory() {
+    closeInlineMenus();
     setIsAssetExplorerOpen(true);
+    loadExternalAssetBrowser(currentExternalPath);
+  }
+
+  function resetAssetPreviewState(assetName = "") {
+    setPreviewingAssetName((current) => (assetName && current && current !== assetName ? current : ""));
+  }
+
+  async function handleAssetPreviewToggle(assetName) {
+    if (!assetName) {
+      return;
+    }
+
+    if (previewingAssetName === assetName) {
+      try {
+        await workbenchApi.stopBroadcastAssetPreview?.(assetName);
+      } catch (error) {
+        console.error("[RT Broadcast Workbench] stop asset preview failed", error);
+      }
+      resetAssetPreviewState(assetName);
+      return;
+    }
+
+    try {
+      await workbenchApi.playBroadcastAssetPreview?.(assetName);
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] play asset preview failed", error);
+    }
+
+    setPreviewingAssetName(assetName);
+  }
+
+  async function handleRulePreviewToggle(ruleId) {
+    if (!ruleId) {
+      return;
+    }
+
+    if (previewingRuleId === ruleId) {
+      try {
+        await workbenchApi.stopBroadcastRulePreview?.(ruleId);
+      } catch (error) {
+        console.error("[RT Broadcast Workbench] stop rule preview failed", error);
+      }
+      setPreviewingRuleId("");
+      return;
+    }
+
+    try {
+      await workbenchApi.playBroadcastRulePreview?.({
+        lineId: selectedLineIdRef.current || "",
+        ruleId,
+        volume: broadcastPreviewVolume
+      });
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] play rule preview failed", error);
+    }
+
+    setPreviewingRuleId(ruleId);
+  }
+
+  function handleBroadcastPreviewVolumeMouseDown(event) {
+    const track = previewVolumeTrackRef.current;
+    if (!(track instanceof HTMLElement)) {
+      return;
+    }
+
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return;
+    }
+
+    const progress = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const nextVolume = Math.round(progress * 100);
+    setBroadcastPreviewVolume(nextVolume);
+    workbenchApi.setBroadcastPreviewVolume?.(nextVolume);
+    setIsDraggingBroadcastVolume(true);
+  }
+
+  function removeAssetFromUi(assetName) {
+    if (!assetName) {
+      return;
+    }
+
+    setCatalogAssetLibrary((current) => current.filter((asset) => asset.name !== assetName));
+    setStations((current) =>
+      current.map((station) =>
+        ({
+          ...station,
+          audios: station.audios.filter((entry) => entry.assetName !== assetName),
+          conflictAssets: station.conflictAssets.filter((entry) => entry.assetName !== assetName),
+          status: deriveBroadcastStationStatus(
+            station.audios.filter((entry) => entry.assetName !== assetName),
+            station.conflictAssets.filter((entry) => entry.assetName !== assetName)
+          )
+        })
+      )
+    );
+    setStationBindingDraftsByLine((current) => {
+      const next = { ...current };
+      Object.keys(next).forEach((lineId) => {
+        const lineDrafts = next[lineId];
+        if (!lineDrafts) {
+          return;
+        }
+
+        const nextLineDrafts = { ...lineDrafts };
+        Object.keys(nextLineDrafts).forEach((stationId) => {
+          const stationDraft = nextLineDrafts[stationId];
+          if (!stationDraft) {
+            return;
+          }
+
+          nextLineDrafts[stationId] = {
+            audios: Array.isArray(stationDraft.audios)
+              ? stationDraft.audios.filter((entry) => entry.assetName !== assetName)
+              : [],
+            conflictAssets: Array.isArray(stationDraft.conflictAssets)
+              ? stationDraft.conflictAssets.filter((entry) => entry.assetName !== assetName)
+              : []
+          };
+        });
+        next[lineId] = nextLineDrafts;
+      });
+      return next;
+    });
+    setRules((current) =>
+      current.map((rule) => ({
+        ...rule,
+        nodes: rule.nodes.filter((node) => !(node.type === "asset" && node.name === assetName))
+      }))
+    );
+    resetAssetPreviewState(assetName);
+  }
+
+  async function handleDeleteAsset(assetName) {
+    if (!assetName) {
+      return;
+    }
+
+    try {
+      if (previewingAssetName === assetName) {
+        await workbenchApi.stopBroadcastAssetPreview?.(assetName);
+      }
+      const result = await workbenchApi.deleteBroadcastAsset?.(assetName);
+      if (!result?.success) {
+        return;
+      }
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] delete asset failed", error);
+      return;
+    }
+
+    removeAssetFromUi(assetName);
+  }
+
+  async function handleDeleteAllAssets() {
+    try {
+      if (previewingAssetName) {
+        await workbenchApi.stopBroadcastAssetPreview?.(previewingAssetName);
+      }
+      const result = await workbenchApi.deleteAllBroadcastAssets?.();
+      if (!result?.success) {
+        return;
+      }
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] delete all assets failed", error);
+      return;
+    }
+
+    setCatalogAssetLibrary([]);
+    setStationBindingDraftsByLine({});
+    setStations((current) => current.map((station) => ({
+      ...station,
+      audios: [],
+      conflictAssets: [],
+      status: "missing"
+    })));
+    setRules((current) =>
+      current.map((rule) => ({
+        ...rule,
+        nodes: rule.nodes.filter((node) => node.type !== "asset")
+      }))
+    );
+    resetAssetPreviewState();
+  }
+
+  async function handleAutoBindStations() {
+    if (!selectedLineIdRef.current) {
+      return;
+    }
+
+    try {
+      await workbenchApi.autoBindBroadcastStationMappings?.(selectedLineIdRef.current);
+      setStationBindingDraftsByLine((current) => {
+        const next = { ...current };
+        delete next[selectedLineIdRef.current];
+        return next;
+      });
+      setBindingLangDraftsByLine((current) => {
+        const next = { ...current };
+        delete next[selectedLineIdRef.current];
+        return next;
+      });
+      setDisambiguationNamesByLine((current) => {
+        const next = { ...current };
+        delete next[selectedLineIdRef.current];
+        return next;
+      });
+      const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current);
+      if (refreshedSnapshot) {
+        applyBroadcastSnapshot(refreshedSnapshot);
+      }
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] auto bind station mappings failed", error);
+    }
   }
 
   function handleCloseAssetExplorer() {
     setIsAssetExplorerOpen(false);
-    setSelectedExternalFiles([]);
-    setCurrentExternalPath(DEFAULT_EXTERNAL_ASSET_PATH);
   }
 
   function handleExternalPathChange(path) {
-    if (EXTERNAL_ASSET_FILE_SYSTEM[path]) {
-      setCurrentExternalPath(path);
+    loadExternalAssetBrowser(path);
+  }
+
+  function resolveExternalFolderTargetPath(folderName) {
+    if (!currentExternalPath) {
+      return folderName;
     }
+
+    return `${currentExternalPath}${currentExternalPath.endsWith("\\") ? "" : "\\"}${folderName}\\`;
   }
 
   function handleExternalBack() {
-    if (currentExternalPath === DEFAULT_EXTERNAL_ASSET_PATH) {
+    if (!externalAssetBrowser?.parentPath) {
       return;
     }
 
-    const parts = currentExternalPath.split("\\").filter(Boolean);
-    if (parts.length <= 1) {
-      return;
-    }
-
-    parts.pop();
-    const nextPath = `${parts.join("\\")}\\`;
-    if (EXTERNAL_ASSET_FILE_SYSTEM[nextPath]) {
-      setCurrentExternalPath(nextPath);
-    }
+    loadExternalAssetBrowser(externalAssetBrowser.parentPath);
   }
 
   function handleToggleExternalFile(fileId) {
@@ -1165,8 +2388,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   }
 
   function handleToggleAllExternalFiles() {
-    const currentViewFiles = EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || [];
-    const currentViewIds = currentViewFiles.map((file) => file.id);
+    const currentViewIds = currentExternalFiles.map((file) => file.id);
     const allSelected = currentViewIds.length > 0 && currentViewIds.every((id) => selectedExternalFiles.includes(id));
 
     if (allSelected) {
@@ -1176,6 +2398,97 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
 
     setSelectedExternalFiles((current) => Array.from(new Set([...current, ...currentViewIds])));
   }
+
+  async function handleImportSelectedExternalFiles() {
+    if (selectedExternalFiles.length === 0) {
+      return;
+    }
+
+    try {
+      const result = await workbenchApi.importBroadcastExternalAssets?.({
+        currentPath: currentExternalPath,
+        selectedPaths: selectedExternalFiles
+      });
+
+      if (result?.success) {
+        handleCloseAssetExplorer();
+      }
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] import external assets failed", error);
+    }
+  }
+
+  async function handleApplyBroadcastConfig() {
+    if (isApplyingBroadcastConfig || broadcastDraftApplied && !broadcastDraftDirty || broadcastVariableMappingIssue) {
+      return;
+    }
+
+    setIsApplyingBroadcastConfig(true);
+    setBroadcastApplyError("");
+
+    try {
+      const result = await workbenchApi.applyBroadcastConfig?.({
+        lineId: selectedLineIdRef.current || ""
+      });
+
+      if (result?.success) {
+        if (result.snapshot) {
+          applyBroadcastSnapshot(result.snapshot);
+          return;
+        }
+
+        const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
+        applyBroadcastSnapshot(refreshedSnapshot);
+        return;
+      }
+
+      setIsApplyingBroadcastConfig(false);
+      setBroadcastApplyError(result?.error || "Apply failed");
+    } catch (error) {
+      setIsApplyingBroadcastConfig(false);
+      setBroadcastApplyError(error instanceof Error ? error.message : "Apply failed");
+    }
+  }
+
+  function handleLocateBroadcastMappingIssue() {
+    if (!broadcastVariableMappingIssue?.stationId) {
+      return;
+    }
+
+    setTrayContext(null);
+    setActiveTab("mapping");
+    setMappingTray(broadcastVariableMappingIssue.stationId);
+  }
+
+  const isBroadcastConfigApplied = broadcastDraftApplied && !broadcastDraftDirty;
+  const broadcastFooterTone = broadcastApplyError
+    ? "error"
+    : broadcastVariableMappingIssue
+      ? "warning"
+    : isBroadcastConfigApplied
+      ? "applied"
+      : broadcastDraftDirty
+        ? "warning"
+        : "neutral";
+  const broadcastFooterText = broadcastApplyError
+    ? broadcastApplyError
+    : broadcastVariableMappingIssue
+      ? broadcastLabels.footerStatusMappingRequired
+        .replace("{station}", broadcastVariableMappingIssue.stationName || "-")
+    : isApplyingBroadcastConfig
+      ? broadcastLabels.footerStatusApplying
+      : isBroadcastConfigApplied
+        ? broadcastLabels.footerStatusApplied
+        : broadcastDraftDirty
+          ? broadcastLabels.footerStatusDirty
+          : broadcastLabels.footerStatusClean;
+  const broadcastApplyButtonLabel = isApplyingBroadcastConfig
+    ? broadcastLabels.footerStatusApplying
+    : broadcastVariableMappingIssue
+      ? broadcastLabels.footerLocateMapping
+    : isBroadcastConfigApplied
+      ? broadcastLabels.appliedConfig
+      : broadcastLabels.applyConfig;
 
   return (
     <div ref={pageRootRef} className={`dw-bc-page is-page-enter-${pageEnterState}`} onClick={handleRootClick}>
@@ -1188,25 +2501,54 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
 
           <div className="dw-bc-sidebar-tools">
             <span>{broadcastLabels.localAssets}</span>
+            <div className="dw-bc-sidebar-icons">
+              <button type="button" className="dw-bc-sidebar-clear-button" onClick={handleDeleteAllAssets}>
+                {broadcastLabels.deleteAllAssets}
+              </button>
+            </div>
           </div>
 
           <div className="dw-bc-asset-head">
             <div>{broadcastLabels.assetFileName}</div>
-            <div>{broadcastLabels.assetDuration}</div>
+            <div>
+              <span className="dw-bc-asset-time-head">{broadcastLabels.assetDuration}</span>
+              <span className="dw-bc-asset-delete-spacer" />
+            </div>
           </div>
 
-          <div className="dw-bc-asset-list">
+          <WorkbenchScrollArea className="dw-bc-asset-list" metricsKey={availableAssetLibrary.length}>
             {availableAssetLibrary.map((asset, index) => (
               <div key={asset.name} className="dw-bc-asset-row dw-bc-page-enter-slide" style={{ animationDelay: `${index * 0.05}s` }}>
-                <div className="dw-bc-asset-play"><PlayIcon /></div>
-                <div className="dw-bc-asset-copy">
-                  <div className="dw-bc-asset-name">{asset.name}</div>
-                  <div className="dw-bc-asset-desc">{asset.desc}</div>
+                <button
+                  type="button"
+                  className={`dw-bc-asset-play ${previewingAssetName === asset.name ? "is-previewing" : ""}`}
+                  onClick={() => handleAssetPreviewToggle(asset.name)}
+                >
+                  <span className="dw-bc-asset-play-icon-shell">
+                    {previewingAssetName === asset.name ? <PauseIcon /> : <PlayIcon />}
+                  </span>
+                </button>
+                <div className="dw-bc-asset-copy-wrap">
+                  <div className="dw-bc-asset-copy">
+                    <div className="dw-bc-asset-name">{formatBroadcastAssetDisplayName(asset.name)}</div>
+                    <div className="dw-bc-asset-desc">{asset.desc}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="dw-bc-asset-copy-button"
+                    onClick={() => handleAssetPreviewToggle(asset.name)}
+                    aria-label={asset.name}
+                  />
                 </div>
-                <div className="dw-bc-asset-time">{asset.length}</div>
+                <div className="dw-bc-asset-meta">
+                  <div className="dw-bc-asset-time">{asset.length}</div>
+                  <button type="button" className="dw-bc-asset-delete" onClick={() => handleDeleteAsset(asset.name)} aria-label={`${broadcastLabels.deleteAsset} ${asset.name}`}>
+                    <TrashIcon />
+                  </button>
+                </div>
               </div>
             ))}
-          </div>
+          </WorkbenchScrollArea>
 
           <footer className="dw-bc-sidebar-foot">
             <button type="button" className="dw-bc-outline-button" onClick={handleImportAssetDirectory}>
@@ -1230,14 +2572,14 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
             </div>
 
             <div className="dw-bc-main-tools">
-              <BroadcastDropdown
+              <WorkbenchDropdown
                 open={lineDropdownOpen}
-                setOpen={(next) => {
+                onOpenChange={(next) => {
                 setTriggerDropdownOpen(false);
                   setLineDropdownOpen(next);
                 }}
-                onSelect={(option) => {
-                  setSelectedLineId(option.value);
+                onSelect={(value) => {
+                  setSelectedLineId(value);
                   setLineDropdownOpen(false);
                 }}
                 options={lineOptions.map((line) => ({
@@ -1250,12 +2592,14 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                 label={broadcastLabels.lineLabel}
                 className="dw-bc-line-picker is-line"
                 title={selectedLine.label}
+                variant="field"
+                positioning="portal"
                 portalHostRef={dropdownPortalHostRef}
               />
             </div>
           </div>
 
-          <div className="dw-bc-body">
+          <WorkbenchScrollArea className="dw-bc-body" metricsKey={`${renderedTab}:${rules.length}:${stations.length}:${Boolean(isCreatingRule)}:${mappingTray || ""}:${trayContext?.ruleId || ""}:${trayContext?.action || ""}`}>
             <div className="dw-bc-body-pad">
               <div className={`dw-bc-tab-panel is-${tabStage}`}>
                 <div className="dw-bc-scene-entry dw-bc-page-enter-scene origin-bottom">
@@ -1269,14 +2613,23 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                         trayCategory={trayCategory}
                         removingRule={Boolean(removingRuleIds[rule.id])}
                         removingNodeIds={removingNodeIds}
+                        previewingRuleId={previewingRuleId}
                         onToggleTray={toggleTray}
+                        onToggleRulePreview={handleRulePreviewToggle}
                         onRemoveNode={handleRemoveNode}
                         onRemoveRule={handleRemoveRule}
                         onSetTrayCategory={setTrayCategory}
                         onCloseTray={() => setTrayContext(null)}
-                        onAddAsset={(ruleId, asset) => handleAddNodeToRule(ruleId, { name: asset.name, desc: asset.desc, type: "asset" })}
-                        onAddVariable={(ruleId, variable) => handleAddNodeToRule(ruleId, { name: variable.name, desc: broadcastLabels.dynamicVariable, type: "variable" })}
-                        onAddDelay={(ruleId, delay) => handleAddNodeToRule(ruleId, { name: delay.name, desc: broadcastLabels.delayNode, type: "delay" })}
+                        onAddAsset={(ruleId, asset) => handleAddNodeToRule(ruleId, { name: asset.name, desc: asset.desc, descKey: asset.descKey, type: "asset" })}
+                        onAddVariable={(ruleId, variable) => handleAddNodeToRule(ruleId, {
+                          name: variable.name,
+                          nameKey: variable.nameKey,
+                          desc: variable.desc || broadcastLabels.dynamicVariable,
+                          descKey: "broadcast.node.dynamicVariable",
+                          type: "variable",
+                          langIndex: normalizeLangIndex(variable.langIndex)
+                        })}
+                        onAddDelay={(ruleId, delay) => handleAddNodeToRule(ruleId, { name: delay.name, desc: broadcastLabels.delayNode, descKey: "broadcast.node.delay", type: "delay", delaySeconds: delay.delaySeconds || 0 })}
                         trayRef={trayRef}
                         assetLibrary={availableAssetLibrary}
                         variableLibrary={variableLibrary}
@@ -1306,14 +2659,14 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                         </div>
                         <div className="dw-bc-form-field is-dropdown">
                           <label>{broadcastLabels.triggerLabel}</label>
-                          <BroadcastDropdown
+                          <WorkbenchDropdown
                             open={triggerDropdownOpen}
-                            setOpen={(next) => {
+                            onOpenChange={(next) => {
                               setLineDropdownOpen(false);
                               setTriggerDropdownOpen(next);
                             }}
-                            onSelect={(option) => {
-                              setNewRuleTriggerId(option.value);
+                            onSelect={(value) => {
+                              setNewRuleTriggerId(value);
                               setTriggerDropdownOpen(false);
                             }}
                             options={triggerOptions.map((option) => ({
@@ -1324,6 +2677,8 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                             }))}
                             value={newRuleTrigger.label}
                             className="dw-bc-form-dropdown"
+                            variant="field"
+                            positioning="portal"
                             portalHostRef={dropdownPortalHostRef}
                           />
                         </div>
@@ -1340,7 +2695,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                       <div>
                         <h2>{broadcastLabels.mappingTitle}</h2>
                       </div>
-                      <button type="button" className="dw-bc-secondary-button">{broadcastLabels.autoBind}</button>
+                      <button type="button" className="dw-bc-secondary-button" onClick={handleAutoBindStations}>{broadcastLabels.autoBind}</button>
                     </div>
 
                     <div className="dw-bc-map-table-head">
@@ -1352,53 +2707,149 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
 
                     {stations.map((station, index) => {
                       const isMissing = station.status === "missing";
+                      const isConflict = station.status === "conflict";
+                      const isReady = station.status === "ready";
                       const isMappingTrayVisible = mappingTray === station.id;
                       return (
                         <div key={station.id}>
                           <div className="dw-bc-map-row dw-bc-page-enter-slide-up" style={{ animationDelay: `${index * 0.08}s` }}>
                             <div className={`dw-bc-map-id dw-bc-map-col is-id ${isMissing ? "is-missing" : ""}`}>{selectedLine.label}</div>
-                            <div className={`dw-bc-map-name dw-bc-map-col is-name ${isMissing ? "is-missing" : ""}`}>{station.name}</div>
+                            <div className={`dw-bc-map-name dw-bc-map-col is-name ${isMissing ? "is-missing" : ""} ${isConflict ? "is-conflict" : ""}`}>{station.name}</div>
                             <div className="dw-bc-map-col is-audio">
-                              {station.audio ? (
-                                <button type="button" className="dw-bc-audio-link" onClick={() => { setMappingTray(isMappingTrayVisible ? null : station.id); setTrayContext(null); }}>
-                                  <SpeakerIcon />
-                                  {station.audio}
-                                </button>
+                              {isReady ? (
+                                <div className="dw-bc-map-audio-stack">
+                                  {station.audios.map((audio) => (
+                                    <button
+                                      key={`${station.id}:${audio.lang}:${audio.assetName}`}
+                                      type="button"
+                                      className="dw-bc-map-audio-binding"
+                                      onClick={() => { setMappingTray(isMappingTrayVisible ? null : station.id); setTrayContext(null); }}
+                                    >
+                                      <span className="dw-bc-map-audio-lang">{audio.lang}</span>
+                                      <span className="dw-bc-map-audio-link-core">
+                                        <span className="dw-bc-map-audio-name">{formatBroadcastAssetDisplayName(audio.assetName)}</span>
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : isConflict ? (
+                                <span className="dw-bc-map-conflict-note">{t("broadcast.mapping.conflictPending", { count: station.conflictAssets.length })}</span>
                               ) : (
                                 <span className="dw-bc-map-missing">{broadcastLabels.mapMissing}</span>
                               )}
                             </div>
                             <div className="dw-bc-map-status dw-bc-map-col is-status">
-                              {station.status === "ready" ? (
-                                <span className="dw-bc-ready">{broadcastLabels.mapReady}</span>
+                              {isReady ? (
+                                <span className="dw-bc-ready">{t("broadcast.mapping.readyCount", { count: station.audios.length })}</span>
+                              ) : isConflict ? (
+                                <button type="button" className="dw-bc-map-button is-conflict" onClick={() => { setMappingTray(isMappingTrayVisible ? null : station.id); setTrayContext(null); }}>
+                                  {t("broadcast.mapping.disambiguate", { count: station.conflictAssets.length })}
+                                </button>
                               ) : (
                                 <button type="button" className="dw-bc-map-button" onClick={() => { setMappingTray(isMappingTrayVisible ? null : station.id); setTrayContext(null); }}>
-                                  {broadcastLabels.mapChooseAudio}
+                                  {broadcastLabels.mapBindLanguageAudio}
                                 </button>
                               )}
                             </div>
                           </div>
 
                           <AnimatedInlinePanel visible={isMappingTrayVisible} panelRef={trayRef}>
-                            <div className={`dw-bc-tray ${isMissing ? "is-missing" : ""}`}>
+                            <div className={`dw-bc-tray ${isMissing ? "is-missing" : ""} ${isConflict ? "is-conflict" : ""}`}>
                               <div className="dw-bc-tray-head">
-                                <span>{t("broadcast.mapping.bindTitle", { station: station.name })}</span>
+                                <span>{isConflict ? t("broadcast.mapping.disambiguationTitle", { station: station.name, count: station.conflictAssets.length }) : t("broadcast.mapping.bindingTitle", { station: station.name })}</span>
                                 <button type="button" className="dw-bc-icon-button" onClick={() => setMappingTray(null)}>
                                   <CloseIcon />
                                 </button>
                               </div>
-                              <div className="dw-bc-tray-columns">
-                                {mappingAssetColumns.map((column, columnIndex) => (
-                                  <div key={`mapping-col-${columnIndex}`} className="dw-bc-tray-column">
-                                    {column.map((asset) => (
-                                      <button key={asset.name} type="button" className="dw-bc-tray-item anim-stagger-slide-up" style={{ animationDelay: `${availableAssetLibrary.findIndex((entry) => entry.name === asset.name) * 0.05}s` }} onClick={() => handleBindStation(station.id, asset.name)}>
-                                        <span>{asset.name}</span>
-                                        <span>{asset.desc}</span>
-                                      </button>
+                              {isConflict ? (
+                                <div className="dw-bc-map-disambiguation-list">
+                                  {station.audios.length > 0 ? (
+                                    <div className="dw-bc-map-binding-list">
+                                      <span className="dw-bc-map-binding-list-title">{broadcastLabels.mapCurrentBindings}</span>
+                                      <div className="dw-bc-map-binding-tags">
+                                        {station.audios.map((audio) => (
+                                          <div key={`${station.id}:${audio.lang}:${audio.assetName}`} className="dw-bc-map-binding-tag">
+                                            <span className="dw-bc-map-binding-tag-lang">{`${audio.lang}:`}</span>
+                                            <span className="dw-bc-map-binding-tag-name">{formatBroadcastAssetDisplayName(audio.assetName)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                  {station.conflictAssets.map((entry, conflictIndex) => (
+                                    <div key={`${station.id}:${entry.assetName}`} className="dw-bc-map-disambiguation-item anim-stagger-slide-up" style={{ animationDelay: `${conflictIndex * 0.05}s` }}>
+                                      <div className="dw-bc-map-disambiguation-asset">
+                                        <SpeakerIcon />
+                                        <span>{formatBroadcastAssetDisplayName(entry.assetName)}</span>
+                                      </div>
+                                      <div className="dw-bc-map-disambiguation-controls">
+                                        <span>{broadcastLabels.mapSuggestedLabel}</span>
+                                        <input
+                                          type="text"
+                                          value={getDisambiguationNameDraft(
+                                            station.id,
+                                            entry.assetName,
+                                            extractBroadcastLanguageHint(entry.assetName, station.name, fallbackLanguageKey, broadcastLabels)
+                                          )}
+                                          placeholder={broadcastLabels.mapLanguagePlaceholder}
+                                          onClick={(event) => event.stopPropagation()}
+                                          onChange={(event) => updateDisambiguationNameDraft(station.id, entry.assetName, event.target.value)}
+                                        />
+                                        <button type="button" className="dw-bc-map-disambiguation-remove" title={broadcastLabels.mapIgnoreCandidate} onClick={() => handleDiscardConflict(station.id, entry.assetName)}>
+                                          <CloseIcon />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                  <div className="dw-bc-map-disambiguation-actions">
+                                    <button type="button" className="dw-bc-primary-button is-compact" onClick={() => handleResolveStationConflicts(station.id)}>
+                                      {broadcastLabels.mapConfirmDisambiguation}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  {station.audios.length > 0 ? (
+                                    <div className="dw-bc-map-binding-list">
+                                      <span className="dw-bc-map-binding-list-title">{broadcastLabels.mapCurrentBindings}</span>
+                                      <div className="dw-bc-map-binding-tags">
+                                        {station.audios.map((audio) => (
+                                          <div key={`${station.id}:${audio.lang}:${audio.assetName}`} className="dw-bc-map-binding-tag">
+                                            <span className="dw-bc-map-binding-tag-lang">{`${audio.lang}:`}</span>
+                                            <span className="dw-bc-map-binding-tag-name">{formatBroadcastAssetDisplayName(audio.assetName)}</span>
+                                            <button type="button" className="dw-bc-map-binding-tag-remove" onClick={() => handleRemoveStationAudio(station.id, audio.lang)}>
+                                              <CloseIcon />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                  <div className="dw-bc-map-binding-toolbar">
+                                    <label>{`${broadcastLabels.mapLanguageLabel}:`}</label>
+                                    <input
+                                      type="text"
+                                      value={getBindingLanguageDraft(station.id)}
+                                      placeholder={broadcastLabels.mapLanguagePlaceholder}
+                                      onClick={(event) => event.stopPropagation()}
+                                      onChange={(event) => updateBindingLanguageDraft(station.id, event.target.value)}
+                                    />
+                                    <span>{broadcastLabels.mapLanguageHint}</span>
+                                  </div>
+                                  <div className="dw-bc-tray-columns">
+                                    {mappingAssetColumns.map((column, columnIndex) => (
+                                      <div key={`mapping-col-${columnIndex}`} className="dw-bc-tray-column">
+                                        {column.map((asset) => (
+                                          <button key={asset.name} type="button" className="dw-bc-tray-item anim-stagger-slide-up" style={{ animationDelay: `${availableAssetLibrary.findIndex((entry) => entry.name === asset.name) * 0.05}s` }} onClick={() => handleBindStation(station.id, asset.name)}>
+                                            <span>{formatBroadcastAssetDisplayName(asset.name)}</span>
+                                            <span>{asset.desc}</span>
+                                          </button>
+                                        ))}
+                                      </div>
                                     ))}
                                   </div>
-                                ))}
-                              </div>
+                                </>
+                              )}
                             </div>
                           </AnimatedInlinePanel>
                         </div>
@@ -1409,125 +2860,156 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                 </div>
               </div>
             </div>
-          </div>
+          </WorkbenchScrollArea>
 
           <footer className="dw-bc-footer">
-            <button type="button" className="dw-bc-primary-button is-footer">{broadcastLabels.applyConfig}</button>
-          </footer>
-        </section>
-        </div>
-        {isAssetExplorerOpen ? (
-          <div className="dw-bc-import-overlay">
-            <div className="dw-bc-import-head">
-              <button type="button" className="dw-bc-import-back-button" onClick={handleCloseAssetExplorer}>
-                <ArrowLeftIcon className="dw-bc-import-back-icon" />
-              </button>
-              <div className="dw-bc-import-head-copy">
-                <span className="dw-bc-import-head-title">{broadcastLabels.importAsset}</span>
-                <span className="dw-bc-import-head-subtitle">本地磁盘 / 音频库 / 扫描到 2 个新音效</span>
+            <div className="dw-bc-footer-left">
+              <div className={`dw-bc-footer-status is-${broadcastFooterTone}`}>
+                <span className={`dw-bc-footer-dot is-${broadcastFooterTone}`} />
+                <span>{broadcastFooterText}</span>
+              </div>
+              <div className="dw-bc-preview-volume">
+                <span className="dw-bc-preview-volume-label">{broadcastLabels.previewVolume}</span>
+                <span className="dw-bc-preview-volume-icon-shell">
+                  <VolumeIcon className="dw-bc-preview-volume-icon" />
+                </span>
+                <div
+                  ref={previewVolumeTrackRef}
+                  className="dw-bc-preview-volume-track"
+                  onMouseDown={handleBroadcastPreviewVolumeMouseDown}
+                >
+                  <div className="dw-bc-preview-volume-fill" style={{ width: `${broadcastPreviewVolume}%` }} />
+                  <div className="dw-bc-preview-volume-thumb" style={{ left: `${broadcastPreviewVolume}%` }} />
+                </div>
+                <span className="dw-bc-preview-volume-value">{`${broadcastPreviewVolume}%`}</span>
               </div>
             </div>
-
-            <div className="dw-bc-import-toolbar">
-              <button
-                type="button"
-                className={`dw-bc-import-parent-button ${currentExternalPath === DEFAULT_EXTERNAL_ASSET_PATH ? "is-disabled" : ""}`}
-                onClick={handleExternalBack}
-              >
-                <span className="dw-bc-import-parent-icon-shell">
-                  <ReturnUpIcon className="dw-bc-import-parent-icon" />
-                </span>
-                <span>返回上一层</span>
-              </button>
-
-              <div className="dw-bc-import-breadcrumbs">
-                <span className="dw-bc-import-breadcrumb-icon-shell">
-                  <FolderIcon className="dw-bc-import-breadcrumb-icon" />
-                </span>
-                <div className="dw-bc-import-breadcrumb-copy">
-                  {currentExternalPath.split("\\").filter(Boolean).map((part, index, parts) => {
-                    const buildPath = `${parts.slice(0, index + 1).join("\\")}\\`;
-                    const isLast = index === parts.length - 1;
-                    return (
-                      <div key={buildPath} className="dw-bc-import-breadcrumb-part">
-                        <button
-                          type="button"
-                          className={`dw-bc-import-breadcrumb-button ${isLast ? "is-current" : ""}`}
-                          onClick={() => handleExternalPathChange(buildPath)}
-                        >
-                          {part}
-                        </button>
-                        {isLast ? null : <span className="dw-bc-import-breadcrumb-sep">\</span>}
-                      </div>
-                    );
-                  })}
+            <button
+              type="button"
+              className={`dw-bc-primary-button is-footer ${isBroadcastConfigApplied ? "is-applied" : ""}`}
+              disabled={isApplyingBroadcastConfig || isBroadcastConfigApplied && !broadcastVariableMappingIssue}
+              onClick={broadcastVariableMappingIssue ? handleLocateBroadcastMappingIssue : handleApplyBroadcastConfig}
+            >
+              {broadcastApplyButtonLabel}
+            </button>
+          </footer>
+          {shouldRenderAssetExplorer ? (
+            <div className={`dw-bc-import-overlay is-${assetExplorerStage}`}>
+              <div className="dw-bc-import-head">
+                <button type="button" className="dw-bc-import-back-button" onClick={handleCloseAssetExplorer}>
+                  <ArrowLeftIcon className="dw-bc-import-back-icon" />
+                </button>
+                <div className="dw-bc-import-head-copy">
+                  <span className="dw-bc-import-head-title">{broadcastLabels.importAsset}</span>
                 </div>
               </div>
 
-              <div className="dw-bc-import-toolbar-spacer" />
+              <div className="dw-bc-import-toolbar">
+                <button
+                  type="button"
+                  className={`dw-bc-import-parent-button ${!externalAssetBrowser?.parentPath ? "is-disabled" : ""}`}
+                  onClick={handleExternalBack}
+                >
+                  <span className="dw-bc-import-parent-icon-shell">
+                    <ReturnUpIcon className="dw-bc-import-parent-icon" />
+                  </span>
+                  <span>{t("broadcast.import.parent")}</span>
+                </button>
 
-              <button type="button" className="dw-bc-import-select-all" onClick={handleToggleAllExternalFiles}>
-                <span className="dw-bc-import-select-all-icon-shell">
-                  {(EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || []).length > 0
-                  && (EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || []).every((file) => selectedExternalFiles.includes(file.id))
-                    ? <CheckSquareIcon className="dw-bc-import-select-all-icon is-checked" />
-                    : <SquareIcon className="dw-bc-import-select-all-icon" />}
-                </span>
-                <span>全选本项目</span>
-              </button>
-            </div>
+                <div className="dw-bc-import-breadcrumbs">
+                  <span className="dw-bc-import-breadcrumb-icon-shell">
+                    <FolderIcon className="dw-bc-import-breadcrumb-icon" />
+                  </span>
+                  <div className="dw-bc-import-breadcrumb-copy">
+                    {currentExternalPath.split("\\").filter(Boolean).map((part, index, parts) => {
+                      const buildPath = `${parts.slice(0, index + 1).join("\\")}\\`;
+                      const isLast = index === parts.length - 1;
+                      return (
+                        <div key={buildPath} className="dw-bc-import-breadcrumb-part">
+                          <button
+                            type="button"
+                            className={`dw-bc-import-breadcrumb-button ${isLast ? "is-current" : ""}`}
+                            onClick={() => handleExternalPathChange(buildPath)}
+                          >
+                            {part}
+                          </button>
+                          {isLast ? null : <span className="dw-bc-import-breadcrumb-sep">\</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
 
-            <div className="dw-bc-import-body">
-              <div className="dw-bc-import-grid">
-                {(EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.folders || []).map((folderName) => (
-                  <button
-                    key={folderName}
-                    type="button"
-                    className="dw-bc-import-card is-folder"
-                    onClick={() => handleExternalPathChange(`${currentExternalPath}${folderName}\\`)}
-                  >
-                    <span className="dw-bc-import-card-icon-shell">
-                      <FolderIcon className="dw-bc-import-card-folder-icon" />
-                    </span>
-                    <span className="dw-bc-import-card-name">{folderName}</span>
-                  </button>
-                ))}
+                <div className="dw-bc-import-toolbar-spacer" />
 
-                {(EXTERNAL_ASSET_FILE_SYSTEM[currentExternalPath]?.files || []).map((file) => {
-                  const isSelected = selectedExternalFiles.includes(file.id);
-                  return (
-                    <button
-                      key={file.id}
-                      type="button"
-                      className={`dw-bc-import-card is-file ${isSelected ? "is-selected" : ""}`}
-                      onClick={() => handleToggleExternalFile(file.id)}
-                    >
-                      <span className="dw-bc-import-card-check-shell">
-                        {isSelected
-                          ? <CheckSquareIcon className="dw-bc-import-card-check-icon is-checked" />
-                          : <SquareIcon className="dw-bc-import-card-check-icon" />}
-                      </span>
-                      <span className="dw-bc-import-card-icon-shell">
-                        <FileAudioIcon className="dw-bc-import-card-file-icon" />
-                      </span>
-                      <span className="dw-bc-import-card-name">{file.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="dw-bc-import-foot">
-              <span className="dw-bc-import-foot-note">支持 .wav, .mp3, .ogg 格式文件</span>
-              <div className="dw-bc-import-foot-actions">
-                <button type="button" className="dw-bc-import-text-button" onClick={handleCloseAssetExplorer}>取消</button>
-                <button type="button" className="dw-bc-primary-button" onClick={handleCloseAssetExplorer}>
-                  导入选中项{selectedExternalFiles.length > 0 ? ` (${selectedExternalFiles.length})` : ""}
+                <button type="button" className="dw-bc-import-select-all" onClick={handleToggleAllExternalFiles}>
+                  <span className="dw-bc-import-select-all-icon-shell">
+                    {currentExternalFiles.length > 0
+                    && currentExternalFiles.every((file) => selectedExternalFiles.includes(file.id))
+                      ? <CheckSquareIcon className="dw-bc-import-select-all-icon is-checked" />
+                      : <SquareIcon className="dw-bc-import-select-all-icon" />}
+                  </span>
+                  <span>{t("broadcast.import.selectAllCurrentDirectory")}</span>
                 </button>
               </div>
+
+              <WorkbenchScrollArea className="dw-bc-import-body" metricsKey={`${currentExternalPath}:${currentExternalFolders.length}:${currentExternalFiles.length}`}>
+                <div key={currentExternalPath} className="dw-bc-import-grid-scene">
+                  <div className="dw-bc-import-grid">
+                    {currentExternalFolders.map((folderName) => (
+                      <button
+                        key={folderName}
+                        type="button"
+                        className="dw-bc-import-card is-folder"
+                        onClick={() => handleExternalPathChange(resolveExternalFolderTargetPath(folderName))}
+                      >
+                        <span className="dw-bc-import-card-icon-shell">
+                          <FolderIcon className="dw-bc-import-card-folder-icon" />
+                        </span>
+                        <ImportCardName>{folderName}</ImportCardName>
+                      </button>
+                    ))}
+
+                    {currentExternalFiles.map((file) => {
+                      const isSelected = selectedExternalFiles.includes(file.id);
+                      return (
+                        <button
+                          key={file.id}
+                          type="button"
+                          className={`dw-bc-import-card is-file ${isSelected ? "is-selected" : ""}`}
+                          onClick={() => handleToggleExternalFile(file.id)}
+                        >
+                          <span className="dw-bc-import-card-check-shell">
+                            {isSelected
+                              ? <CheckSquareIcon className="dw-bc-import-card-check-icon is-checked" />
+                              : <SquareIcon className="dw-bc-import-card-check-icon" />}
+                          </span>
+                          <span className="dw-bc-import-card-icon-shell">
+                            <FileAudioIcon className="dw-bc-import-card-file-icon" />
+                          </span>
+                          <ImportCardName>{file.name}</ImportCardName>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </WorkbenchScrollArea>
+
+              <div className="dw-bc-import-foot">
+                <span className="dw-bc-import-foot-note">
+                  {t("broadcast.import.supportedFormats", { formats: currentExternalAllowedExtensions.join(", ") })}
+                </span>
+                <div className="dw-bc-import-foot-actions">
+                  <button type="button" className="dw-bc-import-text-button" onClick={handleCloseAssetExplorer}>{t("broadcast.import.cancel")}</button>
+                  <button type="button" className="dw-bc-primary-button" onClick={handleImportSelectedExternalFiles}>
+                    {t("broadcast.import.confirm")}{selectedExternalFiles.length > 0 ? ` (${selectedExternalFiles.length})` : ""}
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </section>
+        </div>
       </div>
       <div ref={dropdownPortalHostRef} className="dw-demo-dropdown-portal-layer" />
     </div>

@@ -18,6 +18,7 @@ using Game.Common;
 using Game.Creatures;
 using Game.Pathfind;
 using Game.Prefabs;
+using Game.Rendering;
 using Game.Routes;
 using Game.SceneFlow;
 using Game.Simulation;
@@ -50,6 +51,8 @@ namespace RapidTransitMod
 
     public partial class DepartureControlSystem : GameSystemBase
     {
+        private CameraUpdateSystem m_CameraUpdateSystem;
+
         private struct LineTimeProfileHeader
         {
             public ulong m_Signature;
@@ -838,6 +841,7 @@ namespace RapidTransitMod
             m_NameSystem = World.GetOrCreateSystemManaged<NameSystem>();
             m_EndFrameBarrier = World.GetOrCreateSystemManaged<EndFrameBarrier>();
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
+            m_CameraUpdateSystem = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
 
             m_VehicleState = new NativeHashMap<Entity, VehicleState>(1024, Allocator.Persistent);
             m_VehicleTargetMin = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);

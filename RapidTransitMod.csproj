@@ -72,6 +72,10 @@
     <Reference Include="Colossal.Logging">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Logging.dll</HintPath>
     </Reference>
+    <Reference Include="Colossal.ATL">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.ATL.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="Colossal.Localization">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Localization.dll</HintPath>
       <Private>False</Private>
@@ -115,8 +119,20 @@
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.UnityWebRequestModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestAudioModule">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.UnityWebRequestAudioModule.dll</HintPath>
+      <Private>False</Private>
     </Reference>
     <Reference Include="System.Core" />
     <Reference Include="System.Runtime.Serialization" />

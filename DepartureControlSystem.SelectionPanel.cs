@@ -34,6 +34,8 @@ namespace RapidTransitMod
             public string Detail6Value;
             public string Detail7LabelKey;
             public string Detail7Value;
+            public string Detail8LabelKey;
+            public string Detail8Value;
             public string AlertText;
             public bool ShowRetireAction;
             public bool ShowForceDepartAction;
@@ -522,10 +524,18 @@ namespace RapidTransitMod
             snapshot.Detail4Value = targetMin >= 0 ? SlotStr(targetMin) : "-";
             snapshot.Detail5LabelKey = "stopDwell";
             snapshot.Detail5Value = BuildVehicleStopDwellValue(vehicle);
-            snapshot.Detail6LabelKey = "sliceSamplingBand";
-            snapshot.Detail6Value = BuildVehicleTraversalSamplingBandValue(vehicle, line);
-            snapshot.Detail7LabelKey = "sliceSamplingRate";
-            snapshot.Detail7Value = BuildVehicleTraversalSamplingRateValue(vehicle, line);
+            TryGetBroadcastPanelStationContext(
+                vehicle,
+                line,
+                out string currentStationName,
+                out string nextStationName,
+                out _);
+            snapshot.Detail6LabelKey = "currentStation";
+            snapshot.Detail6Value = string.IsNullOrEmpty(currentStationName) ? "-" : currentStationName;
+            snapshot.Detail7LabelKey = "nextStation";
+            snapshot.Detail7Value = string.IsNullOrEmpty(nextStationName) ? "-" : nextStationName;
+            snapshot.Detail8LabelKey = "event";
+            snapshot.Detail8Value = BuildVehicleBroadcastEventValue(vehicle);
             snapshot.AlertText = alertText;
             snapshot.ShowRetireAction = isManagedVehicle;
             snapshot.ShowForceDepartAction = isManagedVehicle;

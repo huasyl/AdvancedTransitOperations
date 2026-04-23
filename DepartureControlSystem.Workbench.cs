@@ -135,6 +135,22 @@ namespace RapidTransitMod
             public DispatchWorkbenchLineSettingDto[] lineSettings;
             [DataMember]
             public DispatchWorkbenchPersistedDraftState[] drafts;
+            [DataMember]
+            public string broadcastAssetDirectory;
+            [DataMember]
+            public BroadcastWorkbenchPersistedAssetState[] broadcastAssets;
+            [DataMember]
+            public BroadcastWorkbenchPersistedLineBindingState[] broadcastDraftLineBindings;
+            [DataMember]
+            public BroadcastWorkbenchPersistedRuleState[] broadcastDraftRules;
+            [DataMember]
+            public BroadcastWorkbenchPersistedLineBindingState[] broadcastLineBindings;
+            [DataMember]
+            public BroadcastWorkbenchPersistedRuleState[] broadcastRules;
+            [DataMember]
+            public BroadcastWorkbenchPersistedAppliedState broadcastAppliedState;
+            [DataMember]
+            public int? broadcastDraftVolume;
         }
 
         [DataContract]
@@ -215,6 +231,15 @@ namespace RapidTransitMod
         }
 
         [DataContract]
+        public class DispatchWorkbenchStationConflictDto
+        {
+            [DataMember]
+            public string assetName;
+            [DataMember]
+            public string suggestedLang;
+        }
+
+        [DataContract]
         public class DispatchWorkbenchStationDto
         {
             [DataMember]
@@ -227,6 +252,8 @@ namespace RapidTransitMod
             public float distance;
             [DataMember]
             public bool hasSiding;
+            [DataMember]
+            public DispatchWorkbenchStationConflictDto[] conflictAssets;
         }
 
         [DataContract]
@@ -1731,7 +1758,15 @@ namespace RapidTransitMod
             {
                 preferredLineId = m_WorkbenchPreferredLineId,
                 lineSettings = lineSettings,
-                drafts = drafts.ToArray()
+                drafts = drafts.ToArray(),
+                broadcastAssetDirectory = m_BroadcastAssetDirectory,
+                broadcastAssets = BuildPersistedBroadcastAssetStates(),
+                broadcastDraftLineBindings = BuildPersistedBroadcastDraftLineBindingStates(),
+                broadcastDraftRules = BuildPersistedBroadcastDraftRuleStates(),
+                broadcastLineBindings = BuildPersistedBroadcastLineBindingStates(),
+                broadcastRules = BuildPersistedBroadcastRuleStates(),
+                broadcastAppliedState = BuildPersistedBroadcastAppliedState(),
+                broadcastDraftVolume = m_BroadcastDraftVolumePercent
             };
         }
 
@@ -1744,6 +1779,15 @@ namespace RapidTransitMod
             m_WorkbenchLineServiceKinds.Clear();
             InvalidateConfiguredAllowedDepotCache();
             m_WorkbenchPreferredLineId = persisted?.preferredLineId ?? string.Empty;
+            RestoreBroadcastWorkbenchPersistence(
+                persisted?.broadcastAssetDirectory,
+                persisted?.broadcastAssets,
+                persisted?.broadcastDraftLineBindings,
+                persisted?.broadcastDraftRules,
+                persisted?.broadcastLineBindings,
+                persisted?.broadcastRules,
+                persisted?.broadcastAppliedState,
+                persisted?.broadcastDraftVolume ?? 80);
 
             if (persisted?.lineSettings != null)
             {
@@ -2354,7 +2398,7 @@ namespace RapidTransitMod
 
                 stations.Add(new DispatchWorkbenchStationDto
                 {
-                    id = "station-" + stopEntity.Index,
+                    id = CreateWorkbenchStationId(stations.Count),
                     name = name,
                     order = stations.Count,
                     distance = (float)Math.Round(cumulativeDistance, 1),
@@ -2380,10 +2424,25 @@ namespace RapidTransitMod
                 if (stopEntity == Entity.Null)
                     continue;
 
-                originStationId = "station-" + stopEntity.Index;
+                originStationId = CreateWorkbenchOriginStationId(stopEntity);
                 originStationName = ResolveWorkbenchStationName(stopEntity);
                 return;
             }
+        }
+
+        private static string CreateWorkbenchOriginStationId(Entity stopEntity)
+        {
+            if (stopEntity == Entity.Null)
+            {
+                return string.Empty;
+            }
+
+            return "station-" + stopEntity.Index.ToString();
+        }
+
+        private static string CreateWorkbenchStationId(int order)
+        {
+            return "station-" + order.ToString();
         }
 
         private string ResolveWorkbenchEntityName(Entity entity)
