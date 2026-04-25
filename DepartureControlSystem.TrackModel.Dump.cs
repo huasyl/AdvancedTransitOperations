@@ -762,6 +762,7 @@ namespace RapidTransitMod
               .AppendLine();
 
             AppendReplayWaypoints(sb, line, waypoints, chain);
+            AppendReplayStationWindows(sb, waypoints, chain);
             AppendReplayRawSegments(sb, line);
             AppendReplayOfficialSegmentStructures(sb, line, waypoints);
             AppendReplayTrackAtoms(sb, chain);
@@ -823,6 +824,55 @@ namespace RapidTransitMod
                   .Append(" inAtom=").Append(inAtom >= 0 ? inAtom.ToString() : "-")
                   .Append(" outAtom=").Append(outAtom >= 0 ? outAtom.ToString() : "-");
             }
+            sb.AppendLine();
+        }
+
+        private void AppendReplayStationWindows(StringBuilder sb, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain chain)
+        {
+            sb.Append("stationWindows:");
+            if (chain == null || chain.TraversalProfile == null || chain.TraversalProfile.Events == null)
+            {
+                sb.Append(" unavailable").AppendLine();
+                return;
+            }
+
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                bool found = false;
+                for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+                {
+                    TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                    if (traversalEvent.WaypointIndex != i
+                        || (traversalEvent.Kind != TraversalEventKind.Stop && traversalEvent.Kind != TraversalEventKind.Pass))
+                    {
+                        continue;
+                    }
+
+                    int startAtom = traversalEvent.StartAtomIndex;
+                    int endAtomExclusive = math.max(startAtom + 1, traversalEvent.EndAtomIndexExclusive);
+                    int approachStartAtom = math.max(0, startAtom - BroadcastApproachRemainingAtomThreshold);
+                    Entity building = traversalEvent.Building != Entity.Null
+                        ? traversalEvent.Building
+                        : GetStationBuildingForWaypoint(waypoints, i);
+                    sb.Append(" | wp").Append(i)
+                      .Append(" label=").Append(FormatTrackModelDisplayStationLabel(building, i))
+                      .Append(" kind=").Append(traversalEvent.Kind)
+                      .Append(" event=").Append(traversalEvent.EventIndex)
+                      .Append(" atoms=").Append(startAtom).Append("..").Append(endAtomExclusive)
+                      .Append(" approach=").Append(approachStartAtom).Append("..").Append(startAtom)
+                      .Append(" stopFrames=").Append(FormatEtaFrames(traversalEvent.StopFrames));
+                    found = true;
+                }
+
+                if (!found)
+                {
+                    Entity building = GetStationBuildingForWaypoint(waypoints, i);
+                    sb.Append(" | wp").Append(i)
+                      .Append(" label=").Append(FormatTrackModelDisplayStationLabel(building, i))
+                      .Append(" window=-");
+                }
+            }
+
             sb.AppendLine();
         }
 

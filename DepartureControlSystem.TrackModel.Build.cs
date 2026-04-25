@@ -84,12 +84,6 @@ namespace RapidTransitMod
             m_LineOrderedFallbackCaseLogCache.Clear();
             m_LineOrderedFallbackCaseLastLogFrame.Clear();
             m_TrackModelTurnbackBuildLogCache.Clear();
-            m_TrackModelTurnbackSignalLogCache.Clear();
-            m_TrackModelTurnbackSignalLastLogFrame.Clear();
-            m_TrackModelTurnbackLearnLogCache.Clear();
-            m_TrackModelTurnbackLearnLastLogFrame.Clear();
-            m_LearnedTurnbackBoundaryClustersByLine.Clear();
-            m_TurnbackLearnVehicleStates.Clear();
         }
 
         private void ClearBypassTrackModelRuntimeStateForLine(Entity line)
@@ -240,28 +234,6 @@ namespace RapidTransitMod
             m_LineOrderedFallbackCaseLogCache.Remove(line);
             m_LineOrderedFallbackCaseLastLogFrame.Remove(line);
             m_TrackModelTurnbackBuildLogCache.Remove(line);
-            m_TrackModelTurnbackSignalLogCache.Remove(line);
-            m_TrackModelTurnbackSignalLastLogFrame.Remove(line);
-            m_TrackModelTurnbackLearnLogCache.Remove(line);
-            m_TrackModelTurnbackLearnLastLogFrame.Remove(line);
-            m_LearnedTurnbackBoundaryClustersByLine.Remove(line);
-
-            List<Entity> turnbackLearnVehiclesToRemove = null;
-            foreach (KeyValuePair<Entity, TurnbackLearnVehicleSampleState> entry in m_TurnbackLearnVehicleStates)
-            {
-                TurnbackLearnVehicleSampleState state = entry.Value;
-                if (state == null || state.Line != line)
-                    continue;
-
-                turnbackLearnVehiclesToRemove ??= new List<Entity>();
-                turnbackLearnVehiclesToRemove.Add(entry.Key);
-            }
-
-            if (turnbackLearnVehiclesToRemove != null)
-            {
-                for (int i = 0; i < turnbackLearnVehiclesToRemove.Count; i++)
-                    m_TurnbackLearnVehicleStates.Remove(turnbackLearnVehiclesToRemove[i]);
-            }
         }
 
         private ulong ComputeLineTrackChainSignature(
@@ -423,7 +395,7 @@ namespace RapidTransitMod
             Entity previousTarget = pathIndex > 0 ? pathElements[pathIndex - 1].m_Target : Entity.Null;
             Entity nextTarget = pathIndex + 1 < pathElements.Length ? pathElements[pathIndex + 1].m_Target : Entity.Null;
             TrackAtomKey key = new TrackAtomKey(element.m_Target, previousTarget, nextTarget);
-            atom = new TrackAtom(key, element.m_Target, element.m_Flags, atomClass, traversalDir);
+            atom = new TrackAtom(key, element.m_Target, element.m_TargetDelta, element.m_Flags, atomClass, traversalDir);
             return true;
         }
 
@@ -1628,359 +1600,6 @@ namespace RapidTransitMod
             return EntityManager.GetComponentData<Waypoint>(target).m_Index;
         }
 
-        private TurnbackLearnVehicleSampleState GetOrCreateTurnbackLearnVehicleSampleState(
-            Entity vehicle,
-            Entity line,
-            ulong chainSignature)
-        {
-            if (vehicle == Entity.Null || line == Entity.Null)
-                return null;
-
-            if (!m_TurnbackLearnVehicleStates.TryGetValue(vehicle, out TurnbackLearnVehicleSampleState state)
-                || state == null
-                || state.Line != line
-                || state.ChainSignature != chainSignature)
-            {
-                state = new TurnbackLearnVehicleSampleState
-                {
-                    Line = line,
-                    ChainSignature = chainSignature,
-                    LastStrongSampleFrame = 0,
-                    LastTargetWaypointIndex = -1,
-                    LastObservedPathSignature = 0
-                };
-                m_TurnbackLearnVehicleStates[vehicle] = state;
-            }
-
-            return state;
-        }
-
-        private static bool IsLearnedTurnbackClusterConfirmed(LearnedTurnbackBoundaryCluster cluster)
-        {
-            return cluster != null && cluster.HitCount >= TURNBACK_LEARN_CONFIRM_HIT_COUNT;
-        }
-
-        private void TryLogTrackModelTurnbackSignal(
-            Entity line,
-            Entity vehicle,
-            string signalKey,
-            string message)
-        {
-            if (!IsTrackModelTurnbackSignalLoggingEnabled() || line == Entity.Null)
-                return;
-
-            uint nowFrame = m_SimulationSystem.frameIndex;
-            if (!ShouldEmitVehicleLogWithCooldown(
-                    m_TrackModelTurnbackSignalLogCache,
-                    m_TrackModelTurnbackSignalLastLogFrame,
-                    line,
-                    signalKey,
-                    nowFrame,
-                    TURNBACK_SIGNAL_LOG_COOLDOWN_FRAMES))
-            {
-                return;
-            }
-
-            log.Info(message);
-        }
-
-        private bool TryUpsertLearnedTurnbackBoundaryCluster(
-            Entity line,
-            LineTrackChain chain,
-            int sampleAtomIndex,
-            Entity vehicle,
-            uint nowFrame,
-            out LearnedTurnbackBoundaryCluster cluster,
-            out bool createdNewCluster,
-            out bool atomIndexChanged,
-            out bool confirmedBefore,
-            out bool confirmedAfter)
-        {
-            cluster = null;
-            createdNewCluster = false;
-            atomIndexChanged = false;
-            confirmedBefore = false;
-            confirmedAfter = false;
-            if (line == Entity.Null || chain == null || sampleAtomIndex < 0)
-                return false;
-
-            if (!m_LearnedTurnbackBoundaryClustersByLine.TryGetValue(line, out List<LearnedTurnbackBoundaryCluster> clusters))
-            {
-                clusters = new List<LearnedTurnbackBoundaryCluster>();
-                m_LearnedTurnbackBoundaryClustersByLine[line] = clusters;
-            }
-
-            for (int i = clusters.Count - 1; i >= 0; i--)
-            {
-                if (clusters[i] == null || clusters[i].ChainSignature != chain.Signature)
-                    clusters.RemoveAt(i);
-            }
-
-            int bestIndex = -1;
-            int bestDistance = int.MaxValue;
-            for (int i = 0; i < clusters.Count; i++)
-            {
-                int distance = math.abs(clusters[i].AtomIndex - sampleAtomIndex);
-                if (distance > TURNBACK_LEARN_CLUSTER_MERGE_ATOM_RADIUS || distance >= bestDistance)
-                    continue;
-
-                bestDistance = distance;
-                bestIndex = i;
-            }
-
-            if (bestIndex < 0)
-            {
-                cluster = new LearnedTurnbackBoundaryCluster(sampleAtomIndex, chain.Signature, nowFrame, vehicle);
-                clusters.Add(cluster);
-                createdNewCluster = true;
-                confirmedAfter = IsLearnedTurnbackClusterConfirmed(cluster);
-                return true;
-            }
-
-            cluster = clusters[bestIndex];
-            confirmedBefore = IsLearnedTurnbackClusterConfirmed(cluster);
-            int previousAtomIndex = cluster.AtomIndex;
-            cluster.AtomIndex = (int)math.round(
-                ((cluster.AtomIndex * (float)cluster.HitCount) + sampleAtomIndex)
-                / math.max(1f, cluster.HitCount + 1f));
-            cluster.HitCount++;
-            cluster.ChainSignature = chain.Signature;
-            cluster.LastHitFrame = nowFrame;
-            cluster.LastVehicle = vehicle;
-            atomIndexChanged = cluster.AtomIndex != previousAtomIndex;
-            confirmedAfter = IsLearnedTurnbackClusterConfirmed(cluster);
-            return true;
-        }
-
-        private bool ApplyLearnedTurnbackBoundariesToChain(Entity line, LineTrackChain chain)
-        {
-            if (line == Entity.Null || chain == null)
-                return false;
-
-            List<int> previousLearnedAtoms = new List<int>();
-
-            for (int i = chain.TurnbackBoundaries.Count - 1; i >= 0; i--)
-            {
-                if (chain.TurnbackBoundaries[i].IsLearned)
-                {
-                    previousLearnedAtoms.Add(chain.TurnbackBoundaries[i].AtomIndex);
-                    chain.TurnbackBoundaries.RemoveAt(i);
-                }
-            }
-
-            if (!m_LearnedTurnbackBoundaryClustersByLine.TryGetValue(line, out List<LearnedTurnbackBoundaryCluster> clusters)
-                || clusters == null
-                || clusters.Count == 0
-                || chain.TrackAtoms.Count == 0)
-            {
-                return previousLearnedAtoms.Count > 0;
-            }
-
-            previousLearnedAtoms.Sort();
-            List<int> appliedLearnedAtoms = new List<int>();
-            for (int clusterIndex = 0; clusterIndex < clusters.Count; clusterIndex++)
-            {
-                LearnedTurnbackBoundaryCluster cluster = clusters[clusterIndex];
-                if (cluster == null
-                    || cluster.ChainSignature != chain.Signature
-                    || !IsLearnedTurnbackClusterConfirmed(cluster))
-                {
-                    continue;
-                }
-
-                int atomIndex = math.clamp(cluster.AtomIndex, 0, chain.TrackAtoms.Count - 1);
-                bool overlapsStaticBoundary = false;
-
-                for (int existingIndex = chain.TurnbackBoundaries.Count - 1; existingIndex >= 0; existingIndex--)
-                {
-                    TurnbackBoundary existingBoundary = chain.TurnbackBoundaries[existingIndex];
-                    if (existingBoundary.IsLearned)
-                        continue;
-
-                    if (math.abs(existingBoundary.AtomIndex - atomIndex) <= TURNBACK_LEARN_CLUSTER_MERGE_ATOM_RADIUS)
-                    {
-                        overlapsStaticBoundary = true;
-                        break;
-                    }
-                }
-
-                if (overlapsStaticBoundary)
-                    continue;
-
-                int beforeSliceIndex = ResolveTraversalRunSliceIndexForAtom(chain, math.max(0, atomIndex - 1));
-                int afterSliceIndex = ResolveTraversalRunSliceIndexForAtom(chain, atomIndex);
-                int boundaryEventIndex = ResolveTurnbackBoundaryEventIndex(chain, atomIndex);
-                chain.TurnbackBoundaries.Add(new TurnbackBoundary(
-                    atomIndex,
-                    beforeSliceIndex,
-                    afterSliceIndex,
-                    boundaryEventIndex,
-                    true,
-                    cluster.HitCount,
-                    0));
-                appliedLearnedAtoms.Add(atomIndex);
-            }
-
-            appliedLearnedAtoms.Sort();
-            chain.TurnbackBoundaries.Sort((left, right) =>
-            {
-                int atomCompare = left.AtomIndex.CompareTo(right.AtomIndex);
-                if (atomCompare != 0)
-                    return atomCompare;
-                if (left.IsLearned != right.IsLearned)
-                    return left.IsLearned ? -1 : 1;
-                return left.MatchedAtomCount.CompareTo(right.MatchedAtomCount);
-            });
-
-            if (previousLearnedAtoms.Count != appliedLearnedAtoms.Count)
-                return true;
-
-            for (int i = 0; i < previousLearnedAtoms.Count; i++)
-            {
-                if (previousLearnedAtoms[i] != appliedLearnedAtoms[i])
-                    return true;
-            }
-
-            return false;
-        }
-
-        private void TryLearnTurnbackBoundaryFromStrongSignal(
-            Entity vehicle,
-            Entity line,
-            LineTrackChain chain,
-            VehicleTrackCursor cursor,
-            TurnbackLearnVehicleSampleState learnState,
-            int currentTargetWaypointIndex,
-            string signalMode)
-        {
-            uint nowFrame = m_SimulationSystem.frameIndex;
-            if (vehicle == Entity.Null
-                || line == Entity.Null
-                || learnState == null
-                || chain == null
-                || chain.LineEntity != line
-                || chain.TrackAtoms.Count == 0)
-            {
-                return;
-            }
-
-            if (learnState.LastStrongSampleFrame > 0
-                && nowFrame < learnState.LastStrongSampleFrame + TURNBACK_LEARN_SAMPLE_COOLDOWN_FRAMES)
-            {
-                return;
-            }
-
-            learnState.LastStrongSampleFrame = nowFrame;
-            int sampleAtomIndex = math.clamp(cursor.AtomCursorIndex, 0, chain.TrackAtoms.Count - 1);
-            if (!TryUpsertLearnedTurnbackBoundaryCluster(
-                    line,
-                    chain,
-                    sampleAtomIndex,
-                    vehicle,
-                    nowFrame,
-                    out LearnedTurnbackBoundaryCluster cluster,
-                    out bool createdNewCluster,
-                    out bool atomIndexChanged,
-                    out bool confirmedBefore,
-                    out bool confirmedAfter))
-            {
-                return;
-            }
-
-            if (!confirmedAfter)
-            {
-                TryLogTrackModelTurnbackSignal(
-                    line,
-                    vehicle,
-                    "turnback-strong-pending",
-                    "[TrackModelTurnbackSignal] line=" + line.Index
-                        + " vehicle=" + vehicle.Index
-                        + " status=pending"
-                        + " mode=" + signalMode
-                        + " hits=" + cluster.HitCount
-                        + " targetWp=" + currentTargetWaypointIndex
-                        + " atom=" + cluster.AtomIndex);
-                return;
-            }
-
-            bool shouldRefresh = (!confirmedBefore) || atomIndexChanged;
-            bool chainChanged = false;
-            if (shouldRefresh)
-            {
-                chainChanged = ApplyLearnedTurnbackBoundariesToChain(line, chain);
-                if (chainChanged)
-                {
-                    m_LineRunningVehicleFrameSnapshots.Remove(line);
-                    RequestLineOrderedRuntimeForceRefresh(
-                        line,
-                        confirmedBefore ? "learned-turnback-shift" : "learned-turnback-promote");
-                }
-                else
-                {
-                    TryLogTrackModelTurnbackSignal(
-                        line,
-                        vehicle,
-                        "turnback-confirmed-near-static",
-                        "[TrackModelTurnbackSignal] line=" + line.Index
-                            + " vehicle=" + vehicle.Index
-                            + " status=confirmed-near-static"
-                            + " mode=" + signalMode
-                            + " hits=" + cluster.HitCount
-                            + " targetWp=" + currentTargetWaypointIndex
-                            + " atom=" + cluster.AtomIndex);
-                }
-            }
-
-            if (!chainChanged)
-                return;
-
-            string eventType = confirmedBefore ? "shift" : "promote";
-            if (!ShouldEmitVehicleLogWithCooldown(
-                    m_TrackModelTurnbackLearnLogCache,
-                    m_TrackModelTurnbackLearnLastLogFrame,
-                    line,
-                    "turnback-learn-" + eventType,
-                    nowFrame,
-                    TURNBACK_LEARN_LOG_COOLDOWN_FRAMES))
-            {
-                return;
-            }
-
-            log.Info("[TrackModelTurnbackLearn] line=" + line.Index
-                + " vehicle=" + vehicle.Index
-                + " event=" + eventType
-                + " atom=" + cluster.AtomIndex
-                + " sampleAtom=" + sampleAtomIndex
-                + " hits=" + cluster.HitCount
-                + " targetWp=" + currentTargetWaypointIndex
-                + " mode=" + signalMode
-                + " new=" + (createdNewCluster ? "1" : "0")
-                + " boundaries=" + chain.TurnbackBoundaries.Count);
-        }
-
-        private void TryLearnTurnbackBoundaryFromOriginalReturn(
-            Entity vehicle,
-            Entity line,
-            LineTrackChain chain,
-            VehicleTrackCursor cursor,
-            TurnbackLearnVehicleSampleState learnState,
-            int currentTargetWaypointIndex,
-            bool hasReturnEndReached,
-            string signalMode)
-        {
-            if (!hasReturnEndReached)
-                return;
-
-            TryLearnTurnbackBoundaryFromStrongSignal(
-                vehicle,
-                line,
-                chain,
-                cursor,
-                learnState,
-                currentTargetWaypointIndex,
-                signalMode);
-        }
-
         private void BuildTurnbackBoundaries(LineTrackChain chain, Entity line, DynamicBuffer<RouteWaypoint> waypoints)
         {
             if (chain == null)
@@ -2038,7 +1657,6 @@ namespace RapidTransitMod
                 chain.TurnbackBoundaries.Sort((left, right) => left.AtomIndex.CompareTo(right.AtomIndex));
                 chain.TurnbackBuildMode = "station-local-overlap";
                 chain.TurnbackBuildNote = string.Join(";", candidateNotes);
-                ApplyLearnedTurnbackBoundariesToChain(chain.LineEntity, chain);
                 return;
             }
 
@@ -2064,15 +1682,12 @@ namespace RapidTransitMod
                 chain.TurnbackBuildMode = "adjacent-segment-fallback";
                 chain.TurnbackBuildNote = adjacentNote;
                 chain.TurnbackBuildSegmentPairIndex = adjacentSegmentPairIndex;
-                ApplyLearnedTurnbackBoundariesToChain(chain.LineEntity, chain);
             }
             else
             {
                 chain.TurnbackBuildMode = "none";
                 chain.TurnbackBuildNote = "station-local-failed;adjacent-failed";
             }
-
-            ApplyLearnedTurnbackBoundariesToChain(chain.LineEntity, chain);
         }
 
         private void LogTrackModelTurnbackBuild(LineTrackChain chain)

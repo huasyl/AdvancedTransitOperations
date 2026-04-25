@@ -40,6 +40,7 @@ namespace RapidTransitMod
             m_OriginArrivalCandidateSinceFrame.Remove(v);
             m_ForcedOriginReadyFrame.Remove(v);
             ClearAssistLaunchPending(v);
+            ClearBroadcastRuntimeState(v);
             m_RetireFixCount[v] = 0;
 
             string lineTag = m_VehicleLine.TryGetValue(v, out Entity le) ? "线路" + le.Index : "线路?";
@@ -47,7 +48,17 @@ namespace RapidTransitMod
             log.Info("[回库] " + lineTag + " 车辆" + v.Index
                 + (reason.Length > 0 ? " 原因:" + reason : "") + " -> 车库");
             RecordRetireShadowSnapshot(v, "retire-request");
-            m_PendingRetireHandoffs.Add(v);
+            m_RetireHandoffWatch[v] = new RetireHandoffWatchRecord
+            {
+                RequestedFrame = m_SimulationSystem.frameIndex,
+                LastWriteFrame = 0,
+                AttemptCount = 0,
+                SoftAckFrame = 0,
+                HardAckFrame = 0,
+                LastObservedTarget = Entity.Null,
+                ReasonCode = string.IsNullOrWhiteSpace(reason) ? "unspecified" : reason,
+                HasIntervention = false
+            };
         }
 
         private void LaunchVehicle(
@@ -287,51 +298,6 @@ namespace RapidTransitMod
                 + " " + why + "，重置去始发站 wp0=" + stationA.Index);
         }
 
-        private void EnsureRetiringRoute(
-            Entity v,
-            ref Game.Vehicles.PublicTransport pt,
-            ref Target tgt,
-            EntityCommandBuffer ecb)
-        {
-            if (!EntityManager.HasComponent<Owner>(v)) return;
-
-            Entity depot = EntityManager.GetComponentData<Owner>(v).m_Owner;
-            bool wrongTarget = tgt.m_Target != depot;
-            bool stillBoarding = (pt.m_State & PublicTransportFlags.Boarding) != 0;
-            if (!wrongTarget && !stillBoarding) return;
-            uint nowFrame = m_SimulationSystem.frameIndex;
-            if (m_RetireFixCooldownUntil.TryGetValue(v, out uint cooldownUntil) && nowFrame < cooldownUntil)
-                return;
-
-            string lineTag = m_VehicleLine.TryGetValue(v, out Entity lineEnt)
-                ? "线路" + lineEnt.Index : "线路?";
-
-            pt.m_State &= ~PublicTransportFlags.Boarding;
-            pt.m_DepartureFrame = 0;
-            tgt.m_Target = depot;
-            RepathVehicleImmediate(v, pt, tgt);
-            m_RetireFixCooldownUntil[v] = nowFrame + RETIREFIX_REPATH_COOLDOWN_FRAMES;
-            byte fixCount = m_RetireFixCount.TryGetValue(v, out byte oldCount)
-                ? (byte)(oldCount + 1)
-                : (byte)1;
-            m_RetireFixCount[v] = fixCount;
-
-            if (!m_LastRetireFixLogFrame.TryGetValue(v, out uint lastLogFrame)
-                || (nowFrame - lastLogFrame) >= RETIREFIX_LOG_COOLDOWN_FRAMES)
-            {
-                m_LastRetireFixLogFrame[v] = nowFrame;
-                log.Info("[RetireFix] " + lineTag + " 车辆" + v.Index
-                    + " 回库目标异常，重新指向车库 depot=" + depot.Index);
-            }
-
-            if (fixCount >= RETIREFIX_DELETE_THRESHOLD)
-            {
-                log.Info("[RetireAbandon] " + lineTag + " 车辆" + v.Index
-                    + " 连续回库修正" + fixCount + "次，视为失效运力并删除");
-                ecb.AddComponent<Deleted>(v);
-            }
-        }
-
         private void RepathVehicle(
             Entity v,
             Game.Vehicles.PublicTransport pt,
@@ -350,48 +316,6 @@ namespace RapidTransitMod
             ecb.SetComponent(v, pt);
             ecb.AddComponent<PathfindUpdated>(v);
             ecb.AddComponent<Updated>(v);
-        }
-
-        private void RepathVehicleImmediate(
-            Entity v,
-            Game.Vehicles.PublicTransport pt,
-            Target tgt)
-        {
-            if (v == Entity.Null || !EntityManager.Exists(v))
-                return;
-
-            if (EntityManager.HasComponent<PathOwner>(v))
-            {
-                PathOwner po = EntityManager.GetComponentData<PathOwner>(v);
-                po.m_State = PathFlags.Obsolete;
-                po.m_ElementIndex = 0;
-                EntityManager.SetComponentData(v, po);
-            }
-
-            if (EntityManager.HasBuffer<PathElement>(v))
-            {
-                EntityManager.GetBuffer<PathElement>(v).Clear();
-            }
-
-            if (EntityManager.HasComponent<Target>(v))
-            {
-                EntityManager.SetComponentData(v, tgt);
-            }
-
-            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v))
-            {
-                EntityManager.SetComponentData(v, pt);
-            }
-
-            if (!EntityManager.HasComponent<PathfindUpdated>(v))
-            {
-                EntityManager.AddComponent<PathfindUpdated>(v);
-            }
-
-            if (!EntityManager.HasComponent<Updated>(v))
-            {
-                EntityManager.AddComponent<Updated>(v);
-            }
         }
 
         private void ForceRetireOne(EntityCommandBuffer ecb)
@@ -425,6 +349,7 @@ namespace RapidTransitMod
 
         private void ReleaseRuntimeOwnershipAfterRetireHandoff(Entity vehicle, string reason)
         {
+            m_RetireHandoffWatch.Remove(vehicle);
             ClearBroadcastRuntimeState(vehicle);
             m_VehicleState.Remove(vehicle);
             m_VehicleTargetMin.Remove(vehicle);
@@ -631,6 +556,7 @@ namespace RapidTransitMod
             int ownerDepotAvailable = EntityManager.HasComponent<Game.Buildings.TransportDepot>(ownerDepot)
                 ? EntityManager.GetComponentData<Game.Buildings.TransportDepot>(ownerDepot).m_AvailableVehicles
                 : -1;
+            bool hasHandoffWatch = m_RetireHandoffWatch.TryGetValue(vehicle, out RetireHandoffWatchRecord handoffWatch);
 
             string targetKind = DescribeRetireShadowTargetKind(targetEntity);
             string guess = ClassifyRetireShadowGuess(
@@ -653,7 +579,11 @@ namespace RapidTransitMod
             return "frame=" + m_SimulationSystem.frameIndex
                 + " phase=" + phase
                 + " state=" + state
-                + " pending=" + (m_PendingRetireHandoffs.Contains(vehicle) ? "1" : "0")
+                + " pending=" + (hasHandoffWatch ? "1" : "0")
+                + " attempt=" + (hasHandoffWatch ? handoffWatch.AttemptCount.ToString() : "-")
+                + " softAck=" + (hasHandoffWatch && handoffWatch.SoftAckFrame > 0 ? handoffWatch.SoftAckFrame.ToString() : "-")
+                + " hardAck=" + (hasHandoffWatch && handoffWatch.HardAckFrame > 0 ? handoffWatch.HardAckFrame.ToString() : "-")
+                + " lastWrite=" + (hasHandoffWatch && handoffWatch.LastWriteFrame > 0 ? handoffWatch.LastWriteFrame.ToString() : "-")
                 + " guess=" + guess
                 + " ctrl=" + DescribeRetireShadowEntity(controllerEntity)
                 + " owner=" + DescribeRetireShadowEntity(ownerDepot)
@@ -770,17 +700,51 @@ namespace RapidTransitMod
             return "unknown";
         }
 
-        private void ProcessPendingRetireHandoffs(EntityCommandBuffer ecb)
+        private void TickRetireHandoffWatch(EntityCommandBuffer ecb, uint nowFrame)
         {
-            if (m_PendingRetireHandoffs.Count == 0)
+            if (m_RetireHandoffWatch.Count == 0)
                 return;
 
-            List<Entity> processed = new List<Entity>(m_PendingRetireHandoffs.Count);
-            foreach (Entity vehicle in m_PendingRetireHandoffs)
+            List<Entity> watchedVehicles = new List<Entity>(m_RetireHandoffWatch.Keys);
+            List<Entity> removals = null;
+            foreach (Entity vehicle in watchedVehicles)
             {
+                if (!m_RetireHandoffWatch.TryGetValue(vehicle, out RetireHandoffWatchRecord watch))
+                    continue;
                 if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                 {
-                    processed.Add(vehicle);
+                    FlushRetireShadowSnapshots(vehicle, "entity-removed");
+                    ResetRetireShadowSnapshots(vehicle);
+                    removals ??= new List<Entity>();
+                    removals.Add(vehicle);
+                    continue;
+                }
+
+                bool hasRuntimeState = m_VehicleState.TryGetValue(vehicle, out VehicleState runtimeState);
+                if (!hasRuntimeState || runtimeState != VehicleState.Retiring)
+                {
+                    RecordRetireShadowSnapshot(vehicle, "handoff-abort-runtime-state");
+                    log.Info("[RetireHandoffAbort] 车辆" + vehicle.Index
+                        + " runtime state=" + (hasRuntimeState ? runtimeState.ToString() : "-")
+                        + "，停止回库watch");
+                    removals ??= new List<Entity>();
+                    removals.Add(vehicle);
+                    continue;
+                }
+
+                if (EntityManager.HasComponent<Deleted>(vehicle)
+                    || EntityManager.HasComponent<ParkedTrain>(vehicle))
+                {
+                    RecordRetireShadowSnapshot(
+                        vehicle,
+                        EntityManager.HasComponent<ParkedTrain>(vehicle) ? "parked" : "deleted-marked");
+                    ReleaseRuntimeOwnershipAfterRetireHandoff(
+                        vehicle,
+                        EntityManager.HasComponent<ParkedTrain>(vehicle)
+                            ? "retire-handoff-parked"
+                            : "retire-handoff-deleted");
+                    removals ??= new List<Entity>();
+                    removals.Add(vehicle);
                     continue;
                 }
 
@@ -788,71 +752,303 @@ namespace RapidTransitMod
                     ? "线路" + lineEntity.Index
                     : "线路?";
 
-                if (!EntityManager.HasComponent<Owner>(vehicle))
+                if (!EntityManager.HasComponent<Owner>(vehicle)
+                    || !EntityManager.HasComponent<Target>(vehicle)
+                    || !EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
                 {
-                    RecordRetireShadowSnapshot(vehicle, "handoff-no-owner");
-                    log.Info("[回库] " + lineTag + " 车辆" + vehicle.Index + " 无Owner，标记删除");
-                    if (!EntityManager.HasComponent<Deleted>(vehicle))
-                        ecb.AddComponent<Deleted>(vehicle);
-                    processed.Add(vehicle);
+                    RecordRetireShadowSnapshot(vehicle, "handoff-abort-missing-components");
+                    log.Info("[RetireHandoffAbort] " + lineTag + " 车辆" + vehicle.Index
+                        + " 缺少Owner/Target/PublicTransport，停止回库watch，保留RT Retiring ownership");
+                    removals ??= new List<Entity>();
+                    removals.Add(vehicle);
                     continue;
                 }
 
-                if (EntityManager.HasBuffer<ServiceDispatch>(vehicle))
-                {
-                    DynamicBuffer<ServiceDispatch> dispatchBuffer = ecb.SetBuffer<ServiceDispatch>(vehicle);
-                    dispatchBuffer.Clear();
-                }
-
-                if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
-                {
-                    Game.Vehicles.CargoTransport cargoTransport = EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
-                    cargoTransport.m_RequestCount = 0;
-                    cargoTransport.m_State &= ~(CargoTransportFlags.EnRoute
-                        | CargoTransportFlags.Refueling
-                        | CargoTransportFlags.AbandonRoute);
-                    ecb.SetComponent(vehicle, cargoTransport);
-                }
-
-                if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
-                {
-                    Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
-                    publicTransport.m_RequestCount = 0;
-                    publicTransport.m_State &= ~(PublicTransportFlags.EnRoute
-                        | PublicTransportFlags.Refueling
-                        | PublicTransportFlags.AbandonRoute);
-                    ecb.SetComponent(vehicle, publicTransport);
-                }
-
-                if (EntityManager.HasComponent<Train>(vehicle))
-                {
-                    Train train = EntityManager.GetComponentData<Train>(vehicle);
-                    train.m_Flags &= ~Game.Vehicles.TrainFlags.IgnoreParkedVehicle;
-                    ecb.SetComponent(vehicle, train);
-                }
-
+                Entity ownerDepot = EntityManager.GetComponentData<Owner>(vehicle).m_Owner;
                 Target target = EntityManager.GetComponentData<Target>(vehicle);
-                target.m_Target = EntityManager.GetComponentData<Owner>(vehicle).m_Owner;
+                Entity targetEntity = target.m_Target;
+                watch.LastObservedTarget = targetEntity;
 
-                if (EntityManager.HasComponent<PathOwner>(vehicle))
+                bool softAck = IsRetireHandoffSoftAck(vehicle, targetEntity, ownerDepot);
+                bool hardAck = IsRetireHandoffHardAck(vehicle, ownerDepot);
+
+                if (softAck && watch.SoftAckFrame == 0)
                 {
-                    PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
-                    pathOwner.m_State &= ~PathFlags.Failed;
-                    pathOwner.m_State |= PathFlags.Obsolete;
-                    ecb.SetComponent(vehicle, pathOwner);
+                    watch.SoftAckFrame = nowFrame;
+                    RecordRetireShadowSnapshot(vehicle, "handoff-soft-ack");
+                    if (watch.HasIntervention)
+                    {
+                        log.Info("[RetireHandoffAck] " + lineTag + " 车辆" + vehicle.Index
+                            + " soft target=" + DescribeRetireShadowEntity(targetEntity)
+                            + " attempt=" + watch.AttemptCount);
+                    }
                 }
 
-                ecb.SetComponent(vehicle, target);
-                if (!EntityManager.HasComponent<PathfindUpdated>(vehicle))
-                    ecb.AddComponent<PathfindUpdated>(vehicle);
-                if (!EntityManager.HasComponent<Updated>(vehicle))
-                    ecb.AddComponent<Updated>(vehicle);
-                RecordRetireShadowSnapshot(vehicle, "handoff-queued");
-                processed.Add(vehicle);
+                if (hardAck && watch.HardAckFrame == 0)
+                {
+                    watch.HardAckFrame = nowFrame;
+                    RecordRetireShadowSnapshot(vehicle, "handoff-hard-ack");
+                    if (watch.HasIntervention)
+                    {
+                        log.Info("[RetireHandoffAck] " + lineTag + " 车辆" + vehicle.Index
+                            + " hard target=" + DescribeRetireShadowEntity(targetEntity)
+                            + " attempt=" + watch.AttemptCount);
+                    }
+                }
+
+                if (hardAck || watch.HardAckFrame > 0)
+                    continue;
+
+                bool maxAgeReached = nowFrame - watch.RequestedFrame >= RETIRE_HANDOFF_MAX_AGE_FRAMES;
+                if (softAck && maxAgeReached)
+                {
+                    RecordRetireShadowSnapshot(vehicle, "handoff-soft-ack-stagnant-retry");
+                    log.Info("[RetireHandoffRetry] " + lineTag + " 车辆" + vehicle.Index
+                        + " soft ack后未进入hard ack，超时重投"
+                        + " attempts=" + watch.AttemptCount
+                        + " ageFrames=" + (nowFrame - watch.RequestedFrame)
+                        + " target=" + DescribeRetireShadowEntity(targetEntity)
+                        + " reason=" + watch.ReasonCode);
+                    watch.HasIntervention = true;
+                    QueueRetireHandoffWrite(vehicle, ownerDepot, ecb, watch, nowFrame, lineTag);
+                    watch.RequestedFrame = nowFrame;
+                    watch.SoftAckFrame = 0;
+                    continue;
+                }
+
+                if (softAck)
+                    continue;
+
+                bool maxAttemptsReached = watch.AttemptCount >= RETIRE_HANDOFF_MAX_ATTEMPTS;
+                if (maxAttemptsReached || maxAgeReached)
+                {
+                    RecordRetireShadowSnapshot(vehicle, "handoff-abort-timeout");
+                    log.Info("[RetireHandoffAbort] " + lineTag + " 车辆" + vehicle.Index
+                        + " 回库交接未被vanilla接住，停止重投"
+                        + " attempts=" + watch.AttemptCount
+                        + " ageFrames=" + (nowFrame - watch.RequestedFrame)
+                        + " target=" + DescribeRetireShadowEntity(targetEntity)
+                        + " reason=" + watch.ReasonCode);
+                    removals ??= new List<Entity>();
+                    removals.Add(vehicle);
+                    continue;
+                }
+
+                if (!ShouldRetryRetireHandoff(watch, nowFrame, vehicle, targetEntity, ownerDepot))
+                    continue;
+
+                QueueRetireHandoffWrite(vehicle, ownerDepot, ecb, watch, nowFrame, lineTag);
             }
 
-            for (int i = 0; i < processed.Count; i++)
-                m_PendingRetireHandoffs.Remove(processed[i]);
+            if (removals == null)
+                return;
+
+            for (int i = 0; i < removals.Count; i++)
+                m_RetireHandoffWatch.Remove(removals[i]);
+        }
+
+        private bool ShouldRetryRetireHandoff(
+            RetireHandoffWatchRecord watch,
+            uint nowFrame,
+            Entity vehicle,
+            Entity targetEntity,
+            Entity ownerDepot)
+        {
+            if (watch.AttemptCount == 0)
+                return true;
+            if (nowFrame > watch.LastWriteFrame
+                && targetEntity != Entity.Null
+                && targetEntity != ownerDepot
+                && EntityManager.Exists(targetEntity)
+                && IsRouteWaypointLikeTarget(vehicle, targetEntity))
+            {
+                return true;
+            }
+            return nowFrame - watch.LastWriteFrame >= RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES;
+        }
+
+        private bool IsRetireHandoffSoftAck(Entity vehicle, Entity targetEntity, Entity ownerDepot)
+        {
+            if (targetEntity != Entity.Null && targetEntity == ownerDepot)
+                return true;
+            if (IsRetireHandoffHardAck(vehicle, ownerDepot))
+                return true;
+            if (targetEntity != Entity.Null
+                && EntityManager.Exists(targetEntity)
+                && !IsRouteWaypointLikeTarget(vehicle, targetEntity))
+            {
+                return true;
+            }
+            if (targetEntity != Entity.Null
+                && targetEntity == ownerDepot
+                && EntityManager.HasComponent<PathOwner>(vehicle))
+            {
+                PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
+                if ((pathOwner.m_State & (PathFlags.Pending | PathFlags.Obsolete)) != 0)
+                    return true;
+            }
+            return false;
+        }
+
+        private bool IsRetireHandoffHardAck(Entity vehicle, Entity ownerDepot)
+        {
+            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+            {
+                Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                if ((publicTransport.m_State & PublicTransportFlags.Returning) != 0)
+                    return true;
+            }
+            if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
+            {
+                Game.Vehicles.CargoTransport cargoTransport = EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
+                if ((cargoTransport.m_State & CargoTransportFlags.Returning) != 0)
+                    return true;
+            }
+            if (EntityHasDepotPathDestination(vehicle, ownerDepot))
+                return true;
+            Entity headVehicle = ResolveRetireHandoffHeadVehicle(vehicle);
+            if (headVehicle != vehicle && EntityHasDepotPathDestination(headVehicle, ownerDepot))
+                return true;
+            return EntityHasParkingNavigationLane(vehicle)
+                || (headVehicle != vehicle && EntityHasParkingNavigationLane(headVehicle));
+        }
+
+        private bool EntityHasDepotPathDestination(Entity entity, Entity ownerDepot)
+        {
+            return entity != Entity.Null
+                && EntityManager.Exists(entity)
+                && ownerDepot != Entity.Null
+                && EntityManager.HasComponent<PathInformation>(entity)
+                && EntityManager.GetComponentData<PathInformation>(entity).m_Destination == ownerDepot;
+        }
+
+        private bool EntityHasParkingNavigationLane(Entity entity)
+        {
+            if (entity == Entity.Null
+                || !EntityManager.Exists(entity)
+                || !EntityManager.HasBuffer<TrainNavigationLane>(entity))
+            {
+                return false;
+            }
+
+            DynamicBuffer<TrainNavigationLane> lanes = EntityManager.GetBuffer<TrainNavigationLane>(entity, true);
+            return lanes.Length > 0
+                && (lanes[lanes.Length - 1].m_Flags & TrainLaneFlags.ParkingSpace) != 0;
+        }
+
+        private Entity ResolveRetireHandoffHeadVehicle(Entity vehicle)
+        {
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasBuffer<LayoutElement>(vehicle))
+            {
+                return vehicle;
+            }
+
+            DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+            if (layout.Length == 0)
+                return vehicle;
+            return layout[0].m_Vehicle;
+        }
+
+        private bool IsRouteWaypointLikeTarget(Entity vehicle, Entity targetEntity)
+        {
+            if (targetEntity == Entity.Null
+                || !EntityManager.Exists(targetEntity)
+                || !EntityManager.HasComponent<Waypoint>(targetEntity))
+            {
+                return false;
+            }
+
+            if (!EntityManager.HasComponent<CurrentRoute>(vehicle))
+                return true;
+
+            Entity route = EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route;
+            if (route == Entity.Null
+                || !EntityManager.Exists(route)
+                || !EntityManager.HasBuffer<RouteWaypoint>(route))
+            {
+                return true;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(route, true);
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                if (waypoints[i].m_Waypoint == targetEntity)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void QueueRetireHandoffWrite(
+            Entity vehicle,
+            Entity ownerDepot,
+            EntityCommandBuffer ecb,
+            RetireHandoffWatchRecord watch,
+            uint nowFrame,
+            string lineTag)
+        {
+            if (EntityManager.HasBuffer<ServiceDispatch>(vehicle))
+            {
+                DynamicBuffer<ServiceDispatch> dispatchBuffer = ecb.SetBuffer<ServiceDispatch>(vehicle);
+                dispatchBuffer.Clear();
+            }
+
+            if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
+            {
+                Game.Vehicles.CargoTransport cargoTransport = EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
+                cargoTransport.m_RequestCount = 0;
+                cargoTransport.m_State &= ~(CargoTransportFlags.EnRoute
+                    | CargoTransportFlags.Refueling
+                    | CargoTransportFlags.AbandonRoute);
+                ecb.SetComponent(vehicle, cargoTransport);
+            }
+
+            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+            {
+                Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                publicTransport.m_RequestCount = 0;
+                publicTransport.m_State &= ~(PublicTransportFlags.EnRoute
+                    | PublicTransportFlags.Refueling
+                    | PublicTransportFlags.AbandonRoute);
+                ecb.SetComponent(vehicle, publicTransport);
+            }
+
+            if (EntityManager.HasComponent<Train>(vehicle))
+            {
+                Train train = EntityManager.GetComponentData<Train>(vehicle);
+                train.m_Flags &= ~Game.Vehicles.TrainFlags.IgnoreParkedVehicle;
+                ecb.SetComponent(vehicle, train);
+            }
+
+            Target target = EntityManager.GetComponentData<Target>(vehicle);
+            target.m_Target = ownerDepot;
+
+            if (EntityManager.HasComponent<PathOwner>(vehicle))
+            {
+                PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
+                pathOwner.m_State &= ~PathFlags.Failed;
+                pathOwner.m_State |= PathFlags.Obsolete;
+                ecb.SetComponent(vehicle, pathOwner);
+            }
+
+            ecb.SetComponent(vehicle, target);
+            if (!EntityManager.HasComponent<PathfindUpdated>(vehicle))
+                ecb.AddComponent<PathfindUpdated>(vehicle);
+            if (!EntityManager.HasComponent<Updated>(vehicle))
+                ecb.AddComponent<Updated>(vehicle);
+
+            watch.LastWriteFrame = nowFrame;
+            watch.AttemptCount = (byte)(watch.AttemptCount + 1);
+            RecordRetireShadowSnapshot(vehicle, "handoff-queued");
+            if (watch.HasIntervention || watch.AttemptCount > 2)
+            {
+                log.Info("[RetireHandoffRetry] " + lineTag + " 车辆" + vehicle.Index
+                    + " attempt=" + watch.AttemptCount
+                    + " target=depot#" + ownerDepot.Index
+                    + " reason=" + watch.ReasonCode);
+            }
         }
 
         private void PuppetMasterControl(int nowMin)
@@ -1716,6 +1912,12 @@ namespace RapidTransitMod
 
                     Entity lineEnt = line;
                     string lineTag = "线路" + line.Index;
+                    if (state == VehicleState.Retiring)
+                    {
+                        SetUILabel(v, "回库中 #" + v.Index);
+                        continue;
+                    }
+
                     bool allowOriginHoldingBoardingGhost = state == VehicleState.Holding
                         && targetMin >= 0
                         && GetDistanceToOriginMeters(v, wps) <= ORIGIN_FORCE_IDLE_RADIUS_METERS;
@@ -1816,7 +2018,7 @@ namespace RapidTransitMod
                                 {
                                     TryRecordObservedStopDwellOnBoardingEnd(v, lineEnt, previousCachedWpIdx, nowFrame);
                                     RecordWorkbenchRealtimeStopEvent(v, lineEnt, wps, false, -1, previousCachedWpIdx);
-                                    HandleBroadcastLeaveStationTrigger(v, lineEnt, wps, previousCachedWpIdx);
+                                    ArmBroadcastLeaveStationTrigger(v, lineEnt, wps, previousCachedWpIdx);
                                     if (state == VehicleState.Running && previousCachedWpIdx >= 0)
                                     {
                                         Entity departedStop = GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
@@ -2788,6 +2990,7 @@ namespace RapidTransitMod
                     m_LaunchCooldownUntil.Remove(dead);
                     m_LastRetireFixLogFrame.Remove(dead);
                     m_RetireFixCooldownUntil.Remove(dead);
+                    m_RetireHandoffWatch.Remove(dead);
                     m_PreparingFixCooldownUntil.Remove(dead);
                     m_RetireFixCount.Remove(dead);
                     m_OriginArrivalCandidateSinceFrame.Remove(dead);
@@ -2974,7 +3177,9 @@ namespace RapidTransitMod
                 }
             }
 
-            bool allowTrackWaypointAnchoring = ENABLE_TRACK_WAYPOINT_ANCHORING && m_VehicleState.ContainsKey(v);
+            bool allowTrackWaypointAnchoring = ENABLE_TRACK_WAYPOINT_ANCHORING
+                && m_VehicleState.TryGetValue(v, out VehicleState trackState)
+                && trackState != VehicleState.Retiring;
 
             if (allowTrackWaypointAnchoring
                 && TryResolveWaypointIndexByTrackCursor(v, wps, targetWaypointIndex, bvWi, -1, out int anchoredWaypointIndex, out string anchorDetail, out string anchorStableKey))
@@ -3127,6 +3332,56 @@ namespace RapidTransitMod
             }
 
             return startAtomIndex >= 0 && endAtomIndexExclusive > startAtomIndex;
+        }
+
+        private enum CursorAtomWindowRelation : byte
+        {
+            Unknown = 0,
+            Before = 1,
+            Inside = 2,
+            After = 3,
+        }
+
+        private static CursorAtomWindowRelation CompareCursorToAtomWindow(
+            int cursorAtomIndex,
+            int startAtomIndex,
+            int endAtomIndexExclusive)
+        {
+            if (cursorAtomIndex < 0 || startAtomIndex < 0 || endAtomIndexExclusive <= startAtomIndex)
+                return CursorAtomWindowRelation.Unknown;
+
+            if (cursorAtomIndex < startAtomIndex)
+                return CursorAtomWindowRelation.Before;
+
+            if (cursorAtomIndex >= endAtomIndexExclusive)
+                return CursorAtomWindowRelation.After;
+
+            return CursorAtomWindowRelation.Inside;
+        }
+
+        private bool TryGetCursorWaypointWindowRelation(
+            LineTrackChain chain,
+            int waypointIndex,
+            int cursorAtomIndex,
+            out CursorAtomWindowRelation relation,
+            out int startAtomIndex,
+            out int endAtomIndexExclusive)
+        {
+            relation = CursorAtomWindowRelation.Unknown;
+            startAtomIndex = -1;
+            endAtomIndexExclusive = -1;
+            if (!TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    waypointIndex,
+                    cursorAtomIndex,
+                    out startAtomIndex,
+                    out endAtomIndexExclusive))
+            {
+                return false;
+            }
+
+            relation = CompareCursorToAtomWindow(cursorAtomIndex, startAtomIndex, endAtomIndexExclusive);
+            return relation != CursorAtomWindowRelation.Unknown;
         }
 
         private bool IsSuppressedForcedMidStopBoardingGhost(

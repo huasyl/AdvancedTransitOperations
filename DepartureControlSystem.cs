@@ -9,7 +9,6 @@
 // - 新增 m_NearingTerminus：车进入最后一个 waypoint 时打标签，Idle->Holding 前检查本线路有无标签车距始发站 <= 350 米，有则回库疏解
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using Game;
@@ -91,6 +90,18 @@ namespace RapidTransitMod
                 Line = line;
                 TargetMin = targetMin;
             }
+        }
+
+        private sealed class RetireHandoffWatchRecord
+        {
+            public uint RequestedFrame;
+            public uint LastWriteFrame;
+            public byte AttemptCount;
+            public uint SoftAckFrame;
+            public uint HardAckFrame;
+            public Entity LastObservedTarget;
+            public string ReasonCode = string.Empty;
+            public bool HasIntervention;
         }
 
         private struct DeferredBoardingTailIgnoreEntry
@@ -290,33 +301,6 @@ namespace RapidTransitMod
             public readonly Dictionary<Entity, int> WaypointIndexByStop = new Dictionary<Entity, int>();
         }
 
-        private sealed class LearnedTurnbackBoundaryCluster
-        {
-            public int AtomIndex;
-            public int HitCount;
-            public ulong ChainSignature;
-            public uint LastHitFrame;
-            public Entity LastVehicle;
-
-            public LearnedTurnbackBoundaryCluster(int atomIndex, ulong chainSignature, uint lastHitFrame, Entity lastVehicle)
-            {
-                AtomIndex = atomIndex;
-                HitCount = 1;
-                ChainSignature = chainSignature;
-                LastHitFrame = lastHitFrame;
-                LastVehicle = lastVehicle;
-            }
-        }
-
-        private sealed class TurnbackLearnVehicleSampleState
-        {
-            public Entity Line;
-            public ulong ChainSignature;
-            public uint LastStrongSampleFrame;
-            public int LastTargetWaypointIndex = -1;
-            public ulong LastObservedPathSignature;
-        }
-
         private readonly struct TrainHeadSnapshot
         {
             public readonly uint Frame;
@@ -340,20 +324,6 @@ namespace RapidTransitMod
                 RearLane = rearLane;
                 Reversed = reversed;
                 WaypointIndex = waypointIndex;
-            }
-        }
-
-        private readonly struct PatchedTrainReverseSignal
-        {
-            public readonly Entity Vehicle;
-            public readonly Entity HeadVehicle;
-            public readonly uint Frame;
-
-            public PatchedTrainReverseSignal(Entity vehicle, Entity headVehicle, uint frame)
-            {
-                Vehicle = vehicle;
-                HeadVehicle = headVehicle;
-                Frame = frame;
             }
         }
 
@@ -547,7 +517,6 @@ namespace RapidTransitMod
         }
 
         public static DepartureControlSystem Instance = null!;
-        private static readonly ConcurrentQueue<PatchedTrainReverseSignal> s_PatchedTrainReverseSignals = new ConcurrentQueue<PatchedTrainReverseSignal>();
         private TimedLogger log = Mod.log;
         private SimulationSystem m_SimulationSystem = null!;
         private TimeSystem m_TimeSystem = null!;
@@ -617,7 +586,8 @@ namespace RapidTransitMod
         private readonly HashSet<Entity> m_DeferredBoardingHumanTailIgnores = new HashSet<Entity>();
         private readonly HashSet<Entity> m_DeferredBoardingPetTailIgnores = new HashSet<Entity>();
         private readonly List<Entity> m_DeferredBoardingTailScratch = new List<Entity>();
-        private readonly HashSet<Entity> m_PendingRetireHandoffs = new HashSet<Entity>();
+        private readonly Dictionary<Entity, RetireHandoffWatchRecord> m_RetireHandoffWatch =
+            new Dictionary<Entity, RetireHandoffWatchRecord>();
         private readonly Dictionary<Entity, string> m_MidStopTimeoutLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, List<string>> m_RetireShadowHistory = new Dictionary<Entity, List<string>>();
         private readonly Dictionary<Entity, string> m_RetireShadowLastSnapshot = new Dictionary<Entity, string>();
@@ -703,24 +673,9 @@ namespace RapidTransitMod
 
         // ── 诊断 ──
 
-        internal static void EnqueuePatchedTrainReverseSignal(Entity vehicle, Entity headVehicle, uint frame)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            s_PatchedTrainReverseSignals.Enqueue(new PatchedTrainReverseSignal(vehicle, headVehicle, frame));
-        }
-
         internal uint GetCurrentSimulationFrameIndex()
         {
             return m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0;
-        }
-
-        private static void ClearPatchedTrainReverseSignals()
-        {
-            while (s_PatchedTrainReverseSignals.TryDequeue(out _))
-            {
-            }
         }
         private NativeHashSet<Entity> m_DiagnosedLines;
 
@@ -765,6 +720,8 @@ namespace RapidTransitMod
         private const uint SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_REPATH_COOLDOWN_FRAMES = 120;
+        private const uint RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES = 30;
+        private const byte RETIRE_HANDOFF_MAX_ATTEMPTS = 8;
         private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
@@ -789,22 +746,16 @@ namespace RapidTransitMod
         private const int TURNBACK_REPEAT_MIN_PRIMARY_ATOMS = 3;
         private const int TURNBACK_REPEAT_MIN_UNIQUE_LANES = 2;
         private const int TURNBACK_ADJACENT_SEGMENT_MAX_EDGE_SKIP = 2;
-        private const int TURNBACK_LEARN_CLUSTER_MERGE_ATOM_RADIUS = 10;
-        private const int TURNBACK_LEARN_CONFIRM_HIT_COUNT = 2;
-        private const int TURNBACK_PATH_RETURN_FORWARD_WINDOW_ATOMS = 48;
-        private const uint TURNBACK_LEARN_SAMPLE_COOLDOWN_FRAMES = 180;
-        private const uint TURNBACK_LEARN_LOG_COOLDOWN_FRAMES = 1800;
-        private const uint TURNBACK_SIGNAL_LOG_COOLDOWN_FRAMES = 1800;
-
         private static bool IsBypassRuntimeLoggingEnabled() => false;
         private static bool IsBypassPerfProbeLoggingEnabled() => false;
         private static bool IsLineOrderedRuntimeLoggingEnabled() => true;
         private static bool IsLineOrderedRuntimeProbeLoggingEnabled() => true;
         private static bool IsTrackModelTurnbackBuildLoggingEnabled() => true;
-        private static bool IsTrackModelTurnbackSignalLoggingEnabled() => true;
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
         private const uint RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES = 30;
         private const int RETIRE_SHADOW_HISTORY_LIMIT = 4;
+        private static readonly uint RETIRE_HANDOFF_MAX_AGE_FRAMES = (uint)math.round(
+            3f * (float)SIM_FRAMES_PER_MINUTE);
         private const float ORIGIN_ARRIVAL_HOLD_MINUTES = 2f;
         private static readonly uint FORCED_ORIGIN_MIN_DWELL_FRAMES = (uint)math.round(3f * (float)SIM_FRAMES_PER_MINUTE);
         private static readonly uint PREPARING_ORIGIN_SETTLE_FRAMES = (uint)math.max(1f, math.round(2f * (float)SIM_FRAMES_PER_MINUTE));

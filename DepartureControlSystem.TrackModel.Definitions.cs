@@ -4,6 +4,7 @@ using Game.Common;
 using Game.Net;
 using Game.Pathfind;
 using Unity.Entities;
+using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
@@ -14,7 +15,7 @@ namespace RapidTransitMod
         private const float PROTECTED_INTERVAL_TAIL_CLEARANCE_ATOMS = 1.25f;
         private const float SAME_DIRECTION_AHEAD_MARGIN_ATOMS = 0.75f;
         private const float TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES = 1f;
-        private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 6f;
+        private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 3f;
         private const float LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS = 8f;
         private const int MAX_CONFLICT_CORRIDOR_GAP_ATOMS = 6;
         private const uint SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES = 60;
@@ -115,6 +116,7 @@ namespace RapidTransitMod
         {
             public readonly TrackAtomKey Key;
             public readonly Entity SourceTarget;
+            public readonly float2 TargetDelta;
             public readonly PathElementFlags SourceFlags;
             public readonly TrackAtomClass AtomClass;
             public readonly TrackTraversalDir TraversalDir;
@@ -122,12 +124,14 @@ namespace RapidTransitMod
             public TrackAtom(
                 TrackAtomKey key,
                 Entity sourceTarget,
+                float2 targetDelta,
                 PathElementFlags sourceFlags,
                 TrackAtomClass atomClass,
                 TrackTraversalDir traversalDir)
             {
                 Key = key;
                 SourceTarget = sourceTarget;
+                TargetDelta = targetDelta;
                 SourceFlags = sourceFlags;
                 AtomClass = atomClass;
                 TraversalDir = traversalDir;
@@ -295,6 +299,26 @@ namespace RapidTransitMod
                 IsLearned = isLearned;
                 MatchedAtomCount = matchedAtomCount;
                 MatchedUniqueLaneCount = matchedUniqueLaneCount;
+            }
+        }
+
+        private readonly struct TrackTurnbackStationBoundary
+        {
+            public readonly Entity StationEntity;
+            public readonly int WaypointIndex;
+            public readonly int AtomIndex;
+            public readonly int BoundaryEventIndex;
+
+            public TrackTurnbackStationBoundary(
+                Entity stationEntity,
+                int waypointIndex,
+                int atomIndex,
+                int boundaryEventIndex)
+            {
+                StationEntity = stationEntity;
+                WaypointIndex = waypointIndex;
+                AtomIndex = atomIndex;
+                BoundaryEventIndex = boundaryEventIndex;
             }
         }
 

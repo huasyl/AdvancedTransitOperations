@@ -58,12 +58,6 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_LineOrderedFallbackCaseLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_LineOrderedFallbackCaseLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_TrackModelTurnbackBuildLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, string> m_TrackModelTurnbackSignalLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, uint> m_TrackModelTurnbackSignalLastLogFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<Entity, string> m_TrackModelTurnbackLearnLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, uint> m_TrackModelTurnbackLearnLastLogFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<Entity, List<LearnedTurnbackBoundaryCluster>> m_LearnedTurnbackBoundaryClustersByLine = new Dictionary<Entity, List<LearnedTurnbackBoundaryCluster>>();
-        private readonly Dictionary<Entity, TurnbackLearnVehicleSampleState> m_TurnbackLearnVehicleStates = new Dictionary<Entity, TurnbackLearnVehicleSampleState>();
         private readonly HashSet<Entity> m_ProtectedIntervalOverlapSourceKeys = new HashSet<Entity>();
         private readonly HashSet<Entity> m_ProtectedIntervalOverlapMatchedKeys = new HashSet<Entity>();
         private readonly List<Entity> m_ProtectedIntervalOrderedSourceKeys = new List<Entity>();

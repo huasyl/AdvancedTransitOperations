@@ -1329,7 +1329,11 @@
   font-weight: 600;
   text-align: left;
   cursor: pointer;
-  transition: border-color 180ms ease, color 180ms ease;
+  transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+}
+
+.dw-bc-tray-item.is-bind-feedback {
+  animation: dw-bc-tray-bind-confirm 520ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
 
 .dw-bc-node-value.is-variable {
@@ -1651,6 +1655,77 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+@keyframes dw-bc-tray-bind-confirm {
+  0% {
+    background: rgba(130, 226, 217, 0.00);
+    border-bottom-color: rgba(130, 226, 217, 0.10);
+  }
+
+  38% {
+    background: rgba(130, 226, 217, 0.14);
+    border-bottom-color: rgba(130, 226, 217, 0.70);
+  }
+
+  100% {
+    background: rgba(130, 226, 217, 0.04);
+    border-bottom-color: rgba(130, 226, 217, 0.22);
+  }
+}
+
+@keyframes dw-bc-binding-zone-confirm {
+  0% {
+    border-color: rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.20);
+  }
+
+  22% {
+    border-color: rgba(130, 226, 217, 0.88);
+    background: rgba(130, 226, 217, 0.18);
+  }
+
+  62% {
+    border-color: rgba(130, 226, 217, 0.72);
+    background: rgba(130, 226, 217, 0.14);
+  }
+
+  100% {
+    border-color: rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.22);
+  }
+}
+
+@keyframes dw-bc-binding-chip-confirm {
+  0% {
+    border-color: rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  20% {
+    border-color: rgba(130, 226, 217, 0.78);
+    background: rgba(130, 226, 217, 0.18);
+  }
+
+  66% {
+    border-color: rgba(130, 226, 217, 0.62);
+    background: rgba(130, 226, 217, 0.14);
+  }
+
+  100% {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+.dw-bc-tray-item.is-unbound-asset > span:first-child {
+  color: #6fbf7f;
+  font-weight: 700;
+}
+
+.dw-bc-tray-item.is-unbound-asset > .dw-bc-tray-item-note {
+  color: #9fbe9f;
+  font-weight: 700;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-item > span:first-child {
@@ -1985,6 +2060,10 @@
   background: rgba(0, 0, 0, 0.20);
 }
 
+.dw-bc-map-binding-list.is-bind-feedback .dw-bc-map-binding-tags {
+  animation: dw-bc-binding-zone-confirm 3000ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
 .dw-bc-map-binding-tag {
   display: flex;
   align-items: center;
@@ -1994,7 +2073,11 @@
   margin-bottom: 14px;
   padding: 8px 14px;
   background: rgba(255, 255, 255, 0.05);
-  transition: border-color 180ms ease;
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.dw-bc-map-binding-tag.is-bind-feedback {
+  animation: dw-bc-binding-chip-confirm 3200ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
 
 .dw-bc-map-binding-tag-lang {

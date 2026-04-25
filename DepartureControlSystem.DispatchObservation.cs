@@ -969,11 +969,6 @@ namespace RapidTransitMod
             return entity == Entity.Null ? "null" : entity.Index.ToString();
         }
 
-        private static bool HasTrainHeadSnapshotTurned(TrainHeadSnapshot before, TrainHeadSnapshot after)
-        {
-            return before.HeadVehicle != after.HeadVehicle;
-        }
-
         private void TryRecordPreparingArrivalSample(Entity v, Entity line, uint nowFrame)
         {
             if (line == Entity.Null)

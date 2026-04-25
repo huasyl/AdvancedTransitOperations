@@ -84,7 +84,6 @@ namespace RapidTransitMod
             var ecb = m_EndFrameBarrier.CreateCommandBuffer();
             CleanupDeferredBoardingTailIgnores(m_SimulationSystem.frameIndex);
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            DrainPatchedTrainReverseSignals();
 
             EnsureLapCacheBuffer();
             EnsureVehicleCacheBuffer();
@@ -149,7 +148,7 @@ namespace RapidTransitMod
                 }
             }
 
-            ProcessPendingRetireHandoffs(ecb);
+            TickRetireHandoffWatch(ecb, m_SimulationSystem.frameIndex);
 
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
@@ -328,7 +327,7 @@ namespace RapidTransitMod
             m_ForcedMidStopBoardingGraceUntil.Clear();
             m_ForcedMidStopBoardingHardCloseAfter.Clear();
             m_VehicleLine.Clear();
-            m_PendingRetireHandoffs.Clear();
+            m_RetireHandoffWatch.Clear();
             m_RetireShadowHistory.Clear();
             m_RetireShadowLastSnapshot.Clear();
             m_RetireShadowLastFrame.Clear();
@@ -378,7 +377,6 @@ namespace RapidTransitMod
             m_DeferredBoardingPetTailIgnores.Clear();
             m_DeferredBoardingTailScratch.Clear();
             m_MidStopTimeoutLogCache.Clear();
-            ClearPatchedTrainReverseSignals();
             m_SystemReady = false;
             m_StartupRuntimeStateCleared = false;
             m_StableFrameCount = 0;
@@ -413,7 +411,7 @@ namespace RapidTransitMod
             m_ForcedMidStopBoardingGraceUntil.Clear();
             m_ForcedMidStopBoardingHardCloseAfter.Clear();
             m_VehicleLine.Clear();
-            m_PendingRetireHandoffs.Clear();
+            m_RetireHandoffWatch.Clear();
             m_RetireShadowHistory.Clear();
             m_RetireShadowLastSnapshot.Clear();
             m_RetireShadowLastFrame.Clear();
@@ -462,7 +460,6 @@ namespace RapidTransitMod
             m_DeferredBoardingPetTailIgnores.Clear();
             m_DeferredBoardingTailScratch.Clear();
             m_MidStopTimeoutLogCache.Clear();
-            ClearPatchedTrainReverseSignals();
             m_LastPuppetMasterMinute = -1;
             m_LastRegisterSweepMinute = -1;
             m_LastSchedulerTickMinute = -1;

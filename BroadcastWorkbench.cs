@@ -78,6 +78,8 @@ namespace RapidTransitMod
             [DataMember]
             public DispatchWorkbenchStationDto[] stations;
             [DataMember]
+            public BroadcastWorkbenchTurnbackPointDto[] turnbackPoints;
+            [DataMember]
             public BroadcastWorkbenchStationBindingDto[] stationBindings;
             [DataMember]
             public BroadcastWorkbenchRuleDto[] rules;
@@ -95,6 +97,19 @@ namespace RapidTransitMod
             public bool draftDirty;
             [DataMember]
             public int volume;
+        }
+
+        [DataContract]
+        public class BroadcastWorkbenchTurnbackPointDto
+        {
+            [DataMember]
+            public int index;
+            [DataMember]
+            public string stationId;
+            [DataMember]
+            public string stationName;
+            [DataMember]
+            public bool resolved;
         }
 
         [DataContract]
@@ -150,7 +165,7 @@ namespace RapidTransitMod
             [DataMember]
             public int langIndex;
             [DataMember]
-            public int delaySeconds;
+            public float delaySeconds;
         }
 
         [DataContract]
@@ -1330,6 +1345,9 @@ namespace RapidTransitMod
                     .Where(group => group?.Representative != null)
                     .Select(group => CloneDispatchWorkbenchStationDto(group.Representative))
                     .ToArray(),
+                turnbackPoints = activeRuntime != null
+                    ? BuildBroadcastWorkbenchTurnbackPoints(activeRuntime.Entity, stationGroups)
+                    : Array.Empty<BroadcastWorkbenchTurnbackPointDto>(),
                 stationBindings = stationBindings,
                 rules = rules,
                 assetDirectory = m_BroadcastAssetDirectory,
@@ -1935,10 +1953,10 @@ namespace RapidTransitMod
 
                 if (string.Equals(node.type, "delay", StringComparison.Ordinal))
                 {
-                    int delaySeconds = node.delaySeconds > 0 ? node.delaySeconds : 0;
+                    float delaySeconds = node.delaySeconds > 0f ? node.delaySeconds : 0f;
                     if (delaySeconds > 0)
                     {
-                        await Task.Delay(delaySeconds * 1000);
+                        await Task.Delay(Mathf.Max(1, Mathf.RoundToInt(delaySeconds * 1000f)));
                     }
 
                     continue;
@@ -2120,25 +2138,145 @@ namespace RapidTransitMod
 
             BroadcastWorkbenchStationGroup currentStation = stationGroups[0];
             BroadcastWorkbenchStationGroup nextStation = stationGroups.Count > 1 ? stationGroups[1] : null;
-            BroadcastWorkbenchStationGroup terminalStation = stationGroups[stationGroups.Count - 1];
+            BroadcastWorkbenchStationGroup terminalStation = stationGroups[0];
+            BroadcastWorkbenchStationGroup turnbackStation =
+                TryResolveBroadcastWorkbenchTurnbackStation(runtime.Entity, stationGroups, out BroadcastWorkbenchStationGroup resolvedTurnbackStation)
+                    ? resolvedTurnbackStation
+                    : null;
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
                 GetBroadcastDraftLineStationBindingsOrNull(lineId);
             List<BroadcastWorkbenchStationBindingDto> currentStationBindings = ResolveBroadcastBoundBindings(lineBindings, currentStation?.Representative?.id);
             List<BroadcastWorkbenchStationBindingDto> nextStationBindings = ResolveBroadcastBoundBindings(lineBindings, nextStation?.Representative?.id);
             List<BroadcastWorkbenchStationBindingDto> terminalStationBindings = ResolveBroadcastBoundBindings(lineBindings, terminalStation?.Representative?.id);
+            List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings = ResolveBroadcastBoundBindings(lineBindings, turnbackStation?.Representative?.id);
             context = new BroadcastTriggerContext(
                 lineId,
                 Entity.Null,
                 currentStation?.Representative?.name ?? string.Empty,
                 nextStation?.Representative?.name ?? string.Empty,
                 terminalStation?.Representative?.name ?? string.Empty,
+                turnbackStation?.Representative?.name ?? string.Empty,
                 ResolveBroadcastBoundAssetName(currentStationBindings, 1),
                 ResolveBroadcastBoundAssetName(nextStationBindings, 1),
                 ResolveBroadcastBoundAssetName(terminalStationBindings, 1),
+                ResolveBroadcastBoundAssetName(turnbackStationBindings, 1),
                 currentStationBindings,
                 nextStationBindings,
-                terminalStationBindings);
+                terminalStationBindings,
+                turnbackStationBindings);
             return true;
+        }
+
+        private bool TryResolveBroadcastWorkbenchTurnbackStation(
+            Entity line,
+            List<BroadcastWorkbenchStationGroup> stationGroups,
+            out BroadcastWorkbenchStationGroup stationGroup)
+        {
+            stationGroup = null;
+            if (line == Entity.Null
+                || stationGroups == null
+                || stationGroups.Count == 0
+                || !EntityManager.HasBuffer<Game.Routes.RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<Game.Routes.RouteWaypoint> waypoints =
+                EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryResolveNextTurnbackStationBoundary(
+                    chain,
+                    -1,
+                    out TrackTurnbackStationBoundary stationBoundary))
+            {
+                return false;
+            }
+
+            return TryResolveBroadcastWorkbenchTurnbackGroup(
+                stationGroups,
+                stationBoundary,
+                out stationGroup);
+        }
+
+        private BroadcastWorkbenchTurnbackPointDto[] BuildBroadcastWorkbenchTurnbackPoints(
+            Entity line,
+            List<BroadcastWorkbenchStationGroup> stationGroups)
+        {
+            if (line == Entity.Null
+                || stationGroups == null
+                || !EntityManager.HasBuffer<Game.Routes.RouteWaypoint>(line))
+            {
+                return Array.Empty<BroadcastWorkbenchTurnbackPointDto>();
+            }
+
+            DynamicBuffer<Game.Routes.RouteWaypoint> waypoints =
+                EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null)
+            {
+                return Array.Empty<BroadcastWorkbenchTurnbackPointDto>();
+            }
+
+            List<TrackTurnbackStationBoundary> stationBoundaries = new List<TrackTurnbackStationBoundary>();
+            if (!TryCollectTurnbackStationBoundaries(chain, stationBoundaries))
+            {
+                return Array.Empty<BroadcastWorkbenchTurnbackPointDto>();
+            }
+
+            List<BroadcastWorkbenchTurnbackPointDto> points = new List<BroadcastWorkbenchTurnbackPointDto>();
+            for (int i = 0; i < stationBoundaries.Count; i++)
+            {
+                bool resolved = TryResolveBroadcastWorkbenchTurnbackGroup(
+                    stationGroups,
+                    stationBoundaries[i],
+                    out BroadcastWorkbenchStationGroup stationGroup);
+                points.Add(new BroadcastWorkbenchTurnbackPointDto
+                {
+                    index = points.Count + 1,
+                    stationId = resolved ? stationGroup?.Representative?.id ?? string.Empty : string.Empty,
+                    stationName = resolved ? stationGroup?.Representative?.name ?? string.Empty : string.Empty,
+                    resolved = resolved
+                });
+            }
+
+            BroadcastWorkbenchStationGroup terminalGroup = stationGroups.Count > 0 ? stationGroups[0] : null;
+            if (terminalGroup?.Representative != null
+                && !points.Any(point => string.Equals(point.stationId, terminalGroup.Representative.id, StringComparison.Ordinal)))
+            {
+                points.Add(new BroadcastWorkbenchTurnbackPointDto
+                {
+                    index = points.Count + 1,
+                    stationId = terminalGroup.Representative.id ?? string.Empty,
+                    stationName = terminalGroup.Representative.name ?? string.Empty,
+                    resolved = true
+                });
+            }
+
+            return points.ToArray();
+        }
+
+        private bool TryResolveBroadcastWorkbenchTurnbackGroup(
+            List<BroadcastWorkbenchStationGroup> stationGroups,
+            TrackTurnbackStationBoundary stationBoundary,
+            out BroadcastWorkbenchStationGroup stationGroup)
+        {
+            stationGroup = null;
+            if (stationGroups == null || stationGroups.Count == 0 || stationBoundary.StationEntity == Entity.Null)
+            {
+                return false;
+            }
+
+            string stationName = ResolveWorkbenchStationName(stationBoundary.StationEntity);
+            string stationKey = NormalizeBroadcastStationMatchKey(stationName);
+            if (string.IsNullOrEmpty(stationKey))
+            {
+                return false;
+            }
+
+            stationGroup = stationGroups.FirstOrDefault(group =>
+                group != null && string.Equals(group.Key, stationKey, StringComparison.Ordinal));
+            return stationGroup != null;
         }
 
         private void ApplyBroadcastPreviewVolumeToActivePreviewSources()
@@ -3646,7 +3784,7 @@ namespace RapidTransitMod
                 desc = node.desc ?? string.Empty,
                 descKey = node.descKey ?? string.Empty,
                 langIndex = node.langIndex > 0 ? node.langIndex : 1,
-                delaySeconds = node.delaySeconds < 0 ? 0 : node.delaySeconds
+                delaySeconds = node.delaySeconds < 0f ? 0f : node.delaySeconds
             };
         }
 

@@ -319,6 +319,170 @@ namespace RapidTransitMod
             return true;
         }
 
+        private bool TryResolveNextTurnbackStationBoundary(
+            LineTrackChain chain,
+            int atomCursorIndex,
+            out TrackTurnbackStationBoundary stationBoundary)
+        {
+            stationBoundary = default;
+            if (chain == null
+                || chain.TurnbackBoundaries == null
+                || chain.TurnbackBoundaries.Count == 0)
+            {
+                return false;
+            }
+
+            int cursorAtomIndex = atomCursorIndex >= 0 ? atomCursorIndex : -1;
+            for (int boundaryIndex = 0; boundaryIndex < chain.TurnbackBoundaries.Count; boundaryIndex++)
+            {
+                TurnbackBoundary boundary = chain.TurnbackBoundaries[boundaryIndex];
+                if (cursorAtomIndex >= 0 && boundary.AtomIndex <= cursorAtomIndex)
+                {
+                    continue;
+                }
+
+                if (TryResolveTurnbackStationBoundary(chain, boundary, out stationBoundary))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryCollectTurnbackStationBoundaries(
+            LineTrackChain chain,
+            List<TrackTurnbackStationBoundary> stationBoundaries)
+        {
+            if (stationBoundaries == null)
+            {
+                return false;
+            }
+
+            stationBoundaries.Clear();
+            if (chain == null
+                || chain.TurnbackBoundaries == null
+                || chain.TurnbackBoundaries.Count == 0)
+            {
+                return false;
+            }
+
+            for (int boundaryIndex = 0; boundaryIndex < chain.TurnbackBoundaries.Count; boundaryIndex++)
+            {
+                if (TryResolveTurnbackStationBoundary(
+                        chain,
+                        chain.TurnbackBoundaries[boundaryIndex],
+                        out TrackTurnbackStationBoundary stationBoundary))
+                {
+                    stationBoundaries.Add(stationBoundary);
+                }
+            }
+
+            return stationBoundaries.Count > 0;
+        }
+
+        private bool TryResolveTurnbackStationBoundary(
+            LineTrackChain chain,
+            TurnbackBoundary boundary,
+            out TrackTurnbackStationBoundary stationBoundary)
+        {
+            stationBoundary = default;
+            if (chain == null
+                || chain.TraversalProfile == null)
+            {
+                return false;
+            }
+
+            if (boundary.BoundaryEventIndex >= 0
+                && boundary.BoundaryEventIndex < chain.TraversalProfile.Events.Count)
+            {
+                TraversalEvent boundaryEvent = chain.TraversalProfile.Events[boundary.BoundaryEventIndex];
+                if (boundaryEvent.Building != Entity.Null)
+                {
+                    stationBoundary = new TrackTurnbackStationBoundary(
+                        boundaryEvent.Building,
+                        boundaryEvent.WaypointIndex,
+                        boundary.AtomIndex,
+                        boundary.BoundaryEventIndex);
+                    return true;
+                }
+            }
+
+            if (TryResolveNearbyTurnbackStationEvent(
+                    chain,
+                    boundary.AtomIndex,
+                    4,
+                    out TraversalEvent nearbyEvent))
+            {
+                stationBoundary = new TrackTurnbackStationBoundary(
+                    nearbyEvent.Building,
+                    nearbyEvent.WaypointIndex,
+                    boundary.AtomIndex,
+                    nearbyEvent.EventIndex);
+                return true;
+            }
+
+            stationBoundary = new TrackTurnbackStationBoundary(
+                Entity.Null,
+                -1,
+                boundary.AtomIndex,
+                boundary.BoundaryEventIndex);
+            return true;
+        }
+
+        private bool TryResolveNearbyTurnbackStationEvent(
+            LineTrackChain chain,
+            int atomIndex,
+            int radiusAtoms,
+            out TraversalEvent stationEvent)
+        {
+            stationEvent = default;
+            if (chain == null || chain.TraversalProfile == null)
+            {
+                return false;
+            }
+
+            int bestDistance = int.MaxValue;
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent candidate = chain.TraversalProfile.Events[eventIndex];
+                if (candidate.Building == Entity.Null)
+                {
+                    continue;
+                }
+
+                int distance = ResolveTraversalEventAtomDistance(candidate, atomIndex);
+                if (distance > radiusAtoms || distance >= bestDistance)
+                {
+                    continue;
+                }
+
+                bestDistance = distance;
+                stationEvent = candidate;
+            }
+
+            return bestDistance != int.MaxValue;
+        }
+
+        private static int ResolveTraversalEventAtomDistance(TraversalEvent traversalEvent, int atomIndex)
+        {
+            int startAtomIndex = traversalEvent.StartAtomIndex;
+            int endAtomIndexExclusive = traversalEvent.EndAtomIndexExclusive;
+            if (endAtomIndexExclusive > startAtomIndex)
+            {
+                if (atomIndex >= startAtomIndex && atomIndex < endAtomIndexExclusive)
+                {
+                    return 0;
+                }
+
+                return atomIndex < startAtomIndex
+                    ? startAtomIndex - atomIndex
+                    : atomIndex - (endAtomIndexExclusive - 1);
+            }
+
+            return math.abs(atomIndex - startAtomIndex);
+        }
+
         private void RebuildOrderedLinePhaseRanges(LineOrderedRuntimeState state, int atomCount)
         {
             state.PhaseRanges.Clear();

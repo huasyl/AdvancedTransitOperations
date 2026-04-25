@@ -5,11 +5,14 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Colossal.Core;
+using Colossal.Mathematics;
 using Game;
 using Game.Audio;
 using Game.Common;
+using Game.Net;
 using Game.Routes;
 using Unity.Entities;
+using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Audio;
 using UnityEngine.Networking;
@@ -31,11 +34,13 @@ namespace RapidTransitMod
         {
             public Entity Vehicle;
             public string LineId = string.Empty;
+            public string TriggerId = string.Empty;
             public BroadcastTriggerContext Context;
             public List<BroadcastWorkbenchRuleDto> Rules = new List<BroadcastWorkbenchRuleDto>();
             public int RuleIndex;
             public int NodeIndex;
             public uint ResumeFrame;
+            public float ResumeRealtime;
             public string PendingAssetName = string.Empty;
             public Task<AudioClip> PendingClipLoadTask;
             public AudioSource ActiveAudioSource;
@@ -52,6 +57,15 @@ namespace RapidTransitMod
         {
             public int CurrentStopWaypointIndex;
             public int NextStopWaypointIndex;
+            public int LeaveTriggerAtomIndex;
+            public int BroadcastLeaveAtomIndex;
+            public int BroadcastApproachAtomIndex;
+            public uint LeaveTriggeredFrame;
+            public uint IdleRouteBlockedUntilFrame;
+            public float IdleRouteBlockedUntilRealtime;
+            public bool IdleRouteWaitingForLeaveSequenceEnd;
+            public CursorAtomWindowRelation LastCurrentStopWindowRelation;
+            public bool LeaveTriggered;
             public bool MidRouteTriggered;
             public bool ApproachTriggered;
         }
@@ -68,6 +82,8 @@ namespace RapidTransitMod
             public readonly string NextStationName;
             public readonly string TerminalStationId;
             public readonly string TerminalStationName;
+            public readonly string TurnbackStationId;
+            public readonly string TurnbackStationName;
 
             public BroadcastVehicleStationContext(
                 string lineId,
@@ -79,7 +95,9 @@ namespace RapidTransitMod
                 string nextStationId,
                 string nextStationName,
                 string terminalStationId,
-                string terminalStationName)
+                string terminalStationName,
+                string turnbackStationId,
+                string turnbackStationName)
             {
                 LineId = lineId;
                 CurrentStopEntity = currentStopEntity;
@@ -91,6 +109,8 @@ namespace RapidTransitMod
                 NextStationName = nextStationName ?? string.Empty;
                 TerminalStationId = terminalStationId ?? string.Empty;
                 TerminalStationName = terminalStationName ?? string.Empty;
+                TurnbackStationId = turnbackStationId ?? string.Empty;
+                TurnbackStationName = turnbackStationName ?? string.Empty;
             }
         }
 
@@ -103,11 +123,15 @@ namespace RapidTransitMod
             public int[] NormalizedStationWaypointByWaypoint = Array.Empty<int>();
             public int[] NextDistinctStationWaypointByWaypoint = Array.Empty<int>();
             public int TerminalStationWaypointIndex = -1;
+            public BroadcastResolvedStation[] TurnbackStations = Array.Empty<BroadcastResolvedStation>();
         }
 
         private const int BroadcastRuntimeClipCacheLimit = 24;
-        private const float BroadcastMidRouteProgressThreshold = 0.5f;
         private const int BroadcastApproachRemainingAtomThreshold = 4;
+        private const uint BroadcastAnchorDiagnosticCooldownFrames = 30u;
+        private const int BroadcastIdleRouteCooldownAfterLeaveSeconds = 3;
+        private const float BroadcastLeaveAnchorDistanceMeters = 100f;
+        private const float BroadcastApproachAnchorDistanceMeters = 200f;
         private static readonly FieldInfo s_AudioManagerWorldGroupField =
             typeof(AudioManager).GetField("m_WorldGroup", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -119,6 +143,9 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BroadcastCurrentStationNameByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BroadcastNextStationNameByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BroadcastLastEventTextByVehicle = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BroadcastAnchorDiagnosticKeyCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_BroadcastAnchorDiagnosticLastLogFrameCache = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, string> m_BroadcastAnchorTriggerLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, int> m_BroadcastCurrentStopWaypointIndexByVehicle = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, int> m_BroadcastNextStopWaypointIndexByVehicle = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, BroadcastLineStationContextCache> m_BroadcastLineStationContextCaches =
@@ -143,9 +170,34 @@ namespace RapidTransitMod
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
+            int currentStopWaypointIndex)
+        {
+            EmitBroadcastWaypointTrigger(vehicle, line, waypoints, currentStopWaypointIndex, "leave_station");
+        }
+
+        private void ArmBroadcastLeaveStationTrigger(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
             int previousWaypointIndex)
         {
-            EmitBroadcastWaypointTrigger(vehicle, line, waypoints, previousWaypointIndex, "leave_station");
+            if (!ShouldBroadcastForTrackedVehicle(vehicle)
+                || !TryBuildBroadcastTriggerContext(
+                    vehicle,
+                    line,
+                    waypoints,
+                    previousWaypointIndex,
+                    out _,
+                    out BroadcastVehicleStationContext stationContext))
+            {
+                return;
+            }
+
+            RememberBroadcastLeaveTriggerAtom(vehicle, line, waypoints, stationContext);
+            if (m_BroadcastProgressTriggerStateByVehicle.TryGetValue(vehicle, out BroadcastProgressTriggerState state))
+            {
+                LogBroadcastAnchorState("arm", vehicle, line, waypoints, stationContext, state, false);
+            }
         }
 
         private void HandleBroadcastBypassWaitingTrigger(
@@ -183,50 +235,118 @@ namespace RapidTransitMod
         {
             if (vehicle == Entity.Null
                 || line == Entity.Null
-                || boarding
                 || waypoints.Length < 2
                 || !ShouldBroadcastForTrackedVehicle(vehicle)
-                || !TryGetRouteProgress(vehicle, out int progressNextWaypointIndex, out float segmentPosition)
-                || !TryResolveBroadcastVehicleStationContext(vehicle, line, waypoints, -1, out BroadcastVehicleStationContext stationContext))
+                || !TryResolveBroadcastVehicleStationContext(vehicle, line, waypoints, -1, out BroadcastVehicleStationContext stationContext)
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor)
+                || !TryGetCursorWaypointWindowRelation(
+                    chain,
+                    stationContext.CurrentStopWaypointIndex,
+                    cursor.AtomCursorIndex,
+                    out CursorAtomWindowRelation currentStopWindowRelation,
+                    out _,
+                    out _))
             {
                 m_BroadcastProgressTriggerStateByVehicle.Remove(vehicle);
                 return;
             }
 
-            progressNextWaypointIndex = Mathf.Clamp(progressNextWaypointIndex, 0, waypoints.Length - 1);
-            float normalizedProgress = Mathf.Clamp01(segmentPosition);
-            if (!m_BroadcastProgressTriggerStateByVehicle.TryGetValue(vehicle, out BroadcastProgressTriggerState state)
+            bool resetState = !m_BroadcastProgressTriggerStateByVehicle.TryGetValue(vehicle, out BroadcastProgressTriggerState state)
                 || state.CurrentStopWaypointIndex != stationContext.CurrentStopWaypointIndex
-                || state.NextStopWaypointIndex != stationContext.NextStopWaypointIndex)
+                || state.NextStopWaypointIndex != stationContext.NextStopWaypointIndex;
+            uint nowFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0u;
+            if (resetState)
             {
                 state = new BroadcastProgressTriggerState
                 {
                     CurrentStopWaypointIndex = stationContext.CurrentStopWaypointIndex,
                     NextStopWaypointIndex = stationContext.NextStopWaypointIndex,
+                    LeaveTriggerAtomIndex = -1,
+                    BroadcastLeaveAtomIndex = -1,
+                    BroadcastApproachAtomIndex = -1,
+                    LeaveTriggeredFrame = 0u,
+                    IdleRouteBlockedUntilFrame = 0u,
+                    IdleRouteBlockedUntilRealtime = 0f,
+                    IdleRouteWaitingForLeaveSequenceEnd = false,
+                    LastCurrentStopWindowRelation = currentStopWindowRelation,
+                    LeaveTriggered = false,
                     MidRouteTriggered = false,
                     ApproachTriggered = false
                 };
+
+                TryResolveBroadcastDistanceAnchoredAtoms(
+                    vehicle,
+                    line,
+                    waypoints,
+                    state.CurrentStopWaypointIndex,
+                    state.NextStopWaypointIndex,
+                    out state.BroadcastLeaveAtomIndex,
+                    out state.BroadcastApproachAtomIndex);
             }
 
-            if (!state.MidRouteTriggered
-                && progressNextWaypointIndex == stationContext.NextStopWaypointIndex
-                && normalizedProgress >= BroadcastMidRouteProgressThreshold)
+            if (boarding)
             {
-                HandleBroadcastMidRouteTrigger(vehicle, line, waypoints, stationContext.CurrentStopWaypointIndex);
+                state.LastCurrentStopWindowRelation = currentStopWindowRelation;
+                LogBroadcastAnchorState("tick", vehicle, line, waypoints, stationContext, state, false);
+                m_BroadcastProgressTriggerStateByVehicle[vehicle] = state;
+                return;
+            }
+
+            if (!state.LeaveTriggered
+                && state.LastCurrentStopWindowRelation == CursorAtomWindowRelation.Inside
+                && currentStopWindowRelation == CursorAtomWindowRelation.After)
+            {
+                state.LeaveTriggerAtomIndex = cursor.AtomCursorIndex;
+                HandleBroadcastLeaveStationTrigger(vehicle, line, waypoints, state.CurrentStopWaypointIndex);
+                state.LeaveTriggered = true;
+                state.LeaveTriggeredFrame = nowFrame;
+                if (LineHasBroadcastRulesForTrigger(stationContext.LineId, "leave_station"))
+                {
+                    state.IdleRouteWaitingForLeaveSequenceEnd = true;
+                    state.IdleRouteBlockedUntilFrame = 0u;
+                    state.IdleRouteBlockedUntilRealtime = 0f;
+                }
+                LogBroadcastAnchorState("trigger-leave", vehicle, line, waypoints, stationContext, state, true);
+            }
+
+            UpdateIdleRouteLeaveProtection(vehicle, ref state, nowFrame);
+
+            if (!state.MidRouteTriggered
+                && state.LeaveTriggered
+                && state.LeaveTriggeredFrame != nowFrame
+                && IsIdleRouteLeaveProtectionSatisfied(state, nowFrame)
+                && IsBroadcastVehicleWithinIdleRouteAtomWindow(
+                    vehicle,
+                    line,
+                    waypoints,
+                    state.NextStopWaypointIndex,
+                    state.LeaveTriggerAtomIndex,
+                    state.BroadcastLeaveAtomIndex,
+                    state.BroadcastApproachAtomIndex))
+            {
+                HandleBroadcastMidRouteTrigger(vehicle, line, waypoints, state.CurrentStopWaypointIndex);
                 state.MidRouteTriggered = true;
+                LogBroadcastAnchorState("trigger-mid", vehicle, line, waypoints, stationContext, state, true);
             }
 
             if (!state.ApproachTriggered
+                && (!state.LeaveTriggered || state.LeaveTriggeredFrame != nowFrame)
                 && IsBroadcastVehicleWithinApproachAtomWindow(
                     vehicle,
                     line,
                     waypoints,
-                    stationContext.NextStopWaypointIndex))
+                    state.NextStopWaypointIndex,
+                    state.BroadcastApproachAtomIndex))
             {
-                HandleBroadcastApproachStationTrigger(vehicle, line, waypoints, stationContext.CurrentStopWaypointIndex);
+                HandleBroadcastApproachStationTrigger(vehicle, line, waypoints, state.CurrentStopWaypointIndex);
                 state.ApproachTriggered = true;
+                LogBroadcastAnchorState("trigger-approach", vehicle, line, waypoints, stationContext, state, true);
             }
 
+            state.LastCurrentStopWindowRelation = currentStopWindowRelation;
+            LogBroadcastAnchorState("tick", vehicle, line, waypoints, stationContext, state, false);
             m_BroadcastProgressTriggerStateByVehicle[vehicle] = state;
         }
 
@@ -234,9 +354,11 @@ namespace RapidTransitMod
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            int nextStopWaypointIndex)
+            int nextStopWaypointIndex,
+            int broadcastApproachAtomIndex)
         {
-            if (vehicle == Entity.Null
+            if (broadcastApproachAtomIndex < 0
+                || vehicle == Entity.Null
                 || line == Entity.Null
                 || nextStopWaypointIndex < 0
                 || nextStopWaypointIndex >= waypoints.Length
@@ -258,8 +380,437 @@ namespace RapidTransitMod
                 return false;
             }
 
-            int remainingAtoms = windowStart - cursor.AtomCursorIndex;
-            return remainingAtoms <= BroadcastApproachRemainingAtomThreshold;
+            return cursor.AtomCursorIndex >= broadcastApproachAtomIndex;
+        }
+
+        private bool IsBroadcastVehicleWithinIdleRouteAtomWindow(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int nextStopWaypointIndex,
+            int leaveTriggerAtomIndex,
+            int broadcastLeaveAtomIndex,
+            int broadcastApproachAtomIndex)
+        {
+            if (leaveTriggerAtomIndex < 0
+                || broadcastLeaveAtomIndex < 0
+                || broadcastApproachAtomIndex < 0
+                || vehicle == Entity.Null
+                || line == Entity.Null
+                || nextStopWaypointIndex < 0
+                || nextStopWaypointIndex >= waypoints.Length
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            {
+                return false;
+            }
+
+            int effectiveLeaveAtomIndex = GetEffectiveBroadcastLeaveAtomIndex(
+                leaveTriggerAtomIndex,
+                broadcastLeaveAtomIndex);
+            if (effectiveLeaveAtomIndex >= broadcastApproachAtomIndex)
+            {
+                return false;
+            }
+
+            return cursor.AtomCursorIndex >= effectiveLeaveAtomIndex
+                && cursor.AtomCursorIndex < broadcastApproachAtomIndex;
+        }
+
+        private static int GetEffectiveBroadcastLeaveAtomIndex(
+            int leaveTriggerAtomIndex,
+            int broadcastLeaveAtomIndex)
+        {
+            return math.max(leaveTriggerAtomIndex, broadcastLeaveAtomIndex);
+        }
+
+        private void LogBroadcastAnchorState(
+            string phase,
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            BroadcastVehicleStationContext stationContext,
+            BroadcastProgressTriggerState state,
+            bool onceOnly)
+        {
+            uint nowFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0u;
+            if (!TryBuildBroadcastAnchorDiagnostic(
+                    phase,
+                    vehicle,
+                    line,
+                    waypoints,
+                    stationContext,
+                    state,
+                    out string stableKey,
+                    out string message))
+            {
+                return;
+            }
+
+            if (onceOnly)
+            {
+                LogVehicleStateOnce(
+                    m_BroadcastAnchorTriggerLogCache,
+                    vehicle,
+                    phase + "|" + stableKey,
+                    message);
+                return;
+            }
+
+            if (ShouldEmitVehicleLogWithCooldown(
+                    m_BroadcastAnchorDiagnosticKeyCache,
+                    m_BroadcastAnchorDiagnosticLastLogFrameCache,
+                    vehicle,
+                    phase + "|" + stableKey,
+                    nowFrame,
+                    BroadcastAnchorDiagnosticCooldownFrames))
+            {
+                log.Info(message);
+            }
+        }
+
+        private bool TryBuildBroadcastAnchorDiagnostic(
+            string phase,
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            BroadcastVehicleStationContext stationContext,
+            BroadcastProgressTriggerState state,
+            out string stableKey,
+            out string message)
+        {
+            stableKey = string.Empty;
+            message = string.Empty;
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor)
+                || state.CurrentStopWaypointIndex < 0
+                || state.NextStopWaypointIndex < 0
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    state.CurrentStopWaypointIndex,
+                    cursor.AtomCursorIndex,
+                    out _,
+                    out int currentWindowEndExclusive)
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    state.NextStopWaypointIndex,
+                    cursor.AtomCursorIndex,
+                    out int nextWindowStart,
+                    out int nextWindowEndExclusive))
+            {
+                return false;
+            }
+
+            int effectiveLeaveAtomIndex = state.LeaveTriggerAtomIndex >= 0 && state.BroadcastLeaveAtomIndex >= 0
+                ? GetEffectiveBroadcastLeaveAtomIndex(state.LeaveTriggerAtomIndex, state.BroadcastLeaveAtomIndex)
+                : -1;
+            int approachFallbackAtomIndex = math.max(currentWindowEndExclusive, nextWindowStart - 1);
+            bool leaveFallback = state.BroadcastLeaveAtomIndex == currentWindowEndExclusive;
+            bool approachFallback = state.BroadcastApproachAtomIndex == approachFallbackAtomIndex;
+
+            stableKey = "cur=" + state.CurrentStopWaypointIndex
+                + "|next=" + state.NextStopWaypointIndex
+                + "|leaveTrig=" + state.LeaveTriggerAtomIndex
+                + "|leaveAnchor=" + state.BroadcastLeaveAtomIndex
+                + "|effectiveLeave=" + effectiveLeaveAtomIndex
+                + "|approachAnchor=" + state.BroadcastApproachAtomIndex
+                + "|currentEnd=" + currentWindowEndExclusive
+                + "|nextStart=" + nextWindowStart
+                + "|nextEnd=" + nextWindowEndExclusive
+                + "|leaveDone=" + (state.LeaveTriggered ? "1" : "0")
+                + "|midDone=" + (state.MidRouteTriggered ? "1" : "0")
+                + "|approachDone=" + (state.ApproachTriggered ? "1" : "0");
+
+            message = "[BroadcastAnchor] line=" + line.Index
+                + " vehicle=" + vehicle.Index
+                + " phase=" + phase
+                + " current=\"" + (stationContext.CurrentStationName ?? string.Empty) + "\""
+                + " next=\"" + (stationContext.NextStationName ?? string.Empty) + "\""
+                + " wp=" + state.CurrentStopWaypointIndex + "->" + state.NextStopWaypointIndex
+                + " cursor=" + cursor.AtomCursorIndex
+                + " leaveTrigger=" + state.LeaveTriggerAtomIndex
+                + " leaveAnchor=" + state.BroadcastLeaveAtomIndex
+                + " effectiveLeave=" + effectiveLeaveAtomIndex
+                + " approachAnchor=" + state.BroadcastApproachAtomIndex
+                + " currentWindowEnd=" + currentWindowEndExclusive
+                + " nextWindowStart=" + nextWindowStart
+                + " nextWindowEnd=" + nextWindowEndExclusive
+                + " leaveFallback=" + leaveFallback
+                + " approachFallback=" + approachFallback
+                + " fired=" + (state.LeaveTriggered ? "L" : "-")
+                + (state.MidRouteTriggered ? "M" : "-")
+                + (state.ApproachTriggered ? "A" : "-");
+            return true;
+        }
+
+        private void RememberBroadcastLeaveTriggerAtom(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            BroadcastVehicleStationContext stationContext)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            {
+                return;
+            }
+
+            if (m_BroadcastProgressTriggerStateByVehicle.TryGetValue(vehicle, out BroadcastProgressTriggerState existingState)
+                && existingState.CurrentStopWaypointIndex == stationContext.CurrentStopWaypointIndex
+                && existingState.NextStopWaypointIndex == stationContext.NextStopWaypointIndex)
+            {
+                return;
+            }
+
+            TryResolveBroadcastDistanceAnchoredAtoms(
+                vehicle,
+                line,
+                waypoints,
+                stationContext.CurrentStopWaypointIndex,
+                stationContext.NextStopWaypointIndex,
+                out int broadcastLeaveAtomIndex,
+                out int broadcastApproachAtomIndex);
+
+            CursorAtomWindowRelation currentStopWindowRelation = CursorAtomWindowRelation.Unknown;
+            if (TryGetLineTrackChain(line, waypoints, out LineTrackChain relationChain)
+                && relationChain != null
+                && TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, relationChain, out VehicleTrackCursor relationCursor)
+                && TryGetCursorWaypointWindowRelation(
+                    relationChain,
+                    stationContext.CurrentStopWaypointIndex,
+                    relationCursor.AtomCursorIndex,
+                    out CursorAtomWindowRelation liveRelation,
+                    out _,
+                    out _))
+            {
+                currentStopWindowRelation = liveRelation;
+            }
+
+            m_BroadcastProgressTriggerStateByVehicle[vehicle] = new BroadcastProgressTriggerState
+            {
+                CurrentStopWaypointIndex = stationContext.CurrentStopWaypointIndex,
+                NextStopWaypointIndex = stationContext.NextStopWaypointIndex,
+                LeaveTriggerAtomIndex = -1,
+                BroadcastLeaveAtomIndex = broadcastLeaveAtomIndex,
+                BroadcastApproachAtomIndex = broadcastApproachAtomIndex,
+                IdleRouteBlockedUntilFrame = 0u,
+                IdleRouteBlockedUntilRealtime = 0f,
+                IdleRouteWaitingForLeaveSequenceEnd = false,
+                LastCurrentStopWindowRelation = currentStopWindowRelation == CursorAtomWindowRelation.Unknown
+                    ? CursorAtomWindowRelation.Inside
+                    : currentStopWindowRelation,
+                LeaveTriggeredFrame = 0u,
+                LeaveTriggered = false,
+                MidRouteTriggered = false,
+                ApproachTriggered = false
+            };
+        }
+
+        private bool TryResolveBroadcastDistanceAnchoredAtoms(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentStopWaypointIndex,
+            int nextStopWaypointIndex,
+            out int broadcastLeaveAtomIndex,
+            out int broadcastApproachAtomIndex)
+        {
+            broadcastLeaveAtomIndex = -1;
+            broadcastApproachAtomIndex = -1;
+
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || currentStopWaypointIndex < 0
+                || currentStopWaypointIndex >= waypoints.Length
+                || nextStopWaypointIndex < 0
+                || nextStopWaypointIndex >= waypoints.Length
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor)
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    currentStopWaypointIndex,
+                    cursor.AtomCursorIndex,
+                    out _,
+                    out int currentWindowEndExclusive)
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    nextStopWaypointIndex,
+                    cursor.AtomCursorIndex,
+                    out int nextWindowStart,
+                    out _))
+            {
+                return false;
+            }
+
+            currentWindowEndExclusive = math.clamp(currentWindowEndExclusive, 0, chain.TrackAtoms.Count);
+            nextWindowStart = math.clamp(nextWindowStart, 0, math.max(0, chain.TrackAtoms.Count - 1));
+            if (currentWindowEndExclusive >= nextWindowStart)
+            {
+                broadcastLeaveAtomIndex = currentWindowEndExclusive;
+                broadcastApproachAtomIndex = math.max(currentWindowEndExclusive, nextWindowStart - 1);
+                return true;
+            }
+
+            broadcastLeaveAtomIndex = ResolveBroadcastDistanceAnchoredForwardAtom(
+                chain,
+                currentWindowEndExclusive,
+                nextWindowStart,
+                BroadcastLeaveAnchorDistanceMeters,
+                currentWindowEndExclusive);
+            broadcastApproachAtomIndex = ResolveBroadcastDistanceAnchoredBackwardAtom(
+                chain,
+                currentWindowEndExclusive,
+                nextWindowStart,
+                BroadcastApproachAnchorDistanceMeters,
+                math.max(currentWindowEndExclusive, nextWindowStart - 1));
+            return true;
+        }
+
+        private int ResolveBroadcastDistanceAnchoredForwardAtom(
+            LineTrackChain chain,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            float anchorDistanceMeters,
+            int fallbackAtomIndex)
+        {
+            if (chain == null
+                || chain.TrackAtoms.Count == 0
+                || startAtomIndex < 0
+                || startAtomIndex >= chain.TrackAtoms.Count
+                || endAtomIndexExclusive <= startAtomIndex)
+            {
+                return fallbackAtomIndex;
+            }
+
+            float traversedDistance = 0f;
+            int lastAtomIndex = math.min(endAtomIndexExclusive - 1, chain.TrackAtoms.Count - 1);
+            if (lastAtomIndex < startAtomIndex)
+                return fallbackAtomIndex;
+
+            for (int atomIndex = startAtomIndex; atomIndex <= lastAtomIndex; atomIndex++)
+            {
+                if (!TryGetBroadcastTrackAtomTraversalLengthMeters(chain, atomIndex, out float atomDistance))
+                    return fallbackAtomIndex;
+
+                traversedDistance += atomDistance;
+                if (traversedDistance >= anchorDistanceMeters)
+                    return atomIndex;
+            }
+
+            return fallbackAtomIndex;
+        }
+
+        private int ResolveBroadcastDistanceAnchoredBackwardAtom(
+            LineTrackChain chain,
+            int startAtomIndexInclusive,
+            int endAtomIndexExclusive,
+            float anchorDistanceMeters,
+            int fallbackAtomIndex)
+        {
+            if (chain == null
+                || chain.TrackAtoms.Count == 0
+                || endAtomIndexExclusive <= 0
+                || startAtomIndexInclusive >= endAtomIndexExclusive)
+            {
+                return fallbackAtomIndex;
+            }
+
+            float traversedDistance = 0f;
+            int startAtomIndex = math.max(0, startAtomIndexInclusive);
+            int lastAtomIndex = math.min(endAtomIndexExclusive - 1, chain.TrackAtoms.Count - 1);
+            for (int atomIndex = lastAtomIndex; atomIndex >= startAtomIndex; atomIndex--)
+            {
+                if (!TryGetBroadcastTrackAtomTraversalLengthMeters(chain, atomIndex, out float atomDistance))
+                    return fallbackAtomIndex;
+
+                traversedDistance += atomDistance;
+                if (traversedDistance >= anchorDistanceMeters)
+                    return atomIndex;
+            }
+
+            return fallbackAtomIndex;
+        }
+
+        private bool TryGetBroadcastTrackAtomTraversalLengthMeters(
+            LineTrackChain chain,
+            int atomIndex,
+            out float distanceMeters)
+        {
+            distanceMeters = 0f;
+            if (chain == null || atomIndex < 0 || atomIndex >= chain.TrackAtoms.Count)
+                return false;
+
+            TrackAtom atom = chain.TrackAtoms[atomIndex];
+            if (TryGetTrackAtomCurveTraversalLengthMeters(atom, out distanceMeters))
+                return true;
+
+            if (TryGetTrackAtomWorldPosition(chain, atomIndex, out float3 atomPosition))
+            {
+                int nextAtomIndex = atomIndex + 1;
+                if (nextAtomIndex < chain.TrackAtoms.Count
+                    && TryGetTrackAtomWorldPosition(chain, nextAtomIndex, out float3 nextAtomPosition))
+                {
+                    distanceMeters = math.distance(atomPosition, nextAtomPosition);
+                    return true;
+                }
+
+                int previousAtomIndex = atomIndex - 1;
+                if (previousAtomIndex >= 0
+                    && TryGetTrackAtomWorldPosition(chain, previousAtomIndex, out float3 previousAtomPosition))
+                {
+                    distanceMeters = math.distance(previousAtomPosition, atomPosition);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryGetTrackAtomCurveTraversalLengthMeters(
+            TrackAtom atom,
+            out float distanceMeters)
+        {
+            distanceMeters = 0f;
+            if (TryGetEntityCurveTraversalLengthMeters(atom.SourceTarget, atom.TargetDelta, out distanceMeters))
+                return true;
+
+            return atom.Key.PhysicalLaneKey != atom.SourceTarget
+                && TryGetEntityCurveTraversalLengthMeters(atom.Key.PhysicalLaneKey, atom.TargetDelta, out distanceMeters);
+        }
+
+        private bool TryGetEntityCurveTraversalLengthMeters(
+            Entity entity,
+            float2 targetDelta,
+            out float distanceMeters)
+        {
+            distanceMeters = 0f;
+            if (entity == Entity.Null
+                || !EntityManager.Exists(entity)
+                || !EntityManager.HasComponent<Curve>(entity))
+            {
+                return false;
+            }
+
+            float start = math.saturate(targetDelta.x);
+            float end = math.saturate(targetDelta.y);
+            if (math.abs(end - start) <= 0.0001f)
+            {
+                distanceMeters = 0f;
+                return true;
+            }
+
+            Curve curve = EntityManager.GetComponentData<Curve>(entity);
+            Bounds1 curveBounds = new Bounds1(math.min(start, end), math.max(start, end));
+            distanceMeters = MathUtils.Length(curve.m_Bezier.xz, curveBounds);
+            return true;
         }
 
         private void EmitBroadcastWaypointTrigger(
@@ -269,29 +820,49 @@ namespace RapidTransitMod
             int waypointIndex,
             string triggerId)
         {
+            TryEmitBroadcastWaypointTrigger(vehicle, line, waypoints, waypointIndex, triggerId, out _, out _);
+        }
+
+        private bool TryEmitBroadcastWaypointTrigger(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            string triggerId,
+            out BroadcastTriggerContext context,
+            out BroadcastVehicleStationContext stationContext)
+        {
+            context = default;
+            stationContext = default;
             if (!ShouldBroadcastForTrackedVehicle(vehicle))
             {
-                return;
+                return false;
             }
 
-            if (!TryBuildBroadcastTriggerContext(vehicle, line, waypoints, waypointIndex, out BroadcastTriggerContext context))
+            if (!TryBuildBroadcastTriggerContext(vehicle, line, waypoints, waypointIndex, out context, out stationContext))
             {
-                return;
+                return false;
             }
 
             if (IsDuplicateBroadcastTrigger(vehicle, triggerId, context.CurrentStopEntity))
             {
-                return;
+                return false;
             }
 
             RememberBroadcastTriggerStop(vehicle, triggerId, context.CurrentStopEntity);
             UpdateBroadcastVehiclePanelState(vehicle, context.CurrentStationName, context.NextStationName);
             TryStartBroadcastSequence(vehicle, context, triggerId);
+            return true;
         }
 
         private bool ShouldBroadcastForTrackedVehicle(Entity vehicle)
         {
             if (vehicle == Entity.Null || m_CameraUpdateSystem == null)
+            {
+                return false;
+            }
+            if (m_VehicleState.TryGetValue(vehicle, out VehicleState state)
+                && state == VehicleState.Retiring)
             {
                 return false;
             }
@@ -303,7 +874,11 @@ namespace RapidTransitMod
                 return false;
             }
 
-            return orbitCameraController.followedEntity == vehicle;
+            Entity followedVehicle = ResolveRuntimeControllerVehicle(orbitCameraController.followedEntity);
+            Entity broadcastVehicle = ResolveRuntimeControllerVehicle(vehicle);
+            return followedVehicle != Entity.Null
+                && broadcastVehicle != Entity.Null
+                && followedVehicle == broadcastVehicle;
         }
 
         private bool IsDuplicateBroadcastTrigger(Entity vehicle, string triggerId, Entity currentStop)
@@ -361,6 +936,59 @@ namespace RapidTransitMod
             m_BroadcastNextStationNameByVehicle[vehicle] = nextStationName ?? string.Empty;
         }
 
+        private bool LineHasBroadcastRulesForTrigger(string lineId, string triggerId)
+        {
+            return !string.IsNullOrEmpty(lineId)
+                && !string.IsNullOrEmpty(triggerId)
+                && m_BroadcastLineRules.TryGetValue(lineId, out List<BroadcastWorkbenchRuleDto> rules)
+                && rules != null
+                && rules.Any(rule => rule != null
+                    && string.Equals(rule.triggerId, triggerId, StringComparison.Ordinal)
+                    && rule.nodes != null
+                    && rule.nodes.Length > 0);
+        }
+
+        private bool IsBroadcastSequenceActiveForTrigger(Entity vehicle, string triggerId)
+        {
+            return vehicle != Entity.Null
+                && !string.IsNullOrEmpty(triggerId)
+                && m_BroadcastSequenceStateByVehicle.TryGetValue(vehicle, out BroadcastRuntimeSequenceState state)
+                && state != null
+                && string.Equals(state.TriggerId, triggerId, StringComparison.Ordinal);
+        }
+
+        private void UpdateIdleRouteLeaveProtection(
+            Entity vehicle,
+            ref BroadcastProgressTriggerState state,
+            uint nowFrame)
+        {
+            if (!state.IdleRouteWaitingForLeaveSequenceEnd)
+            {
+                return;
+            }
+
+            if (IsBroadcastSequenceActiveForTrigger(vehicle, "leave_station"))
+            {
+                return;
+            }
+
+            state.IdleRouteWaitingForLeaveSequenceEnd = false;
+            state.IdleRouteBlockedUntilFrame = nowFrame;
+            state.IdleRouteBlockedUntilRealtime = UnityEngine.Time.realtimeSinceStartup + BroadcastIdleRouteCooldownAfterLeaveSeconds;
+        }
+
+        private static bool IsIdleRouteLeaveProtectionSatisfied(
+            BroadcastProgressTriggerState state,
+            uint nowFrame)
+        {
+            if (state.IdleRouteWaitingForLeaveSequenceEnd)
+            {
+                return false;
+            }
+
+            return UnityEngine.Time.realtimeSinceStartup >= state.IdleRouteBlockedUntilRealtime;
+        }
+
         private void TryStartBroadcastSequence(Entity vehicle, BroadcastTriggerContext context, string triggerId)
         {
             if (vehicle == Entity.Null || string.IsNullOrEmpty(context.LineId) || string.IsNullOrEmpty(triggerId))
@@ -394,9 +1022,11 @@ namespace RapidTransitMod
             {
                 Vehicle = vehicle,
                 LineId = context.LineId,
+                TriggerId = triggerId,
                 Context = context,
                 Rules = matchedRules,
-                ResumeFrame = nowFrame
+                ResumeFrame = nowFrame,
+                ResumeRealtime = 0f
             };
             m_BroadcastSequenceStateByVehicle[vehicle] = state;
             m_BroadcastLastEventTextByVehicle[vehicle] = BuildBroadcastEventText(triggerId, context);
@@ -504,7 +1134,16 @@ namespace RapidTransitMod
                 return AdvanceBroadcastRuntimeSequence(state, nowFrame);
             }
 
-            if (nowFrame < state.ResumeFrame)
+            if (state.ResumeRealtime > 0f)
+            {
+                if (UnityEngine.Time.realtimeSinceStartup < state.ResumeRealtime)
+                {
+                    return true;
+                }
+
+                state.ResumeRealtime = 0f;
+            }
+            else if (nowFrame < state.ResumeFrame)
             {
                 return true;
             }
@@ -527,10 +1166,11 @@ namespace RapidTransitMod
 
                 if (string.Equals(node.type, "delay", StringComparison.Ordinal))
                 {
-                    int delaySeconds = node.delaySeconds > 0 ? node.delaySeconds : 0;
-                    if (delaySeconds > 0)
+                    float delaySeconds = node.delaySeconds > 0f ? node.delaySeconds : 0f;
+                    if (delaySeconds > 0f)
                     {
-                        state.ResumeFrame = nowFrame + ConvertBroadcastDelaySecondsToFrames(delaySeconds);
+                        state.ResumeFrame = nowFrame;
+                        state.ResumeRealtime = UnityEngine.Time.realtimeSinceStartup + delaySeconds;
                         return true;
                     }
 
@@ -602,6 +1242,9 @@ namespace RapidTransitMod
             m_BroadcastCurrentStopWaypointIndexByVehicle.Remove(vehicle);
             m_BroadcastNextStopWaypointIndexByVehicle.Remove(vehicle);
             m_BroadcastLastEventTextByVehicle.Remove(vehicle);
+            m_BroadcastAnchorDiagnosticKeyCache.Remove(vehicle);
+            m_BroadcastAnchorDiagnosticLastLogFrameCache.Remove(vehicle);
+            m_BroadcastAnchorTriggerLogCache.Remove(vehicle);
             InvalidatePanelData();
         }
 
@@ -623,6 +1266,9 @@ namespace RapidTransitMod
             m_BroadcastNextStopWaypointIndexByVehicle.Clear();
             m_BroadcastLineStationContextCaches.Clear();
             m_BroadcastLastEventTextByVehicle.Clear();
+            m_BroadcastAnchorDiagnosticKeyCache.Clear();
+            m_BroadcastAnchorDiagnosticLastLogFrameCache.Clear();
+            m_BroadcastAnchorTriggerLogCache.Clear();
             m_BroadcastRuntimeClipLoadTasks.Clear();
 
             foreach (BroadcastRuntimeClipCacheEntry entry in m_BroadcastRuntimeClipCache.Values)
@@ -695,12 +1341,6 @@ namespace RapidTransitMod
             }
 
             m_BroadcastRuntimeClipCache.Clear();
-        }
-
-        private uint ConvertBroadcastDelaySecondsToFrames(int delaySeconds)
-        {
-            float framesPerSecond = (float)SIM_FRAMES_PER_MINUTE / 60f;
-            return (uint)Mathf.Max(1, Mathf.RoundToInt(delaySeconds * framesPerSecond));
         }
 
         private bool TryStartBroadcastWorldAudio(BroadcastRuntimeSequenceState state, string assetName, AudioClip clip)
@@ -1058,6 +1698,8 @@ namespace RapidTransitMod
                     return ResolveBroadcastBoundAssetName(context.NextStationBindings, langIndex);
                 case "broadcast.variable.terminal":
                     return ResolveBroadcastBoundAssetName(context.TerminalStationBindings, langIndex);
+                case "broadcast.variable.turnback":
+                    return ResolveBroadcastBoundAssetName(context.TurnbackStationBindings, langIndex);
                 default:
                     return string.Empty;
             }
@@ -1070,13 +1712,31 @@ namespace RapidTransitMod
             int currentStopWaypointIndex,
             out BroadcastTriggerContext context)
         {
+            return TryBuildBroadcastTriggerContext(
+                vehicle,
+                line,
+                waypoints,
+                currentStopWaypointIndex,
+                out context,
+                out _);
+        }
+
+        private bool TryBuildBroadcastTriggerContext(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentStopWaypointIndex,
+            out BroadcastTriggerContext context,
+            out BroadcastVehicleStationContext stationContext)
+        {
             context = default;
+            stationContext = default;
             if (!TryResolveBroadcastVehicleStationContext(
                     vehicle,
                     line,
                     waypoints,
                     currentStopWaypointIndex,
-                    out BroadcastVehicleStationContext stationContext))
+                    out stationContext))
             {
                 return false;
             }
@@ -1089,6 +1749,8 @@ namespace RapidTransitMod
                 ResolveBroadcastBoundBindings(lineBindings, stationContext.NextStationId);
             List<BroadcastWorkbenchStationBindingDto> terminalStationBindings =
                 ResolveBroadcastBoundBindings(lineBindings, stationContext.TerminalStationId);
+            List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings =
+                ResolveBroadcastBoundBindings(lineBindings, stationContext.TurnbackStationId);
 
             context = new BroadcastTriggerContext(
                 stationContext.LineId,
@@ -1096,12 +1758,15 @@ namespace RapidTransitMod
                 stationContext.CurrentStationName,
                 stationContext.NextStationName,
                 stationContext.TerminalStationName,
+                stationContext.TurnbackStationName,
                 ResolveBroadcastBoundAssetName(currentStationBindings, 1),
                 ResolveBroadcastBoundAssetName(nextStationBindings, 1),
                 ResolveBroadcastBoundAssetName(terminalStationBindings, 1),
+                ResolveBroadcastBoundAssetName(turnbackStationBindings, 1),
                 currentStationBindings,
                 nextStationBindings,
-                terminalStationBindings);
+                terminalStationBindings,
+                turnbackStationBindings);
             return true;
         }
 
@@ -1225,11 +1890,100 @@ namespace RapidTransitMod
                 NormalizedStationWaypointByWaypoint = normalizedStationWaypointByWaypoint,
                 NextDistinctStationWaypointByWaypoint = nextDistinctStationWaypointByWaypoint,
                 TerminalStationWaypointIndex = stationArray.Length > 0
-                    ? stationArray[stationArray.Length - 1].WaypointIndex
+                    ? stationArray[0].WaypointIndex
                     : -1
             };
+            cache.TurnbackStations = ResolveBroadcastTurnbackStations(line, waypoints, cache);
             m_BroadcastLineStationContextCaches[line] = cache;
             return stationArray.Length > 0;
+        }
+
+        private BroadcastResolvedStation[] ResolveBroadcastTurnbackStations(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            BroadcastLineStationContextCache cache)
+        {
+            if (line == Entity.Null
+                || waypoints.Length == 0
+                || cache == null
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null)
+            {
+                return Array.Empty<BroadcastResolvedStation>();
+            }
+
+            List<TrackTurnbackStationBoundary> stationBoundaries = new List<TrackTurnbackStationBoundary>();
+            if (!TryCollectTurnbackStationBoundaries(chain, stationBoundaries))
+            {
+                return Array.Empty<BroadcastResolvedStation>();
+            }
+
+            List<BroadcastResolvedStation> stations = new List<BroadcastResolvedStation>();
+            for (int i = 0; i < stationBoundaries.Count; i++)
+            {
+                TryResolveBroadcastTurnbackStationFromBoundary(cache, stationBoundaries[i], out BroadcastResolvedStation station);
+                stations.Add(station);
+            }
+
+            if (cache.Stations != null
+                && cache.Stations.Length > 0
+                && cache.Stations[0] != null
+                && !stations.Any(station => IsSameBroadcastStation(station, cache.Stations[0])))
+            {
+                stations.Add(cache.Stations[0]);
+            }
+
+            return stations.ToArray();
+        }
+
+        private static bool IsSameBroadcastStation(BroadcastResolvedStation left, BroadcastResolvedStation right)
+        {
+            if (left == null || right == null)
+            {
+                return false;
+            }
+
+            return left.Order == right.Order
+                || left.StopEntity == right.StopEntity
+                || string.Equals(left.StationId, right.StationId, StringComparison.Ordinal);
+        }
+
+        private bool TryResolveBroadcastTurnbackStationFromBoundary(
+            BroadcastLineStationContextCache cache,
+            TrackTurnbackStationBoundary stationBoundary,
+            out BroadcastResolvedStation station)
+        {
+            station = null;
+            if (cache == null)
+            {
+                return false;
+            }
+
+            if (TryGetBroadcastStationByWaypointIndex(cache, stationBoundary.WaypointIndex, out station))
+            {
+                return true;
+            }
+
+            if (stationBoundary.StationEntity == Entity.Null || cache.Stations == null)
+            {
+                station = null;
+                return false;
+            }
+
+            string stationName = ResolveWorkbenchStationName(stationBoundary.StationEntity);
+            for (int i = 0; i < cache.Stations.Length; i++)
+            {
+                BroadcastResolvedStation candidate = cache.Stations[i];
+                if (candidate != null
+                    && string.Equals(candidate.Name, stationName, StringComparison.Ordinal))
+                {
+                    station = candidate;
+                    return true;
+                }
+            }
+
+            station = null;
+            return false;
         }
 
         private static bool TryGetBroadcastStationByOrder(
@@ -1450,7 +2204,15 @@ namespace RapidTransitMod
                 return false;
             }
 
-            BroadcastResolvedStation terminalStation = cache.Stations[cache.Stations.Length - 1];
+            BroadcastResolvedStation terminalStation = cache.Stations[0];
+            BroadcastResolvedStation turnbackStation = TryResolveBroadcastTurnbackStation(
+                vehicle,
+                line,
+                waypoints,
+                cache,
+                out BroadcastResolvedStation resolvedTurnbackStation)
+                ? resolvedTurnbackStation
+                : null;
             string lineId = GetDraftKey(GetWorkbenchLineId(line));
             context = new BroadcastVehicleStationContext(
                 lineId,
@@ -1462,7 +2224,9 @@ namespace RapidTransitMod
                 nextStation?.StationId ?? string.Empty,
                 nextStation?.Name ?? string.Empty,
                 terminalStation?.StationId ?? string.Empty,
-                terminalStation?.Name ?? string.Empty);
+                terminalStation?.Name ?? string.Empty,
+                turnbackStation?.StationId ?? string.Empty,
+                turnbackStation?.Name ?? string.Empty);
 
             if (vehicle != Entity.Null)
             {
@@ -1481,6 +2245,51 @@ namespace RapidTransitMod
             }
 
             return true;
+        }
+
+        private bool TryResolveBroadcastTurnbackStation(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            BroadcastLineStationContextCache cache,
+            out BroadcastResolvedStation station)
+        {
+            station = null;
+            if (cache == null
+                || line == Entity.Null
+                || waypoints.Length == 0
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null)
+            {
+                return false;
+            }
+
+            int atomCursorIndex = -1;
+            if (vehicle != Entity.Null
+                && TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            {
+                atomCursorIndex = cursor.AtomCursorIndex;
+            }
+
+            if (!TryResolveNextTurnbackStationBoundary(
+                    chain,
+                    atomCursorIndex,
+                    out TrackTurnbackStationBoundary stationBoundary))
+            {
+                if (chain.TurnbackBoundaries != null
+                    && chain.TurnbackBoundaries.Count > 0
+                    && cache.Stations != null
+                    && cache.Stations.Length > 0
+                    && cache.Stations[0] != null)
+                {
+                    station = cache.Stations[0];
+                    return true;
+                }
+
+                return false;
+            }
+
+            return TryResolveBroadcastTurnbackStationFromBoundary(cache, stationBoundary, out station);
         }
 
         private static string ResolveBroadcastBoundAssetName(
@@ -1644,12 +2453,15 @@ namespace RapidTransitMod
             public readonly string CurrentStationName;
             public readonly string NextStationName;
             public readonly string TerminalStationName;
+            public readonly string TurnbackStationName;
             public readonly string CurrentStationAssetName;
             public readonly string NextStationAssetName;
             public readonly string TerminalStationAssetName;
+            public readonly string TurnbackStationAssetName;
             public readonly List<BroadcastWorkbenchStationBindingDto> CurrentStationBindings;
             public readonly List<BroadcastWorkbenchStationBindingDto> NextStationBindings;
             public readonly List<BroadcastWorkbenchStationBindingDto> TerminalStationBindings;
+            public readonly List<BroadcastWorkbenchStationBindingDto> TurnbackStationBindings;
 
             public BroadcastTriggerContext(
                 string lineId,
@@ -1657,24 +2469,30 @@ namespace RapidTransitMod
                 string currentStationName,
                 string nextStationName,
                 string terminalStationName,
+                string turnbackStationName,
                 string currentStationAssetName,
                 string nextStationAssetName,
                 string terminalStationAssetName,
+                string turnbackStationAssetName,
                 List<BroadcastWorkbenchStationBindingDto> currentStationBindings,
                 List<BroadcastWorkbenchStationBindingDto> nextStationBindings,
-                List<BroadcastWorkbenchStationBindingDto> terminalStationBindings)
+                List<BroadcastWorkbenchStationBindingDto> terminalStationBindings,
+                List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings)
             {
                 LineId = lineId;
                 CurrentStopEntity = currentStopEntity;
                 CurrentStationName = currentStationName;
                 NextStationName = nextStationName;
                 TerminalStationName = terminalStationName;
+                TurnbackStationName = turnbackStationName;
                 CurrentStationAssetName = currentStationAssetName;
                 NextStationAssetName = nextStationAssetName;
                 TerminalStationAssetName = terminalStationAssetName;
+                TurnbackStationAssetName = turnbackStationAssetName;
                 CurrentStationBindings = currentStationBindings;
                 NextStationBindings = nextStationBindings;
                 TerminalStationBindings = terminalStationBindings;
+                TurnbackStationBindings = turnbackStationBindings;
             }
         }
     }
