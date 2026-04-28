@@ -228,6 +228,8 @@ namespace RapidTransitMod
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveBroadcastStationBindings", new Func<string, string>(HandleSaveBroadcastStationBindings));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.autoBindBroadcastStationMappings", new Func<string, string>(HandleAutoBindBroadcastStationMappings));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveBroadcastRules", new Func<string, string>(HandleSaveBroadcastRules));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveBroadcastPlatformAnnouncement", new Func<string, string>(HandleSaveBroadcastPlatformAnnouncement));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.copyBroadcastPlatformAnnouncementToAllStations", new Func<string, string>(HandleCopyBroadcastPlatformAnnouncementToAllStations));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.applyBroadcastConfig", new Func<string, string>(HandleApplyBroadcastConfig));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.openBroadcastAssetDirectoryPicker", new Func<string>(HandleOpenBroadcastAssetDirectoryPicker));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.playBroadcastAssetPreview", new Func<string, string>(HandlePlayBroadcastAssetPreview));
@@ -308,6 +310,16 @@ namespace RapidTransitMod
         private static string HandleSaveBroadcastRules(string requestJson)
         {
             return DepartureControlSystem.Instance?.SaveBroadcastRulesJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleSaveBroadcastPlatformAnnouncement(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.SaveBroadcastPlatformAnnouncementJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleCopyBroadcastPlatformAnnouncementToAllStations(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.CopyBroadcastPlatformAnnouncementToAllStationsJson(requestJson) ?? string.Empty;
         }
 
         private static string HandleApplyBroadcastConfig(string requestJson)
@@ -517,6 +529,8 @@ namespace RapidTransitMod
             registerCall("workbench.saveBroadcastStationBindings", new Func<string, string>(HandleSaveBroadcastStationBindings));
             registerCall("workbench.autoBindBroadcastStationMappings", new Func<string, string>(HandleAutoBindBroadcastStationMappings));
             registerCall("workbench.saveBroadcastRules", new Func<string, string>(HandleSaveBroadcastRules));
+            registerCall("workbench.saveBroadcastPlatformAnnouncement", new Func<string, string>(HandleSaveBroadcastPlatformAnnouncement));
+            registerCall("workbench.copyBroadcastPlatformAnnouncementToAllStations", new Func<string, string>(HandleCopyBroadcastPlatformAnnouncementToAllStations));
             registerCall("workbench.applyBroadcastConfig", new Func<string, string>(HandleApplyBroadcastConfig));
             registerCall("workbench.openBroadcastAssetDirectoryPicker", new Func<string>(HandleOpenBroadcastAssetDirectoryPicker));
             registerCall("workbench.playBroadcastAssetPreview", new Func<string, string>(HandlePlayBroadcastAssetPreview));

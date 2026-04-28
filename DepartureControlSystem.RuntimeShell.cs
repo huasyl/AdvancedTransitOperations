@@ -369,6 +369,9 @@ namespace RapidTransitMod
             m_RouteProgressFrameSnapshots.Clear();
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();
+            m_PreparingTargetDriftLogCache.Clear();
+            m_CrossLineCandidateLogCache.Clear();
+            m_RouteVehicleOwnerMismatchLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_LastLaunchHeadSnapshots.Clear();
             m_LastBoardingHeadSnapshots.Clear();
@@ -452,6 +455,9 @@ namespace RapidTransitMod
             m_RouteProgressFrameSnapshots.Clear();
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();
+            m_PreparingTargetDriftLogCache.Clear();
+            m_CrossLineCandidateLogCache.Clear();
+            m_RouteVehicleOwnerMismatchLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_LastLaunchHeadSnapshots.Clear();
             m_LastBoardingHeadSnapshots.Clear();

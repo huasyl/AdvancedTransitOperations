@@ -31,6 +31,7 @@ export default function WorkbenchScrollArea({
 
     let frameId = 0;
     let timeoutId = 0;
+    let resizeObserver = null;
 
     function showIndicatorTemporarily() {
       setIndicatorActive(true);
@@ -84,6 +85,16 @@ export default function WorkbenchScrollArea({
     scheduleUpdate();
     timeoutId = window.setTimeout(updateMetrics, 80);
 
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(() => {
+        scheduleUpdate();
+      });
+      resizeObserver.observe(scrollElement);
+      if (scrollElement.firstElementChild) {
+        resizeObserver.observe(scrollElement.firstElementChild);
+      }
+    }
+
     function handleScroll() {
       scheduleUpdate();
       showIndicatorTemporarily();
@@ -101,6 +112,9 @@ export default function WorkbenchScrollArea({
       }
       if (hideTimerRef.current) {
         window.clearTimeout(hideTimerRef.current);
+      }
+      if (resizeObserver) {
+        resizeObserver.disconnect();
       }
       scrollElement.removeEventListener("scroll", handleScroll);
       window.removeEventListener("resize", scheduleUpdate);

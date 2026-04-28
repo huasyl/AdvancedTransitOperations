@@ -33,6 +33,7 @@ namespace RapidTransitMod
         private sealed class BroadcastRuntimeSequenceState
         {
             public Entity Vehicle;
+            public Entity AudioPositionEntity;
             public string LineId = string.Empty;
             public string TriggerId = string.Empty;
             public BroadcastTriggerContext Context;
@@ -68,6 +69,40 @@ namespace RapidTransitMod
             public bool LeaveTriggered;
             public bool MidRouteTriggered;
             public bool ApproachTriggered;
+        }
+
+        private struct BroadcastPlatformApproachTriggerState
+        {
+            public string LineId;
+            public string StationId;
+            public int CurrentStopWaypointIndex;
+            public int NextStopWaypointIndex;
+            public int TriggerAtomIndex;
+            public int CursorAtomIndex;
+            public int TraversalPhaseIndex;
+            public uint LastObservedFrame;
+            public bool Triggered;
+            public BroadcastVehicleStationContext StationContext;
+        }
+
+        private readonly struct BroadcastVehicleRuntimeFrameContext
+        {
+            public readonly BroadcastVehicleStationContext StationContext;
+            public readonly LineTrackChain Chain;
+            public readonly VehicleTrackCursor Cursor;
+            public readonly int TraversalPhaseIndex;
+
+            public BroadcastVehicleRuntimeFrameContext(
+                BroadcastVehicleStationContext stationContext,
+                LineTrackChain chain,
+                VehicleTrackCursor cursor,
+                int traversalPhaseIndex)
+            {
+                StationContext = stationContext;
+                Chain = chain;
+                Cursor = cursor;
+                TraversalPhaseIndex = traversalPhaseIndex;
+            }
         }
 
         private readonly struct BroadcastVehicleStationContext
@@ -130,8 +165,11 @@ namespace RapidTransitMod
         private const int BroadcastApproachRemainingAtomThreshold = 4;
         private const uint BroadcastAnchorDiagnosticCooldownFrames = 30u;
         private const int BroadcastIdleRouteCooldownAfterLeaveSeconds = 3;
+        private const string BroadcastPlatformIdleTriggerId = "platform_idle_clear";
+        private const string BroadcastPlatformApproachTriggerId = "platform_approach_station";
         private const float BroadcastLeaveAnchorDistanceMeters = 100f;
         private const float BroadcastApproachAnchorDistanceMeters = 200f;
+        private const float BroadcastPlatformApproachAnchorDistanceMeters = 400f;
         private static readonly FieldInfo s_AudioManagerWorldGroupField =
             typeof(AudioManager).GetField("m_WorldGroup", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -140,12 +178,17 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, Entity> m_BroadcastLastBypassWaitingStopByVehicle = new Dictionary<Entity, Entity>();
         private readonly Dictionary<Entity, BroadcastProgressTriggerState> m_BroadcastProgressTriggerStateByVehicle =
             new Dictionary<Entity, BroadcastProgressTriggerState>();
+        private readonly Dictionary<Entity, BroadcastPlatformApproachTriggerState> m_BroadcastPlatformApproachTriggerStateByVehicle =
+            new Dictionary<Entity, BroadcastPlatformApproachTriggerState>();
         private readonly Dictionary<Entity, string> m_BroadcastCurrentStationNameByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BroadcastNextStationNameByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BroadcastLastEventTextByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BroadcastAnchorDiagnosticKeyCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_BroadcastAnchorDiagnosticLastLogFrameCache = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_BroadcastAnchorTriggerLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BroadcastPlatformApproachDiagnosticKeyCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_BroadcastPlatformApproachDiagnosticLastLogFrameCache = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, string> m_BroadcastPlatformApproachTriggerLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, int> m_BroadcastCurrentStopWaypointIndexByVehicle = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, int> m_BroadcastNextStopWaypointIndexByVehicle = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, BroadcastLineStationContextCache> m_BroadcastLineStationContextCaches =
@@ -156,6 +199,10 @@ namespace RapidTransitMod
             new Dictionary<string, BroadcastRuntimeClipCacheEntry>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Task<AudioClip>> m_BroadcastRuntimeClipLoadTasks =
             new Dictionary<string, Task<AudioClip>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, uint> m_BroadcastPlatformAnnouncementCooldownUntilFrame =
+            new Dictionary<string, uint>(StringComparer.Ordinal);
+        private readonly Dictionary<string, BroadcastRuntimeSequenceState> m_BroadcastPlatformSequenceStateByKey =
+            new Dictionary<string, BroadcastRuntimeSequenceState>(StringComparer.Ordinal);
 
         private void HandleBroadcastStopAndOpenTrigger(
             Entity vehicle,
@@ -231,20 +278,20 @@ namespace RapidTransitMod
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            bool boarding)
+            bool boarding,
+            bool shouldBroadcastForTrackedVehicle,
+            bool hasRuntimeContext,
+            BroadcastVehicleRuntimeFrameContext runtimeContext)
         {
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypoints.Length < 2
-                || !ShouldBroadcastForTrackedVehicle(vehicle)
-                || !TryResolveBroadcastVehicleStationContext(vehicle, line, waypoints, -1, out BroadcastVehicleStationContext stationContext)
-                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
-                || chain == null
-                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor)
+                || !shouldBroadcastForTrackedVehicle
+                || !hasRuntimeContext
                 || !TryGetCursorWaypointWindowRelation(
-                    chain,
-                    stationContext.CurrentStopWaypointIndex,
-                    cursor.AtomCursorIndex,
+                    runtimeContext.Chain,
+                    runtimeContext.StationContext.CurrentStopWaypointIndex,
+                    runtimeContext.Cursor.AtomCursorIndex,
                     out CursorAtomWindowRelation currentStopWindowRelation,
                     out _,
                     out _))
@@ -253,6 +300,9 @@ namespace RapidTransitMod
                 return;
             }
 
+            BroadcastVehicleStationContext stationContext = runtimeContext.StationContext;
+            LineTrackChain chain = runtimeContext.Chain;
+            VehicleTrackCursor cursor = runtimeContext.Cursor;
             bool resetState = !m_BroadcastProgressTriggerStateByVehicle.TryGetValue(vehicle, out BroadcastProgressTriggerState state)
                 || state.CurrentStopWaypointIndex != stationContext.CurrentStopWaypointIndex
                 || state.NextStopWaypointIndex != stationContext.NextStopWaypointIndex;
@@ -348,6 +398,50 @@ namespace RapidTransitMod
             state.LastCurrentStopWindowRelation = currentStopWindowRelation;
             LogBroadcastAnchorState("tick", vehicle, line, waypoints, stationContext, state, false);
             m_BroadcastProgressTriggerStateByVehicle[vehicle] = state;
+        }
+
+        private bool TryBuildBroadcastVehicleRuntimeFrameContext(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int preferredCurrentStopWaypointIndex,
+            out BroadcastVehicleRuntimeFrameContext runtimeContext)
+        {
+            runtimeContext = default;
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || waypoints.Length < 2
+                || !TryResolveBroadcastVehicleStationContext(
+                    vehicle,
+                    line,
+                    waypoints,
+                    preferredCurrentStopWaypointIndex,
+                    out BroadcastVehicleStationContext stationContext)
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryBuildLineRunningVehicleOwnLineRuntimeSnapshot(
+                    vehicle,
+                    line,
+                    waypoints,
+                    chain,
+                    out VehicleTrackCursor cursor,
+                    out _,
+                    out _,
+                    out _,
+                    out int traversalPhaseIndex,
+                    out _,
+                    out _,
+                    out _))
+            {
+                return false;
+            }
+
+            runtimeContext = new BroadcastVehicleRuntimeFrameContext(
+                stationContext,
+                chain,
+                cursor,
+                traversalPhaseIndex);
+            return true;
         }
 
         private bool IsBroadcastVehicleWithinApproachAtomWindow(
@@ -468,6 +562,106 @@ namespace RapidTransitMod
             {
                 log.Info(message);
             }
+        }
+
+        private void LogBroadcastPlatformApproachState(
+            string phase,
+            Entity vehicle,
+            LineTrackChain chain,
+            BroadcastPlatformApproachTriggerState state,
+            bool onceOnly)
+        {
+            uint nowFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0u;
+            if (!TryBuildBroadcastPlatformApproachDiagnostic(
+                    phase,
+                    vehicle,
+                    chain,
+                    state,
+                    out string stableKey,
+                    out string message))
+            {
+                return;
+            }
+
+            if (onceOnly)
+            {
+                LogVehicleStateOnce(
+                    m_BroadcastPlatformApproachTriggerLogCache,
+                    vehicle,
+                    phase + "|" + stableKey,
+                    message);
+                return;
+            }
+
+            if (ShouldEmitVehicleLogWithCooldown(
+                    m_BroadcastPlatformApproachDiagnosticKeyCache,
+                    m_BroadcastPlatformApproachDiagnosticLastLogFrameCache,
+                    vehicle,
+                    phase + "|" + stableKey,
+                    nowFrame,
+                    BroadcastAnchorDiagnosticCooldownFrames))
+            {
+                log.Info(message);
+            }
+        }
+
+        private bool TryBuildBroadcastPlatformApproachDiagnostic(
+            string phase,
+            Entity vehicle,
+            LineTrackChain chain,
+            BroadcastPlatformApproachTriggerState state,
+            out string stableKey,
+            out string message)
+        {
+            stableKey = string.Empty;
+            message = string.Empty;
+            if (vehicle == Entity.Null
+                || chain == null
+                || state.CurrentStopWaypointIndex < 0
+                || state.NextStopWaypointIndex < 0
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    state.CurrentStopWaypointIndex,
+                    state.CursorAtomIndex,
+                    out _,
+                    out int currentWindowEndExclusive)
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    state.NextStopWaypointIndex,
+                    state.CursorAtomIndex,
+                    out int nextWindowStart,
+                    out _))
+            {
+                return false;
+            }
+
+            currentWindowEndExclusive = math.clamp(currentWindowEndExclusive, 0, chain.TrackAtoms.Count);
+            nextWindowStart = math.clamp(nextWindowStart, 0, math.max(0, chain.TrackAtoms.Count - 1));
+            bool fallback = state.TriggerAtomIndex == currentWindowEndExclusive;
+            stableKey = "line=" + (state.LineId ?? string.Empty)
+                + "|station=" + (state.StationId ?? string.Empty)
+                + "|phaseIndex=" + state.TraversalPhaseIndex
+                + "|cur=" + state.CurrentStopWaypointIndex
+                + "|next=" + state.NextStopWaypointIndex
+                + "|cursor=" + state.CursorAtomIndex
+                + "|trigger=" + state.TriggerAtomIndex
+                + "|fallback=" + fallback;
+            message = "[BroadcastPlatformApproach] line=" + (state.LineId ?? string.Empty)
+                + " vehicle=" + vehicle.Index
+                + " phase=" + phase
+                + " station=\"" + (state.StationContext.NextStationName ?? string.Empty) + "\""
+                + " current=\"" + (state.StationContext.CurrentStationName ?? string.Empty) + "\""
+                + " next=\"" + (state.StationContext.NextStationName ?? string.Empty) + "\""
+                + " wp=" + state.CurrentStopWaypointIndex + "->" + state.NextStopWaypointIndex
+                + " cursor=" + state.CursorAtomIndex
+                + " triggerAtom=" + state.TriggerAtomIndex
+                + " currentWindowEnd=" + currentWindowEndExclusive
+                + " nextWindowStart=" + nextWindowStart
+                + " anchorMeters=" + BroadcastPlatformApproachAnchorDistanceMeters.ToString("F0")
+                + " fallback=" + fallback
+                + " triggered=" + state.Triggered
+                + " phaseIndex=" + state.TraversalPhaseIndex;
+            return true;
         }
 
         private bool TryBuildBroadcastAnchorDiagnostic(
@@ -671,6 +865,96 @@ namespace RapidTransitMod
                 nextWindowStart,
                 BroadcastApproachAnchorDistanceMeters,
                 math.max(currentWindowEndExclusive, nextWindowStart - 1));
+            return true;
+        }
+
+        private bool TryResolveBroadcastPlatformApproachAtom(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentStopWaypointIndex,
+            int nextStopWaypointIndex,
+            out int triggerAtomIndex,
+            out int cursorAtomIndex)
+        {
+            triggerAtomIndex = -1;
+            cursorAtomIndex = -1;
+
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || currentStopWaypointIndex < 0
+                || currentStopWaypointIndex >= waypoints.Length
+                || nextStopWaypointIndex < 0
+                || nextStopWaypointIndex >= waypoints.Length
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor)
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    currentStopWaypointIndex,
+                    cursor.AtomCursorIndex,
+                    out _,
+                    out int currentWindowEndExclusive)
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    nextStopWaypointIndex,
+                    cursor.AtomCursorIndex,
+                    out int nextWindowStart,
+                    out _))
+            {
+                return false;
+            }
+
+            cursorAtomIndex = cursor.AtomCursorIndex;
+            return TryResolveBroadcastPlatformApproachAtom(
+                chain,
+                cursor.AtomCursorIndex,
+                currentStopWaypointIndex,
+                nextStopWaypointIndex,
+                out triggerAtomIndex);
+        }
+
+        private bool TryResolveBroadcastPlatformApproachAtom(
+            LineTrackChain chain,
+            int cursorAtomIndex,
+            int currentStopWaypointIndex,
+            int nextStopWaypointIndex,
+            out int triggerAtomIndex)
+        {
+            triggerAtomIndex = -1;
+            if (chain == null
+                || currentStopWaypointIndex < 0
+                || nextStopWaypointIndex < 0
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    currentStopWaypointIndex,
+                    cursorAtomIndex,
+                    out _,
+                    out int currentWindowEndExclusive)
+                || !TryGetWaypointTraversalAtomWindow(
+                    chain,
+                    nextStopWaypointIndex,
+                    cursorAtomIndex,
+                    out int nextWindowStart,
+                    out _))
+            {
+                return false;
+            }
+
+            currentWindowEndExclusive = math.clamp(currentWindowEndExclusive, 0, chain.TrackAtoms.Count);
+            nextWindowStart = math.clamp(nextWindowStart, 0, math.max(0, chain.TrackAtoms.Count - 1));
+            if (currentWindowEndExclusive >= nextWindowStart)
+            {
+                triggerAtomIndex = currentWindowEndExclusive;
+                return true;
+            }
+
+            triggerAtomIndex = ResolveBroadcastDistanceAnchoredBackwardAtom(
+                chain,
+                currentWindowEndExclusive,
+                nextWindowStart,
+                BroadcastPlatformApproachAnchorDistanceMeters,
+                currentWindowEndExclusive);
             return true;
         }
 
@@ -1021,6 +1305,7 @@ namespace RapidTransitMod
             BroadcastRuntimeSequenceState state = new BroadcastRuntimeSequenceState
             {
                 Vehicle = vehicle,
+                AudioPositionEntity = vehicle,
                 LineId = context.LineId,
                 TriggerId = triggerId,
                 Context = context,
@@ -1034,9 +1319,464 @@ namespace RapidTransitMod
             AdvanceBroadcastRuntimeSequence(state, nowFrame);
         }
 
+        private void TickBroadcastPlatformAnnouncements(uint nowFrame)
+        {
+            if (m_BroadcastLinePlatformAnnouncements.Count == 0)
+            {
+                return;
+            }
+
+            PruneBroadcastPlatformApproachTriggerStates(nowFrame);
+
+            List<WorkbenchLineRuntime> runtimeLines = BuildWorkbenchLinesStable();
+            for (int i = 0; i < runtimeLines.Count; i++)
+            {
+                WorkbenchLineRuntime runtime = runtimeLines[i];
+                if (runtime == null
+                    || string.IsNullOrWhiteSpace(runtime.Id)
+                    || !m_BroadcastLinePlatformAnnouncements.TryGetValue(runtime.Id, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
+                    || lineAnnouncements == null
+                    || lineAnnouncements.Count == 0
+                    || !EntityManager.HasBuffer<RouteWaypoint>(runtime.Entity))
+                {
+                    continue;
+                }
+
+                DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(runtime.Entity, true);
+                Dictionary<string, Dictionary<int, Entity>> approachCandidatesByStation = null;
+                foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in lineAnnouncements)
+                {
+                    BroadcastWorkbenchPlatformAnnouncementDto announcement = entry.Value;
+                    if (announcement == null
+                        || !announcement.enabled
+                        || announcement.nodes == null
+                        || announcement.nodes.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(announcement.triggerId, BroadcastPlatformIdleTriggerId, StringComparison.Ordinal))
+                    {
+                        string cooldownKey = runtime.Id + "|" + entry.Key + "|" + BroadcastPlatformIdleTriggerId;
+                        if (m_BroadcastPlatformAnnouncementCooldownUntilFrame.TryGetValue(cooldownKey, out uint cooldownUntil)
+                            && nowFrame < cooldownUntil)
+                        {
+                            continue;
+                        }
+
+                        if (!IsBroadcastPlatformStationIdle(runtime.Entity, waypoints, entry.Key)
+                            || !TryBuildBroadcastPlatformTriggerContext(runtime.Entity, waypoints, entry.Key, out BroadcastTriggerContext context))
+                        {
+                            continue;
+                        }
+
+                        string sequenceKey = BuildBroadcastPlatformIdleSequenceKey(runtime.Id, entry.Key);
+                        if (TryStartBroadcastPlatformSequence(sequenceKey, context.CurrentStopEntity, context, announcement))
+                        {
+                            uint cooldownFrames = (uint)Math.Max(1, announcement.cooldownGameMinutes) * (uint)SIM_FRAMES_PER_MINUTE;
+                            m_BroadcastPlatformAnnouncementCooldownUntilFrame[cooldownKey] = nowFrame + cooldownFrames;
+                        }
+
+                        continue;
+                    }
+
+                    if (string.Equals(announcement.triggerId, BroadcastPlatformApproachTriggerId, StringComparison.Ordinal))
+                    {
+                        if (approachCandidatesByStation == null)
+                        {
+                            approachCandidatesByStation = BuildBroadcastPlatformApproachCandidatesByStation(runtime.Id, nowFrame);
+                        }
+
+                        TickBroadcastPlatformApproachAnnouncement(
+                            nowFrame,
+                            runtime,
+                            waypoints,
+                            entry.Key,
+                            announcement,
+                            approachCandidatesByStation);
+                    }
+                }
+            }
+        }
+
+        private void PruneBroadcastPlatformApproachTriggerStates(uint nowFrame)
+        {
+            if (m_BroadcastPlatformApproachTriggerStateByVehicle.Count == 0)
+            {
+                return;
+            }
+
+            List<Entity> staleVehicles = null;
+            foreach (KeyValuePair<Entity, BroadcastPlatformApproachTriggerState> entry in m_BroadcastPlatformApproachTriggerStateByVehicle)
+            {
+                Entity vehicle = entry.Key;
+                if (vehicle == Entity.Null
+                    || !EntityManager.Exists(vehicle)
+                    || !m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                    || vehicleState != VehicleState.Running
+                    || entry.Value.LastObservedFrame != nowFrame)
+                {
+                    staleVehicles ??= new List<Entity>();
+                    staleVehicles.Add(vehicle);
+                }
+            }
+
+            if (staleVehicles == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < staleVehicles.Count; i++)
+            {
+                m_BroadcastPlatformApproachTriggerStateByVehicle.Remove(staleVehicles[i]);
+            }
+        }
+
+        private void TickBroadcastPlatformApproachAnnouncement(
+            uint nowFrame,
+            WorkbenchLineRuntime runtime,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            string stationId,
+            BroadcastWorkbenchPlatformAnnouncementDto announcement,
+            Dictionary<string, Dictionary<int, Entity>> approachCandidatesByStation)
+        {
+            BroadcastTriggerContext stationAudioContext = default;
+            LineTrackChain chain = null;
+            if (runtime == null
+                || runtime.Entity == Entity.Null
+                || string.IsNullOrWhiteSpace(runtime.Id)
+                || string.IsNullOrWhiteSpace(stationId)
+                || announcement == null
+                || approachCandidatesByStation == null
+                || !approachCandidatesByStation.TryGetValue(stationId, out Dictionary<int, Entity> candidatesByPhase)
+                || candidatesByPhase == null
+                || candidatesByPhase.Count == 0
+                || !TryGetLineTrackChain(runtime.Entity, waypoints, out chain)
+                || chain == null
+                || !TryBuildBroadcastPlatformTriggerContext(runtime.Entity, waypoints, stationId, out stationAudioContext))
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<int, Entity> candidateEntry in candidatesByPhase)
+            {
+                Entity vehicle = candidateEntry.Value;
+                if (vehicle == Entity.Null
+                    || !m_BroadcastPlatformApproachTriggerStateByVehicle.TryGetValue(vehicle, out BroadcastPlatformApproachTriggerState state)
+                    || state.Triggered
+                    || state.CursorAtomIndex < state.TriggerAtomIndex)
+                {
+                    continue;
+                }
+
+                string overrideTurnbackStationName = string.Empty;
+                List<BroadcastWorkbenchStationBindingDto> overrideTurnbackStationBindings = null;
+                if (string.Equals(state.StationContext.NextStationId, stationId, StringComparison.Ordinal)
+                    && string.Equals(state.StationContext.TurnbackStationId, stationId, StringComparison.Ordinal)
+                    && !string.IsNullOrEmpty(stationAudioContext.TurnbackStationName))
+                {
+                    overrideTurnbackStationName = stationAudioContext.TurnbackStationName;
+                    overrideTurnbackStationBindings = stationAudioContext.TurnbackStationBindings;
+                }
+
+                if (!TryBuildBroadcastTriggerContext(
+                        state.StationContext,
+                        overrideTurnbackStationName,
+                        overrideTurnbackStationBindings,
+                        out BroadcastTriggerContext vehicleContext))
+                {
+                    continue;
+                }
+
+                string sequenceKey = BuildBroadcastPlatformApproachSequenceKey(
+                    runtime.Id,
+                    stationId,
+                    vehicle,
+                    state.CurrentStopWaypointIndex,
+                    state.NextStopWaypointIndex);
+                if (TryStartBroadcastPlatformSequence(
+                        sequenceKey,
+                        stationAudioContext.CurrentStopEntity,
+                        vehicleContext,
+                        announcement))
+                {
+                    state.Triggered = true;
+                    m_BroadcastPlatformApproachTriggerStateByVehicle[vehicle] = state;
+                    LogBroadcastPlatformApproachState("trigger", vehicle, chain, state, true);
+                }
+            }
+        }
+
+        private Dictionary<string, Dictionary<int, Entity>> BuildBroadcastPlatformApproachCandidatesByStation(
+            string lineId,
+            uint nowFrame)
+        {
+            Dictionary<string, Dictionary<int, Entity>> candidatesByStation =
+                new Dictionary<string, Dictionary<int, Entity>>(StringComparer.Ordinal);
+
+            foreach (KeyValuePair<Entity, BroadcastPlatformApproachTriggerState> entry in m_BroadcastPlatformApproachTriggerStateByVehicle)
+            {
+                BroadcastPlatformApproachTriggerState state = entry.Value;
+                if (state.Triggered
+                    || state.LastObservedFrame != nowFrame
+                    || string.IsNullOrWhiteSpace(state.LineId)
+                    || string.IsNullOrWhiteSpace(state.StationId)
+                    || !string.Equals(state.LineId, lineId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!candidatesByStation.TryGetValue(state.StationId, out Dictionary<int, Entity> nearestByPhase))
+                {
+                    nearestByPhase = new Dictionary<int, Entity>();
+                    candidatesByStation[state.StationId] = nearestByPhase;
+                }
+
+                if (!nearestByPhase.TryGetValue(state.TraversalPhaseIndex, out Entity currentVehicle)
+                    || !m_BroadcastPlatformApproachTriggerStateByVehicle.TryGetValue(currentVehicle, out BroadcastPlatformApproachTriggerState currentState)
+                    || state.CursorAtomIndex > currentState.CursorAtomIndex)
+                {
+                    nearestByPhase[state.TraversalPhaseIndex] = entry.Key;
+                }
+            }
+
+            return candidatesByStation;
+        }
+
+        private bool TryStartBroadcastPlatformSequence(
+            string sequenceKey,
+            Entity audioPositionEntity,
+            BroadcastTriggerContext context,
+            BroadcastWorkbenchPlatformAnnouncementDto announcement)
+        {
+            if (announcement == null
+                || string.IsNullOrWhiteSpace(sequenceKey)
+                || audioPositionEntity == Entity.Null
+                || string.IsNullOrEmpty(context.LineId)
+                || announcement.nodes == null
+                || announcement.nodes.Length == 0)
+            {
+                return false;
+            }
+
+            string triggerId = string.IsNullOrWhiteSpace(announcement.triggerId)
+                ? BroadcastPlatformIdleTriggerId
+                : announcement.triggerId;
+            string triggerLabel = ResolveBroadcastPlatformTriggerLabel(triggerId);
+
+            BroadcastWorkbenchRuleDto rule = new BroadcastWorkbenchRuleDto
+            {
+                id = sequenceKey,
+                title = string.IsNullOrWhiteSpace(announcement.title) ? (announcement.stationName ?? string.Empty) : announcement.title,
+                triggerId = triggerId,
+                trigger = triggerLabel,
+                nodes = announcement.nodes
+                    .Select(CloneBroadcastWorkbenchRuleNode)
+                    .Where(node => node != null)
+                    .ToArray()
+            };
+            if (rule.nodes.Length == 0)
+            {
+                return false;
+            }
+
+            uint nowFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0u;
+            StopBroadcastRuntimePlatformSequence(sequenceKey);
+            BroadcastRuntimeSequenceState state = new BroadcastRuntimeSequenceState
+            {
+                Vehicle = audioPositionEntity,
+                AudioPositionEntity = audioPositionEntity,
+                LineId = context.LineId,
+                TriggerId = triggerId,
+                Context = context,
+                Rules = new List<BroadcastWorkbenchRuleDto> { rule },
+                ResumeFrame = nowFrame,
+                ResumeRealtime = 0f
+            };
+            m_BroadcastPlatformSequenceStateByKey[sequenceKey] = state;
+            return AdvanceBroadcastRuntimeSequence(state, nowFrame);
+        }
+
+        private bool LineHasEnabledBroadcastPlatformApproachAnnouncements(Entity line)
+        {
+            string lineId = GetDraftKey(GetWorkbenchLineId(line));
+            if (string.IsNullOrWhiteSpace(lineId)
+                || !m_BroadcastLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
+                || lineAnnouncements == null)
+            {
+                return false;
+            }
+
+            foreach (BroadcastWorkbenchPlatformAnnouncementDto announcement in lineAnnouncements.Values)
+            {
+                if (announcement != null
+                    && announcement.enabled
+                    && announcement.nodes != null
+                    && announcement.nodes.Length > 0
+                    && string.Equals(announcement.triggerId, BroadcastPlatformApproachTriggerId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryGetEnabledBroadcastPlatformApproachAnnouncement(
+            string lineId,
+            string stationId,
+            out BroadcastWorkbenchPlatformAnnouncementDto announcement)
+        {
+            announcement = null;
+            return !string.IsNullOrWhiteSpace(lineId)
+                && !string.IsNullOrWhiteSpace(stationId)
+                && m_BroadcastLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
+                && lineAnnouncements != null
+                && lineAnnouncements.TryGetValue(stationId, out announcement)
+                && announcement != null
+                && announcement.enabled
+                && announcement.nodes != null
+                && announcement.nodes.Length > 0
+                && string.Equals(announcement.triggerId, BroadcastPlatformApproachTriggerId, StringComparison.Ordinal);
+        }
+
+        private void UpdateBroadcastPlatformApproachWatch(
+            Entity vehicle,
+            bool hasRuntimeContext,
+            BroadcastVehicleRuntimeFrameContext runtimeContext)
+        {
+            if (vehicle == Entity.Null
+                || !hasRuntimeContext)
+            {
+                m_BroadcastPlatformApproachTriggerStateByVehicle.Remove(vehicle);
+                return;
+            }
+
+            BroadcastVehicleStationContext stationContext = runtimeContext.StationContext;
+            uint nowFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0u;
+            if (string.IsNullOrWhiteSpace(stationContext.LineId)
+                || string.IsNullOrWhiteSpace(stationContext.NextStationId)
+                || string.Equals(stationContext.CurrentStationId, stationContext.NextStationId, StringComparison.Ordinal)
+                || !TryGetEnabledBroadcastPlatformApproachAnnouncement(
+                    stationContext.LineId,
+                    stationContext.NextStationId,
+                    out _)
+                || !TryResolveBroadcastPlatformApproachAtom(
+                    runtimeContext.Chain,
+                    runtimeContext.Cursor.AtomCursorIndex,
+                    stationContext.CurrentStopWaypointIndex,
+                    stationContext.NextStopWaypointIndex,
+                    out int triggerAtomIndex))
+            {
+                m_BroadcastPlatformApproachTriggerStateByVehicle.Remove(vehicle);
+                return;
+            }
+
+            bool resetState =
+                !m_BroadcastPlatformApproachTriggerStateByVehicle.TryGetValue(vehicle, out BroadcastPlatformApproachTriggerState state)
+                || !string.Equals(state.LineId, stationContext.LineId, StringComparison.Ordinal)
+                || !string.Equals(state.StationId, stationContext.NextStationId, StringComparison.Ordinal)
+                || state.CurrentStopWaypointIndex != stationContext.CurrentStopWaypointIndex
+                || state.NextStopWaypointIndex != stationContext.NextStopWaypointIndex
+                || state.TraversalPhaseIndex != runtimeContext.TraversalPhaseIndex;
+
+            if (resetState)
+            {
+                state = new BroadcastPlatformApproachTriggerState
+                {
+                    LineId = stationContext.LineId,
+                    StationId = stationContext.NextStationId,
+                    CurrentStopWaypointIndex = stationContext.CurrentStopWaypointIndex,
+                    NextStopWaypointIndex = stationContext.NextStopWaypointIndex,
+                    TriggerAtomIndex = triggerAtomIndex,
+                    CursorAtomIndex = runtimeContext.Cursor.AtomCursorIndex,
+                    TraversalPhaseIndex = runtimeContext.TraversalPhaseIndex,
+                    LastObservedFrame = nowFrame,
+                    Triggered = false,
+                    StationContext = stationContext
+                };
+                LogBroadcastPlatformApproachState("resolve", vehicle, runtimeContext.Chain, state, true);
+            }
+            else
+            {
+                state.TriggerAtomIndex = triggerAtomIndex;
+                state.CursorAtomIndex = runtimeContext.Cursor.AtomCursorIndex;
+                state.TraversalPhaseIndex = runtimeContext.TraversalPhaseIndex;
+                state.LastObservedFrame = nowFrame;
+                state.StationContext = stationContext;
+            }
+
+            m_BroadcastPlatformApproachTriggerStateByVehicle[vehicle] = state;
+        }
+
+        private static string BuildBroadcastPlatformIdleSequenceKey(string lineId, string stationId)
+        {
+            return "platform_idle|" + (lineId ?? string.Empty) + "|" + (stationId ?? string.Empty);
+        }
+
+        private static string BuildBroadcastPlatformApproachSequenceKey(
+            string lineId,
+            string stationId,
+            Entity vehicle,
+            int currentStopWaypointIndex,
+            int nextStopWaypointIndex)
+        {
+            return "platform_approach|" + (lineId ?? string.Empty)
+                + "|" + (stationId ?? string.Empty)
+                + "|" + vehicle.Index
+                + "|" + currentStopWaypointIndex
+                + "|" + nextStopWaypointIndex;
+        }
+
+        private static string ResolveBroadcastPlatformTriggerLabel(string triggerId)
+        {
+            return string.Equals(triggerId, BroadcastPlatformApproachTriggerId, StringComparison.Ordinal)
+                ? "即将进站"
+                : "空闲时";
+        }
+
+        private bool IsBroadcastPlatformStationIdle(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            string stationId)
+        {
+            if (line == Entity.Null || string.IsNullOrWhiteSpace(stationId))
+            {
+                return false;
+            }
+
+            foreach (var entry in m_VehicleState)
+            {
+                if (entry.Value != VehicleState.Running)
+                {
+                    continue;
+                }
+
+                Entity vehicle = entry.Key;
+                if (vehicle == Entity.Null
+                    || !EntityManager.Exists(vehicle)
+                    || ResolveVehicleLine(vehicle) != line
+                    || !TryResolveBroadcastVehicleStationContext(vehicle, line, waypoints, -1, out BroadcastVehicleStationContext stationContext))
+                {
+                    continue;
+                }
+
+                if (string.Equals(stationContext.NextStationId, stationId, StringComparison.Ordinal)
+                    && !string.Equals(stationContext.CurrentStationId, stationId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private void TickBroadcastRuntime(uint nowFrame)
         {
-            if (m_BroadcastSequenceStateByVehicle.Count == 0)
+            TickBroadcastPlatformAnnouncements(nowFrame);
+
+            if (m_BroadcastSequenceStateByVehicle.Count == 0
+                && m_BroadcastPlatformSequenceStateByKey.Count == 0)
             {
                 PruneBroadcastRuntimeClipCache(nowFrame);
                 return;
@@ -1063,6 +1803,27 @@ namespace RapidTransitMod
                 completedVehicles.Add(entry.Key);
             }
 
+            List<string> completedPlatformKeys = null;
+            foreach (KeyValuePair<string, BroadcastRuntimeSequenceState> entry in m_BroadcastPlatformSequenceStateByKey)
+            {
+                BroadcastRuntimeSequenceState state = entry.Value;
+                if (state == null || state.Vehicle == Entity.Null || !EntityManager.Exists(state.Vehicle))
+                {
+                    completedPlatformKeys ??= new List<string>();
+                    completedPlatformKeys.Add(entry.Key);
+                    continue;
+                }
+
+                UpdateBroadcastRuntimeAudioSourcePosition(state);
+                if (AdvanceBroadcastRuntimeSequence(state, nowFrame))
+                {
+                    continue;
+                }
+
+                completedPlatformKeys ??= new List<string>();
+                completedPlatformKeys.Add(entry.Key);
+            }
+
             if (completedVehicles != null)
             {
                 for (int i = 0; i < completedVehicles.Count; i++)
@@ -1073,6 +1834,14 @@ namespace RapidTransitMod
                 }
 
                 InvalidatePanelData();
+            }
+
+            if (completedPlatformKeys != null)
+            {
+                for (int i = 0; i < completedPlatformKeys.Count; i++)
+                {
+                    StopBroadcastRuntimePlatformSequence(completedPlatformKeys[i]);
+                }
             }
 
             CompleteDetachedBroadcastRuntimeClipLoads(nowFrame);
@@ -1225,6 +1994,20 @@ namespace RapidTransitMod
             m_BroadcastSequenceStateByVehicle.Remove(vehicle);
         }
 
+        private void StopBroadcastRuntimePlatformSequence(string sequenceKey)
+        {
+            if (string.IsNullOrWhiteSpace(sequenceKey)
+                || !m_BroadcastPlatformSequenceStateByKey.TryGetValue(sequenceKey, out BroadcastRuntimeSequenceState state))
+            {
+                return;
+            }
+
+            ReleaseBroadcastRuntimeAudioSource(state);
+            state.PendingClipLoadTask = null;
+            state.PendingAssetName = string.Empty;
+            m_BroadcastPlatformSequenceStateByKey.Remove(sequenceKey);
+        }
+
         private void ClearBroadcastRuntimeState(Entity vehicle)
         {
             if (vehicle == Entity.Null)
@@ -1237,6 +2020,7 @@ namespace RapidTransitMod
             m_BroadcastLastLeaveStationStopByVehicle.Remove(vehicle);
             m_BroadcastLastBypassWaitingStopByVehicle.Remove(vehicle);
             m_BroadcastProgressTriggerStateByVehicle.Remove(vehicle);
+            m_BroadcastPlatformApproachTriggerStateByVehicle.Remove(vehicle);
             m_BroadcastCurrentStationNameByVehicle.Remove(vehicle);
             m_BroadcastNextStationNameByVehicle.Remove(vehicle);
             m_BroadcastCurrentStopWaypointIndexByVehicle.Remove(vehicle);
@@ -1245,6 +2029,9 @@ namespace RapidTransitMod
             m_BroadcastAnchorDiagnosticKeyCache.Remove(vehicle);
             m_BroadcastAnchorDiagnosticLastLogFrameCache.Remove(vehicle);
             m_BroadcastAnchorTriggerLogCache.Remove(vehicle);
+            m_BroadcastPlatformApproachDiagnosticKeyCache.Remove(vehicle);
+            m_BroadcastPlatformApproachDiagnosticLastLogFrameCache.Remove(vehicle);
+            m_BroadcastPlatformApproachTriggerLogCache.Remove(vehicle);
             InvalidatePanelData();
         }
 
@@ -1255,20 +2042,31 @@ namespace RapidTransitMod
                 ReleaseBroadcastRuntimeAudioSource(entry.Value);
             }
 
+            foreach (KeyValuePair<string, BroadcastRuntimeSequenceState> entry in m_BroadcastPlatformSequenceStateByKey)
+            {
+                ReleaseBroadcastRuntimeAudioSource(entry.Value);
+            }
+
             m_BroadcastSequenceStateByVehicle.Clear();
+            m_BroadcastPlatformSequenceStateByKey.Clear();
             m_BroadcastLastStopAndOpenStopByVehicle.Clear();
             m_BroadcastLastLeaveStationStopByVehicle.Clear();
             m_BroadcastLastBypassWaitingStopByVehicle.Clear();
             m_BroadcastProgressTriggerStateByVehicle.Clear();
+            m_BroadcastPlatformApproachTriggerStateByVehicle.Clear();
             m_BroadcastCurrentStationNameByVehicle.Clear();
             m_BroadcastNextStationNameByVehicle.Clear();
             m_BroadcastCurrentStopWaypointIndexByVehicle.Clear();
             m_BroadcastNextStopWaypointIndexByVehicle.Clear();
             m_BroadcastLineStationContextCaches.Clear();
+            m_BroadcastPlatformAnnouncementCooldownUntilFrame.Clear();
             m_BroadcastLastEventTextByVehicle.Clear();
             m_BroadcastAnchorDiagnosticKeyCache.Clear();
             m_BroadcastAnchorDiagnosticLastLogFrameCache.Clear();
             m_BroadcastAnchorTriggerLogCache.Clear();
+            m_BroadcastPlatformApproachDiagnosticKeyCache.Clear();
+            m_BroadcastPlatformApproachDiagnosticLastLogFrameCache.Clear();
+            m_BroadcastPlatformApproachTriggerLogCache.Clear();
             m_BroadcastRuntimeClipLoadTasks.Clear();
 
             foreach (BroadcastRuntimeClipCacheEntry entry in m_BroadcastRuntimeClipCache.Values)
@@ -1304,11 +2102,36 @@ namespace RapidTransitMod
                 }
             }
 
+            List<string> affectedPlatformKeys = null;
+            foreach (KeyValuePair<string, BroadcastRuntimeSequenceState> entry in m_BroadcastPlatformSequenceStateByKey)
+            {
+                BroadcastRuntimeSequenceState state = entry.Value;
+                if (state == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(state.ActiveAudioAssetName, assetName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(state.PendingAssetName, assetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    affectedPlatformKeys ??= new List<string>();
+                    affectedPlatformKeys.Add(entry.Key);
+                }
+            }
+
             if (affectedVehicles != null)
             {
                 for (int i = 0; i < affectedVehicles.Count; i++)
                 {
                     StopBroadcastRuntimeSequence(affectedVehicles[i]);
+                }
+            }
+
+            if (affectedPlatformKeys != null)
+            {
+                for (int i = 0; i < affectedPlatformKeys.Count; i++)
+                {
+                    StopBroadcastRuntimePlatformSequence(affectedPlatformKeys[i]);
                 }
             }
 
@@ -1333,7 +2156,18 @@ namespace RapidTransitMod
                 ReleaseBroadcastRuntimeAudioSource(entry.Value);
             }
 
+            foreach (KeyValuePair<string, BroadcastRuntimeSequenceState> entry in m_BroadcastPlatformSequenceStateByKey)
+            {
+                ReleaseBroadcastRuntimeAudioSource(entry.Value);
+            }
+
             m_BroadcastSequenceStateByVehicle.Clear();
+            m_BroadcastPlatformSequenceStateByKey.Clear();
+            m_BroadcastPlatformAnnouncementCooldownUntilFrame.Clear();
+            m_BroadcastPlatformApproachTriggerStateByVehicle.Clear();
+            m_BroadcastPlatformApproachDiagnosticKeyCache.Clear();
+            m_BroadcastPlatformApproachDiagnosticLastLogFrameCache.Clear();
+            m_BroadcastPlatformApproachTriggerLogCache.Clear();
             m_BroadcastRuntimeClipLoadTasks.Clear();
             foreach (BroadcastRuntimeClipCacheEntry entry in m_BroadcastRuntimeClipCache.Values)
             {
@@ -1345,7 +2179,11 @@ namespace RapidTransitMod
 
         private bool TryStartBroadcastWorldAudio(BroadcastRuntimeSequenceState state, string assetName, AudioClip clip)
         {
-            if (state == null || clip == null || !TryGetBroadcastWorldAudioPosition(state.Vehicle, out Vector3 position))
+            Entity audioPositionEntity = state?.AudioPositionEntity ?? Entity.Null;
+            if (state == null
+                || clip == null
+                || audioPositionEntity == Entity.Null
+                || !TryGetBroadcastWorldAudioPosition(audioPositionEntity, out Vector3 position))
             {
                 return false;
             }
@@ -1389,12 +2227,13 @@ namespace RapidTransitMod
 
         private void UpdateBroadcastRuntimeAudioSourcePosition(BroadcastRuntimeSequenceState state)
         {
-            if (state?.ActiveAudioSource == null || state.Vehicle == Entity.Null)
+            Entity audioPositionEntity = state?.AudioPositionEntity ?? Entity.Null;
+            if (state?.ActiveAudioSource == null || audioPositionEntity == Entity.Null)
             {
                 return;
             }
 
-            if (!TryGetBroadcastWorldAudioPosition(state.Vehicle, out Vector3 position))
+            if (!TryGetBroadcastWorldAudioPosition(audioPositionEntity, out Vector3 position))
             {
                 return;
             }
@@ -1409,6 +2248,14 @@ namespace RapidTransitMod
                 BroadcastVolumeScalarMax,
                 ClampBroadcastVolumePercent(m_BroadcastAppliedVolumePercent) / 100f);
             foreach (KeyValuePair<Entity, BroadcastRuntimeSequenceState> entry in m_BroadcastSequenceStateByVehicle)
+            {
+                if (entry.Value?.ActiveAudioSource != null)
+                {
+                    entry.Value.ActiveAudioSource.volume = volume;
+                }
+            }
+
+            foreach (KeyValuePair<string, BroadcastRuntimeSequenceState> entry in m_BroadcastPlatformSequenceStateByKey)
             {
                 if (entry.Value?.ActiveAudioSource != null)
                 {
@@ -1632,6 +2479,14 @@ namespace RapidTransitMod
                 }
             }
 
+            foreach (BroadcastRuntimeSequenceState state in m_BroadcastPlatformSequenceStateByKey.Values)
+            {
+                if (state?.PendingClipLoadTask != null && ReferenceEquals(state.PendingClipLoadTask, task))
+                {
+                    return true;
+                }
+            }
+
             return false;
         }
 
@@ -1643,6 +2498,14 @@ namespace RapidTransitMod
             }
 
             foreach (BroadcastRuntimeSequenceState state in m_BroadcastSequenceStateByVehicle.Values)
+            {
+                if (state?.ActiveAudioSource != null && state.ActiveAudioSource.clip == clip)
+                {
+                    return true;
+                }
+            }
+
+            foreach (BroadcastRuntimeSequenceState state in m_BroadcastPlatformSequenceStateByKey.Values)
             {
                 if (state?.ActiveAudioSource != null && state.ActiveAudioSource.clip == clip)
                 {
@@ -1741,6 +2604,27 @@ namespace RapidTransitMod
                 return false;
             }
 
+            return TryBuildBroadcastTriggerContext(stationContext, out context);
+        }
+
+        private bool TryBuildBroadcastTriggerContext(
+            BroadcastVehicleStationContext stationContext,
+            out BroadcastTriggerContext context)
+        {
+            return TryBuildBroadcastTriggerContext(
+                stationContext,
+                string.Empty,
+                null,
+                out context);
+        }
+
+        private bool TryBuildBroadcastTriggerContext(
+            BroadcastVehicleStationContext stationContext,
+            string overrideTurnbackStationName,
+            List<BroadcastWorkbenchStationBindingDto> overrideTurnbackStationBindings,
+            out BroadcastTriggerContext context)
+        {
+            context = default;
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
                 GetBroadcastAppliedLineStationBindings(stationContext.LineId);
             List<BroadcastWorkbenchStationBindingDto> currentStationBindings =
@@ -1750,7 +2634,10 @@ namespace RapidTransitMod
             List<BroadcastWorkbenchStationBindingDto> terminalStationBindings =
                 ResolveBroadcastBoundBindings(lineBindings, stationContext.TerminalStationId);
             List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings =
-                ResolveBroadcastBoundBindings(lineBindings, stationContext.TurnbackStationId);
+                overrideTurnbackStationBindings ?? ResolveBroadcastBoundBindings(lineBindings, stationContext.TurnbackStationId);
+            string turnbackStationName = !string.IsNullOrEmpty(overrideTurnbackStationName)
+                ? overrideTurnbackStationName
+                : stationContext.TurnbackStationName;
 
             context = new BroadcastTriggerContext(
                 stationContext.LineId,
@@ -1758,7 +2645,7 @@ namespace RapidTransitMod
                 stationContext.CurrentStationName,
                 stationContext.NextStationName,
                 stationContext.TerminalStationName,
-                stationContext.TurnbackStationName,
+                turnbackStationName,
                 ResolveBroadcastBoundAssetName(currentStationBindings, 1),
                 ResolveBroadcastBoundAssetName(nextStationBindings, 1),
                 ResolveBroadcastBoundAssetName(terminalStationBindings, 1),
@@ -1768,6 +2655,129 @@ namespace RapidTransitMod
                 terminalStationBindings,
                 turnbackStationBindings);
             return true;
+        }
+
+        private bool TryBuildBroadcastPlatformTriggerContext(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            string stationId,
+            out BroadcastTriggerContext context)
+        {
+            context = default;
+            if (line == Entity.Null
+                || string.IsNullOrWhiteSpace(stationId)
+                || !TryGetBroadcastLineStationContextCache(line, waypoints, out BroadcastLineStationContextCache cache))
+            {
+                return false;
+            }
+
+            BroadcastResolvedStation currentStation = cache.Stations
+                .FirstOrDefault(station => station != null && string.Equals(station.StationId, stationId, StringComparison.Ordinal));
+            if (currentStation == null)
+            {
+                return false;
+            }
+
+            TryGetBroadcastNextStationAfterWaypointIndex(cache, currentStation.WaypointIndex, out BroadcastResolvedStation nextStation);
+            BroadcastResolvedStation terminalStation = cache.Stations.Length > 0 ? cache.Stations[0] : null;
+            BroadcastResolvedStation turnbackStation =
+                ResolveBroadcastTurnbackStationAfterWaypoint(cache, currentStation);
+            string lineId = GetDraftKey(GetWorkbenchLineId(line));
+            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
+                GetBroadcastAppliedLineStationBindings(lineId);
+            List<BroadcastWorkbenchStationBindingDto> currentStationBindings =
+                ResolveBroadcastBoundBindings(lineBindings, currentStation.StationId);
+            List<BroadcastWorkbenchStationBindingDto> nextStationBindings =
+                ResolveBroadcastBoundBindings(lineBindings, nextStation?.StationId);
+            List<BroadcastWorkbenchStationBindingDto> terminalStationBindings =
+                ResolveBroadcastBoundBindings(lineBindings, terminalStation?.StationId);
+            List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings =
+                ResolveBroadcastBoundBindings(lineBindings, turnbackStation?.StationId);
+
+            context = new BroadcastTriggerContext(
+                lineId,
+                currentStation.StopEntity,
+                currentStation.Name,
+                nextStation?.Name ?? string.Empty,
+                terminalStation?.Name ?? string.Empty,
+                turnbackStation?.Name ?? string.Empty,
+                ResolveBroadcastBoundAssetName(currentStationBindings, 1),
+                ResolveBroadcastBoundAssetName(nextStationBindings, 1),
+                ResolveBroadcastBoundAssetName(terminalStationBindings, 1),
+                ResolveBroadcastBoundAssetName(turnbackStationBindings, 1),
+                currentStationBindings,
+                nextStationBindings,
+                terminalStationBindings,
+                turnbackStationBindings);
+            return true;
+        }
+
+        private static BroadcastResolvedStation ResolveBroadcastTurnbackStationAfterWaypoint(
+            BroadcastLineStationContextCache cache,
+            BroadcastResolvedStation currentStation)
+        {
+            if (cache?.TurnbackStations == null || cache.TurnbackStations.Length == 0)
+            {
+                return null;
+            }
+
+            int waypointIndex = currentStation?.WaypointIndex ?? -1;
+            BroadcastResolvedStation terminalStation =
+                cache.Stations != null && cache.Stations.Length > 0 ? cache.Stations[0] : null;
+            BroadcastResolvedStation firstStation = null;
+            BroadcastResolvedStation nextStation = null;
+            List<BroadcastResolvedStation> candidates = new List<BroadcastResolvedStation>();
+            for (int i = 0; i < cache.TurnbackStations.Length; i++)
+            {
+                BroadcastResolvedStation station = cache.TurnbackStations[i];
+                if (station != null)
+                {
+                    candidates.Add(station);
+                }
+            }
+
+            if (terminalStation != null
+                && !candidates.Any(candidate => IsSameBroadcastStation(candidate, terminalStation)))
+            {
+                candidates.Add(terminalStation);
+            }
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                BroadcastResolvedStation station = candidates[i];
+                if (firstStation == null || station.WaypointIndex < firstStation.WaypointIndex)
+                {
+                    firstStation = station;
+                }
+
+                if (station.WaypointIndex > waypointIndex
+                    && !IsSameBroadcastStation(station, currentStation)
+                    && (nextStation == null || station.WaypointIndex < nextStation.WaypointIndex))
+                {
+                    nextStation = station;
+                }
+            }
+
+            if (nextStation != null)
+            {
+                return nextStation;
+            }
+
+            if (firstStation != null && !IsSameBroadcastStation(firstStation, currentStation))
+            {
+                return firstStation;
+            }
+
+            for (int i = 0; i < cache.TurnbackStations.Length; i++)
+            {
+                BroadcastResolvedStation station = cache.TurnbackStations[i];
+                if (!IsSameBroadcastStation(station, currentStation))
+                {
+                    return station;
+                }
+            }
+
+            return firstStation;
         }
 
         private List<BroadcastResolvedStation> BuildBroadcastResolvedStations(DynamicBuffer<RouteWaypoint> waypoints)
@@ -1923,14 +2933,6 @@ namespace RapidTransitMod
             {
                 TryResolveBroadcastTurnbackStationFromBoundary(cache, stationBoundaries[i], out BroadcastResolvedStation station);
                 stations.Add(station);
-            }
-
-            if (cache.Stations != null
-                && cache.Stations.Length > 0
-                && cache.Stations[0] != null
-                && !stations.Any(station => IsSameBroadcastStation(station, cache.Stations[0])))
-            {
-                stations.Add(cache.Stations[0]);
             }
 
             return stations.ToArray();
@@ -2271,25 +3273,74 @@ namespace RapidTransitMod
                 atomCursorIndex = cursor.AtomCursorIndex;
             }
 
-            if (!TryResolveNextTurnbackStationBoundary(
+            BroadcastResolvedStation terminalStation =
+                cache.Stations != null && cache.Stations.Length > 0 ? cache.Stations[0] : null;
+            if (!TryResolveBroadcastTurnbackStationBoundaryWithWrap(
                     chain,
                     atomCursorIndex,
                     out TrackTurnbackStationBoundary stationBoundary))
             {
-                if (chain.TurnbackBoundaries != null
-                    && chain.TurnbackBoundaries.Count > 0
-                    && cache.Stations != null
-                    && cache.Stations.Length > 0
-                    && cache.Stations[0] != null)
-                {
-                    station = cache.Stations[0];
-                    return true;
-                }
-
                 return false;
             }
 
-            return TryResolveBroadcastTurnbackStationFromBoundary(cache, stationBoundary, out station);
+            bool resolved = TryResolveBroadcastTurnbackStationFromBoundary(cache, stationBoundary, out station);
+            bool wrappedToStart = atomCursorIndex >= 0 && stationBoundary.AtomIndex <= atomCursorIndex;
+            if (wrappedToStart
+                && resolved
+                && terminalStation != null
+                && !IsSameBroadcastStation(station, terminalStation))
+            {
+                station = terminalStation;
+                return true;
+            }
+
+            return resolved;
+        }
+
+        private bool TryResolveBroadcastTurnbackStationBoundaryWithWrap(
+            LineTrackChain chain,
+            int atomCursorIndex,
+            out TrackTurnbackStationBoundary stationBoundary)
+        {
+            stationBoundary = default;
+            if (chain == null
+                || chain.TurnbackBoundaries == null
+                || chain.TurnbackBoundaries.Count == 0)
+            {
+                return false;
+            }
+
+            int cursorAtomIndex = atomCursorIndex >= 0 ? atomCursorIndex : -1;
+            bool hasFirstResolvedBoundary = false;
+            TrackTurnbackStationBoundary firstResolvedBoundary = default;
+            for (int boundaryIndex = 0; boundaryIndex < chain.TurnbackBoundaries.Count; boundaryIndex++)
+            {
+                TurnbackBoundary boundary = chain.TurnbackBoundaries[boundaryIndex];
+                if (!TryResolveTurnbackStationBoundary(chain, boundary, out TrackTurnbackStationBoundary candidate))
+                {
+                    continue;
+                }
+
+                if (!hasFirstResolvedBoundary)
+                {
+                    firstResolvedBoundary = candidate;
+                    hasFirstResolvedBoundary = true;
+                }
+
+                if (cursorAtomIndex < 0 || boundary.AtomIndex > cursorAtomIndex)
+                {
+                    stationBoundary = candidate;
+                    return true;
+                }
+            }
+
+            if (hasFirstResolvedBoundary)
+            {
+                stationBoundary = firstResolvedBoundary;
+                return true;
+            }
+
+            return false;
         }
 
         private static string ResolveBroadcastBoundAssetName(
@@ -2381,6 +3432,12 @@ namespace RapidTransitMod
                     break;
                 case "approach_station":
                     triggerLabel = IsChineseLocale() ? "即将进站" : "approach_station";
+                    break;
+                case BroadcastPlatformApproachTriggerId:
+                    triggerLabel = IsChineseLocale() ? "站台即将进站" : BroadcastPlatformApproachTriggerId;
+                    break;
+                case BroadcastPlatformIdleTriggerId:
+                    triggerLabel = IsChineseLocale() ? "站台空闲时" : BroadcastPlatformIdleTriggerId;
                     break;
                 case "mid_route":
                     triggerLabel = IsChineseLocale() ? "区间运行中" : "mid_route";

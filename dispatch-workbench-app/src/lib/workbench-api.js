@@ -18,6 +18,8 @@ const CALLS = {
   saveBroadcastStationBindings: "suhua::rt.workbench.saveBroadcastStationBindings",
   autoBindBroadcastStationMappings: "suhua::rt.workbench.autoBindBroadcastStationMappings",
   saveBroadcastRules: "suhua::rt.workbench.saveBroadcastRules",
+  saveBroadcastPlatformAnnouncement: "suhua::rt.workbench.saveBroadcastPlatformAnnouncement",
+  copyBroadcastPlatformAnnouncementToAllStations: "suhua::rt.workbench.copyBroadcastPlatformAnnouncementToAllStations",
   applyBroadcastConfig: "suhua::rt.workbench.applyBroadcastConfig",
   openBroadcastAssetDirectoryPicker: "suhua::rt.workbench.openBroadcastAssetDirectoryPicker",
   playBroadcastAssetPreview: "suhua::rt.workbench.playBroadcastAssetPreview",
@@ -69,6 +71,7 @@ function createEmptyBroadcastSnapshot() {
     stations: [],
     stationBindings: [],
     rules: [],
+    platformAnnouncements: [],
     assetDirectory: "",
     assets: [],
     version: "",
@@ -148,6 +151,14 @@ function createBroadcastRulesSaveResult() {
   return {
     success: false,
     error: ""
+  };
+}
+
+function createBroadcastPlatformAnnouncementSaveResult() {
+  return {
+    success: false,
+    error: "",
+    snapshot: null
   };
 }
 
@@ -252,6 +263,16 @@ function createLiveApi() {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.saveBroadcastRules, JSON.stringify(request ?? {}));
       return parsePayload(payload, createBroadcastRulesSaveResult());
+    },
+    async saveBroadcastPlatformAnnouncement(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.saveBroadcastPlatformAnnouncement, JSON.stringify(request ?? {}));
+      return parsePayload(payload, createBroadcastPlatformAnnouncementSaveResult());
+    },
+    async copyBroadcastPlatformAnnouncementToAllStations(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.copyBroadcastPlatformAnnouncementToAllStations, JSON.stringify(request ?? {}));
+      return parsePayload(payload, createBroadcastPlatformAnnouncementSaveResult());
     },
     async applyBroadcastConfig(request) {
       const engineCall = getEngineCall();

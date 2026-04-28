@@ -1190,6 +1190,14 @@
   transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
 }
 
+.dw-bc-secondary-button.is-compact {
+  height: 42px;
+  min-width: 112px;
+  padding: 0 16px;
+  font-size: 14px;
+  line-height: 18px;
+}
+
 .dw-bc-primary-button.is-footer {
   min-width: 176px;
 }
@@ -2397,6 +2405,83 @@
   margin-top: 8px;
 }
 
+.dw-bc-map-disambiguation-actions > button + button {
+  margin-left: 8px;
+}
+
+.dw-bc-platform-head-tools {
+  display: flex;
+  align-items: flex-end;
+}
+
+.dw-bc-platform-head-tools > * + * {
+  margin-left: 12px;
+}
+
+.dw-bc-platform-targets {
+  position: relative;
+  margin-top: 24px;
+  padding-top: 16px;
+}
+
+.dw-bc-platform-targets::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 176px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dw-bc-platform-target-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dw-bc-platform-target-head > span {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.dw-bc-platform-station-buttons {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.dw-bc-platform-station-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 46px;
+  min-width: 0;
+  padding: 0 12px;
+  margin-right: 8px;
+  margin-bottom: 8px;
+  border: 0;
+  border-radius: 0;
+  background-color: rgba(255, 255, 255, 0.04);
+  color: #c6d2da;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 20px;
+  font-weight: 600;
+  font-family: var(--dw-native-font-family);
+  text-align: center;
+  white-space: nowrap;
+  transition: background-color 130ms ease, color 130ms ease;
+}
+
+.dw-bc-platform-station-button.is-active {
+  background-color: rgba(90, 180, 197, 0.22);
+  color: #5ab4c5;
+}
+
 .dw-bc-footer {
   display: flex;
   align-items: center;
@@ -2595,6 +2680,26 @@
   background: rgba(116, 193, 193, 0.07);
   border-color: rgba(116, 193, 193, 0.50);
   color: #bfecec;
+}
+
+.dw-bc-platform-station-button:hover {
+  background-color: rgba(255, 255, 255, 0.10);
+  color: #e4edf2;
+}
+
+.dw-bc-platform-station-button:active {
+  background-color: rgba(255, 255, 255, 0.16);
+  color: #f3fbfd;
+}
+
+.dw-bc-platform-station-button.is-active:hover {
+  background-color: rgba(90, 180, 197, 0.22);
+  color: #5ab4c5;
+}
+
+.dw-bc-platform-station-button.is-active:active {
+  background-color: rgba(90, 180, 197, 0.30);
+  color: #8fe3f1;
 }
 
 .dw-bc-link-muted:hover {

@@ -176,7 +176,9 @@ namespace RapidTransitMod
 
             if (vehicleState == VehicleState.Preparing)
             {
-                etaFrames = EstimatePreparingArrivalFrames(vehicle, line, nowFrame, lineDurationFrames);
+                var routeWaypoints = GetBufferLookup<RouteWaypoint>(true);
+                if (routeWaypoints.TryGetBuffer(line, out var waypoints))
+                    etaFrames = EstimatePreparingArrivalFrames(vehicle, line, waypoints, nowFrame, lineDurationFrames);
             }
             else if (vehicleState == VehicleState.Running)
             {

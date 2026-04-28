@@ -102,6 +102,7 @@ namespace RapidTransitMod
             public Entity LastObservedTarget;
             public string ReasonCode = string.Empty;
             public bool HasIntervention;
+            public bool HardAckStallLogged;
         }
 
         private struct DeferredBoardingTailIgnoreEntry
@@ -572,6 +573,9 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BypassDecisionLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BypassQueuedLocalOverrideLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_PreparingSlotLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_PreparingTargetDriftLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_CrossLineCandidateLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_RouteVehicleOwnerMismatchLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_HoldingSkipLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LateDispatchLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BvMisfireObserveLogCache = new Dictionary<Entity, string>();
@@ -2165,17 +2169,31 @@ namespace RapidTransitMod
             return math.max(0f, remaining);
         }
 
-        private float EstimatePreparingArrivalFrames(Entity v, Entity line, uint nowFrame, float lineDurationFrames)
+        private float EstimatePreparingArrivalFrames(
+            Entity v,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> wps,
+            uint nowFrame,
+            float lineDurationFrames)
         {
-            if (!m_VehiclePreparingStartFrame.TryGetValue(v, out uint prepStart))
+            if (!m_VehiclePreparingStartFrame.ContainsKey(v))
                 return float.MaxValue;
-            float elapsedFrames = nowFrame - prepStart;
             float cachedFrames = ReadDispatchCache(line);
             if (cachedFrames <= 0f)
                 cachedFrames = EstimateDispatchFallbackFrames(v, line, lineDurationFrames);
             if (cachedFrames <= 0f)
                 return float.MaxValue;
-            return math.max(0f, cachedFrames - elapsedFrames);
+
+            if (wps.Length > 0
+                && EntityManager.HasComponent<Target>(v)
+                && EntityManager.GetComponentData<Target>(v).m_Target == wps[0].m_Waypoint
+                && TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition)
+                && nextWaypointIndex == 0)
+            {
+                return math.max(0f, cachedFrames * (1f - math.saturate(segmentPosition)));
+            }
+
+            return cachedFrames;
         }
 
         private float EstimateRunningArrivalFrames(

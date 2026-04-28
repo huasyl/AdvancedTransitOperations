@@ -144,9 +144,13 @@ namespace RapidTransitMod
             [DataMember]
             public BroadcastWorkbenchPersistedRuleState[] broadcastDraftRules;
             [DataMember]
+            public BroadcastWorkbenchPersistedPlatformAnnouncementState[] broadcastDraftPlatformAnnouncements;
+            [DataMember]
             public BroadcastWorkbenchPersistedLineBindingState[] broadcastLineBindings;
             [DataMember]
             public BroadcastWorkbenchPersistedRuleState[] broadcastRules;
+            [DataMember]
+            public BroadcastWorkbenchPersistedPlatformAnnouncementState[] broadcastPlatformAnnouncements;
             [DataMember]
             public BroadcastWorkbenchPersistedAppliedState broadcastAppliedState;
             [DataMember]
@@ -1763,8 +1767,10 @@ namespace RapidTransitMod
                 broadcastAssets = BuildPersistedBroadcastAssetStates(),
                 broadcastDraftLineBindings = BuildPersistedBroadcastDraftLineBindingStates(),
                 broadcastDraftRules = BuildPersistedBroadcastDraftRuleStates(),
+                broadcastDraftPlatformAnnouncements = BuildPersistedBroadcastDraftPlatformAnnouncementStates(),
                 broadcastLineBindings = BuildPersistedBroadcastLineBindingStates(),
                 broadcastRules = BuildPersistedBroadcastRuleStates(),
+                broadcastPlatformAnnouncements = BuildPersistedBroadcastPlatformAnnouncementStates(),
                 broadcastAppliedState = BuildPersistedBroadcastAppliedState(),
                 broadcastDraftVolume = m_BroadcastDraftVolumePercent
             };
@@ -1784,8 +1790,10 @@ namespace RapidTransitMod
                 persisted?.broadcastAssets,
                 persisted?.broadcastDraftLineBindings,
                 persisted?.broadcastDraftRules,
+                persisted?.broadcastDraftPlatformAnnouncements,
                 persisted?.broadcastLineBindings,
                 persisted?.broadcastRules,
+                persisted?.broadcastPlatformAnnouncements,
                 persisted?.broadcastAppliedState,
                 persisted?.broadcastDraftVolume ?? 80);
 

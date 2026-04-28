@@ -33,10 +33,14 @@ namespace RapidTransitMod
             new Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>>(StringComparer.Ordinal);
         private readonly Dictionary<string, List<BroadcastWorkbenchRuleDto>> m_BroadcastDraftLineRules =
             new Dictionary<string, List<BroadcastWorkbenchRuleDto>>(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastDraftLinePlatformAnnouncements =
+            new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> m_BroadcastLineStationAssetBindings =
             new Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>>(StringComparer.Ordinal);
         private readonly Dictionary<string, List<BroadcastWorkbenchRuleDto>> m_BroadcastLineRules =
             new Dictionary<string, List<BroadcastWorkbenchRuleDto>>(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastLinePlatformAnnouncements =
+            new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, DispatchWorkbenchStationConflictDto[]>> m_BroadcastPendingAutoBindConflicts =
             new Dictionary<string, Dictionary<string, DispatchWorkbenchStationConflictDto[]>>(StringComparer.Ordinal);
         private readonly HashSet<string> m_BroadcastAppliedLineIds = new HashSet<string>(StringComparer.Ordinal);
@@ -83,6 +87,8 @@ namespace RapidTransitMod
             public BroadcastWorkbenchStationBindingDto[] stationBindings;
             [DataMember]
             public BroadcastWorkbenchRuleDto[] rules;
+            [DataMember]
+            public BroadcastWorkbenchPlatformAnnouncementDto[] platformAnnouncements;
             [DataMember]
             public string assetDirectory;
             [DataMember]
@@ -183,6 +189,29 @@ namespace RapidTransitMod
             public string trigger;
             [DataMember]
             public string triggerKey;
+            [DataMember]
+            public BroadcastWorkbenchRuleNodeDto[] nodes;
+        }
+
+        [DataContract]
+        public class BroadcastWorkbenchPlatformAnnouncementDto
+        {
+            [DataMember]
+            public string lineId;
+            [DataMember]
+            public string stationId;
+            [DataMember]
+            public string stationName;
+            [DataMember]
+            public string title;
+            [DataMember]
+            public string uiTriggerId;
+            [DataMember]
+            public bool enabled;
+            [DataMember]
+            public string triggerId;
+            [DataMember]
+            public int cooldownGameMinutes;
             [DataMember]
             public BroadcastWorkbenchRuleNodeDto[] nodes;
         }
@@ -404,6 +433,36 @@ namespace RapidTransitMod
         }
 
         [DataContract]
+        public class BroadcastWorkbenchSavePlatformAnnouncementRequest
+        {
+            [DataMember]
+            public string lineId;
+            [DataMember]
+            public string stationId;
+            [DataMember]
+            public string stationName;
+            [DataMember]
+            public string title;
+            [DataMember]
+            public string uiTriggerId;
+            [DataMember]
+            public bool enabled;
+            [DataMember]
+            public BroadcastWorkbenchRuleNodeDto[] nodes;
+        }
+
+        [DataContract]
+        public class BroadcastWorkbenchSavePlatformAnnouncementResult
+        {
+            [DataMember]
+            public bool success;
+            [DataMember]
+            public string error;
+            [DataMember]
+            public BroadcastWorkbenchSnapshot snapshot;
+        }
+
+        [DataContract]
         public class BroadcastWorkbenchApplyRequest
         {
             [DataMember]
@@ -450,6 +509,15 @@ namespace RapidTransitMod
             public string lineId;
             [DataMember]
             public BroadcastWorkbenchRuleDto[] rules;
+        }
+
+        [DataContract]
+        public class BroadcastWorkbenchPersistedPlatformAnnouncementState
+        {
+            [DataMember]
+            public string lineId;
+            [DataMember]
+            public BroadcastWorkbenchPlatformAnnouncementDto[] announcements;
         }
 
         [DataContract]
@@ -550,6 +618,84 @@ namespace RapidTransitMod
             {
                 result.error = ex.Message ?? string.Empty;
                 LogBroadcastWorkbenchException("SaveBroadcastRulesJson", ex);
+            }
+
+            return DispatchWorkbenchJson.Serialize(result);
+        }
+
+        public string SaveBroadcastPlatformAnnouncementJson(string requestJson)
+        {
+            return SaveBroadcastPlatformAnnouncementCore(requestJson, copyToAllStations: false);
+        }
+
+        public string CopyBroadcastPlatformAnnouncementToAllStationsJson(string requestJson)
+        {
+            return SaveBroadcastPlatformAnnouncementCore(requestJson, copyToAllStations: true);
+        }
+
+        private string SaveBroadcastPlatformAnnouncementCore(string requestJson, bool copyToAllStations)
+        {
+            BroadcastWorkbenchSavePlatformAnnouncementResult result = new BroadcastWorkbenchSavePlatformAnnouncementResult
+            {
+                success = false,
+                error = string.Empty
+            };
+
+            try
+            {
+                EnsureWorkbenchPersistenceLoaded();
+                BroadcastWorkbenchSavePlatformAnnouncementRequest request =
+                    DispatchWorkbenchJson.Deserialize<BroadcastWorkbenchSavePlatformAnnouncementRequest>(requestJson);
+                string lineId = request?.lineId ?? string.Empty;
+                string stationId = request?.stationId ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(lineId) || string.IsNullOrWhiteSpace(stationId))
+                {
+                    result.error = "Line or station is missing.";
+                    return DispatchWorkbenchJson.Serialize(result);
+                }
+
+                List<WorkbenchLineRuntime> runtimeLines = BuildWorkbenchLinesStable();
+                WorkbenchLineRuntime activeRuntime = ResolveActiveWorkbenchLine(runtimeLines, lineId);
+                List<BroadcastWorkbenchStationGroup> stationGroups = activeRuntime != null
+                    ? BuildBroadcastWorkbenchStationGroups(activeRuntime.Entity)
+                    : new List<BroadcastWorkbenchStationGroup>();
+                BroadcastWorkbenchPlatformAnnouncementDto announcement =
+                    NormalizeBroadcastPlatformAnnouncement(lineId, stationId, request?.stationName, request?.title, request?.uiTriggerId, request?.enabled == true, request?.nodes);
+                Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements =
+                    GetOrCreateBroadcastDraftLinePlatformAnnouncements(lineId);
+
+                if (copyToAllStations)
+                {
+                    foreach (BroadcastWorkbenchStationGroup group in stationGroups)
+                    {
+                        string targetStationId = group?.Representative?.id ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(targetStationId))
+                        {
+                            continue;
+                        }
+
+                        lineAnnouncements[targetStationId] = CloneBroadcastPlatformAnnouncement(
+                            announcement,
+                            lineId,
+                            targetStationId,
+                            group.Representative.name);
+                    }
+                }
+                else
+                {
+                    lineAnnouncements[stationId] = announcement;
+                }
+
+                m_WorkbenchSnapshotVersion++;
+                SaveWorkbenchPersistence();
+                result.success = true;
+                result.snapshot = BuildBroadcastWorkbenchSnapshot(lineId);
+                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(result.snapshot);
+            }
+            catch (Exception ex)
+            {
+                result.error = ex.Message ?? string.Empty;
+                LogBroadcastWorkbenchException("SaveBroadcastPlatformAnnouncementJson", ex);
             }
 
             return DispatchWorkbenchJson.Serialize(result);
@@ -1327,6 +1473,9 @@ namespace RapidTransitMod
             BroadcastWorkbenchRuleDto[] rules = activeRuntime != null
                 ? BuildBroadcastDraftRules(activeRuntime.Id)
                 : Array.Empty<BroadcastWorkbenchRuleDto>();
+            BroadcastWorkbenchPlatformAnnouncementDto[] platformAnnouncements = activeRuntime != null
+                ? BuildBroadcastDraftPlatformAnnouncements(activeRuntime.Id, stationGroups)
+                : Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>();
             string activeLineId = activeRuntime?.Id ?? string.Empty;
             bool draftDirty = !string.IsNullOrEmpty(activeLineId) && IsBroadcastLineDraftDirty(activeLineId);
             if (m_BroadcastDraftVolumePercent != m_BroadcastAppliedVolumePercent)
@@ -1350,6 +1499,7 @@ namespace RapidTransitMod
                     : Array.Empty<BroadcastWorkbenchTurnbackPointDto>(),
                 stationBindings = stationBindings,
                 rules = rules,
+                platformAnnouncements = platformAnnouncements,
                 assetDirectory = m_BroadcastAssetDirectory,
                 assets = m_BroadcastAssetCatalog.Select(CloneBroadcastWorkbenchAsset).ToArray(),
                 version = m_WorkbenchSnapshotVersion.ToString(),
@@ -2240,15 +2390,22 @@ namespace RapidTransitMod
                 });
             }
 
-            BroadcastWorkbenchStationGroup terminalGroup = stationGroups.Count > 0 ? stationGroups[0] : null;
-            if (terminalGroup?.Representative != null
-                && !points.Any(point => string.Equals(point.stationId, terminalGroup.Representative.id, StringComparison.Ordinal)))
+            BroadcastWorkbenchStationGroup terminalStationGroup =
+                stationGroups.Count > 0 ? stationGroups[0] : null;
+            bool hasResolvedTurnback = points.Any(point => point != null && point.resolved);
+            bool terminalAlreadyIncluded = terminalStationGroup != null
+                && points.Any(point => point != null
+                    && point.resolved
+                    && string.Equals(point.stationId, terminalStationGroup.Representative?.id ?? string.Empty, StringComparison.Ordinal));
+            if (hasResolvedTurnback
+                && terminalStationGroup?.Representative != null
+                && !terminalAlreadyIncluded)
             {
                 points.Add(new BroadcastWorkbenchTurnbackPointDto
                 {
                     index = points.Count + 1,
-                    stationId = terminalGroup.Representative.id ?? string.Empty,
-                    stationName = terminalGroup.Representative.name ?? string.Empty,
+                    stationId = terminalStationGroup.Representative.id ?? string.Empty,
+                    stationName = terminalStationGroup.Representative.name ?? string.Empty,
                     resolved = true
                 });
             }
@@ -2407,6 +2564,42 @@ namespace RapidTransitMod
             }
 
             return rules;
+        }
+
+        private Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> GetOrCreateBroadcastDraftLinePlatformAnnouncements(string lineId)
+        {
+            string lineKey = lineId ?? string.Empty;
+            if (!m_BroadcastDraftLinePlatformAnnouncements.TryGetValue(lineKey, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements))
+            {
+                announcements = new Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>(StringComparer.Ordinal);
+                m_BroadcastDraftLinePlatformAnnouncements[lineKey] = announcements;
+            }
+
+            return announcements;
+        }
+
+        private Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> GetBroadcastAppliedLinePlatformAnnouncements(string lineId)
+        {
+            if (string.IsNullOrEmpty(lineId)
+                || !m_BroadcastLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements)
+                || announcements == null)
+            {
+                return null;
+            }
+
+            return announcements;
+        }
+
+        private Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> GetBroadcastDraftLinePlatformAnnouncementsOrNull(string lineId)
+        {
+            if (string.IsNullOrEmpty(lineId)
+                || !m_BroadcastDraftLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements)
+                || announcements == null)
+            {
+                return null;
+            }
+
+            return announcements;
         }
 
         private WorkbenchLineRuntime ResolveBroadcastWorkbenchLineRuntime(string lineId)
@@ -2713,6 +2906,51 @@ namespace RapidTransitMod
                 .ToArray();
         }
 
+        private BroadcastWorkbenchPlatformAnnouncementDto[] BuildBroadcastDraftPlatformAnnouncements(
+            string lineId,
+            List<BroadcastWorkbenchStationGroup> stationGroups)
+        {
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements =
+                GetBroadcastDraftLinePlatformAnnouncementsOrNull(lineId);
+            if (string.IsNullOrEmpty(lineId)
+                || stationGroups == null
+                || stationGroups.Count == 0)
+            {
+                return Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>();
+            }
+
+            List<BroadcastWorkbenchPlatformAnnouncementDto> result = new List<BroadcastWorkbenchPlatformAnnouncementDto>();
+            for (int i = 0; i < stationGroups.Count; i++)
+            {
+                BroadcastWorkbenchStationGroup group = stationGroups[i];
+                string stationId = group?.Representative?.id ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(stationId))
+                {
+                    continue;
+                }
+
+                BroadcastWorkbenchPlatformAnnouncementDto announcement = null;
+                if (announcements != null)
+                {
+                    for (int stationIndex = 0; stationIndex < group.StationIds.Count; stationIndex++)
+                    {
+                        if (announcements.TryGetValue(group.StationIds[stationIndex], out announcement) && announcement != null)
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                result.Add(CloneBroadcastPlatformAnnouncement(
+                    announcement,
+                    lineId,
+                    stationId,
+                    group.Representative.name));
+            }
+
+            return result.ToArray();
+        }
+
         private void ApplyBroadcastDraftToRuntime(string lineId)
         {
             if (string.IsNullOrWhiteSpace(lineId))
@@ -2744,6 +2982,17 @@ namespace RapidTransitMod
             {
                 m_BroadcastLineRules.Remove(lineId);
             }
+
+            if (m_BroadcastDraftLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> draftAnnouncements)
+                && draftAnnouncements != null
+                && draftAnnouncements.Count > 0)
+            {
+                m_BroadcastLinePlatformAnnouncements[lineId] = CloneBroadcastLinePlatformAnnouncements(draftAnnouncements);
+            }
+            else
+            {
+                m_BroadcastLinePlatformAnnouncements.Remove(lineId);
+            }
         }
 
         private bool IsBroadcastLineDraftDirty(string lineId)
@@ -2757,7 +3006,16 @@ namespace RapidTransitMod
 
             List<BroadcastWorkbenchRuleDto> appliedRules = GetBroadcastAppliedLineRules(lineId);
             List<BroadcastWorkbenchRuleDto> draftRules = GetBroadcastDraftLineRulesOrNull(lineId);
-            return !AreBroadcastRulesEqual(appliedRules, draftRules);
+            if (!AreBroadcastRulesEqual(appliedRules, draftRules))
+            {
+                return true;
+            }
+
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> appliedAnnouncements =
+                GetBroadcastAppliedLinePlatformAnnouncements(lineId);
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> draftAnnouncements =
+                GetBroadcastDraftLinePlatformAnnouncementsOrNull(lineId);
+            return !AreBroadcastPlatformAnnouncementsEqual(appliedAnnouncements, draftAnnouncements);
         }
 
         private bool RemoveBroadcastAsset(string assetName)
@@ -2842,12 +3100,16 @@ namespace RapidTransitMod
             RemoveBroadcastAssetReferencesFromBindings(m_BroadcastLineStationAssetBindings, assetName);
             RemoveBroadcastAssetReferencesFromRules(m_BroadcastDraftLineRules, assetName);
             RemoveBroadcastAssetReferencesFromRules(m_BroadcastLineRules, assetName);
+            RemoveBroadcastAssetReferencesFromPlatformAnnouncements(m_BroadcastDraftLinePlatformAnnouncements, assetName);
+            RemoveBroadcastAssetReferencesFromPlatformAnnouncements(m_BroadcastLinePlatformAnnouncements, assetName);
         }
 
         private void RemoveAllBroadcastAssetNodesFromRules()
         {
             RemoveAllBroadcastAssetNodesFromRuleSet(m_BroadcastDraftLineRules);
             RemoveAllBroadcastAssetNodesFromRuleSet(m_BroadcastLineRules);
+            RemoveAllBroadcastAssetNodesFromPlatformAnnouncements(m_BroadcastDraftLinePlatformAnnouncements);
+            RemoveAllBroadcastAssetNodesFromPlatformAnnouncements(m_BroadcastLinePlatformAnnouncements);
         }
 
         private Dictionary<string, string> BuildBroadcastAssetMatchLookup()
@@ -3323,6 +3585,61 @@ namespace RapidTransitMod
             }
         }
 
+        private static void RemoveBroadcastAssetReferencesFromPlatformAnnouncements(
+            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> allAnnouncements,
+            string assetName)
+        {
+            foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in allAnnouncements)
+            {
+                Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements = lineEntry.Value;
+                if (announcements == null)
+                {
+                    continue;
+                }
+
+                foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> stationEntry in announcements)
+                {
+                    BroadcastWorkbenchPlatformAnnouncementDto announcement = stationEntry.Value;
+                    if (announcement?.nodes == null || announcement.nodes.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    announcement.nodes = announcement.nodes
+                        .Where(node => node != null
+                            && !(string.Equals(node.type, "asset", StringComparison.Ordinal)
+                                && string.Equals(node.name, assetName, StringComparison.OrdinalIgnoreCase)))
+                        .ToArray();
+                }
+            }
+        }
+
+        private static void RemoveAllBroadcastAssetNodesFromPlatformAnnouncements(
+            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> allAnnouncements)
+        {
+            foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in allAnnouncements)
+            {
+                Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements = lineEntry.Value;
+                if (announcements == null)
+                {
+                    continue;
+                }
+
+                foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> stationEntry in announcements)
+                {
+                    BroadcastWorkbenchPlatformAnnouncementDto announcement = stationEntry.Value;
+                    if (announcement?.nodes == null || announcement.nodes.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    announcement.nodes = announcement.nodes
+                        .Where(node => node != null && !string.Equals(node.type, "asset", StringComparison.Ordinal))
+                        .ToArray();
+                }
+            }
+        }
+
         private static void RestoreBroadcastLineBindingsInto(
             Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> target,
             BroadcastWorkbenchPersistedLineBindingState[] persistedLineBindings)
@@ -3426,6 +3743,50 @@ namespace RapidTransitMod
             }
         }
 
+        private static void RestoreBroadcastPlatformAnnouncementsInto(
+            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> target,
+            BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedAnnouncements)
+        {
+            if (persistedAnnouncements == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < persistedAnnouncements.Length; i++)
+            {
+                BroadcastWorkbenchPersistedPlatformAnnouncementState lineState = persistedAnnouncements[i];
+                if (lineState == null || string.IsNullOrWhiteSpace(lineState.lineId) || lineState.announcements == null)
+                {
+                    continue;
+                }
+
+                Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements =
+                    new Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>(StringComparer.Ordinal);
+                for (int j = 0; j < lineState.announcements.Length; j++)
+                {
+                    BroadcastWorkbenchPlatformAnnouncementDto announcement = lineState.announcements[j];
+                    if (announcement == null || string.IsNullOrWhiteSpace(announcement.stationId))
+                    {
+                        continue;
+                    }
+
+                    lineAnnouncements[announcement.stationId] = NormalizeBroadcastPlatformAnnouncement(
+                        lineState.lineId,
+                        announcement.stationId,
+                        announcement.stationName,
+                        announcement.title,
+                        announcement.uiTriggerId,
+                        announcement.enabled,
+                        announcement.nodes);
+                }
+
+                if (lineAnnouncements.Count > 0)
+                {
+                    target[lineState.lineId] = lineAnnouncements;
+                }
+            }
+        }
+
         private static void CopyBroadcastBindings(
             Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> source,
             Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> target)
@@ -3459,6 +3820,21 @@ namespace RapidTransitMod
             }
         }
 
+        private static void CopyBroadcastPlatformAnnouncements(
+            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> source,
+            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> target)
+        {
+            foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> entry in source)
+            {
+                if (entry.Value == null || entry.Value.Count == 0)
+                {
+                    continue;
+                }
+
+                target[entry.Key] = CloneBroadcastLinePlatformAnnouncements(entry.Value);
+            }
+        }
+
         private static bool AreBroadcastLineBindingsEqual(
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> left,
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> right)
@@ -3478,6 +3854,15 @@ namespace RapidTransitMod
             string rightJson = DispatchWorkbenchJson.Serialize(
                 right?.Select(CloneBroadcastWorkbenchRule).Where(rule => rule != null).ToArray()
                 ?? Array.Empty<BroadcastWorkbenchRuleDto>());
+            return string.Equals(leftJson, rightJson, StringComparison.Ordinal);
+        }
+
+        private static bool AreBroadcastPlatformAnnouncementsEqual(
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> left,
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> right)
+        {
+            string leftJson = DispatchWorkbenchJson.Serialize(FlattenBroadcastLinePlatformAnnouncements(left));
+            string rightJson = DispatchWorkbenchJson.Serialize(FlattenBroadcastLinePlatformAnnouncements(right));
             return string.Equals(leftJson, rightJson, StringComparison.Ordinal);
         }
 
@@ -3611,6 +3996,49 @@ namespace RapidTransitMod
                 .ToArray();
         }
 
+        private BroadcastWorkbenchPersistedPlatformAnnouncementState[] BuildPersistedBroadcastDraftPlatformAnnouncementStates()
+        {
+            return BuildPersistedBroadcastPlatformAnnouncementStates(m_BroadcastDraftLinePlatformAnnouncements);
+        }
+
+        private BroadcastWorkbenchPersistedPlatformAnnouncementState[] BuildPersistedBroadcastPlatformAnnouncementStates()
+        {
+            return BuildPersistedBroadcastPlatformAnnouncementStates(m_BroadcastLinePlatformAnnouncements);
+        }
+
+        private static BroadcastWorkbenchPersistedPlatformAnnouncementState[] BuildPersistedBroadcastPlatformAnnouncementStates(
+            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> source)
+        {
+            return source
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => new BroadcastWorkbenchPersistedPlatformAnnouncementState
+                {
+                    lineId = entry.Key ?? string.Empty,
+                    announcements = FlattenBroadcastLinePlatformAnnouncements(entry.Value)
+                })
+                .Where(entry => entry.announcements.Length > 0)
+                .ToArray();
+        }
+
+        private static BroadcastWorkbenchPlatformAnnouncementDto[] FlattenBroadcastLinePlatformAnnouncements(
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
+        {
+            if (lineAnnouncements == null || lineAnnouncements.Count == 0)
+            {
+                return Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>();
+            }
+
+            return lineAnnouncements
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => CloneBroadcastPlatformAnnouncement(
+                    entry.Value,
+                    entry.Value?.lineId ?? string.Empty,
+                    entry.Key,
+                    entry.Value?.stationName ?? string.Empty))
+                .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.stationId))
+                .ToArray();
+        }
+
         private BroadcastWorkbenchPersistedAppliedState BuildPersistedBroadcastAppliedState()
         {
             return new BroadcastWorkbenchPersistedAppliedState
@@ -3625,16 +4053,20 @@ namespace RapidTransitMod
             BroadcastWorkbenchPersistedAssetState[] persistedAssets,
             BroadcastWorkbenchPersistedLineBindingState[] persistedDraftLineBindings,
             BroadcastWorkbenchPersistedRuleState[] persistedDraftRules,
+            BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedDraftPlatformAnnouncements,
             BroadcastWorkbenchPersistedLineBindingState[] persistedLineBindings,
             BroadcastWorkbenchPersistedRuleState[] persistedRules,
+            BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedPlatformAnnouncements,
             BroadcastWorkbenchPersistedAppliedState persistedAppliedState,
             int persistedDraftVolume)
         {
             m_BroadcastAssetCatalog.Clear();
             m_BroadcastDraftLineStationAssetBindings.Clear();
             m_BroadcastDraftLineRules.Clear();
+            m_BroadcastDraftLinePlatformAnnouncements.Clear();
             m_BroadcastLineStationAssetBindings.Clear();
             m_BroadcastLineRules.Clear();
+            m_BroadcastLinePlatformAnnouncements.Clear();
             m_BroadcastAppliedLineIds.Clear();
             m_BroadcastDraftVolumePercent = ClampBroadcastVolumePercent(persistedDraftVolume);
             m_BroadcastAppliedVolumePercent = ClampBroadcastVolumePercent(persistedAppliedState?.volume ?? m_BroadcastDraftVolumePercent);
@@ -3692,6 +4124,10 @@ namespace RapidTransitMod
                 m_BroadcastDraftLineRules,
                 persistedDraftRules);
 
+            RestoreBroadcastPlatformAnnouncementsInto(
+                m_BroadcastDraftLinePlatformAnnouncements,
+                persistedDraftPlatformAnnouncements);
+
             RestoreBroadcastLineBindingsInto(
                 m_BroadcastLineStationAssetBindings,
                 persistedLineBindings);
@@ -3699,6 +4135,10 @@ namespace RapidTransitMod
             RestoreBroadcastRulesInto(
                 m_BroadcastLineRules,
                 persistedRules);
+
+            RestoreBroadcastPlatformAnnouncementsInto(
+                m_BroadcastLinePlatformAnnouncements,
+                persistedPlatformAnnouncements);
 
             if (persistedAppliedState?.lineIds != null)
             {
@@ -3721,6 +4161,11 @@ namespace RapidTransitMod
             if (m_BroadcastDraftLineRules.Count == 0 && persistedRules != null)
             {
                 CopyBroadcastRules(m_BroadcastLineRules, m_BroadcastDraftLineRules);
+            }
+
+            if (m_BroadcastDraftLinePlatformAnnouncements.Count == 0 && persistedPlatformAnnouncements != null)
+            {
+                CopyBroadcastPlatformAnnouncements(m_BroadcastLinePlatformAnnouncements, m_BroadcastDraftLinePlatformAnnouncements);
             }
 
             ApplyBroadcastPreviewVolumeToActivePreviewSources();
@@ -3786,6 +4231,104 @@ namespace RapidTransitMod
                 langIndex = node.langIndex > 0 ? node.langIndex : 1,
                 delaySeconds = node.delaySeconds < 0f ? 0f : node.delaySeconds
             };
+        }
+
+        private static BroadcastWorkbenchPlatformAnnouncementDto CloneBroadcastPlatformAnnouncement(
+            BroadcastWorkbenchPlatformAnnouncementDto announcement,
+            string lineId,
+            string stationId,
+            string stationName)
+        {
+            if (announcement == null)
+            {
+                return NormalizeBroadcastPlatformAnnouncement(lineId, stationId, stationName, string.Empty, "platform_idle_clear", false, null);
+            }
+
+            return NormalizeBroadcastPlatformAnnouncement(
+                lineId,
+                stationId,
+                string.IsNullOrWhiteSpace(stationName) ? announcement.stationName : stationName,
+                announcement.title,
+                announcement.uiTriggerId,
+                announcement.enabled,
+                announcement.nodes);
+        }
+
+        private static BroadcastWorkbenchPlatformAnnouncementDto NormalizeBroadcastPlatformAnnouncement(
+            string lineId,
+            string stationId,
+            string stationName,
+            string title,
+            string uiTriggerId,
+            bool enabled,
+            IEnumerable<BroadcastWorkbenchRuleNodeDto> nodes)
+        {
+            string normalizedUiTriggerId = NormalizeBroadcastPlatformUiTriggerId(uiTriggerId);
+            return new BroadcastWorkbenchPlatformAnnouncementDto
+            {
+                lineId = lineId ?? string.Empty,
+                stationId = stationId ?? string.Empty,
+                stationName = stationName ?? string.Empty,
+                title = title ?? string.Empty,
+                uiTriggerId = normalizedUiTriggerId,
+                enabled = enabled,
+                triggerId = ResolveBroadcastPlatformRuntimeTriggerId(normalizedUiTriggerId),
+                cooldownGameMinutes = 20,
+                nodes = nodes == null
+                    ? Array.Empty<BroadcastWorkbenchRuleNodeDto>()
+                    : nodes
+                        .Select(CloneBroadcastWorkbenchRuleNode)
+                        .Where(node => node != null
+                            && !string.IsNullOrWhiteSpace(node.id)
+                            && !string.IsNullOrWhiteSpace(node.type))
+                        .ToArray()
+            };
+        }
+
+        private static string NormalizeBroadcastPlatformUiTriggerId(string uiTriggerId)
+        {
+            switch ((uiTriggerId ?? string.Empty).Trim())
+            {
+                case "approach_station":
+                case "platform_approach_station":
+                    return "approach_station";
+                case "platform_idle_clear":
+                default:
+                    return "platform_idle_clear";
+            }
+        }
+
+        private static string ResolveBroadcastPlatformRuntimeTriggerId(string uiTriggerId)
+        {
+            return string.Equals(uiTriggerId, "approach_station", StringComparison.Ordinal)
+                ? "platform_approach_station"
+                : "platform_idle_clear";
+        }
+
+        private static Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> CloneBroadcastLinePlatformAnnouncements(
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> source)
+        {
+            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> clone =
+                new Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>(StringComparer.Ordinal);
+            if (source == null)
+            {
+                return clone;
+            }
+
+            foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in source)
+            {
+                BroadcastWorkbenchPlatformAnnouncementDto announcement = CloneBroadcastPlatformAnnouncement(
+                    entry.Value,
+                    entry.Value?.lineId ?? string.Empty,
+                    entry.Key,
+                    entry.Value?.stationName ?? string.Empty);
+                if (!string.IsNullOrWhiteSpace(entry.Key))
+                {
+                    clone[entry.Key] = announcement;
+                }
+            }
+
+            return clone;
         }
 
         private static List<BroadcastWorkbenchRuleDto> NormalizeBroadcastRules(IEnumerable<BroadcastWorkbenchRuleDto> rules)

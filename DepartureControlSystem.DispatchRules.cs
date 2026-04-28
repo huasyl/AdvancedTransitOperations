@@ -119,6 +119,11 @@ namespace RapidTransitMod
             return MinutesUntil(nowMin, targetMin);
         }
 
+        private static float GetDispatchReachableWindowFrames(int nowMin, int targetMin)
+        {
+            return GetDispatchLeadMinutes(nowMin, targetMin) * (float)SIM_FRAMES_PER_MINUTE;
+        }
+
         private static int GetPreviousScheduledTargetMin(int nowMin, IReadOnlyList<int> targets)
         {
             if (targets == null || targets.Count == 0)

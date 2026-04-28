@@ -16,6 +16,9 @@ namespace RapidTransitMod
         {
             m_BypassDecisionLogCache.Clear();
             m_PreparingSlotLogCache.Clear();
+            m_PreparingTargetDriftLogCache.Clear();
+            m_CrossLineCandidateLogCache.Clear();
+            m_RouteVehicleOwnerMismatchLogCache.Clear();
             m_HoldingSkipLogCache.Clear();
             m_LateDispatchLogCache.Clear();
             m_YieldSkipLogCache.Clear();
