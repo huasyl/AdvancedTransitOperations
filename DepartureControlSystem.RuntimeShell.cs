@@ -120,7 +120,6 @@ namespace RapidTransitMod
                 log.Info("[运行异常] DriveStateMachine -> " + ex.GetType().Name + ": " + ex.Message);
                 throw;
             }
-
             if (nowMin != m_LastPuppetMasterMinute)
             {
                 try

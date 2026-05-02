@@ -5,6 +5,8 @@ import ManualTimetableEditor from "../components/ManualTimetableEditor";
 import { ChoiceButtons, ControlText, SafeControlText } from "../components/ChoiceButtons";
 import { useI18n } from "../lib/i18n";
 
+const MIN_LINE_SETTING_MINUTES = 5;
+
 export default function SchedulePage({
   shellMode,
   manualRows,
@@ -61,6 +63,12 @@ export default function SchedulePage({
   const [draftLineKind, setDraftLineKind] = useState(currentLineKind);
   const [originHoldInput, setOriginHoldInput] = useState(String(selectedLine?.originHoldLimitMinutes ?? 20));
   const [maxStationDwellInput, setMaxStationDwellInput] = useState(String(selectedLine?.maxStationDwellMinutes ?? 10));
+  const originHoldInputValue = Number(originHoldInput);
+  const maxStationDwellInputValue = Number(maxStationDwellInput);
+  const originHoldTooSmall =
+    originHoldInput !== "" && Number.isFinite(originHoldInputValue) && originHoldInputValue < MIN_LINE_SETTING_MINUTES;
+  const maxStationDwellTooSmall =
+    maxStationDwellInput !== "" && Number.isFinite(maxStationDwellInputValue) && maxStationDwellInputValue < MIN_LINE_SETTING_MINUTES;
 
   useEffect(() => {
     if (saveState?.message) {
@@ -86,9 +94,12 @@ export default function SchedulePage({
       return;
     }
 
+    if (originHoldTooSmall) {
+      return;
+    }
     const normalizedValue =
       Number.isFinite(Number(originHoldInput)) && Number(originHoldInput) > 0
-        ? Math.max(1, Math.min(120, Math.round(Number(originHoldInput))))
+        ? Math.max(MIN_LINE_SETTING_MINUTES, Math.min(120, Math.round(Number(originHoldInput))))
         : 20;
     setOriginHoldInput(String(normalizedValue));
     onOriginHoldLimitChange?.(selectedEditLine, normalizedValue);
@@ -100,9 +111,12 @@ export default function SchedulePage({
       return;
     }
 
+    if (maxStationDwellTooSmall) {
+      return;
+    }
     const normalizedValue =
       Number.isFinite(Number(maxStationDwellInput)) && Number(maxStationDwellInput) > 0
-        ? Math.max(1, Math.min(120, Math.round(Number(maxStationDwellInput))))
+        ? Math.max(MIN_LINE_SETTING_MINUTES, Math.min(120, Math.round(Number(maxStationDwellInput))))
         : 10;
     setMaxStationDwellInput(String(normalizedValue));
     onMaxStationDwellChange?.(selectedEditLine, normalizedValue);
@@ -258,9 +272,9 @@ export default function SchedulePage({
                 <SafeControlText>{selectedOriginStationName}</SafeControlText>
               </div>
             </div>
-            <div className="dw-field dw-schedule-page-hold-field">
+            <div className={`dw-field dw-schedule-page-hold-field${originHoldTooSmall ? " is-error" : ""}`}>
               <label>
-                <SafeControlText>{locale === "zh-CN" ? "\u5019\u8f66\u7a97\u53e3 / \u5206\u949f" : "Hold window / min"}</SafeControlText>
+                <SafeControlText>{originHoldTooSmall ? (locale === "zh-CN" ? "\u4e0d\u5f97\u5c0f\u4e8e5\u5206" : "Min 5 min") : (locale === "zh-CN" ? "\u5019\u8f66\u7a97\u53e3 / \u5206\u949f" : "Hold window / min")}</SafeControlText>
               </label>
               <input
                 type="text"
@@ -271,9 +285,9 @@ export default function SchedulePage({
                 onBlur={commitOriginHoldLimit}
               />
             </div>
-            <div className="dw-field dw-schedule-page-dwell-field">
+            <div className={`dw-field dw-schedule-page-dwell-field${maxStationDwellTooSmall ? " is-error" : ""}`}>
               <label>
-                <SafeControlText>{locale === "zh-CN" ? "\u6700\u957f\u505c\u7ad9\u65f6\u95f4" : "Max dwell / min"}</SafeControlText>
+                <SafeControlText>{maxStationDwellTooSmall ? (locale === "zh-CN" ? "\u4e0d\u5f97\u5c0f\u4e8e5\u5206" : "Min 5 min") : (locale === "zh-CN" ? "\u6700\u957f\u505c\u7ad9\u65f6\u95f4" : "Max dwell / min")}</SafeControlText>
               </label>
               <input
                 type="text"

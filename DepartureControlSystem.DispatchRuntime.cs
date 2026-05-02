@@ -58,7 +58,11 @@ namespace RapidTransitMod
                 LastObservedTarget = Entity.Null,
                 ReasonCode = string.IsNullOrWhiteSpace(reason) ? "unspecified" : reason,
                 HasIntervention = false,
-                HardAckStallLogged = false
+                HardAckStallLogged = false,
+                LastTraceFrame = 0,
+                LastDispatchGuardLogFrame = 0,
+                LastParkingDiagLogFrame = 0,
+                LastTraceKey = string.Empty
             };
         }
 
@@ -701,6 +705,91 @@ namespace RapidTransitMod
             return "unknown";
         }
 
+        internal void GuardRetireHandoffDispatchInputs(uint nowFrame)
+        {
+            if (m_RetireHandoffWatch.Count == 0)
+                return;
+
+            List<Entity> watchedVehicles = new List<Entity>(m_RetireHandoffWatch.Keys);
+            foreach (Entity vehicle in watchedVehicles)
+            {
+                if (!m_RetireHandoffWatch.TryGetValue(vehicle, out RetireHandoffWatchRecord watch))
+                    continue;
+                if (vehicle == Entity.Null
+                    || !EntityManager.Exists(vehicle)
+                    || EntityManager.HasComponent<Deleted>(vehicle)
+                    || EntityManager.HasComponent<ParkedTrain>(vehicle))
+                {
+                    continue;
+                }
+                if (!m_VehicleState.TryGetValue(vehicle, out VehicleState runtimeState)
+                    || runtimeState != VehicleState.Retiring)
+                {
+                    continue;
+                }
+
+                int serviceDispatchCount = 0;
+                int publicRequestCount = 0;
+                int cargoRequestCount = 0;
+                bool cleared = false;
+
+                if (EntityManager.HasBuffer<ServiceDispatch>(vehicle))
+                {
+                    DynamicBuffer<ServiceDispatch> dispatchBuffer = EntityManager.GetBuffer<ServiceDispatch>(vehicle);
+                    serviceDispatchCount = dispatchBuffer.Length;
+                    if (dispatchBuffer.Length > 0)
+                    {
+                        dispatchBuffer.Clear();
+                        cleared = true;
+                    }
+                }
+
+                if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+                {
+                    Game.Vehicles.PublicTransport publicTransport =
+                        EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                    publicRequestCount = publicTransport.m_RequestCount;
+                    if (publicTransport.m_RequestCount != 0)
+                    {
+                        publicTransport.m_RequestCount = 0;
+                        EntityManager.SetComponentData(vehicle, publicTransport);
+                        cleared = true;
+                    }
+                }
+
+                if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
+                {
+                    Game.Vehicles.CargoTransport cargoTransport =
+                        EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
+                    cargoRequestCount = cargoTransport.m_RequestCount;
+                    if (cargoTransport.m_RequestCount != 0)
+                    {
+                        cargoTransport.m_RequestCount = 0;
+                        EntityManager.SetComponentData(vehicle, cargoTransport);
+                        cleared = true;
+                    }
+                }
+
+                if (!cleared)
+                    continue;
+
+                bool cooled = watch.LastDispatchGuardLogFrame == 0
+                    || nowFrame - watch.LastDispatchGuardLogFrame >= 180;
+                if (!cooled)
+                    continue;
+
+                watch.LastDispatchGuardLogFrame = nowFrame;
+                string lineTag = m_VehicleLine.TryGetValue(vehicle, out Entity lineEntity)
+                    ? "线路" + lineEntity.Index
+                    : "线路?";
+                log.Info("[RetireHandoffGuard] " + lineTag + " 车辆" + vehicle.Index
+                    + " 清理未停稳回库车dispatch输入"
+                    + " serviceDispatch=" + serviceDispatchCount
+                    + " publicReq=" + publicRequestCount
+                    + " cargoReq=" + cargoRequestCount);
+            }
+        }
+
         private void TickRetireHandoffWatch(EntityCommandBuffer ecb, uint nowFrame)
         {
             if (m_RetireHandoffWatch.Count == 0)
@@ -769,9 +858,58 @@ namespace RapidTransitMod
                 Target target = EntityManager.GetComponentData<Target>(vehicle);
                 Entity targetEntity = target.m_Target;
                 watch.LastObservedTarget = targetEntity;
+                Entity currentRoute = EntityManager.HasComponent<CurrentRoute>(vehicle)
+                    ? EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
+                    : Entity.Null;
+                Entity headVehicle = ResolveRetireHandoffHeadVehicle(vehicle);
+                Entity pathInfoDestination = EntityManager.HasComponent<PathInformation>(vehicle)
+                    ? EntityManager.GetComponentData<PathInformation>(vehicle).m_Destination
+                    : Entity.Null;
+                Entity headPathInfoDestination = EntityManager.HasComponent<PathInformation>(headVehicle)
+                    ? EntityManager.GetComponentData<PathInformation>(headVehicle).m_Destination
+                    : Entity.Null;
+                Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                bool returning = (publicTransport.m_State & PublicTransportFlags.Returning) != 0;
+                bool parking = EntityHasParkingNavigationLane(vehicle)
+                    || (headVehicle != vehicle && EntityHasParkingNavigationLane(headVehicle));
+                bool waypointLikeTarget = targetEntity != Entity.Null
+                    && EntityManager.Exists(targetEntity)
+                    && IsRouteWaypointLikeTarget(vehicle, targetEntity);
+                bool targetDepotSemantic = IsRetireHandoffDepotSemanticEntity(targetEntity, ownerDepot);
+                bool pathDepotSemantic = EntityHasDepotPathDestination(vehicle, ownerDepot)
+                    || (headVehicle != vehicle && EntityHasDepotPathDestination(headVehicle, ownerDepot));
 
                 bool softAck = IsRetireHandoffSoftAck(vehicle, targetEntity, ownerDepot);
                 bool hardAck = IsRetireHandoffHardAck(vehicle, ownerDepot);
+
+                MaybeLogRetireHandoffTrace(
+                    vehicle,
+                    lineTag,
+                    watch,
+                    nowFrame,
+                    currentRoute,
+                    targetEntity,
+                    ownerDepot,
+                    pathInfoDestination,
+                    headPathInfoDestination,
+                    softAck,
+                    hardAck,
+                    returning,
+                    parking,
+                    "sample",
+                    force: false);
+                MaybeLogRetireParkingDiagnostic(
+                    vehicle,
+                    lineTag,
+                    watch,
+                    nowFrame,
+                    currentRoute,
+                    targetEntity,
+                    ownerDepot,
+                    pathInfoDestination,
+                    headPathInfoDestination,
+                    returning,
+                    parking);
 
                 if (softAck && watch.SoftAckFrame == 0)
                 {
@@ -788,7 +926,24 @@ namespace RapidTransitMod
                 if (hardAck && watch.HardAckFrame == 0)
                 {
                     watch.HardAckFrame = nowFrame;
+                    watch.HardAckStallLogged = false;
                     RecordRetireShadowSnapshot(vehicle, "handoff-hard-ack");
+                    MaybeLogRetireHandoffTrace(
+                        vehicle,
+                        lineTag,
+                        watch,
+                        nowFrame,
+                        currentRoute,
+                        targetEntity,
+                        ownerDepot,
+                        pathInfoDestination,
+                        headPathInfoDestination,
+                        softAck,
+                        hardAck,
+                        returning,
+                        parking,
+                        "hard-ack",
+                        force: true);
                     if (watch.HasIntervention)
                     {
                         log.Info("[RetireHandoffAck] " + lineTag + " 车辆" + vehicle.Index
@@ -797,58 +952,64 @@ namespace RapidTransitMod
                     }
                 }
 
-                if (watch.HardAckFrame > 0)
+                bool maxAgeReached = nowFrame - watch.RequestedFrame >= RETIRE_HANDOFF_MAX_AGE_FRAMES;
+                bool routeRegression = waypointLikeTarget;
+                bool lostDepotSemantics = watch.HardAckFrame > 0
+                    && !targetDepotSemantic
+                    && !pathDepotSemantic
+                    && !returning
+                    && !parking;
+                bool hardAckStalled = watch.HardAckFrame > 0
+                    && !parking
+                    && (nowFrame - watch.HardAckFrame) >= RETIRE_HANDOFF_MAX_AGE_FRAMES;
+
+                if (watch.HardAckFrame > 0 && (routeRegression || lostDepotSemantics))
                 {
-                    uint hardAckAgeFrames = nowFrame - watch.HardAckFrame;
-                    if (!watch.HardAckStallLogged
-                        && hardAckAgeFrames >= RETIRE_HANDOFF_MAX_AGE_FRAMES)
-                    {
-                        watch.HardAckStallLogged = true;
-                        watch.HasIntervention = true;
-                        RecordRetireShadowSnapshot(vehicle, "handoff-hard-ack-stalled");
-
-                        Entity currentRoute = EntityManager.HasComponent<CurrentRoute>(vehicle)
-                            ? EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
-                            : Entity.Null;
-                        Entity headVehicle = ResolveRetireHandoffHeadVehicle(vehicle);
-                        Entity pathInfoDestination = EntityManager.HasComponent<PathInformation>(vehicle)
-                            ? EntityManager.GetComponentData<PathInformation>(vehicle).m_Destination
-                            : Entity.Null;
-                        Entity headPathInfoDestination = EntityManager.HasComponent<PathInformation>(headVehicle)
-                            ? EntityManager.GetComponentData<PathInformation>(headVehicle).m_Destination
-                            : Entity.Null;
-                        Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
-                        bool returning = (publicTransport.m_State
-                            & PublicTransportFlags.Returning) != 0;
-                        string publicTransportState = publicTransport.m_State.ToString();
-
-                        log.Info("[RetireHandoffStall] " + lineTag + " 车辆" + vehicle.Index
-                            + " hard ack后长期未收口"
-                            + " hardAckAgeFrames=" + hardAckAgeFrames
-                            + " attempts=" + watch.AttemptCount
-                            + " target=" + DescribeRetireShadowEntity(targetEntity)
-                            + " targetKind=" + DescribeRetireShadowTargetKind(targetEntity)
-                            + " targetExists=" + ((targetEntity != Entity.Null && EntityManager.Exists(targetEntity)) ? "1" : "0")
-                            + " owner=" + DescribeRetireShadowEntity(ownerDepot)
-                            + " route=" + DescribeRetireShadowEntity(currentRoute)
-                            + " returning=" + (returning ? "1" : "0")
-                            + " ptState=" + publicTransportState
-                            + " piDest=" + DescribeRetireShadowEntity(pathInfoDestination)
-                            + " headPiDest=" + DescribeRetireShadowEntity(headPathInfoDestination)
-                            + " parking=" + (EntityHasParkingNavigationLane(vehicle) ? "1" : "0")
-                            + " headParking=" + ((headVehicle != vehicle && EntityHasParkingNavigationLane(headVehicle)) ? "1" : "0")
-                            + " reason=" + watch.ReasonCode);
-                    }
+                    watch.HasIntervention = true;
+                    RecordRetireShadowSnapshot(vehicle, "handoff-hard-ack-regressed");
+                    MaybeLogRetireHandoffTrace(
+                        vehicle,
+                        lineTag,
+                        watch,
+                        nowFrame,
+                        currentRoute,
+                        targetEntity,
+                        ownerDepot,
+                        pathInfoDestination,
+                        headPathInfoDestination,
+                        softAck,
+                        hardAck,
+                        returning,
+                        parking,
+                        routeRegression ? "route-regressed" : "depot-semantics-lost",
+                        force: true);
+                    QueueRetireHandoffWrite(vehicle, ownerDepot, ecb, watch, nowFrame, lineTag);
+                    watch.RequestedFrame = nowFrame;
+                    watch.SoftAckFrame = 0;
+                    watch.HardAckFrame = 0;
+                    watch.HardAckStallLogged = false;
                     continue;
                 }
 
-                if (hardAck)
-                    continue;
-
-                bool maxAgeReached = nowFrame - watch.RequestedFrame >= RETIRE_HANDOFF_MAX_AGE_FRAMES;
-                if (softAck && maxAgeReached)
+                if (softAck && !hardAck && maxAgeReached)
                 {
                     RecordRetireShadowSnapshot(vehicle, "handoff-soft-ack-stagnant-retry");
+                    MaybeLogRetireHandoffTrace(
+                        vehicle,
+                        lineTag,
+                        watch,
+                        nowFrame,
+                        currentRoute,
+                        targetEntity,
+                        ownerDepot,
+                        pathInfoDestination,
+                        headPathInfoDestination,
+                        softAck,
+                        hardAck,
+                        returning,
+                        parking,
+                        "soft-stagnant-retry",
+                        force: true);
                     log.Info("[RetireHandoffRetry] " + lineTag + " 车辆" + vehicle.Index
                         + " soft ack后未进入hard ack，超时重投"
                         + " attempts=" + watch.AttemptCount
@@ -859,16 +1020,87 @@ namespace RapidTransitMod
                     QueueRetireHandoffWrite(vehicle, ownerDepot, ecb, watch, nowFrame, lineTag);
                     watch.RequestedFrame = nowFrame;
                     watch.SoftAckFrame = 0;
+                    watch.HardAckFrame = 0;
+                    watch.HardAckStallLogged = false;
                     continue;
                 }
 
-                if (softAck)
+                if (hardAckStalled)
+                {
+                    uint hardAckAgeFrames = nowFrame - watch.HardAckFrame;
+                    if (!watch.HardAckStallLogged)
+                    {
+                        watch.HardAckStallLogged = true;
+                        watch.HasIntervention = true;
+                        RecordRetireShadowSnapshot(vehicle, "handoff-hard-ack-stalled");
+                        MaybeLogRetireHandoffTrace(
+                            vehicle,
+                            lineTag,
+                            watch,
+                            nowFrame,
+                            currentRoute,
+                            targetEntity,
+                            ownerDepot,
+                            pathInfoDestination,
+                            headPathInfoDestination,
+                            softAck,
+                            hardAck,
+                            returning,
+                            parking,
+                            "hard-stalled",
+                            force: true);
+                        log.Info("[RetireHandoffStall] " + lineTag + " 车辆" + vehicle.Index
+                            + " hard ack后长期未收口"
+                            + " hardAckAgeFrames=" + hardAckAgeFrames
+                            + " attempts=" + watch.AttemptCount
+                            + " target=" + DescribeRetireShadowEntity(targetEntity)
+                            + " targetKind=" + DescribeRetireShadowTargetKind(targetEntity)
+                            + " targetExists=" + ((targetEntity != Entity.Null && EntityManager.Exists(targetEntity)) ? "1" : "0")
+                            + " owner=" + DescribeRetireShadowEntity(ownerDepot)
+                            + " route=" + DescribeRetireShadowEntity(currentRoute)
+                            + " returning=" + (returning ? "1" : "0")
+                            + " ptState=" + publicTransport.m_State
+                            + " piDest=" + DescribeRetireShadowEntity(pathInfoDestination)
+                            + " headPiDest=" + DescribeRetireShadowEntity(headPathInfoDestination)
+                            + " parking=" + (parking ? "1" : "0")
+                            + " headParking=" + ((headVehicle != vehicle && EntityHasParkingNavigationLane(headVehicle)) ? "1" : "0")
+                            + " reason=" + watch.ReasonCode);
+                    }
+
+                    if (ShouldRetryRetireHandoff(watch, nowFrame, vehicle, targetEntity, ownerDepot))
+                    {
+                        QueueRetireHandoffWrite(vehicle, ownerDepot, ecb, watch, nowFrame, lineTag);
+                        watch.RequestedFrame = nowFrame;
+                        watch.SoftAckFrame = 0;
+                        watch.HardAckFrame = 0;
+                        watch.HardAckStallLogged = false;
+                    }
+                    continue;
+                }
+
+                if (softAck || hardAck)
                     continue;
 
                 bool maxAttemptsReached = watch.AttemptCount >= RETIRE_HANDOFF_MAX_ATTEMPTS;
                 if (maxAttemptsReached || maxAgeReached)
                 {
                     RecordRetireShadowSnapshot(vehicle, "handoff-abort-timeout");
+                    MaybeLogRetireHandoffTrace(
+                        vehicle,
+                        lineTag,
+                        watch,
+                        nowFrame,
+                        currentRoute,
+                        targetEntity,
+                        ownerDepot,
+                        pathInfoDestination,
+                        headPathInfoDestination,
+                        softAck,
+                        hardAck,
+                        returning,
+                        parking,
+                        "abort-timeout",
+                        force: true);
                     log.Info("[RetireHandoffAbort] " + lineTag + " 车辆" + vehicle.Index
                         + " 回库交接未被vanilla接住，停止重投"
                         + " attempts=" + watch.AttemptCount
@@ -965,7 +1197,9 @@ namespace RapidTransitMod
                 && EntityManager.Exists(entity)
                 && ownerDepot != Entity.Null
                 && EntityManager.HasComponent<PathInformation>(entity)
-                && EntityManager.GetComponentData<PathInformation>(entity).m_Destination == ownerDepot;
+                && IsRetireHandoffDepotSemanticEntity(
+                    EntityManager.GetComponentData<PathInformation>(entity).m_Destination,
+                    ownerDepot);
         }
 
         private bool EntityHasParkingNavigationLane(Entity entity)
@@ -982,6 +1216,115 @@ namespace RapidTransitMod
                 && (lanes[lanes.Length - 1].m_Flags & TrainLaneFlags.ParkingSpace) != 0;
         }
 
+        private void MaybeLogRetireParkingDiagnostic(
+            Entity vehicle,
+            string lineTag,
+            RetireHandoffWatchRecord watch,
+            uint nowFrame,
+            Entity currentRoute,
+            Entity targetEntity,
+            Entity ownerDepot,
+            Entity pathInfoDestination,
+            Entity headPathInfoDestination,
+            bool returning,
+            bool parking)
+        {
+            if (!parking)
+                return;
+
+            bool cooled = watch.LastParkingDiagLogFrame == 0
+                || nowFrame - watch.LastParkingDiagLogFrame >= 180;
+            if (!cooled)
+                return;
+
+            watch.LastParkingDiagLogFrame = nowFrame;
+            Entity headVehicle = ResolveRetireHandoffHeadVehicle(vehicle);
+            log.Info("[RetireParkingDiag] " + lineTag + " 车辆" + vehicle.Index
+                + " attempt=" + watch.AttemptCount
+                + " target=" + DescribeRetireShadowEntity(targetEntity)
+                + " targetKind=" + DescribeRetireShadowTargetKind(targetEntity)
+                + " owner=" + DescribeRetireShadowEntity(ownerDepot)
+                + " route=" + DescribeRetireShadowEntity(currentRoute)
+                + " returning=" + (returning ? "1" : "0")
+                + " piDest=" + DescribeRetireShadowEntity(pathInfoDestination)
+                + " headPiDest=" + DescribeRetireShadowEntity(headPathInfoDestination)
+                + " ctrl{" + FormatRetireParkingEntityDiagnostic(vehicle) + "}"
+                + " head{" + FormatRetireParkingEntityDiagnostic(headVehicle) + "}");
+        }
+
+        private string FormatRetireParkingEntityDiagnostic(Entity entity)
+        {
+            if (entity == Entity.Null || !EntityManager.Exists(entity))
+                return "entity=-";
+
+            return "entity=" + DescribeRetireShadowEntity(entity)
+                + " path=" + FormatRetireParkingPathDiagnostic(entity)
+                + " nav=" + FormatRetireParkingNavigationDiagnostic(entity)
+                + " front=" + FormatRetireParkingFrontFlags(entity);
+        }
+
+        private string FormatRetireParkingPathDiagnostic(Entity entity)
+        {
+            if (!EntityManager.HasComponent<PathOwner>(entity))
+                return "-";
+
+            PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(entity);
+            int pathLen = EntityManager.HasBuffer<PathElement>(entity)
+                ? EntityManager.GetBuffer<PathElement>(entity, true).Length
+                : -1;
+            string lastTarget = "-";
+            string lastFlags = "-";
+            if (pathLen > 0)
+            {
+                PathElement last = EntityManager.GetBuffer<PathElement>(entity, true)[pathLen - 1];
+                lastTarget = DescribeRetireShadowEntity(last.m_Target);
+                lastFlags = last.m_Flags.ToString();
+            }
+
+            return "state=" + pathOwner.m_State
+                + " idx=" + pathOwner.m_ElementIndex
+                + " len=" + pathLen
+                + " last=" + lastTarget
+                + " lastFlags=" + lastFlags;
+        }
+
+        private string FormatRetireParkingNavigationDiagnostic(Entity entity)
+        {
+            if (!EntityManager.HasBuffer<TrainNavigationLane>(entity))
+                return "-";
+
+            DynamicBuffer<TrainNavigationLane> lanes = EntityManager.GetBuffer<TrainNavigationLane>(entity, true);
+            if (lanes.Length == 0)
+                return "len=0";
+
+            TrainNavigationLane last = lanes[lanes.Length - 1];
+            string result = "len=" + lanes.Length
+                + " lastLane=" + DescribeRetireShadowEntity(last.m_Lane)
+                + " lastFlags=" + last.m_Flags;
+            if (!EntityManager.HasComponent<Game.Objects.SpawnLocation>(last.m_Lane))
+                return result + " spawn=0";
+
+            Game.Objects.SpawnLocation spawnLocation =
+                EntityManager.GetComponentData<Game.Objects.SpawnLocation>(last.m_Lane);
+            bool parkedVehicle = (spawnLocation.m_Flags & Game.Objects.SpawnLocationFlags.ParkedVehicle) != 0;
+            return result
+                + " spawn=1"
+                + " spawnFlags=" + spawnLocation.m_Flags
+                + " spawnParked=" + (parkedVehicle ? "1" : "0")
+                + " group=" + spawnLocation.m_GroupIndex
+                + " conn1=" + DescribeRetireShadowEntity(spawnLocation.m_ConnectedLane1)
+                + " conn2=" + DescribeRetireShadowEntity(spawnLocation.m_ConnectedLane2);
+        }
+
+        private string FormatRetireParkingFrontFlags(Entity entity)
+        {
+            return entity != Entity.Null
+                && EntityManager.Exists(entity)
+                && EntityManager.HasComponent<TrainCurrentLane>(entity)
+                    ? EntityManager.GetComponentData<TrainCurrentLane>(entity).m_Front.m_LaneFlags.ToString()
+                    : "-";
+        }
+
         private Entity ResolveRetireHandoffHeadVehicle(Entity vehicle)
         {
             if (vehicle == Entity.Null
@@ -995,6 +1338,125 @@ namespace RapidTransitMod
             if (layout.Length == 0)
                 return vehicle;
             return layout[0].m_Vehicle;
+        }
+
+        private bool IsRetireHandoffDepotSemanticEntity(Entity entity, Entity ownerDepot)
+        {
+            if (entity == Entity.Null
+                || ownerDepot == Entity.Null
+                || !EntityManager.Exists(entity))
+            {
+                return false;
+            }
+
+            if (entity == ownerDepot)
+                return true;
+
+            return CanonicalizeTransportDepotEntity(entity) == ownerDepot;
+        }
+
+        private void MaybeLogRetireHandoffTrace(
+            Entity vehicle,
+            string lineTag,
+            RetireHandoffWatchRecord watch,
+            uint nowFrame,
+            Entity currentRoute,
+            Entity targetEntity,
+            Entity ownerDepot,
+            Entity pathInfoDestination,
+            Entity headPathInfoDestination,
+            bool softAck,
+            bool hardAck,
+            bool returning,
+            bool parking,
+            string reason,
+            bool force)
+        {
+            string pathFlags = "-";
+            if (EntityManager.HasComponent<PathOwner>(vehicle))
+                pathFlags = EntityManager.GetComponentData<PathOwner>(vehicle).m_State.ToString();
+
+            bool pathfindUpdated = EntityManager.HasComponent<PathfindUpdated>(vehicle);
+
+            string navLastFlags = "-";
+            if (EntityManager.HasBuffer<TrainNavigationLane>(vehicle))
+            {
+                DynamicBuffer<TrainNavigationLane> navigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(vehicle, true);
+                if (navigationLanes.Length > 0)
+                    navLastFlags = navigationLanes[navigationLanes.Length - 1].m_Flags.ToString();
+            }
+
+            string frontFlags = EntityManager.HasComponent<TrainCurrentLane>(vehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(vehicle).m_Front.m_LaneFlags.ToString()
+                : "-";
+
+            Entity headVehicle = ResolveRetireHandoffHeadVehicle(vehicle);
+            string headNavLastFlags = "-";
+            if (headVehicle != Entity.Null && EntityManager.HasBuffer<TrainNavigationLane>(headVehicle))
+            {
+                DynamicBuffer<TrainNavigationLane> headNavigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(headVehicle, true);
+                if (headNavigationLanes.Length > 0)
+                    headNavLastFlags = headNavigationLanes[headNavigationLanes.Length - 1].m_Flags.ToString();
+            }
+
+            string headFrontFlags = headVehicle != Entity.Null && EntityManager.HasComponent<TrainCurrentLane>(headVehicle)
+                ? EntityManager.GetComponentData<TrainCurrentLane>(headVehicle).m_Front.m_LaneFlags.ToString()
+                : "-";
+
+            bool targetDepotSemantic = IsRetireHandoffDepotSemanticEntity(targetEntity, ownerDepot);
+            bool pathDepotSemantic = IsRetireHandoffDepotSemanticEntity(pathInfoDestination, ownerDepot)
+                || IsRetireHandoffDepotSemanticEntity(headPathInfoDestination, ownerDepot);
+            string key = "target=" + DescribeRetireShadowEntity(targetEntity)
+                + "|targetKind=" + DescribeRetireShadowTargetKind(targetEntity)
+                + "|targetDepot=" + (targetDepotSemantic ? "1" : "0")
+                + "|route=" + DescribeRetireShadowEntity(currentRoute)
+                + "|piDest=" + DescribeRetireShadowEntity(pathInfoDestination)
+                + "|headPiDest=" + DescribeRetireShadowEntity(headPathInfoDestination)
+                + "|piDepot=" + (pathDepotSemantic ? "1" : "0")
+                + "|returning=" + (returning ? "1" : "0")
+                + "|parking=" + (parking ? "1" : "0")
+                + "|path=" + pathFlags
+                + "|pfu=" + (pathfindUpdated ? "1" : "0")
+                + "|navLast=" + navLastFlags
+                + "|front=" + frontFlags
+                + "|headNavLast=" + headNavLastFlags
+                + "|headFront=" + headFrontFlags
+                + "|soft=" + (softAck ? "1" : "0")
+                + "|hard=" + (hardAck ? "1" : "0")
+                + "|attempt=" + watch.AttemptCount;
+
+            bool changed = !string.Equals(watch.LastTraceKey, key, StringComparison.Ordinal);
+            bool cooled = watch.LastTraceFrame == 0
+                || (nowFrame - watch.LastTraceFrame) >= RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
+            if (!force && !changed && !cooled)
+                return;
+
+            if (!force && !changed)
+                reason = "cooldown";
+
+            log.Info("[RetireHandoffTrace] " + lineTag + " 车辆" + vehicle.Index
+                + " reason=" + reason
+                + " attempt=" + watch.AttemptCount
+                + " target=" + DescribeRetireShadowEntity(targetEntity)
+                + " targetKind=" + DescribeRetireShadowTargetKind(targetEntity)
+                + " targetDepot=" + (targetDepotSemantic ? "1" : "0")
+                + " route=" + DescribeRetireShadowEntity(currentRoute)
+                + " piDest=" + DescribeRetireShadowEntity(pathInfoDestination)
+                + " headPiDest=" + DescribeRetireShadowEntity(headPathInfoDestination)
+                + " piDepot=" + (pathDepotSemantic ? "1" : "0")
+                + " returning=" + (returning ? "1" : "0")
+                + " parking=" + (parking ? "1" : "0")
+                + " path=" + pathFlags
+                + " pfu=" + (pathfindUpdated ? "1" : "0")
+                + " navLast=" + navLastFlags
+                + " front=" + frontFlags
+                + " headNavLast=" + headNavLastFlags
+                + " headFront=" + headFrontFlags
+                + " softAck=" + (softAck ? "1" : "0")
+                + " hardAck=" + (hardAck ? "1" : "0"));
+
+            watch.LastTraceFrame = nowFrame;
+            watch.LastTraceKey = key;
         }
 
         private bool IsRouteWaypointLikeTarget(Entity vehicle, Entity targetEntity)
@@ -1322,53 +1784,99 @@ namespace RapidTransitMod
 
                 foreach (var line in lines)
                 {
-                    if (!EntityManager.Exists(line)) continue;
-                    if (!wpBuffers.TryGetBuffer(line, out var wps) || wps.Length < 2) continue;
-                    if (!IsLineStable(line, wps)) continue;
-                    if (!IsWorkbenchTimetableApplied(line)) continue;
-                    if (!EntityManager.HasComponent<PrefabRef>(line)) continue;
-                    Entity prefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
-                    if (!EntityManager.HasComponent<TransportLineData>(prefab)) continue;
-                    if (!modBuffers.TryGetBuffer(line, out var mods)) continue;
-
-                    float iDefault = EntityManager.GetComponentData<TransportLineData>(prefab).m_DefaultVehicleInterval;
-                    float D = CalculateLineDuration(line);
-                    if (D <= 0f) D = iDefault;
-                    if (D <= 0f) continue;
-
-                    int actualCount = CountActiveVehicles(line, rvBuffers);
-                    int nTarget = actualCount;
-
-                    if (m_SpawningLines.TryGetValue(line, out int spawnTarget))
-                    {
-                        if (actualCount >= spawnTarget)
-                        {
-                            m_SpawningLines.Remove(line);
-                            m_LineSpawnRequestFrame.Remove(line);
-                            log.Info("[PuppetMaster] 线路" + line.Index + " 产车完成 actualCount=" + actualCount);
-                        }
-                        else
-                        {
-                            nTarget = spawnTarget;
-                        }
-                    }
-
-                    float targetInterval;
-                    if (nTarget <= 0)
-                    {
-                        // Allow true zero-vehicle lines by stretching the native interval far beyond
-                        // a normal lap, instead of forcing the game to keep one vehicle alive.
-                        targetInterval = math.max(iDefault, D) * 64f;
-                    }
-                    else
-                    {
-                        targetInterval = D / nTarget;
-                    }
-                    float delta = targetInterval - iDefault;
-                    InjectModifier(mods, delta);
+                    ApplyPuppetMasterControlForLine(line, rvBuffers, modBuffers, wpBuffers);
                 }
             }
             finally { lines.Dispose(); }
+        }
+
+        private void ApplyPuppetMasterControlForLine(
+            Entity line,
+            BufferLookup<RouteVehicle> rvBuffers,
+            BufferLookup<RouteModifier> modBuffers,
+            BufferLookup<RouteWaypoint> wpBuffers)
+        {
+            if (!EntityManager.Exists(line)) return;
+            if (!wpBuffers.TryGetBuffer(line, out var wps) || wps.Length < 2) return;
+            if (!IsLineStable(line, wps)) return;
+            if (!IsWorkbenchTimetableApplied(line)) return;
+            if (!EntityManager.HasComponent<PrefabRef>(line)) return;
+            Entity prefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+            if (!EntityManager.HasComponent<TransportLineData>(prefab)) return;
+            if (!modBuffers.TryGetBuffer(line, out var mods)) return;
+
+            float iDefault = EntityManager.GetComponentData<TransportLineData>(prefab).m_DefaultVehicleInterval;
+            float D = CalculateLineDuration(line);
+            if (D <= 0f) D = iDefault;
+            if (D <= 0f) return;
+
+            int actualCount = CountActiveVehicles(line, rvBuffers);
+            int nTarget = actualCount;
+
+            if (m_SpawningLines.TryGetValue(line, out int spawnTarget))
+            {
+                if (actualCount >= spawnTarget)
+                {
+                    m_SpawningLines.Remove(line);
+                    m_LineSpawnRequestFrame.Remove(line);
+                    log.Info("[PuppetMaster] 线路" + line.Index + " 产车完成 actualCount=" + actualCount);
+                }
+                else
+                {
+                    nTarget = spawnTarget;
+                }
+            }
+
+            float targetInterval;
+            if (nTarget <= 0)
+            {
+                // Allow true zero-vehicle lines by stretching the native interval far beyond
+                // a normal lap, instead of forcing the game to keep one vehicle alive.
+                targetInterval = math.max(iDefault, D) * 64f;
+            }
+            else
+            {
+                targetInterval = D / nTarget;
+            }
+
+            float delta = targetInterval - iDefault;
+            InjectModifier(mods, delta);
+        }
+
+        private void ApplyCleanupTargetReductionForLine(
+            Entity line,
+            int removedCount,
+            BufferLookup<RouteVehicle> rvBuffers,
+            BufferLookup<RouteModifier> modBuffers,
+            BufferLookup<RouteWaypoint> wpBuffers)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line) || removedCount <= 0)
+                return;
+
+            int actualCount = CountActiveVehicles(line, rvBuffers);
+            if (m_SpawningLines.TryGetValue(line, out int spawnTarget))
+            {
+                int newSpawnTarget = math.max(0, spawnTarget - removedCount);
+                if (newSpawnTarget <= actualCount)
+                {
+                    m_SpawningLines.Remove(line);
+                    m_LineSpawnRequestFrame.Remove(line);
+                    log.Info("[CleanupTargetAdjust] 线路" + line.Index
+                        + " 清理" + removedCount + "辆"
+                        + " spawnTarget=" + spawnTarget + " -> -"
+                        + " actualCount=" + actualCount);
+                }
+                else if (newSpawnTarget != spawnTarget)
+                {
+                    m_SpawningLines[line] = newSpawnTarget;
+                    log.Info("[CleanupTargetAdjust] 线路" + line.Index
+                        + " 清理" + removedCount + "辆"
+                        + " spawnTarget=" + spawnTarget + " -> " + newSpawnTarget
+                        + " actualCount=" + actualCount);
+                }
+            }
+
+            ApplyPuppetMasterControlForLine(line, rvBuffers, modBuffers, wpBuffers);
         }
 
         private void SchedulerTick(EntityCommandBuffer ecb, int nowMin)
@@ -1481,6 +1989,17 @@ namespace RapidTransitMod
                         }
                     }
 
+                    int dispatchScanLimitMinutes = originHoldLimitMinutes;
+                    if (useWorkbenchSchedule)
+                    {
+                        float scanSpawnLeadFrames = EstimateSpawnLeadFrames(line, lineDurationFrames);
+                        float scanSpawnTriggerFrames = scanSpawnLeadFrames
+                            + originHoldLimitMinutes * (float)SIM_FRAMES_PER_MINUTE;
+                        dispatchScanLimitMinutes = math.max(
+                            originHoldLimitMinutes,
+                            (int)math.ceil(scanSpawnTriggerFrames / (float)SIM_FRAMES_PER_MINUTE));
+                    }
+
                     for (int s = useWorkbenchSchedule ? -1 : 0; s < maxSlots; s++)
                     {
                         if (useWorkbenchSchedule)
@@ -1508,13 +2027,14 @@ namespace RapidTransitMod
                             slot = (slot + SLOT_INTERVAL) % 1440;
                             continue;
                         }
-                        if (minsToSlot > originHoldLimitMinutes)
+                        if (minsToSlot > dispatchScanLimitMinutes)
                         {
                             if (useWorkbenchSchedule && s >= 0)
                                 break;
                             slot = (slot + SLOT_INTERVAL) % 1440;
                             continue;
                         }
+                        bool spawnOnlyScan = useWorkbenchSchedule && minsToSlot > originHoldLimitMinutes;
 
                         Entity currentOccupier = Entity.Null;
                         for (int i = 0; i < runtimeVehicles.Count; i++)
@@ -1612,6 +2132,17 @@ namespace RapidTransitMod
 
                             if (st == VehicleState.Idle || st == VehicleState.Holding)
                             {
+                                if (spawnOnlyScan)
+                                {
+                                    if (nearestVehicle == Entity.Null)
+                                    {
+                                        nearestVehicle = v;
+                                        nearestState = st;
+                                        nearestETA = 0f;
+                                        nearestReason = "outside-origin-hold-window";
+                                    }
+                                    continue;
+                                }
                                 int cachedIdx = m_CachedWpIdx.TryGetValue(v, out int ci) ? ci : -1;
                                 if (cachedIdx != 0)
                                 {
@@ -1676,6 +2207,22 @@ namespace RapidTransitMod
                                     nearestReason = "late-for-slot";
                                 }
                                 continue;
+                            }
+                            if (spawnOnlyScan)
+                            {
+                                float earliestHoldArrivalFrames = slotFramesAway
+                                    - originHoldLimitMinutes * (float)SIM_FRAMES_PER_MINUTE;
+                                if (earliestHoldArrivalFrames > 0f && eta < earliestHoldArrivalFrames)
+                                {
+                                    if (nearestVehicle == Entity.Null)
+                                    {
+                                        nearestVehicle = v;
+                                        nearestState = st;
+                                        nearestETA = eta;
+                                        nearestReason = "before-origin-hold-window";
+                                    }
+                                    continue;
+                                }
                             }
 
                             float remaining = GetRemainingRange(v);
@@ -1825,7 +2372,7 @@ namespace RapidTransitMod
                                 }
 
                                 float spawnTriggerFrames = spawnLeadFrames
-                                    + GetSpawnTriggerBufferMinutes(spawnLeadFrames) * (float)SIM_FRAMES_PER_MINUTE;
+                                    + originHoldLimitMinutes * (float)SIM_FRAMES_PER_MINUTE;
                                 if (slotFramesAway > spawnTriggerFrames)
                                 {
                                     slot = (slot + SLOT_INTERVAL) % 1440;
@@ -2407,6 +2954,12 @@ namespace RapidTransitMod
                     bool atA = state == VehicleState.Preparing
                         ? HasPreparingVehicleReachedOrigin(v, wps, boarding, curWpIdx)
                         : (curWpIdx == 0);
+                    bool broadcastOriginWaitBusy = atA
+                        || boarding
+                        || m_ForcedOriginReadyFrame.ContainsKey(v)
+                        || (state != VehicleState.Preparing
+                            && m_CachedWpIdx.TryGetValue(v, out int broadcastCachedWpIdx)
+                            && broadcastCachedWpIdx == 0);
                     if (state == VehicleState.Preparing)
                         LogPreparingTargetDrift(lineEnt, v, routeEnt, wps[0].m_Waypoint, tgt.m_Target, targetMin, curWpIdx, boarding, atA);
                     bool midStopBoarding = state == VehicleState.Running
@@ -2428,10 +2981,31 @@ namespace RapidTransitMod
                             out midStopDwellDeadlineFrame,
                             out maxStationDwellMinutes);
                     string vTag = " #" + v.Index;
+                    bool hasEnabledPlatformAnnouncements = LineHasEnabledBroadcastPlatformAnnouncements(routeEnt);
 
                     switch (state)
                     {
                         case VehicleState.Preparing:
+                            if (hasEnabledPlatformAnnouncements)
+                            {
+                                float preparingApproachEtaFrames = atA
+                                    ? 0f
+                                    : EstimatePreparingArrivalFrames(v, routeEnt, wps, nowFrame, ReadLineLapCache(routeEnt));
+                                UpdateBroadcastPlatformOriginBusyWatch(
+                                    routeEnt,
+                                    wps,
+                                    atA || preparingApproachEtaFrames <= BroadcastPlatformPreparingApproachLeadMinutes * (float)SIM_FRAMES_PER_MINUTE);
+                                if (LineHasEnabledBroadcastPlatformApproachAnnouncements(routeEnt))
+                                {
+                                    UpdateBroadcastPreparingPlatformApproachWatch(
+                                        v,
+                                        routeEnt,
+                                        wps,
+                                        atA,
+                                        preparingApproachEtaFrames);
+                                }
+                            }
+
                             if (targetMin >= 0 && IsSlotSoftExpired(nowMin, targetMin) && !CanLateDispatchSlot(nowMin, targetMin))
                             {
                                 int overdue = GetSlotOverdueMinutes(nowMin, targetMin);
@@ -2489,6 +3063,11 @@ namespace RapidTransitMod
                             break;
 
                         case VehicleState.Holding:
+                            if (hasEnabledPlatformAnnouncements)
+                            {
+                                UpdateBroadcastPlatformOriginBusyWatch(routeEnt, wps, broadcastOriginWaitBusy);
+                            }
+
                             if (!atA)
                             {
                                 if (TryGetAssistLaunchPending(v, routeEnt, targetMin, out AssistLaunchPendingRecord assistPending))
@@ -2726,9 +3305,9 @@ namespace RapidTransitMod
                             if (IsAppliedWorkbenchExpressLine(lineEnt))
                                 UpdateVehicleTraversalSliceObservation(v, lineEnt, wps, nowFrame);
 
-                            bool hasPlatformApproachWatch = LineHasEnabledBroadcastPlatformApproachAnnouncements(routeEnt);
                             bool shouldBroadcastForTrackedVehicle = ShouldBroadcastForTrackedVehicle(v);
-                            bool needsBroadcastRuntimeContext = hasPlatformApproachWatch || shouldBroadcastForTrackedVehicle;
+                            bool hasPlatformApproachWatch = LineHasEnabledBroadcastPlatformApproachAnnouncements(routeEnt);
+                            bool needsBroadcastRuntimeContext = hasEnabledPlatformAnnouncements || shouldBroadcastForTrackedVehicle;
                             BroadcastVehicleRuntimeFrameContext broadcastRuntimeContext = default;
                             bool hasBroadcastRuntimeContext = needsBroadcastRuntimeContext
                                 && TryBuildBroadcastVehicleRuntimeFrameContext(
@@ -2737,8 +3316,16 @@ namespace RapidTransitMod
                                     wps,
                                     curWpIdx,
                                     out broadcastRuntimeContext);
+                            UpdateBroadcastPlatformBusyWatch(
+                                routeEnt,
+                                wps,
+                                hasEnabledPlatformAnnouncements && hasBroadcastRuntimeContext,
+                                boarding,
+                                broadcastRuntimeContext);
                             UpdateBroadcastPlatformApproachWatch(
                                 v,
+                                routeEnt,
+                                wps,
                                 hasPlatformApproachWatch && hasBroadcastRuntimeContext,
                                 broadcastRuntimeContext);
                             TickBroadcastProgressTriggers(
@@ -2792,10 +3379,6 @@ namespace RapidTransitMod
                                         assistStop = ResolveWorkbenchStopEntity(wps[curWpIdx].m_Waypoint);
                                     RememberBoardingAssistSnapshot(v, assistStop, nowFrame);
                                     ecb.SetComponent(v, pt);
-                                    MarkForcedMidStopClosingConsist(
-                                        v,
-                                        nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES,
-                                        nowFrame + FORCED_MIDSTOP_HARD_CLOSE_FRAMES);
                                     string timeoutLogKey = midStopDwellSinceFrame.ToString();
                                     LogVehicleStateOnce(
                                         m_MidStopTimeoutLogCache,
@@ -3069,6 +3652,11 @@ namespace RapidTransitMod
 
                         case VehicleState.Idle:
                             ClearBypassYieldState(v);
+                            if (hasEnabledPlatformAnnouncements)
+                            {
+                                UpdateBroadcastPlatformOriginBusyWatch(routeEnt, wps, broadcastOriginWaitBusy);
+                            }
+
                             if (!atA)
                             {
                                 m_VehicleState[v] = VehicleState.Running;
@@ -3239,16 +3827,17 @@ namespace RapidTransitMod
                 {
                     if (!EntityManager.Exists(kv.Key)) deadKeys.Add(kv.Key);
                 }
+                Dictionary<Entity, int> removedCountByLine = null;
                 foreach (var dead in deadKeys)
                 {
                     VehicleState deadState = m_VehicleState.TryGetValue(dead, out VehicleState removedState)
                         ? removedState
                         : default;
+                    Entity mappedLine = m_VehicleLine.TryGetValue(dead, out Entity removedLine)
+                        ? removedLine
+                        : Entity.Null;
                     if (deadState == VehicleState.Preparing)
                     {
-                        Entity mappedLine = m_VehicleLine.TryGetValue(dead, out Entity removedLine)
-                            ? removedLine
-                            : Entity.Null;
                         int removedTargetMin = m_VehicleTargetMin.TryGetValue(dead, out int removedTarget)
                             ? removedTarget
                             : -1;
@@ -3332,7 +3921,29 @@ namespace RapidTransitMod
                         for (int i = 0; i < episodeReleaseKeys.Count; i++)
                             m_BypassConflictEpisodes.Remove(episodeReleaseKeys[i]);
                     }
+                    if (mappedLine != Entity.Null && deadState != VehicleState.Retiring)
+                    {
+                        removedCountByLine ??= new Dictionary<Entity, int>();
+                        removedCountByLine[mappedLine] = removedCountByLine.TryGetValue(mappedLine, out int removedCount)
+                            ? removedCount + 1
+                            : 1;
+                    }
                     log.Info("[清理] 车辆" + dead.Index + " 消失");
+                }
+                if (removedCountByLine != null && removedCountByLine.Count > 0)
+                {
+                    var cleanupRouteVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
+                    var cleanupModifierBuffers = GetBufferLookup<RouteModifier>(false);
+                    var cleanupWaypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+                    foreach (KeyValuePair<Entity, int> removedEntry in removedCountByLine)
+                    {
+                        ApplyCleanupTargetReductionForLine(
+                            removedEntry.Key,
+                            removedEntry.Value,
+                            cleanupRouteVehicleBuffers,
+                            cleanupModifierBuffers,
+                            cleanupWaypointBuffers);
+                    }
                 }
                 if (deadKeys.Length > 0)
                     m_WaypointIndexFrameSnapshots.Clear();
@@ -3362,6 +3973,33 @@ namespace RapidTransitMod
                 computedWaypointIndex);
 
             return computedWaypointIndex;
+        }
+
+        internal bool IsRuntimeReadyForOriginArrivingRepair()
+        {
+            return m_SystemReady;
+        }
+
+        internal bool TryGetRuntimeVehicleState(Entity vehicle, out VehicleState state)
+        {
+            state = default;
+            return m_VehicleState.IsCreated && m_VehicleState.TryGetValue(vehicle, out state);
+        }
+
+        internal int ComputeWaypointIndexForOriginArrivingRepair(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            return ComputeWpIndex(vehicle, waypoints);
+        }
+
+        internal bool TryGetOriginArrivalRouteProgressForOriginArrivingRepair(
+            Entity vehicle,
+            out int nextWaypointIndex,
+            out float segmentPosition)
+        {
+            if (!TryGetRouteProgress(vehicle, out nextWaypointIndex, out segmentPosition))
+                return false;
+
+            return nextWaypointIndex == 0 && segmentPosition >= ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS;
         }
 
         private bool TryGetWaypointIndexCurrentFrame(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints, out int waypointIndex)

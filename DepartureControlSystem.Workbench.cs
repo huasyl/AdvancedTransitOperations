@@ -513,7 +513,7 @@ namespace RapidTransitMod
         private bool m_AppliedWorkbenchPersistenceLoaded = false;
         private const int DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES = 20;
         private const int DEFAULT_MAX_STATION_DWELL_MINUTES = 10;
-        private const int MIN_ORIGIN_HOLD_LIMIT_MINUTES = 1;
+        private const int MIN_ORIGIN_HOLD_LIMIT_MINUTES = 5;
         private const int MAX_ORIGIN_HOLD_LIMIT_MINUTES = 120;
         private const uint CONFIGURED_ALLOWED_DEPOT_CACHE_LOG_INTERVAL_FRAMES = 3600u;
 

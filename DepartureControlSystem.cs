@@ -103,6 +103,10 @@ namespace RapidTransitMod
             public string ReasonCode = string.Empty;
             public bool HasIntervention;
             public bool HardAckStallLogged;
+            public uint LastTraceFrame;
+            public uint LastDispatchGuardLogFrame;
+            public uint LastParkingDiagLogFrame;
+            public string LastTraceKey = string.Empty;
         }
 
         private struct DeferredBoardingTailIgnoreEntry
@@ -720,11 +724,13 @@ namespace RapidTransitMod
         private const uint LAUNCH_COOLDOWN_FRAMES = 600;
         private const uint FORCED_MIDSTOP_BV_GRACE_FRAMES = 180;
         private const uint FORCED_MIDSTOP_HARD_CLOSE_FRAMES = 360;
+        private const uint OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES = 1800;
         private const uint SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES = 1800;
         private const uint SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES = 30;
+        private const uint RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES = 180;
         private const byte RETIRE_HANDOFF_MAX_ATTEMPTS = 8;
         private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
@@ -777,6 +783,9 @@ namespace RapidTransitMod
         private const uint NEW_LINE_STABLE_FRAMES = 300;
         private const int DISPATCH_SAMPLE_HISTORY_LIMIT = 8;
         private const float DISPATCH_SAMPLE_OUTLIER_FACTOR = 1.5f;
+        private const float DISPATCH_FAST_SAMPLE_MARGIN = 0.98f;
+        private const float DISPATCH_SLOW_SAMPLE_BLEND = 0.5f;
+        private const float DISPATCH_SLOW_SAMPLE_MAX_STEP_MINUTES = 4f;
         private const uint BYPASS_YIELD_DECISION_COOLDOWN_FRAMES = 30;
         private const uint PREPARING_ROUTE_FIX_GRACE_FRAMES = 300;
         private const uint BOARDING_TAIL_IGNORE_TTL_FRAMES = 900;

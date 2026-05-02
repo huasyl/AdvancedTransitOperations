@@ -2286,6 +2286,26 @@ body {
   margin-bottom: 0;
 }
 
+.dw-schedule-page-hold-field.is-error label,
+.dw-schedule-page-dwell-field.is-error label {
+  color: #f3aaaa;
+}
+
+.dw-schedule-page-hold-field.is-error input,
+.dw-schedule-page-dwell-field.is-error input {
+  border-top-color: transparent;
+  border-right-color: transparent;
+  border-left-color: transparent;
+  border-bottom-color: rgba(236, 111, 111, 0.92);
+}
+
+.dw-schedule-page-hold-field.is-error input:hover,
+.dw-schedule-page-hold-field.is-error input:focus,
+.dw-schedule-page-dwell-field.is-error input:hover,
+.dw-schedule-page-dwell-field.is-error input:focus {
+  border-bottom-color: rgba(246, 135, 135, 0.96);
+}
+
 .dw-schedule-page-origin-value {
   min-height: 34px;
   padding: 8px 12px;

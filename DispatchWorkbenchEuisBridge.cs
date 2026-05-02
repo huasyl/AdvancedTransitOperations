@@ -238,6 +238,7 @@ namespace RapidTransitMod
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.stopBroadcastRulePreview", new Func<string, string>(HandleStopBroadcastRulePreview));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.setBroadcastPreviewVolume", new Func<string, string>(HandleSetBroadcastPreviewVolume));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.exportPlannerInput", new Func<string>(HandleExportPlannerInput));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getLocale", new Func<string>(HandleGetLocale));
@@ -360,6 +361,11 @@ namespace RapidTransitMod
         private static string HandleRefreshMetadata()
         {
             return DepartureControlSystem.Instance?.RefreshWorkbenchMetadataJson() ?? string.Empty;
+        }
+
+        private static string HandleExportPlannerInput()
+        {
+            return DepartureControlSystem.Instance?.ExportPlannerInputJson() ?? string.Empty;
         }
 
         private static string HandleSaveDraft(string requestJson)
@@ -539,6 +545,7 @@ namespace RapidTransitMod
             registerCall("workbench.stopBroadcastRulePreview", new Func<string, string>(HandleStopBroadcastRulePreview));
             registerCall("workbench.setBroadcastPreviewVolume", new Func<string, string>(HandleSetBroadcastPreviewVolume));
             registerCall("workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
+            registerCall("workbench.exportPlannerInput", new Func<string>(HandleExportPlannerInput));
             registerCall("workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             registerCall("workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
             registerCall("workbench.getLocale", new Func<string>(HandleGetLocale));

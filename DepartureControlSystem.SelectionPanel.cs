@@ -42,6 +42,7 @@ namespace RapidTransitMod
             public bool ShowReevaluateAction;
             public bool ShowLineSpawnAction;
             public bool ShowDumpTrackModelAction;
+            public bool ShowDumpPlannerInputAction;
             public bool ShowBypassStationToggle;
             public bool BypassStationChecked;
         }
@@ -484,6 +485,7 @@ namespace RapidTransitMod
                 spawnPending);
             snapshot.ShowLineSpawnAction = isManagedLine;
             snapshot.ShowDumpTrackModelAction = true;
+            snapshot.ShowDumpPlannerInputAction = true;
             snapshot.ShowBypassStationToggle = CanConfigureBypassStation(selectedEntity);
             snapshot.BypassStationChecked = snapshot.ShowBypassStationToggle && IsBypassStation(selectedEntity);
             return true;
@@ -541,6 +543,7 @@ namespace RapidTransitMod
             snapshot.ShowForceDepartAction = isManagedVehicle;
             snapshot.ShowReevaluateAction = false;
             snapshot.ShowDumpTrackModelAction = false;
+            snapshot.ShowDumpPlannerInputAction = false;
             return true;
         }
 

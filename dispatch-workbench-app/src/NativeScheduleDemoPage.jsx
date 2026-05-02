@@ -9,6 +9,7 @@ import WorkbenchScrollArea from "./components/WorkbenchScrollArea";
 
 const NATIVE_SCHEDULE_PERSIST_KEY = "rtm.nativeSchedule.frontendDraft.v1";
 const NATIVE_SCHEDULE_PERSIST_SCHEMA_VERSION = 3;
+const MIN_LINE_SETTING_MINUTES = 5;
 
 function DemoTextField({
   label,
@@ -539,7 +540,7 @@ function clampPositiveMinutes(value, fallbackValue) {
     return fallbackValue;
   }
 
-  return Math.max(1, Math.min(120, Math.round(numeric)));
+  return Math.max(MIN_LINE_SETTING_MINUTES, Math.min(120, Math.round(numeric)));
 }
 
 function buildNativeDepotOptions(snapshotDepots = []) {
@@ -2144,6 +2145,12 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   const [origin, setOrigin] = useState(LINE_OPTIONS[0]?.originId || "");
   const [holdMinutes, setHoldMinutes] = useState(LINE_OPTIONS[0]?.hold || "");
   const [dwellMinutes, setDwellMinutes] = useState(LINE_OPTIONS[0]?.dwell || "");
+  const holdMinutesValue = Number(holdMinutes);
+  const dwellMinutesValue = Number(dwellMinutes);
+  const holdMinutesTooSmall =
+    holdMinutes !== "" && Number.isFinite(holdMinutesValue) && holdMinutesValue < MIN_LINE_SETTING_MINUTES;
+  const dwellMinutesTooSmall =
+    dwellMinutes !== "" && Number.isFinite(dwellMinutesValue) && dwellMinutesValue < MIN_LINE_SETTING_MINUTES;
   const [summaryEntries, setSummaryEntries] = useState(() => normalizeSummaryEntries([], t));
   const [autoRules, setAutoRules] = useState([]);
   const [manualDrafts, setManualDrafts] = useState([]);
@@ -2657,12 +2664,22 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   }
 
   function handleHoldMinutesChange(value) {
+    const numeric = Number(value);
+    if (value !== "" && Number.isFinite(numeric) && numeric < MIN_LINE_SETTING_MINUTES) {
+      setHoldMinutes(value);
+      return;
+    }
     markLocalDataDirty();
     setHoldMinutes(value);
     updateRuntimeLineOption(selectedLine.id, { hold: value });
   }
 
   function handleDwellMinutesChange(value) {
+    const numeric = Number(value);
+    if (value !== "" && Number.isFinite(numeric) && numeric < MIN_LINE_SETTING_MINUTES) {
+      setDwellMinutes(value);
+      return;
+    }
     markLocalDataDirty();
     setDwellMinutes(value);
     updateRuntimeLineOption(selectedLine.id, { dwell: value });
@@ -3021,8 +3038,8 @@ function NativeScheduleDemoPage({ registerHostActions }) {
           portalHostRef={dropdownPortalHostRef}
         />
 
-        <DemoTextField label={t("nativeSchedule.topbar.holdMinutes")} value={holdMinutes} onCommit={handleHoldMinutesChange} className="is-hold" suffix={t("nativeSchedule.unit.minutes")} />
-        <DemoTextField label={t("nativeSchedule.topbar.dwellMinutes")} value={dwellMinutes} onCommit={handleDwellMinutesChange} className="is-dwell" suffix={t("nativeSchedule.unit.minutes")} />
+        <DemoTextField label={holdMinutesTooSmall ? "\u4e0d\u5f97\u5c0f\u4e8e5\u5206" : t("nativeSchedule.topbar.holdMinutes")} value={holdMinutes} onCommit={handleHoldMinutesChange} onDraftChange={setHoldMinutes} className={`is-hold${holdMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
+        <DemoTextField label={dwellMinutesTooSmall ? "\u4e0d\u5f97\u5c0f\u4e8e5\u5206" : t("nativeSchedule.topbar.dwellMinutes")} value={dwellMinutes} onCommit={handleDwellMinutesChange} onDraftChange={setDwellMinutes} className={`is-dwell${dwellMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
         </div>
         <div className="dw-demo-main">
         <SummarySection

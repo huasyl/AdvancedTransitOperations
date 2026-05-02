@@ -1174,9 +1174,9 @@ function SequenceRule({
 }) {
   const isTrayVisible = trayContext?.ruleId === rule.id;
   const [displayAction, setDisplayAction] = useState(null);
-  const assetColumns = splitIntoVerticalColumns(assetLibrary);
-  const variableColumns = splitIntoColumns(variableLibrary);
-  const delayColumns = splitIntoColumns(delayLibrary);
+  const assetColumns = useMemo(() => splitIntoVerticalColumns(assetLibrary), [assetLibrary]);
+  const variableColumns = useMemo(() => splitIntoColumns(variableLibrary), [variableLibrary]);
+  const delayColumns = useMemo(() => splitIntoColumns(delayLibrary), [delayLibrary]);
 
   useEffect(() => {
     if (isTrayVisible && trayContext?.action) {
@@ -1426,14 +1426,34 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   const dirtyPlatformStationIdsRef = useRef([]);
   const skipNextRulesSaveRef = useRef(false);
   const availableAssetLibrary = catalogAssetLibrary;
-  const mappingAssetColumns = splitIntoColumns(availableAssetLibrary);
+  const mappingAssetColumns = useMemo(
+    () => splitIntoColumns(availableAssetLibrary),
+    [availableAssetLibrary]
+  );
+  const mappingAssetOrderByName = useMemo(() => {
+    const next = new Map();
+    availableAssetLibrary.forEach((asset, index) => {
+      if (asset?.name) {
+        next.set(asset.name, index);
+      }
+    });
+    return next;
+  }, [availableAssetLibrary]);
   const currentExternalFolders = Array.isArray(externalAssetBrowser?.folders) ? externalAssetBrowser.folders : [];
   const currentExternalFiles = Array.isArray(externalAssetBrowser?.files) ? externalAssetBrowser.files : [];
   const currentExternalAllowedExtensions = Array.isArray(externalAssetBrowser?.allowedExtensions) && externalAssetBrowser.allowedExtensions.length > 0
     ? externalAssetBrowser.allowedExtensions
     : [".wav", ".mp3", ".ogg"];
   const selectedLine = lineOptions.find((line) => line.id === selectedLineId) ?? lineOptions[0];
-  const newRuleTrigger = triggerOptions.find((option) => option.id === newRuleTriggerId) ?? triggerOptions[0];
+  const availableBroadcastTriggerOptions = useMemo(() => {
+    const usedTriggerIds = new Set(
+      rules.map((rule) => (typeof rule?.triggerId === "string" ? rule.triggerId : ""))
+    );
+    return triggerOptions.filter((option) => !usedTriggerIds.has(option.id));
+  }, [rules, triggerOptions]);
+  const newRuleTrigger = availableBroadcastTriggerOptions.find((option) => option.id === newRuleTriggerId)
+    ?? availableBroadcastTriggerOptions[0]
+    ?? null;
   const fallbackLanguageKey = useMemo(
     () => getBroadcastLocaleLanguageKey(locale),
     [locale]
@@ -1589,6 +1609,35 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
       };
     });
   }, [platformAnnouncements, platformTriggerOptions, stations, t]);
+  const platformStationOccupancyByTrigger = useMemo(() => {
+    const next = new Map();
+    platformRules.forEach((rule) => {
+      const triggerId = resolvePlatformUiTriggerId(rule?.triggerId);
+      if (!triggerId || !Array.isArray(rule?.stationIds)) {
+        return;
+      }
+
+      let stationMap = next.get(triggerId);
+      if (!stationMap) {
+        stationMap = new Map();
+        next.set(triggerId, stationMap);
+      }
+
+      rule.stationIds.forEach((stationId) => {
+        if (!stationId) {
+          return;
+        }
+
+        let ruleIds = stationMap.get(stationId);
+        if (!ruleIds) {
+          ruleIds = new Set();
+          stationMap.set(stationId, ruleIds);
+        }
+        ruleIds.add(rule.id);
+      });
+    });
+    return next;
+  }, [platformRules]);
   const broadcastVariableMappingIssue = useMemo(
     () => buildBroadcastVariableMappingIssue(rules, stations),
     [rules, stations]
@@ -1606,6 +1655,32 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
       }
     });
     dirtyPlatformStationIdsRef.current = Array.from(current);
+  }
+
+  function isPlatformStationOccupiedByTrigger(stationId, triggerId, exceptRuleId = "") {
+    const normalizedTriggerId = resolvePlatformUiTriggerId(triggerId);
+    const ruleIds = platformStationOccupancyByTrigger.get(normalizedTriggerId)?.get(stationId);
+    if (!ruleIds || ruleIds.size === 0) {
+      return false;
+    }
+
+    if (!exceptRuleId) {
+      return true;
+    }
+
+    for (const ruleId of ruleIds) {
+      if (ruleId !== exceptRuleId) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function getAvailablePlatformCreateStations(triggerId) {
+    return stations.filter((station) =>
+      station && !isPlatformStationOccupiedByTrigger(station.id, triggerId)
+    );
   }
 
   function getPrimaryStationAssetName(audios) {
@@ -1728,27 +1803,45 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     }
   }
 
-  function getPlatformAnnouncement(station) {
-    const existing = platformAnnouncements.find((entry) => entry.stationId === station.id);
-    return existing || {
+  function buildPlatformAnnouncementKey(stationId, triggerId) {
+    return `${stationId || ""}:${resolvePlatformUiTriggerId(triggerId || "platform_idle_clear")}`;
+  }
+
+  function createEmptyPlatformAnnouncement(station, triggerId = "platform_idle_clear") {
+    const resolvedTriggerId = resolvePlatformUiTriggerId(triggerId);
+    return {
       lineId: getActiveBroadcastLineId(),
       stationId: station.id,
       stationName: station.name,
-      uiTriggerId: "platform_idle_clear",
+      title: "",
+      uiTriggerId: resolvedTriggerId,
       enabled: false,
-      triggerId: "platform_idle_clear",
+      triggerId: resolvePlatformRuntimeTriggerId(resolvedTriggerId),
       cooldownGameMinutes: 20,
       nodes: []
     };
   }
 
-  function updatePlatformAnnouncement(station, updater) {
-    const base = getPlatformAnnouncement(station);
+  function getPlatformAnnouncement(station, triggerId = "platform_idle_clear") {
+    const resolvedTriggerId = resolvePlatformUiTriggerId(triggerId);
+    const existing = platformAnnouncements.find((entry) =>
+      entry.stationId === station.id
+      && resolvePlatformUiTriggerId(entry?.uiTriggerId || entry?.triggerId) === resolvedTriggerId
+    );
+    return existing || createEmptyPlatformAnnouncement(station, resolvedTriggerId);
+  }
+
+  function updatePlatformAnnouncement(station, triggerId, updater) {
+    const base = getPlatformAnnouncement(station, triggerId);
     const nextAnnouncement = typeof updater === "function" ? updater(base) : base;
+    const nextKey = buildPlatformAnnouncementKey(station.id, nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId || triggerId);
     markDirtyPlatformStations([station?.id]);
     setPlatformAnnouncements((current) => {
-      const withoutStation = current.filter((entry) => entry.stationId !== station.id);
-      return [...withoutStation, {
+      const nextByKey = new Map(current.map((entry) => [
+        buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId),
+        entry
+      ]));
+      nextByKey.set(nextKey, {
         ...nextAnnouncement,
         lineId: getActiveBroadcastLineId(),
         stationId: station.id,
@@ -1756,19 +1849,21 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
         uiTriggerId: resolvePlatformUiTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
         triggerId: resolvePlatformRuntimeTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
         cooldownGameMinutes: 20
-      }];
+      });
+      return Array.from(nextByKey.values());
     });
   }
 
   function buildPlatformAnnouncementForStation(station, source) {
+    const uiTriggerId = resolvePlatformUiTriggerId(source?.uiTriggerId || source?.triggerId);
     return {
       lineId: getActiveBroadcastLineId(),
       stationId: station.id,
       stationName: station.name,
       title: typeof source?.title === "string" ? source.title : "",
-      uiTriggerId: resolvePlatformUiTriggerId(source?.uiTriggerId || source?.triggerId),
+      uiTriggerId,
       enabled: Boolean(source?.enabled),
-      triggerId: resolvePlatformRuntimeTriggerId(source?.uiTriggerId || source?.triggerId),
+      triggerId: resolvePlatformRuntimeTriggerId(uiTriggerId),
       cooldownGameMinutes: 20,
       nodes: Array.isArray(source?.nodes) ? source.nodes : []
     };
@@ -1783,22 +1878,27 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     const nextRule = typeof updater === "function" ? updater(targetRule) : targetRule;
     markDirtyPlatformStations(targetRule.stationIds);
     setPlatformAnnouncements((current) => {
-      const nextByStation = new Map(current.map((entry) => [entry.stationId, entry]));
+      const nextByKey = new Map(current.map((entry) => [
+        buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId),
+        entry
+      ]));
       targetRule.stationIds.forEach((stationId) => {
         const station = stations.find((entry) => entry.id === stationId);
         if (station) {
-          nextByStation.set(stationId, buildPlatformAnnouncementForStation(station, nextRule));
+          const announcement = buildPlatformAnnouncementForStation(station, nextRule);
+          nextByKey.set(
+            buildPlatformAnnouncementKey(stationId, announcement.uiTriggerId),
+            announcement
+          );
         }
       });
 
-      return stations.map((station) =>
-        nextByStation.get(station.id) || buildPlatformAnnouncementForStation(station, { enabled: false, nodes: [] })
-      );
+      return Array.from(nextByKey.values());
     });
   }
 
-  async function savePlatformAnnouncement(station, copyToAll = false) {
-    const announcement = getPlatformAnnouncement(station);
+  async function savePlatformAnnouncement(station, triggerId = "platform_idle_clear", copyToAll = false) {
+    const announcement = getPlatformAnnouncement(station, triggerId);
     const request = {
       lineId: getActiveBroadcastLineId(),
       stationId: station.id,
@@ -1885,28 +1985,36 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   }
 
   function handleCreatePlatformRule() {
-    const targetStations = stations.filter((station) => platformCreateStationIds.includes(station.id));
+    const targetStations = stations.filter((station) =>
+      platformCreateStationIds.includes(station.id)
+      && !isPlatformStationOccupiedByTrigger(station.id, newRuleTriggerId)
+    );
     if (!newRuleTitle.trim() || targetStations.length === 0) {
       return;
     }
 
     setPlatformAnnouncements((current) => {
-      const nextByStation = new Map(current.map((entry) => [entry.stationId, entry]));
+      const nextByKey = new Map(current.map((entry) => [
+        buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId),
+        entry
+      ]));
       const nodes = [];
       const signatureKey = `1:${newRuleTriggerId}:${JSON.stringify(nodes)}`;
       platformRuleTitleMemoryRef.current[signatureKey] = newRuleTitle.trim();
       targetStations.forEach((station) => {
-        nextByStation.set(station.id, buildPlatformAnnouncementForStation(station, {
+        const announcement = buildPlatformAnnouncementForStation(station, {
           title: newRuleTitle.trim(),
           triggerId: newRuleTriggerId,
           enabled: true,
           nodes
-        }));
+        });
+        nextByKey.set(
+          buildPlatformAnnouncementKey(station.id, announcement.uiTriggerId),
+          announcement
+        );
       });
 
-      return stations.map((station) =>
-        nextByStation.get(station.id) || buildPlatformAnnouncementForStation(station, { enabled: false, nodes: [] })
-      );
+      return Array.from(nextByKey.values());
     });
     markDirtyPlatformStations(targetStations.map((station) => station.id));
     setIsCreatingRule(false);
@@ -1977,17 +2085,21 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     }
 
     setPlatformAnnouncements((current) => {
-      const nextByStation = new Map(current.map((entry) => [entry.stationId, entry]));
+      const nextByKey = new Map(current.map((entry) => [
+        buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId),
+        entry
+      ]));
       targetRule.stationIds.forEach((stationId) => {
         const station = stations.find((entry) => entry.id === stationId);
         if (station) {
-          nextByStation.set(stationId, buildPlatformAnnouncementForStation(station, { enabled: false, nodes: [] }));
+          nextByKey.set(
+            buildPlatformAnnouncementKey(stationId, targetRule.triggerId),
+            createEmptyPlatformAnnouncement(station, targetRule.triggerId)
+          );
         }
       });
 
-      return stations.map((station) =>
-        nextByStation.get(station.id) || buildPlatformAnnouncementForStation(station, { enabled: false, nodes: [] })
-      );
+      return Array.from(nextByKey.values());
     });
     markDirtyPlatformStations(targetRule.stationIds);
     if (trayContext?.ruleId === ruleId) {
@@ -2014,20 +2126,20 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
       platformRuleTitleMemoryRef.current[signatureKey] = rememberedTitle;
     }
     setPlatformAnnouncements((current) => {
-      const nextByStation = new Map(current.map((entry) => [entry.stationId, entry]));
-      nextByStation.set(
-        stationId,
-        buildPlatformAnnouncementForStation(
-          station,
-          isAssigned ? { enabled: false, nodes: [] } : stableRule
-        )
+      const nextByKey = new Map(current.map((entry) => [
+        buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId),
+        entry
+      ]));
+      const nextAnnouncement = isAssigned
+        ? createEmptyPlatformAnnouncement(station, stableRule.triggerId)
+        : buildPlatformAnnouncementForStation(station, stableRule);
+      nextByKey.set(
+        buildPlatformAnnouncementKey(stationId, stableRule.triggerId),
+        nextAnnouncement
       );
-
-      return stations.map((entry) =>
-        nextByStation.get(entry.id) || buildPlatformAnnouncementForStation(entry, { enabled: false, nodes: [] })
-      );
+      return Array.from(nextByKey.values());
     });
-    markDirtyPlatformStations([...targetRule.stationIds, stationId]);
+    markDirtyPlatformStations([stationId]);
   }
 
   function scheduleMappingBindFeedback(stationId, assetName, lang) {
@@ -2399,15 +2511,8 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
           applyBroadcastSnapshot(snapshot);
         }
       } catch (error) {
-        try {
-          const fallbackSnapshot = await workbenchApi.refreshSnapshot?.();
-          if (!disposed) {
-            applyBroadcastSnapshot(fallbackSnapshot);
-          }
-        } catch (fallbackError) {
-          if (!disposed) {
-            console.error("[RT Broadcast Workbench] backend refresh failed", error, fallbackError);
-          }
+        if (!disposed) {
+          console.error("[RT Broadcast Workbench] backend refresh failed", error);
         }
       }
     }
@@ -2493,7 +2598,10 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
 
     const timer = window.setTimeout(async () => {
       const stationMap = new Map(stations.map((station) => [station.id, station]));
-      const announcementMap = new Map(platformAnnouncements.map((entry) => [entry.stationId, entry]));
+      const announcementMap = new Map(platformAnnouncements.map((entry) => [
+        buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId),
+        entry
+      ]));
       dirtyPlatformStationIdsRef.current = [];
 
       try {
@@ -2505,8 +2613,11 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
             continue;
           }
 
-          const source = announcementMap.get(stationId) || buildPlatformAnnouncementForStation(station, { enabled: false, nodes: [] });
-          latestSnapshot = await persistPlatformAnnouncementForStation(station, source) || latestSnapshot;
+          for (const triggerId of ["platform_idle_clear", "approach_station"]) {
+            const source = announcementMap.get(buildPlatformAnnouncementKey(stationId, triggerId))
+              || createEmptyPlatformAnnouncement(station, triggerId);
+            latestSnapshot = await persistPlatformAnnouncementForStation(station, source) || latestSnapshot;
+          }
         }
 
         if (latestSnapshot) {
@@ -2821,7 +2932,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   }
 
   function handleCreateRule() {
-    if (!newRuleTitle.trim()) {
+    if (!newRuleTitle.trim() || !newRuleTrigger) {
       return;
     }
 
@@ -3434,7 +3545,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
             </div>
           </div>
 
-          <WorkbenchScrollArea className="dw-bc-body" externalScrollRef={bodyScrollRef} metricsKey={`${renderedTab}:${Boolean(isCreatingRule)}:${mappingTray || ""}`}>
+          <WorkbenchScrollArea className="dw-bc-body" externalScrollRef={bodyScrollRef} metricsKey={`${renderedTab}:${Boolean(isCreatingRule)}:${Boolean(trayContext || mappingTray)}:${stations.length}:${platformRules.length}:${availableAssetLibrary.length}`}>
             <div className="dw-bc-body-pad" ref={bodyPadRef}>
               <div className={`dw-bc-tab-panel is-${tabStage}`}>
                 <div className="dw-bc-scene-entry dw-bc-page-enter-scene origin-bottom">
@@ -3474,8 +3585,8 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                     </div>
                   ))}
                   <div className="dw-bc-create-block">
-                    <div className={`dw-bc-create-button-shell ${isCreatingRule ? "is-hidden" : "is-visible"}`}>
-                      <button type="button" className="dw-bc-create-button" onClick={() => { setIsCreatingRule(true); setTrayContext(null); setMappingTray(null); }}>
+                    <div className={`dw-bc-create-button-shell ${isCreatingRule || availableBroadcastTriggerOptions.length === 0 ? "is-hidden" : "is-visible"}`}>
+                      <button type="button" className="dw-bc-create-button" onClick={() => { setIsCreatingRule(true); setTrayContext(null); setMappingTray(null); setNewRuleTriggerId((availableBroadcastTriggerOptions[0]?.id) || TRIGGER_OPTIONS[0].id); }}>
                         <span className="dw-bc-create-button-icon-shell">
                           <PlusIcon />
                         </span>
@@ -3504,13 +3615,13 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                               setNewRuleTriggerId(value);
                               setTriggerDropdownOpen(false);
                             }}
-                            options={triggerOptions.map((option) => ({
+                            options={availableBroadcastTriggerOptions.map((option) => ({
                               key: option.id,
                               value: option.id,
                               label: option.label,
                               active: option.id === newRuleTriggerId
                             }))}
-                            value={newRuleTrigger.label}
+                            value={newRuleTrigger?.label || ""}
                             className="dw-bc-form-dropdown"
                             variant="field"
                             positioning="portal"
@@ -3682,7 +3793,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                                     {mappingAssetColumns.map((column, columnIndex) => (
                                       <div key={`mapping-col-${columnIndex}`} className="dw-bc-tray-column">
                                         {column.map((asset) => (
-                                          <button key={asset.name} type="button" className="dw-bc-tray-item anim-stagger-slide-up" style={{ animationDelay: `${availableAssetLibrary.findIndex((entry) => entry.name === asset.name) * 0.05}s` }} onClick={() => handleBindStation(station.id, asset.name)}>
+                                          <button key={asset.name} type="button" className="dw-bc-tray-item anim-stagger-slide-up" style={{ animationDelay: `${(mappingAssetOrderByName.get(asset.name) ?? 0) * 0.05}s` }} onClick={() => handleBindStation(station.id, asset.name)}>
                                             <span>{formatBroadcastAssetDisplayName(asset.name)}</span>
                                             <span>{asset.desc}</span>
                                           </button>
@@ -3750,12 +3861,18 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                             <div className="dw-bc-platform-station-buttons">
                               {stations.map((station) => {
                                 const isActive = rule.stationIds.includes(station.id);
+                                const isOccupied = !isActive && isPlatformStationOccupiedByTrigger(station.id, rule.triggerId, rule.id);
                                 return (
                                   <button
                                     key={`${rule.id}:${station.id}`}
                                     type="button"
-                                    className={`dw-bc-platform-station-button ${isActive ? "is-active" : ""}`}
-                                    onClick={() => handleTogglePlatformRuleStation(rule.id, station.id)}
+                                    className={`dw-bc-platform-station-button ${isActive ? "is-active" : ""} ${isOccupied ? "is-disabled" : ""}`}
+                                    disabled={isOccupied}
+                                    onClick={() => {
+                                      if (!isOccupied) {
+                                        handleTogglePlatformRuleStation(rule.id, station.id);
+                                      }
+                                    }}
                                   >
                                     {station.name}
                                   </button>
@@ -3768,7 +3885,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                     ))}
                     <div className="dw-bc-create-block">
                       <div className={`dw-bc-create-button-shell ${isCreatingRule ? "is-hidden" : "is-visible"}`}>
-                        <button type="button" className="dw-bc-create-button" onClick={() => { setIsCreatingRule(true); setTrayContext(null); setMappingTray(null); setNewRuleTriggerId("platform_idle_clear"); setPlatformCreateStationIds((current) => current.length > 0 ? current : (stations[0]?.id ? [stations[0].id] : [])); }}>
+                        <button type="button" className="dw-bc-create-button" onClick={() => { setIsCreatingRule(true); setTrayContext(null); setMappingTray(null); setNewRuleTriggerId("platform_idle_clear"); setPlatformCreateStationIds((current) => { const availableStations = getAvailablePlatformCreateStations("platform_idle_clear"); const kept = current.filter((stationId) => availableStations.some((station) => station.id === stationId)); return kept.length > 0 ? kept : (availableStations[0]?.id ? [availableStations[0].id] : []); }); }}>
                           <span className="dw-bc-create-button-icon-shell">
                             <PlusIcon />
                           </span>
@@ -3795,6 +3912,9 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                               }}
                               onSelect={(value) => {
                                 setNewRuleTriggerId(value);
+                                setPlatformCreateStationIds((current) =>
+                                  current.filter((stationId) => !isPlatformStationOccupiedByTrigger(stationId, value))
+                                );
                                 setTriggerDropdownOpen(false);
                               }}
                               options={platformTriggerOptions.map((option) => ({
@@ -3814,18 +3934,22 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                             <label>{t("broadcast.platform.stationLabel")}</label>
                             <div className="dw-bc-platform-station-buttons">
                               {stations.map((station) => {
-                                const isActive = platformCreateStationIds.includes(station.id);
+                                const isOccupied = isPlatformStationOccupiedByTrigger(station.id, newRuleTriggerId);
+                                const isActive = !isOccupied && platformCreateStationIds.includes(station.id);
                                 return (
                                   <button
                                     key={`create-platform:${station.id}`}
                                     type="button"
-                                    className={`dw-bc-platform-station-button ${isActive ? "is-active" : ""}`}
+                                    className={`dw-bc-platform-station-button ${isActive ? "is-active" : ""} ${isOccupied ? "is-disabled" : ""}`}
+                                    disabled={isOccupied}
                                     onClick={() => {
-                                      setPlatformCreateStationIds((current) =>
-                                        current.includes(station.id)
-                                          ? current.filter((entry) => entry !== station.id)
-                                          : [...current, station.id]
-                                      );
+                                      if (!isOccupied) {
+                                        setPlatformCreateStationIds((current) =>
+                                          current.includes(station.id)
+                                            ? current.filter((entry) => entry !== station.id)
+                                            : [...current, station.id]
+                                        );
+                                      }
                                     }}
                                   >
                                     {station.name}

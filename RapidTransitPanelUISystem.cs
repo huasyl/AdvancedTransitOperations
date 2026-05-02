@@ -54,6 +54,7 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestVehicleReevaluate", RequestVehicleReevaluate));
             AddBinding(new TriggerBinding(kGroup, "requestLineSpawn", RequestLineSpawn));
             AddBinding(new TriggerBinding(kGroup, "requestDumpTrackModel", RequestDumpTrackModel));
+            AddBinding(new TriggerBinding(kGroup, "requestDumpPlannerInput", RequestDumpPlannerInput));
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
@@ -196,7 +197,8 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showReevaluateAction", snapshot.ShowReevaluateAction);
             AppendJsonBool(sb, "showLineSpawnAction", snapshot.ShowLineSpawnAction);
             AppendJsonBool(sb, "showDumpTrackModelAction", snapshot.ShowDumpTrackModelAction);
-            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction);
+            AppendJsonBool(sb, "showDumpPlannerInputAction", snapshot.ShowDumpPlannerInputAction);
+            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction);
             AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
             AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
             if (sb[sb.Length - 1] == ',')
@@ -383,6 +385,16 @@ namespace RapidTransitMod
                 return;
 
             DepartureControlSystem.Instance.RequestDumpTrackModelSnapshot();
+            m_LastVehicle = Entity.Null;
+            m_LastSnapshotVersion = 0;
+        }
+
+        private void RequestDumpPlannerInput()
+        {
+            if (DepartureControlSystem.Instance == null)
+                return;
+
+            DepartureControlSystem.Instance.RequestDumpPlannerInputSnapshot();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }

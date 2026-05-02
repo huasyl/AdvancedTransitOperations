@@ -545,6 +545,14 @@
   line-height: 24px;
 }
 
+.dw-demo-field.is-error .dw-demo-label {
+  color: #f3aaaa;
+}
+
+.dw-demo-field.is-error .dw-demo-input {
+  border-bottom-color: rgba(236, 111, 111, 0.92);
+}
+
 .dw-demo-input.is-readonly {
   cursor: default;
 }
@@ -569,6 +577,11 @@
 
 .dw-demo-input.is-error:hover,
 .dw-demo-input.is-error:focus {
+  border-bottom-color: rgba(246, 135, 135, 0.96);
+}
+
+.dw-demo-field.is-error .dw-demo-input:hover,
+.dw-demo-field.is-error .dw-demo-input:focus {
   border-bottom-color: rgba(246, 135, 135, 0.96);
 }
 

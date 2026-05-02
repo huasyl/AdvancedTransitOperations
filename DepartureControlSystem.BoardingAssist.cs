@@ -64,16 +64,11 @@ namespace RapidTransitMod
             stats = default;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
-            publicTransport.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
+            publicTransport.m_DepartureFrame = nowFrame > OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
+                ? nowFrame - OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
+                : 1;
             publicTransport.m_MinWaitingDistance = float.MaxValue;
             publicTransport.m_MaxBoardingDistance = float.MaxValue;
-            PromoteClosablePassengersForVehicle(vehicle, ecb, ref scannedPassengers, ref readiedPassengers, ref stats);
-            if (EntityManager.HasBuffer<LayoutElement>(vehicle))
-            {
-                DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
-                for (int i = 0; i < layout.Length; i++)
-                    PromoteClosablePassengersForVehicle(layout[i].m_Vehicle, ecb, ref scannedPassengers, ref readiedPassengers, ref stats);
-            }
         }
 
         private void PromoteClosablePassengersForVehicle(

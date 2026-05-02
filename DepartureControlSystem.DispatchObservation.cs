@@ -1008,7 +1008,7 @@ namespace RapidTransitMod
 
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
             RecordLineDispatchSampleSummary(line, nowMin, v, sampleMinutes);
-            UpdateDispatchCache(line, frames);
+            UpdateDispatchCache(line, v, frames);
         }
     }
 }

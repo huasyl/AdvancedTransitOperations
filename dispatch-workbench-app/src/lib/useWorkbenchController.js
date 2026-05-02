@@ -103,11 +103,11 @@ function normalizeLineOptions(lines, t) {
       ...line,
       originHoldLimitMinutes:
         Number.isFinite(Number(line?.originHoldLimitMinutes)) && Number(line.originHoldLimitMinutes) > 0
-          ? Math.max(1, Math.min(120, Math.round(Number(line.originHoldLimitMinutes))))
+          ? Math.max(5, Math.min(120, Math.round(Number(line.originHoldLimitMinutes))))
           : 20,
       maxStationDwellMinutes:
         Number.isFinite(Number(line?.maxStationDwellMinutes)) && Number(line.maxStationDwellMinutes) > 0
-          ? Math.max(1, Math.min(120, Math.round(Number(line.maxStationDwellMinutes))))
+          ? Math.max(5, Math.min(120, Math.round(Number(line.maxStationDwellMinutes))))
           : 10,
       rawName: line.name,
       name: line.name || fallbackName
@@ -120,11 +120,11 @@ function serializeLineSettingsForSave(lines) {
     lineId: line?.id || "",
     originHoldLimitMinutes:
       Number.isFinite(Number(line?.originHoldLimitMinutes)) && Number(line.originHoldLimitMinutes) > 0
-        ? Math.max(1, Math.min(120, Math.round(Number(line.originHoldLimitMinutes))))
+        ? Math.max(5, Math.min(120, Math.round(Number(line.originHoldLimitMinutes))))
         : 20,
     maxStationDwellMinutes:
       Number.isFinite(Number(line?.maxStationDwellMinutes)) && Number(line.maxStationDwellMinutes) > 0
-        ? Math.max(1, Math.min(120, Math.round(Number(line.maxStationDwellMinutes))))
+        ? Math.max(5, Math.min(120, Math.round(Number(line.maxStationDwellMinutes))))
         : 10,
     allowedDepotId: line?.allowedDepotId || "",
     serviceKind: line?.kind === "express" ? "express" : "local"
@@ -691,7 +691,7 @@ export function useWorkbenchController() {
 
     const normalizedValue =
       Number.isFinite(Number(nextValue)) && Number(nextValue) > 0
-        ? Math.max(1, Math.min(120, Math.round(Number(nextValue))))
+        ? Math.max(5, Math.min(120, Math.round(Number(nextValue))))
         : 20;
 
     setLineOptions((current) =>
@@ -784,7 +784,7 @@ export function useWorkbenchController() {
 
     const normalizedValue =
       Number.isFinite(Number(nextValue)) && Number(nextValue) > 0
-        ? Math.max(1, Math.min(120, Math.round(Number(nextValue))))
+        ? Math.max(5, Math.min(120, Math.round(Number(nextValue))))
         : 10;
 
     setLineOptions((current) =>

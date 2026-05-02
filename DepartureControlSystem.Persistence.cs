@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Game.Common;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
@@ -43,6 +44,7 @@ namespace RapidTransitMod
             m_WaypointStopDwellObservations.Clear();
             var buffer = EntityManager.GetBuffer<StopDwellObservationElement>(city, true);
             int restoredCount = 0;
+            int restoredByLegacyTopologyCount = 0;
             int skippedSignatureMismatchCount = 0;
             for (int i = 0; i < buffer.Length; i++)
             {
@@ -55,12 +57,15 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                if (!TryGetStopDwellObservationProfileSignature(entry.m_LineEntity, out ulong currentSignature)
-                    || currentSignature != entry.m_ProfileSignature)
+                bool signatureMatched = TryGetStopDwellObservationProfileSignature(entry.m_LineEntity, out ulong currentSignature)
+                    && currentSignature == entry.m_ProfileSignature;
+                if (!signatureMatched && !CanRestoreLegacyStopDwellObservation(entry.m_LineEntity, entry.m_WaypointIndex))
                 {
                     skippedSignatureMismatchCount++;
                     continue;
                 }
+                if (!signatureMatched)
+                    restoredByLegacyTopologyCount++;
 
                 m_WaypointStopDwellObservations[MakeLineWaypointStopObservationKey(entry.m_LineEntity, entry.m_WaypointIndex)] =
                     new StopDwellObservation
@@ -74,6 +79,7 @@ namespace RapidTransitMod
             m_StopDwellObservationCacheLoaded = true;
             log.Info("[恢复] StopDwellObservations buffer=" + buffer.Length
                 + " restored=" + restoredCount
+                + " legacyTopologyFallback=" + restoredByLegacyTopologyCount
                 + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
         }
 
@@ -127,20 +133,7 @@ namespace RapidTransitMod
 
         private bool TryGetStopDwellObservationProfileSignature(Entity line, out ulong signature)
         {
-            signature = 0UL;
-            if (line == Entity.Null || !EntityManager.Exists(line) || !EntityManager.HasBuffer<RouteWaypoint>(line))
-                return false;
-
-            var segmentBuffers = GetBufferLookup<RouteSegment>(true);
-            if (!segmentBuffers.TryGetBuffer(line, out DynamicBuffer<RouteSegment> segments))
-                return false;
-
-            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            if (waypoints.Length == 0 || segments.Length != waypoints.Length)
-                return false;
-
-            signature = ComputeLineProfileSignature(waypoints, segments);
-            return signature != 0UL;
+            return TryGetObservationPersistenceProfileSignature(line, out signature);
         }
 
         private void EnsureTraversalSliceObservationBuffer()
@@ -179,6 +172,7 @@ namespace RapidTransitMod
             m_TraversalRunSliceObservations.Clear();
             var buffer = EntityManager.GetBuffer<TraversalSliceObservationElement>(city, true);
             int restoredCount = 0;
+            int restoredByLegacyTopologyCount = 0;
             int skippedSignatureMismatchCount = 0;
             for (int i = 0; i < buffer.Length; i++)
             {
@@ -186,12 +180,15 @@ namespace RapidTransitMod
                 if (entry.m_LineEntity == Entity.Null || entry.m_SliceIndex < 0)
                     continue;
 
-                if (!TryGetTraversalSliceObservationProfileSignature(entry.m_LineEntity, out ulong currentSignature)
-                    || currentSignature != entry.m_ProfileSignature)
+                bool signatureMatched = TryGetTraversalSliceObservationProfileSignature(entry.m_LineEntity, out ulong currentSignature)
+                    && currentSignature == entry.m_ProfileSignature;
+                if (!signatureMatched && !CanRestoreLegacyTraversalSliceObservation(entry.m_LineEntity, entry.m_SliceIndex))
                 {
                     skippedSignatureMismatchCount++;
                     continue;
                 }
+                if (!signatureMatched)
+                    restoredByLegacyTopologyCount++;
 
                 ulong key = MakeTraversalSliceObservationKey(entry.m_LineEntity, entry.m_SliceIndex);
                 m_TraversalRunSliceObservations[key] = new TraversalSliceObservation(
@@ -205,6 +202,7 @@ namespace RapidTransitMod
             m_TraversalSliceObservationCacheLoaded = true;
             log.Info("[恢复] TraversalSliceObservations buffer=" + buffer.Length
                 + " restored=" + restoredCount
+                + " legacyTopologyFallback=" + restoredByLegacyTopologyCount
                 + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
         }
 
@@ -259,6 +257,11 @@ namespace RapidTransitMod
 
         private bool TryGetTraversalSliceObservationProfileSignature(Entity line, out ulong signature)
         {
+            return TryGetObservationPersistenceProfileSignature(line, out signature);
+        }
+
+        private bool TryGetObservationPersistenceProfileSignature(Entity line, out ulong signature)
+        {
             signature = 0UL;
             if (line == Entity.Null || !EntityManager.Exists(line) || !EntityManager.HasBuffer<RouteWaypoint>(line))
                 return false;
@@ -271,8 +274,109 @@ namespace RapidTransitMod
             if (waypoints.Length == 0 || segments.Length != waypoints.Length)
                 return false;
 
-            signature = ComputeLineProfileSignature(waypoints, segments);
+            signature = ComputeObservationPersistenceProfileSignature(waypoints, segments);
             return signature != 0UL;
+        }
+
+        private ulong ComputeObservationPersistenceProfileSignature(
+            DynamicBuffer<RouteWaypoint> waypoints,
+            DynamicBuffer<RouteSegment> segments)
+        {
+            ulong hash = 1469598103934665603UL;
+            hash = MixLineSignature(hash, waypoints.Length);
+            hash = MixLineSignature(hash, segments.Length);
+            int count = math.min(waypoints.Length, segments.Length);
+            for (int i = 0; i < count; i++)
+            {
+                hash = MixLineSignature(hash, i);
+
+                Entity waypointEntity = waypoints[i].m_Waypoint;
+                if (waypointEntity != Entity.Null
+                    && EntityManager.Exists(waypointEntity)
+                    && EntityManager.HasComponent<Waypoint>(waypointEntity))
+                {
+                    hash = MixLineSignature(hash, EntityManager.GetComponentData<Waypoint>(waypointEntity).m_Index);
+                }
+                else
+                {
+                    hash = MixLineSignature(hash, -1);
+                }
+
+                if (TryResolvePlannerWaypointPosition(waypointEntity, out float3 waypointPosition))
+                {
+                    hash = MixLineSignature(hash, QuantizeObservationPersistenceValue(waypointPosition.x));
+                    hash = MixLineSignature(hash, QuantizeObservationPersistenceValue(waypointPosition.y));
+                    hash = MixLineSignature(hash, QuantizeObservationPersistenceValue(waypointPosition.z));
+                }
+                else
+                {
+                    hash = MixLineSignature(hash, 0);
+                    hash = MixLineSignature(hash, 0);
+                    hash = MixLineSignature(hash, 0);
+                }
+
+                Entity segmentEntity = segments[i].m_Segment;
+                float durationSeconds = 0f;
+                if (segmentEntity != Entity.Null
+                    && EntityManager.Exists(segmentEntity)
+                    && EntityManager.HasComponent<PathInformation>(segmentEntity))
+                {
+                    durationSeconds = math.max(0f, EntityManager.GetComponentData<PathInformation>(segmentEntity).m_Duration);
+                }
+
+                hash = MixLineSignature(hash, QuantizeObservationPersistenceValue(durationSeconds));
+                hash = MixLineSignature(hash, QuantizeObservationPersistenceValue(ReadRouteSegmentDistanceMeters(segmentEntity, waypoints, i)));
+            }
+
+            return hash;
+        }
+
+        private static int QuantizeObservationPersistenceValue(float value)
+        {
+            if (!math.isfinite(value))
+                return 0;
+
+            return (int)math.round(value * 10f);
+        }
+
+        private bool CanRestoreLegacyStopDwellObservation(Entity line, int waypointIndex)
+        {
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || waypointIndex < 0
+                || !EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypointIndex >= waypoints.Length)
+                return false;
+
+            Entity stopEntity = ResolveWorkbenchStopEntity(waypoints[waypointIndex].m_Waypoint);
+            return stopEntity != Entity.Null && EntityManager.Exists(stopEntity);
+        }
+
+        private bool CanRestoreLegacyTraversalSliceObservation(Entity line, int sliceIndex)
+        {
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || sliceIndex < 0
+                || !EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || chain.TraversalProfile == null
+                || chain.TraversalProfile.RunSlices == null)
+            {
+                return false;
+            }
+
+            return sliceIndex < chain.TraversalProfile.RunSlices.Count;
         }
 
         private void EnsureDispatchCacheBuffer()
@@ -318,6 +422,24 @@ namespace RapidTransitMod
             if (!m_DispatchCacheBufferReady) return 0f;
             Entity city = m_CitySystem.City;
             if (city == Entity.Null) return 0f;
+            if (EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
+            {
+                string lineId = GetWorkbenchLineId(line);
+                Entity configuredDepot = GetConfiguredAllowedDepot(line);
+                string configuredDepotId = BuildWorkbenchDepotPersistentId(configuredDepot);
+                if (!string.IsNullOrEmpty(lineId) && !string.IsNullOrEmpty(configuredDepotId))
+                {
+                    float depotFrames = ReadDispatchDepotCache(city, lineId, configuredDepotId);
+                    if (depotFrames > 0f)
+                        return depotFrames;
+
+                    // With an explicit depot, an old line-only sample may describe a
+                    // different origin path. Prefer fallback estimation until this
+                    // depot has its own sample.
+                    return 0f;
+                }
+            }
+
             if (!EntityManager.HasBuffer<LineDispatchCacheElement>(city)) return 0f;
 
             var buf = EntityManager.GetBuffer<LineDispatchCacheElement>(city, true);
@@ -329,13 +451,32 @@ namespace RapidTransitMod
             return 0f;
         }
 
-        private void UpdateDispatchCache(Entity line, uint sampleFrames)
+        private float ReadDispatchDepotCache(Entity city, string lineId, string depotId)
+        {
+            if (city == Entity.Null || string.IsNullOrEmpty(lineId) || string.IsNullOrEmpty(depotId))
+                return 0f;
+            if (!EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
+                return 0f;
+
+            FixedString128Bytes lineKey = lineId;
+            FixedString128Bytes depotKey = depotId;
+            var buf = EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city, true);
+            for (int i = 0; i < buf.Length; i++)
+            {
+                if (buf[i].m_LineId == lineKey && buf[i].m_DepotId == depotKey)
+                    return buf[i].m_DepotToOriginFrames;
+            }
+            return 0f;
+        }
+
+        private void UpdateDispatchCache(Entity line, Entity vehicle, uint sampleFrames)
         {
             if (!m_DispatchCacheBufferReady) return;
             Entity city = m_CitySystem.City;
             if (city == Entity.Null) return;
             if (!EntityManager.HasBuffer<LineDispatchCacheElement>(city)) return;
             if (!EntityManager.HasBuffer<LineDispatchHistoryElement>(city)) return;
+            bool depotSpecificUpdated = UpdateDispatchDepotCache(city, line, vehicle, sampleFrames);
 
             var buf = EntityManager.GetBuffer<LineDispatchCacheElement>(city);
             var historyBuf = EntityManager.GetBuffer<LineDispatchHistoryElement>(city);
@@ -354,10 +495,13 @@ namespace RapidTransitMod
                 UpsertDispatchHistory(historyBuf, updatedHistory);
                 float oldMinutes = oldFrames / (float)SIM_FRAMES_PER_MINUTE;
                 float newMinutes = newFrames / (float)SIM_FRAMES_PER_MINUTE;
-                log.Info("[出库缓存] 线路" + line.Index
-                    + " 样本=" + (sampleFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
-                    + " 最近" + updatedHistory.m_SampleCount + "条均值" + newMinutes.ToString("F1") + "分钟"
-                    + (oldFrames > 0 ? " 旧值" + oldMinutes.ToString("F1") + "分钟" : ""));
+                if (!depotSpecificUpdated)
+                {
+                    log.Info("[出库缓存] 线路" + line.Index
+                        + " 样本=" + (sampleFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                        + " 最近" + updatedHistory.m_SampleCount + "条均值" + newMinutes.ToString("F1") + "分钟"
+                        + (oldFrames > 0 ? " 旧值" + oldMinutes.ToString("F1") + "分钟" : ""));
+                }
                 return;
             }
 
@@ -372,9 +516,188 @@ namespace RapidTransitMod
                 m_DepotToOriginFrames = createdFrames
             });
             UpsertDispatchHistory(historyBuf, createdHistory);
-            log.Info("[出库缓存新增] 线路" + line.Index
-                + " 最近" + createdHistory.m_SampleCount + "条均值"
-                + (createdFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟");
+            if (!depotSpecificUpdated)
+            {
+                log.Info("[出库缓存新增] 线路" + line.Index
+                    + " 最近" + createdHistory.m_SampleCount + "条均值"
+                    + (createdFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟");
+            }
+        }
+
+        private bool UpdateDispatchDepotCache(Entity city, Entity line, Entity vehicle, uint sampleFrames)
+        {
+            if (city == Entity.Null
+                || line == Entity.Null
+                || vehicle == Entity.Null
+                || sampleFrames == 0
+                || !EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city)
+                || !EntityManager.HasBuffer<LineDispatchDepotHistoryElement>(city))
+            {
+                return false;
+            }
+
+            string lineId = GetWorkbenchLineId(line);
+            Entity owner = EntityManager.HasComponent<Owner>(vehicle)
+                ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
+                : Entity.Null;
+            string depotId = BuildWorkbenchDepotPersistentId(owner);
+            if (string.IsNullOrEmpty(lineId) || string.IsNullOrEmpty(depotId))
+                return false;
+
+            FixedString128Bytes lineKey = lineId;
+            FixedString128Bytes depotKey = depotId;
+            var buf = EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city);
+            var historyBuf = EntityManager.GetBuffer<LineDispatchDepotHistoryElement>(city);
+            for (int i = 0; i < buf.Length; i++)
+            {
+                if (buf[i].m_LineId != lineKey || buf[i].m_DepotId != depotKey)
+                    continue;
+
+                uint oldFrames = buf[i].m_DepotToOriginFrames;
+                LineDispatchDepotHistoryElement history = GetDispatchDepotHistoryElement(historyBuf, lineKey, depotKey);
+                LineDispatchDepotHistoryElement updatedHistory = AppendDispatchDepotSample(history, sampleFrames);
+                uint newFrames = ComputeAdaptiveDispatchEstimate(oldFrames, sampleFrames);
+                buf[i] = new LineDispatchDepotCacheElement
+                {
+                    m_LineId = lineKey,
+                    m_DepotId = depotKey,
+                    m_DepotToOriginFrames = newFrames
+                };
+                UpsertDispatchDepotHistory(historyBuf, updatedHistory);
+                LogDispatchDepotCacheUpdate(line, depotId, sampleFrames, oldFrames, newFrames, updatedHistory.m_SampleCount);
+                return true;
+            }
+
+            LineDispatchDepotHistoryElement createdHistory = AppendDispatchDepotSample(new LineDispatchDepotHistoryElement
+            {
+                m_LineId = lineKey,
+                m_DepotId = depotKey
+            }, sampleFrames);
+            buf.Add(new LineDispatchDepotCacheElement
+            {
+                m_LineId = lineKey,
+                m_DepotId = depotKey,
+                m_DepotToOriginFrames = sampleFrames
+            });
+            UpsertDispatchDepotHistory(historyBuf, createdHistory);
+            LogDispatchDepotCacheUpdate(line, depotId, sampleFrames, 0, sampleFrames, createdHistory.m_SampleCount);
+            return true;
+        }
+
+        private static LineDispatchDepotHistoryElement GetDispatchDepotHistoryElement(
+            DynamicBuffer<LineDispatchDepotHistoryElement> historyBuf,
+            FixedString128Bytes lineId,
+            FixedString128Bytes depotId)
+        {
+            for (int i = 0; i < historyBuf.Length; i++)
+            {
+                if (historyBuf[i].m_LineId == lineId && historyBuf[i].m_DepotId == depotId)
+                    return historyBuf[i];
+            }
+            return new LineDispatchDepotHistoryElement
+            {
+                m_LineId = lineId,
+                m_DepotId = depotId
+            };
+        }
+
+        private static void UpsertDispatchDepotHistory(
+            DynamicBuffer<LineDispatchDepotHistoryElement> historyBuf,
+            LineDispatchDepotHistoryElement history)
+        {
+            for (int i = 0; i < historyBuf.Length; i++)
+            {
+                if (historyBuf[i].m_LineId != history.m_LineId || historyBuf[i].m_DepotId != history.m_DepotId)
+                    continue;
+                historyBuf[i] = history;
+                return;
+            }
+            historyBuf.Add(history);
+        }
+
+        private LineDispatchDepotHistoryElement AppendDispatchDepotSample(
+            LineDispatchDepotHistoryElement element,
+            uint sampleFrames)
+        {
+            var samples = ReadDispatchDepotSamples(element);
+            samples.Add(sampleFrames);
+            if (samples.Count > DISPATCH_SAMPLE_HISTORY_LIMIT)
+                samples.RemoveAt(0);
+
+            WriteDispatchDepotSamples(ref element, samples);
+            return element;
+        }
+
+        private static List<uint> ReadDispatchDepotSamples(LineDispatchDepotHistoryElement element)
+        {
+            var samples = new List<uint>(DISPATCH_SAMPLE_HISTORY_LIMIT);
+            AddDispatchSampleIfValid(samples, element.m_Sample0);
+            AddDispatchSampleIfValid(samples, element.m_Sample1);
+            AddDispatchSampleIfValid(samples, element.m_Sample2);
+            AddDispatchSampleIfValid(samples, element.m_Sample3);
+            AddDispatchSampleIfValid(samples, element.m_Sample4);
+            AddDispatchSampleIfValid(samples, element.m_Sample5);
+            AddDispatchSampleIfValid(samples, element.m_Sample6);
+            AddDispatchSampleIfValid(samples, element.m_Sample7);
+            if (samples.Count > element.m_SampleCount)
+                samples.RemoveRange((int)element.m_SampleCount, samples.Count - (int)element.m_SampleCount);
+            return samples;
+        }
+
+        private static void WriteDispatchDepotSamples(ref LineDispatchDepotHistoryElement element, List<uint> samples)
+        {
+            element.m_SampleCount = (byte)math.min(samples.Count, DISPATCH_SAMPLE_HISTORY_LIMIT);
+            element.m_Sample0 = samples.Count > 0 ? samples[0] : 0;
+            element.m_Sample1 = samples.Count > 1 ? samples[1] : 0;
+            element.m_Sample2 = samples.Count > 2 ? samples[2] : 0;
+            element.m_Sample3 = samples.Count > 3 ? samples[3] : 0;
+            element.m_Sample4 = samples.Count > 4 ? samples[4] : 0;
+            element.m_Sample5 = samples.Count > 5 ? samples[5] : 0;
+            element.m_Sample6 = samples.Count > 6 ? samples[6] : 0;
+            element.m_Sample7 = samples.Count > 7 ? samples[7] : 0;
+        }
+
+        private static uint ComputeAdaptiveDispatchEstimate(uint oldFrames, uint sampleFrames)
+        {
+            if (oldFrames == 0)
+                return sampleFrames;
+
+            float oldValue = oldFrames;
+            float sampleValue = sampleFrames;
+            if (sampleValue <= oldValue * DISPATCH_FAST_SAMPLE_MARGIN)
+                return sampleFrames;
+
+            if (sampleValue <= oldValue)
+                return (uint)math.round(sampleValue);
+
+            float maxStepFrames = DISPATCH_SLOW_SAMPLE_MAX_STEP_MINUTES * (float)SIM_FRAMES_PER_MINUTE;
+            float blended = oldValue + (sampleValue - oldValue) * DISPATCH_SLOW_SAMPLE_BLEND;
+            float capped = math.min(blended, oldValue + maxStepFrames);
+            return (uint)math.round(capped);
+        }
+
+        private void LogDispatchDepotCacheUpdate(
+            Entity line,
+            string depotId,
+            uint sampleFrames,
+            uint oldFrames,
+            uint newFrames,
+            byte sampleCount)
+        {
+            string mode = oldFrames == 0
+                ? "new"
+                : newFrames < oldFrames
+                    ? "fast-down"
+                    : newFrames > oldFrames
+                        ? "slow-up"
+                        : "hold";
+            log.Info("[出库缓存] 线路" + line.Index
+                + " depot=" + depotId
+                + " 样本=" + (sampleFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                + " 最近" + sampleCount + "条"
+                + " ETA=" + (newFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                + (oldFrames > 0 ? " 旧值" + (oldFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟" : "")
+                + " mode=" + mode);
         }
 
         private static LineDispatchHistoryElement GetDispatchHistoryElement(DynamicBuffer<LineDispatchHistoryElement> historyBuf, Entity line)

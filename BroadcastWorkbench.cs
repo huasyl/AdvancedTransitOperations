@@ -674,16 +674,21 @@ namespace RapidTransitMod
                             continue;
                         }
 
-                        lineAnnouncements[targetStationId] = CloneBroadcastPlatformAnnouncement(
+                        BroadcastWorkbenchPlatformAnnouncementDto clonedAnnouncement = CloneBroadcastPlatformAnnouncement(
                             announcement,
                             lineId,
                             targetStationId,
                             group.Representative.name);
+                        lineAnnouncements[BuildBroadcastPlatformAnnouncementStorageKey(
+                            targetStationId,
+                            clonedAnnouncement.uiTriggerId)] = clonedAnnouncement;
                     }
                 }
                 else
                 {
-                    lineAnnouncements[stationId] = announcement;
+                    lineAnnouncements[BuildBroadcastPlatformAnnouncementStorageKey(
+                        stationId,
+                        announcement.uiTriggerId)] = announcement;
                 }
 
                 m_WorkbenchSnapshotVersion++;
@@ -2914,38 +2919,56 @@ namespace RapidTransitMod
                 GetBroadcastDraftLinePlatformAnnouncementsOrNull(lineId);
             if (string.IsNullOrEmpty(lineId)
                 || stationGroups == null
-                || stationGroups.Count == 0)
+                || stationGroups.Count == 0
+                || announcements == null
+                || announcements.Count == 0)
             {
                 return Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>();
             }
 
-            List<BroadcastWorkbenchPlatformAnnouncementDto> result = new List<BroadcastWorkbenchPlatformAnnouncementDto>();
+            Dictionary<string, BroadcastWorkbenchStationGroup> stationGroupByStationId =
+                new Dictionary<string, BroadcastWorkbenchStationGroup>(StringComparer.Ordinal);
             for (int i = 0; i < stationGroups.Count; i++)
             {
                 BroadcastWorkbenchStationGroup group = stationGroups[i];
-                string stationId = group?.Representative?.id ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(stationId))
+                if (group?.Representative == null || group.StationIds == null)
                 {
                     continue;
                 }
 
-                BroadcastWorkbenchPlatformAnnouncementDto announcement = null;
-                if (announcements != null)
+                for (int stationIndex = 0; stationIndex < group.StationIds.Count; stationIndex++)
                 {
-                    for (int stationIndex = 0; stationIndex < group.StationIds.Count; stationIndex++)
+                    string memberStationId = group.StationIds[stationIndex];
+                    if (!string.IsNullOrWhiteSpace(memberStationId))
                     {
-                        if (announcements.TryGetValue(group.StationIds[stationIndex], out announcement) && announcement != null)
-                        {
-                            break;
-                        }
+                        stationGroupByStationId[memberStationId] = group;
                     }
+                }
+            }
+
+            List<BroadcastWorkbenchPlatformAnnouncementDto> result = new List<BroadcastWorkbenchPlatformAnnouncementDto>();
+            foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in announcements)
+            {
+                BroadcastWorkbenchPlatformAnnouncementDto announcement = entry.Value;
+                if (announcement == null || string.IsNullOrWhiteSpace(announcement.stationId))
+                {
+                    continue;
+                }
+
+                string stationId = announcement.stationId;
+                string stationName = announcement.stationName;
+                if (stationGroupByStationId.TryGetValue(announcement.stationId, out BroadcastWorkbenchStationGroup group)
+                    && group?.Representative != null)
+                {
+                    stationId = group.Representative.id ?? stationId;
+                    stationName = group.Representative.name ?? stationName;
                 }
 
                 result.Add(CloneBroadcastPlatformAnnouncement(
                     announcement,
                     lineId,
                     stationId,
-                    group.Representative.name));
+                    stationName));
             }
 
             return result.ToArray();
@@ -3770,7 +3793,7 @@ namespace RapidTransitMod
                         continue;
                     }
 
-                    lineAnnouncements[announcement.stationId] = NormalizeBroadcastPlatformAnnouncement(
+                    BroadcastWorkbenchPlatformAnnouncementDto normalizedAnnouncement = NormalizeBroadcastPlatformAnnouncement(
                         lineState.lineId,
                         announcement.stationId,
                         announcement.stationName,
@@ -3778,6 +3801,9 @@ namespace RapidTransitMod
                         announcement.uiTriggerId,
                         announcement.enabled,
                         announcement.nodes);
+                    lineAnnouncements[BuildBroadcastPlatformAnnouncementStorageKey(
+                        normalizedAnnouncement.stationId,
+                        normalizedAnnouncement.uiTriggerId)] = normalizedAnnouncement;
                 }
 
                 if (lineAnnouncements.Count > 0)
@@ -4033,7 +4059,7 @@ namespace RapidTransitMod
                 .Select(entry => CloneBroadcastPlatformAnnouncement(
                     entry.Value,
                     entry.Value?.lineId ?? string.Empty,
-                    entry.Key,
+                    entry.Value?.stationId ?? string.Empty,
                     entry.Value?.stationName ?? string.Empty))
                 .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.stationId))
                 .ToArray();
@@ -4320,15 +4346,30 @@ namespace RapidTransitMod
                 BroadcastWorkbenchPlatformAnnouncementDto announcement = CloneBroadcastPlatformAnnouncement(
                     entry.Value,
                     entry.Value?.lineId ?? string.Empty,
-                    entry.Key,
+                    entry.Value?.stationId ?? string.Empty,
                     entry.Value?.stationName ?? string.Empty);
-                if (!string.IsNullOrWhiteSpace(entry.Key))
+                string storageKey = BuildBroadcastPlatformAnnouncementStorageKey(
+                    announcement?.stationId,
+                    announcement?.uiTriggerId);
+                if (!string.IsNullOrWhiteSpace(storageKey))
                 {
-                    clone[entry.Key] = announcement;
+                    clone[storageKey] = announcement;
                 }
             }
 
             return clone;
+        }
+
+        private static string BuildBroadcastPlatformAnnouncementStorageKey(string stationId, string uiTriggerId)
+        {
+            string normalizedStationId = stationId ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(normalizedStationId))
+            {
+                return string.Empty;
+            }
+
+            string normalizedUiTriggerId = NormalizeBroadcastPlatformUiTriggerId(uiTriggerId);
+            return normalizedStationId + "|" + normalizedUiTriggerId;
         }
 
         private static List<BroadcastWorkbenchRuleDto> NormalizeBroadcastRules(IEnumerable<BroadcastWorkbenchRuleDto> rules)

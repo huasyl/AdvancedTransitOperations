@@ -1084,6 +1084,19 @@
   border-left-color: rgba(116, 193, 193, 0.94);
 }
 
+.dw-bc-create-form > .dw-bc-icon-button.is-corner {
+  width: 36px;
+  height: 36px;
+}
+
+.dw-bc-create-form > .dw-bc-icon-button.is-corner .dw-bc-close-icon {
+  width: 22px;
+  height: 22px;
+  color: #f0fbff;
+  stroke: #f0fbff;
+  stroke-width: 2.8;
+}
+
 .dw-bc-tray {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.00) 100%);
   -webkit-backdrop-filter: none;
@@ -1260,6 +1273,7 @@
 .dw-bc-node-flow-item {
   display: flex;
   align-items: flex-end;
+  margin-bottom: 12px;
   transition: opacity 220ms ease, transform 220ms ease;
 }
 
@@ -1363,7 +1377,7 @@
   position: absolute;
   right: 0;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translateY(-50%) scale(0.92);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1373,8 +1387,9 @@
   background: transparent;
   color: #f0fbff;
   cursor: pointer;
-  opacity: 1;
-  transition: opacity 180ms ease, color 180ms ease;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease, color 180ms ease, transform 180ms ease;
 }
 
 .dw-bc-node-remove .dw-bc-close-icon {
@@ -2438,7 +2453,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .dw-bc-platform-target-head > span {
@@ -2702,6 +2717,14 @@
   color: #8fe3f1;
 }
 
+.dw-bc-platform-station-button.is-disabled,
+.dw-bc-platform-station-button.is-disabled:hover,
+.dw-bc-platform-station-button.is-disabled:active {
+  background-color: rgba(255, 255, 255, 0.025);
+  color: rgba(198, 210, 218, 0.42);
+  opacity: 0.72;
+}
+
 .dw-bc-link-muted:hover {
   color: #dca0a0;
 }
@@ -2718,8 +2741,11 @@
   stroke: #81b581;
 }
 
-.dw-bc-rule:hover .dw-bc-node-remove {
+.dw-bc-node-value-wrap:hover .dw-bc-node-remove,
+.dw-bc-node-value-wrap:focus-within .dw-bc-node-remove {
   opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%) scale(1);
 }
 
 .dw-bc-node-value:hover {
@@ -2734,6 +2760,12 @@
 
 .dw-bc-node-remove:hover {
   color: #f08a8a;
+}
+
+.dw-bc-create-form > .dw-bc-icon-button.is-corner:hover .dw-bc-close-icon,
+.dw-bc-create-form > .dw-bc-icon-button.is-corner:hover .dw-bc-close-icon * {
+  color: #ffffff;
+  stroke: #ffffff;
 }
 
 .dw-bc-node-add:hover {
