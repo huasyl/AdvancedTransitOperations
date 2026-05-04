@@ -28,6 +28,8 @@ const CALLS = {
   stopBroadcastRulePreview: "suhua::rt.workbench.stopBroadcastRulePreview",
   setBroadcastPreviewVolume: "suhua::rt.workbench.setBroadcastPreviewVolume",
   refreshMetadata: "suhua::rt.workbench.refreshMetadata",
+  loadPlannerContext: "suhua::rt.workbench.loadPlannerContext",
+  runPlanner: "suhua::rt.workbench.runPlanner",
   saveWorkbenchDraft: "suhua::rt.workbench.saveWorkbenchDraft",
   saveNativeWorkbenchDraft: "suhua::rt.workbench.saveNativeWorkbenchDraft",
   getLocale: "suhua::rt.workbench.getLocale"
@@ -107,6 +109,42 @@ function createEmptyBroadcastBindingSlotHints() {
     success: false,
     error: "",
     slotHints: []
+  };
+}
+
+function createEmptyPlannerInput() {
+  return {
+    lines: [],
+    stations: [],
+    segments: [],
+    configuredBypassStations: [],
+    candidateBypassStations: [],
+    currentTrackScenario: {
+      lines: [],
+      sharedCorridors: []
+    },
+    observations: {
+      stopDwell: [],
+      traversalSlices: []
+    },
+    runtimeParams: {},
+    drafts: []
+  };
+}
+
+function createEmptyPlannerResult() {
+  return {
+    success: false,
+    engineVersion: "",
+    requestEcho: null,
+    inputSummary: null,
+    lineRoleSummary: null,
+    defaultPlanId: "",
+    plans: [],
+    planSummaries: [],
+    selectedPlan: null,
+    diagnostics: [],
+    performance: null
   };
 }
 
@@ -313,6 +351,16 @@ function createLiveApi() {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.refreshMetadata);
       return parsePayload(payload, createEmptySnapshot());
+    },
+    async loadPlannerContext() {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadPlannerContext);
+      return parsePayload(payload, createEmptyPlannerInput());
+    },
+    async runPlanner(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.runPlanner, JSON.stringify(request ?? {}));
+      return parsePayload(payload, createEmptyPlannerResult());
     },
     async saveDraft(request) {
       const engineCall = getEngineCall();

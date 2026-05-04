@@ -20,7 +20,8 @@ export default function WorkbenchDropdown({
   variant = "field",
   positioning = "local",
   open: controlledOpen,
-  onOpenChange
+  onOpenChange,
+  closeOnSelect = true
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = typeof controlledOpen === "boolean" ? controlledOpen : uncontrolledOpen;
@@ -101,10 +102,12 @@ export default function WorkbenchDropdown({
           className={`dw-demo-dropdown-option ${option.active ? "is-active" : ""} ${optionClassName}`.trim()}
           onClick={() => {
             onSelect(option.value ?? option);
-            setOpen(false);
+            if (closeOnSelect) {
+              setOpen(false);
+            }
           }}
         >
-          {option.label}
+          {option.content || option.label}
         </button>
       ))}
     </div>

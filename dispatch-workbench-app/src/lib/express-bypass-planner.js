@@ -171,6 +171,10 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function dedupeLineIds(values) {
+  return [...new Set(asArray(values).filter(Boolean))];
+}
+
 function toLineStationKey(lineId, order) {
   return `${lineId || ""}:${order}`;
 }
@@ -521,6 +525,11 @@ function normalizeJointPlannerRequest(options = {}, draft = null, scenario = nul
   const expressStopStationIds = explicitExpressStopStationIds.length > 0
     ? explicitExpressStopStationIds
     : derivedExpressStopStationIds;
+  const adjustableLineIds = dedupeLineIds(
+    asArray(options.adjustableLineIds).filter(Boolean).length > 0
+      ? asArray(options.adjustableLineIds)
+      : asArray(scenario?.adjustableLineIds)
+  );
   return {
     objective: options.objective || DEFAULT_OBJECTIVE,
     expressTripsPerHour: expressTripsPerHourValue === undefined || expressTripsPerHourValue === null
@@ -539,6 +548,8 @@ function normalizeJointPlannerRequest(options = {}, draft = null, scenario = nul
       ? null
       : Math.max(0, clampNumber(options.maxLocalHoldMinutes, 0)),
     maxLocalRetimeMinutes: Math.max(0, clampNumber(options.maxLocalRetimeMinutes, 0)),
+    adjustableLineIds,
+    adjustableLineIdSet: new Set(adjustableLineIds),
     lockedLocalTripIds: new Set(asArray(options.lockedLocalTripIds).filter(Boolean)),
     lockedExpressTripIds: new Set(asArray(options.lockedExpressTripIds).filter(Boolean)),
     stopStartLossMinutesPerSkippedStop: resolveStopStartLossMinutesPerSkippedStop(options),
@@ -960,10 +971,14 @@ export function buildAnalysisScenario(normalizedInput, draft, options = {}) {
     : asArray(draft?.generatedRows);
   const stagedLocalLineIds = uniqueLineIds(draftRowsForSelection, "local").filter((lineId) => normalizedInput.lineById.has(lineId));
   const stagedExpressLineIds = uniqueLineIds(draftRowsForSelection, "express").filter((lineId) => normalizedInput.lineById.has(lineId));
+  const stagedSelectedLineIds = dedupeLineIds([...stagedLocalLineIds, ...stagedExpressLineIds]);
   const explicitLocalLineIds = asArray(options.localLineIds).filter((lineId) => normalizedInput.lineById.has(lineId));
   const explicitExpressLineIds = asArray(options.expressLineIds).filter((lineId) => normalizedInput.lineById.has(lineId));
+  const explicitSelectedLineIds = asArray(options.selectedLineIds).filter((lineId) => normalizedInput.lineById.has(lineId));
+  const explicitAdjustableLineIds = asArray(options.adjustableLineIds).filter((lineId) => normalizedInput.lineById.has(lineId));
   const mergedLocalLineIds = asArray(mergedView.localLineIds).filter((lineId) => normalizedInput.lineById.has(lineId));
   const mergedExpressLineIds = asArray(mergedView.expressLineIds).filter((lineId) => normalizedInput.lineById.has(lineId));
+  const mergedSelectedLineIds = dedupeLineIds([...mergedLocalLineIds, ...mergedExpressLineIds]);
   const preferMergedViewLineIds = options.preferMergedViewLineIds === true;
 
   const localLineIds = explicitLocalLineIds.length > 0
@@ -980,13 +995,23 @@ export function buildAnalysisScenario(normalizedInput, draft, options = {}) {
       : mergedExpressLineIds.length > 0
         ? mergedExpressLineIds
         : stagedExpressLineIds;
+  const selectedLineIds = explicitSelectedLineIds.length > 0
+    ? dedupeLineIds(explicitSelectedLineIds)
+    : !preferMergedViewLineIds && stagedSelectedLineIds.length > 0
+      ? stagedSelectedLineIds
+      : mergedSelectedLineIds.length > 0
+        ? mergedSelectedLineIds
+        : dedupeLineIds([...localLineIds, ...expressLineIds]);
+  const adjustableLineIds = explicitAdjustableLineIds.length > 0
+    ? dedupeLineIds(explicitAdjustableLineIds.filter((lineId) => selectedLineIds.includes(lineId)))
+    : dedupeLineIds(localLineIds.filter((lineId) => selectedLineIds.includes(lineId)));
 
   const windowStart = options.windowStart || mergedView.windowStart || "00:00";
   const windowEnd = options.windowEnd || mergedView.windowEnd || "23:59";
   const windowStartMinute = timeToMinutes(windowStart);
   const windowEndMinute = timeToMinutes(windowEnd);
 
-  const scenarioLineIds = new Set([...localLineIds, ...expressLineIds]);
+  const scenarioLineIds = new Set(selectedLineIds);
   const stagedRowSource = asArray(options.stagedRowsOverride).length > 0
     ? asArray(options.stagedRowsOverride)
     : asArray(draft?.stagedRows).length > 0
@@ -1014,7 +1039,13 @@ export function buildAnalysisScenario(normalizedInput, draft, options = {}) {
     draftKey: draft?.lineKey || "",
     selectedLineId: draft?.selectedLineId || "",
     turnbackStationId: mergedView.turnbackStationId || "",
-    localLineIds,
+    selectedLineIds,
+    selectedLineIdSet: new Set(selectedLineIds),
+    selectedLocalLineIds: localLineIds,
+    adjustableLineIds,
+    adjustableLineIdSet: new Set(adjustableLineIds),
+    fixedLineIds: selectedLineIds.filter((lineId) => !adjustableLineIds.includes(lineId)),
+    localLineIds: adjustableLineIds,
     expressLineIds,
     windowStart,
     windowEnd,
@@ -1478,7 +1509,7 @@ function buildLineRuntimeModel(normalizedInput, lineId, options = {}) {
 
 export function buildLineRuntimeModels(normalizedInput, scenario, options = {}) {
   const lineRuntimeModels = new Map();
-  [...new Set([...scenario.localLineIds, ...scenario.expressLineIds])].forEach((lineId) => {
+  dedupeLineIds(scenario.selectedLineIds).forEach((lineId) => {
     const runtimeModel = buildLineRuntimeModel(normalizedInput, lineId, options);
     if (runtimeModel) {
       lineRuntimeModels.set(lineId, runtimeModel);
@@ -1519,58 +1550,123 @@ function estimateIntervalRuntimeMinutes(lineTrack, interval) {
   return Math.max(interval.baseMinutes, 0);
 }
 
+function orientSharedCorridorForScenario(normalizedInput, scenario, sharedCorridor, lineRuntimeModels) {
+  const primaryLineId = sharedCorridor.lineId;
+  const secondaryLineId = sharedCorridor.otherLineId;
+  const primaryModel = lineRuntimeModels.get(primaryLineId);
+  const secondaryModel = lineRuntimeModels.get(secondaryLineId);
+  if (!primaryModel || !secondaryModel) {
+    return null;
+  }
+
+  const primaryEntryOffsetMinutes = getAtomBoundaryMinuteOffset(primaryModel, sharedCorridor.lineStartAtomIndex);
+  const primaryExitOffsetMinutes = getAtomBoundaryMinuteOffset(primaryModel, sharedCorridor.lineEndAtomIndexExclusive);
+  const secondaryEntryOffsetMinutes = getAtomBoundaryMinuteOffset(secondaryModel, sharedCorridor.otherStartAtomIndex);
+  const secondaryExitOffsetMinutes = getAtomBoundaryMinuteOffset(secondaryModel, sharedCorridor.otherEndAtomIndexExclusive);
+  const primaryRuntimeMinutes = Number(Math.max(0, primaryExitOffsetMinutes - primaryEntryOffsetMinutes).toFixed(2));
+  const secondaryRuntimeMinutes = Number(Math.max(0, secondaryExitOffsetMinutes - secondaryEntryOffsetMinutes).toFixed(2));
+  const primaryAdjustable = scenario.adjustableLineIdSet?.has(primaryLineId) === true;
+  const secondaryAdjustable = scenario.adjustableLineIdSet?.has(secondaryLineId) === true;
+
+  let usePrimaryAsLocal = false;
+  if (primaryAdjustable !== secondaryAdjustable) {
+    usePrimaryAsLocal = primaryAdjustable;
+  } else if (primaryRuntimeMinutes !== secondaryRuntimeMinutes) {
+    usePrimaryAsLocal = primaryRuntimeMinutes >= secondaryRuntimeMinutes;
+  } else {
+    const primaryKind = normalizedInput.lineById.get(primaryLineId)?.kind || "local";
+    const secondaryKind = normalizedInput.lineById.get(secondaryLineId)?.kind || "local";
+    if (primaryKind !== secondaryKind) {
+      usePrimaryAsLocal = primaryKind !== "express";
+    } else {
+      usePrimaryAsLocal = String(primaryLineId).localeCompare(String(secondaryLineId)) <= 0;
+    }
+  }
+
+  if (usePrimaryAsLocal) {
+    return {
+      corridorId: sharedCorridor.id,
+      sharedKey: sharedCorridor.id,
+      localLineId: primaryLineId,
+      expressLineId: secondaryLineId,
+      yieldingLineId: primaryLineId,
+      priorityLineId: secondaryLineId,
+      localStartAtomIndex: sharedCorridor.lineStartAtomIndex,
+      localEndAtomIndexExclusive: sharedCorridor.lineEndAtomIndexExclusive,
+      expressStartAtomIndex: sharedCorridor.otherStartAtomIndex,
+      expressEndAtomIndexExclusive: sharedCorridor.otherEndAtomIndexExclusive,
+      localStartStationId: sharedCorridor.lineStartStationId,
+      localEndStationId: sharedCorridor.lineEndStationId,
+      expressStartStationId: sharedCorridor.otherStartStationId,
+      expressEndStationId: sharedCorridor.otherEndStationId,
+      localEntryOffsetMinutes: primaryEntryOffsetMinutes,
+      localExitOffsetMinutes: primaryExitOffsetMinutes,
+      expressEntryOffsetMinutes: secondaryEntryOffsetMinutes,
+      expressExitOffsetMinutes: secondaryExitOffsetMinutes,
+      localRuntimeMinutes: primaryRuntimeMinutes,
+      expressRuntimeMinutes: secondaryRuntimeMinutes,
+      orderedRun: sharedCorridor.orderedRun,
+      physicalOverlap: sharedCorridor.physicalOverlap,
+      confidence: clampNumber(sharedCorridor.confidence, 0.3),
+      localAdjustable: primaryAdjustable
+    };
+  }
+
+  return {
+    corridorId: sharedCorridor.id,
+    sharedKey: sharedCorridor.id,
+    localLineId: secondaryLineId,
+    expressLineId: primaryLineId,
+    yieldingLineId: secondaryLineId,
+    priorityLineId: primaryLineId,
+    localStartAtomIndex: sharedCorridor.otherStartAtomIndex,
+    localEndAtomIndexExclusive: sharedCorridor.otherEndAtomIndexExclusive,
+    expressStartAtomIndex: sharedCorridor.lineStartAtomIndex,
+    expressEndAtomIndexExclusive: sharedCorridor.lineEndAtomIndexExclusive,
+    localStartStationId: sharedCorridor.otherStartStationId,
+    localEndStationId: sharedCorridor.otherEndStationId,
+    expressStartStationId: sharedCorridor.lineStartStationId,
+    expressEndStationId: sharedCorridor.lineEndStationId,
+    localEntryOffsetMinutes: secondaryEntryOffsetMinutes,
+    localExitOffsetMinutes: secondaryExitOffsetMinutes,
+    expressEntryOffsetMinutes: primaryEntryOffsetMinutes,
+    expressExitOffsetMinutes: primaryExitOffsetMinutes,
+    localRuntimeMinutes: secondaryRuntimeMinutes,
+    expressRuntimeMinutes: primaryRuntimeMinutes,
+    orderedRun: sharedCorridor.orderedRun,
+    physicalOverlap: sharedCorridor.physicalOverlap,
+    confidence: clampNumber(sharedCorridor.confidence, 0.3),
+    localAdjustable: secondaryAdjustable
+  };
+}
+
 function buildSharedCorridors(normalizedInput, scenario, lineRuntimeModels) {
   const corridors = [];
-  scenario.localLineIds.forEach((localLineId) => {
-    scenario.expressLineIds.forEach((expressLineId) => {
-      const localModel = lineRuntimeModels.get(localLineId);
-      const expressModel = lineRuntimeModels.get(expressLineId);
-      if (!localModel || !expressModel) {
-        return;
-      }
+  const selectedLineIdSet = scenario.selectedLineIdSet || new Set(asArray(scenario.selectedLineIds).filter(Boolean));
+  asArray(normalizedInput.sharedCorridors).forEach((sharedCorridor) => {
+    if (!selectedLineIdSet.has(sharedCorridor.lineId) || !selectedLineIdSet.has(sharedCorridor.otherLineId)) {
+      return;
+    }
+    if (sharedCorridor.traversalRelation !== "SameDirection") {
+      return;
+    }
+    if (sharedCorridor.hasMirroredContext) {
+      return;
+    }
+    if (sharedCorridor.orderedRun <= 0 || sharedCorridor.physicalOverlap <= 0) {
+      return;
+    }
 
-      const pairKey = toOrderedLinePairKey(localLineId, expressLineId);
-      asArray(normalizedInput.sharedCorridorsByLinePair.get(pairKey)).forEach((sharedCorridor) => {
-        if (sharedCorridor.traversalRelation !== "SameDirection") {
-          return;
-        }
-        if (sharedCorridor.hasMirroredContext) {
-          return;
-        }
-        if (sharedCorridor.orderedRun <= 0 || sharedCorridor.physicalOverlap <= 0) {
-          return;
-        }
-
-        const localEntryOffsetMinutes = getAtomBoundaryMinuteOffset(localModel, sharedCorridor.lineStartAtomIndex);
-        const localExitOffsetMinutes = getAtomBoundaryMinuteOffset(localModel, sharedCorridor.lineEndAtomIndexExclusive);
-        const expressEntryOffsetMinutes = getAtomBoundaryMinuteOffset(expressModel, sharedCorridor.otherStartAtomIndex);
-        const expressExitOffsetMinutes = getAtomBoundaryMinuteOffset(expressModel, sharedCorridor.otherEndAtomIndexExclusive);
-
-        corridors.push({
-          corridorId: sharedCorridor.id,
-          sharedKey: sharedCorridor.id,
-          localLineId,
-          expressLineId,
-          localStartAtomIndex: sharedCorridor.lineStartAtomIndex,
-          localEndAtomIndexExclusive: sharedCorridor.lineEndAtomIndexExclusive,
-          expressStartAtomIndex: sharedCorridor.otherStartAtomIndex,
-          expressEndAtomIndexExclusive: sharedCorridor.otherEndAtomIndexExclusive,
-          localStartStationId: sharedCorridor.lineStartStationId,
-          localEndStationId: sharedCorridor.lineEndStationId,
-          expressStartStationId: sharedCorridor.otherStartStationId,
-          expressEndStationId: sharedCorridor.otherEndStationId,
-          localEntryOffsetMinutes,
-          localExitOffsetMinutes,
-          expressEntryOffsetMinutes,
-          expressExitOffsetMinutes,
-          localRuntimeMinutes: Number(Math.max(0, localExitOffsetMinutes - localEntryOffsetMinutes).toFixed(2)),
-          expressRuntimeMinutes: Number(Math.max(0, expressExitOffsetMinutes - expressEntryOffsetMinutes).toFixed(2)),
-          orderedRun: sharedCorridor.orderedRun,
-          physicalOverlap: sharedCorridor.physicalOverlap,
-          confidence: clampNumber(sharedCorridor.confidence, 0.3)
-        });
-      });
-    });
+    const orientedCorridor = orientSharedCorridorForScenario(
+      normalizedInput,
+      scenario,
+      sharedCorridor,
+      lineRuntimeModels
+    );
+    if (!orientedCorridor || orientedCorridor.localLineId === orientedCorridor.expressLineId) {
+      return;
+    }
+    corridors.push(orientedCorridor);
   });
 
   return corridors;
@@ -2293,6 +2389,8 @@ function buildTrunkGroups(corridors) {
           trunkKey: `${pairKey}|trunk-group-${trunkGroups.filter((group) => toOrderedLinePairKey(group.localLineId, group.expressLineId) === pairKey).length}`,
           localLineId: corridor.localLineId,
           expressLineId: corridor.expressLineId,
+          yieldingLineId: corridor.localLineId,
+          priorityLineId: corridor.expressLineId,
           corridorIds: [],
           localStartAtomIndex: corridor.localStartAtomIndex,
           localEndAtomIndexExclusive: corridor.localEndAtomIndexExclusive,
@@ -2396,6 +2494,8 @@ function buildPursuitTrunkCorridors(corridors) {
       sourceCorridorIds: [...group.corridorIds],
       localLineId: group.localLineId,
       expressLineId: group.expressLineId,
+      yieldingLineId: group.localLineId,
+      priorityLineId: group.expressLineId,
       localStartAtomIndex: group.localStartAtomIndex,
       localEndAtomIndexExclusive: group.localEndAtomIndexExclusive,
       expressStartAtomIndex: group.expressStartAtomIndex,
@@ -2435,6 +2535,8 @@ function buildTrunkProblemClusters(catchupEvents, trunkGrouping) {
         trunkKey: key,
         localLineId: event.localLineId,
         expressLineId: event.expressLineId,
+        yieldingLineId: event.localLineId,
+        priorityLineId: event.expressLineId,
         corridorIds: [...new Set(trunkGroup?.corridorIds || [event.corridorId])],
         localStartAtomIndex: trunkGroup?.localStartAtomIndex ?? -1,
         localEndAtomIndexExclusive: trunkGroup?.localEndAtomIndexExclusive ?? -1,
@@ -2756,12 +2858,12 @@ function stationIsWithinTrunkProblemCluster(station, cluster) {
 
 function rankVirtualBypassCandidates(normalizedInput, scenario, trunkProblemClusters) {
   const configuredIds = new Set(
-    scenario.localLineIds.flatMap((lineId) =>
+    scenario.adjustableLineIds.flatMap((lineId) =>
       asArray(normalizedInput.configuredBypassByLineId.get(lineId)).map((station) => station.stationId)
     )
   );
   const candidates = [];
-  scenario.localLineIds.forEach((lineId) => {
+  scenario.adjustableLineIds.forEach((lineId) => {
     asArray(normalizedInput.candidateBypassByLineId.get(lineId)).forEach((station) => {
       if (!configuredIds.has(station.stationId)) {
         candidates.push(station);
@@ -2840,7 +2942,7 @@ export function buildLocalObservedModel(rawInput, options = {}) {
   const scenario = options.scenario || buildAnalysisScenario(normalizedInput, draft, options);
   const localLineIds = asArray(options.localLineIds).filter(Boolean).length > 0
     ? asArray(options.localLineIds).filter(Boolean)
-    : scenario.localLineIds;
+    : scenario.adjustableLineIds;
 
   const lineRuntimeModels = new Map();
   const summaries = [];
@@ -3074,6 +3176,10 @@ export function findCatchupEvents(normalizedInput, scenario, trips, corridors, o
           expressTripId: expressTrip.tripId,
           localLineId: corridor.localLineId,
           expressLineId: corridor.expressLineId,
+          yieldingTripId: localTrip.tripId,
+          priorityTripId: expressTrip.tripId,
+          yieldingLineId: corridor.localLineId,
+          priorityLineId: corridor.expressLineId,
           localDepartTime: localTrip.departureTime,
           expressDepartTime: expressTrip.departureTime,
           corridorFromStationId: corridor.localStartStationId,
@@ -3387,6 +3493,127 @@ function buildPlanMetrics(catchupEvents) {
   };
 }
 
+function buildScenarioLineRoleSummary(scenario) {
+  const selectedLineIds = dedupeLineIds(scenario?.selectedLineIds);
+  const adjustableLineIds = dedupeLineIds(scenario?.adjustableLineIds);
+  const fixedLineIds = selectedLineIds.filter((lineId) => !adjustableLineIds.includes(lineId));
+  const targetLineIds = dedupeLineIds(
+    asArray(scenario?.expressLineIds).length > 0
+      ? scenario.expressLineIds
+      : [scenario?.selectedLineId].filter(Boolean)
+  ).filter((lineId) => selectedLineIds.includes(lineId));
+  return {
+    selectedLineIds,
+    adjustableLineIds,
+    fixedLineIds,
+    targetLineIds,
+    roles: selectedLineIds.map((lineId) => ({
+      lineId,
+      participates: true,
+      adjustable: adjustableLineIds.includes(lineId),
+      fixed: fixedLineIds.includes(lineId),
+      target: targetLineIds.includes(lineId)
+    }))
+  };
+}
+
+function collectPlanAdjustedLineIds(plan) {
+  const adjustedLineIds = new Set();
+  asArray(plan?.scheduleActions).forEach((action) => {
+    asArray(action.affectedLineIds).forEach((lineId) => adjustedLineIds.add(lineId));
+    if (action.affectedLineId) {
+      adjustedLineIds.add(action.affectedLineId);
+    }
+  });
+  asArray(plan?.addedVirtualBypassStations).forEach((station) => {
+    if (station?.lineId) {
+      adjustedLineIds.add(station.lineId);
+    }
+  });
+  return [...adjustedLineIds];
+}
+
+function buildPlanProblemIssues(plan, scenario) {
+  const issues = [];
+  const roleSummary = buildScenarioLineRoleSummary(scenario);
+  const fixedLineIdSet = new Set(roleSummary.fixedLineIds);
+
+  asArray(plan?.trunkProblemClusters)
+    .filter((cluster) => clampNumber(cluster.totalUnresolvedRiskMinutes, 0) > 0)
+    .slice(0, 8)
+    .forEach((cluster) => {
+      issues.push({
+        type: "unresolvedConflict",
+        severity: "high",
+        clusterId: cluster.clusterId,
+        yieldingLineId: cluster.yieldingLineId || cluster.localLineId,
+        priorityLineId: cluster.priorityLineId || cluster.expressLineId,
+        severityMinutes: Number(clampNumber(cluster.totalUnresolvedRiskMinutes, 0).toFixed(2)),
+        recommendedBypassStationId: cluster.recommendedBypassStation?.stationId || ""
+      });
+    });
+
+  asArray(plan?.catchupEvents)
+    .filter((event) => clampNumber(event.requiredHoldMinutes, 0) > clampNumber(event.holdBudgetMinutes, 0))
+    .slice(0, 8)
+    .forEach((event) => {
+      issues.push({
+        type: "waitLimitExceeded",
+        severity: "medium",
+        catchupId: event.catchupId,
+        yieldingLineId: event.yieldingLineId || event.localLineId,
+        priorityLineId: event.priorityLineId || event.expressLineId,
+        yieldingTripId: event.yieldingTripId || event.localTripId,
+        priorityTripId: event.priorityTripId || event.expressTripId,
+        requiredHoldMinutes: event.requiredHoldMinutes,
+        holdBudgetMinutes: event.holdBudgetMinutes
+      });
+    });
+
+  if (clampNumber(plan?.metrics?.totalRobustnessRiskMinutes, 0) > 0) {
+    issues.push({
+      type: "robustnessWeak",
+      severity: clampNumber(plan.metrics.totalRobustnessRiskMinutes, 0) > 10 ? "medium" : "low",
+      riskMinutes: plan.metrics.totalRobustnessRiskMinutes
+    });
+  }
+
+  const fixedAffectedLineIds = collectPlanAdjustedLineIds(plan).filter((lineId) => fixedLineIdSet.has(lineId));
+  if (fixedAffectedLineIds.length > 0) {
+    issues.push({
+      type: "fixedLineAffected",
+      severity: "high",
+      lineIds: fixedAffectedLineIds
+    });
+  }
+
+  return issues;
+}
+
+function attachPlannerFrontendSummary(plan, scenario) {
+  const lineRoleSummary = buildScenarioLineRoleSummary(scenario);
+  const problemIssues = buildPlanProblemIssues(plan, scenario);
+  const actuallyAdjustedLineIds = collectPlanAdjustedLineIds(plan);
+  plan.lineRoleSummary = lineRoleSummary;
+  plan.problemIssues = problemIssues;
+  plan.frontendSummary = {
+    selectedLineIds: lineRoleSummary.selectedLineIds,
+    adjustableLineIds: lineRoleSummary.adjustableLineIds,
+    fixedLineIds: lineRoleSummary.fixedLineIds,
+    targetLineIds: lineRoleSummary.targetLineIds,
+    actuallyAdjustedLineIds,
+    issueCountsByType: problemIssues.reduce((counts, issue) => {
+      counts[issue.type] = clampNumber(counts[issue.type], 0) + 1;
+      return counts;
+    }, {}),
+    actionCount: asArray(plan.scheduleActions).length,
+    catchupClusterCount: asArray(plan.trunkProblemClusters).length,
+    unresolvedRiskMinutes: clampNumber(plan.metrics?.totalUnresolvedRiskMinutes, 0),
+    robustnessRiskMinutes: clampNumber(plan.metrics?.totalRobustnessRiskMinutes, 0)
+  };
+  return plan;
+}
+
 function scoreCatchupScenario(objective, metrics, departureGapPenalty) {
   const weights = OBJECTIVE_WEIGHTS[objective] || OBJECTIVE_WEIGHTS[DEFAULT_OBJECTIVE];
   const score =
@@ -3652,7 +3879,7 @@ function buildClusterRetimeGroups(plan, workingRows, normalizedInput, request) {
   const rowsById = new Map(workingRows.map((row) => [row.id, row]));
   const localRowsByLineId = new Map();
   workingRows.forEach((row) => {
-    if (row.kind !== "local" || request.lockedLocalTripIds.has(row.id)) {
+    if (!isAdjustableRow(row, request)) {
       return;
     }
     if (!localRowsByLineId.has(row.lineId)) {
@@ -3903,15 +4130,29 @@ function buildPlanStateSignature(rows, virtualBypassStationIds, offsetDeltaMinut
   return `${buildWorkingRowsSignature(rows)}|offset:${quantizeMinuteToStep(offsetDeltaMinutes)}|virtual:${[...new Set(asArray(virtualBypassStationIds).filter(Boolean))].sort().join(",")}`;
 }
 
-function buildStatePenaltyMetrics(rows, baselineRowById, actionLog) {
-  const changedLocalRows = rows.filter((row) => {
-    if (row.kind !== "local") {
+function isAdjustableRow(row, request) {
+  if (!row?.id || !row?.lineId) {
+    return false;
+  }
+  if (request?.lockedLocalTripIds?.has(row.id)) {
+    return false;
+  }
+  const adjustableLineIdSet = request?.adjustableLineIdSet;
+  if (adjustableLineIdSet instanceof Set && adjustableLineIdSet.size > 0) {
+    return adjustableLineIdSet.has(row.lineId);
+  }
+  return row.kind !== "express";
+}
+
+function buildStatePenaltyMetrics(rows, baselineRowById, actionLog, request = null) {
+  const changedAdjustableRows = rows.filter((row) => {
+    if (!isAdjustableRow(row, request)) {
       return false;
     }
     const baselineRow = baselineRowById.get(row.id);
     return baselineRow && baselineRow.minute !== row.minute;
   });
-  const totalRetimedMinutes = changedLocalRows.reduce((sum, row) => {
+  const totalRetimedMinutes = changedAdjustableRows.reduce((sum, row) => {
     const baselineRow = baselineRowById.get(row.id);
     return sum + Math.abs((baselineRow?.minute ?? row.minute) - row.minute);
   }, 0);
@@ -3920,7 +4161,7 @@ function buildStatePenaltyMetrics(rows, baselineRowById, actionLog) {
     .reduce((sum, action) => sum + Math.max(0, clampNumber(action.windowEndMinute, 0) - clampNumber(action.windowStartMinute, 0)), 0);
 
   return {
-    retimedTripCount: changedLocalRows.length,
+    retimedTripCount: changedAdjustableRows.length,
     totalRetimedMinutes: Number(totalRetimedMinutes.toFixed(2)),
     rebuildSpanMinutes: Number(rebuildSpanMinutes.toFixed(2))
   };
@@ -3929,7 +4170,7 @@ function buildStatePenaltyMetrics(rows, baselineRowById, actionLog) {
 function buildPlanState(preparedContext, baseOptions, rows, offsetDeltaMinutes, virtualBypassStationIds, baselineRowById, actionLog = [], basePlanByStateSignature = null) {
   const configuredBypassStationIds = getConfiguredBypassStationIdsForLines(
     preparedContext.normalizedInput,
-    preparedContext.scenario.localLineIds
+    preparedContext.scenario.adjustableLineIds
   );
   const uniqueVirtualBypassStationIds = [...new Set(asArray(virtualBypassStationIds).filter(Boolean))];
   const stateSignature = buildPlanStateSignature(rows, uniqueVirtualBypassStationIds, offsetDeltaMinutes);
@@ -3950,7 +4191,9 @@ function buildPlanState(preparedContext, baseOptions, rows, offsetDeltaMinutes, 
       basePlanByStateSignature.set(stateSignature, cachedBasePlan);
     }
   }
-  const penaltyMetrics = buildStatePenaltyMetrics(rows, baselineRowById, actionLog);
+  const penaltyMetrics = buildStatePenaltyMetrics(rows, baselineRowById, actionLog, {
+    adjustableLineIdSet: preparedContext.scenario.adjustableLineIdSet
+  });
   const plan = {
     ...cachedBasePlan,
     metrics: {
@@ -4241,7 +4484,7 @@ export function buildScheduleProblem(planState, normalizedInput, scenario, reque
   const rowsById = new Map(asArray(planState?.rows).map((row) => [row.id, row]));
   const localRowsByLineId = new Map();
   asArray(planState?.rows).forEach((row) => {
-    if (row.kind !== "local" || request.lockedLocalTripIds.has(row.id)) {
+    if (!isAdjustableRow(row, request)) {
       return;
     }
     if (!localRowsByLineId.has(row.lineId)) {
@@ -4667,6 +4910,51 @@ function summarizeScheduleProblem(problem) {
   };
 }
 
+function buildStructuredScheduleActions(actionLog, rows, normalizedInput = null) {
+  const rowById = new Map(asArray(rows).map((row) => [row.id, row]));
+  return asArray(actionLog).map((action) => {
+    const affectedTripIds = action.type === "retimeVector"
+      ? asArray(action.tripDeltas).map((entry) => entry.tripId)
+      : asArray(action.shiftPlan?.shifts).map((entry) => entry.tripId);
+    const stationLineIds = asArray(action.stationIds)
+      .map((stationId) =>
+        normalizedInput?.stationById?.get(stationId)?.lineId
+        || normalizedInput?.candidateBypassStations?.find((station) => station.stationId === stationId)?.lineId
+        || normalizedInput?.configuredBypassStations?.find((station) => station.stationId === stationId)?.lineId
+        || ""
+      );
+    const affectedLineIds = [...new Set([
+      action.lineId,
+      action.localLineId,
+      action.shiftPlan?.localLineId,
+      ...stationLineIds,
+      ...affectedTripIds.map((tripId) => rowById.get(tripId)?.lineId)
+    ].filter(Boolean))];
+    const deltaPattern = action.type === "retimeVector"
+      ? asArray(action.tripDeltas).map((entry) => entry.deltaMinutes)
+      : asArray(action.shiftPlan?.shifts).map((entry) => entry.deltaMinutes);
+    return {
+      actionType: action.type,
+      type: action.type,
+      shape: action.shape || action.shiftPlan?.shape || "",
+      reason: action.reason || "",
+      reasonRegionIds: asArray(action.targetRegionIds),
+      targetRegionIds: asArray(action.targetRegionIds),
+      reasonClusterIds: asArray(action.clusterIds),
+      clusterIds: asArray(action.clusterIds),
+      stationIds: asArray(action.stationIds),
+      affectedLineIds,
+      affectedLineId: affectedLineIds[0] || "",
+      affectedTripIds,
+      tripIds: affectedTripIds,
+      deltaPattern,
+      deltaMinutes: deltaPattern.reduce((sum, value) => sum + Math.abs(clampNumber(value, 0)), 0),
+      deltaOffsetMinutes: action.deltaOffsetMinutes || 0,
+      riskScore: clampNumber(action.riskScore, 0)
+    };
+  });
+}
+
 function collectWindowRebuildCandidateRows(planState, cluster, request) {
   const localLineId = cluster.localLineId;
   const windowHalfSpan = DEFAULT_MAX_REBUILD_WINDOW_MINUTES / 2;
@@ -4674,9 +4962,8 @@ function collectWindowRebuildCandidateRows(planState, cluster, request) {
   const windowEndMinute = clampNumber(cluster.dominantCatchupMinute, 0) + windowHalfSpan;
   const lineRows = sortRowsByMinute(
     planState.rows.filter((row) =>
-      row.kind === "local"
-      && row.lineId === localLineId
-      && !request.lockedLocalTripIds.has(row.id)
+      row.lineId === localLineId
+      && isAdjustableRow(row, request)
     )
   );
   const rowIndexById = new Map(lineRows.map((row, index) => [row.id, index]));
@@ -5335,22 +5622,11 @@ function searchRegionJointPlans(preparedContext, workingRows, offsetDeltaMinutes
           windowStartMinute: action.windowStartMinute,
           windowEndMinute: action.windowEndMinute
         }));
-      plan.scheduleActions = planState.actionLog.map((action) => ({
-        type: action.type,
-        shape: action.shape || action.shiftPlan?.shape || "",
-        reason: action.reason || "",
-        targetRegionIds: asArray(action.targetRegionIds),
-        clusterIds: asArray(action.clusterIds),
-        stationIds: asArray(action.stationIds),
-        tripIds: action.type === "retimeVector"
-          ? asArray(action.tripDeltas).map((entry) => entry.tripId)
-          : asArray(action.shiftPlan?.shifts).map((entry) => entry.tripId),
-        deltaPattern: action.type === "retimeVector"
-          ? asArray(action.tripDeltas).map((entry) => entry.deltaMinutes)
-          : asArray(action.shiftPlan?.shifts).map((entry) => entry.deltaMinutes),
-        deltaOffsetMinutes: action.deltaOffsetMinutes || 0,
-        riskScore: clampNumber(action.riskScore, 0)
-      }));
+      plan.scheduleActions = buildStructuredScheduleActions(
+        planState.actionLog,
+        planState.rows,
+        preparedContext.normalizedInput
+      );
       plan.scheduleProblem = summarizeScheduleProblem(buildScheduleProblem(
         planState,
         preparedContext.normalizedInput,
@@ -5358,15 +5634,15 @@ function searchRegionJointPlans(preparedContext, workingRows, offsetDeltaMinutes
         request
       ));
       plan.actionLog = planState.actionLog;
-      const changedLocalRows = planState.rows.filter((row) => {
-        if (row.kind !== "local") {
+      const changedAdjustableRows = planState.rows.filter((row) => {
+        if (!isAdjustableRow(row, request)) {
           return false;
         }
         const baselineRow = baselineRowById.get(row.id);
         return baselineRow && baselineRow.minute !== row.minute;
       });
-      plan.totalRetimedTrips = changedLocalRows.length;
-      plan.totalRetimedMinutes = changedLocalRows.reduce((sum, row) => {
+      plan.totalRetimedTrips = changedAdjustableRows.length;
+      plan.totalRetimedMinutes = changedAdjustableRows.reduce((sum, row) => {
         const baselineRow = baselineRowById.get(row.id);
         return sum + Math.abs((baselineRow?.minute ?? row.minute) - row.minute);
       }, 0);
@@ -5377,7 +5653,7 @@ function searchRegionJointPlans(preparedContext, workingRows, offsetDeltaMinutes
           `virtual bypass ${planState.virtualBypassStationIds.length}`
         ];
       }
-      return plan;
+      return attachPlannerFrontendSummary(plan, preparedContext.scenario);
     });
 
   return {
@@ -5401,8 +5677,8 @@ export function evaluateExistingOnlyVariant(normalizedInput, scenario, lineRunti
   const departureGapPenalty = computeDepartureGapPenalty(
     normalizedInput,
     trips,
-    scenario.localLineIds,
-    scenario.expressLineIds,
+    scenario.selectedLineIds,
+    [],
     clampNumber(options.minDepartureGapMinutes, DEFAULT_MIN_DEPARTURE_GAP_MINUTES)
   );
   const score = scoreCatchupScenario(
@@ -5458,7 +5734,7 @@ export function evaluateExistingOnlyVariant(normalizedInput, scenario, lineRunti
     confidence
   };
   plan.explanation = buildPlanExplanation(plan, scenario);
-  return plan;
+  return attachPlannerFrontendSummary(plan, scenario);
 }
 
 export function searchExistingBypassPlans(rawInput, options = {}) {
@@ -5506,6 +5782,9 @@ export function searchExistingBypassPlans(rawInput, options = {}) {
       start: scenario.windowStart,
       end: scenario.windowEnd
     },
+    selectedLineIds: scenario.selectedLineIds,
+    adjustableLineIds: scenario.adjustableLineIds,
+    lineRoleSummary: buildScenarioLineRoleSummary(scenario),
     localLineIds: scenario.localLineIds,
     expressLineIds: scenario.expressLineIds,
     corridorCount: corridors.length,
@@ -5576,6 +5855,9 @@ export function searchJointPlans(rawInput, options = {}) {
       start: scenario.windowStart,
       end: scenario.windowEnd
     },
+    selectedLineIds: scenario.selectedLineIds,
+    adjustableLineIds: scenario.adjustableLineIds,
+    lineRoleSummary: buildScenarioLineRoleSummary(scenario),
     localLineIds: scenario.localLineIds,
     expressLineIds: scenario.expressLineIds,
     departureRowCount,
@@ -5608,7 +5890,7 @@ export function searchJointPlans(rawInput, options = {}) {
 export function searchVirtualBypassPlans(rawInput, options = {}) {
   const context = resolvePlanningContext(rawInput, options);
   const { normalizedInput, scenario, lineRuntimeModels, corridors } = context;
-  const baseBypassStationIds = getConfiguredBypassStationIdsForLines(normalizedInput, scenario.localLineIds);
+  const baseBypassStationIds = getConfiguredBypassStationIdsForLines(normalizedInput, scenario.adjustableLineIds);
   const baseExisting = searchExistingBypassPlans(context, {
     ...options,
     mode: "existingOnly"
@@ -5671,6 +5953,9 @@ export function searchVirtualBypassPlans(rawInput, options = {}) {
       start: scenario.windowStart,
       end: scenario.windowEnd
     },
+    selectedLineIds: scenario.selectedLineIds,
+    adjustableLineIds: scenario.adjustableLineIds,
+    lineRoleSummary: buildScenarioLineRoleSummary(scenario),
     localLineIds: scenario.localLineIds,
     expressLineIds: scenario.expressLineIds,
     corridorCount: corridors.length,

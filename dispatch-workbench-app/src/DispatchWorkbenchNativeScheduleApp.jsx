@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import NativeScheduleDemoPage from "./NativeScheduleDemoPage";
 import BroadcastWorkbenchPage from "./BroadcastWorkbenchPage";
+import PlannerWorkbenchPage from "./PlannerWorkbenchPage";
 import { useNativeScheduleI18n } from "./native-schedule-i18n";
 
 const DEFAULT_NATIVE_WORKBENCH_PAGE = "schedule";
@@ -36,10 +37,12 @@ export default function DispatchWorkbenchNativeScheduleApp({ registerHostActions
   const [activePage, setActivePage] = useState(DEFAULT_NATIVE_WORKBENCH_PAGE);
   const [renderedPage, setRenderedPage] = useState(DEFAULT_NATIVE_WORKBENCH_PAGE);
   const [pageStage, setPageStage] = useState("entered");
+  const [plannerEnterSequence, setPlannerEnterSequence] = useState(0);
   const [broadcastEnterSequence, setBroadcastEnterSequence] = useState(0);
   const pageTabs = useMemo(
     () => ([
       { key: "schedule", label: t("nativeWorkbench.tab.schedule") },
+      { key: "planner", label: t("nativeWorkbench.tab.planner") },
       { key: "broadcast", label: t("nativeWorkbench.tab.broadcast") },
       { key: "overview", label: t("nativeWorkbench.tab.overview") }
     ]),
@@ -69,6 +72,9 @@ export default function DispatchWorkbenchNativeScheduleApp({ registerHostActions
     setPageStage("exiting");
     const timer = window.setTimeout(() => {
       setRenderedPage(activePage);
+      if (activePage === "planner") {
+        setPlannerEnterSequence((current) => current + 1);
+      }
       if (activePage === "broadcast") {
         setBroadcastEnterSequence((current) => current + 1);
       }
@@ -116,6 +122,12 @@ export default function DispatchWorkbenchNativeScheduleApp({ registerHostActions
           data-workbench-page="schedule"
         >
           <NativeScheduleDemoPage registerHostActions={registerHostActions} />
+        </div>
+        <div
+          className={`dw-native-workbench-page ${renderedPage === "planner" ? "is-active" : "is-inactive"} is-${pageStage}`}
+          data-workbench-page="planner"
+        >
+          <PlannerWorkbenchPage pageEnterSequence={plannerEnterSequence} />
         </div>
         <div
           className={`dw-native-workbench-page ${renderedPage === "broadcast" ? "is-active" : "is-inactive"} is-${pageStage}`}

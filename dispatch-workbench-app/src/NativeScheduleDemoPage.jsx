@@ -1145,7 +1145,12 @@ function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) {
 
       return {
         ...row,
-        sourceLabel: row.source === "auto" ? t("schedule.source.auto") : t("schedule.source.manual"),
+        sourceLabel:
+          row.source === "auto"
+            ? t("schedule.source.auto")
+            : row.source === "planner"
+              ? t("schedule.source.planner")
+              : t("schedule.source.manual"),
         note: row.note || t("combined.note.direct"),
         lineName: row.lineName || getLocalizedLineName(lineOption, t),
         origin: getLocalizedOriginLabel(row.originId || lineOption.originId, t),

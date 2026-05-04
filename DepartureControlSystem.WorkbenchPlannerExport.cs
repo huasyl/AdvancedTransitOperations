@@ -445,6 +445,11 @@ namespace RapidTransitMod
             return DispatchWorkbenchJson.Serialize(BuildPlannerExportSnapshot());
         }
 
+        public string LoadPlannerContextJson()
+        {
+            return ExportPlannerInputJson();
+        }
+
         public void RequestDumpPlannerInputSnapshot()
         {
             try
@@ -1017,6 +1022,8 @@ namespace RapidTransitMod
                     continue;
                 if (configuredOnly && !station.Dto.isConfiguredBypass)
                     continue;
+                if (!configuredOnly && station.Dto.isConfiguredBypass)
+                    continue;
 
                 string key = station.Dto.lineId + "|" + station.Dto.buildingEntityIndex.ToString() + "|" + station.Dto.order.ToString();
                 if (!seen.Add(key))
@@ -1058,14 +1065,24 @@ namespace RapidTransitMod
         private DispatchPlannerDraftDto[] BuildPlannerDrafts(List<WorkbenchLineRuntime> runtimeLines)
         {
             List<DispatchPlannerDraftDto> drafts = new List<DispatchPlannerDraftDto>();
-            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts)
+            HashSet<string> draftKeys = new HashSet<string>(m_WorkbenchDrafts.Keys, StringComparer.Ordinal);
+            for (int i = 0; i < (runtimeLines?.Count ?? 0); i++)
             {
-                DispatchWorkbenchDraftState draft = entry.Value;
+                if (!string.IsNullOrEmpty(runtimeLines[i]?.Id))
+                {
+                    draftKeys.Add(runtimeLines[i].Id);
+                }
+            }
+
+            foreach (string draftKey in draftKeys)
+            {
+                m_WorkbenchDrafts.TryGetValue(draftKey, out DispatchWorkbenchDraftState sourceDraft);
+                DispatchWorkbenchDraftState draft = ClonePlannerExportDraftState(draftKey, sourceDraft, runtimeLines);
                 string preferredLineId = !string.IsNullOrEmpty(draft?.SelectedLineId)
                     ? draft.SelectedLineId
                     : !string.IsNullOrEmpty(draft?.MergedView?.localLineId)
                         ? draft.MergedView.localLineId
-                        : entry.Key;
+                        : draftKey;
                 WorkbenchLineRuntime activeRuntime = runtimeLines != null && runtimeLines.Count > 0
                     ? ResolveActiveWorkbenchLine(runtimeLines, preferredLineId)
                     : null;
@@ -1077,7 +1094,7 @@ namespace RapidTransitMod
                     : new List<DispatchWorkbenchTripDto>();
                 drafts.Add(new DispatchPlannerDraftDto
                 {
-                    lineKey = entry.Key,
+                    lineKey = draftKey,
                     selectedLineId = draft.SelectedLineId ?? string.Empty,
                     selectedEditLine = draft.SelectedEditLine ?? string.Empty,
                     mergedView = draft.MergedView,
@@ -1089,6 +1106,62 @@ namespace RapidTransitMod
             }
 
             return drafts.ToArray();
+        }
+
+        private DispatchWorkbenchDraftState ClonePlannerExportDraftState(
+            string draftKey,
+            DispatchWorkbenchDraftState sourceDraft,
+            List<WorkbenchLineRuntime> runtimeLines)
+        {
+            DispatchWorkbenchDraftState draft = sourceDraft != null
+                ? new DispatchWorkbenchDraftState
+                {
+                    SelectedLineId = sourceDraft.SelectedLineId ?? string.Empty,
+                    SelectedEditLine = sourceDraft.SelectedEditLine ?? string.Empty,
+                    MergedView = sourceDraft.MergedView == null
+                        ? null
+                        : new DispatchWorkbenchMergedView
+                        {
+                            localLineId = sourceDraft.MergedView.localLineId,
+                            expressLineId = sourceDraft.MergedView.expressLineId,
+                            localLineIds = sourceDraft.MergedView.localLineIds != null ? sourceDraft.MergedView.localLineIds.ToArray() : Array.Empty<string>(),
+                            expressLineIds = sourceDraft.MergedView.expressLineIds != null ? sourceDraft.MergedView.expressLineIds.ToArray() : Array.Empty<string>(),
+                            isLoop = sourceDraft.MergedView.isLoop,
+                            turnbackStationId = sourceDraft.MergedView.turnbackStationId,
+                            direction = sourceDraft.MergedView.direction,
+                            windowStart = sourceDraft.MergedView.windowStart,
+                            windowEnd = sourceDraft.MergedView.windowEnd
+                        },
+                    ManualRows = sourceDraft.ManualRows != null ? sourceDraft.ManualRows.Select(CloneManualRow).ToList() : new List<DispatchWorkbenchManualRowDto>(),
+                    StagedRows = sourceDraft.StagedRows != null ? sourceDraft.StagedRows.Select(CloneStagedRow).ToList() : new List<DispatchWorkbenchStagedRowDto>(),
+                    AutoRules = sourceDraft.AutoRules != null ? sourceDraft.AutoRules.Select(CloneAutoRule).ToList() : new List<DispatchWorkbenchAutoRuleDto>(),
+                    DraftApplied = sourceDraft.DraftApplied,
+                    RulesApplied = sourceDraft.RulesApplied
+                }
+                : CreateEmptyWorkbenchDraftState(draftKey);
+
+            WorkbenchLineRuntime activeRuntime = runtimeLines != null && runtimeLines.Count > 0
+                ? ResolveActiveWorkbenchLine(runtimeLines, draft.SelectedLineId ?? draftKey)
+                : null;
+            if (sourceDraft == null && activeRuntime != null)
+            {
+                if (string.Equals(activeRuntime.Kind, "express", StringComparison.OrdinalIgnoreCase))
+                {
+                    draft.MergedView.localLineIds = Array.Empty<string>();
+                    draft.MergedView.localLineId = string.Empty;
+                    draft.MergedView.expressLineIds = new[] { activeRuntime.Id };
+                    draft.MergedView.expressLineId = activeRuntime.Id;
+                }
+                else
+                {
+                    draft.MergedView.localLineIds = new[] { activeRuntime.Id };
+                    draft.MergedView.localLineId = activeRuntime.Id;
+                    draft.MergedView.expressLineIds = Array.Empty<string>();
+                    draft.MergedView.expressLineId = string.Empty;
+                }
+            }
+
+            return draft;
         }
 
         private bool TryResolvePlannerWaypointPosition(Entity waypoint, out float3 position)
