@@ -762,6 +762,43 @@
   font-weight: 600;
 }
 
+.dw-planner-readonly-lines {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding-top: 8px;
+  padding-right: 12px;
+  padding-bottom: 0;
+  padding-left: 12px;
+  box-sizing: border-box;
+}
+
+.dw-planner-readonly-line {
+  margin-right: 8px;
+  margin-bottom: 8px;
+  border-radius: 999px;
+  background: rgba(90, 122, 132, 0.20);
+  padding-top: 8px;
+  padding-right: 8px;
+  padding-bottom: 8px;
+  padding-left: 8px;
+  color: #c7d4dc;
+  font-size: 14px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+.dw-planner-readonly-empty {
+  margin-bottom: 8px;
+  color: rgba(184, 198, 195, 0.72);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
 .dw-planner-risk-list {
   display: flex;
   align-items: stretch;
@@ -787,6 +824,10 @@
 
 .dw-planner-risk-item.is-warning {
   border-left-color: rgba(227, 179, 65, 0.34);
+}
+
+.dw-planner-risk-item.is-success {
+  border-left-color: rgba(97, 199, 148, 0.34);
 }
 
 .dw-planner-risk-head {
@@ -822,6 +863,16 @@
   border-color: rgba(227, 179, 65, 0.30);
   background: rgba(227, 179, 65, 0.06);
   color: #e3b341;
+}
+
+.dw-planner-risk-badge.is-success {
+  border-color: rgba(97, 199, 148, 0.30);
+  background: rgba(97, 199, 148, 0.08);
+  color: #8adcad;
+}
+
+.dw-planner-risk-badge + .dw-planner-risk-badge {
+  margin-left: 8px;
 }
 
 .dw-planner-risk-route {
@@ -872,6 +923,13 @@
   flex: 0 0 auto;
   margin-right: 8px;
   color: rgba(184, 198, 195, 0.76);
+}
+
+.dw-planner-risk-summary {
+  color: rgba(218, 228, 232, 0.88);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 500;
 }
 
 .dw-planner-risk-events {

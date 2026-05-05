@@ -233,6 +233,9 @@ namespace RapidTransitMod.Planner
         public string TrunkId = string.Empty;
         public string LocalLineId = string.Empty;
         public string ExpressLineId = string.Empty;
+        public string PairRole = string.Empty;
+        public bool IsPrimaryPlanningRisk = false;
+        public bool IsSuppressed = false;
         public string YieldingLineId = string.Empty;
         public string PriorityLineId = string.Empty;
         public string FromStationId = string.Empty;
@@ -264,6 +267,12 @@ namespace RapidTransitMod.Planner
         public string PriorityTripId = string.Empty;
         public string LocalLineId = string.Empty;
         public string ExpressLineId = string.Empty;
+        public string PairRole = string.Empty;
+        public string ProblemType = string.Empty;
+        public string ResolutionState = string.Empty;
+        public string TreatmentType = string.Empty;
+        public string BlockReasonCode = string.Empty;
+        public string[] SuggestedOptionCodes = new string[0];
         public string YieldingLineId = string.Empty;
         public string PriorityLineId = string.Empty;
         public string TrunkId = string.Empty;
@@ -284,6 +293,8 @@ namespace RapidTransitMod.Planner
         public float UnresolvedRiskMinutes = 0f;
         public float RobustnessRiskMinutes = 0f;
         public float RequiredHoldMinutes = 0f;
+        public float RequiredMarginMinutes = 0f;
+        public float CurrentWorstCaseGapMinutes = 0f;
         public float HoldBudgetMinutes = 0f;
         public float ResolvedHoldMinutes = 0f;
         public float ExpressSavedMinutes = 0f;
@@ -302,6 +313,9 @@ namespace RapidTransitMod.Planner
         public string ClusterId = string.Empty;
         public string LocalLineId = string.Empty;
         public string ExpressLineId = string.Empty;
+        public string PairRole = string.Empty;
+        public string ResolutionState = string.Empty;
+        public bool IsPrimaryPlanningRisk = false;
         public string YieldingLineId = string.Empty;
         public string PriorityLineId = string.Empty;
         public string FromStationId = string.Empty;
@@ -362,6 +376,9 @@ namespace RapidTransitMod.Planner
         public DepartureControlSystem.DispatchPlannerRequest Request = new DepartureControlSystem.DispatchPlannerRequest();
         public DepartureControlSystem.DispatchPlannerDraftDto SelectedDraft;
         public string[] SelectedLineIds = new string[0];
+        public string[] EffectiveLineIds = new string[0];
+        public string[] AutoFixedConstraintLineIds = new string[0];
+        public int SuppressedFixedVsFixedClusterCount = 0;
         public string[] AdjustableLineIds = new string[0];
         public string[] FixedLineIds = new string[0];
         public string[] TargetLineIds = new string[0];

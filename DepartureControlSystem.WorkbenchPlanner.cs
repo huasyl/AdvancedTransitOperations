@@ -21,8 +21,6 @@ namespace RapidTransitMod
             [DataMember]
             public string[] localLineIds;
             [DataMember]
-            public string[] selectedLineIds;
-            [DataMember]
             public string[] adjustableLineIds;
             [DataMember]
             public string expressSourceMode;
@@ -69,8 +67,6 @@ namespace RapidTransitMod
             public string windowEnd;
             [DataMember]
             public string[] localLineIds;
-            [DataMember]
-            public string[] selectedLineIds;
             [DataMember]
             public string[] adjustableLineIds;
             [DataMember]
@@ -124,6 +120,14 @@ namespace RapidTransitMod
             public int sharedCorridorCount;
             [DataMember]
             public int draftTripCount;
+            [DataMember]
+            public string[] effectiveLineIds;
+            [DataMember]
+            public string[] autoFixedConstraintLineIds;
+            [DataMember]
+            public int suppressedFixedVsFixedClusterCount;
+            [DataMember]
+            public int primaryRiskClusterCount;
         }
 
         [DataContract]
@@ -168,13 +172,17 @@ namespace RapidTransitMod
         public class DispatchPlannerLineRoleSummaryDto
         {
             [DataMember]
-            public string[] selectedLineIds;
+            public string[] effectiveLineIds;
             [DataMember]
             public string[] adjustableLineIds;
             [DataMember]
             public string[] fixedLineIds;
             [DataMember]
             public string[] targetLineIds;
+            [DataMember]
+            public string[] autoFixedConstraintLineIds;
+            [DataMember]
+            public int suppressedFixedVsFixedClusterCount;
             [DataMember]
             public DispatchPlannerLineRoleDto[] roles;
         }
@@ -264,7 +272,7 @@ namespace RapidTransitMod
         public class DispatchPlannerFrontendSummaryDto
         {
             [DataMember]
-            public string[] selectedLineIds;
+            public string[] effectiveLineIds;
             [DataMember]
             public string[] adjustableLineIds;
             [DataMember]
@@ -283,6 +291,59 @@ namespace RapidTransitMod
             public float unresolvedRiskMinutes;
             [DataMember]
             public float robustnessRiskMinutes;
+        }
+
+        [DataContract]
+        public class DispatchPlannerRiskItemDto
+        {
+            [DataMember]
+            public string riskId;
+            [DataMember]
+            public string problemType;
+            [DataMember]
+            public string resolutionState;
+            [DataMember]
+            public string pairRole;
+            [DataMember]
+            public string treatmentType;
+            [DataMember]
+            public string blockReasonCode;
+            [DataMember]
+            public string[] suggestedOptionCodes;
+            [DataMember]
+            public string yieldingLineId;
+            [DataMember]
+            public string priorityLineId;
+            [DataMember]
+            public string yieldingTripId;
+            [DataMember]
+            public string priorityTripId;
+            [DataMember]
+            public string yieldingDepartTime;
+            [DataMember]
+            public string priorityDepartTime;
+            [DataMember]
+            public string fromStationId;
+            [DataMember]
+            public string toStationId;
+            [DataMember]
+            public string catchupTime;
+            [DataMember]
+            public string selectedBypassStationId;
+            [DataMember]
+            public float requiredHoldMinutes;
+            [DataMember]
+            public float plannedAdjustmentMinutes;
+            [DataMember]
+            public float holdBudgetMinutes;
+            [DataMember]
+            public float unresolvedRiskMinutes;
+            [DataMember]
+            public float robustnessRiskMinutes;
+            [DataMember]
+            public float requiredMarginMinutes;
+            [DataMember]
+            public float currentWorstCaseGapMinutes;
         }
 
         [DataContract]
@@ -372,6 +433,18 @@ namespace RapidTransitMod
             [DataMember]
             public string reasonCode;
             [DataMember]
+            public string problemType;
+            [DataMember]
+            public string resolutionState;
+            [DataMember]
+            public string pairRole;
+            [DataMember]
+            public string treatmentType;
+            [DataMember]
+            public string blockReasonCode;
+            [DataMember]
+            public string[] suggestedOptionCodes;
+            [DataMember]
             public string yieldingLineId;
             [DataMember]
             public string priorityLineId;
@@ -401,6 +474,10 @@ namespace RapidTransitMod
             public float robustnessRiskMinutes;
             [DataMember]
             public string selectedBypassStationId;
+            [DataMember]
+            public float requiredMarginMinutes;
+            [DataMember]
+            public float currentWorstCaseGapMinutes;
         }
 
         [DataContract]
@@ -516,6 +593,8 @@ namespace RapidTransitMod
             public string[] selectedBypassStationIds;
             [DataMember]
             public DispatchPlannerRiskClusterDto[] riskClusters;
+            [DataMember]
+            public DispatchPlannerRiskItemDto[] riskItems;
             [DataMember]
             public DispatchPlannerOptimizationRegionDto[] optimizationRegions;
             [DataMember]

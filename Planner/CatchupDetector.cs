@@ -41,7 +41,8 @@ namespace RapidTransitMod.Planner
                     ? resolvedExpressTrips
                     : new List<PlannerTripModel>();
                 List<PlannerBypassStation> corridorStations = CollectBypassStations(context, trunk);
-                float holdBudgetMinutes = ResolveHoldBudgetMinutes(context, localModel);
+                bool canHoldYieldingLine = (context.AdjustableLineIds ?? new string[0]).Contains(trunk.LocalLineId ?? string.Empty);
+                float holdBudgetMinutes = canHoldYieldingLine ? ResolveHoldBudgetMinutes(context, localModel) : 0f;
 
                 for (int localIndex = 0; localIndex < localTrips.Count; localIndex++)
                 {
@@ -74,10 +75,15 @@ namespace RapidTransitMod.Planner
                             catchupPoint,
                             corridorStations,
                             holdBudgetMinutes);
+                        if (!canHoldYieldingLine)
+                        {
+                            selectedBypass = null;
+                        }
                         bool canUseBypass = selectedBypass != null;
                         float requiredHoldMinutes = canUseBypass ? selectedBypass.HoldNeededMinutes : catchupPoint.SeverityMinutes;
+                        float requiredMarginMinutes = catchupPoint.RobustnessRiskMinutes;
                         float targetHoldMinutes = canUseBypass
-                            ? Math.Max(requiredHoldMinutes, catchupPoint.RobustnessRiskMinutes)
+                            ? Math.Max(requiredHoldMinutes, requiredMarginMinutes)
                             : 0f;
                         float resolvedHoldMinutes = canUseBypass ? Math.Min(targetHoldMinutes, holdBudgetMinutes) : 0f;
                         float unresolvedRiskMinutes = canUseBypass
@@ -91,6 +97,8 @@ namespace RapidTransitMod.Planner
                         catchupEvent.EventId = expressTrip.TripId + "|" + localTrip.TripId + "|" + trunk.TrunkId;
                         catchupEvent.LocalTripId = localTrip.TripId;
                         catchupEvent.ExpressTripId = expressTrip.TripId;
+                        catchupEvent.PairRole = trunk.PairRole;
+                        catchupEvent.ProblemType = ResolveProblemType(trunk, catchupPoint);
                         catchupEvent.YieldingTripId = localTrip.TripId;
                         catchupEvent.PriorityTripId = expressTrip.TripId;
                         catchupEvent.LocalLineId = trunk.LocalLineId;
@@ -115,8 +123,26 @@ namespace RapidTransitMod.Planner
                         catchupEvent.UnresolvedRiskMinutes = PlannerMath.Round2(unresolvedRiskMinutes);
                         catchupEvent.RobustnessRiskMinutes = PlannerMath.Round2(robustnessRiskMinutes);
                         catchupEvent.RequiredHoldMinutes = PlannerMath.Round2(requiredHoldMinutes);
+                        catchupEvent.RequiredMarginMinutes = PlannerMath.Round2(requiredMarginMinutes);
+                        catchupEvent.CurrentWorstCaseGapMinutes = catchupPoint.WorstCaseGapMinutes;
                         catchupEvent.HoldBudgetMinutes = PlannerMath.Round2(holdBudgetMinutes);
                         catchupEvent.ResolvedHoldMinutes = PlannerMath.Round2(resolvedHoldMinutes);
+                        catchupEvent.TreatmentType = resolvedHoldMinutes > 0f ? "hold" : "none";
+                        catchupEvent.ResolutionState = ResolveResolutionState(
+                            context,
+                            canUseBypass,
+                            targetHoldMinutes,
+                            holdBudgetMinutes,
+                            unresolvedRiskMinutes,
+                            robustnessRiskMinutes);
+                        catchupEvent.BlockReasonCode = ResolveBlockReasonCode(
+                            context,
+                            canUseBypass,
+                            targetHoldMinutes,
+                            holdBudgetMinutes,
+                            unresolvedRiskMinutes,
+                            robustnessRiskMinutes);
+                        catchupEvent.SuggestedOptionCodes = ResolveSuggestedOptionCodes(catchupEvent.BlockReasonCode);
                         catchupEvent.ExpressSavedMinutes = PlannerMath.Round2(Math.Max(0f, trunk.LocalRuntimeMinutes - trunk.ExpressRuntimeMinutes));
                         catchupEvent.CatchupMinute = catchupPoint.CatchupMinute;
                         catchupEvent.CatchupAxisIndex = catchupPoint.CatchupAxisIndex;
@@ -359,6 +385,90 @@ namespace RapidTransitMod.Planner
             return point;
         }
 
+        private static string ResolveProblemType(PursuitTrunk trunk, PlannerCatchupPoint catchupPoint)
+        {
+            if (!string.Equals(trunk.PairRole, "target-adjustable", StringComparison.Ordinal))
+            {
+                return "backgroundConstraint";
+            }
+
+            return catchupPoint.SeverityMinutes > 0f || catchupPoint.DidCatchUp
+                ? "hardCatchup"
+                : "lowMargin";
+        }
+
+        private static string ResolveResolutionState(
+            PlannerContext context,
+            bool canUseBypass,
+            float targetHoldMinutes,
+            float holdBudgetMinutes,
+            float unresolvedRiskMinutes,
+            float robustnessRiskMinutes)
+        {
+            if (unresolvedRiskMinutes <= 0f && robustnessRiskMinutes <= 0f)
+            {
+                return "resolved";
+            }
+
+            return "blocked";
+        }
+
+        private static string ResolveBlockReasonCode(
+            PlannerContext context,
+            bool canUseBypass,
+            float targetHoldMinutes,
+            float holdBudgetMinutes,
+            float unresolvedRiskMinutes,
+            float robustnessRiskMinutes)
+        {
+            if (unresolvedRiskMinutes <= 0f && robustnessRiskMinutes <= 0f)
+            {
+                return string.Empty;
+            }
+
+            if (canUseBypass && holdBudgetMinutes < targetHoldMinutes)
+            {
+                return "waitBudgetTooLow";
+            }
+
+            if (!canUseBypass && ((context.ActiveVirtualBypassStationIds?.Length ?? 0) > 0
+                || (context.ForcedBypassStationIds?.Length ?? 0) > 0))
+            {
+                return "selectedBypassStationNotUsable";
+            }
+
+            if (!canUseBypass && context.Request.maxAdditionalBypassStations > 0)
+            {
+                return "needsBypassStation";
+            }
+
+            if (!canUseBypass && context.Request.maxOffsetMinutes > 0)
+            {
+                return "offsetRangeTooSmall";
+            }
+
+            return "noUsableBypassStation";
+        }
+
+        private static string[] ResolveSuggestedOptionCodes(string blockReasonCode)
+        {
+            switch (blockReasonCode)
+            {
+                case "waitBudgetTooLow":
+                    return new[] { "maxLocalWaitMinutes" };
+                case "needsBypassStation":
+                    return new[] { "maxAdditionalBypassStations", "forcedBypassStationIds" };
+                case "selectedBypassStationNotUsable":
+                    return new[] { "forcedBypassStationIds" };
+                case "offsetRangeTooSmall":
+                    return new[] { "maxOffsetMinutes" };
+                case "noUsableBypassStation":
+                    return new[] { "maxAdditionalBypassStations", "adjustableLineIds" };
+                default:
+                    return new string[0];
+            }
+        }
+
         private static List<PlannerBypassStation> CollectBypassStations(PlannerContext context, PursuitTrunk trunk)
         {
             Dictionary<string, PlannerBypassStation> stationsById = new Dictionary<string, PlannerBypassStation>(StringComparer.Ordinal);
@@ -530,6 +640,12 @@ namespace RapidTransitMod.Planner
                 if (catchupEvent.SeverityMinutes > current.SeverityMinutes)
                 {
                     current.TrunkId = catchupEvent.TrunkId;
+                    current.PairRole = catchupEvent.PairRole;
+                    current.ProblemType = catchupEvent.ProblemType;
+                    current.ResolutionState = catchupEvent.ResolutionState;
+                    current.TreatmentType = catchupEvent.TreatmentType;
+                    current.BlockReasonCode = catchupEvent.BlockReasonCode;
+                    current.SuggestedOptionCodes = catchupEvent.SuggestedOptionCodes;
                     current.YieldingTripId = catchupEvent.YieldingTripId;
                     current.PriorityTripId = catchupEvent.PriorityTripId;
                     current.YieldingLineId = catchupEvent.YieldingLineId;
@@ -551,6 +667,8 @@ namespace RapidTransitMod.Planner
                     current.UnresolvedRiskMinutes = catchupEvent.UnresolvedRiskMinutes;
                     current.RobustnessRiskMinutes = catchupEvent.RobustnessRiskMinutes;
                     current.RequiredHoldMinutes = catchupEvent.RequiredHoldMinutes;
+                    current.RequiredMarginMinutes = catchupEvent.RequiredMarginMinutes;
+                    current.CurrentWorstCaseGapMinutes = catchupEvent.CurrentWorstCaseGapMinutes;
                     current.HoldBudgetMinutes = catchupEvent.HoldBudgetMinutes;
                     current.ResolvedHoldMinutes = catchupEvent.ResolvedHoldMinutes;
                     current.ExpressSavedMinutes = catchupEvent.ExpressSavedMinutes;

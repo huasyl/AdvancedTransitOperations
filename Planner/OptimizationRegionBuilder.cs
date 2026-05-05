@@ -13,6 +13,12 @@ namespace RapidTransitMod.Planner
             Dictionary<string, PlannerRiskCluster> clustersByKey = new Dictionary<string, PlannerRiskCluster>(StringComparer.Ordinal);
             foreach (PlannerCatchupEvent catchupEvent in catchupEvents)
             {
+                if (string.Equals(catchupEvent.PairRole, "fixed-fixed", StringComparison.Ordinal))
+                {
+                    context.SuppressedFixedVsFixedClusterCount += 1;
+                    continue;
+                }
+
                 string key = catchupEvent.LocalLineId + "|" + catchupEvent.ExpressLineId + "|" + catchupEvent.TrunkId;
                 if (!clustersByKey.TryGetValue(key, out PlannerRiskCluster cluster))
                 {
@@ -20,6 +26,9 @@ namespace RapidTransitMod.Planner
                     cluster.ClusterId = key;
                     cluster.LocalLineId = catchupEvent.LocalLineId;
                     cluster.ExpressLineId = catchupEvent.ExpressLineId;
+                    cluster.PairRole = catchupEvent.PairRole;
+                    cluster.IsPrimaryPlanningRisk = string.Equals(catchupEvent.PairRole, "target-adjustable", StringComparison.Ordinal);
+                    cluster.ResolutionState = "resolved";
                     cluster.YieldingLineId = string.IsNullOrEmpty(catchupEvent.YieldingLineId) ? catchupEvent.LocalLineId : catchupEvent.YieldingLineId;
                     cluster.PriorityLineId = string.IsNullOrEmpty(catchupEvent.PriorityLineId) ? catchupEvent.ExpressLineId : catchupEvent.PriorityLineId;
                     cluster.FromStationId = catchupEvent.FromStationId;
@@ -33,6 +42,7 @@ namespace RapidTransitMod.Planner
                 cluster.RobustnessRiskMinutes = PlannerMath.Round2(cluster.RobustnessRiskMinutes + catchupEvent.RobustnessRiskMinutes);
                 cluster.TotalExpressSavedMinutes = PlannerMath.Round2(cluster.TotalExpressSavedMinutes + catchupEvent.ExpressSavedMinutes);
                 cluster.TotalLocalWaitMinutes = PlannerMath.Round2(cluster.TotalLocalWaitMinutes + catchupEvent.ResolvedHoldMinutes);
+                cluster.ResolutionState = MergeResolutionState(cluster.ResolutionState, catchupEvent.ResolutionState);
                 cluster.CatchupIds.Add(catchupEvent.EventId);
                 cluster.SourceCorridorIds = cluster.SourceCorridorIds
                     .Union(catchupEvent.SourceCorridorIds)
@@ -49,6 +59,30 @@ namespace RapidTransitMod.Planner
                 .ThenByDescending(cluster => cluster.RobustnessRiskMinutes)
                 .ThenByDescending(cluster => cluster.MaxSeverityMinutes)
                 .ToList();
+        }
+
+        private static string MergeResolutionState(string current, string next)
+        {
+            int currentRank = GetResolutionRank(current);
+            int nextRank = GetResolutionRank(next);
+            return nextRank > currentRank ? next ?? string.Empty : current ?? string.Empty;
+        }
+
+        private static int GetResolutionRank(string state)
+        {
+            if (string.Equals(state, "blocked", StringComparison.Ordinal))
+            {
+                return 3;
+            }
+            if (string.Equals(state, "actionable", StringComparison.Ordinal))
+            {
+                return 2;
+            }
+            if (string.Equals(state, "resolved", StringComparison.Ordinal))
+            {
+                return 1;
+            }
+            return 0;
         }
 
         public List<PlannerOptimizationRegion> BuildOptimizationRegions(List<PlannerRiskCluster> clusters)

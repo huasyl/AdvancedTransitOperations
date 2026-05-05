@@ -46,7 +46,7 @@ namespace RapidTransitMod.Planner
 
                     if (startsNewGroup && currentGroup.Count > 0)
                     {
-                        result.Add(BuildGroupTrunk(currentGroup, result.Count));
+                        result.Add(BuildGroupTrunk(currentGroup, result.Count, context));
                         currentGroup.Clear();
                     }
 
@@ -55,7 +55,7 @@ namespace RapidTransitMod.Planner
 
                 if (currentGroup.Count > 0)
                 {
-                    result.Add(BuildGroupTrunk(currentGroup, result.Count));
+                    result.Add(BuildGroupTrunk(currentGroup, result.Count, context));
                 }
             }
 
@@ -67,8 +67,6 @@ namespace RapidTransitMod.Planner
             List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> result =
                 new List<DepartureControlSystem.DispatchPlannerSharedCorridorDto>();
             HashSet<string> selectedLineSet = new HashSet<string>(context.SelectedLineIds ?? new string[0], StringComparer.Ordinal);
-            HashSet<string> selectedExpressLineSet = new HashSet<string>(context.SelectedExpressLineIds ?? new string[0], StringComparer.Ordinal);
-            HashSet<string> adjustableLineSet = new HashSet<string>(context.AdjustableLineIds ?? new string[0], StringComparer.Ordinal);
 
             foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DepartureControlSystem.DispatchPlannerSharedCorridorDto[0])
             {
@@ -88,15 +86,14 @@ namespace RapidTransitMod.Planner
                     {
                         continue;
                     }
-                    if (selectedExpressLineSet.Count > 0
-                        && !selectedExpressLineSet.Contains(corridor.lineId ?? string.Empty)
-                        && !selectedExpressLineSet.Contains(corridor.otherLineId ?? string.Empty))
+
+                    string pairRole = ResolvePairRole(context, corridor.lineId, corridor.otherLineId);
+                    if (string.Equals(pairRole, "fixed-fixed", StringComparison.Ordinal))
                     {
+                        context.SuppressedFixedVsFixedClusterCount += 1;
                         continue;
                     }
-                    if (selectedExpressLineSet.Count > 0
-                        && adjustableLineSet.Count > 0
-                        && !IsTargetExpressToAdjustableCorridor(corridor, selectedExpressLineSet, adjustableLineSet))
+                    if (!IsPlannerPairRole(pairRole))
                     {
                         continue;
                     }
@@ -111,12 +108,21 @@ namespace RapidTransitMod.Planner
                         continue;
                     }
 
-                    if (string.Equals(corridor.otherLineId, baseLineId, StringComparison.Ordinal))
+                    if (string.Equals(corridor.lineId, baseLineId, StringComparison.Ordinal)
+                        && selectedLineSet.Contains(corridor.otherLineId ?? string.Empty))
+                    {
+                        DepartureControlSystem.DispatchPlannerSharedCorridorDto mapped = CloneCorridor(corridor);
+                        mapped.lineId = context.VirtualExpressLineId;
+                        mapped.id = (corridor.id ?? string.Empty).Replace(baseLineId, context.VirtualExpressLineId);
+                        AddMappedVirtualCorridor(context, result, mapped);
+                    }
+                    else if (string.Equals(corridor.otherLineId, baseLineId, StringComparison.Ordinal)
+                        && selectedLineSet.Contains(corridor.lineId ?? string.Empty))
                     {
                         DepartureControlSystem.DispatchPlannerSharedCorridorDto mapped = CloneCorridor(corridor);
                         mapped.otherLineId = context.VirtualExpressLineId;
                         mapped.id = (corridor.id ?? string.Empty).Replace(baseLineId, context.VirtualExpressLineId);
-                        result.Add(OrientCorridorForRoles(context, mapped));
+                        AddMappedVirtualCorridor(context, result, mapped);
                     }
                 }
             }
@@ -143,10 +149,28 @@ namespace RapidTransitMod.Planner
                 fullCorridor.physicalOverlap = lineTrack.trackAtomCount;
                 fullCorridor.orderedRun = lineTrack.trackAtomCount;
                 fullCorridor.confidence = 0.9f;
-                result.Add(OrientCorridorForRoles(context, fullCorridor));
+                AddMappedVirtualCorridor(context, result, fullCorridor);
             }
 
             return result;
+        }
+
+        private static void AddMappedVirtualCorridor(
+            PlannerContext context,
+            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> result,
+            DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor)
+        {
+            string pairRole = ResolvePairRole(context, corridor.lineId, corridor.otherLineId);
+            if (string.Equals(pairRole, "fixed-fixed", StringComparison.Ordinal))
+            {
+                context.SuppressedFixedVsFixedClusterCount += 1;
+                return;
+            }
+            if (!IsPlannerPairRole(pairRole))
+            {
+                return;
+            }
+            result.Add(OrientCorridorForRoles(context, corridor));
         }
 
         private static bool IsTargetExpressToAdjustableCorridor(
@@ -158,6 +182,42 @@ namespace RapidTransitMod.Planner
             string otherLineId = corridor.otherLineId ?? string.Empty;
             return (selectedExpressLineSet.Contains(lineId) && adjustableLineSet.Contains(otherLineId))
                 || (selectedExpressLineSet.Contains(otherLineId) && adjustableLineSet.Contains(lineId));
+        }
+
+        private static bool IsPlannerPairRole(string pairRole)
+        {
+            return string.Equals(pairRole, "target-adjustable", StringComparison.Ordinal)
+                || string.Equals(pairRole, "target-fixed", StringComparison.Ordinal)
+                || string.Equals(pairRole, "adjustable-fixed", StringComparison.Ordinal);
+        }
+
+        private static string ResolvePairRole(PlannerContext context, string leftLineId, string rightLineId)
+        {
+            bool leftTarget = (context.TargetLineIds ?? new string[0]).Contains(leftLineId ?? string.Empty);
+            bool rightTarget = (context.TargetLineIds ?? new string[0]).Contains(rightLineId ?? string.Empty);
+            bool leftAdjustable = (context.AdjustableLineIds ?? new string[0]).Contains(leftLineId ?? string.Empty);
+            bool rightAdjustable = (context.AdjustableLineIds ?? new string[0]).Contains(rightLineId ?? string.Empty);
+            bool leftFixed = (context.FixedLineIds ?? new string[0]).Contains(leftLineId ?? string.Empty);
+            bool rightFixed = (context.FixedLineIds ?? new string[0]).Contains(rightLineId ?? string.Empty);
+
+            if ((leftTarget && rightAdjustable) || (rightTarget && leftAdjustable))
+            {
+                return "target-adjustable";
+            }
+            if ((leftTarget && rightFixed) || (rightTarget && leftFixed))
+            {
+                return "target-fixed";
+            }
+            if ((leftAdjustable && rightFixed) || (rightAdjustable && leftFixed))
+            {
+                return "adjustable-fixed";
+            }
+            if (leftFixed && rightFixed)
+            {
+                return "fixed-fixed";
+            }
+
+            return "other";
         }
 
         private static DepartureControlSystem.DispatchPlannerSharedCorridorDto OrientCorridorForRoles(
@@ -239,7 +299,8 @@ namespace RapidTransitMod.Planner
 
         private static PursuitTrunk BuildGroupTrunk(
             List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> group,
-            int groupIndex)
+            int groupIndex,
+            PlannerContext context)
         {
             DepartureControlSystem.DispatchPlannerSharedCorridorDto first = group[0];
             DepartureControlSystem.DispatchPlannerSharedCorridorDto localStart = group.OrderBy(corridor => corridor.lineStartAtomIndex).First();
@@ -251,6 +312,9 @@ namespace RapidTransitMod.Planner
             trunk.TrunkId = first.lineId + "|" + first.otherLineId + "|trunk-group-" + groupIndex;
             trunk.LocalLineId = first.lineId ?? string.Empty;
             trunk.ExpressLineId = first.otherLineId ?? string.Empty;
+            trunk.PairRole = ResolvePairRole(context, trunk.LocalLineId, trunk.ExpressLineId);
+            trunk.IsPrimaryPlanningRisk = string.Equals(trunk.PairRole, "target-adjustable", StringComparison.Ordinal);
+            trunk.IsSuppressed = string.Equals(trunk.PairRole, "fixed-fixed", StringComparison.Ordinal);
             trunk.YieldingLineId = trunk.LocalLineId;
             trunk.PriorityLineId = trunk.ExpressLineId;
             trunk.FromStationId = localStart.lineStartStationId ?? string.Empty;

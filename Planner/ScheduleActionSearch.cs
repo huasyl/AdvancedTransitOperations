@@ -41,8 +41,8 @@ namespace RapidTransitMod.Planner
                     .Where(stationId => !string.IsNullOrEmpty(stationId))
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
-                plan.ExpressSavedMinutes = PlannerMath.Round2(riskClusters.Sum(cluster => cluster.TotalExpressSavedMinutes));
-                plan.LocalWaitMinutes = PlannerMath.Round2(riskClusters.Sum(cluster => cluster.TotalLocalWaitMinutes));
+                plan.ExpressSavedMinutes = ComputeExpressSavedMinutes(context, catchupEvents);
+                plan.LocalWaitMinutes = ComputeLocalWaitMinutes(catchupEvents);
                 plan.UnresolvedRiskMinutes = PlannerMath.Round2(riskClusters.Sum(cluster => cluster.UnresolvedRiskMinutes));
                 plan.RobustnessRiskMinutes = PlannerMath.Round2(riskClusters.Sum(cluster => cluster.RobustnessRiskMinutes));
                 plan.AddedBypassStationCount = (activeVirtualBypassStationIds ?? new string[0])
@@ -66,6 +66,48 @@ namespace RapidTransitMod.Planner
             }
 
             return plans;
+        }
+
+        private static float ComputeExpressSavedMinutes(
+            PlannerContext context,
+            List<PlannerCatchupEvent> catchupEvents)
+        {
+            Dictionary<string, float> savedByTripId = new Dictionary<string, float>(StringComparer.Ordinal);
+            foreach (PlannerCatchupEvent catchupEvent in catchupEvents ?? new List<PlannerCatchupEvent>())
+            {
+                if (catchupEvent == null || string.IsNullOrEmpty(catchupEvent.ExpressTripId))
+                {
+                    continue;
+                }
+                if (!savedByTripId.TryGetValue(catchupEvent.ExpressTripId, out float current)
+                    || catchupEvent.ExpressSavedMinutes > current)
+                {
+                    savedByTripId[catchupEvent.ExpressTripId] = catchupEvent.ExpressSavedMinutes;
+                }
+            }
+
+            return savedByTripId.Count == 0
+                ? 0f
+                : PlannerMath.Round2(savedByTripId.Values.Sum() / savedByTripId.Count);
+        }
+
+        private static float ComputeLocalWaitMinutes(List<PlannerCatchupEvent> catchupEvents)
+        {
+            Dictionary<string, float> waitByTripId = new Dictionary<string, float>(StringComparer.Ordinal);
+            foreach (PlannerCatchupEvent catchupEvent in catchupEvents ?? new List<PlannerCatchupEvent>())
+            {
+                if (catchupEvent == null || string.IsNullOrEmpty(catchupEvent.LocalTripId) || catchupEvent.ResolvedHoldMinutes <= 0f)
+                {
+                    continue;
+                }
+                if (!waitByTripId.TryGetValue(catchupEvent.LocalTripId, out float current)
+                    || catchupEvent.ResolvedHoldMinutes > current)
+                {
+                    waitByTripId[catchupEvent.LocalTripId] = catchupEvent.ResolvedHoldMinutes;
+                }
+            }
+
+            return PlannerMath.Round2(waitByTripId.Values.Sum());
         }
 
         private static List<PlannerWorkingRow> CloneWorkingRows(IEnumerable<PlannerWorkingRow> rows)
@@ -348,7 +390,7 @@ namespace RapidTransitMod.Planner
 
             return new DepartureControlSystem.DispatchPlannerFrontendSummaryDto
             {
-                selectedLineIds = context.SelectedLineIds ?? new string[0],
+                effectiveLineIds = context.EffectiveLineIds ?? context.SelectedLineIds ?? new string[0],
                 adjustableLineIds = context.AdjustableLineIds ?? new string[0],
                 fixedLineIds = context.FixedLineIds ?? new string[0],
                 targetLineIds = context.TargetLineIds ?? new string[0],
@@ -366,6 +408,18 @@ namespace RapidTransitMod.Planner
             if (diagnostics.Any(issue => string.Equals(issue.Level, "error", StringComparison.Ordinal)))
             {
                 return "infeasible";
+            }
+            if (plan.CatchupEvents.Any(item =>
+                string.Equals(item.ResolutionState, "blocked", StringComparison.Ordinal)
+                && string.Equals(item.PairRole, "target-adjustable", StringComparison.Ordinal)))
+            {
+                return "blocked";
+            }
+            if (plan.CatchupEvents.Any(item =>
+                string.Equals(item.ResolutionState, "actionable", StringComparison.Ordinal)
+                && string.Equals(item.PairRole, "target-adjustable", StringComparison.Ordinal)))
+            {
+                return "needsAction";
             }
             if (plan.UnresolvedRiskMinutes > 0f)
             {

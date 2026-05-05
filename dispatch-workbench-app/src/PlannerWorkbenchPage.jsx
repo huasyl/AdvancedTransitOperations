@@ -256,11 +256,13 @@ function waitForUiPaint() {
   return new Promise((resolve) => {
     if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
       window.requestAnimationFrame(() => {
-        window.setTimeout(resolve, 0);
+        window.requestAnimationFrame(() => {
+          window.setTimeout(resolve, 50);
+        });
       });
       return;
     }
-    setTimeout(resolve, 0);
+    setTimeout(resolve, 50);
   });
 }
 
@@ -350,10 +352,47 @@ function buildStationOptionsForLine(plannerInput, lineId) {
     }));
 }
 
-function buildForcedBypassOptions(plannerInput, expressSource, virtualBaseLine, participatingLineIds, adjustableLineIds) {
+function buildRelatedLineOptionsForTarget(plannerInput, targetLineId, lineOptions) {
+  const target = String(targetLineId || "");
+  if (!target) {
+    return [];
+  }
+
+  const optionByLineId = new Map((Array.isArray(lineOptions) ? lineOptions : []).map((option) => [option.value, option]));
+  const relatedIds = new Set();
+  const corridors = Array.isArray(plannerInput?.currentTrackScenario?.sharedCorridors)
+    ? plannerInput.currentTrackScenario.sharedCorridors
+    : [];
+  corridors.forEach((corridor) => {
+    if (!corridor
+      || String(corridor.traversalRelation || "").toLowerCase() !== "samedirection"
+      || corridor.hasMirroredContext
+      || Number(corridor.orderedRun || 0) <= 0
+      || Number(corridor.physicalOverlap || 0) <= 0) {
+      return;
+    }
+    if (corridor.lineId === target && optionByLineId.has(corridor.otherLineId)) {
+      relatedIds.add(corridor.otherLineId);
+    }
+    if (corridor.otherLineId === target && optionByLineId.has(corridor.lineId)) {
+      relatedIds.add(corridor.lineId);
+    }
+  });
+
+  if (optionByLineId.has(target)) {
+    relatedIds.add(target);
+  }
+
+  return [...relatedIds]
+    .map((lineId) => optionByLineId.get(lineId))
+    .filter(Boolean)
+    .sort((left, right) => String(left.label || "").localeCompare(String(right.label || "")));
+}
+
+function buildForcedBypassOptions(plannerInput, expressSource, virtualBaseLine, adjustableLineIds) {
   const relevantLineIds = expressSource === "virtual" && virtualBaseLine
     ? [virtualBaseLine]
-    : (Array.isArray(adjustableLineIds) && adjustableLineIds.length > 0 ? adjustableLineIds : participatingLineIds);
+    : (Array.isArray(adjustableLineIds) && adjustableLineIds.length > 0 ? adjustableLineIds : []);
   const relevantLineIdSet = new Set((Array.isArray(relevantLineIds) ? relevantLineIds : []).filter(Boolean));
   const grouped = new Map();
   const allStations = [
@@ -365,29 +404,56 @@ function buildForcedBypassOptions(plannerInput, expressSource, virtualBaseLine, 
       return;
     }
     const nextOrder = Number(station?.order || 0);
-    if (!grouped.has(station.stationId) || nextOrder < grouped.get(station.stationId).order) {
-      grouped.set(station.stationId, {
-        value: station.stationId,
-        label: station.name || station.stationId,
-        order: Number.isFinite(nextOrder) ? nextOrder : 0
-      });
+    const label = station.name || station.stationId;
+    const buildingEntityIndex = Number(station?.buildingEntityIndex);
+    const groupKey = Number.isFinite(buildingEntityIndex) && buildingEntityIndex >= 0
+      ? `building:${buildingEntityIndex}`
+      : `name:${String(label || "").trim().toLowerCase()}`;
+    const existing = grouped.get(groupKey);
+    if (existing) {
+      existing.stationIds.push(station.stationId);
+      existing.order = Math.min(existing.order, Number.isFinite(nextOrder) ? nextOrder : existing.order);
+      return;
     }
+
+    grouped.set(groupKey, {
+      value: groupKey,
+      label,
+      stationIds: [station.stationId],
+      order: Number.isFinite(nextOrder) ? nextOrder : 0
+    });
   });
   return [...grouped.values()]
+    .map((option) => ({
+      ...option,
+      stationIds: [...new Set(option.stationIds)]
+    }))
     .sort((left, right) => {
       if (left.order !== right.order) {
         return left.order - right.order;
       }
       return String(left.label || "").localeCompare(String(right.label || ""));
     })
-    .map(({ value, label }) => ({ value, label }));
+    .map(({ value, label, stationIds }) => ({ value, label, stationIds }));
+}
+
+function expandForcedBypassStationIds(selectedValues, forcedBypassOptions) {
+  const optionByValue = new Map((Array.isArray(forcedBypassOptions) ? forcedBypassOptions : [])
+    .map((option) => [option.value, option]));
+  return [...new Set((Array.isArray(selectedValues) ? selectedValues : []).flatMap((value) => {
+    const option = optionByValue.get(value);
+    if (option && Array.isArray(option.stationIds) && option.stationIds.length > 0) {
+      return option.stationIds;
+    }
+    return value ? [value] : [];
+  }).filter(Boolean))];
 }
 
 function summarizePlanType(status) {
-  if (status === "infeasible") {
+  if (status === "infeasible" || status === "blocked") {
     return "error";
   }
-  if (status === "risk" || status === "fragile") {
+  if (status === "risk" || status === "fragile" || status === "needsAction") {
     return "warning";
   }
   return "optimal";
@@ -483,6 +549,10 @@ function formatPlannerStatusLabel(status, t) {
   switch (status) {
     case "feasible":
       return t("planner.badge.feasible");
+    case "needsAction":
+      return t("planner.riskState.actionable");
+    case "blocked":
+      return t("planner.riskState.blocked");
     case "fragile":
       return t("planner.badge.fragile");
     case "risk":
@@ -544,6 +614,185 @@ function formatRiskReasonLabel(reasonCode, t) {
     default:
       return "";
   }
+}
+
+function formatRiskTypeLabel(problemType, t) {
+  switch (problemType) {
+    case "hardCatchup":
+      return t("planner.riskType.hardCatchup");
+    case "lowMargin":
+      return t("planner.riskType.lowMargin");
+    case "backgroundConstraint":
+      return t("planner.riskType.backgroundConstraint");
+    default:
+      return t("planner.riskType.lowMargin");
+  }
+}
+
+function formatResolutionStateLabel(resolutionState, t) {
+  switch (resolutionState) {
+    case "resolved":
+    case "handled":
+      return t("planner.riskState.resolved");
+    case "actionable":
+    case "needsAction":
+    case "fragile":
+      return t("planner.riskState.actionable");
+    case "blocked":
+    case "unresolved":
+      return t("planner.riskState.blocked");
+    default:
+      return t("planner.riskState.actionable");
+  }
+}
+
+function resolveRiskStateTone(resolutionState) {
+  switch (resolutionState) {
+    case "resolved":
+    case "handled":
+      return "success";
+    case "blocked":
+    case "unresolved":
+      return "error";
+    default:
+      return "warning";
+  }
+}
+
+function resolveRiskTypeTone(problemType) {
+  return problemType === "hardCatchup" ? "error" : "warning";
+}
+
+function formatBlockReasonLabel(blockReasonCode, t) {
+  switch (blockReasonCode) {
+    case "noUsableBypassStation":
+      return t("planner.blockReason.noUsableBypassStation");
+    case "waitBudgetTooLow":
+      return t("planner.blockReason.waitBudgetTooLow");
+    case "needsBypassStation":
+      return t("planner.blockReason.needsBypassStation");
+    case "selectedBypassStationNotUsable":
+      return t("planner.blockReason.selectedBypassStationNotUsable");
+    case "offsetRangeTooSmall":
+      return t("planner.blockReason.offsetRangeTooSmall");
+    default:
+      return "";
+  }
+}
+
+function formatSuggestedOptionLabel(optionCode, t) {
+  switch (optionCode) {
+    case "maxLocalWaitMinutes":
+      return t("planner.suggestedOption.maxLocalWaitMinutes");
+    case "maxAdditionalBypassStations":
+      return t("planner.suggestedOption.maxAdditionalBypassStations");
+    case "forcedBypassStationIds":
+      return t("planner.suggestedOption.forcedBypassStationIds");
+    case "maxOffsetMinutes":
+      return t("planner.suggestedOption.maxOffsetMinutes");
+    case "adjustableLineIds":
+      return t("planner.suggestedOption.adjustableLineIds");
+    default:
+      return "";
+  }
+}
+
+function formatPairRoleLabel(pairRole, t) {
+  switch (pairRole) {
+    case "target-fixed":
+      return t("planner.pairRole.targetFixed");
+    case "adjustable-fixed":
+      return t("planner.pairRole.adjustableFixed");
+    case "target-adjustable":
+      return t("planner.pairRole.targetAdjustable");
+    default:
+      return t("planner.pairRole.targetAdjustable");
+  }
+}
+
+function formatRiskItemSummary(item, resolvers, t) {
+  const fromStationName = item?.fromStationId ? resolvers.resolveStationName(item.fromStationId) : "";
+  const toStationName = item?.toStationId ? resolvers.resolveStationName(item.toStationId) : "";
+  const interval = [
+    fromStationName,
+    toStationName
+  ].filter(Boolean).join(" - ") || "--";
+  const problemType = item?.problemType || "";
+  if (problemType === "hardCatchup") {
+    return t("planner.risk.summary.hardCatchup", {
+      interval,
+      required: formatMinutesLabel(item?.requiredHoldMinutes),
+      gap: formatMinutesLabel(item?.currentWorstCaseGapMinutes)
+    });
+  }
+  if (problemType === "backgroundConstraint") {
+    return t("planner.risk.summary.backgroundConstraint", {
+      interval,
+      role: formatPairRoleLabel(item?.pairRole, t),
+      gap: formatMinutesLabel(item?.currentWorstCaseGapMinutes)
+    });
+  }
+  return t("planner.risk.summary.lowMargin", {
+    interval,
+    margin: formatMinutesLabel(item?.requiredMarginMinutes),
+    gap: formatMinutesLabel(item?.currentWorstCaseGapMinutes)
+  });
+}
+
+function formatRiskItemAction(item, resolvers, t) {
+  const state = item?.resolutionState || "";
+  const selectedBypassStationId = item?.selectedBypassStationId || "";
+  const stationName = selectedBypassStationId ? resolvers.resolveStationName(selectedBypassStationId, "") : "";
+  const plannedMinutes = Number(item?.plannedAdjustmentMinutes || 0);
+  if ((state === "resolved" || state === "handled") && plannedMinutes > 0 && stationName) {
+    return t("planner.risk.action.resolvedHold", {
+      station: stationName,
+      minutes: formatMinutesLabel(plannedMinutes)
+    });
+  }
+  if (state === "resolved" || state === "handled") {
+    return t("planner.risk.action.resolved");
+  }
+
+  const reason = formatBlockReasonLabel(item?.blockReasonCode, t);
+  const options = joinDisplayValues((item?.suggestedOptionCodes || [])
+    .map((optionCode) => formatSuggestedOptionLabel(optionCode, t))
+    .filter(Boolean), " / ", "");
+  if (reason && options) {
+    return t("planner.risk.action.blockedWithOptions", { reason, options });
+  }
+  if (reason) {
+    return reason;
+  }
+  if (options) {
+    return t("planner.risk.action.suggestedOptions", { options });
+  }
+  return t("planner.empty.noSuggestedActions");
+}
+
+function mapRiskItemToDisplay(item, itemIndex, resolvers, t) {
+  const problemType = item?.problemType || "";
+  const resolutionState = item?.resolutionState || "";
+  const stateTone = resolveRiskStateTone(resolutionState);
+  const typeTone = resolveRiskTypeTone(problemType);
+  return {
+    id: item?.riskId || `risk-item-${itemIndex}`,
+    status: formatRiskTypeLabel(problemType, t),
+    stateLabel: formatResolutionStateLabel(resolutionState, t),
+    typeToneClass: `is-${typeTone}`,
+    stateToneClass: `is-${stateTone}`,
+    itemToneClass: `is-${stateTone}`,
+    lineSrc: resolvers.resolveLineName(item?.yieldingLineId),
+    lineDest: resolvers.resolveLineName(item?.priorityLineId),
+    interval: [
+      item?.fromStationId ? resolvers.resolveStationName(item.fromStationId) : "",
+      item?.toStationId ? resolvers.resolveStationName(item.toStationId) : ""
+    ].filter(Boolean).join(" - "),
+    summary: formatRiskItemSummary(item, resolvers, t),
+    action: formatRiskItemAction(item, resolvers, t),
+    warning: stateTone === "error",
+    events: []
+  };
 }
 
 function formatTripDescriptor(lineName, departTime, tripId) {
@@ -841,6 +1090,7 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
   const plans = planDetails.map((plan, planIndex) => {
     const summary = summaryById.get(plan.planId) || {};
     const riskClusters = Array.isArray(plan.riskClusters) ? plan.riskClusters : [];
+    const riskItems = Array.isArray(plan.riskItems) ? plan.riskItems : [];
     const structuredActions = Array.isArray(plan.structuredScheduleActions) ? plan.structuredScheduleActions : [];
     const problemIssues = Array.isArray(plan.problemIssues) ? plan.problemIssues : [];
     const timetableRows = Array.isArray(plan.timetablePreviewRows) ? plan.timetablePreviewRows : [];
@@ -870,7 +1120,9 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
         ? joinDisplayValues(plan.selectedBypassStationIds.map((stationId) => resolvers.resolveStationName(stationId)))
         : "--",
       diagnostics: combinedDiagnostics,
-      risks: riskClusters.filter(shouldShowRiskCluster).map((risk, riskIndex) => {
+      risks: riskItems.length > 0 ? riskItems.map((riskItem, riskItemIndex) =>
+        mapRiskItemToDisplay(riskItem, riskItemIndex, resolvers, t)
+      ) : riskClusters.filter(shouldShowRiskCluster).map((risk, riskIndex) => {
         const actionMessages = structuredActions
           .filter((action) =>
             (action?.clusterIds || []).includes(risk.clusterId)
@@ -1018,7 +1270,6 @@ function buildPlannerRequest(params) {
     plannerInput,
     analysisStart,
     analysisEnd,
-    participatingLines,
     adjustableLines,
     expressSource,
     virtualBaseLine,
@@ -1032,20 +1283,19 @@ function buildPlannerRequest(params) {
     maxOvertakes,
     maxLocalShift,
     maxLocalWait,
-    forcedOvertakes
+    forcedOvertakes,
+    forcedBypassOptions
   } = params;
 
   const lineCollections = buildLineCollections(plannerInput);
   const canonicalizeLineId = lineCollections.canonicalizeLineId || ((lineId) => lineId || "");
-  const selectedLineIds = [...new Set(participatingLines.map(canonicalizeLineId).filter(Boolean))];
   const normalizedAdjustableLineIds = adjustableLines
     .map(canonicalizeLineId)
-    .filter((lineId) => selectedLineIds.includes(lineId));
+    .filter(Boolean);
   const request = {
     draftKey: pickPlannerDraft(plannerInput)?.lineKey || "",
     windowStart: analysisStart,
     windowEnd: analysisEnd,
-    selectedLineIds,
     adjustableLineIds: [...new Set(normalizedAdjustableLineIds)],
     expressSourceMode: expressSource === "existing" ? "existing" : "virtual",
     expressLineId: expressSource === "existing" ? canonicalizeLineId(existingExpressLine) : "",
@@ -1065,7 +1315,7 @@ function buildPlannerRequest(params) {
     maxLocalRetimeMinutes: parsePositiveInt(maxLocalShift, 0),
     maxLocalWaitMinutes: parsePositiveInt(maxLocalWait, 0),
     maxAdditionalBypassStations: parsePositiveInt(maxOvertakes, 0),
-    forcedBypassStationIds: forcedOvertakes.filter(Boolean)
+    forcedBypassStationIds: expandForcedBypassStationIds(forcedOvertakes, forcedBypassOptions)
   };
 
   if (expressSource === "existing" && !lineCollections.expressLineOptions.some((option) => option.value === request.expressLineId)) {
@@ -1111,7 +1361,6 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
   const [analysisStartInvalid, setAnalysisStartInvalid] = useState(false);
   const [analysisEndInvalid, setAnalysisEndInvalid] = useState(false);
   const [leftTab, setLeftTab] = useState("service");
-  const [participatingLines, setParticipatingLines] = useState([]);
   const [adjustableLines, setAdjustableLines] = useState([]);
   const [expressSource, setExpressSource] = useState("virtual");
   const [virtualBaseLine, setVirtualBaseLine] = useState("");
@@ -1143,15 +1392,24 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
     () => buildStationOptionsForLine(plannerInput, virtualBaseLine),
     [plannerInput, virtualBaseLine]
   );
+  const targetScopeLineId = expressSource === "virtual" ? virtualBaseLine : existingExpressLine;
+  const adjustableLineOptions = useMemo(
+    () => buildRelatedLineOptionsForTarget(plannerInput, targetScopeLineId, lineOptions)
+      .filter((option) => expressSource === "virtual" || option.value !== targetScopeLineId),
+    [expressSource, lineOptions, plannerInput, targetScopeLineId]
+  );
+  const readonlyConstraintLineOptions = useMemo(() => {
+    const adjustableSet = new Set(adjustableLines);
+    return adjustableLineOptions.filter((option) => !adjustableSet.has(option.value));
+  }, [adjustableLineOptions, adjustableLines]);
   const forcedBypassOptions = useMemo(
     () => buildForcedBypassOptions(
       plannerInput,
       expressSource,
       virtualBaseLine,
-      participatingLines,
       adjustableLines
     ),
-    [adjustableLines, expressSource, participatingLines, plannerInput, virtualBaseLine]
+    [adjustableLines, expressSource, plannerInput, virtualBaseLine]
   );
 
   const expressSourceOptions = useMemo(
@@ -1220,6 +1478,7 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
   const plans = liveDisplay.plans.length > 0 ? liveDisplay.plans : mockPlans;
   const activePlan = plans.find((plan) => plan.id === activePlanId) || plans[0];
   const timetableRows = Array.isArray(activePlan?.timetableRows) ? activePlan.timetableRows : [];
+  const showGenericPlanError = activePlan?.type === "error" && (activePlan?.risks || []).length === 0;
 
   const analysisStartMinutes = timeToMinutes(analysisStart);
   const analysisEndMinutes = timeToMinutes(analysisEnd);
@@ -1237,7 +1496,7 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
     || isImportingDraft
     || !plannerResult
     || !activePlan?.rawPlan
-    || activePlan?.type === "error"
+    || showGenericPlanError
     || !!importedPlanId;
 
   useEffect(() => {
@@ -1279,20 +1538,20 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
     const mergedExpress = Array.isArray(draft?.mergedView?.expressLineIds)
       ? draft.mergedView.expressLineIds.map(canonicalizeLineId).filter(Boolean)
       : [];
-    const defaultParticipatingLines = [...new Set([...mergedLocal, ...mergedExpress])]
-      .filter((lineId) => lineOptions.some((option) => option.value === lineId));
-    const nextParticipating = defaultParticipatingLines.length > 0
-      ? defaultParticipatingLines
-      : lineOptions.map((option) => option.value).slice(0, 3);
-    const nextAdjustable = mergedLocal.length > 0
-      ? mergedLocal.filter((lineId) => nextParticipating.includes(lineId))
-      : nextParticipating.filter((lineId) => localLineOptions.some((option) => option.value === lineId));
     const nextExpressSource = mergedExpress.length > 0 && expressLineOptions.length > 0 ? "existing" : "virtual";
     const nextVirtualBaseLine = mergedLocal[0] || localLineOptions[0]?.value || "";
     const nextExistingExpressLine = mergedExpress[0] || expressLineOptions[0]?.value || "";
+    const nextTargetScopeLineId = nextExpressSource === "virtual" ? nextVirtualBaseLine : nextExistingExpressLine;
+    const nextAdjustableOptions = buildRelatedLineOptionsForTarget(plannerInput, nextTargetScopeLineId, lineOptions)
+      .filter((option) => nextExpressSource === "virtual" || option.value !== nextTargetScopeLineId);
+    const nextAdjustableOptionIds = new Set(nextAdjustableOptions.map((option) => option.value));
+    const nextAdjustableSeeds = [...new Set([...mergedLocal, ...mergedExpress])]
+      .filter((lineId) => nextAdjustableOptionIds.has(lineId));
+    const nextAdjustable = nextAdjustableSeeds.length > 0
+      ? nextAdjustableSeeds
+      : nextAdjustableOptions.map((option) => option.value);
     const nextStationOptions = buildStationOptionsForLine(plannerInput, nextVirtualBaseLine);
 
-    setParticipatingLines(nextParticipating);
     setAdjustableLines(nextAdjustable);
     setExpressSource(nextExpressSource);
     setVirtualBaseLine(nextVirtualBaseLine);
@@ -1304,18 +1563,6 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
   useEffect(() => {
     const canonicalizeLineId = lineCollections.canonicalizeLineId || ((lineId) => lineId || "");
     const allowedLineIds = new Set(lineOptions.map((option) => option.value));
-    setParticipatingLines((current) => {
-      const next = [...new Set((Array.isArray(current) ? current : [])
-        .map(canonicalizeLineId)
-        .filter((lineId) => lineId && allowedLineIds.has(lineId)))];
-      return next.length === current.length && next.every((value, index) => value === current[index]) ? current : next;
-    });
-    setAdjustableLines((current) => {
-      const next = [...new Set((Array.isArray(current) ? current : [])
-        .map(canonicalizeLineId)
-        .filter((lineId) => lineId && allowedLineIds.has(lineId)))];
-      return next.length === current.length && next.every((value, index) => value === current[index]) ? current : next;
-    });
     setVirtualBaseLine((current) => {
       const next = canonicalizeLineId(current);
       return allowedLineIds.has(next) ? next : "";
@@ -1327,17 +1574,15 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
   }, [lineCollections.canonicalizeLineId, lineOptions]);
 
   useEffect(() => {
-    if (expressSource === "virtual" && virtualBaseLine && !participatingLines.includes(virtualBaseLine)) {
-      setParticipatingLines((current) => [...new Set([...current, virtualBaseLine])]);
-    }
-    if (expressSource === "existing" && existingExpressLine && !participatingLines.includes(existingExpressLine)) {
-      setParticipatingLines((current) => [...new Set([...current, existingExpressLine])]);
-    }
-  }, [existingExpressLine, expressSource, participatingLines, virtualBaseLine]);
-
-  useEffect(() => {
-    setAdjustableLines((current) => current.filter((lineId) => participatingLines.includes(lineId)));
-  }, [participatingLines]);
+    const canonicalizeLineId = lineCollections.canonicalizeLineId || ((lineId) => lineId || "");
+    const allowedLineIds = new Set(adjustableLineOptions.map((option) => option.value));
+    setAdjustableLines((current) => {
+      const next = [...new Set((Array.isArray(current) ? current : [])
+        .map(canonicalizeLineId)
+        .filter((lineId) => lineId && allowedLineIds.has(lineId)))];
+      return next.length === current.length && next.every((value, index) => value === current[index]) ? current : next;
+    });
+  }, [adjustableLineOptions, lineCollections.canonicalizeLineId]);
 
   useEffect(() => {
     if (virtualBaseLine && localLineOptions.some((option) => option.value === virtualBaseLine)) {
@@ -1409,7 +1654,6 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         plannerInput: latestPlannerInput || plannerInput,
         analysisStart,
         analysisEnd,
-        participatingLines,
         adjustableLines,
         expressSource,
         virtualBaseLine,
@@ -1423,7 +1667,8 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         maxOvertakes,
         maxLocalShift,
         maxLocalWait,
-        forcedOvertakes
+        forcedOvertakes,
+        forcedBypassOptions
       });
       const result = await workbenchApi.runPlanner?.(request);
       setPlannerResult(result || null);
@@ -1569,15 +1814,6 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                       onChange={setExpressSource}
                     />
 
-                    <PlannerField label={t("planner.field.participatingLines")}>
-                      <PlannerMultiSelectDropdown
-                        options={lineOptions}
-                        value={participatingLines}
-                        onToggle={(lineId) => setParticipatingLines((current) => toggleArrayValue(current, lineId))}
-                        portalHostRef={dropdownPortalHostRef}
-                      />
-                    </PlannerField>
-
                     {expressSource === "virtual" ? (
                       <PlannerField label={t("planner.field.basedOnLine")}>
                         <WorkbenchDropdown
@@ -1711,11 +1947,23 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                   <PlannerSidebarSection title={t("planner.group.adjustment")}>
                     <PlannerField label={t("planner.field.adjustableLines")}>
                       <PlannerMultiSelectDropdown
-                        options={lineOptions}
+                        options={adjustableLineOptions}
                         value={adjustableLines}
                         onToggle={(lineId) => setAdjustableLines((current) => toggleArrayValue(current, lineId))}
                         portalHostRef={dropdownPortalHostRef}
                       />
+                    </PlannerField>
+
+                    <PlannerField label={t("planner.field.backgroundConstraintLines")}>
+                      <div className="dw-planner-readonly-lines">
+                        {readonlyConstraintLineOptions.length > 0 ? (
+                          readonlyConstraintLineOptions.map((option) => (
+                            <span key={option.value} className="dw-planner-readonly-line">{option.label}</span>
+                          ))
+                        ) : (
+                          <span className="dw-planner-readonly-empty">{t("planner.empty.noConstraintLines")}</span>
+                        )}
+                      </div>
                     </PlannerField>
 
                     <div className="dw-planner-split-row is-balanced-pair">
@@ -1790,7 +2038,7 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
             <>
               <WorkbenchScrollArea className="dw-planner-main-scroll" metricsKey={activePlanId}>
                 <div className="dw-planner-main-content">
-                  {activePlan?.type === "error" ? (
+                  {showGenericPlanError ? (
                     <div className="dw-planner-error-state">
                       <div className="dw-planner-error-title">{t("planner.error.title")}</div>
                       <div className="dw-planner-diagnostics-list">
@@ -1851,22 +2099,28 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                         {(activePlan?.risks || []).length > 0 ? (
                           <div className="dw-planner-risk-list">
                             {(activePlan?.risks || []).map((risk) => (
-                              <div key={risk.id} className={`dw-planner-risk-item ${risk.warning ? "is-error" : "is-warning"}`}>
+                              <div key={risk.id} className={`dw-planner-risk-item ${risk.itemToneClass || (risk.warning ? "is-error" : "is-warning")}`}>
                                 <div className="dw-planner-risk-head">
-                                  <span className={`dw-planner-risk-badge ${risk.warning ? "is-error" : "is-warning"}`}>{risk.status}</span>
+                                  <span className={`dw-planner-risk-badge ${risk.typeToneClass || (risk.warning ? "is-error" : "is-warning")}`}>{risk.status}</span>
+                                  {risk.stateLabel ? (
+                                    <span className={`dw-planner-risk-badge ${risk.stateToneClass || (risk.warning ? "is-error" : "is-warning")}`}>{risk.stateLabel}</span>
+                                  ) : null}
                                   <span className="dw-planner-risk-route">
                                     <span className="dw-planner-risk-route-source">{risk.lineSrc}</span>
                                     <span className="dw-planner-risk-route-arrow">→</span>
                                     <span className="dw-planner-risk-route-dest">{risk.lineDest}</span>
                                   </span>
                                 </div>
-                                {(risk.events || []).length === 0 ? (
+                                {risk.summary ? (
+                                  <div className="dw-planner-risk-summary">{risk.summary}</div>
+                                ) : null}
+                                {!risk.summary && (risk.events || []).length === 0 ? (
                                   <div className="dw-planner-risk-range">
                                     <span className="dw-planner-risk-label">{t("planner.risk.range")}</span>
                                     <span>{risk.interval}</span>
                                   </div>
                                 ) : null}
-                                {(risk.events || []).length > 0 ? (
+                                {!risk.summary && (risk.events || []).length > 0 ? (
                                   <div className="dw-planner-risk-events">
                                     {(risk.events || []).map((event) => (
                                       <div key={event.id} className="dw-planner-risk-event">
@@ -1900,7 +2154,7 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                                     ))}
                                   </div>
                                 ) : null}
-                                {(risk.events || []).length === 0 ? (
+                                {!risk.summary && (risk.events || []).length === 0 ? (
                                   <div className="dw-planner-risk-stats">
                                     <span>{t("planner.risk.catchups")} <span className="dw-planner-risk-stat-value">{risk.catchups}</span></span>
                                     <span>{t("planner.risk.maxGap")} <span className="dw-planner-risk-stat-value">{risk.severity}</span></span>
@@ -1908,7 +2162,7 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                                 ) : null}
                                 <div className="dw-planner-risk-action">
                                   <span className="dw-planner-risk-action-label">{t("planner.risk.actionLabel")}</span>
-                                  <span>{risk.suggestion}</span>
+                                  <span>{risk.action || risk.suggestion}</span>
                                 </div>
                               </div>
                             ))}

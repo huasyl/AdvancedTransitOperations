@@ -319,11 +319,6 @@ namespace RapidTransitMod.Planner
                 AddLocalFallbackLines(selected, context, context.Request.adjustableLineIds);
             }
 
-            if (selected.Count == 0)
-            {
-                AddLocalFallbackLines(selected, context, context.Request.selectedLineIds);
-            }
-
             if (selected.Count == 0 && context.SelectedDraft?.mergedView?.localLineIds != null)
             {
                 foreach (string lineId in context.SelectedDraft.mergedView.localLineIds)
@@ -443,39 +438,57 @@ namespace RapidTransitMod.Planner
 
         private static void BuildLineRoles(PlannerContext context)
         {
-            HashSet<string> selected = new HashSet<string>(StringComparer.Ordinal);
-            foreach (string lineId in context.Request.selectedLineIds ?? new string[0])
+            HashSet<string> target = new HashSet<string>(
+                (context.SelectedExpressLineIds ?? new string[0]).Where(lineId => !string.IsNullOrEmpty(lineId)),
+                StringComparer.Ordinal);
+            HashSet<string> physicalTargetLineIds = new HashSet<string>(StringComparer.Ordinal);
+            if (string.Equals(context.ExpressSourceMode, "virtual", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrEmpty(context.VirtualExpressBaseLineId)
+                    && context.LinesById.ContainsKey(context.VirtualExpressBaseLineId))
+                {
+                    physicalTargetLineIds.Add(context.VirtualExpressBaseLineId);
+                }
+            }
+            else
+            {
+                foreach (string lineId in context.SelectedExpressLineIds ?? new string[0])
+                {
+                    if (!string.IsNullOrEmpty(lineId) && context.LinesById.ContainsKey(lineId))
+                    {
+                        physicalTargetLineIds.Add(lineId);
+                    }
+                }
+            }
+
+            HashSet<string> effective = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string lineId in target)
             {
                 if (!string.IsNullOrEmpty(lineId)
                     && (context.LinesById.ContainsKey(lineId)
                         || string.Equals(lineId, context.VirtualExpressLineId, StringComparison.Ordinal)))
                 {
-                    selected.Add(lineId);
+                    effective.Add(lineId);
+                }
+            }
+            foreach (string lineId in physicalTargetLineIds)
+            {
+                if (!string.IsNullOrEmpty(lineId) && context.LinesById.ContainsKey(lineId))
+                {
+                    effective.Add(lineId);
                 }
             }
 
-            if (selected.Count == 0)
+            HashSet<string> autoConstraintLineIds = DiscoverAutoConstraintLineIds(context, physicalTargetLineIds);
+            foreach (string lineId in autoConstraintLineIds)
             {
-                foreach (string lineId in context.SelectedLocalLineIds ?? new string[0])
-                {
-                    if (!string.IsNullOrEmpty(lineId))
-                    {
-                        selected.Add(lineId);
-                    }
-                }
-                foreach (string lineId in context.SelectedExpressLineIds ?? new string[0])
-                {
-                    if (!string.IsNullOrEmpty(lineId))
-                    {
-                        selected.Add(lineId);
-                    }
-                }
+                effective.Add(lineId);
             }
 
             HashSet<string> adjustable = new HashSet<string>(StringComparer.Ordinal);
             foreach (string lineId in context.Request.adjustableLineIds ?? new string[0])
             {
-                if (!string.IsNullOrEmpty(lineId) && selected.Contains(lineId))
+                if (!string.IsNullOrEmpty(lineId) && effective.Contains(lineId))
                 {
                     adjustable.Add(lineId);
                 }
@@ -485,21 +498,125 @@ namespace RapidTransitMod.Planner
             {
                 foreach (string lineId in context.SelectedLocalLineIds ?? new string[0])
                 {
-                    if (!string.IsNullOrEmpty(lineId) && selected.Contains(lineId))
+                    if (!string.IsNullOrEmpty(lineId) && effective.Contains(lineId))
                     {
                         adjustable.Add(lineId);
                     }
                 }
             }
 
-            HashSet<string> target = new HashSet<string>(
-                (context.SelectedExpressLineIds ?? new string[0]).Where(lineId => !string.IsNullOrEmpty(lineId)),
-                StringComparer.Ordinal);
+            string[] effectiveArray = effective
+                .Where(lineId => !string.IsNullOrEmpty(lineId))
+                .OrderBy(lineId => lineId, StringComparer.Ordinal)
+                .ToArray();
+            string[] adjustableArray = adjustable
+                .Where(lineId => !string.IsNullOrEmpty(lineId) && effective.Contains(lineId))
+                .OrderBy(lineId => lineId, StringComparer.Ordinal)
+                .ToArray();
+            string[] fixedArray = effectiveArray
+                .Where(lineId => !adjustable.Contains(lineId))
+                .ToArray();
 
-            context.SelectedLineIds = selected.ToArray();
-            context.AdjustableLineIds = adjustable.ToArray();
-            context.FixedLineIds = selected.Where(lineId => !adjustable.Contains(lineId)).ToArray();
-            context.TargetLineIds = target.Where(lineId => selected.Contains(lineId)).ToArray();
+            context.SelectedLineIds = effectiveArray;
+            context.EffectiveLineIds = effectiveArray;
+            context.AdjustableLineIds = adjustableArray;
+            context.FixedLineIds = fixedArray;
+            context.AutoFixedConstraintLineIds = fixedArray
+                .Where(lineId => !target.Contains(lineId))
+                .OrderBy(lineId => lineId, StringComparer.Ordinal)
+                .ToArray();
+            context.TargetLineIds = target
+                .Where(lineId => effective.Contains(lineId))
+                .OrderBy(lineId => lineId, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        private static HashSet<string> DiscoverAutoConstraintLineIds(
+            PlannerContext context,
+            HashSet<string> physicalTargetLineIds)
+        {
+            HashSet<string> discovered = new HashSet<string>(StringComparer.Ordinal);
+            if (physicalTargetLineIds == null || physicalTargetLineIds.Count == 0)
+            {
+                return discovered;
+            }
+
+            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DepartureControlSystem.DispatchPlannerSharedCorridorDto[0])
+            {
+                if (!IsValidSameDirectionCorridor(corridor))
+                {
+                    continue;
+                }
+
+                string lineId = corridor.lineId ?? string.Empty;
+                string otherLineId = corridor.otherLineId ?? string.Empty;
+                if (physicalTargetLineIds.Contains(lineId))
+                {
+                    AddDiscoveredConstraintLine(context, discovered, otherLineId);
+                }
+                if (physicalTargetLineIds.Contains(otherLineId))
+                {
+                    AddDiscoveredConstraintLine(context, discovered, lineId);
+                }
+            }
+
+            return discovered;
+        }
+
+        private static void AddDiscoveredConstraintLine(
+            PlannerContext context,
+            HashSet<string> discovered,
+            string lineId)
+        {
+            if (string.IsNullOrEmpty(lineId)
+                || !context.LinesById.ContainsKey(lineId)
+                || !HasLineActivityInsideWindow(context, lineId))
+            {
+                return;
+            }
+
+            discovered.Add(lineId);
+        }
+
+        private static bool IsValidSameDirectionCorridor(DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor)
+        {
+            return corridor != null
+                && string.Equals(corridor.traversalRelation, "SameDirection", StringComparison.OrdinalIgnoreCase)
+                && !corridor.hasMirroredContext
+                && corridor.orderedRun > 0
+                && corridor.physicalOverlap > 0;
+        }
+
+        private static bool HasLineActivityInsideWindow(PlannerContext context, string lineId)
+        {
+            DepartureControlSystem.DispatchWorkbenchStagedRowDto[] stagedRows = context.SelectedDraft?.stagedRows ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
+            foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in stagedRows)
+            {
+                if (row == null || !string.Equals(row.lineId, lineId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                int? minute = PlannerMath.TimeToMinutes(row.time);
+                if (minute.HasValue && PlannerMath.IsMinuteInsideWindow(minute.Value, context.WindowStartMinute, context.WindowEndMinute))
+                {
+                    return true;
+                }
+            }
+
+            foreach (DepartureControlSystem.DispatchWorkbenchTripDto trip in EnumeratePlannerTrips(context))
+            {
+                if (trip == null || !string.Equals(trip.lineId, lineId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                int? minute = PlannerMath.TimeToMinutes(trip.depart);
+                if (minute.HasValue && PlannerMath.IsMinuteInsideWindow(minute.Value, context.WindowStartMinute, context.WindowEndMinute))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static List<PlannerWorkingRow> BuildWorkingRows(PlannerContext context)
@@ -589,7 +706,7 @@ namespace RapidTransitMod.Planner
             if (string.Equals(context.ExpressSourceMode, "virtual", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrEmpty(context.VirtualExpressLineId))
             {
-                rows.RemoveAll(row => string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase));
+                rows.RemoveAll(row => string.Equals(row.LineId, context.VirtualExpressLineId, StringComparison.Ordinal));
                 rows.AddRange(BuildVirtualExpressRows(context));
             }
 

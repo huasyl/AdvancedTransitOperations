@@ -15,7 +15,7 @@ namespace RapidTransitMod.Planner
             result.success = state.Diagnostics.All(issue => !string.Equals(issue.Level, "error", StringComparison.Ordinal));
             result.engineVersion = PlannerDefaults.EngineVersion;
             result.requestEcho = BuildRequestEcho(context);
-            result.inputSummary = BuildInputSummary(context);
+            result.inputSummary = BuildInputSummary(context, state.RiskClusters);
             result.lineRoleSummary = BuildLineRoleSummary(context);
             result.defaultPlanId = projectedPlans.Count > 0 ? projectedPlans[0].PlanId : string.Empty;
             result.plans = projectedPlans.Select(plan => BuildPlanDetail(context, plan)).ToArray();
@@ -122,7 +122,25 @@ namespace RapidTransitMod.Planner
 
         private static int GetInfeasibleRank(PlannerPlanModel plan)
         {
-            return string.Equals(plan?.Status, "infeasible", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            string status = plan?.Status ?? string.Empty;
+            if (string.Equals(status, "feasible", StringComparison.OrdinalIgnoreCase))
+            {
+                return 0;
+            }
+            if (string.Equals(status, "needsAction", StringComparison.OrdinalIgnoreCase))
+            {
+                return 1;
+            }
+            if (string.Equals(status, "fragile", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, "risk", StringComparison.OrdinalIgnoreCase))
+            {
+                return 2;
+            }
+            if (string.Equals(status, "blocked", StringComparison.OrdinalIgnoreCase))
+            {
+                return 3;
+            }
+            return string.Equals(status, "infeasible", StringComparison.OrdinalIgnoreCase) ? 4 : 2;
         }
 
         private static string BuildPlanSignature(PlannerPlanModel plan)
@@ -179,7 +197,6 @@ namespace RapidTransitMod.Planner
                 windowStart = context.WindowStart,
                 windowEnd = context.WindowEnd,
                 localLineIds = context.SelectedLocalLineIds,
-                selectedLineIds = context.SelectedLineIds,
                 adjustableLineIds = context.AdjustableLineIds,
                 expressSourceMode = context.ExpressSourceMode,
                 expressLineId = context.Request.expressLineId,
@@ -199,7 +216,9 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerInputSummaryDto BuildInputSummary(PlannerContext context)
+        private static DepartureControlSystem.DispatchPlannerInputSummaryDto BuildInputSummary(
+            PlannerContext context,
+            List<PlannerRiskCluster> riskClusters)
         {
             int draftTripCount = (context.SelectedDraft?.trips?.Length ?? 0);
             return new DepartureControlSystem.DispatchPlannerInputSummaryDto
@@ -211,7 +230,11 @@ namespace RapidTransitMod.Planner
                 configuredBypassStationCount = context.Snapshot.configuredBypassStations?.Length ?? 0,
                 candidateBypassStationCount = context.Snapshot.candidateBypassStations?.Length ?? 0,
                 sharedCorridorCount = context.Snapshot.currentTrackScenario?.sharedCorridors?.Length ?? 0,
-                draftTripCount = draftTripCount
+                draftTripCount = draftTripCount,
+                effectiveLineIds = context.EffectiveLineIds ?? context.SelectedLineIds ?? Array.Empty<string>(),
+                autoFixedConstraintLineIds = context.AutoFixedConstraintLineIds ?? Array.Empty<string>(),
+                suppressedFixedVsFixedClusterCount = context.SuppressedFixedVsFixedClusterCount,
+                primaryRiskClusterCount = (riskClusters ?? new List<PlannerRiskCluster>()).Count(cluster => cluster.IsPrimaryPlanningRisk)
             };
         }
 
@@ -246,6 +269,7 @@ namespace RapidTransitMod.Planner
                 metrics = BuildPlanMetrics(plan),
                 selectedBypassStationIds = plan.SelectedBypassStationIds.ToArray(),
                 riskClusters = plan.RiskClusters.Select(cluster => BuildRiskCluster(context, plan, cluster)).ToArray(),
+                riskItems = BuildRiskItems(context, plan),
                 optimizationRegions = BuildOptimizationRegions(regions),
                 structuredScheduleActions = plan.StructuredScheduleActions.ToArray(),
                 problemIssues = plan.ProblemIssues.ToArray(),
@@ -398,17 +422,19 @@ namespace RapidTransitMod.Planner
 
         private static DepartureControlSystem.DispatchPlannerLineRoleSummaryDto BuildLineRoleSummary(PlannerContext context)
         {
-            string[] selectedLineIds = context.SelectedLineIds ?? new string[0];
+            string[] effectiveLineIds = context.EffectiveLineIds ?? context.SelectedLineIds ?? new string[0];
             HashSet<string> adjustable = new HashSet<string>(context.AdjustableLineIds ?? new string[0], StringComparer.Ordinal);
             HashSet<string> fixedLines = new HashSet<string>(context.FixedLineIds ?? new string[0], StringComparer.Ordinal);
             HashSet<string> targets = new HashSet<string>(context.TargetLineIds ?? new string[0], StringComparer.Ordinal);
             return new DepartureControlSystem.DispatchPlannerLineRoleSummaryDto
             {
-                selectedLineIds = selectedLineIds,
+                effectiveLineIds = effectiveLineIds,
                 adjustableLineIds = context.AdjustableLineIds ?? new string[0],
                 fixedLineIds = context.FixedLineIds ?? new string[0],
                 targetLineIds = context.TargetLineIds ?? new string[0],
-                roles = selectedLineIds.Select(lineId => new DepartureControlSystem.DispatchPlannerLineRoleDto
+                autoFixedConstraintLineIds = context.AutoFixedConstraintLineIds ?? new string[0],
+                suppressedFixedVsFixedClusterCount = context.SuppressedFixedVsFixedClusterCount,
+                roles = effectiveLineIds.Select(lineId => new DepartureControlSystem.DispatchPlannerLineRoleDto
                 {
                     lineId = lineId,
                     participates = true,
@@ -425,7 +451,7 @@ namespace RapidTransitMod.Planner
         {
             return new DepartureControlSystem.DispatchPlannerFrontendSummaryDto
             {
-                selectedLineIds = context.SelectedLineIds ?? new string[0],
+                effectiveLineIds = context.EffectiveLineIds ?? context.SelectedLineIds ?? new string[0],
                 adjustableLineIds = context.AdjustableLineIds ?? new string[0],
                 fixedLineIds = context.FixedLineIds ?? new string[0],
                 targetLineIds = context.TargetLineIds ?? new string[0],
@@ -486,6 +512,95 @@ namespace RapidTransitMod.Planner
                 .ToArray();
         }
 
+        private static DepartureControlSystem.DispatchPlannerRiskItemDto[] BuildRiskItems(
+            PlannerContext context,
+            PlannerPlanModel plan)
+        {
+            Dictionary<string, PlannerWorkingRow> adjustedRowsById = (plan.AdjustedRows ?? new List<PlannerWorkingRow>())
+                .Where(row => row != null && !string.IsNullOrEmpty(row.Id))
+                .GroupBy(row => row.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
+            return (plan.CatchupEvents ?? new List<PlannerCatchupEvent>())
+                .Where(item =>
+                    item != null
+                    && !string.Equals(item.PairRole, "fixed-fixed", StringComparison.Ordinal)
+                    && (item.UnresolvedRiskMinutes > 0f
+                        || item.RobustnessRiskMinutes > 0f
+                        || !string.Equals(item.ResolutionState, "resolved", StringComparison.Ordinal)))
+                .OrderBy(item => GetRiskItemRoleRank(item.PairRole))
+                .ThenByDescending(item => item.UnresolvedRiskMinutes)
+                .ThenByDescending(item => item.RobustnessRiskMinutes)
+                .ThenBy(item => item.CatchupMinute)
+                .Take(16)
+                .Select(item => BuildRiskItem(context, item, adjustedRowsById))
+                .ToArray();
+        }
+
+        private static int GetRiskItemRoleRank(string pairRole)
+        {
+            if (string.Equals(pairRole, "target-adjustable", StringComparison.Ordinal))
+            {
+                return 0;
+            }
+            if (string.Equals(pairRole, "target-fixed", StringComparison.Ordinal))
+            {
+                return 1;
+            }
+            if (string.Equals(pairRole, "adjustable-fixed", StringComparison.Ordinal))
+            {
+                return 2;
+            }
+            return 3;
+        }
+
+        private static DepartureControlSystem.DispatchPlannerRiskItemDto BuildRiskItem(
+            PlannerContext context,
+            PlannerCatchupEvent catchupEvent,
+            Dictionary<string, PlannerWorkingRow> adjustedRowsById)
+        {
+            string yieldingTripId = string.IsNullOrEmpty(catchupEvent.YieldingTripId) ? catchupEvent.LocalTripId : catchupEvent.YieldingTripId;
+            string priorityTripId = string.IsNullOrEmpty(catchupEvent.PriorityTripId) ? catchupEvent.ExpressTripId : catchupEvent.PriorityTripId;
+            return new DepartureControlSystem.DispatchPlannerRiskItemDto
+            {
+                riskId = catchupEvent.EventId,
+                problemType = string.IsNullOrEmpty(catchupEvent.ProblemType) ? ResolveProblemTypeFallback(catchupEvent) : catchupEvent.ProblemType,
+                resolutionState = string.IsNullOrEmpty(catchupEvent.ResolutionState) ? ResolveRiskEventStatus(catchupEvent) : catchupEvent.ResolutionState,
+                pairRole = catchupEvent.PairRole ?? string.Empty,
+                treatmentType = catchupEvent.TreatmentType ?? string.Empty,
+                blockReasonCode = catchupEvent.BlockReasonCode ?? string.Empty,
+                suggestedOptionCodes = catchupEvent.SuggestedOptionCodes ?? Array.Empty<string>(),
+                yieldingLineId = string.IsNullOrEmpty(catchupEvent.YieldingLineId) ? catchupEvent.LocalLineId : catchupEvent.YieldingLineId,
+                priorityLineId = string.IsNullOrEmpty(catchupEvent.PriorityLineId) ? catchupEvent.ExpressLineId : catchupEvent.PriorityLineId,
+                yieldingTripId = yieldingTripId,
+                priorityTripId = priorityTripId,
+                yieldingDepartTime = ResolveTripDepartTime(adjustedRowsById, yieldingTripId),
+                priorityDepartTime = ResolveTripDepartTime(adjustedRowsById, priorityTripId),
+                fromStationId = catchupEvent.FromStationId,
+                toStationId = catchupEvent.ToStationId,
+                catchupTime = PlannerMath.MinutesToTime((int)Math.Round(catchupEvent.CatchupMinute)),
+                selectedBypassStationId = catchupEvent.SelectedBypassStation?.StationId ?? string.Empty,
+                requiredHoldMinutes = catchupEvent.RequiredHoldMinutes,
+                plannedAdjustmentMinutes = catchupEvent.ResolvedHoldMinutes,
+                holdBudgetMinutes = catchupEvent.HoldBudgetMinutes,
+                unresolvedRiskMinutes = catchupEvent.UnresolvedRiskMinutes,
+                robustnessRiskMinutes = catchupEvent.RobustnessRiskMinutes,
+                requiredMarginMinutes = catchupEvent.RequiredMarginMinutes,
+                currentWorstCaseGapMinutes = catchupEvent.CurrentWorstCaseGapMinutes
+            };
+        }
+
+        private static string ResolveProblemTypeFallback(PlannerCatchupEvent catchupEvent)
+        {
+            if (!string.Equals(catchupEvent.PairRole, "target-adjustable", StringComparison.Ordinal))
+            {
+                return "backgroundConstraint";
+            }
+            return catchupEvent.RequiredHoldMinutes > 0f || catchupEvent.DidCatchUp
+                ? "hardCatchup"
+                : "lowMargin";
+        }
+
         private static DepartureControlSystem.DispatchPlannerRiskEventDto BuildRiskEvent(
             PlannerCatchupEvent catchupEvent,
             Dictionary<string, PlannerWorkingRow> adjustedRowsById)
@@ -497,6 +612,12 @@ namespace RapidTransitMod.Planner
                 eventId = catchupEvent.EventId,
                 statusCode = ResolveRiskEventStatus(catchupEvent),
                 reasonCode = ResolveRiskEventReason(catchupEvent),
+                problemType = string.IsNullOrEmpty(catchupEvent.ProblemType) ? ResolveProblemTypeFallback(catchupEvent) : catchupEvent.ProblemType,
+                resolutionState = string.IsNullOrEmpty(catchupEvent.ResolutionState) ? ResolveRiskEventStatus(catchupEvent) : catchupEvent.ResolutionState,
+                pairRole = catchupEvent.PairRole ?? string.Empty,
+                treatmentType = catchupEvent.TreatmentType ?? string.Empty,
+                blockReasonCode = catchupEvent.BlockReasonCode ?? string.Empty,
+                suggestedOptionCodes = catchupEvent.SuggestedOptionCodes ?? Array.Empty<string>(),
                 yieldingLineId = string.IsNullOrEmpty(catchupEvent.YieldingLineId) ? catchupEvent.LocalLineId : catchupEvent.YieldingLineId,
                 priorityLineId = string.IsNullOrEmpty(catchupEvent.PriorityLineId) ? catchupEvent.ExpressLineId : catchupEvent.PriorityLineId,
                 yieldingTripId = yieldingTripId,
@@ -511,7 +632,9 @@ namespace RapidTransitMod.Planner
                 holdBudgetMinutes = catchupEvent.HoldBudgetMinutes,
                 unresolvedRiskMinutes = catchupEvent.UnresolvedRiskMinutes,
                 robustnessRiskMinutes = catchupEvent.RobustnessRiskMinutes,
-                selectedBypassStationId = catchupEvent.SelectedBypassStation?.StationId ?? string.Empty
+                selectedBypassStationId = catchupEvent.SelectedBypassStation?.StationId ?? string.Empty,
+                requiredMarginMinutes = catchupEvent.RequiredMarginMinutes,
+                currentWorstCaseGapMinutes = catchupEvent.CurrentWorstCaseGapMinutes
             };
         }
 
