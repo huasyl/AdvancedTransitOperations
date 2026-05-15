@@ -379,7 +379,7 @@ export function useWorkbenchController() {
     const fallbackLineId = snapshot.selectedEditLine || snapshot.selectedLineId || nextLines[0]?.id || "";
     const nextManualRows = normalizeManualRows(snapshot.manualRows, fallbackLineId);
     const nextAutoRules = normalizeAutoRules(snapshot.autoRules, fallbackLineId);
-    const nextStagedRows = normalizeStagedRows(snapshot.stagedRows);
+    const nextStagedRows = normalizeStagedRows(snapshot.lineDraftRows ?? snapshot.stagedRows);
 
     setLineOptions(nextLines);
     setDepotOptions(nextDepots);
@@ -627,7 +627,7 @@ export function useWorkbenchController() {
           mergedView: getPersistedMergedView(mergedView),
           manualRows,
           autoRules,
-          stagedRows,
+          lineDraftRows: stagedRows,
           lineSettings: lineSettingsForSave
         });
         if (!applySaveDraftResult(result, { reportSuccess: false, reportFailure: true }) || !result?.snapshot) {
@@ -670,7 +670,7 @@ export function useWorkbenchController() {
       mergedView: getPersistedMergedView(nextState.mergedView ?? mergedView),
       manualRows: nextState.manualRows ?? manualRows,
       autoRules: nextState.autoRules ?? autoRules,
-      stagedRows: nextState.stagedRows ?? stagedRows,
+      lineDraftRows: nextState.stagedRows ?? stagedRows,
       lineSettings: nextState.lineSettings ?? lineSettingsForSave
     }).then((result) => {
       if (applySaveDraftResult(result, { reportSuccess: false, reportFailure: true })) {
@@ -948,7 +948,7 @@ export function useWorkbenchController() {
         mergedView: getPersistedMergedView(mergedView),
         manualRows,
         autoRules,
-        stagedRows,
+        lineDraftRows: stagedRows,
         lineSettings: lineSettingsForSave,
         applyDraft: true
       });

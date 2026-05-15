@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "validate:euis": "node ./scripts/validate-euis-frontend.mjs",
+    "dev:planner-lab": "vite --config vite.planner-lab.config.js",
     "build:euis": "npm run validate:euis && vite build --config vite.euis.config.js",
     "build:native-schedule": "vite build --config vite.native-schedule.config.js",
     "build": "npm run build:euis"

@@ -420,6 +420,8 @@ namespace RapidTransitMod
             [DataMember]
             public DispatchWorkbenchManualRowDto[] manualRows;
             [DataMember]
+            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
+            [DataMember(EmitDefaultValue = false)]
             public DispatchWorkbenchStagedRowDto[] stagedRows;
             [DataMember]
             public DispatchWorkbenchAutoRuleDto[] autoRules;
@@ -1099,7 +1101,7 @@ namespace RapidTransitMod
                     selectedEditLine = draft.SelectedEditLine ?? string.Empty,
                     mergedView = draft.MergedView,
                     manualRows = draft.ManualRows != null ? draft.ManualRows.Select(CloneManualRow).ToArray() : Array.Empty<DispatchWorkbenchManualRowDto>(),
-                    stagedRows = draft.StagedRows != null ? draft.StagedRows.ToArray() : Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                    lineDraftRows = draft.StagedRows != null ? draft.StagedRows.ToArray() : Array.Empty<DispatchWorkbenchStagedRowDto>(),
                     autoRules = draft.AutoRules != null ? draft.AutoRules.Select(CloneAutoRule).ToArray() : Array.Empty<DispatchWorkbenchAutoRuleDto>(),
                     trips = trips.ToArray()
                 });

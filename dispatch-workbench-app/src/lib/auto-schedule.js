@@ -72,6 +72,37 @@ export function hasMinimumDepartureGapForOrigin(candidateMinute, candidateOrigin
   });
 }
 
+export function collectOriginDepartureConflictRowIds(
+  rows,
+  lineOriginById,
+  minGapMinutes = MIN_DEPARTURE_INTERVAL_MINUTES
+) {
+  const stagedWithMinutes = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      row,
+      minute: timeToMinutes(row?.time),
+      originStationId: lineOriginById.get(row?.lineId) || ""
+    }))
+    .filter((entry) => entry.minute !== null)
+    .sort((left, right) => left.minute - right.minute);
+
+  const conflictIds = new Set();
+  for (let index = 1; index < stagedWithMinutes.length; index += 1) {
+    const current = stagedWithMinutes[index];
+    const previous = stagedWithMinutes[index - 1];
+    if (!current.originStationId || current.originStationId !== previous.originStationId) {
+      continue;
+    }
+
+    if (current.minute - previous.minute < minGapMinutes) {
+      conflictIds.add(current.row.id);
+      conflictIds.add(previous.row.id);
+    }
+  }
+
+  return conflictIds;
+}
+
 export function pickEvenlyDistributedIndexes(totalCount, targetCount) {
   if (targetCount <= 0 || totalCount <= 0) {
     return [];

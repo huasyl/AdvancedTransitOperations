@@ -126,12 +126,6 @@ namespace RapidTransitMod.Planner
                 return infeasibleCompare;
             }
 
-            int scoreCompare = right.Score.CompareTo(left.Score);
-            if (scoreCompare != 0)
-            {
-                return scoreCompare;
-            }
-
             int unresolvedCompare = left.UnresolvedRiskMinutes.CompareTo(right.UnresolvedRiskMinutes);
             if (unresolvedCompare != 0)
             {
@@ -142,6 +136,12 @@ namespace RapidTransitMod.Planner
             if (robustnessCompare != 0)
             {
                 return robustnessCompare;
+            }
+
+            int scoreCompare = right.Score.CompareTo(left.Score);
+            if (scoreCompare != 0)
+            {
+                return scoreCompare;
             }
 
             int bypassCompare = left.AddedBypassStationCount.CompareTo(right.AddedBypassStationCount);
@@ -201,7 +201,6 @@ namespace RapidTransitMod.Planner
             }
 
             List<PlannerPlanModel> selectedPlans = new List<PlannerPlanModel>();
-            HashSet<string> usedPlanSignatures = new HashSet<string>(System.StringComparer.Ordinal);
             foreach (PlannerObjectiveDefinition objective in PlannerDefaults.Objectives)
             {
                 if (!plansByObjective.TryGetValue(objective.Id, out List<PlannerPlanModel> objectivePlans)
@@ -211,24 +210,7 @@ namespace RapidTransitMod.Planner
                 }
 
                 objectivePlans.Sort(ComparePlans);
-                PlannerPlanModel selectedPlan = null;
-                for (int index = 0; index < objectivePlans.Count; index++)
-                {
-                    PlannerPlanModel candidate = objectivePlans[index];
-                    string signature = BuildPlanSignature(candidate);
-                    if (usedPlanSignatures.Add(signature))
-                    {
-                        selectedPlan = candidate;
-                        break;
-                    }
-                }
-
-                if (selectedPlan == null)
-                {
-                    continue;
-                }
-
-                selectedPlans.Add(selectedPlan);
+                selectedPlans.Add(objectivePlans[0]);
             }
 
             return selectedPlans;
@@ -355,15 +337,38 @@ namespace RapidTransitMod.Planner
             List<PlannerRetimeVariant> variants = new List<PlannerRetimeVariant>();
             HashSet<string> variantKeys = new HashSet<string>(System.StringComparer.Ordinal);
 
-            PlannerCatchupEvent[] orderedEvents = (catchupEvents ?? new List<PlannerCatchupEvent>())
+            List<PlannerCatchupEvent> candidateEvents = (catchupEvents ?? new List<PlannerCatchupEvent>())
                 .Where(item =>
                     item != null
                     && !string.IsNullOrEmpty(item.LocalTripId)
                     && adjustableLineIds.Contains(item.LocalLineId))
+                .ToList();
+            List<PlannerCatchupEvent> orderedEvents = new List<PlannerCatchupEvent>();
+            HashSet<string> eventIds = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (PlannerCatchupEvent catchupEvent in candidateEvents
+                .Where(item => string.Equals(item.PairRole, "target-adjustable", System.StringComparison.Ordinal))
+                .GroupBy(item => (item.LocalLineId ?? string.Empty) + "|" + (item.TrunkId ?? string.Empty), System.StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderByDescending(item => item.UnresolvedRiskMinutes + item.RobustnessRiskMinutes)
+                    .ThenByDescending(item => item.RequiredHoldMinutes)
+                    .First()))
+            {
+                if (eventIds.Add(catchupEvent.EventId ?? string.Empty))
+                {
+                    orderedEvents.Add(catchupEvent);
+                }
+            }
+
+            foreach (PlannerCatchupEvent catchupEvent in candidateEvents
                 .OrderByDescending(item => item.UnresolvedRiskMinutes + item.RobustnessRiskMinutes)
                 .ThenByDescending(item => item.RequiredHoldMinutes)
-                .Take(8)
-                .ToArray();
+                .Take(12))
+            {
+                if (eventIds.Add(catchupEvent.EventId ?? string.Empty))
+                {
+                    orderedEvents.Add(catchupEvent);
+                }
+            }
 
             foreach (PlannerCatchupEvent catchupEvent in orderedEvents)
             {
@@ -489,11 +494,14 @@ namespace RapidTransitMod.Planner
         {
             List<string[]> sets = new List<string[]>();
             HashSet<string> forced = new HashSet<string>(context.ForcedBypassStationIds ?? new string[0], System.StringComparer.Ordinal);
-            string[] forcedArray = forced.Where(stationId => !string.IsNullOrEmpty(stationId)).ToArray();
-            sets.Add(forcedArray);
+            HashSet<string> configuredStationIds = BuildConfiguredBypassStationIdSet(context);
+            string[] forcedVirtualArray = forced
+                .Where(stationId => !string.IsNullOrEmpty(stationId) && !configuredStationIds.Contains(stationId))
+                .ToArray();
+            sets.Add(forcedVirtualArray);
 
             int maxAdditional = context.Request.maxAdditionalBypassStations;
-            if (maxAdditional <= forcedArray.Length)
+            if (maxAdditional <= forcedVirtualArray.Length)
             {
                 return sets;
             }
@@ -518,43 +526,210 @@ namespace RapidTransitMod.Planner
                 }
             }
 
-            List<string> candidates = candidateScores
-                .OrderByDescending(entry => entry.Value)
-                .ThenBy(entry => entry.Key, System.StringComparer.Ordinal)
-                .Select(entry => entry.Key)
-                .ToList();
-            int candidateLimit = System.Math.Min(candidates.Count, 6);
+            List<string> candidates = BuildPrioritizedVirtualBypassCandidates(
+                context,
+                pursuitTrunks,
+                forced,
+                candidateScores);
+            int candidateLimit = System.Math.Min(candidates.Count, 8);
             for (int i = 0; i < candidateLimit; i++)
             {
-                AddStationSet(sets, forcedArray, new[] { candidates[i] }, maxAdditional);
+                AddStationSet(sets, forcedVirtualArray, new[] { candidates[i] }, maxAdditional);
             }
-            for (int i = 0; i < candidateLimit; i++)
+            foreach (VirtualBypassStationSetOption option in BuildVirtualBypassStationSetOptions(candidates, candidateLimit, candidateScores, 2))
             {
-                for (int j = i + 1; j < candidateLimit; j++)
+                AddStationSet(sets, forcedVirtualArray, option.StationIds, maxAdditional);
+                if (sets.Count >= 16)
                 {
-                    AddStationSet(sets, forcedArray, new[] { candidates[i], candidates[j] }, maxAdditional);
-                    if (sets.Count >= 16)
+                    return sets;
+                }
+            }
+            foreach (VirtualBypassStationSetOption option in BuildVirtualBypassStationSetOptions(candidates, candidateLimit, candidateScores, 3))
+            {
+                AddStationSet(sets, forcedVirtualArray, option.StationIds, maxAdditional);
+                if (sets.Count >= 24)
+                {
+                    return sets;
+                }
+            }
+
+            return sets;
+        }
+
+        private static HashSet<string> BuildConfiguredBypassStationIdSet(PlannerContext context)
+        {
+            HashSet<string> configured = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (List<PlannerBypassStation> stations in (context?.ConfiguredBypassStationsByLineId ?? new Dictionary<string, List<PlannerBypassStation>>()).Values)
+            {
+                foreach (PlannerBypassStation station in stations ?? new List<PlannerBypassStation>())
+                {
+                    if (!string.IsNullOrEmpty(station?.StationId))
                     {
-                        return sets;
+                        configured.Add(station.StationId);
                     }
                 }
             }
-            for (int i = 0; i < candidateLimit; i++)
+
+            return configured;
+        }
+
+        private static List<string> BuildPrioritizedVirtualBypassCandidates(
+            PlannerContext context,
+            List<PursuitTrunk> pursuitTrunks,
+            HashSet<string> forced,
+            Dictionary<string, float> candidateScores)
+        {
+            List<string> prioritized = new List<string>();
+            HashSet<string> seen = new HashSet<string>(System.StringComparer.Ordinal);
+            Dictionary<string, float> protectedScores = new Dictionary<string, float>(System.StringComparer.Ordinal);
+            foreach (PursuitTrunk trunk in pursuitTrunks ?? new List<PursuitTrunk>())
             {
-                for (int j = i + 1; j < candidateLimit; j++)
+                string stationId = PickBestVirtualBypassCandidateForTrunk(context, trunk, forced, candidateScores);
+                if (!string.IsNullOrEmpty(stationId))
                 {
-                    for (int k = j + 1; k < candidateLimit; k++)
+                    candidateScores.TryGetValue(stationId, out float score);
+                    if (!protectedScores.TryGetValue(stationId, out float current) || score > current)
                     {
-                        AddStationSet(sets, forcedArray, new[] { candidates[i], candidates[j], candidates[k] }, maxAdditional);
-                        if (sets.Count >= 24)
+                        protectedScores[stationId] = score;
+                    }
+                }
+            }
+
+            foreach (string stationId in protectedScores
+                .OrderByDescending(entry => entry.Value)
+                .ThenBy(entry => entry.Key, System.StringComparer.Ordinal)
+                .Select(entry => entry.Key))
+            {
+                if (seen.Add(stationId))
+                {
+                    prioritized.Add(stationId);
+                }
+            }
+
+            foreach (string stationId in candidateScores
+                .OrderByDescending(entry => entry.Value)
+                .ThenBy(entry => entry.Key, System.StringComparer.Ordinal)
+                .Select(entry => entry.Key))
+            {
+                if (!string.IsNullOrEmpty(stationId) && seen.Add(stationId))
+                {
+                    prioritized.Add(stationId);
+                }
+            }
+
+            return prioritized;
+        }
+
+        private static string PickBestVirtualBypassCandidateForTrunk(
+            PlannerContext context,
+            PursuitTrunk trunk,
+            HashSet<string> forced,
+            Dictionary<string, float> candidateScores)
+        {
+            if (trunk == null
+                || !trunk.IsPrimaryPlanningRisk
+                || string.IsNullOrEmpty(trunk.LocalLineId)
+                || !context.CandidateBypassStationsByLineId.TryGetValue(trunk.LocalLineId, out List<PlannerBypassStation> stations))
+            {
+                return string.Empty;
+            }
+
+            PlannerBypassStation bestStation = null;
+            float bestScore = float.MinValue;
+            int tolerance = PlannerDefaults.BypassStationEndpointToleranceAtoms;
+            int midpoint = (trunk.LocalStartAtomIndex + trunk.LocalEndAtomIndexExclusive) / 2;
+            for (int i = 0; i < stations.Count; i++)
+            {
+                PlannerBypassStation station = stations[i];
+                if (station == null
+                    || !station.IsVirtualCandidate
+                    || station.IsConfigured
+                    || forced.Contains(station.StationId)
+                    || station.TrackAtomIndex < trunk.LocalStartAtomIndex - tolerance
+                    || station.TrackAtomIndex > trunk.LocalEndAtomIndexExclusive + tolerance)
+                {
+                    continue;
+                }
+
+                candidateScores.TryGetValue(station.StationId, out float score);
+                if (bestStation == null
+                    || score > bestScore
+                    || (score == bestScore && System.Math.Abs(station.TrackAtomIndex - midpoint) < System.Math.Abs(bestStation.TrackAtomIndex - midpoint))
+                    || (score == bestScore && station.TrackAtomIndex == bestStation.TrackAtomIndex && string.Compare(station.StationId, bestStation.StationId, System.StringComparison.Ordinal) < 0))
+                {
+                    bestStation = station;
+                    bestScore = score;
+                }
+            }
+
+            return bestStation?.StationId ?? string.Empty;
+        }
+
+        private static List<VirtualBypassStationSetOption> BuildVirtualBypassStationSetOptions(
+            List<string> candidates,
+            int candidateLimit,
+            Dictionary<string, float> candidateScores,
+            int setSize)
+        {
+            List<VirtualBypassStationSetOption> options = new List<VirtualBypassStationSetOption>();
+            if (setSize == 2)
+            {
+                for (int i = 0; i < candidateLimit; i++)
+                {
+                    for (int j = i + 1; j < candidateLimit; j++)
+                    {
+                        options.Add(CreateVirtualBypassStationSetOption(
+                            new[] { candidates[i], candidates[j] },
+                            candidateScores));
+                    }
+                }
+            }
+            else if (setSize == 3)
+            {
+                for (int i = 0; i < candidateLimit; i++)
+                {
+                    for (int j = i + 1; j < candidateLimit; j++)
+                    {
+                        for (int k = j + 1; k < candidateLimit; k++)
                         {
-                            return sets;
+                            options.Add(CreateVirtualBypassStationSetOption(
+                                new[] { candidates[i], candidates[j], candidates[k] },
+                                candidateScores));
                         }
                     }
                 }
             }
 
-            return sets;
+            options.Sort((left, right) =>
+            {
+                int scoreCompare = right.Score.CompareTo(left.Score);
+                if (scoreCompare != 0)
+                {
+                    return scoreCompare;
+                }
+
+                return string.Compare(left.Key, right.Key, System.StringComparison.Ordinal);
+            });
+            return options;
+        }
+
+        private static VirtualBypassStationSetOption CreateVirtualBypassStationSetOption(
+            string[] stationIds,
+            Dictionary<string, float> candidateScores)
+        {
+            float score = 0f;
+            for (int i = 0; i < stationIds.Length; i++)
+            {
+                candidateScores.TryGetValue(stationIds[i], out float stationScore);
+                score += stationScore;
+            }
+
+            return new VirtualBypassStationSetOption
+            {
+                StationIds = stationIds,
+                Score = score,
+                Key = string.Join("|", stationIds.OrderBy(stationId => stationId, System.StringComparer.Ordinal))
+            };
         }
 
         private static float ScoreVirtualBypassCandidate(
@@ -607,6 +782,13 @@ namespace RapidTransitMod.Planner
         {
             public string Key = string.Empty;
             public List<PlannerWorkingRow> Rows = new List<PlannerWorkingRow>();
+        }
+
+        private sealed class VirtualBypassStationSetOption
+        {
+            public string[] StationIds = new string[0];
+            public float Score = 0f;
+            public string Key = string.Empty;
         }
     }
 }

@@ -292,8 +292,8 @@ function pickPlannerDraft(plannerInput) {
   return candidateDrafts
     .slice()
     .sort((left, right) =>
-      ((right?.stagedRows?.length || 0) + (right?.trips?.length || 0))
-      - ((left?.stagedRows?.length || 0) + (left?.trips?.length || 0))
+      (((right?.lineDraftRows || right?.stagedRows)?.length || 0) + (right?.trips?.length || 0))
+      - (((left?.lineDraftRows || left?.stagedRows)?.length || 0) + (left?.trips?.length || 0))
     )[0] || null;
 }
 
@@ -459,6 +459,31 @@ function summarizePlanType(status) {
   return "optimal";
 }
 
+function summarizePlanTypeFromRisks(riskItems, fallbackStatus) {
+  const displayedTypes = (riskItems || []).map((item) => resolveDisplayedRiskProblemType(item));
+  if (displayedTypes.includes("hardCatchup")) {
+    return "error";
+  }
+  if (displayedTypes.includes("lowMargin") || displayedTypes.includes("backgroundConstraint")) {
+    return "warning";
+  }
+  return summarizePlanType(fallbackStatus);
+}
+
+function formatPlannerBadgeLabel(status, riskItems, t) {
+  const displayedTypes = (riskItems || []).map((item) => resolveDisplayedRiskProblemType(item));
+  if (displayedTypes.includes("hardCatchup")) {
+    return formatRiskTypeLabel("hardCatchup", t);
+  }
+  if (displayedTypes.includes("lowMargin")) {
+    return formatRiskTypeLabel("lowMargin", t);
+  }
+  if (displayedTypes.includes("backgroundConstraint")) {
+    return formatRiskTypeLabel("backgroundConstraint", t);
+  }
+  return formatPlannerStatusLabel(status, t);
+}
+
 function formatNumberValue(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric)) {
@@ -477,6 +502,14 @@ function joinDisplayValues(values, separator = " / ", emptyValue = "--") {
     .map((value) => String(value || "").trim())
     .filter(Boolean);
   return parts.length > 0 ? parts.join(separator) : emptyValue;
+}
+
+function joinUniqueDisplayValues(values, separator = " / ", emptyValue = "--") {
+  const parts = (Array.isArray(values) ? values : [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const uniqueParts = [...new Set(parts)];
+  return uniqueParts.length > 0 ? uniqueParts.join(separator) : emptyValue;
 }
 
 function buildPlannerResolvers(plannerInput, result, t) {
@@ -663,6 +696,26 @@ function resolveRiskTypeTone(problemType) {
   return problemType === "hardCatchup" ? "error" : "warning";
 }
 
+function resolveDisplayedRiskProblemType(item) {
+  const problemType = item?.problemType || "";
+  const plannedMinutes = Number(item?.plannedAdjustmentMinutes || 0);
+  const requiredHoldMinutes = Number(item?.requiredHoldMinutes || 0);
+  const requiredMarginMinutes = Number(item?.requiredMarginMinutes || 0);
+  const unresolvedRiskMinutes = Number(item?.unresolvedRiskMinutes || 0);
+  const robustnessRiskMinutes = Number(item?.robustnessRiskMinutes || 0);
+  if (unresolvedRiskMinutes > 0 || requiredHoldMinutes > plannedMinutes) {
+    return "hardCatchup";
+  }
+
+  if (problemType !== "hardCatchup") {
+    return problemType;
+  }
+
+  const hardCatchupResolved = unresolvedRiskMinutes <= 0 && plannedMinutes >= requiredHoldMinutes;
+  const marginStillShort = robustnessRiskMinutes > 0 || requiredMarginMinutes > plannedMinutes;
+  return hardCatchupResolved && marginStillShort ? "lowMargin" : problemType;
+}
+
 function formatBlockReasonLabel(blockReasonCode, t) {
   switch (blockReasonCode) {
     case "noUsableBypassStation":
@@ -688,6 +741,8 @@ function formatSuggestedOptionLabel(optionCode, t) {
       return t("planner.suggestedOption.maxAdditionalBypassStations");
     case "forcedBypassStationIds":
       return t("planner.suggestedOption.forcedBypassStationIds");
+    case "maxLocalRetimeMinutes":
+      return t("planner.suggestedOption.maxLocalRetimeMinutes");
     case "maxOffsetMinutes":
       return t("planner.suggestedOption.maxOffsetMinutes");
     case "adjustableLineIds":
@@ -711,13 +766,16 @@ function formatPairRoleLabel(pairRole, t) {
 }
 
 function formatRiskItemSummary(item, resolvers, t) {
-  const fromStationName = item?.fromStationId ? resolvers.resolveStationName(item.fromStationId) : "";
-  const toStationName = item?.toStationId ? resolvers.resolveStationName(item.toStationId) : "";
+  const fromStationId = item?.catchupFromStationId || item?.fromStationId || "";
+  const toStationId = item?.catchupToStationId || item?.toStationId || "";
+  const fromStationName = fromStationId ? resolvers.resolveStationName(fromStationId) : "";
+  const toStationName = toStationId ? resolvers.resolveStationName(toStationId) : "";
   const interval = [
     fromStationName,
     toStationName
   ].filter(Boolean).join(" - ") || "--";
-  const problemType = item?.problemType || "";
+  const originalProblemType = item?.problemType || "";
+  const problemType = resolveDisplayedRiskProblemType(item);
   if (problemType === "hardCatchup") {
     return t("planner.risk.summary.hardCatchup", {
       interval,
@@ -732,9 +790,19 @@ function formatRiskItemSummary(item, resolvers, t) {
       gap: formatMinutesLabel(item?.currentWorstCaseGapMinutes)
     });
   }
+  const plannedMinutes = Number(item?.plannedAdjustmentMinutes || 0);
+  const requiredMarginMinutes = Number(item?.requiredMarginMinutes || 0);
+  const marginShortfall = Math.max(0, requiredMarginMinutes - plannedMinutes);
+  if (originalProblemType === "hardCatchup") {
+    return t("planner.risk.summary.hardCatchupMarginOnly", {
+      interval,
+      margin: formatMinutesLabel(marginShortfall),
+      gap: formatMinutesLabel(item?.currentWorstCaseGapMinutes)
+    });
+  }
   return t("planner.risk.summary.lowMargin", {
     interval,
-    margin: formatMinutesLabel(item?.requiredMarginMinutes),
+    margin: formatMinutesLabel(marginShortfall),
     gap: formatMinutesLabel(item?.currentWorstCaseGapMinutes)
   });
 }
@@ -770,27 +838,72 @@ function formatRiskItemAction(item, resolvers, t) {
   return t("planner.empty.noSuggestedActions");
 }
 
+function formatRiskItemDetail(item, t) {
+  const state = item?.resolutionState || "";
+  if (state !== "blocked") {
+    return "";
+  }
+
+  const plannedMinutes = Number(item?.plannedAdjustmentMinutes || 0);
+  const requiredHoldMinutes = Number(item?.requiredHoldMinutes || 0);
+  const requiredMarginMinutes = Number(item?.requiredMarginMinutes || 0);
+  const hardShortfall = Math.max(0, requiredHoldMinutes - plannedMinutes);
+  const marginShortfall = Math.max(0, requiredMarginMinutes - plannedMinutes);
+  const parts = [];
+  if (hardShortfall > 0) {
+    parts.push(t("planner.risk.detail.blockedShortfall", {
+      catchupTime: item?.catchupTime || "--",
+      planned: formatMinutesLabel(plannedMinutes),
+      shortfall: formatMinutesLabel(hardShortfall)
+    }));
+  }
+  if (hardShortfall > 0 && marginShortfall > hardShortfall) {
+    parts.push(t("planner.risk.detail.blockedMarginShortfall", {
+      shortfall: formatMinutesLabel(marginShortfall)
+    }));
+  }
+  return parts.join(" ");
+}
+
 function mapRiskItemToDisplay(item, itemIndex, resolvers, t) {
-  const problemType = item?.problemType || "";
+  const problemType = resolveDisplayedRiskProblemType(item);
   const resolutionState = item?.resolutionState || "";
   const stateTone = resolveRiskStateTone(resolutionState);
   const typeTone = resolveRiskTypeTone(problemType);
+  const displayTone = stateTone === "success" ? stateTone : typeTone;
   return {
     id: item?.riskId || `risk-item-${itemIndex}`,
     status: formatRiskTypeLabel(problemType, t),
     stateLabel: formatResolutionStateLabel(resolutionState, t),
     typeToneClass: `is-${typeTone}`,
-    stateToneClass: `is-${stateTone}`,
-    itemToneClass: `is-${stateTone}`,
+    stateToneClass: `is-${displayTone}`,
+    itemToneClass: `is-${displayTone}`,
     lineSrc: resolvers.resolveLineName(item?.yieldingLineId),
     lineDest: resolvers.resolveLineName(item?.priorityLineId),
     interval: [
-      item?.fromStationId ? resolvers.resolveStationName(item.fromStationId) : "",
-      item?.toStationId ? resolvers.resolveStationName(item.toStationId) : ""
+      item?.catchupFromStationId || item?.fromStationId
+        ? resolvers.resolveStationName(item?.catchupFromStationId || item?.fromStationId)
+        : "",
+      item?.catchupToStationId || item?.toStationId
+        ? resolvers.resolveStationName(item?.catchupToStationId || item?.toStationId)
+        : ""
     ].filter(Boolean).join(" - "),
+    tripPair: t("planner.risk.tripPair", {
+      yieldingTrip: formatTripDescriptor(
+        resolvers.resolveLineName(item?.yieldingLineId),
+        item?.yieldingDepartTime,
+        item?.yieldingTripId
+      ),
+      priorityTrip: formatTripDescriptor(
+        resolvers.resolveLineName(item?.priorityLineId),
+        item?.priorityDepartTime,
+        item?.priorityTripId
+      )
+    }),
     summary: formatRiskItemSummary(item, resolvers, t),
+    detail: formatRiskItemDetail(item, t),
     action: formatRiskItemAction(item, resolvers, t),
-    warning: stateTone === "error",
+    warning: displayTone === "error",
     events: []
   };
 }
@@ -926,7 +1039,11 @@ function translatePreviewStatus(row, t) {
 }
 
 function formatChangedWindow(window, resolvers, t) {
-  const lineNames = joinDisplayValues(window?.lineNames, " / ", "");
+  const resolvedLineNames = Array.isArray(window?.lineIds)
+    ? window.lineIds.map((lineId, index) => resolvers.resolveLineName(lineId, window?.lineNames?.[index] || ""))
+    : [];
+  const lineNames = joinDisplayValues(resolvedLineNames, " / ", "")
+    || joinDisplayValues(window?.lineNames, " / ", "");
   const rows = Array.isArray(window?.rowDiffs) ? window.rowDiffs : [];
   return {
     id: window?.windowId || "",
@@ -1092,6 +1209,19 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
     const riskClusters = Array.isArray(plan.riskClusters) ? plan.riskClusters : [];
     const riskItems = Array.isArray(plan.riskItems) ? plan.riskItems : [];
     const structuredActions = Array.isArray(plan.structuredScheduleActions) ? plan.structuredScheduleActions : [];
+    const affectedWaitTripIds = new Set();
+    structuredActions.forEach((action) => {
+      if ((action?.actionType || action?.type) !== "predictedHold") {
+        return;
+      }
+      (action?.affectedTripIds || action?.tripIds || []).forEach((tripId) => {
+        if (tripId) {
+          affectedWaitTripIds.add(tripId);
+        }
+      });
+    });
+    const affectedWaitTripCount = affectedWaitTripIds.size;
+    const localWaitMinutes = Number(summary.localWaitMinutes ?? plan.metrics?.localWaitMinutes ?? 0);
     const problemIssues = Array.isArray(plan.problemIssues) ? plan.problemIssues : [];
     const timetableRows = Array.isArray(plan.timetablePreviewRows) ? plan.timetablePreviewRows : [];
     const changedWindows = Array.isArray(plan.changedWindows) ? plan.changedWindows : [];
@@ -1104,20 +1234,25 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
       .filter(Boolean);
     const combinedDiagnostics = [...new Set([...issueMessages, ...fallbackDiagnostics])];
     const badgeStatus = summary.status || plan.status || "risk";
+    const primaryRiskItems = Array.isArray(riskItems) ? riskItems : [];
 
     return {
       id: plan.planId || `planner-plan-${planIndex}`,
       rawPlan: plan,
       title: formatPlannerObjectiveTitle(plan.objectiveId, "", t),
-      type: summarizePlanType(badgeStatus),
-      badgeLabel: formatPlannerStatusLabel(badgeStatus, t),
+      type: summarizePlanTypeFromRisks(primaryRiskItems, badgeStatus),
+      badgeLabel: formatPlannerBadgeLabel(badgeStatus, primaryRiskItems, t),
       metrics: {
         expressSave: Number(summary.expressSavedMinutes ?? plan.metrics?.expressSavedMinutes ?? 0),
-        localWait: Number(summary.localWaitMinutes ?? plan.metrics?.localWaitMinutes ?? 0),
+        localWait: localWaitMinutes,
+        averageLocalWait: affectedWaitTripCount > 0
+          ? Number((localWaitMinutes / affectedWaitTripCount).toFixed(1))
+          : 0,
+        affectedWaitTrips: affectedWaitTripCount,
         overtakes: Number(summary.addedBypassStationCount ?? plan.metrics?.addedBypassStationCount ?? 0)
       },
       stations: Array.isArray(plan.selectedBypassStationIds) && plan.selectedBypassStationIds.length > 0
-        ? joinDisplayValues(plan.selectedBypassStationIds.map((stationId) => resolvers.resolveStationName(stationId)))
+        ? joinUniqueDisplayValues(plan.selectedBypassStationIds.map((stationId) => resolvers.resolveStationName(stationId)))
         : "--",
       diagnostics: combinedDiagnostics,
       risks: riskItems.length > 0 ? riskItems.map((riskItem, riskItemIndex) =>
@@ -1168,8 +1303,8 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
               )
             }),
             interval: [
-              resolvers.resolveStationName(event?.fromStationId),
-              resolvers.resolveStationName(event?.toStationId)
+              resolvers.resolveStationName(event?.catchupFromStationId || event?.fromStationId),
+              resolvers.resolveStationName(event?.catchupToStationId || event?.toStationId)
             ].filter(Boolean).join(" - "),
             catchupTime: event?.catchupTime || "",
             waitStation: resolvers.resolveStationName(event?.selectedBypassStationId),
@@ -1232,28 +1367,44 @@ function buildPlannerLineSettingsForSave(lines = []) {
     }));
 }
 
-function buildPlannerImportedStagedRows(planDetail, importedNote) {
-  const rowDiffs = (Array.isArray(planDetail?.changedWindows) ? planDetail.changedWindows : [])
-    .flatMap((window) => Array.isArray(window?.rowDiffs) ? window.rowDiffs : []);
-  return rowDiffs
-    .filter((row) =>
-      row?.lineId
-      && row?.afterTime
-      && row?.beforeTime
-      && Number(row?.scheduleShiftMinutes || 0) !== 0)
-    .map((row, index) => ({
-      id: row?.tripId ? `planner-${row.tripId}` : `planner-${index + 1}`,
-      lineId: row.lineId,
-      time: row.afterTime,
-      kind: row?.kind === "express" ? "express" : "local",
-      source: "planner",
-      note: importedNote,
-      plannerReplaceKey: buildPlannerStagedRowKey({
-        lineId: row.lineId,
-        kind: row?.kind === "express" ? "express" : "local",
-        time: row.beforeTime
-      })
-    }));
+function normalizePlannerRow(row, index, importedNote, prefix) {
+  return {
+    id: String(row?.id || row?.tripId || `${prefix}-${index + 1}`),
+    lineId: String(row?.lineId || ""),
+    time: String(row?.time || row?.afterTime || ""),
+    kind: row?.kind === "express" ? "express" : "local",
+    source: String(row?.source || "planner"),
+    note: importedNote || row?.note || ""
+  };
+}
+
+function buildPlannerReplacementRows(planDetail, importedNote) {
+  return (Array.isArray(planDetail?.plannerReplacementRows) ? planDetail.plannerReplacementRows : [])
+    .map((row, index) => normalizePlannerRow(row, index, importedNote, "planner-replacement"))
+    .filter((row) => row.lineId && row.time);
+}
+
+function buildPlannerBaselineRows(planDetail) {
+  return (Array.isArray(planDetail?.plannerBaselineRows) ? planDetail.plannerBaselineRows : [])
+    .map((row, index) => normalizePlannerRow(row, index, "", "planner-baseline"))
+    .filter((row) => row.lineId && row.time);
+}
+
+function buildPlannerImportContract(plannerResult, activePlan, importedRows) {
+  const rawPlan = activePlan?.rawPlan;
+  if (!rawPlan || !rawPlan.planId) {
+    return null;
+  }
+
+  return {
+    draftKey: String(plannerResult?.requestEcho?.draftKey || ""),
+    importedFrom: "planner-ui",
+    importedPlanId: String(rawPlan.planId || ""),
+    importedObjectiveId: String(rawPlan.objectiveId || ""),
+    importedLineIds: [...new Set((Array.isArray(importedRows) ? importedRows : []).map((row) => row?.lineId).filter(Boolean))],
+    requestEcho: plannerResult?.requestEcho || null,
+    plan: rawPlan
+  };
 }
 
 function buildPlannerStagedRowKey(row) {
@@ -1261,8 +1412,81 @@ function buildPlannerStagedRowKey(row) {
   return `${row?.lineId || ""}|${kind}|${row?.time || ""}`;
 }
 
-function shouldReplacePlannerRow(row, replaceRowKeySet) {
-  return replaceRowKeySet instanceof Set && replaceRowKeySet.has(buildPlannerStagedRowKey(row));
+function getSnapshotCombinedDraftRows(snapshot) {
+  return Array.isArray(snapshot?.combinedDraftRows)
+    ? snapshot.combinedDraftRows
+    : Array.isArray(snapshot?.combinedStagedRows)
+      ? snapshot.combinedStagedRows
+      : Array.isArray(snapshot?.lineDraftRows)
+        ? snapshot.lineDraftRows
+        : Array.isArray(snapshot?.stagedRows)
+          ? snapshot.stagedRows
+          : [];
+}
+
+function isPlannerRowInsideWindow(row, windowStartMinutes, windowEndMinutes) {
+  const minutes = timeToMinutes(row?.time);
+  return minutes != null && minutes >= windowStartMinutes && minutes < windowEndMinutes;
+}
+
+function buildPlannerReplacementDraftBlocks(snapshot, baselineRows, replacementRows, requestEcho) {
+  const startMinutes = timeToMinutes(requestEcho?.windowStart);
+  const endMinutes = timeToMinutes(requestEcho?.windowEnd);
+  if (startMinutes == null || endMinutes == null || endMinutes <= startMinutes) {
+    return null;
+  }
+
+  const affectedLineIds = [...new Set(replacementRows.map((row) => row.lineId).filter(Boolean))];
+  if (affectedLineIds.length === 0) {
+    return null;
+  }
+
+  const affectedLineSet = new Set(affectedLineIds);
+  const combinedRows = getSnapshotCombinedDraftRows(snapshot)
+    .map((row, index) => normalizePlannerRow(row, index, row?.note || "", "current-draft"))
+    .filter((row) => row.lineId && row.time);
+
+  for (const lineId of affectedLineIds) {
+    const currentKeys = combinedRows
+      .filter((row) => row.lineId === lineId && isPlannerRowInsideWindow(row, startMinutes, endMinutes))
+      .map(buildPlannerStagedRowKey)
+      .sort();
+    const baselineKeys = baselineRows
+      .filter((row) => row.lineId === lineId && isPlannerRowInsideWindow(row, startMinutes, endMinutes))
+      .map(buildPlannerStagedRowKey)
+      .sort();
+    if (currentKeys.length !== baselineKeys.length || currentKeys.some((key, index) => key !== baselineKeys[index])) {
+      return null;
+    }
+  }
+
+  return affectedLineIds.map((lineId) => {
+    const preservedRows = combinedRows
+      .filter((row) =>
+        row.lineId === lineId
+        && !isPlannerRowInsideWindow(row, startMinutes, endMinutes));
+    const insertedRows = replacementRows
+      .filter((row) => row.lineId === lineId && isPlannerRowInsideWindow(row, startMinutes, endMinutes));
+    const lineDraftRows = [...preservedRows, ...insertedRows]
+      .sort((left, right) => {
+        const leftMinutes = timeToMinutes(left?.time) ?? 9999;
+        const rightMinutes = timeToMinutes(right?.time) ?? 9999;
+        if (leftMinutes !== rightMinutes) {
+          return leftMinutes - rightMinutes;
+        }
+
+        return String(left?.id || "").localeCompare(String(right?.id || ""));
+      })
+      .map((row, index) => ({
+        id: String(row?.id || `planner-${lineId}-${index + 1}`),
+        lineId,
+        time: row.time,
+        kind: row.kind === "express" ? "express" : "local",
+        source: row.source || "planner",
+        note: row.note || ""
+      }));
+    return { lineId, lineDraftRows };
+  }).filter((block) => affectedLineSet.has(block.lineId));
 }
 
 function buildPlannerRequest(params) {
@@ -1703,14 +1927,15 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         return;
       }
 
-      const importedRows = buildPlannerImportedStagedRows(activePlan.rawPlan, t("combined.note.planner"));
-      if (importedRows.length === 0) {
+      const replacementRows = buildPlannerReplacementRows(activePlan.rawPlan, t("combined.note.planner"));
+      const baselineRows = buildPlannerBaselineRows(activePlan.rawPlan);
+      if (replacementRows.length === 0 || baselineRows.length === 0) {
         setPlannerLoadError(t("planner.import.error.empty"));
         return;
       }
 
       const runtimeLineIdSet = new Set(snapshot.lines.map((line) => line?.id).filter(Boolean));
-      const unsupportedLineIds = [...new Set(importedRows
+      const unsupportedLineIds = [...new Set(replacementRows
         .map((row) => row.lineId)
         .filter((lineId) => !runtimeLineIdSet.has(lineId)))];
       if (unsupportedLineIds.length > 0) {
@@ -1718,23 +1943,52 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         return;
       }
 
-      const replaceRowKeySet = new Set(importedRows
-        .map((row) => row.plannerReplaceKey)
-        .filter(Boolean));
-      const preservedStagedRows = (Array.isArray(snapshot.stagedRows) ? snapshot.stagedRows : [])
-        .filter((row) => !shouldReplacePlannerRow(row, replaceRowKeySet));
-      const sanitizedImportedRows = importedRows.map(({ plannerReplaceKey, ...row }) => row);
+      const lineDraftRowsByLineId = buildPlannerReplacementDraftBlocks(
+        snapshot,
+        baselineRows,
+        replacementRows,
+        plannerResult?.requestEcho
+      );
+      if (!lineDraftRowsByLineId || lineDraftRowsByLineId.length === 0) {
+        setPlannerLoadError(t("planner.import.error.save"));
+        return;
+      }
+
       const fallbackSelectedLineId = snapshot.selectedLineId || snapshot.lines[0]?.id || "";
+      const mergedViewForSave = normalizePlannerMergedViewForSave(snapshot, fallbackSelectedLineId);
+      const importedLocalLineIds = replacementRows
+        .filter((row) => row?.kind !== "express")
+        .map((row) => row?.lineId)
+        .filter(Boolean);
+      const importedExpressLineIds = replacementRows
+        .filter((row) => row?.kind === "express")
+        .map((row) => row?.lineId)
+        .filter(Boolean);
+      mergedViewForSave.localLineIds = [...new Set([...(mergedViewForSave.localLineIds || []), ...importedLocalLineIds])];
+      mergedViewForSave.expressLineIds = [...new Set([...(mergedViewForSave.expressLineIds || []), ...importedExpressLineIds])];
+      mergedViewForSave.localLineId = mergedViewForSave.localLineIds[0] || mergedViewForSave.localLineId || "";
+      mergedViewForSave.expressLineId = mergedViewForSave.expressLineIds[0] || mergedViewForSave.expressLineId || "";
+      const saveScopeLineIds = new Set([
+        fallbackSelectedLineId,
+        snapshot.selectedEditLine || fallbackSelectedLineId,
+        ...(mergedViewForSave.localLineIds || []),
+        ...(mergedViewForSave.expressLineIds || [])
+      ].filter(Boolean));
       const request = {
         selectedLineId: fallbackSelectedLineId,
         selectedEditLine: snapshot.selectedEditLine || fallbackSelectedLineId,
-        mergedView: normalizePlannerMergedViewForSave(snapshot, fallbackSelectedLineId),
-        manualRows: Array.isArray(snapshot.manualRows) ? snapshot.manualRows : [],
-        autoRules: Array.isArray(snapshot.autoRules) ? snapshot.autoRules : [],
-        stagedRows: [...preservedStagedRows, ...sanitizedImportedRows],
+        mergedView: mergedViewForSave,
+        manualRows: Array.isArray(snapshot.manualRows)
+          ? snapshot.manualRows.filter((row) => saveScopeLineIds.has(row?.lineId))
+          : [],
+        autoRules: Array.isArray(snapshot.autoRules)
+          ? snapshot.autoRules.filter((rule) => saveScopeLineIds.has(rule?.lineId))
+          : [],
+        lineDraftRowsByLineId,
         lineSettings: buildPlannerLineSettingsForSave(snapshot.lines),
         applyDraft: false,
-        nativeScheduleWriter: true
+        nativeScheduleWriter: true,
+        plannerImportContract: buildPlannerImportContract(plannerResult, activePlan, replacementRows)
       };
 
       const result = await workbenchApi.saveNativeDraft?.(request);
@@ -2057,6 +2311,8 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                         <div className="dw-planner-metrics-row">
                           <PlannerMetric label={t("planner.metrics.expressSave")} value={`${activePlan?.metrics?.expressSave ?? 0}m`} tone="success" />
                           <PlannerMetric label={t("planner.metrics.localWait")} value={`${activePlan?.metrics?.localWait ?? 0}m`} tone={activePlan?.type === "warning" ? "warning" : "default"} />
+                          <PlannerMetric label={t("planner.metrics.averageLocalWait")} value={`${activePlan?.metrics?.averageLocalWait ?? 0}m`} tone="default" />
+                          <PlannerMetric label={t("planner.metrics.affectedWaitTrips")} value={`${activePlan?.metrics?.affectedWaitTrips ?? 0}`} />
                           <PlannerMetric label={t("planner.metrics.bypassCount")} value={`${activePlan?.metrics?.overtakes ?? 0}`} />
                         </div>
                       </section>
@@ -2112,7 +2368,15 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                                   </span>
                                 </div>
                                 {risk.summary ? (
+                                  risk.tripPair ? (
+                                    <div className="dw-planner-risk-trip">{risk.tripPair}</div>
+                                  ) : null
+                                ) : null}
+                                {risk.summary ? (
                                   <div className="dw-planner-risk-summary">{risk.summary}</div>
+                                ) : null}
+                                {risk.detail ? (
+                                  <div className="dw-planner-risk-detail">{risk.detail}</div>
                                 ) : null}
                                 {!risk.summary && (risk.events || []).length === 0 ? (
                                   <div className="dw-planner-risk-range">

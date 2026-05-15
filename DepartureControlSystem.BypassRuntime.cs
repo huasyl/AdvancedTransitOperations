@@ -26,7 +26,7 @@ namespace RapidTransitMod
             }
         }
 
-        private void SetBypassYieldState(Entity vehicle, Entity blocker, string lineTag, string stateTag)
+        private void SetBypassYieldState(Entity vehicle, Entity blocker, string lineTag, string stateTag, Entity holdStation = default, int waypointIndex = -1)
         {
             if (vehicle == Entity.Null || blocker == Entity.Null)
                 return;
@@ -35,6 +35,7 @@ namespace RapidTransitMod
                 return;
 
             m_BypassYieldBlocker[vehicle] = blocker;
+            RecordRuntimeObservationBypassHoldStart(vehicle, blocker, holdStation, waypointIndex, m_SimulationSystem.frameIndex, stateTag);
             if (!IsBypassRuntimeLoggingEnabled())
                 return;
 
@@ -51,6 +52,7 @@ namespace RapidTransitMod
             m_BypassYieldBlocker.Remove(vehicle);
             m_BypassHoldCadenceSnapshots.Remove(vehicle);
             m_BypassConflictEpisodes.Remove(vehicle);
+            RecordRuntimeObservationBypassHoldRelease(vehicle, blocker, m_SimulationSystem.frameIndex, releaseReason);
             if (!IsBypassRuntimeLoggingEnabled())
                 return;
 

@@ -1,5 +1,5 @@
 ﻿import { formatDirection, timeToMinutes } from "./time";
-import { MIN_DEPARTURE_INTERVAL_MINUTES } from "./auto-schedule";
+import { collectOriginDepartureConflictRowIds } from "./auto-schedule";
 import { buildValidationIssues } from "./validation";
 
 export function getFilteredTrips({ viewMode, selectedLineId, mergedView, trips }) {
@@ -172,24 +172,10 @@ export function buildCombinedScheduleRows({ stagedRows = [], lineOptions = [], s
     lineKinds.set(row.lineId, kinds);
   });
 
-  const stagedWithMinutes = stagedRows
-    .map((row) => ({ row, minute: timeToMinutes(row.time) }))
-    .filter((entry) => entry.minute !== null)
-    .sort((left, right) => left.minute - right.minute);
-
-  const tooCloseIds = new Set();
-  for (let index = 1; index < stagedWithMinutes.length; index += 1) {
-    const currentOrigin = lineOriginById.get(stagedWithMinutes[index].row.lineId)?.id || "";
-    const previousOrigin = lineOriginById.get(stagedWithMinutes[index - 1].row.lineId)?.id || "";
-    if (!currentOrigin || currentOrigin !== previousOrigin) {
-      continue;
-    }
-
-    if (stagedWithMinutes[index].minute - stagedWithMinutes[index - 1].minute < MIN_DEPARTURE_INTERVAL_MINUTES) {
-      tooCloseIds.add(stagedWithMinutes[index].row.id);
-      tooCloseIds.add(stagedWithMinutes[index - 1].row.id);
-    }
-  }
+  const tooCloseIds = collectOriginDepartureConflictRowIds(
+    stagedRows,
+    new Map(lineOptions.map((line) => [line.id, line.originStationId || ""]))
+  );
 
   return stagedRows
     .filter((row) => timeToMinutes(row.time) !== null)

@@ -55,6 +55,7 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestLineSpawn", RequestLineSpawn));
             AddBinding(new TriggerBinding(kGroup, "requestDumpTrackModel", RequestDumpTrackModel));
             AddBinding(new TriggerBinding(kGroup, "requestDumpPlannerInput", RequestDumpPlannerInput));
+            AddBinding(new TriggerBinding(kGroup, "requestDumpRuntimeObservation", RequestDumpRuntimeObservation));
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
@@ -198,7 +199,8 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showLineSpawnAction", snapshot.ShowLineSpawnAction);
             AppendJsonBool(sb, "showDumpTrackModelAction", snapshot.ShowDumpTrackModelAction);
             AppendJsonBool(sb, "showDumpPlannerInputAction", snapshot.ShowDumpPlannerInputAction);
-            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction);
+            AppendJsonBool(sb, "showDumpRuntimeObservationAction", snapshot.ShowDumpRuntimeObservationAction);
+            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction || snapshot.ShowDumpRuntimeObservationAction);
             AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
             AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
             if (sb[sb.Length - 1] == ',')
@@ -395,6 +397,16 @@ namespace RapidTransitMod
                 return;
 
             DepartureControlSystem.Instance.RequestDumpPlannerInputSnapshot();
+            m_LastVehicle = Entity.Null;
+            m_LastSnapshotVersion = 0;
+        }
+
+        private void RequestDumpRuntimeObservation()
+        {
+            if (DepartureControlSystem.Instance == null)
+                return;
+
+            DepartureControlSystem.Instance.RequestDumpRuntimeObservationSnapshot();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }

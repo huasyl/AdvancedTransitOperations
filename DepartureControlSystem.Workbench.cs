@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
@@ -49,7 +50,15 @@ namespace RapidTransitMod
             [DataMember]
             public DispatchWorkbenchAutoRuleDto[] autoRules;
             [DataMember]
+            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
+            [DataMember]
+            public DispatchWorkbenchStagedRowDto[] combinedDraftRows;
+            [DataMember]
+            public DispatchWorkbenchStagedRowDto[] appliedRows;
+            [DataMember(EmitDefaultValue = false)]
             public DispatchWorkbenchStagedRowDto[] stagedRows;
+            [DataMember(EmitDefaultValue = false)]
+            public DispatchWorkbenchStagedRowDto[] combinedStagedRows;
             [DataMember]
             public string version;
             [DataMember]
@@ -100,6 +109,10 @@ namespace RapidTransitMod
             [DataMember]
             public DispatchWorkbenchAutoRuleDto[] autoRules;
             [DataMember]
+            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
+            [DataMember]
+            public DispatchWorkbenchLineDraftRowsDto[] lineDraftRowsByLineId;
+            [DataMember(EmitDefaultValue = false)]
             public DispatchWorkbenchStagedRowDto[] stagedRows;
             [DataMember]
             public DispatchWorkbenchLineSettingDto[] lineSettings;
@@ -109,6 +122,19 @@ namespace RapidTransitMod
             public bool applyDraft;
             [DataMember]
             public bool nativeScheduleWriter;
+            [DataMember]
+            public DispatchWorkbenchPlannerImportContractDto plannerImportContract;
+        }
+
+        [DataContract]
+        public class DispatchWorkbenchLineDraftRowsDto
+        {
+            [DataMember]
+            public string lineId;
+            [DataMember]
+            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
+            [DataMember(EmitDefaultValue = false)]
+            public DispatchWorkbenchStagedRowDto[] stagedRows;
         }
 
         [DataContract]
@@ -158,6 +184,25 @@ namespace RapidTransitMod
         }
 
         [DataContract]
+        public class DispatchWorkbenchPlannerImportContractDto
+        {
+            [DataMember]
+            public string draftKey;
+            [DataMember]
+            public string importedFrom;
+            [DataMember]
+            public string importedPlanId;
+            [DataMember]
+            public string importedObjectiveId;
+            [DataMember]
+            public string[] importedLineIds;
+            [DataMember]
+            public DispatchPlannerRequestEchoDto requestEcho;
+            [DataMember]
+            public DispatchPlannerPlanDetailDto plan;
+        }
+
+        [DataContract]
         public class DispatchWorkbenchPersistedDraftState
         {
             [DataMember]
@@ -173,11 +218,15 @@ namespace RapidTransitMod
             [DataMember]
             public DispatchWorkbenchAutoRuleDto[] autoRules;
             [DataMember]
+            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
+            [DataMember(EmitDefaultValue = false)]
             public DispatchWorkbenchStagedRowDto[] stagedRows;
             [DataMember]
             public bool rulesApplied;
             [DataMember]
             public bool draftApplied;
+            [DataMember]
+            public DispatchWorkbenchPlannerImportContractDto plannerImportContract;
         }
 
         [DataContract]
@@ -382,6 +431,7 @@ namespace RapidTransitMod
             public List<DispatchWorkbenchStagedRowDto> StagedRows = new List<DispatchWorkbenchStagedRowDto>();
             public bool RulesApplied = false;
             public bool DraftApplied = false;
+            public DispatchWorkbenchPlannerImportContractDto PlannerImportContract;
             public readonly Dictionary<string, int[]> AppliedDepartureMinutesCache = new Dictionary<string, int[]>(StringComparer.Ordinal);
         }
 
@@ -390,7 +440,12 @@ namespace RapidTransitMod
             public Entity LineEntity = Entity.Null;
             public int OriginHoldLimitMinutes = DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
             public int MaxStationDwellMinutes = DEFAULT_MAX_STATION_DWELL_MINUTES;
-            public List<DispatchWorkbenchStagedRowDto> StagedRows = new List<DispatchWorkbenchStagedRowDto>();
+            public List<DispatchWorkbenchStagedRowDto> AppliedRows = new List<DispatchWorkbenchStagedRowDto>();
+            public List<DispatchWorkbenchStagedRowDto> StagedRows
+            {
+                get => AppliedRows;
+                set => AppliedRows = value ?? new List<DispatchWorkbenchStagedRowDto>();
+            }
             public int[] DepartureMinutesCache = Array.Empty<int>();
         }
 
@@ -488,6 +543,8 @@ namespace RapidTransitMod
         }
 
         private readonly Dictionary<string, DispatchWorkbenchDraftState> m_WorkbenchDrafts = new Dictionary<string, DispatchWorkbenchDraftState>();
+        private readonly Dictionary<string, DispatchWorkbenchPlannerImportContractDto> m_AppliedPlannerImportContracts =
+            new Dictionary<string, DispatchWorkbenchPlannerImportContractDto>(StringComparer.Ordinal);
         private readonly Dictionary<string, int> m_WorkbenchLineOriginHoldLimits = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, int> m_WorkbenchLineMaxStationDwellMinutes = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_WorkbenchLineAllowedDepots = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -516,12 +573,32 @@ namespace RapidTransitMod
         private const int MIN_ORIGIN_HOLD_LIMIT_MINUTES = 5;
         private const int MAX_ORIGIN_HOLD_LIMIT_MINUTES = 120;
         private const uint CONFIGURED_ALLOWED_DEPOT_CACHE_LOG_INTERVAL_FRAMES = 3600u;
+        private static readonly bool ENABLE_WORKBENCH_INTEGRITY_REPORT = true;
 
         protected override void OnGameLoaded(Context serializationContext)
         {
             base.OnGameLoaded(serializationContext);
+            ResetWorkbenchPersistenceStateForLoad();
             TryRestoreWorkbenchPersistence();
             TryRestoreAppliedWorkbenchPersistence();
+        }
+
+        private void ResetWorkbenchPersistenceStateForLoad()
+        {
+            m_WorkbenchDrafts.Clear();
+            m_AppliedWorkbenchLines.Clear();
+            m_AppliedPlannerImportContracts.Clear();
+            m_WorkbenchLineOriginHoldLimits.Clear();
+            m_WorkbenchLineMaxStationDwellMinutes.Clear();
+            m_WorkbenchLineAllowedDepots.Clear();
+            m_WorkbenchLineServiceKinds.Clear();
+            m_WorkbenchLineFrameSnapshots.Clear();
+            m_ConfiguredAllowedDepotCacheByLine.Clear();
+            m_WorkbenchPreferredLineId = string.Empty;
+            m_LastWorkbenchSnapshotLogKey = string.Empty;
+            m_LastAppliedWorkbenchInspectLogKey = string.Empty;
+            m_WorkbenchPersistenceLoaded = false;
+            m_AppliedWorkbenchPersistenceLoaded = false;
         }
 
         public string LoadWorkbenchSnapshotJson()
@@ -560,7 +637,11 @@ namespace RapidTransitMod
                 List<WorkbenchLineRuntime> runtimeLines = BuildWorkbenchLinesStable();
                 bool lineSettingsChanged = request?.lineSettings != null;
                 NormalizeRequestedLineSettingsFromMergedView(request, runtimeLines);
-                List<string> errors = ValidateWorkbenchRequest(request, runtimeLines);
+                List<string> errors = ValidateWorkbenchRequest(
+                    request,
+                    runtimeLines,
+                    validateApplyOnlyConstraints: request?.applyDraft == true);
+                WriteWorkbenchSaveRequestReport(request, runtimeLines, errors);
                 if (errors.Count > 0)
                 {
                     result.errors = errors.ToArray();
@@ -570,25 +651,49 @@ namespace RapidTransitMod
 
                 string lineKey = GetDraftKey(request?.selectedLineId);
                 DispatchWorkbenchDraftState state = GetOrCreateWorkbenchDraft(lineKey);
+                Dictionary<string, List<DispatchWorkbenchStagedRowDto>> nextLineDraftRowsByKey =
+                    BuildRequestLineDraftRowsByDraftKey(request, lineKey);
                 List<DispatchWorkbenchManualRowDto> nextManualRows = request.manualRows != null
                     ? request.manualRows.Select(CloneManualRow).ToList()
                     : new List<DispatchWorkbenchManualRowDto>();
                 List<DispatchWorkbenchAutoRuleDto> nextAutoRules = request.autoRules != null
                     ? request.autoRules.Select(CloneAutoRule).ToList()
                     : new List<DispatchWorkbenchAutoRuleDto>();
-                List<DispatchWorkbenchStagedRowDto> nextStagedRows = request.stagedRows != null
-                    ? request.stagedRows.Select(CloneStagedRow).ToList()
-                    : new List<DispatchWorkbenchStagedRowDto>();
+                bool hasActiveLineDraftRows = nextLineDraftRowsByKey.TryGetValue(
+                    lineKey,
+                    out List<DispatchWorkbenchStagedRowDto> activeLineDraftRows);
+                List<DispatchWorkbenchStagedRowDto> nextStagedRows = hasActiveLineDraftRows
+                    ? DeduplicateWorkbenchStagedRowsByIdPreservingLast(activeLineDraftRows)
+                    : state.StagedRows.Select(CloneStagedRow).ToList();
+                if (request.applyDraft)
+                {
+                    List<string> appliedErrors = ValidateAppliedWorkbenchCandidateRows(
+                        lineKey,
+                        nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
+                        runtimeLines);
+                    if (appliedErrors.Count > 0)
+                    {
+                        result.errors = appliedErrors.ToArray();
+                        result.snapshot = BuildWorkbenchSnapshot(request.selectedLineId);
+                        return DispatchWorkbenchJson.Serialize(result);
+                    }
+                }
+                DispatchWorkbenchPlannerImportContractDto nextPlannerImportContract =
+                    ClonePlannerImportContract(request.plannerImportContract);
                 string requestedSelectedLineId = string.IsNullOrEmpty(request.selectedLineId) ? lineKey : request.selectedLineId;
                 string requestedSelectedEditLine = string.IsNullOrEmpty(request.selectedEditLine) ? "local" : request.selectedEditLine;
+                bool hasAdditionalLineDraftTargets = nextLineDraftRowsByKey.Keys
+                    .Any(key => !string.Equals(key, lineKey, StringComparison.Ordinal));
                 if (!request.applyDraft
                     && !request.markRulesApplied
+                    && !hasAdditionalLineDraftTargets
                     && string.Equals(state.SelectedLineId ?? string.Empty, requestedSelectedLineId, StringComparison.Ordinal)
                     && string.Equals(state.SelectedEditLine ?? string.Empty, requestedSelectedEditLine, StringComparison.Ordinal)
                     && AreMergedViewsEquivalent(state.MergedView, request.mergedView)
                     && AreManualRowsEquivalent(state.ManualRows, nextManualRows)
                     && AreAutoRulesEquivalent(state.AutoRules, nextAutoRules)
                     && AreStagedRowsEquivalent(state.StagedRows, nextStagedRows)
+                    && ArePlannerImportContractsEquivalent(state.PlannerImportContract, nextPlannerImportContract)
                     && AreWorkbenchLineSettingsEquivalent(request.lineSettings))
                 {
                     result.success = true;
@@ -610,8 +715,28 @@ namespace RapidTransitMod
                 state.ManualRows = nextManualRows;
                 state.AutoRules = nextAutoRules;
                 state.StagedRows = nextStagedRows;
-                RemoveWorkbenchRowsFromOtherDrafts(
+                if (nextPlannerImportContract != null)
+                {
+                    if (string.IsNullOrEmpty(nextPlannerImportContract.draftKey))
+                    {
+                        nextPlannerImportContract.draftKey = lineKey;
+                    }
+                    state.PlannerImportContract = nextPlannerImportContract;
+                }
+                else if (rulesChanged)
+                {
+                    state.PlannerImportContract = null;
+                }
+                bool additionalDraftRowsChanged = ApplyAdditionalLineDraftRowsByDraftKey(
                     lineKey,
+                    nextLineDraftRowsByKey,
+                    nextPlannerImportContract);
+                if (additionalDraftRowsChanged)
+                {
+                    rulesChanged = true;
+                }
+                RemoveWorkbenchRowsFromOtherDrafts(
+                    new HashSet<string>(nextLineDraftRowsByKey.Keys.Concat(new[] { lineKey }), StringComparer.Ordinal),
                     CollectTouchedWorkbenchLineIds(
                         state.SelectedLineId,
                         state.SelectedEditLine,
@@ -652,6 +777,7 @@ namespace RapidTransitMod
                 if (request.applyDraft)
                 {
                     RebuildAppliedWorkbenchStateFromDrafts();
+                    SeedRuntimeObservationFromAppliedWorkbenchState(state.SelectedLineId);
                 }
                 else
                 {
@@ -690,10 +816,12 @@ namespace RapidTransitMod
             DispatchWorkbenchDraftState draft = GetOrCreateWorkbenchDraft(draftKey);
             List<DispatchWorkbenchManualRowDto> mergedManualRows = new List<DispatchWorkbenchManualRowDto>();
             List<DispatchWorkbenchAutoRuleDto> mergedAutoRules = new List<DispatchWorkbenchAutoRuleDto>();
+            List<DispatchWorkbenchStagedRowDto> activeStagedRows = new List<DispatchWorkbenchStagedRowDto>();
             List<DispatchWorkbenchStagedRowDto> mergedStagedRows = new List<DispatchWorkbenchStagedRowDto>();
             HashSet<string> mergedManualRowIds = new HashSet<string>(StringComparer.Ordinal);
             HashSet<string> mergedAutoRuleIds = new HashSet<string>(StringComparer.Ordinal);
             HashSet<string> mergedStagedRowIds = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> activeStagedRowIds = new HashSet<string>(StringComparer.Ordinal);
             HashSet<string> validRuntimeLineIds = new HashSet<string>(
                 runtimeLines.Select(line => line.Id),
                 StringComparer.Ordinal);
@@ -712,7 +840,8 @@ namespace RapidTransitMod
             }
 
             EnsureMergedViewDefaultsStable(draft, runtimeLines, activeRuntime);
-            CollectWorkbenchDraftRows(draftKey, validRuntimeLineIds, mergedManualRows, mergedAutoRules, mergedStagedRows, mergedManualRowIds, mergedAutoRuleIds, mergedStagedRowIds);
+            CollectWorkbenchDraftRows(draftKey, validRuntimeLineIds, mergedManualRows, mergedAutoRules, activeStagedRows, mergedManualRowIds, mergedAutoRuleIds, activeStagedRowIds);
+            CollectWorkbenchDraftRows(draftKey, validRuntimeLineIds, new List<DispatchWorkbenchManualRowDto>(), new List<DispatchWorkbenchAutoRuleDto>(), mergedStagedRows, new HashSet<string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal), mergedStagedRowIds);
             foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 if (string.Equals(entry.Key, draftKey, StringComparison.Ordinal))
@@ -724,7 +853,15 @@ namespace RapidTransitMod
                 : new List<DispatchWorkbenchTripDto>();
             List<DispatchWorkbenchDepotDto> depots = BuildWorkbenchDepots();
 
-            LogWorkbenchSnapshot(activeRuntime, stations, trips, draft);
+            LogWorkbenchSnapshot(activeRuntime, stations, trips, draft, activeStagedRows, mergedStagedRows);
+            WriteWorkbenchIntegrityReport(
+                "snapshot",
+                activeRuntime,
+                draftKey,
+                draft,
+                runtimeLines,
+                activeStagedRows,
+                mergedStagedRows);
 
             return new DispatchWorkbenchSnapshot
             {
@@ -752,7 +889,9 @@ namespace RapidTransitMod
                 trips = trips.ToArray(),
                 manualRows = mergedManualRows.ToArray(),
                 autoRules = mergedAutoRules.ToArray(),
-                stagedRows = mergedStagedRows.ToArray(),
+                lineDraftRows = activeStagedRows.ToArray(),
+                combinedDraftRows = mergedStagedRows.ToArray(),
+                appliedRows = BuildAppliedWorkbenchRowsSnapshot(),
                 version = m_WorkbenchSnapshotVersion.ToString(),
                 sourceMode = "game-backend",
                 rulesApplied = draft.RulesApplied,
@@ -792,7 +931,9 @@ namespace RapidTransitMod
                 trips = Array.Empty<DispatchWorkbenchTripDto>(),
                 manualRows = Array.Empty<DispatchWorkbenchManualRowDto>(),
                 autoRules = Array.Empty<DispatchWorkbenchAutoRuleDto>(),
-                stagedRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                lineDraftRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                combinedDraftRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                appliedRows = BuildAppliedWorkbenchRowsSnapshot(),
                 version = m_WorkbenchSnapshotVersion.ToString(),
                 sourceMode = "game-backend",
                 rulesApplied = false,
@@ -1247,6 +1388,8 @@ namespace RapidTransitMod
                 if (persisted != null)
                 {
                     RestoreWorkbenchPersistence(persisted);
+                    Mod.log.Info("[WorkbenchRestore] drafts=" + m_WorkbenchDrafts.Count
+                        + " " + SummarizeWorkbenchDraftRows());
                 }
 
                 m_WorkbenchPersistenceLoaded = true;
@@ -1265,13 +1408,18 @@ namespace RapidTransitMod
             if (m_AppliedWorkbenchPersistenceLoaded)
                 return true;
 
+            m_AppliedPlannerImportContracts.Clear();
             Entity city = m_CitySystem.City;
             if (city == Entity.Null)
+            {
+                m_AppliedWorkbenchLines.Clear();
                 return false;
+            }
 
             if (!EntityManager.HasBuffer<AppliedWorkbenchLineStateElement>(city)
                 && !EntityManager.HasBuffer<AppliedWorkbenchStagedRowElement>(city))
             {
+                m_AppliedWorkbenchLines.Clear();
                 return false;
             }
 
@@ -1332,7 +1480,7 @@ namespace RapidTransitMod
 
                 foreach (AppliedWorkbenchLineState state in m_AppliedWorkbenchLines.Values)
                 {
-                state.StagedRows = state.StagedRows
+                    state.StagedRows = state.StagedRows
                         .OrderBy(row => ParseTimeMinutes(row.time))
                         .ThenBy(row => row.id, StringComparer.Ordinal)
                         .Select(CloneStagedRow)
@@ -1340,9 +1488,18 @@ namespace RapidTransitMod
                     state.DepartureMinutesCache = BuildAppliedDepartureMinutes(state.StagedRows, GetWorkbenchLineId(state.LineEntity));
                 }
 
+                RecoverAppliedStagedRowsFromDrafts();
                 SyncWorkbenchDraftsFromAppliedState();
+                RefreshAppliedPlannerImportContractsFromDrafts();
                 InvalidateWorkbenchLineFrameSnapshots();
                 InvalidateAppliedWorkbenchTrackModelState();
+                if (m_AppliedWorkbenchLines.Values.Any(
+                    state => state != null && state.StagedRows != null && state.StagedRows.Count > 0))
+                {
+                    SeedRuntimeObservationFromAppliedWorkbenchState(GetPreferredWorkbenchLineId());
+                }
+                Mod.log.Info("[AppliedWorkbenchRestore] lines=" + m_AppliedWorkbenchLines.Count
+                    + " " + SummarizeAppliedWorkbenchRows());
                 m_AppliedWorkbenchPersistenceLoaded = true;
                 return true;
             }
@@ -1463,6 +1620,7 @@ namespace RapidTransitMod
                 }
             }
 
+            RefreshAppliedPlannerImportContractsFromDrafts();
             SyncWorkbenchDraftsFromAppliedState();
             InvalidateWorkbenchLineFrameSnapshots();
             InvalidateAppliedWorkbenchTrackModelState();
@@ -1485,6 +1643,98 @@ namespace RapidTransitMod
 
                 applied.OriginHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(lineKey);
                 applied.MaxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(lineKey);
+            }
+        }
+
+        private void RecoverAppliedStagedRowsFromDrafts()
+        {
+            Dictionary<string, Dictionary<string, Queue<DispatchWorkbenchStagedRowDto>>> rowsByLineAndKey =
+                new Dictionary<string, Dictionary<string, Queue<DispatchWorkbenchStagedRowDto>>>(StringComparer.Ordinal);
+
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts)
+            {
+                DispatchWorkbenchDraftState draft = entry.Value;
+                if (draft == null || !draft.DraftApplied || draft.StagedRows == null || draft.StagedRows.Count == 0)
+                    continue;
+
+                foreach (DispatchWorkbenchStagedRowDto row in draft.StagedRows)
+                {
+                    if (row == null || string.IsNullOrEmpty(row.lineId))
+                        continue;
+
+                    if (!rowsByLineAndKey.TryGetValue(row.lineId, out Dictionary<string, Queue<DispatchWorkbenchStagedRowDto>> rowQueues))
+                    {
+                        rowQueues = new Dictionary<string, Queue<DispatchWorkbenchStagedRowDto>>(StringComparer.Ordinal);
+                        rowsByLineAndKey[row.lineId] = rowQueues;
+                    }
+
+                    string matchingKey = BuildWorkbenchStagedRowMatchingKey(row);
+                    if (!rowQueues.TryGetValue(matchingKey, out Queue<DispatchWorkbenchStagedRowDto> queue))
+                    {
+                        queue = new Queue<DispatchWorkbenchStagedRowDto>();
+                        rowQueues[matchingKey] = queue;
+                    }
+
+                    queue.Enqueue(CloneStagedRow(row));
+                }
+            }
+
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                AppliedWorkbenchLineState state = entry.Value;
+                if (state == null || state.StagedRows == null || state.StagedRows.Count == 0)
+                    continue;
+
+                string lineId = GetWorkbenchLineId(state.LineEntity);
+                if (string.IsNullOrEmpty(lineId)
+                    || !rowsByLineAndKey.TryGetValue(lineId, out Dictionary<string, Queue<DispatchWorkbenchStagedRowDto>> rowQueues))
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < state.StagedRows.Count; i++)
+                {
+                    DispatchWorkbenchStagedRowDto row = state.StagedRows[i];
+                    string matchingKey = BuildWorkbenchStagedRowMatchingKey(row);
+                    if (!rowQueues.TryGetValue(matchingKey, out Queue<DispatchWorkbenchStagedRowDto> queue)
+                        || queue.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    DispatchWorkbenchStagedRowDto restoredRow = queue.Dequeue();
+                    if (!string.IsNullOrEmpty(restoredRow.id))
+                    {
+                        row.id = restoredRow.id;
+                    }
+                    if (!string.IsNullOrEmpty(restoredRow.note))
+                    {
+                        row.note = restoredRow.note;
+                    }
+                }
+            }
+        }
+
+        private void RefreshAppliedPlannerImportContractsFromDrafts()
+        {
+            m_AppliedPlannerImportContracts.Clear();
+
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts)
+            {
+                DispatchWorkbenchDraftState draft = entry.Value;
+                if (draft == null || !draft.DraftApplied || draft.PlannerImportContract == null)
+                    continue;
+
+                DispatchWorkbenchPlannerImportContractDto contract = ClonePlannerImportContract(draft.PlannerImportContract);
+                if (contract == null)
+                    continue;
+
+                if (string.IsNullOrEmpty(contract.draftKey))
+                {
+                    contract.draftKey = entry.Key;
+                }
+
+                m_AppliedPlannerImportContracts[entry.Key] = contract;
             }
         }
 
@@ -1532,14 +1782,124 @@ namespace RapidTransitMod
             return lineIds;
         }
 
-        private void RemoveWorkbenchRowsFromOtherDrafts(string activeLineKey, HashSet<string> lineIds)
+        private static DispatchWorkbenchStagedRowDto[] GetRequestLineDraftRows(DispatchWorkbenchSaveRequest request)
+        {
+            return request?.lineDraftRows
+                ?? request?.stagedRows
+                ?? Array.Empty<DispatchWorkbenchStagedRowDto>();
+        }
+
+        private static DispatchWorkbenchStagedRowDto[] GetLineDraftRowsBlockRows(DispatchWorkbenchLineDraftRowsDto block)
+        {
+            return block?.lineDraftRows
+                ?? block?.stagedRows
+                ?? Array.Empty<DispatchWorkbenchStagedRowDto>();
+        }
+
+        private static Dictionary<string, List<DispatchWorkbenchStagedRowDto>> BuildRequestLineDraftRowsByDraftKey(
+            DispatchWorkbenchSaveRequest request,
+            string fallbackLineKey)
+        {
+            Dictionary<string, List<DispatchWorkbenchStagedRowDto>> rowsByDraftKey =
+                new Dictionary<string, List<DispatchWorkbenchStagedRowDto>>(StringComparer.Ordinal);
+            string fallbackKey = GetDraftKeyStatic(fallbackLineKey);
+
+            if (request?.lineDraftRowsByLineId != null && request.lineDraftRowsByLineId.Length > 0)
+            {
+                foreach (DispatchWorkbenchLineDraftRowsDto block in request.lineDraftRowsByLineId)
+                {
+                    string targetKey = GetDraftKeyStatic(block?.lineId);
+                    if (string.IsNullOrEmpty(targetKey))
+                    {
+                        targetKey = fallbackKey;
+                    }
+
+                    rowsByDraftKey[targetKey] = GetLineDraftRowsBlockRows(block)
+                        .Select(CloneStagedRow)
+                        .ToList();
+                }
+
+                return rowsByDraftKey;
+            }
+
+            DispatchWorkbenchStagedRowDto[] rows = GetRequestLineDraftRows(request);
+            if (rows.Length == 0)
+            {
+                rowsByDraftKey[fallbackKey] = new List<DispatchWorkbenchStagedRowDto>();
+                return rowsByDraftKey;
+            }
+
+            foreach (IGrouping<string, DispatchWorkbenchStagedRowDto> group in rows
+                .Where(row => row != null)
+                .GroupBy(row => GetDraftKeyStatic(string.IsNullOrEmpty(row.lineId) ? fallbackKey : row.lineId), StringComparer.Ordinal))
+            {
+                rowsByDraftKey[group.Key] = group.Select(CloneStagedRow).ToList();
+            }
+
+            if (!rowsByDraftKey.ContainsKey(fallbackKey))
+            {
+                rowsByDraftKey[fallbackKey] = new List<DispatchWorkbenchStagedRowDto>();
+            }
+
+            return rowsByDraftKey;
+        }
+
+        private bool ApplyAdditionalLineDraftRowsByDraftKey(
+            string activeLineKey,
+            Dictionary<string, List<DispatchWorkbenchStagedRowDto>> rowsByDraftKey,
+            DispatchWorkbenchPlannerImportContractDto plannerImportContract)
+        {
+            if (rowsByDraftKey == null || rowsByDraftKey.Count == 0)
+                return false;
+
+            bool changed = false;
+            foreach (KeyValuePair<string, List<DispatchWorkbenchStagedRowDto>> entry in rowsByDraftKey)
+            {
+                string draftKey = GetDraftKey(entry.Key);
+                if (string.Equals(draftKey, activeLineKey, StringComparison.Ordinal))
+                    continue;
+
+                DispatchWorkbenchDraftState draft = GetOrCreateWorkbenchDraft(draftKey);
+                List<DispatchWorkbenchStagedRowDto> nextRows =
+                    DeduplicateWorkbenchStagedRowsByIdPreservingLast(entry.Value?.Select(CloneStagedRow).ToList()
+                    ?? new List<DispatchWorkbenchStagedRowDto>());
+                bool draftRowsChanged = !AreStagedRowsEquivalent(draft.StagedRows, nextRows);
+                if (!draftRowsChanged)
+                    continue;
+
+                draft.SelectedLineId = draftKey;
+                draft.SelectedEditLine = draftKey == "__default__" ? string.Empty : draftKey;
+                draft.StagedRows = nextRows;
+                draft.RulesApplied = false;
+                draft.DraftApplied = false;
+                draft.AppliedDepartureMinutesCache.Clear();
+                if (plannerImportContract != null)
+                {
+                    DispatchWorkbenchPlannerImportContractDto contract = ClonePlannerImportContract(plannerImportContract);
+                    if (contract != null)
+                    {
+                        contract.draftKey = draftKey;
+                        draft.PlannerImportContract = contract;
+                    }
+                }
+                else
+                {
+                    draft.PlannerImportContract = null;
+                }
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private void RemoveWorkbenchRowsFromOtherDrafts(HashSet<string> skippedDraftKeys, HashSet<string> lineIds)
         {
             if (lineIds == null || lineIds.Count == 0)
                 return;
 
             foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts)
             {
-                if (string.Equals(entry.Key, activeLineKey, StringComparison.Ordinal))
+                if (skippedDraftKeys != null && skippedDraftKeys.Contains(entry.Key))
                     continue;
 
                 DispatchWorkbenchDraftState draft = entry.Value;
@@ -1581,15 +1941,29 @@ namespace RapidTransitMod
 
                 draft.RulesApplied = false;
                 draft.DraftApplied = false;
+                draft.PlannerImportContract = null;
                 draft.AppliedDepartureMinutesCache.Clear();
             }
         }
 
         private void SyncWorkbenchDraftsFromAppliedState()
         {
-            foreach (DispatchWorkbenchDraftState draft in m_WorkbenchDrafts.Values)
+            HashSet<string> appliedLineKeys = new HashSet<string>(m_AppliedWorkbenchLines.Keys, StringComparer.Ordinal);
+            Dictionary<string, bool> draftAppliedBeforeSync = m_WorkbenchDrafts
+                .ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value?.DraftApplied == true,
+                    StringComparer.Ordinal);
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> draftEntry in m_WorkbenchDrafts)
             {
-                draft.DraftApplied = false;
+                DispatchWorkbenchDraftState draft = draftEntry.Value;
+                if (draft == null)
+                    continue;
+
+                if (!appliedLineKeys.Contains(draftEntry.Key))
+                {
+                    draft.DraftApplied = false;
+                }
                 draft.AppliedDepartureMinutesCache.Clear();
             }
 
@@ -1597,7 +1971,9 @@ namespace RapidTransitMod
             {
                 string lineKey = entry.Key;
                 AppliedWorkbenchLineState applied = entry.Value;
-                if (!m_WorkbenchDrafts.TryGetValue(lineKey, out DispatchWorkbenchDraftState draft))
+                bool draftExisted = m_WorkbenchDrafts.TryGetValue(lineKey, out DispatchWorkbenchDraftState draft);
+                bool draftWasApplied = draftAppliedBeforeSync.TryGetValue(lineKey, out bool wasApplied) && wasApplied;
+                if (!draftExisted)
                 {
                     draft = CreateEmptyWorkbenchDraftState(lineKey);
                     draft.ManualRows.Clear();
@@ -1610,23 +1986,21 @@ namespace RapidTransitMod
                 {
                     draft.SelectedEditLine = lineKey == "__default__" ? string.Empty : lineKey;
                 }
-                bool hasMixedDraftRows = draft.StagedRows != null
-                    && draft.StagedRows
-                        .Where(row => row != null && !string.IsNullOrEmpty(row.lineId))
-                        .Select(row => row.lineId)
-                        .Distinct(StringComparer.Ordinal)
-                        .Count() > 1;
-                if (!hasMixedDraftRows
+                bool canRefreshDraftFromApplied = !draftExisted || draftWasApplied;
+                if (canRefreshDraftFromApplied
                     && !AreStagedRowsEquivalentIgnoringIdAndNote(draft.StagedRows, applied.StagedRows))
                 {
                     draft.StagedRows = applied.StagedRows.Select(CloneStagedRow).ToList();
                 }
-                if (!hasMixedDraftRows)
+                if (canRefreshDraftFromApplied)
                 {
                     EnsureAppliedMergedViewMatchesLineKind(draft, lineKey, applied);
                 }
-                draft.DraftApplied = true;
-                draft.RulesApplied = true;
+                draft.DraftApplied = canRefreshDraftFromApplied;
+                if (canRefreshDraftFromApplied)
+                {
+                    draft.RulesApplied = true;
+                }
                 draft.AppliedDepartureMinutesCache.Clear();
                 m_WorkbenchLineOriginHoldLimits[lineKey] =
                     NormalizeOriginHoldLimitMinutes(applied.OriginHoldLimitMinutes);
@@ -1711,6 +2085,8 @@ namespace RapidTransitMod
                 return 1;
             if (string.Equals(source, "auto", StringComparison.Ordinal))
                 return 2;
+            if (string.Equals(source, "planner", StringComparison.Ordinal))
+                return 3;
             return 0;
         }
 
@@ -1720,8 +2096,24 @@ namespace RapidTransitMod
             {
                 1 => "manual",
                 2 => "auto",
+                3 => "planner",
                 _ => string.Empty
             };
+        }
+
+        private DispatchWorkbenchStagedRowDto[] BuildAppliedWorkbenchRowsSnapshot()
+        {
+            if (m_AppliedWorkbenchLines.Count == 0)
+            {
+                return Array.Empty<DispatchWorkbenchStagedRowDto>();
+            }
+
+            return m_AppliedWorkbenchLines
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .SelectMany(pair => pair.Value?.StagedRows ?? new List<DispatchWorkbenchStagedRowDto>())
+                .Where(row => row != null)
+                .Select(CloneStagedRow)
+                .ToArray();
         }
 
         private static string BuildAppliedRowNote(byte sourceCode)
@@ -1730,6 +2122,7 @@ namespace RapidTransitMod
             {
                 1 => "restored-manual",
                 2 => "restored-auto",
+                3 => "restored-planner",
                 _ => string.Empty
             };
         }
@@ -1779,6 +2172,7 @@ namespace RapidTransitMod
         private void RestoreWorkbenchPersistence(DispatchWorkbenchPersistentState persisted)
         {
             m_WorkbenchDrafts.Clear();
+            m_AppliedPlannerImportContracts.Clear();
             m_WorkbenchLineOriginHoldLimits.Clear();
             m_WorkbenchLineMaxStationDwellMinutes.Clear();
             m_WorkbenchLineAllowedDepots.Clear();
@@ -1817,6 +2211,318 @@ namespace RapidTransitMod
 
                 m_WorkbenchDrafts[lineKey] = CreateDraftStateFromPersisted(lineKey, dto);
             }
+
+            MigrateRestoredWorkbenchDraftRowsByLineId();
+        }
+
+        private void MigrateRestoredWorkbenchDraftRowsByLineId()
+        {
+            if (m_WorkbenchDrafts.Count == 0)
+                return;
+
+            List<KeyValuePair<string, DispatchWorkbenchDraftState>> restoredDrafts =
+                m_WorkbenchDrafts.ToList();
+            HashSet<string> touchedDraftKeys = new HashSet<string>(StringComparer.Ordinal);
+            int relocatedRows = 0;
+            int createdDrafts = 0;
+
+            for (int draftIndex = 0; draftIndex < restoredDrafts.Count; draftIndex++)
+            {
+                string sourceKey = restoredDrafts[draftIndex].Key;
+                DispatchWorkbenchDraftState sourceDraft = restoredDrafts[draftIndex].Value;
+                if (sourceDraft == null)
+                    continue;
+
+                relocatedRows += MigrateRestoredManualRowsByLineId(
+                    sourceKey,
+                    sourceDraft,
+                    touchedDraftKeys,
+                    ref createdDrafts);
+                relocatedRows += MigrateRestoredAutoRulesByLineId(
+                    sourceKey,
+                    sourceDraft,
+                    touchedDraftKeys,
+                    ref createdDrafts);
+                relocatedRows += MigrateRestoredStagedRowsByLineId(
+                    sourceKey,
+                    sourceDraft,
+                    touchedDraftKeys,
+                    ref createdDrafts);
+            }
+
+            if (relocatedRows == 0)
+                return;
+
+            foreach (string draftKey in touchedDraftKeys)
+            {
+                if (!m_WorkbenchDrafts.TryGetValue(draftKey, out DispatchWorkbenchDraftState draft)
+                    || draft == null)
+                {
+                    continue;
+                }
+
+                draft.ManualRows = DeduplicateWorkbenchManualRowsForMigration(draft.ManualRows);
+                draft.AutoRules = DeduplicateWorkbenchAutoRulesForMigration(draft.AutoRules);
+                draft.StagedRows = DeduplicateWorkbenchStagedRowsForMigration(draft.StagedRows);
+                NormalizeMigratedWorkbenchDraftState(draftKey, draft);
+            }
+
+            Mod.log.Info("[WorkbenchDraftMigration] relocatedRows="
+                + relocatedRows
+                + " touchedDrafts="
+                + touchedDraftKeys.Count
+                + " createdDrafts="
+                + createdDrafts);
+        }
+
+        private int MigrateRestoredManualRowsByLineId(
+            string sourceKey,
+            DispatchWorkbenchDraftState sourceDraft,
+            HashSet<string> touchedDraftKeys,
+            ref int createdDrafts)
+        {
+            if (sourceDraft.ManualRows == null || sourceDraft.ManualRows.Count == 0)
+                return 0;
+
+            List<DispatchWorkbenchManualRowDto> retainedRows =
+                new List<DispatchWorkbenchManualRowDto>(sourceDraft.ManualRows.Count);
+            int movedRows = 0;
+            for (int i = 0; i < sourceDraft.ManualRows.Count; i++)
+            {
+                DispatchWorkbenchManualRowDto row = sourceDraft.ManualRows[i];
+                if (!ShouldMigrateRestoredWorkbenchRow(sourceKey, row?.lineId, out string targetKey))
+                {
+                    retainedRows.Add(row);
+                    continue;
+                }
+
+                DispatchWorkbenchDraftState targetDraft =
+                    GetOrCreateRestoredWorkbenchMigrationDraft(targetKey, ref createdDrafts);
+                targetDraft.ManualRows.Add(CloneManualRow(row));
+                if (sourceDraft.RulesApplied || sourceDraft.DraftApplied)
+                {
+                    targetDraft.RulesApplied = true;
+                }
+                CopyPlannerImportContractForMigratedDraft(sourceDraft, targetDraft, targetKey);
+                touchedDraftKeys.Add(sourceKey);
+                touchedDraftKeys.Add(targetKey);
+                movedRows++;
+            }
+
+            sourceDraft.ManualRows = retainedRows;
+            return movedRows;
+        }
+
+        private int MigrateRestoredAutoRulesByLineId(
+            string sourceKey,
+            DispatchWorkbenchDraftState sourceDraft,
+            HashSet<string> touchedDraftKeys,
+            ref int createdDrafts)
+        {
+            if (sourceDraft.AutoRules == null || sourceDraft.AutoRules.Count == 0)
+                return 0;
+
+            List<DispatchWorkbenchAutoRuleDto> retainedRules =
+                new List<DispatchWorkbenchAutoRuleDto>(sourceDraft.AutoRules.Count);
+            int movedRules = 0;
+            for (int i = 0; i < sourceDraft.AutoRules.Count; i++)
+            {
+                DispatchWorkbenchAutoRuleDto rule = sourceDraft.AutoRules[i];
+                if (!ShouldMigrateRestoredWorkbenchRow(sourceKey, rule?.lineId, out string targetKey))
+                {
+                    retainedRules.Add(rule);
+                    continue;
+                }
+
+                DispatchWorkbenchDraftState targetDraft =
+                    GetOrCreateRestoredWorkbenchMigrationDraft(targetKey, ref createdDrafts);
+                targetDraft.AutoRules.Add(CloneAutoRule(rule));
+                if (sourceDraft.RulesApplied || sourceDraft.DraftApplied)
+                {
+                    targetDraft.RulesApplied = true;
+                }
+                CopyPlannerImportContractForMigratedDraft(sourceDraft, targetDraft, targetKey);
+                touchedDraftKeys.Add(sourceKey);
+                touchedDraftKeys.Add(targetKey);
+                movedRules++;
+            }
+
+            sourceDraft.AutoRules = retainedRules;
+            return movedRules;
+        }
+
+        private int MigrateRestoredStagedRowsByLineId(
+            string sourceKey,
+            DispatchWorkbenchDraftState sourceDraft,
+            HashSet<string> touchedDraftKeys,
+            ref int createdDrafts)
+        {
+            if (sourceDraft.StagedRows == null || sourceDraft.StagedRows.Count == 0)
+                return 0;
+
+            List<DispatchWorkbenchStagedRowDto> retainedRows =
+                new List<DispatchWorkbenchStagedRowDto>(sourceDraft.StagedRows.Count);
+            int movedRows = 0;
+            for (int i = 0; i < sourceDraft.StagedRows.Count; i++)
+            {
+                DispatchWorkbenchStagedRowDto row = sourceDraft.StagedRows[i];
+                if (!ShouldMigrateRestoredWorkbenchRow(sourceKey, row?.lineId, out string targetKey))
+                {
+                    retainedRows.Add(row);
+                    continue;
+                }
+
+                DispatchWorkbenchDraftState targetDraft =
+                    GetOrCreateRestoredWorkbenchMigrationDraft(targetKey, ref createdDrafts);
+                targetDraft.StagedRows.Add(CloneStagedRow(row));
+                if (sourceDraft.DraftApplied)
+                {
+                    targetDraft.DraftApplied = true;
+                    targetDraft.RulesApplied = true;
+                }
+                else if (sourceDraft.RulesApplied)
+                {
+                    targetDraft.RulesApplied = true;
+                }
+                CopyPlannerImportContractForMigratedDraft(sourceDraft, targetDraft, targetKey);
+                touchedDraftKeys.Add(sourceKey);
+                touchedDraftKeys.Add(targetKey);
+                movedRows++;
+            }
+
+            sourceDraft.StagedRows = retainedRows;
+            return movedRows;
+        }
+
+        private bool ShouldMigrateRestoredWorkbenchRow(
+            string sourceKey,
+            string rowLineId,
+            out string targetKey)
+        {
+            targetKey = string.Empty;
+            if (string.IsNullOrEmpty(rowLineId)
+                || string.Equals(rowLineId, "local", StringComparison.Ordinal)
+                || string.Equals(rowLineId, "express", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            targetKey = GetDraftKey(rowLineId);
+            return !string.Equals(targetKey, sourceKey ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        private DispatchWorkbenchDraftState GetOrCreateRestoredWorkbenchMigrationDraft(
+            string lineKey,
+            ref int createdDrafts)
+        {
+            if (!m_WorkbenchDrafts.TryGetValue(lineKey, out DispatchWorkbenchDraftState draft)
+                || draft == null)
+            {
+                draft = CreateEmptyWorkbenchDraftState(lineKey);
+                m_WorkbenchDrafts[lineKey] = draft;
+                createdDrafts++;
+            }
+
+            return draft;
+        }
+
+        private void CopyPlannerImportContractForMigratedDraft(
+            DispatchWorkbenchDraftState sourceDraft,
+            DispatchWorkbenchDraftState targetDraft,
+            string targetKey)
+        {
+            if (sourceDraft?.PlannerImportContract == null
+                || targetDraft == null
+                || targetDraft.PlannerImportContract != null)
+            {
+                return;
+            }
+
+            DispatchWorkbenchPlannerImportContractDto contract =
+                ClonePlannerImportContract(sourceDraft.PlannerImportContract);
+            if (contract == null)
+                return;
+
+            contract.draftKey = targetKey;
+            targetDraft.PlannerImportContract = contract;
+        }
+
+        private void NormalizeMigratedWorkbenchDraftState(
+            string draftKey,
+            DispatchWorkbenchDraftState draft)
+        {
+            if (draft == null)
+                return;
+
+            if (string.IsNullOrEmpty(draft.SelectedLineId))
+            {
+                draft.SelectedLineId = draftKey;
+            }
+            if (string.IsNullOrEmpty(draft.SelectedEditLine)
+                || string.Equals(draft.SelectedEditLine, "local", StringComparison.Ordinal)
+                || string.Equals(draft.SelectedEditLine, "express", StringComparison.Ordinal))
+            {
+                draft.SelectedEditLine = draftKey == "__default__" ? string.Empty : draftKey;
+            }
+
+            if (draft.DraftApplied && !HasWorkbenchRowsForDraft(draft.StagedRows, draftKey))
+            {
+                draft.DraftApplied = false;
+            }
+            if (draft.RulesApplied
+                && !HasWorkbenchRowsForDraft(draft.ManualRows, draftKey)
+                && !HasWorkbenchRulesForDraft(draft.AutoRules, draftKey)
+                && !HasWorkbenchRowsForDraft(draft.StagedRows, draftKey))
+            {
+                draft.RulesApplied = false;
+            }
+
+            if (draft.MergedView == null)
+            {
+                draft.MergedView = new DispatchWorkbenchMergedView
+                {
+                    localLineIds = Array.Empty<string>(),
+                    expressLineIds = Array.Empty<string>(),
+                    isLoop = true,
+                    turnbackStationId = string.Empty,
+                    direction = "up"
+                };
+            }
+
+            ApplyCurrentTimeWindowDefaults(draft.MergedView);
+            draft.AppliedDepartureMinutesCache.Clear();
+        }
+
+        private static bool HasWorkbenchRowsForDraft(
+            List<DispatchWorkbenchManualRowDto> rows,
+            string draftKey)
+        {
+            return rows != null
+                && rows.Any(row => row != null
+                    && string.Equals(GetDraftKeyStatic(row.lineId), draftKey, StringComparison.Ordinal));
+        }
+
+        private static bool HasWorkbenchRulesForDraft(
+            List<DispatchWorkbenchAutoRuleDto> rules,
+            string draftKey)
+        {
+            return rules != null
+                && rules.Any(rule => rule != null
+                    && string.Equals(GetDraftKeyStatic(rule.lineId), draftKey, StringComparison.Ordinal));
+        }
+
+        private static bool HasWorkbenchRowsForDraft(
+            List<DispatchWorkbenchStagedRowDto> rows,
+            string draftKey)
+        {
+            return rows != null
+                && rows.Any(row => row != null
+                    && string.Equals(GetDraftKeyStatic(row.lineId), draftKey, StringComparison.Ordinal));
+        }
+
+        private static string GetDraftKeyStatic(string lineId)
+        {
+            return string.IsNullOrEmpty(lineId) ? "__default__" : lineId;
         }
 
         private static DispatchWorkbenchPersistedDraftState CreatePersistedDraftState(string lineKey, DispatchWorkbenchDraftState draft)
@@ -1829,9 +2535,10 @@ namespace RapidTransitMod
                 mergedView = CloneMergedViewForPersistence(draft?.MergedView),
                 manualRows = draft?.ManualRows?.Select(CloneManualRow).ToArray() ?? Array.Empty<DispatchWorkbenchManualRowDto>(),
                 autoRules = draft?.AutoRules?.Select(CloneAutoRule).ToArray() ?? Array.Empty<DispatchWorkbenchAutoRuleDto>(),
-                stagedRows = draft?.StagedRows?.Select(CloneStagedRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                lineDraftRows = draft?.StagedRows?.Select(CloneStagedRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
                 rulesApplied = draft?.RulesApplied == true,
-                draftApplied = draft?.DraftApplied == true
+                draftApplied = draft?.DraftApplied == true,
+                plannerImportContract = ClonePlannerImportContract(draft?.PlannerImportContract)
             };
         }
 
@@ -1846,9 +2553,12 @@ namespace RapidTransitMod
                 MergedView = CloneMergedView(dto.mergedView),
                 ManualRows = dto.manualRows?.Select(CloneManualRow).ToList() ?? new List<DispatchWorkbenchManualRowDto>(),
                 AutoRules = dto.autoRules?.Select(CloneAutoRule).ToList() ?? new List<DispatchWorkbenchAutoRuleDto>(),
-                StagedRows = dto.stagedRows?.Select(CloneStagedRow).ToList() ?? new List<DispatchWorkbenchStagedRowDto>(),
+                StagedRows = DeduplicateWorkbenchStagedRowsByIdPreservingLast(
+                    (dto.lineDraftRows ?? dto.stagedRows)?.Select(CloneStagedRow).ToList()
+                    ?? new List<DispatchWorkbenchStagedRowDto>()),
                 RulesApplied = dto.rulesApplied,
-                DraftApplied = dto.draftApplied
+                DraftApplied = dto.draftApplied,
+                PlannerImportContract = ClonePlannerImportContract(dto.plannerImportContract)
             };
 
             if (draft.MergedView == null)
@@ -2432,10 +3142,26 @@ namespace RapidTransitMod
                 if (stopEntity == Entity.Null)
                     continue;
 
-                originStationId = CreateWorkbenchOriginStationId(stopEntity);
+                originStationId = CreateWorkbenchOriginGroupId(stopEntity);
                 originStationName = ResolveWorkbenchStationName(stopEntity);
                 return;
             }
+        }
+
+        private string CreateWorkbenchOriginGroupId(Entity stopEntity)
+        {
+            if (stopEntity == Entity.Null)
+            {
+                return string.Empty;
+            }
+
+            Entity buildingEntity = FindTransportStationFromStop(stopEntity);
+            if (buildingEntity != Entity.Null)
+            {
+                return "station-building-" + buildingEntity.Index.ToString();
+            }
+
+            return CreateWorkbenchOriginStationId(stopEntity);
         }
 
         private static string CreateWorkbenchOriginStationId(Entity stopEntity)
@@ -2455,19 +3181,43 @@ namespace RapidTransitMod
 
         private string ResolveWorkbenchEntityName(Entity entity)
         {
-            string translatedName = TryTranslateName(m_NameSystem.GetName(entity));
+            string translatedName = TryGetTranslatedWorkbenchEntityName(entity);
             if (!string.IsNullOrEmpty(translatedName))
             {
                 return translatedName;
             }
 
-            string renderedLabel = m_NameSystem.GetRenderedLabelName(entity);
+            string renderedLabel = TryGetRenderedWorkbenchEntityName(entity);
             if (!string.IsNullOrEmpty(renderedLabel))
             {
                 return renderedLabel;
             }
 
             return string.Empty;
+        }
+
+        private string TryGetTranslatedWorkbenchEntityName(Entity entity)
+        {
+            try
+            {
+                return TryTranslateName(m_NameSystem.GetName(entity));
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private string TryGetRenderedWorkbenchEntityName(Entity entity)
+        {
+            try
+            {
+                return m_NameSystem.GetRenderedLabelName(entity);
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         private Entity ResolveWorkbenchStopEntity(Entity waypoint)
@@ -2498,7 +3248,7 @@ namespace RapidTransitMod
                 }
             }
 
-            return TryTranslateName(m_NameSystem.GetName(stopEntity));
+            return TryGetTranslatedWorkbenchEntityName(stopEntity);
         }
 
         private Entity FindOwnedTransportStop(Entity entity)
@@ -2684,6 +3434,15 @@ namespace RapidTransitMod
 
             stopRecord.LastUpdatedFrame = nowFrame;
             activeTrip.LastUpdatedFrame = nowFrame;
+            RecordRuntimeObservationStopEvent(
+                vehicle,
+                line,
+                stopEntity,
+                stopWaypointIndex,
+                isOriginStop,
+                boarding,
+                nowTime,
+                nowFrame);
 
             string stopName = ResolveWorkbenchStationName(stopEntity);
             if (string.IsNullOrEmpty(stopName))
@@ -3048,7 +3807,9 @@ namespace RapidTransitMod
             WorkbenchLineRuntime activeRuntime,
             List<DispatchWorkbenchStationDto> stations,
             List<DispatchWorkbenchTripDto> trips,
-            DispatchWorkbenchDraftState draft)
+            DispatchWorkbenchDraftState draft,
+            List<DispatchWorkbenchStagedRowDto> activeStagedRows,
+            List<DispatchWorkbenchStagedRowDto> mergedStagedRows)
         {
             string lineId = activeRuntime?.Id ?? "none";
             string lineName = activeRuntime?.Name ?? "none";
@@ -3076,7 +3837,21 @@ namespace RapidTransitMod
             string expressPreview = draft?.MergedView?.expressLineIds != null
                 ? string.Join(",", draft.MergedView.expressLineIds)
                 : draft?.MergedView?.expressLineId ?? string.Empty;
-            string logKey = lineId + "|" + stations.Count + "|" + (trips?.Count ?? 0) + "|" + localPreview + "|" + expressPreview;
+            string activeRowsPreview = SummarizeStagedRowsByLine(activeStagedRows);
+            string mergedRowsPreview = SummarizeStagedRowsByLine(mergedStagedRows);
+            string logKey = lineId
+                + "|"
+                + stations.Count
+                + "|"
+                + (trips?.Count ?? 0)
+                + "|"
+                + localPreview
+                + "|"
+                + expressPreview
+                + "|"
+                + activeRowsPreview
+                + "|"
+                + mergedRowsPreview;
             if (logKey == m_LastWorkbenchSnapshotLogKey)
             {
                 return;
@@ -3102,7 +3877,475 @@ namespace RapidTransitMod
                 + drawableTripCount
                 + " firstTrips=["
                 + tripPreview
+                + "] activeRows=["
+                + activeRowsPreview
+                + "] combinedRows=["
+                + mergedRowsPreview
                 + "]");
+        }
+
+        private string SummarizeWorkbenchDraftRows()
+        {
+            if (m_WorkbenchDrafts.Count == 0)
+                return "draftRows=[]";
+
+            return "draftRows=["
+                + string.Join("; ", m_WorkbenchDrafts
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair =>
+                    {
+                        DispatchWorkbenchDraftState draft = pair.Value;
+                        return pair.Key
+                            + " sel="
+                            + (draft?.SelectedLineId ?? string.Empty)
+                            + " edit="
+                            + (draft?.SelectedEditLine ?? string.Empty)
+                            + " applied="
+                            + (draft?.DraftApplied == true ? "1" : "0")
+                            + " staged="
+                            + SummarizeStagedRowsByLine(draft?.StagedRows);
+                    }))
+                + "]";
+        }
+
+        private string SummarizeAppliedWorkbenchRows()
+        {
+            if (m_AppliedWorkbenchLines.Count == 0)
+                return "appliedRows=[]";
+
+            return "appliedRows=["
+                + string.Join("; ", m_AppliedWorkbenchLines
+                    .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair =>
+                    {
+                        AppliedWorkbenchLineState state = pair.Value;
+                        string entityText = state?.LineEntity == Entity.Null
+                            ? "none"
+                            : state?.LineEntity.Index.ToString();
+                        return pair.Key
+                            + " entity="
+                            + entityText
+                            + " staged="
+                            + SummarizeStagedRowsByLine(state?.StagedRows);
+                    }))
+                + "]";
+        }
+
+        private static string SummarizeStagedRowsByLine(IEnumerable<DispatchWorkbenchStagedRowDto> rows)
+        {
+            if (rows == null)
+                return "-";
+
+            string[] parts = rows
+                .Where(row => row != null)
+                .GroupBy(row => string.IsNullOrEmpty(row.lineId) ? "(missing)" : row.lineId, StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group =>
+                {
+                    string preview = string.Join(",", group
+                        .Select(row => row.time ?? string.Empty)
+                        .Where(time => !string.IsNullOrEmpty(time))
+                        .OrderBy(time => time, StringComparer.Ordinal)
+                        .Take(6));
+                    return group.Key + ":" + group.Count() + "(" + preview + ")";
+                })
+                .ToArray();
+
+            return parts.Length == 0 ? "-" : string.Join("|", parts);
+        }
+
+        private void WriteWorkbenchIntegrityReport(
+            string reason,
+            WorkbenchLineRuntime activeRuntime,
+            string draftKey,
+            DispatchWorkbenchDraftState activeDraft,
+            List<WorkbenchLineRuntime> runtimeLines,
+            List<DispatchWorkbenchStagedRowDto> activeStagedRows,
+            List<DispatchWorkbenchStagedRowDto> combinedStagedRows)
+        {
+            if (!ENABLE_WORKBENCH_INTEGRITY_REPORT)
+                return;
+
+            try
+            {
+                Dictionary<string, WorkbenchLineRuntime> runtimeById = runtimeLines
+                    .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
+                    .GroupBy(line => line.Id, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                Dictionary<string, List<string>> provenanceByKey = BuildWorkbenchRowProvenanceMap();
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("RapidTransitMod Workbench Integrity Report");
+                sb.AppendLine("reason=" + (reason ?? string.Empty));
+                sb.AppendLine("frame=" + (m_SimulationSystem != null ? m_SimulationSystem.frameIndex.ToString() : "0"));
+                sb.AppendLine("activeLine=" + (activeRuntime?.Id ?? "none") + " name=\"" + (activeRuntime?.Name ?? "none") + "\" draftKey=" + (draftKey ?? string.Empty));
+                sb.AppendLine("activeDraft selected=" + (activeDraft?.SelectedLineId ?? string.Empty)
+                    + " edit=" + (activeDraft?.SelectedEditLine ?? string.Empty)
+                    + " rulesApplied=" + (activeDraft?.RulesApplied == true ? "1" : "0")
+                    + " draftApplied=" + (activeDraft?.DraftApplied == true ? "1" : "0")
+                    + " local=[" + string.Join(",", NormalizeLineIdList(activeDraft?.MergedView?.localLineIds, activeDraft?.MergedView?.localLineId, null)) + "]"
+                    + " express=[" + string.Join(",", NormalizeLineIdList(activeDraft?.MergedView?.expressLineIds, activeDraft?.MergedView?.expressLineId, null)) + "]");
+                sb.AppendLine();
+                AppendWorkbenchLineCatalogReport(sb, runtimeLines);
+                AppendWorkbenchDraftReport(sb, runtimeById);
+                AppendWorkbenchAppliedReport(sb, runtimeById);
+                AppendWorkbenchRowSetReport(sb, "activeRows", activeStagedRows, runtimeById, provenanceByKey);
+                AppendWorkbenchRowSetReport(sb, "combinedRows", combinedStagedRows, runtimeById, provenanceByKey);
+                AppendWorkbenchConflictReport(sb, "combinedRows", combinedStagedRows, runtimeById, provenanceByKey);
+
+                string filePath = GetWorkbenchReportPath("RapidTransitMod-workbench-integrity-latest.txt");
+                File.WriteAllText(filePath, sb.ToString());
+                Mod.log.Info("[WorkbenchIntegrityReport] exported to " + filePath);
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("[WorkbenchIntegrityReport] failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private void WriteWorkbenchSaveRequestReport(
+            DispatchWorkbenchSaveRequest request,
+            List<WorkbenchLineRuntime> runtimeLines,
+            List<string> errors)
+        {
+            if (!ENABLE_WORKBENCH_INTEGRITY_REPORT || request == null)
+                return;
+
+            try
+            {
+                Dictionary<string, WorkbenchLineRuntime> runtimeById = runtimeLines
+                    .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
+                    .GroupBy(line => line.Id, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                Dictionary<string, List<string>> provenanceByKey = BuildWorkbenchRowProvenanceMap();
+                List<DispatchWorkbenchStagedRowDto> rows = BuildRequestLineDraftRowsByDraftKey(
+                        request,
+                        GetDraftKey(request.selectedLineId))
+                    .Values
+                    .SelectMany(group => group)
+                    .Select(CloneStagedRow)
+                    .ToList();
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("RapidTransitMod Workbench Save Request Report");
+                sb.AppendLine("frame=" + (m_SimulationSystem != null ? m_SimulationSystem.frameIndex.ToString() : "0"));
+                sb.AppendLine("selectedLineId=" + (request.selectedLineId ?? string.Empty)
+                    + " selectedEditLine=" + (request.selectedEditLine ?? string.Empty)
+                    + " applyDraft=" + (request.applyDraft ? "1" : "0")
+                    + " markRulesApplied=" + (request.markRulesApplied ? "1" : "0")
+                    + " nativeScheduleWriter=" + (request.nativeScheduleWriter ? "1" : "0"));
+                sb.AppendLine("mergedView local=[" + string.Join(",", NormalizeLineIdList(request.mergedView?.localLineIds, request.mergedView?.localLineId, runtimeLines)) + "]"
+                    + " express=[" + string.Join(",", NormalizeLineIdList(request.mergedView?.expressLineIds, request.mergedView?.expressLineId, runtimeLines)) + "]");
+                sb.AppendLine("validationErrors=" + (errors == null || errors.Count == 0 ? "-" : string.Join(" | ", errors)));
+                sb.AppendLine("manualRows=" + SummarizeManualRowsByLine(request.manualRows));
+                sb.AppendLine("autoRules=" + SummarizeAutoRulesByLine(request.autoRules));
+                sb.AppendLine("lineDraftRows=" + SummarizeStagedRowsByLine(rows));
+                sb.AppendLine();
+                AppendWorkbenchRowSetReport(sb, "request.lineDraftRows", rows, runtimeById, provenanceByKey);
+                AppendWorkbenchConflictReport(sb, "request.lineDraftRows", rows, runtimeById, provenanceByKey);
+
+                string filePath = GetWorkbenchReportPath("RapidTransitMod-workbench-save-request-latest.txt");
+                File.WriteAllText(filePath, sb.ToString());
+                Mod.log.Info("[WorkbenchSaveRequestReport] exported to " + filePath);
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("[WorkbenchSaveRequestReport] failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private static string GetWorkbenchReportPath(string fileName)
+        {
+            string logsDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "AppData",
+                "LocalLow",
+                "Colossal Order",
+                "Cities Skylines II",
+                "Logs");
+            Directory.CreateDirectory(logsDirectory);
+            return Path.Combine(logsDirectory, fileName);
+        }
+
+        private void AppendWorkbenchLineCatalogReport(StringBuilder sb, List<WorkbenchLineRuntime> runtimeLines)
+        {
+            sb.AppendLine("== runtime lines ==");
+            if (runtimeLines == null || runtimeLines.Count == 0)
+            {
+                sb.AppendLine("(none)");
+                sb.AppendLine();
+                return;
+            }
+
+            foreach (WorkbenchLineRuntime line in runtimeLines.OrderBy(line => line.Id, StringComparer.Ordinal))
+            {
+                sb.AppendLine((line.Id ?? string.Empty)
+                    + " entity=" + line.Entity.Index
+                    + " routeNumber=" + (line.RouteNumber == int.MaxValue ? "-" : line.RouteNumber.ToString())
+                    + " kind=" + (line.Kind ?? string.Empty)
+                    + " name=\"" + (line.Name ?? string.Empty) + "\""
+                    + " origin=" + (line.OriginStationId ?? string.Empty)
+                    + " \"" + (line.OriginStationName ?? string.Empty) + "\"");
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendWorkbenchDraftReport(StringBuilder sb, Dictionary<string, WorkbenchLineRuntime> runtimeById)
+        {
+            sb.AppendLine("== drafts ==");
+            if (m_WorkbenchDrafts.Count == 0)
+            {
+                sb.AppendLine("(none)");
+                sb.AppendLine();
+                return;
+            }
+
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                DispatchWorkbenchDraftState draft = entry.Value;
+                List<string> localIds = NormalizeLineIdList(draft?.MergedView?.localLineIds, draft?.MergedView?.localLineId, null);
+                List<string> expressIds = NormalizeLineIdList(draft?.MergedView?.expressLineIds, draft?.MergedView?.expressLineId, null);
+                HashSet<string> scope = new HashSet<string>(localIds.Concat(expressIds), StringComparer.Ordinal);
+                if (!string.IsNullOrEmpty(draft?.SelectedLineId)) scope.Add(draft.SelectedLineId);
+                if (!string.IsNullOrEmpty(draft?.SelectedEditLine)) scope.Add(draft.SelectedEditLine);
+                if (!string.IsNullOrEmpty(entry.Key)) scope.Add(entry.Key);
+                string outOfScope = draft?.StagedRows == null
+                    ? "-"
+                    : string.Join(",", draft.StagedRows
+                        .Where(row => row != null && !string.IsNullOrEmpty(row.lineId) && !scope.Contains(row.lineId))
+                        .Select(row => row.lineId)
+                        .Distinct(StringComparer.Ordinal)
+                        .OrderBy(id => id, StringComparer.Ordinal));
+                if (string.IsNullOrEmpty(outOfScope)) outOfScope = "-";
+                sb.AppendLine("draft=" + entry.Key
+                    + " selected=" + (draft?.SelectedLineId ?? string.Empty)
+                    + " edit=" + (draft?.SelectedEditLine ?? string.Empty)
+                    + " rulesApplied=" + (draft?.RulesApplied == true ? "1" : "0")
+                    + " draftApplied=" + (draft?.DraftApplied == true ? "1" : "0")
+                    + " local=[" + string.Join(",", localIds) + "]"
+                    + " express=[" + string.Join(",", expressIds) + "]"
+                    + " staged=" + SummarizeStagedRowsByLine(draft?.StagedRows)
+                    + " outOfScope=[" + outOfScope + "]");
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendWorkbenchAppliedReport(StringBuilder sb, Dictionary<string, WorkbenchLineRuntime> runtimeById)
+        {
+            sb.AppendLine("== applied ==");
+            if (m_AppliedWorkbenchLines.Count == 0)
+            {
+                sb.AppendLine("(none)");
+                sb.AppendLine();
+                return;
+            }
+
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                AppliedWorkbenchLineState state = entry.Value;
+                string runtimeOrigin = runtimeById.TryGetValue(entry.Key, out WorkbenchLineRuntime runtime)
+                    ? (runtime.OriginStationId + " \"" + runtime.OriginStationName + "\"")
+                    : "-";
+                sb.AppendLine("applied=" + entry.Key
+                    + " entity=" + (state?.LineEntity == Entity.Null ? "none" : state?.LineEntity.Index.ToString())
+                    + " origin=" + runtimeOrigin
+                    + " staged=" + SummarizeStagedRowsByLine(state?.StagedRows));
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendWorkbenchRowSetReport(
+            StringBuilder sb,
+            string title,
+            IEnumerable<DispatchWorkbenchStagedRowDto> rows,
+            Dictionary<string, WorkbenchLineRuntime> runtimeById,
+            Dictionary<string, List<string>> provenanceByKey)
+        {
+            sb.AppendLine("== " + title + " ==");
+            List<DispatchWorkbenchStagedRowDto> rowList = rows?.Where(row => row != null).ToList()
+                ?? new List<DispatchWorkbenchStagedRowDto>();
+            sb.AppendLine("summary=" + SummarizeStagedRowsByLine(rowList));
+            foreach (DispatchWorkbenchStagedRowDto row in rowList
+                .OrderBy(row => ParseTimeMinutes(row.time))
+                .ThenBy(row => row.lineId, StringComparer.Ordinal)
+                .Take(240))
+            {
+                sb.AppendLine(DescribeWorkbenchRow(row, runtimeById, provenanceByKey));
+            }
+            if (rowList.Count > 240)
+            {
+                sb.AppendLine("... truncated rows=" + (rowList.Count - 240));
+            }
+            sb.AppendLine();
+        }
+
+        private void AppendWorkbenchConflictReport(
+            StringBuilder sb,
+            string title,
+            IEnumerable<DispatchWorkbenchStagedRowDto> rows,
+            Dictionary<string, WorkbenchLineRuntime> runtimeById,
+            Dictionary<string, List<string>> provenanceByKey)
+        {
+            const int minGapMinutes = 5;
+            sb.AppendLine("== " + title + " conflicts ==");
+            List<(DispatchWorkbenchStagedRowDto Row, int Minute, string OriginId, string OriginName)> entries =
+                (rows ?? Enumerable.Empty<DispatchWorkbenchStagedRowDto>())
+                    .Where(row => row != null)
+                    .Select(row =>
+                    {
+                        int minute = ParseTimeMinutes(row.time);
+                        string originId = string.Empty;
+                        string originName = string.Empty;
+                        if (runtimeById.TryGetValue(row.lineId ?? string.Empty, out WorkbenchLineRuntime line))
+                        {
+                            originId = line.OriginStationId ?? string.Empty;
+                            originName = line.OriginStationName ?? string.Empty;
+                        }
+                        return (Row: row, Minute: minute, OriginId: originId, OriginName: originName);
+                    })
+                    .Where(entry => entry.Minute >= 0 && !string.IsNullOrEmpty(entry.OriginId))
+                    .OrderBy(entry => entry.Minute)
+                    .ThenBy(entry => entry.Row.lineId, StringComparer.Ordinal)
+                    .ToList();
+
+            int frontendConflictCount = 0;
+            for (int i = 1; i < entries.Count; i++)
+            {
+                var previous = entries[i - 1];
+                var current = entries[i];
+                if (!string.Equals(previous.OriginId, current.OriginId, StringComparison.Ordinal))
+                    continue;
+                int gap = current.Minute - previous.Minute;
+                if (gap >= minGapMinutes)
+                    continue;
+                frontendConflictCount++;
+                if (frontendConflictCount <= 80)
+                {
+                    sb.AppendLine("frontendPair gap=" + gap
+                        + " origin=" + current.OriginId + " \"" + current.OriginName + "\""
+                        + " left={" + DescribeWorkbenchRow(previous.Row, runtimeById, provenanceByKey) + "}"
+                        + " right={" + DescribeWorkbenchRow(current.Row, runtimeById, provenanceByKey) + "}");
+                }
+            }
+            sb.AppendLine("frontendPairCount=" + frontendConflictCount);
+
+            int originConflictCount = 0;
+            foreach (IGrouping<string, (DispatchWorkbenchStagedRowDto Row, int Minute, string OriginId, string OriginName)> group in entries.GroupBy(entry => entry.OriginId, StringComparer.Ordinal))
+            {
+                var ordered = group.OrderBy(entry => entry.Minute).ThenBy(entry => entry.Row.lineId, StringComparer.Ordinal).ToArray();
+                for (int i = 1; i < ordered.Length; i++)
+                {
+                    int gap = ordered[i].Minute - ordered[i - 1].Minute;
+                    if (gap >= minGapMinutes)
+                        continue;
+                    originConflictCount++;
+                }
+            }
+            sb.AppendLine("originScopedPairCount=" + originConflictCount);
+            sb.AppendLine();
+        }
+
+        private string DescribeWorkbenchRow(
+            DispatchWorkbenchStagedRowDto row,
+            Dictionary<string, WorkbenchLineRuntime> runtimeById,
+            Dictionary<string, List<string>> provenanceByKey)
+        {
+            if (row == null)
+                return "(null)";
+
+            string lineName = runtimeById.TryGetValue(row.lineId ?? string.Empty, out WorkbenchLineRuntime line)
+                ? line.Name ?? string.Empty
+                : "(unknown-line)";
+            string origin = runtimeById.TryGetValue(row.lineId ?? string.Empty, out line)
+                ? ((line.OriginStationId ?? string.Empty) + " \"" + (line.OriginStationName ?? string.Empty) + "\"")
+                : "-";
+            string key = BuildWorkbenchStagedRowSemanticKey(row);
+            string provenance = provenanceByKey.TryGetValue(key, out List<string> sources)
+                ? string.Join(",", sources.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal))
+                : "-";
+            return "id=" + (row.id ?? string.Empty)
+                + " line=" + (row.lineId ?? string.Empty)
+                + " name=\"" + lineName + "\""
+                + " kind=" + (row.kind ?? string.Empty)
+                + " time=" + (row.time ?? string.Empty)
+                + " source=" + (row.source ?? string.Empty)
+                + " note=\"" + (row.note ?? string.Empty) + "\""
+                + " origin=" + origin
+                + " provenance=[" + provenance + "]";
+        }
+
+        private Dictionary<string, List<string>> BuildWorkbenchRowProvenanceMap()
+        {
+            Dictionary<string, List<string>> result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts)
+            {
+                DispatchWorkbenchDraftState draft = entry.Value;
+                if (draft?.StagedRows == null)
+                    continue;
+
+                foreach (DispatchWorkbenchStagedRowDto row in draft.StagedRows)
+                {
+                    AddWorkbenchRowProvenance(result, row, "draft:" + entry.Key + ":applied=" + (draft.DraftApplied ? "1" : "0"));
+                }
+            }
+
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                AppliedWorkbenchLineState state = entry.Value;
+                if (state?.StagedRows == null)
+                    continue;
+
+                foreach (DispatchWorkbenchStagedRowDto row in state.StagedRows)
+                {
+                    AddWorkbenchRowProvenance(result, row, "applied:" + entry.Key);
+                }
+            }
+
+            return result;
+        }
+
+        private static void AddWorkbenchRowProvenance(
+            Dictionary<string, List<string>> result,
+            DispatchWorkbenchStagedRowDto row,
+            string label)
+        {
+            string key = BuildWorkbenchStagedRowSemanticKey(row);
+            if (string.IsNullOrEmpty(key))
+                return;
+
+            if (!result.TryGetValue(key, out List<string> sources))
+            {
+                sources = new List<string>();
+                result[key] = sources;
+            }
+
+            sources.Add(label);
+        }
+
+        private static string SummarizeManualRowsByLine(IEnumerable<DispatchWorkbenchManualRowDto> rows)
+        {
+            if (rows == null)
+                return "-";
+
+            string[] parts = rows
+                .Where(row => row != null)
+                .GroupBy(row => string.IsNullOrEmpty(row.lineId) ? "(missing)" : row.lineId, StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => group.Key + ":" + group.Count())
+                .ToArray();
+            return parts.Length == 0 ? "-" : string.Join("|", parts);
+        }
+
+        private static string SummarizeAutoRulesByLine(IEnumerable<DispatchWorkbenchAutoRuleDto> rules)
+        {
+            if (rules == null)
+                return "-";
+
+            string[] parts = rules
+                .Where(rule => rule != null)
+                .GroupBy(rule => string.IsNullOrEmpty(rule.lineId) ? "(missing)" : rule.lineId, StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => group.Key + ":" + group.Count())
+                .ToArray();
+            return parts.Length == 0 ? "-" : string.Join("|", parts);
         }
 
         private List<DispatchWorkbenchTripDto> BuildWorkbenchTrips(
@@ -3488,6 +4731,135 @@ namespace RapidTransitMod
             };
         }
 
+        private static List<DispatchWorkbenchManualRowDto> DeduplicateWorkbenchManualRowsForMigration(
+            List<DispatchWorkbenchManualRowDto> rows)
+        {
+            if (rows == null || rows.Count <= 1)
+                return rows ?? new List<DispatchWorkbenchManualRowDto>();
+
+            HashSet<string> seenIds = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> seenSemanticKeys = new HashSet<string>(StringComparer.Ordinal);
+            List<DispatchWorkbenchManualRowDto> result =
+                new List<DispatchWorkbenchManualRowDto>(rows.Count);
+            for (int index = rows.Count - 1; index >= 0; index--)
+            {
+                DispatchWorkbenchManualRowDto row = rows[index];
+                if (row == null)
+                    continue;
+
+                string rowId = BuildWorkbenchRowIdKey(row.lineId, row.id);
+                if (!string.IsNullOrEmpty(rowId) && !seenIds.Add(rowId))
+                    continue;
+
+                string semanticKey = BuildWorkbenchManualRowSemanticKey(row);
+                if (!string.IsNullOrEmpty(semanticKey) && !seenSemanticKeys.Add(semanticKey))
+                    continue;
+
+                result.Add(row);
+            }
+
+            result.Reverse();
+            return result;
+        }
+
+        private static List<DispatchWorkbenchAutoRuleDto> DeduplicateWorkbenchAutoRulesForMigration(
+            List<DispatchWorkbenchAutoRuleDto> rules)
+        {
+            if (rules == null || rules.Count <= 1)
+                return rules ?? new List<DispatchWorkbenchAutoRuleDto>();
+
+            HashSet<string> seenIds = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> seenSemanticKeys = new HashSet<string>(StringComparer.Ordinal);
+            List<DispatchWorkbenchAutoRuleDto> result =
+                new List<DispatchWorkbenchAutoRuleDto>(rules.Count);
+            for (int index = rules.Count - 1; index >= 0; index--)
+            {
+                DispatchWorkbenchAutoRuleDto rule = rules[index];
+                if (rule == null)
+                    continue;
+
+                string ruleId = BuildWorkbenchRowIdKey(rule.lineId, rule.id);
+                if (!string.IsNullOrEmpty(ruleId) && !seenIds.Add(ruleId))
+                    continue;
+
+                string semanticKey = BuildWorkbenchAutoRuleSemanticKey(rule);
+                if (!string.IsNullOrEmpty(semanticKey) && !seenSemanticKeys.Add(semanticKey))
+                    continue;
+
+                result.Add(rule);
+            }
+
+            result.Reverse();
+            return result;
+        }
+
+        private static List<DispatchWorkbenchStagedRowDto> DeduplicateWorkbenchStagedRowsForMigration(
+            List<DispatchWorkbenchStagedRowDto> rows)
+        {
+            if (rows == null || rows.Count <= 1)
+                return rows ?? new List<DispatchWorkbenchStagedRowDto>();
+
+            HashSet<string> seenIds = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> seenSemanticKeys = new HashSet<string>(StringComparer.Ordinal);
+            List<DispatchWorkbenchStagedRowDto> result =
+                new List<DispatchWorkbenchStagedRowDto>(rows.Count);
+            for (int index = rows.Count - 1; index >= 0; index--)
+            {
+                DispatchWorkbenchStagedRowDto row = rows[index];
+                if (row == null)
+                    continue;
+
+                string rowId = BuildWorkbenchRowIdKey(row.lineId, row.id);
+                if (!string.IsNullOrEmpty(rowId) && !seenIds.Add(rowId))
+                    continue;
+
+                string semanticKey = BuildWorkbenchStagedRowSemanticKey(row);
+                if (!string.IsNullOrEmpty(semanticKey) && !seenSemanticKeys.Add(semanticKey))
+                    continue;
+
+                result.Add(row);
+            }
+
+            result.Reverse();
+            return result;
+        }
+
+        private static List<DispatchWorkbenchStagedRowDto> DeduplicateWorkbenchStagedRowsByIdPreservingLast(
+            List<DispatchWorkbenchStagedRowDto> rows)
+        {
+            if (rows == null || rows.Count <= 1)
+                return rows ?? new List<DispatchWorkbenchStagedRowDto>();
+
+            HashSet<string> seenIds = new HashSet<string>(StringComparer.Ordinal);
+            List<DispatchWorkbenchStagedRowDto> result = new List<DispatchWorkbenchStagedRowDto>(rows.Count);
+            for (int index = rows.Count - 1; index >= 0; index--)
+            {
+                DispatchWorkbenchStagedRowDto row = rows[index];
+                if (row == null)
+                    continue;
+
+                string rowId = row.id ?? string.Empty;
+                if (!string.IsNullOrEmpty(rowId) && !seenIds.Add(rowId))
+                    continue;
+
+                result.Add(row);
+            }
+
+            result.Reverse();
+            return result;
+        }
+
+        private static DispatchWorkbenchPlannerImportContractDto ClonePlannerImportContract(DispatchWorkbenchPlannerImportContractDto contract)
+        {
+            if (contract == null)
+                return null;
+
+            string json = DispatchWorkbenchJson.Serialize(contract);
+            return string.IsNullOrEmpty(json)
+                ? null
+                : DispatchWorkbenchJson.Deserialize<DispatchWorkbenchPlannerImportContractDto>(json);
+        }
+
         private static string BuildWorkbenchStagedRowSemanticKey(DispatchWorkbenchStagedRowDto row)
         {
             if (row == null)
@@ -3498,6 +4870,61 @@ namespace RapidTransitMod
                 + (string.IsNullOrEmpty(row.kind) ? "local" : row.kind)
                 + "|"
                 + (row.time ?? string.Empty);
+        }
+
+        private static string BuildWorkbenchManualRowSemanticKey(DispatchWorkbenchManualRowDto row)
+        {
+            if (row == null)
+                return string.Empty;
+
+            return (row.lineId ?? string.Empty)
+                + "|"
+                + (string.IsNullOrEmpty(row.kind) ? "local" : row.kind)
+                + "|"
+                + (row.time ?? string.Empty)
+                + "|"
+                + (row.offsetMode ?? string.Empty)
+                + "|"
+                + (row.offsetMinutes ?? string.Empty);
+        }
+
+        private static string BuildWorkbenchAutoRuleSemanticKey(DispatchWorkbenchAutoRuleDto rule)
+        {
+            if (rule == null)
+                return string.Empty;
+
+            return (rule.lineId ?? string.Empty)
+                + "|"
+                + (string.IsNullOrEmpty(rule.kind) ? "local" : rule.kind)
+                + "|"
+                + (rule.start ?? string.Empty)
+                + "|"
+                + (rule.end ?? string.Empty)
+                + "|"
+                + rule.departuresPerHour.ToString("R")
+                + "|"
+                + rule.localPerHour.ToString("R")
+                + "|"
+                + rule.expressPerHour.ToString("R")
+                + "|"
+                + (rule.expressOffsetMode ?? string.Empty)
+                + "|"
+                + rule.expressOffsetMinutes.ToString();
+        }
+
+        private static string BuildWorkbenchRowIdKey(string lineId, string rowId)
+        {
+            return string.IsNullOrEmpty(rowId)
+                ? string.Empty
+                : ((lineId ?? string.Empty) + "|" + rowId);
+        }
+
+        private static string BuildWorkbenchStagedRowMatchingKey(DispatchWorkbenchStagedRowDto row)
+        {
+            if (row == null)
+                return string.Empty;
+
+            return BuildWorkbenchStagedRowSemanticKey(row);
         }
 
         private static DispatchWorkbenchLineSettingDto CloneLineSetting(DispatchWorkbenchLineSettingDto setting)
@@ -4132,9 +5559,24 @@ namespace RapidTransitMod
             return true;
         }
 
+        private static bool ArePlannerImportContractsEquivalent(
+            DispatchWorkbenchPlannerImportContractDto left,
+            DispatchWorkbenchPlannerImportContractDto right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null)
+                return false;
+
+            string leftJson = DispatchWorkbenchJson.Serialize(left);
+            string rightJson = DispatchWorkbenchJson.Serialize(right);
+            return string.Equals(leftJson, rightJson, StringComparison.Ordinal);
+        }
+
         private List<string> ValidateWorkbenchRequest(
             DispatchWorkbenchSaveRequest request,
-            List<WorkbenchLineRuntime> runtimeLines)
+            List<WorkbenchLineRuntime> runtimeLines,
+            bool validateApplyOnlyConstraints)
         {
             List<string> errors = new List<string>();
             if (request == null)
@@ -4157,6 +5599,23 @@ namespace RapidTransitMod
                 request.mergedView.expressLineIds,
                 request.mergedView.expressLineId,
                 runtimeLines);
+            HashSet<string> draftScopeLineIds = new HashSet<string>(StringComparer.Ordinal);
+            if (!string.IsNullOrEmpty(request.selectedLineId))
+            {
+                draftScopeLineIds.Add(request.selectedLineId);
+            }
+            if (!string.IsNullOrEmpty(request.selectedEditLine))
+            {
+                draftScopeLineIds.Add(request.selectedEditLine);
+            }
+            foreach (string lineId in localIds)
+            {
+                draftScopeLineIds.Add(lineId);
+            }
+            foreach (string lineId in expressIds)
+            {
+                draftScopeLineIds.Add(lineId);
+            }
 
             if (!request.nativeScheduleWriter && localIds.Count == 0)
             {
@@ -4329,21 +5788,36 @@ namespace RapidTransitMod
                 }
             }
 
-            if (request.stagedRows != null)
+            List<DispatchWorkbenchStagedRowDto> requestLineDraftRows =
+                BuildRequestLineDraftRowsByDraftKey(request, GetDraftKey(request.selectedLineId))
+                    .Values
+                    .SelectMany(group => group)
+                    .ToList();
+            if (requestLineDraftRows.Count > 0
+                || request.lineDraftRows != null
+                || request.stagedRows != null
+                || request.lineDraftRowsByLineId != null)
             {
+                const int minOriginDepartureGapMinutes = 5;
                 HashSet<string> stagedKeys = new HashSet<string>();
                 Dictionary<string, string> stagedLineKinds = new Dictionary<string, string>();
-                for (int i = 0; i < request.stagedRows.Length; i++)
+                List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)> stagedOriginDepartures =
+                    new List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)>();
+                for (int i = 0; i < requestLineDraftRows.Count; i++)
                 {
-                    DispatchWorkbenchStagedRowDto row = request.stagedRows[i];
+                    DispatchWorkbenchStagedRowDto row = requestLineDraftRows[i];
                     if (string.IsNullOrEmpty(row.lineId))
                     {
-                        errors.Add("Staged row " + row.id + " is missing lineId.");
+                        errors.Add("Line draft row " + row.id + " is missing lineId.");
+                    }
+                    else if (runtimeLineById.Count > 0 && !runtimeLineById.ContainsKey(row.lineId))
+                    {
+                        errors.Add("Line draft row " + row.id + " references a line that no longer exists.");
                     }
 
                     if (ParseTimeMinutes(row.time) < 0)
                     {
-                        errors.Add("Staged row " + row.id + " has invalid time.");
+                        errors.Add("Line draft row " + row.id + " has invalid time.");
                     }
 
                     string stagedKey = (row.lineId ?? string.Empty)
@@ -4353,7 +5827,7 @@ namespace RapidTransitMod
                         + (row.time ?? string.Empty);
                     if (!stagedKeys.Add(stagedKey))
                     {
-                        errors.Add("Staged rows contain duplicate departures for the same line and service.");
+                        errors.Add("Line draft rows contain duplicate departures for the same line and service.");
                     }
 
                     string normalizedKind = string.IsNullOrEmpty(row.kind) ? "local" : row.kind;
@@ -4361,17 +5835,168 @@ namespace RapidTransitMod
                     {
                         if (!string.Equals(existingKind, normalizedKind, StringComparison.Ordinal))
                         {
-                            errors.Add("Staged rows cannot mix local and express departures for the same line.");
+                            errors.Add("Line draft rows cannot mix local and express departures for the same line.");
                         }
                     }
                     else
                     {
                         stagedLineKinds[row.lineId ?? string.Empty] = normalizedKind;
                     }
+
+                    int stagedMinutes = ParseTimeMinutes(row.time);
+                    if (stagedMinutes >= 0
+                        && runtimeLineById.TryGetValue(row.lineId ?? string.Empty, out WorkbenchLineRuntime runtimeLine)
+                        && !string.IsNullOrEmpty(runtimeLine.OriginStationId))
+                    {
+                        stagedOriginDepartures.Add((
+                            row.id ?? string.Empty,
+                            row.lineId ?? string.Empty,
+                            runtimeLine.OriginStationId,
+                            runtimeLine.OriginStationName ?? string.Empty,
+                            stagedMinutes));
+                    }
+                }
+
+                if (validateApplyOnlyConstraints)
+                {
+                    foreach (IGrouping<string, (string RowId, string LineId, string OriginId, string OriginName, int Minutes)> group in stagedOriginDepartures
+                        .GroupBy(row => row.OriginId, StringComparer.Ordinal))
+                    {
+                        (string RowId, string LineId, string OriginId, string OriginName, int Minutes)[] ordered = group
+                            .OrderBy(row => row.Minutes)
+                            .ToArray();
+                        for (int i = 1; i < ordered.Length; i++)
+                        {
+                            int gap = ordered[i].Minutes - ordered[i - 1].Minutes;
+                            if (gap < minOriginDepartureGapMinutes)
+                            {
+                                string originLabel = !string.IsNullOrEmpty(ordered[i].OriginName)
+                                    ? ordered[i].OriginName
+                                    : ordered[i].OriginId;
+                                errors.Add(
+                                    "Staged rows depart from the same origin station too close together: "
+                                    + originLabel
+                                    + " "
+                                    + SlotStr(ordered[i - 1].Minutes)
+                                    + " and "
+                                    + SlotStr(ordered[i].Minutes)
+                                    + ".");
+                            }
+                        }
+                    }
                 }
             }
 
             return errors;
+        }
+
+        private List<string> ValidateAppliedWorkbenchCandidateRows(
+            string activeLineKey,
+            List<DispatchWorkbenchStagedRowDto> activeRows,
+            List<WorkbenchLineRuntime> runtimeLines)
+        {
+            const int minOriginDepartureGapMinutes = 5;
+            List<string> errors = new List<string>();
+            Dictionary<string, WorkbenchLineRuntime> runtimeLineById = runtimeLines?
+                .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
+                .ToDictionary(line => line.Id, line => line, StringComparer.Ordinal)
+                ?? new Dictionary<string, WorkbenchLineRuntime>(StringComparer.Ordinal);
+            HashSet<string> replacedLineIds = new HashSet<string>(StringComparer.Ordinal);
+            if (!string.IsNullOrEmpty(activeLineKey))
+            {
+                replacedLineIds.Add(activeLineKey);
+            }
+            if (activeRows != null)
+            {
+                foreach (DispatchWorkbenchStagedRowDto row in activeRows)
+                {
+                    if (!string.IsNullOrEmpty(row?.lineId))
+                    {
+                        replacedLineIds.Add(row.lineId);
+                    }
+                }
+            }
+
+            List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)> departures =
+                new List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)>();
+            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            {
+                if (replacedLineIds.Contains(entry.Key))
+                    continue;
+
+                AppliedWorkbenchLineState state = entry.Value;
+                if (state == null || state.StagedRows == null)
+                    continue;
+
+                foreach (DispatchWorkbenchStagedRowDto row in state.StagedRows)
+                {
+                    AddWorkbenchOriginDeparture(row, runtimeLineById, departures);
+                }
+            }
+
+            if (activeRows != null)
+            {
+                foreach (DispatchWorkbenchStagedRowDto row in activeRows)
+                {
+                    AddWorkbenchOriginDeparture(row, runtimeLineById, departures);
+                }
+            }
+
+            foreach (IGrouping<string, (string RowId, string LineId, string OriginId, string OriginName, int Minutes)> group in departures
+                .GroupBy(row => row.OriginId, StringComparer.Ordinal))
+            {
+                (string RowId, string LineId, string OriginId, string OriginName, int Minutes)[] ordered = group
+                    .OrderBy(row => row.Minutes)
+                    .ToArray();
+                for (int i = 1; i < ordered.Length; i++)
+                {
+                    int gap = ordered[i].Minutes - ordered[i - 1].Minutes;
+                    if (gap >= minOriginDepartureGapMinutes)
+                        continue;
+
+                    string originLabel = !string.IsNullOrEmpty(ordered[i].OriginName)
+                        ? ordered[i].OriginName
+                        : ordered[i].OriginId;
+                    errors.Add(
+                        "Applied timetable would depart from the same origin station too close together: "
+                        + originLabel
+                        + " "
+                        + SlotStr(ordered[i - 1].Minutes)
+                        + " "
+                        + ordered[i - 1].LineId
+                        + " and "
+                        + SlotStr(ordered[i].Minutes)
+                        + " "
+                        + ordered[i].LineId
+                        + ".");
+                }
+            }
+
+            return errors;
+        }
+
+        private static void AddWorkbenchOriginDeparture(
+            DispatchWorkbenchStagedRowDto row,
+            Dictionary<string, WorkbenchLineRuntime> runtimeLineById,
+            List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)> departures)
+        {
+            int minutes = ParseTimeMinutes(row?.time);
+            if (minutes < 0)
+                return;
+
+            string lineId = row?.lineId ?? string.Empty;
+            if (!runtimeLineById.TryGetValue(lineId, out WorkbenchLineRuntime runtimeLine)
+                || string.IsNullOrEmpty(runtimeLine.OriginStationId))
+            {
+                return;
+            }
+
+            departures.Add((
+                row?.id ?? string.Empty,
+                lineId,
+                runtimeLine.OriginStationId,
+                runtimeLine.OriginStationName ?? string.Empty,
+                minutes));
         }
 
         private void NormalizeRequestedLineSettingsFromMergedView(

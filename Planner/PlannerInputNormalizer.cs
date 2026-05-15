@@ -233,6 +233,7 @@ namespace RapidTransitMod.Planner
                 context.Snapshot.candidateBypassStations,
                 false,
                 true);
+            BuildTemporaryStopBypassCandidates(context);
         }
 
         private static void BuildBypassMap(
@@ -277,6 +278,134 @@ namespace RapidTransitMod.Planner
             }
         }
 
+        private static void BuildTemporaryStopBypassCandidates(PlannerContext context)
+        {
+            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DepartureControlSystem.DispatchPlannerSharedCorridorDto[0])
+            {
+                if (!IsValidSameDirectionCorridor(corridor))
+                {
+                    continue;
+                }
+
+                AddTemporaryStopCandidatesForCorridor(
+                    context,
+                    corridor.lineId ?? string.Empty,
+                    corridor.otherLineId ?? string.Empty,
+                    corridor.lineStartAtomIndex,
+                    corridor.lineEndAtomIndexExclusive,
+                    corridor.otherStartAtomIndex,
+                    corridor.otherEndAtomIndexExclusive);
+            }
+
+            foreach (KeyValuePair<string, List<PlannerBypassStation>> entry in context.CandidateBypassStationsByLineId)
+            {
+                entry.Value.Sort((left, right) =>
+                {
+                    int orderCompare = left.Order.CompareTo(right.Order);
+                    return orderCompare != 0 ? orderCompare : string.Compare(left.StationId, right.StationId, StringComparison.Ordinal);
+                });
+            }
+        }
+
+        private static void AddTemporaryStopCandidatesForCorridor(
+            PlannerContext context,
+            string targetLineId,
+            string sourceLineId,
+            int targetStartAtomIndex,
+            int targetEndAtomIndexExclusive,
+            int sourceStartAtomIndex,
+            int sourceEndAtomIndexExclusive)
+        {
+            if (string.IsNullOrEmpty(targetLineId)
+                || string.IsNullOrEmpty(sourceLineId)
+                || string.Equals(targetLineId, sourceLineId, StringComparison.Ordinal)
+                || !context.StationsByLineId.TryGetValue(sourceLineId, out List<DepartureControlSystem.DispatchPlannerStationDto> sourceStations))
+            {
+                return;
+            }
+
+            if (!context.CandidateBypassStationsByLineId.TryGetValue(targetLineId, out List<PlannerBypassStation> targetCandidates))
+            {
+                targetCandidates = new List<PlannerBypassStation>();
+                context.CandidateBypassStationsByLineId[targetLineId] = targetCandidates;
+            }
+
+            int tolerance = PlannerDefaults.BypassStationEndpointToleranceAtoms;
+            int sourceStart = Math.Min(sourceStartAtomIndex, sourceEndAtomIndexExclusive);
+            int sourceEnd = Math.Max(sourceStartAtomIndex, sourceEndAtomIndexExclusive);
+            int targetStart = Math.Min(targetStartAtomIndex, targetEndAtomIndexExclusive);
+            int targetEnd = Math.Max(targetStartAtomIndex, targetEndAtomIndexExclusive);
+            HashSet<string> existingIds = new HashSet<string>(
+                targetCandidates.Select(station => station.StationId ?? string.Empty),
+                StringComparer.Ordinal);
+
+            foreach (PlannerBypassStation station in context.ConfiguredBypassStationsByLineId.TryGetValue(targetLineId, out List<PlannerBypassStation> configured)
+                ? configured
+                : new List<PlannerBypassStation>())
+            {
+                existingIds.Add(station.StationId ?? string.Empty);
+            }
+
+            foreach (DepartureControlSystem.DispatchPlannerStationDto sourceStation in sourceStations)
+            {
+                if (sourceStation == null
+                    || string.IsNullOrEmpty(sourceStation.id)
+                    || !sourceStation.canConfigureBypass
+                    || sourceStation.trackAtomIndex < sourceStart - tolerance
+                    || sourceStation.trackAtomIndex > sourceEnd + tolerance
+                    || HasTargetLineStationAtBuilding(context, targetLineId, sourceStation.buildingEntityIndex)
+                    || !existingIds.Add(sourceStation.id))
+                {
+                    continue;
+                }
+
+                int projectedAtomIndex = ProjectSourceAtomToTargetCorridor(
+                    sourceStation.trackAtomIndex,
+                    sourceStart,
+                    sourceEnd,
+                    targetStart,
+                    targetEnd);
+                targetCandidates.Add(new PlannerBypassStation
+                {
+                    StationId = sourceStation.id,
+                    WorkbenchStationId = sourceStation.workbenchStationId ?? string.Empty,
+                    LineId = targetLineId,
+                    Name = sourceStation.name ?? sourceStation.id,
+                    Order = projectedAtomIndex,
+                    TrackAtomIndex = projectedAtomIndex,
+                    IsConfigured = false,
+                    IsVirtualCandidate = true
+                });
+            }
+        }
+
+        private static bool HasTargetLineStationAtBuilding(
+            PlannerContext context,
+            string targetLineId,
+            int buildingEntityIndex)
+        {
+            if (buildingEntityIndex < 0
+                || !context.StationsByLineId.TryGetValue(targetLineId ?? string.Empty, out List<DepartureControlSystem.DispatchPlannerStationDto> targetStations))
+            {
+                return false;
+            }
+
+            return targetStations.Any(station => station != null && station.buildingEntityIndex == buildingEntityIndex);
+        }
+
+        private static int ProjectSourceAtomToTargetCorridor(
+            int sourceAtomIndex,
+            int sourceStartAtomIndex,
+            int sourceEndAtomIndexExclusive,
+            int targetStartAtomIndex,
+            int targetEndAtomIndexExclusive)
+        {
+            int sourceLength = Math.Max(1, sourceEndAtomIndexExclusive - sourceStartAtomIndex);
+            int targetLength = Math.Max(1, targetEndAtomIndexExclusive - targetStartAtomIndex);
+            float ratio = Math.Max(0f, Math.Min(1f, (sourceAtomIndex - sourceStartAtomIndex) / (float)sourceLength));
+            return targetStartAtomIndex + (int)Math.Round(targetLength * ratio);
+        }
+
         private static int ResolveTrackAtomIndex(PlannerContext context, string stationId)
         {
             return !string.IsNullOrEmpty(stationId)
@@ -299,7 +428,7 @@ namespace RapidTransitMod.Planner
             }
 
             return drafts
-                .OrderByDescending(draft => (draft?.stagedRows?.Length ?? 0) + (draft?.trips?.Length ?? 0))
+                .OrderByDescending(draft => ((draft?.lineDraftRows ?? draft?.stagedRows)?.Length ?? 0) + (draft?.trips?.Length ?? 0))
                 .FirstOrDefault();
         }
 
@@ -589,7 +718,10 @@ namespace RapidTransitMod.Planner
 
         private static bool HasLineActivityInsideWindow(PlannerContext context, string lineId)
         {
-            DepartureControlSystem.DispatchWorkbenchStagedRowDto[] stagedRows = context.SelectedDraft?.stagedRows ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
+            DepartureControlSystem.DispatchWorkbenchStagedRowDto[] stagedRows =
+                context.SelectedDraft?.lineDraftRows
+                ?? context.SelectedDraft?.stagedRows
+                ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
             foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in stagedRows)
             {
                 if (row == null || !string.Equals(row.lineId, lineId, StringComparison.Ordinal))
@@ -625,7 +757,10 @@ namespace RapidTransitMod.Planner
             HashSet<string> selectedLineSet = new HashSet<string>(context.SelectedLineIds ?? new string[0], StringComparer.Ordinal);
             HashSet<string> rowIds = new HashSet<string>(StringComparer.Ordinal);
 
-            DepartureControlSystem.DispatchWorkbenchStagedRowDto[] stagedRows = context.SelectedDraft?.stagedRows ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
+            DepartureControlSystem.DispatchWorkbenchStagedRowDto[] stagedRows =
+                context.SelectedDraft?.lineDraftRows
+                ?? context.SelectedDraft?.stagedRows
+                ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
             if (stagedRows.Length > 0)
             {
                 foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in stagedRows)

@@ -878,6 +878,14 @@ namespace RapidTransitMod
                 bool targetDepotSemantic = IsRetireHandoffDepotSemanticEntity(targetEntity, ownerDepot);
                 bool pathDepotSemantic = EntityHasDepotPathDestination(vehicle, ownerDepot)
                     || (headVehicle != vehicle && EntityHasDepotPathDestination(headVehicle, ownerDepot));
+                PathFlags currentPathState = EntityManager.HasComponent<PathOwner>(vehicle)
+                    ? EntityManager.GetComponentData<PathOwner>(vehicle).m_State
+                    : 0;
+                bool depotSemanticRepathWindow = watch.HardAckFrame > 0
+                    && targetDepotSemantic
+                    && pathDepotSemantic
+                    && returning
+                    && (currentPathState & (PathFlags.Pending | PathFlags.Obsolete | PathFlags.Updated)) != 0;
 
                 bool softAck = IsRetireHandoffSoftAck(vehicle, targetEntity, ownerDepot);
                 bool hardAck = IsRetireHandoffHardAck(vehicle, ownerDepot);
@@ -960,6 +968,7 @@ namespace RapidTransitMod
                     && !returning
                     && !parking;
                 bool hardAckStalled = watch.HardAckFrame > 0
+                    && !depotSemanticRepathWindow
                     && !parking
                     && (nowFrame - watch.HardAckFrame) >= RETIRE_HANDOFF_MAX_AGE_FRAMES;
 
@@ -2553,7 +2562,7 @@ namespace RapidTransitMod
                     {
                         m_DiagnosedLines.Add(line);
                         LogLineTrackChainDiagnostics(line);
-                        string lineName = m_NameSystem.GetRenderedLabelName(line);
+                        string lineName = ResolveWorkbenchEntityName(line);
                         log.Info("[诊断] " + lineTag + " (" + lineName + ") waypoint数=" + wps.Length);
                     }
 
@@ -3042,6 +3051,10 @@ namespace RapidTransitMod
                                 m_ForcedOriginReadyFrame[v] = nowFrame + PREPARING_ORIGIN_SETTLE_FRAMES;
                                 TryRecordPreparingArrivalSample(v, lineEnt, nowFrame);
                                 RecordLineHoldingSummary(lineEnt, nowMin, v, targetMin);
+                                if (targetMin >= 0)
+                                {
+                                    RecordRuntimeObservationTargetBound(routeEnt, v, targetMin, nowFrame, "preparing-holding-assign");
+                                }
                                 pt.m_DepartureFrame = nowFrame + 9999;
                                 ecb.SetComponent(v, pt);
                                 if (targetMin >= 0)
@@ -3088,6 +3101,7 @@ namespace RapidTransitMod
                                     m_LaunchCooldownUntil[v] = nowFrame + LAUNCH_COOLDOWN_FRAMES;
                                     m_VehicleCurrentSlot[v] = assistedTargetMin;
                                     m_VehicleTargetMin[v] = -1;
+                                    RecordRuntimeObservationLaunch(routeEnt, v, assistedTargetMin, nowMin, nowFrame, isLateAssistLaunch);
                                     m_OriginArrivalCandidateSinceFrame.Remove(v);
                                     m_ForcedOriginReadyFrame.Remove(v);
                                     ClearAssistLaunchPending(v);
@@ -3139,6 +3153,7 @@ namespace RapidTransitMod
                                 if (assigned)
                                 {
                                     targetMin = lateSlot;
+                                    RecordRuntimeObservationTargetBound(routeEnt, v, targetMin, nowFrame, "holding-assigned");
                                 }
                                 else if (TryAssignUpcomingScheduledTargetToWaitingVehicle(
                                     routeEnt,
@@ -3150,6 +3165,7 @@ namespace RapidTransitMod
                                     out int upcomingTarget))
                                 {
                                     targetMin = upcomingTarget;
+                                    RecordRuntimeObservationTargetBound(routeEnt, v, targetMin, nowFrame, "holding-upcoming-assigned");
                                 }
                                 else
                                 {
@@ -3247,6 +3263,7 @@ namespace RapidTransitMod
                                 m_LaunchCooldownUntil[v] = nowFrame + LAUNCH_COOLDOWN_FRAMES;
                                 m_VehicleCurrentSlot[v] = targetMin;
                                 m_VehicleTargetMin[v] = -1;
+                                RecordRuntimeObservationLaunch(routeEnt, v, targetMin, nowMin, nowFrame, isLateDispatch);
                                 m_OriginArrivalCandidateSinceFrame.Remove(v);
                                 m_ForcedOriginReadyFrame.Remove(v);
                                 BeginWorkbenchRealtimeTripAtLaunch(v, lineEnt, wps);
@@ -3439,7 +3456,10 @@ namespace RapidTransitMod
                             {
                                 pt.m_DepartureFrame = nowFrame + 9999;
                                 ecb.SetComponent(v, pt);
-                                SetBypassYieldState(v, runningBypassBlocker, lineTag, "运行中");
+                                Entity bypassHoldStation = bypassControlWaypointIndex >= 0 && bypassControlWaypointIndex < wps.Length
+                                    ? ResolveWorkbenchStopEntity(wps[bypassControlWaypointIndex].m_Waypoint)
+                                    : Entity.Null;
+                                SetBypassYieldState(v, runningBypassBlocker, lineTag, "运行中", bypassHoldStation, bypassControlWaypointIndex);
                                 HandleBroadcastBypassWaitingTrigger(v, routeEnt, wps, bypassControlWaypointIndex);
                                 SetUILabel(v, "待避快车" + vTag);
                                 break;
@@ -3739,6 +3759,7 @@ namespace RapidTransitMod
                                 pt.m_DepartureFrame = nowFrame + 9999;
                                 ecb.SetComponent(v, pt);
                                 bool isLateTarget = CanLateDispatchSlot(nowMin, targetMin);
+                                RecordRuntimeObservationTargetBound(routeEnt, v, targetMin, nowFrame, isLateTarget ? "idle-late-claim" : "idle-holding-assign");
                                 SetUILabel(v,
                                     (isLateTarget ? "候车 补发 " : "候车 ") + SlotStr(targetMin) + vTag);
                                 LogVehicleStateOnce(

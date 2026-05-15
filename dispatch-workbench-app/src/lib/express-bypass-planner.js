@@ -712,7 +712,7 @@ function normalizeDraft(draft = {}) {
     manualRows: asArray(draft.manualRows)
       .map(normalizeManualRow)
       .filter((row) => row.id && row.lineId && row.time),
-    stagedRows: asArray(draft.stagedRows)
+    stagedRows: asArray(draft.lineDraftRows ?? draft.stagedRows)
       .map((row) => ({
         id: row?.id || "",
         lineId: row?.lineId || "",
@@ -2893,7 +2893,9 @@ function rankVirtualBypassCandidates(normalizedInput, scenario, trunkProblemClus
 function enumerateVirtualBypassStationSets(rankedCandidates, options = {}) {
   const forcedBypassStationId = options.forcedBypassStationId || "";
   if (forcedBypassStationId) {
-    return [[forcedBypassStationId]];
+    return isConfiguredBypassStationId(options.normalizedInput, forcedBypassStationId)
+      ? [[]]
+      : [[forcedBypassStationId]];
   }
 
   const maxAdditionalStations = Math.max(1, clampNumber(options.maxAdditionalBypassStations, 1));
@@ -2934,6 +2936,16 @@ function getConfiguredBypassStationIdsForLines(normalizedInput, lineIds) {
     });
   });
   return [...new Set(stationIds)];
+}
+
+function isConfiguredBypassStationId(normalizedInput, stationId) {
+  if (!stationId) {
+    return false;
+  }
+
+  return asArray(normalizedInput?.configuredBypassStations).some(
+    (station) => station?.stationId === stationId
+  );
 }
 
 export function buildLocalObservedModel(rawInput, options = {}) {
@@ -5506,7 +5518,9 @@ function searchRegionJointPlans(preparedContext, workingRows, offsetDeltaMinutes
   const maxIterations = request.scheduleSearchIterations || DEFAULT_SCHEDULE_SEARCH_ITERATIONS;
   const basePlanByStateSignature = new Map();
   const initialVirtualBypassStationIds = request.forcedBypassStationId
-    ? [request.forcedBypassStationId]
+    ? (isConfiguredBypassStationId(preparedContext?.normalizedInput, request.forcedBypassStationId)
+      ? []
+      : [request.forcedBypassStationId])
     : [];
   const baselineRowById = new Map(workingRows.map((row) => [row.id, row]));
   let frontier = [
@@ -5901,7 +5915,10 @@ export function searchVirtualBypassPlans(rawInput, options = {}) {
     scenario,
     basePlan?.trunkProblemClusters || []
   );
-  const stationSets = enumerateVirtualBypassStationSets(rankedCandidates, options);
+  const stationSets = enumerateVirtualBypassStationSets(rankedCandidates, {
+    ...options,
+    normalizedInput
+  });
   const offsets = options.freezeExpressOffsets
     ? [0]
     : quantizeOffsetVariants(options.offsetStepMinutes, options.maxOffsetMinutes);

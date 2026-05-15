@@ -411,13 +411,13 @@ namespace RapidTransitMod.Planner
             }
             if (plan.CatchupEvents.Any(item =>
                 string.Equals(item.ResolutionState, "blocked", StringComparison.Ordinal)
-                && string.Equals(item.PairRole, "target-adjustable", StringComparison.Ordinal)))
+                && !string.Equals(item.PairRole, "fixed-fixed", StringComparison.Ordinal)))
             {
                 return "blocked";
             }
             if (plan.CatchupEvents.Any(item =>
                 string.Equals(item.ResolutionState, "actionable", StringComparison.Ordinal)
-                && string.Equals(item.PairRole, "target-adjustable", StringComparison.Ordinal)))
+                && !string.Equals(item.PairRole, "fixed-fixed", StringComparison.Ordinal)))
             {
                 return "needsAction";
             }

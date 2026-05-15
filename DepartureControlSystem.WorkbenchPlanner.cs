@@ -327,6 +327,10 @@ namespace RapidTransitMod
             [DataMember]
             public string toStationId;
             [DataMember]
+            public string catchupFromStationId;
+            [DataMember]
+            public string catchupToStationId;
+            [DataMember]
             public string catchupTime;
             [DataMember]
             public string selectedBypassStationId;
@@ -460,6 +464,10 @@ namespace RapidTransitMod
             public string fromStationId;
             [DataMember]
             public string toStationId;
+            [DataMember]
+            public string catchupFromStationId;
+            [DataMember]
+            public string catchupToStationId;
             [DataMember]
             public string catchupTime;
             [DataMember]
@@ -607,6 +615,10 @@ namespace RapidTransitMod
             public DispatchPlannerFrontendSummaryDto frontendSummary;
             [DataMember]
             public DispatchPlannerPreviewRowDto[] timetablePreviewRows;
+            [DataMember]
+            public DispatchWorkbenchStagedRowDto[] plannerBaselineRows;
+            [DataMember]
+            public DispatchWorkbenchStagedRowDto[] plannerReplacementRows;
             [DataMember]
             public DispatchPlannerChangedWindowDto[] changedWindows;
             [DataMember]

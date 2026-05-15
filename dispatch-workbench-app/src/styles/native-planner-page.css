@@ -636,8 +636,8 @@
 }
 
 .dw-planner-metric {
-  width: 33.333%;
-  flex: 0 0 33.333%;
+  width: 20%;
+  flex: 0 0 20%;
   min-width: 0;
 }
 
@@ -647,16 +647,16 @@
 
 .dw-planner-metric-label {
   color: rgba(184, 198, 195, 0.82);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 14px;
+  line-height: 18px;
   font-weight: 600;
 }
 
 .dw-planner-metric-value {
   margin-top: 8px;
   color: #edf5f9;
-  font-size: 24px;
-  line-height: 28px;
+  font-size: 18px;
+  line-height: 22px;
   font-weight: 700;
 }
 
@@ -833,7 +833,8 @@
 .dw-planner-risk-head {
   display: flex;
   align-items: center;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
 .dw-planner-risk-badge {
@@ -878,8 +879,10 @@
 .dw-planner-risk-route {
   display: flex;
   align-items: center;
+  width: 100%;
   min-width: 0;
-  margin-left: 12px;
+  margin-top: 8px;
+  margin-left: 0;
   color: #edf5f9;
   font-size: 18px;
   line-height: 24px;
@@ -930,6 +933,22 @@
   font-size: 16px;
   line-height: 22px;
   font-weight: 500;
+}
+
+.dw-planner-risk-detail {
+  margin-top: 8px;
+  color: rgba(184, 198, 195, 0.88);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.dw-planner-risk-trip {
+  margin-bottom: 8px;
+  color: #edf5f9;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 700;
 }
 
 .dw-planner-risk-events {

@@ -14,7 +14,8 @@ export const emptyMergedView = {
 
 export const emptyManualRows = [];
 export const emptyAutoRules = [];
-export const emptyStagedRows = [];
+export const emptyLineDraftRows = [];
+export const emptyStagedRows = emptyLineDraftRows;
 export const emptyLines = [];
 export const emptyDepots = [];
 export const emptyStations = [];
@@ -31,7 +32,11 @@ export function createEmptySnapshot(overrides = {}) {
     trips: emptyTrips,
     manualRows: emptyManualRows,
     autoRules: emptyAutoRules,
-    stagedRows: emptyStagedRows,
+    lineDraftRows: emptyLineDraftRows,
+    combinedDraftRows: emptyLineDraftRows,
+    appliedRows: emptyLineDraftRows,
+    stagedRows: emptyLineDraftRows,
+    combinedStagedRows: emptyLineDraftRows,
     version: "empty",
     sourceMode: "backend-fallback",
     ...overrides

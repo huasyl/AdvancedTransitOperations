@@ -55,7 +55,6 @@ namespace RapidTransitMod.Planner
             }
 
             List<PlannerPlanModel> selectedPlans = new List<PlannerPlanModel>();
-            HashSet<string> usedSignatures = new HashSet<string>(StringComparer.Ordinal);
             foreach (PlannerObjectiveDefinition objective in PlannerDefaults.Objectives)
             {
                 if (!plansByObjective.TryGetValue(objective.Id, out List<PlannerPlanModel> objectivePlans)
@@ -65,15 +64,7 @@ namespace RapidTransitMod.Planner
                 }
 
                 objectivePlans.Sort(ComparePlansForObjective);
-                PlannerPlanModel selectedPlan = objectivePlans
-                    .FirstOrDefault(candidate => usedSignatures.Add(BuildPlanSignature(candidate)));
-                if (selectedPlan == null)
-                {
-                    continue;
-                }
-
-                usedSignatures.Add(BuildPlanSignature(selectedPlan));
-                selectedPlans.Add(selectedPlan);
+                selectedPlans.Add(objectivePlans[0]);
             }
 
             return selectedPlans;
@@ -87,12 +78,6 @@ namespace RapidTransitMod.Planner
                 return infeasibleCompare;
             }
 
-            int scoreCompare = right.Score.CompareTo(left.Score);
-            if (scoreCompare != 0)
-            {
-                return scoreCompare;
-            }
-
             int unresolvedCompare = left.UnresolvedRiskMinutes.CompareTo(right.UnresolvedRiskMinutes);
             if (unresolvedCompare != 0)
             {
@@ -103,6 +88,12 @@ namespace RapidTransitMod.Planner
             if (robustnessCompare != 0)
             {
                 return robustnessCompare;
+            }
+
+            int scoreCompare = right.Score.CompareTo(left.Score);
+            if (scoreCompare != 0)
+            {
+                return scoreCompare;
             }
 
             int bypassCompare = left.AddedBypassStationCount.CompareTo(right.AddedBypassStationCount);
@@ -276,9 +267,32 @@ namespace RapidTransitMod.Planner
                 lineRoleSummary = BuildLineRoleSummary(context),
                 frontendSummary = plan.FrontendSummary ?? BuildFallbackFrontendSummary(context, plan),
                 timetablePreviewRows = plan.PreviewRows.ToArray(),
+                plannerBaselineRows = BuildPlannerRows(plan.BaselineRows, "plannerBaseline"),
+                plannerReplacementRows = BuildPlannerRows(plan.AdjustedRows, "plannerReplacement"),
                 changedWindows = BuildChangedWindows(context, plan, regions),
                 diagnostics = plan.Diagnostics.Select(BuildDiagnostic).ToArray()
             };
+        }
+
+        private static DepartureControlSystem.DispatchWorkbenchStagedRowDto[] BuildPlannerRows(
+            IEnumerable<PlannerWorkingRow> rows,
+            string source)
+        {
+            return (rows ?? Array.Empty<PlannerWorkingRow>())
+                .Where(row => row != null && !string.IsNullOrEmpty(row.LineId))
+                .OrderBy(row => row.LineId, StringComparer.Ordinal)
+                .ThenBy(row => row.Minute)
+                .ThenBy(row => row.Id, StringComparer.Ordinal)
+                .Select((row, index) => new DepartureControlSystem.DispatchWorkbenchStagedRowDto
+                {
+                    id = string.IsNullOrEmpty(row.Id) ? source + "-" + (index + 1).ToString() : row.Id,
+                    lineId = row.LineId,
+                    time = PlannerMath.MinutesToTime(row.Minute),
+                    kind = string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase) ? "express" : "local",
+                    source = string.IsNullOrEmpty(row.Source) ? source : row.Source,
+                    note = row.Note ?? string.Empty
+                })
+                .ToArray();
         }
 
         private static DepartureControlSystem.DispatchPlannerPlanMetricsDto BuildPlanMetrics(PlannerPlanModel plan)
@@ -578,6 +592,8 @@ namespace RapidTransitMod.Planner
                 priorityDepartTime = ResolveTripDepartTime(adjustedRowsById, priorityTripId),
                 fromStationId = catchupEvent.FromStationId,
                 toStationId = catchupEvent.ToStationId,
+                catchupFromStationId = catchupEvent.CatchupFromStationId,
+                catchupToStationId = catchupEvent.CatchupToStationId,
                 catchupTime = PlannerMath.MinutesToTime((int)Math.Round(catchupEvent.CatchupMinute)),
                 selectedBypassStationId = catchupEvent.SelectedBypassStation?.StationId ?? string.Empty,
                 requiredHoldMinutes = catchupEvent.RequiredHoldMinutes,
@@ -626,6 +642,8 @@ namespace RapidTransitMod.Planner
                 priorityDepartTime = ResolveTripDepartTime(adjustedRowsById, priorityTripId),
                 fromStationId = catchupEvent.FromStationId,
                 toStationId = catchupEvent.ToStationId,
+                catchupFromStationId = catchupEvent.CatchupFromStationId,
+                catchupToStationId = catchupEvent.CatchupToStationId,
                 catchupTime = PlannerMath.MinutesToTime((int)Math.Round(catchupEvent.CatchupMinute)),
                 requiredHoldMinutes = catchupEvent.RequiredHoldMinutes,
                 plannedAdjustmentMinutes = catchupEvent.ResolvedHoldMinutes,

@@ -15,6 +15,7 @@ namespace RapidTransitMod.Planner
         public const float ObservedStationRuntimeMaxProfileRatio = 1.8f;
         public const float ObservedStationRuntimeMaxProfileExtraMinutes = 12f;
         public const int PursuitTrunkMergeGapAtoms = 12;
+        public const int BypassStationEndpointToleranceAtoms = 8;
         public const float PursuitCurveSampleStepMinutes = 2f;
         public const float MinSharedGapMinutes = 1f;
         public const float RobustnessMarginTargetMinutes = 5f;
@@ -223,6 +224,8 @@ namespace RapidTransitMod.Planner
         public int AxisIndex = -1;
         public float GapAtStationMinutes = 0f;
         public float HoldNeededMinutes = 0f;
+        public float RobustnessHoldNeededMinutes = 0f;
+        public float TargetHoldMinutes = 0f;
         public float LocalStationMinute = 0f;
         public float ExpressStationMinute = 0f;
         public float StationDepartureMinute = 0f;
@@ -278,6 +281,8 @@ namespace RapidTransitMod.Planner
         public string TrunkId = string.Empty;
         public string FromStationId = string.Empty;
         public string ToStationId = string.Empty;
+        public string CatchupFromStationId = string.Empty;
+        public string CatchupToStationId = string.Empty;
         public float LocalEntryMinute = 0f;
         public float ExpressEntryMinute = 0f;
         public float LocalExitMinute = 0f;

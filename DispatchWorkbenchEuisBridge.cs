@@ -241,6 +241,7 @@ namespace RapidTransitMod
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadPlannerContext", new Func<string>(HandleLoadPlannerContext));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.exportPlannerInput", new Func<string>(HandleLoadPlannerContext));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.runPlanner", new Func<string, string>(HandleRunPlanner));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getRuntimeObservationSnapshot", new Func<string>(HandleGetRuntimeObservationSnapshot));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getLocale", new Func<string>(HandleGetLocale));
@@ -373,6 +374,11 @@ namespace RapidTransitMod
         private static string HandleRunPlanner(string requestJson)
         {
             return DepartureControlSystem.Instance?.RunWorkbenchPlannerJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleGetRuntimeObservationSnapshot()
+        {
+            return DepartureControlSystem.Instance?.GetRuntimeObservationSnapshotJson() ?? string.Empty;
         }
 
         private static string HandleSaveDraft(string requestJson)

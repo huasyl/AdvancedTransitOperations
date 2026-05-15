@@ -81,17 +81,23 @@ namespace RapidTransitMod.Planner
                         }
                         bool canUseBypass = selectedBypass != null;
                         float requiredHoldMinutes = canUseBypass ? selectedBypass.HoldNeededMinutes : catchupPoint.SeverityMinutes;
-                        float requiredMarginMinutes = catchupPoint.RobustnessRiskMinutes;
-                        float targetHoldMinutes = canUseBypass
-                            ? Math.Max(requiredHoldMinutes, requiredMarginMinutes)
-                            : 0f;
+                        float requiredMarginMinutes = canUseBypass ? selectedBypass.RobustnessHoldNeededMinutes : catchupPoint.RobustnessRiskMinutes;
+                        float targetHoldMinutes = canUseBypass ? selectedBypass.TargetHoldMinutes : 0f;
                         float resolvedHoldMinutes = canUseBypass ? Math.Min(targetHoldMinutes, holdBudgetMinutes) : 0f;
                         float unresolvedRiskMinutes = canUseBypass
                             ? Math.Max(0f, requiredHoldMinutes - resolvedHoldMinutes)
                             : Math.Max(requiredHoldMinutes, catchupPoint.ClosingMinutes * 0.5f);
                         float robustnessRiskMinutes = canUseBypass
-                            ? Math.Max(0f, catchupPoint.RobustnessRiskMinutes - resolvedHoldMinutes)
+                            ? Math.Max(0f, requiredMarginMinutes - resolvedHoldMinutes)
                             : catchupPoint.RobustnessRiskMinutes;
+                        int catchupAtomIndex = MapAxisToAtomIndex(trunk, true, catchupPoint.CatchupAxisIndex, trunk.AxisSampleCount);
+                        ResolveCatchupStationInterval(
+                            localModel,
+                            catchupAtomIndex,
+                            trunk.FromStationId,
+                            trunk.ToStationId,
+                            out string catchupFromStationId,
+                            out string catchupToStationId);
 
                         PlannerCatchupEvent catchupEvent = new PlannerCatchupEvent();
                         catchupEvent.EventId = expressTrip.TripId + "|" + localTrip.TripId + "|" + trunk.TrunkId;
@@ -108,6 +114,8 @@ namespace RapidTransitMod.Planner
                         catchupEvent.TrunkId = trunk.TrunkId;
                         catchupEvent.FromStationId = trunk.FromStationId;
                         catchupEvent.ToStationId = trunk.ToStationId;
+                        catchupEvent.CatchupFromStationId = catchupFromStationId;
+                        catchupEvent.CatchupToStationId = catchupToStationId;
                         catchupEvent.LocalEntryMinute = localWindow.EntryMinute;
                         catchupEvent.ExpressEntryMinute = expressWindow.EntryMinute;
                         catchupEvent.LocalExitMinute = localWindow.ExitMinute;
@@ -147,7 +155,7 @@ namespace RapidTransitMod.Planner
                         catchupEvent.CatchupMinute = catchupPoint.CatchupMinute;
                         catchupEvent.CatchupAxisIndex = catchupPoint.CatchupAxisIndex;
                         catchupEvent.DidCatchUp = catchupPoint.DidCatchUp;
-                        catchupEvent.WithinHoldBudget = resolvedHoldMinutes >= requiredHoldMinutes;
+                        catchupEvent.WithinHoldBudget = resolvedHoldMinutes >= targetHoldMinutes;
                         catchupEvent.Confidence = trunk.Confidence;
                         catchupEvent.SelectedBypassStation = selectedBypass;
                         catchupEvent.UsableBypassStations = corridorStations;
@@ -293,6 +301,75 @@ namespace RapidTransitMod.Planner
             float ratio = axisSampleCount <= 0 ? 0f : (float)axisIndex / axisSampleCount;
             int atomOffset = (int)Math.Round(lengthAtoms * ratio);
             return Math.Max(startAtomIndex, Math.Min(endAtomIndexExclusive, startAtomIndex + atomOffset));
+        }
+
+        private static void ResolveCatchupStationInterval(
+            PlannerLineRuntimeModel model,
+            int atomIndex,
+            string fallbackFromStationId,
+            string fallbackToStationId,
+            out string fromStationId,
+            out string toStationId)
+        {
+            fromStationId = fallbackFromStationId ?? string.Empty;
+            toStationId = fallbackToStationId ?? string.Empty;
+            if (model == null || model.Stations == null || model.Stations.Count == 0)
+            {
+                return;
+            }
+
+            List<DepartureControlSystem.DispatchPlannerStationDto> stations = model.Stations
+                .Where(station => station != null && station.trackAtomIndex >= 0 && !string.IsNullOrEmpty(station.id))
+                .OrderBy(station => station.trackAtomIndex)
+                .ThenBy(station => station.order)
+                .ToList();
+            if (stations.Count == 0)
+            {
+                return;
+            }
+
+            DepartureControlSystem.DispatchPlannerStationDto before = null;
+            DepartureControlSystem.DispatchPlannerStationDto after = null;
+            for (int index = 0; index < stations.Count; index++)
+            {
+                DepartureControlSystem.DispatchPlannerStationDto station = stations[index];
+                if (station.trackAtomIndex <= atomIndex)
+                {
+                    before = station;
+                    continue;
+                }
+
+                after = station;
+                break;
+            }
+
+            int beforeIndex = before == null ? 0 : stations.IndexOf(before);
+            int afterIndex = after == null ? stations.Count - 1 : stations.IndexOf(after);
+            if (before == null)
+            {
+                before = stations[0];
+                beforeIndex = 0;
+            }
+            if (after == null)
+            {
+                after = stations[stations.Count - 1];
+                afterIndex = stations.Count - 1;
+            }
+
+            if (string.Equals(before.id, after.id, StringComparison.Ordinal) && stations.Count > 1)
+            {
+                if (afterIndex + 1 < stations.Count)
+                {
+                    after = stations[afterIndex + 1];
+                }
+                else if (beforeIndex > 0)
+                {
+                    before = stations[beforeIndex - 1];
+                }
+            }
+
+            fromStationId = before?.id ?? fromStationId;
+            toStationId = after?.id ?? toStationId;
         }
 
         private static PlannerGapProfile ComputeGapProfile(PlannerCurve localCurve, PlannerCurve expressCurve)
@@ -459,7 +536,7 @@ namespace RapidTransitMod.Planner
                 case "needsBypassStation":
                     return new[] { "maxAdditionalBypassStations", "forcedBypassStationIds" };
                 case "selectedBypassStationNotUsable":
-                    return new[] { "forcedBypassStationIds" };
+                    return new[] { "maxLocalRetimeMinutes", "forcedBypassStationIds" };
                 case "offsetRangeTooSmall":
                     return new[] { "maxOffsetMinutes" };
                 case "noUsableBypassStation":
@@ -474,6 +551,19 @@ namespace RapidTransitMod.Planner
             Dictionary<string, PlannerBypassStation> stationsById = new Dictionary<string, PlannerBypassStation>(StringComparer.Ordinal);
             AddBypassStations(stationsById, context.ConfiguredBypassStationsByLineId, trunk);
             AddBypassStations(stationsById, context.CandidateBypassStationsByLineId, trunk, BuildAllowedVirtualBypassStationSet(context));
+            HashSet<string> forcedStationIds = new HashSet<string>(context.ForcedBypassStationIds ?? new string[0], StringComparer.Ordinal);
+            if (forcedStationIds.Count > 0)
+            {
+                List<PlannerBypassStation> forcedStations = stationsById.Values
+                    .Where(station => forcedStationIds.Contains(station.StationId ?? string.Empty))
+                    .OrderBy(station => station.Order)
+                    .ToList();
+                if (forcedStations.Count > 0)
+                {
+                    return forcedStations;
+                }
+            }
+
             return stationsById.Values.OrderBy(station => station.Order).ToList();
         }
 
@@ -514,8 +604,9 @@ namespace RapidTransitMod.Planner
                 {
                     continue;
                 }
-                if (station.TrackAtomIndex >= trunk.LocalStartAtomIndex
-                    && station.TrackAtomIndex <= trunk.LocalEndAtomIndexExclusive)
+                int tolerance = PlannerDefaults.BypassStationEndpointToleranceAtoms;
+                if (station.TrackAtomIndex >= trunk.LocalStartAtomIndex - tolerance
+                    && station.TrackAtomIndex <= trunk.LocalEndAtomIndexExclusive + tolerance)
                 {
                     stationsById[station.StationId] = station;
                 }
@@ -524,18 +615,7 @@ namespace RapidTransitMod.Planner
 
         private static float ResolveHoldBudgetMinutes(PlannerContext context, PlannerLineRuntimeModel localModel)
         {
-            float lineBudgetMinutes = localModel.Line?.maxStationDwellMinutes ?? 0;
-            if (context.Request.maxLocalWaitMinutes <= 0)
-            {
-                return lineBudgetMinutes;
-            }
-
-            if (lineBudgetMinutes <= 0)
-            {
-                return context.Request.maxLocalWaitMinutes;
-            }
-
-            return Math.Min(lineBudgetMinutes, context.Request.maxLocalWaitMinutes);
+            return Math.Max(0f, context.Request.maxLocalWaitMinutes);
         }
 
         private static PlannerBypassEvaluation PickBestBypassStation(
@@ -565,12 +645,35 @@ namespace RapidTransitMod.Planner
 
             evaluations.Sort((left, right) =>
             {
-                int holdCompare = left.HoldNeededMinutes.CompareTo(right.HoldNeededMinutes);
+                bool leftFeasible = left.TargetHoldMinutes <= holdBudgetMinutes;
+                bool rightFeasible = right.TargetHoldMinutes <= holdBudgetMinutes;
+                if (leftFeasible != rightFeasible)
+                {
+                    return leftFeasible ? -1 : 1;
+                }
+
+                float leftOverBudget = Math.Max(0f, left.TargetHoldMinutes - holdBudgetMinutes);
+                float rightOverBudget = Math.Max(0f, right.TargetHoldMinutes - holdBudgetMinutes);
+                int overBudgetCompare = leftOverBudget.CompareTo(rightOverBudget);
+                if (overBudgetCompare != 0)
+                {
+                    return overBudgetCompare;
+                }
+
+                int holdCompare = left.TargetHoldMinutes.CompareTo(right.TargetHoldMinutes);
                 if (holdCompare != 0)
                 {
                     return holdCompare;
                 }
-                return left.AxisIndex.CompareTo(right.AxisIndex);
+
+                int catchupDistanceCompare = Math.Abs(catchupPoint.CatchupAxisIndex - left.AxisIndex)
+                    .CompareTo(Math.Abs(catchupPoint.CatchupAxisIndex - right.AxisIndex));
+                if (catchupDistanceCompare != 0)
+                {
+                    return catchupDistanceCompare;
+                }
+
+                return right.AxisIndex.CompareTo(left.AxisIndex);
             });
 
             return evaluations.Count > 0 ? evaluations[0] : null;
@@ -585,22 +688,32 @@ namespace RapidTransitMod.Planner
         {
             int axisSampleCount = Math.Max(1, trunk.AxisSampleCount);
             int localLength = Math.Max(1, trunk.LocalEndAtomIndexExclusive - trunk.LocalStartAtomIndex);
-            int stationOffset = station.TrackAtomIndex - trunk.LocalStartAtomIndex;
-            if (stationOffset < 0 || station.TrackAtomIndex > trunk.LocalEndAtomIndexExclusive)
+            int tolerance = PlannerDefaults.BypassStationEndpointToleranceAtoms;
+            if (station.TrackAtomIndex < trunk.LocalStartAtomIndex - tolerance
+                || station.TrackAtomIndex > trunk.LocalEndAtomIndexExclusive + tolerance)
             {
                 return null;
             }
 
-            int axisIndex = Math.Max(0, Math.Min(axisSampleCount, (int)Math.Round(axisSampleCount * (stationOffset / (float)localLength))));
+            int clampedStationAtomIndex = Math.Max(
+                trunk.LocalStartAtomIndex,
+                Math.Min(trunk.LocalEndAtomIndexExclusive, station.TrackAtomIndex));
+            int stationOffset = clampedStationAtomIndex - trunk.LocalStartAtomIndex;
+            int axisIndex = Math.Max(0, Math.Min(axisSampleCount, (int)Math.Floor(axisSampleCount * (stationOffset / (float)localLength))));
             if (axisIndex >= gapProfile.Samples.Count || axisIndex > catchupPoint.CatchupAxisIndex)
             {
                 return null;
             }
 
             float gapAtStationMinutes = gapProfile.Samples[axisIndex].GapMinutes;
-            float holdNeededMinutes = PlannerMath.Round2(Math.Max(
-                0f,
-                catchupPoint.SeverityMinutes - Math.Max(0f, gapAtStationMinutes - catchupPoint.MinGapMinutes)));
+            if (gapAtStationMinutes < 0f)
+            {
+                return null;
+            }
+
+            float holdNeededMinutes = PlannerMath.Round2(Math.Max(0f, gapAtStationMinutes + PlannerDefaults.MinSharedGapMinutes));
+            float robustnessHoldNeededMinutes = PlannerMath.Round2(Math.Max(holdNeededMinutes, gapAtStationMinutes + PlannerDefaults.RobustnessMarginTargetMinutes));
+            float targetHoldMinutes = robustnessHoldNeededMinutes;
             PlannerStationEvent localStationEvent = localTrip.StationEvents.FirstOrDefault(eventItem =>
                 string.Equals(eventItem.StationId, station.StationId, StringComparison.Ordinal));
 
@@ -613,6 +726,8 @@ namespace RapidTransitMod.Planner
             evaluation.AxisIndex = axisIndex;
             evaluation.GapAtStationMinutes = PlannerMath.Round2(gapAtStationMinutes);
             evaluation.HoldNeededMinutes = holdNeededMinutes;
+            evaluation.RobustnessHoldNeededMinutes = robustnessHoldNeededMinutes;
+            evaluation.TargetHoldMinutes = targetHoldMinutes;
             evaluation.LocalStationMinute = PlannerMath.Round2(gapProfile.Samples[axisIndex].LocalMinute);
             evaluation.ExpressStationMinute = PlannerMath.Round2(gapProfile.Samples[axisIndex].ExpressMinute);
             evaluation.StationDepartureMinute = localStationEvent != null
@@ -626,7 +741,15 @@ namespace RapidTransitMod.Planner
             Dictionary<string, PlannerCatchupEvent> mergedByKey = new Dictionary<string, PlannerCatchupEvent>(StringComparer.Ordinal);
             foreach (PlannerCatchupEvent catchupEvent in events)
             {
-                string key = catchupEvent.LocalTripId + "|" + catchupEvent.ExpressTripId + "|" + catchupEvent.LocalLineId + "|" + catchupEvent.ExpressLineId;
+                string key = catchupEvent.LocalTripId
+                    + "|"
+                    + catchupEvent.ExpressTripId
+                    + "|"
+                    + catchupEvent.LocalLineId
+                    + "|"
+                    + catchupEvent.ExpressLineId
+                    + "|"
+                    + catchupEvent.TrunkId;
                 if (!mergedByKey.TryGetValue(key, out PlannerCatchupEvent current))
                 {
                     mergedByKey[key] = catchupEvent;
@@ -652,6 +775,8 @@ namespace RapidTransitMod.Planner
                     current.PriorityLineId = catchupEvent.PriorityLineId;
                     current.FromStationId = catchupEvent.FromStationId;
                     current.ToStationId = catchupEvent.ToStationId;
+                    current.CatchupFromStationId = catchupEvent.CatchupFromStationId;
+                    current.CatchupToStationId = catchupEvent.CatchupToStationId;
                     current.LocalEntryMinute = catchupEvent.LocalEntryMinute;
                     current.ExpressEntryMinute = catchupEvent.ExpressEntryMinute;
                     current.LocalExitMinute = catchupEvent.LocalExitMinute;

@@ -717,7 +717,7 @@ function serializeNativeAutoRules(rows = []) {
     });
 }
 
-function serializeNativeStagedRows(rows = []) {
+function serializeNativeLineDraftRows(rows = []) {
   return [...(Array.isArray(rows) ? rows : [])]
     .filter((row) => row?.lineId)
     .sort((left, right) => {
@@ -953,13 +953,9 @@ function createSummaryEntry({
   source = "manual",
   note = ""
 }, t) {
-  const fallbackOption = getLineOptionByKind(kind);
   const selectedOption = getLineOptionById(serviceId);
-  const resolvedKind = normalizeKind(kind || selectedOption.kind || fallbackOption.kind);
-  const lineOption =
-    selectedOption.kind === resolvedKind
-      ? selectedOption
-      : getLineOptionByKind(resolvedKind) || selectedOption || fallbackOption;
+  const resolvedKind = normalizeKind(kind || selectedOption.kind);
+  const lineOption = selectedOption;
 
   return {
     id,
@@ -1708,6 +1704,7 @@ function DemoPreviewTimes({
 
 function SummaryTable({
   rows,
+  editableLineId,
   onRemoveRow,
   summaryScrollRef,
   summaryFilter,
@@ -1807,7 +1804,18 @@ function SummaryTable({
                   )}
                 </div>
                 <div className="is-action">
-                  <button type="button" className="dw-demo-link-danger dw-demo-row-action" onClick={() => onRemoveRow(row.id)}>{t("nativeSchedule.summary.action.remove")}</button>
+                  <button
+                    type="button"
+                    className="dw-demo-link-danger dw-demo-row-action"
+                    onClick={() => {
+                      if (row.lineId === editableLineId || row.serviceId === editableLineId) {
+                        onRemoveRow(row.id);
+                      }
+                    }}
+                    disabled={row.lineId !== editableLineId && row.serviceId !== editableLineId}
+                  >
+                    {t("nativeSchedule.summary.action.remove")}
+                  </button>
                 </div>
               </div>
             ))
@@ -1822,6 +1830,7 @@ function SummarySection({
   summaryStateLabel,
   hasAppliedSchedule,
   summaryRows,
+  editableLineId,
   earliestStart,
   conflictCount,
   summaryFilter,
@@ -1852,6 +1861,7 @@ function SummarySection({
 
       <SummaryTable
         rows={summaryRows}
+        editableLineId={editableLineId}
         summaryScrollRef={summaryScrollRef}
         summaryFilter={summaryFilter}
         onSummaryFilterChange={onSummaryFilterChange}
@@ -2405,7 +2415,18 @@ function NativeScheduleDemoPage({ registerHostActions }) {
 
     const nextManualDrafts = mapSnapshotManualRows(snapshot?.manualRows, sourceLine.id);
     const nextAutoRules = mapSnapshotAutoRules(snapshot?.autoRules, sourceLine.id);
-    const nextSummaryEntries = normalizeSummaryEntries(mapSnapshotSummaryRows(snapshot?.stagedRows), t);
+    const nextSummaryEntries = normalizeSummaryEntries(
+      mapSnapshotSummaryRows(
+        Array.isArray(snapshot?.combinedDraftRows)
+          ? snapshot.combinedDraftRows
+          : Array.isArray(snapshot?.combinedStagedRows)
+            ? snapshot.combinedStagedRows
+            : Array.isArray(snapshot?.lineDraftRows)
+              ? snapshot.lineDraftRows
+              : snapshot?.stagedRows
+      ),
+      t
+    );
     const nextSummarySignature = getSummaryRowsSignature(nextSummaryEntries);
     const currentSummaryRowKeys = nextSummaryEntries.map((row) => getSummaryRowKey(row));
     const previousAppliedRowKeySet = new Set(
@@ -2537,13 +2558,16 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   ]);
 
   async function saveNativeWorkbenchDraft({ applyDraft = false } = {}) {
+    const currentLineRows = summaryEntries.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
+    const currentManualRows = manualDrafts.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
+    const currentAutoRows = autoRules.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const request = {
       selectedLineId,
       selectedEditLine: selectedLineId,
       mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
-      manualRows: serializeNativeManualRows(manualDrafts),
-      autoRules: serializeNativeAutoRules(autoRules),
-      stagedRows: serializeNativeStagedRows(summaryEntries),
+      manualRows: serializeNativeManualRows(currentManualRows),
+      autoRules: serializeNativeAutoRules(currentAutoRows),
+      lineDraftRows: serializeNativeLineDraftRows(currentLineRows),
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
       applyDraft,
       nativeScheduleWriter: true
@@ -2789,6 +2813,10 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   }
 
   function removeSummaryRow(rowId) {
+    const target = summaryEntries.find((row) => row.id === rowId);
+    if (target && target.lineId !== selectedLine.id && target.serviceId !== selectedLine.id) {
+      return;
+    }
     markLocalDataDirty();
     setSummaryEntries((current) => current.filter((row) => row.id !== rowId));
   }
@@ -2797,18 +2825,18 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     markLocalDataDirty();
     setSummaryEntries((current) => {
       if (summaryFilter === "current") {
-        return current.filter((row) => row.serviceId !== selectedLine.id);
+        return current.filter((row) => row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
       }
 
       if (summaryFilter === "local") {
-        return current.filter((row) => row.kind !== "local");
+        return current.filter((row) => row.kind !== "local" || (row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id));
       }
 
       if (summaryFilter === "express") {
-        return current.filter((row) => row.kind !== "express");
+        return current.filter((row) => row.kind !== "express" || (row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id));
       }
 
-      return [];
+      return current.filter((row) => row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
     });
   }
 
@@ -3051,6 +3079,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
           summaryStateLabel={summaryStateLabel}
           hasAppliedSchedule={hasAppliedSchedule}
           summaryRows={visibleSummaryRows}
+          editableLineId={selectedLine.id}
           earliestStart={earliestStart}
           conflictCount={conflictCount}
           summaryFilter={summaryFilter}

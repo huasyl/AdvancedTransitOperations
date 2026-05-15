@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <Compile Remove="references\**\*.cs" />
+    <Compile Remove="tools\**\*.cs" />
     <None Include="references\**\*.cs" />
     <None Include="RapidTransitMod.mjs">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
