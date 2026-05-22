@@ -718,11 +718,7 @@ namespace RapidTransitMod.Planner
 
         private static bool HasLineActivityInsideWindow(PlannerContext context, string lineId)
         {
-            DepartureControlSystem.DispatchWorkbenchStagedRowDto[] stagedRows =
-                context.SelectedDraft?.lineDraftRows
-                ?? context.SelectedDraft?.stagedRows
-                ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
-            foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in stagedRows)
+            foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in EnumeratePlannerDraftRows(context))
             {
                 if (row == null || !string.Equals(row.lineId, lineId, StringComparison.Ordinal))
                 {
@@ -757,11 +753,9 @@ namespace RapidTransitMod.Planner
             HashSet<string> selectedLineSet = new HashSet<string>(context.SelectedLineIds ?? new string[0], StringComparer.Ordinal);
             HashSet<string> rowIds = new HashSet<string>(StringComparer.Ordinal);
 
-            DepartureControlSystem.DispatchWorkbenchStagedRowDto[] stagedRows =
-                context.SelectedDraft?.lineDraftRows
-                ?? context.SelectedDraft?.stagedRows
-                ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
-            if (stagedRows.Length > 0)
+            List<DepartureControlSystem.DispatchWorkbenchStagedRowDto> stagedRows =
+                EnumeratePlannerDraftRows(context).ToList();
+            if (stagedRows.Count > 0)
             {
                 foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in stagedRows)
                 {
@@ -862,6 +856,25 @@ namespace RapidTransitMod.Planner
                 return string.Compare(left.Id, right.Id, StringComparison.Ordinal);
             });
             return rows;
+        }
+
+        private static IEnumerable<DepartureControlSystem.DispatchWorkbenchStagedRowDto> EnumeratePlannerDraftRows(PlannerContext context)
+        {
+            foreach (DepartureControlSystem.DispatchPlannerDraftDto draft in context?.Snapshot?.drafts
+                ?? new DepartureControlSystem.DispatchPlannerDraftDto[0])
+            {
+                DepartureControlSystem.DispatchWorkbenchStagedRowDto[] rows =
+                    draft?.lineDraftRows
+                    ?? draft?.stagedRows
+                    ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
+                foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in rows)
+                {
+                    if (row != null)
+                    {
+                        yield return row;
+                    }
+                }
+            }
         }
 
         private static IEnumerable<DepartureControlSystem.DispatchWorkbenchTripDto> EnumeratePlannerTrips(PlannerContext context)

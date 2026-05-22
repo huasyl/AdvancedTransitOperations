@@ -260,6 +260,29 @@ function quantizeMinuteToStep(minute, stepMinutes = DEFAULT_LOCAL_RETIME_STEP_MI
   return Math.round(clampNumber(minute, 0) / step) * step;
 }
 
+function circularMinuteGap(leftMinute, rightMinute) {
+  const dayMinutes = 24 * 60;
+  const left = ((Math.round(leftMinute) % dayMinutes) + dayMinutes) % dayMinutes;
+  const right = ((Math.round(rightMinute) % dayMinutes) + dayMinutes) % dayMinutes;
+  const directGap = Math.abs(right - left);
+  return Math.min(directGap, dayMinutes - directGap);
+}
+
+function hasSameOriginDepartureGap(rows, minGapMinutes = DEFAULT_MIN_DEPARTURE_GAP_MINUTES) {
+  if (!Array.isArray(rows) || rows.length < 2) {
+    return true;
+  }
+
+  const ordered = [...rows].sort((left, right) => left.minute - right.minute);
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index].minute - ordered[index - 1].minute < minGapMinutes) {
+      return false;
+    }
+  }
+
+  return circularMinuteGap(ordered[0].minute, ordered[ordered.length - 1].minute) >= minGapMinutes;
+}
+
 function enumerateSymmetricStepDeltas(maxMinutes, stepMinutes = DEFAULT_LOCAL_RETIME_STEP_MINUTES) {
   const deltas = [];
   const step = Math.max(1, Math.round(stepMinutes || 1));
@@ -1845,6 +1868,12 @@ function computeDepartureGapPenalty(normalizedInput, trips, localLineIds, expres
         penaltyMinutes += minGapMinutes - gap;
       }
     }
+    if (minutes.length > 1 && minutes[0] !== minutes[minutes.length - 1]) {
+      const wrapGap = circularMinuteGap(minutes[0], minutes[minutes.length - 1]);
+      if (wrapGap < minGapMinutes) {
+        penaltyMinutes += minGapMinutes - wrapGap;
+      }
+    }
   });
 
   return penaltyMinutes;
@@ -1906,7 +1935,7 @@ function ensureMinuteGap(candidateMinute, originStationId, occupiedRows, minGapM
     if ((row.originStationId || "") !== originStationId) {
       return true;
     }
-    return Math.abs(row.minute - candidateMinute) >= minGapMinutes;
+    return circularMinuteGap(row.minute, candidateMinute) >= minGapMinutes;
   });
 }
 
@@ -4112,11 +4141,8 @@ function validateShiftPlan(normalizedInput, scenario, workingRows, shiftPlan) {
   });
 
   for (const rows of rowsByOrigin.values()) {
-    rows.sort((left, right) => left.minute - right.minute);
-    for (let index = 1; index < rows.length; index += 1) {
-      if (rows[index].minute - rows[index - 1].minute < DEFAULT_MIN_DEPARTURE_GAP_MINUTES) {
-        return false;
-      }
+    if (!hasSameOriginDepartureGap(rows)) {
+      return false;
     }
   }
 
@@ -4337,11 +4363,8 @@ function validateWorkingRows(normalizedInput, scenario, workingRows) {
   });
 
   for (const rows of rowsByOrigin.values()) {
-    rows.sort((left, right) => left.minute - right.minute);
-    for (let index = 1; index < rows.length; index += 1) {
-      if (rows[index].minute - rows[index - 1].minute < DEFAULT_MIN_DEPARTURE_GAP_MINUTES) {
-        return false;
-      }
+    if (!hasSameOriginDepartureGap(rows)) {
+      return false;
     }
   }
 

@@ -398,18 +398,13 @@ export function useWorkbenchController() {
     hasLoadedSnapshotRef.current = true;
   }
 
-  function applySaveDraftResult(result, { reportSuccess = false, reportFailure = true } = {}) {
+  function applySaveDraftResult(result, { reportFailure = true } = {}) {
     if (result?.snapshot) {
       applySnapshot(result.snapshot);
     }
 
     if (result?.success) {
-      if (reportSuccess) {
-        setSaveState({
-          status: "success",
-          message: t("message.saveSuccessBackend", { version: result.version ?? "-" })
-        });
-      }
+      setSaveState({ status: "idle", message: "" });
       return true;
     }
 
@@ -630,7 +625,7 @@ export function useWorkbenchController() {
           lineDraftRows: stagedRows,
           lineSettings: lineSettingsForSave
         });
-        if (!applySaveDraftResult(result, { reportSuccess: false, reportFailure: true }) || !result?.snapshot) {
+        if (!applySaveDraftResult(result, { reportFailure: true }) || !result?.snapshot) {
           suppressNextSnapshotRef.current = false;
         }
       } catch {
@@ -673,7 +668,7 @@ export function useWorkbenchController() {
       lineDraftRows: nextState.stagedRows ?? stagedRows,
       lineSettings: nextState.lineSettings ?? lineSettingsForSave
     }).then((result) => {
-      if (applySaveDraftResult(result, { reportSuccess: false, reportFailure: true })) {
+      if (applySaveDraftResult(result, { reportFailure: true })) {
         return;
       }
 
@@ -952,8 +947,8 @@ export function useWorkbenchController() {
         lineSettings: lineSettingsForSave,
         applyDraft: true
       });
-      if (applySaveDraftResult(result, { reportSuccess: true, reportFailure: true })) {
-        return t("message.saveSuccessBackend", { version: result?.version ?? "-" });
+      if (applySaveDraftResult(result, { reportFailure: true })) {
+        return "";
       }
 
       return result?.errors?.length

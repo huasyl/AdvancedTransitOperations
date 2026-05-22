@@ -502,6 +502,16 @@ namespace RapidTransitMod
                         continue;
                     }
 
+                    if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
+                        continue;
+
+                    DepartureControlSystem control = DepartureControlSystem.Instance;
+                    if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(line))
+                    {
+                        DestroySuppressedManagedLineRequest(request, line);
+                        continue;
+                    }
+
                     if (ShouldSkipFrozenConfiguredDepotRequest(request, line))
                         continue;
 
@@ -514,6 +524,21 @@ namespace RapidTransitMod
                         m_FramePendingLineStates[line] = lineState;
                 }
             }
+        }
+
+        private void DestroySuppressedManagedLineRequest(Entity request, Entity line)
+        {
+            if (request == Entity.Null || !EntityManager.Exists(request))
+                return;
+
+            m_PendingConfiguredRequestSources.Remove(request);
+            m_ConfiguredDepotBlockedRequests.Remove(request);
+            m_ConfiguredRequestParkedFallbacks.Remove(request);
+
+            Mod.log.Info("[OfficialRequestAbort] line=" + line.Index
+                + " request=" + request.Index
+                + " reason=managed-line-without-rt-spawn-pending");
+            EntityManager.DestroyEntity(request);
         }
 
         private void FinalizePendingRequestPreferredDepots()

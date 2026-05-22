@@ -106,6 +106,9 @@ namespace RapidTransitMod
             public uint LastTraceFrame;
             public uint LastDispatchGuardLogFrame;
             public uint LastParkingDiagLogFrame;
+            public uint LastPreCommitLogFrame;
+            public uint LastEndReachedRepairLogFrame;
+            public uint LastRedispatchBlockedLogFrame;
             public string LastTraceKey = string.Empty;
         }
 
@@ -584,6 +587,10 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_LateDispatchLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BvMisfireObserveLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_DepartureObserveLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_OriginDispatchTraceLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_OriginDispatchTraceLastLogFrameCache = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, string> m_DispatchSlotHeldLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_DispatchSlotHeldLastLogFrameCache = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, string> m_BvWaypointMismatchLogCache = new Dictionary<Entity, string>();
         private const bool ENABLE_TRACK_WAYPOINT_ANCHORING = true;
         private readonly Dictionary<Entity, string> m_BvTrackAnchorRecoveryLogCache = new Dictionary<Entity, string>();
@@ -685,6 +692,29 @@ namespace RapidTransitMod
         {
             return m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0;
         }
+
+        internal bool ShouldDestroyOfficialTransportVehicleRequest(Entity line)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line) || !IsWorkbenchTimetableApplied(line))
+                return false;
+
+            if (m_SpawningLines.ContainsKey(line))
+                return false;
+
+            if (!EntityManager.HasBuffer<RouteVehicle>(line))
+                return true;
+
+            DynamicBuffer<RouteVehicle> routeVehicles = EntityManager.GetBuffer<RouteVehicle>(line, true);
+            uint nowFrame = GetCurrentSimulationFrameIndex();
+            for (int i = 0; i < routeVehicles.Length; i++)
+            {
+                Entity vehicle = ResolveRuntimeControllerVehicle(routeVehicles[i].m_Vehicle);
+                if (IsFreshDispatchedPreparingVehicle(vehicle, nowFrame))
+                    return false;
+            }
+
+            return true;
+        }
         private NativeHashSet<Entity> m_DiagnosedLines;
 
         // ── 启动稳定检测（仅启动阶段执行一次，通过后永久关闭）──
@@ -731,7 +761,8 @@ namespace RapidTransitMod
         private const uint RETIREFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES = 30;
         private const uint RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES = 180;
-        private const byte RETIRE_HANDOFF_MAX_ATTEMPTS = 8;
+        private const uint ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES = 1800;
+        private const byte RETIRE_HANDOFF_MAX_ATTEMPTS = 12;
         private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
@@ -2094,14 +2125,18 @@ namespace RapidTransitMod
 
         private float GetWaypointStopFrames(Entity waypoint, TransportLineData prefabLineData)
         {
-            if (!EntityManager.HasComponent<VehicleTiming>(waypoint))
+            if (waypoint == Entity.Null
+                || !EntityManager.Exists(waypoint)
+                || !EntityManager.HasComponent<VehicleTiming>(waypoint))
                 return 0f;
 
             float stopDuration = prefabLineData.m_StopDuration;
             if (EntityManager.HasComponent<Connected>(waypoint))
             {
                 Entity connectedStop = EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
-                if (connectedStop != Entity.Null && EntityManager.HasComponent<Game.Routes.TransportStop>(connectedStop))
+                if (connectedStop != Entity.Null
+                    && EntityManager.Exists(connectedStop)
+                    && EntityManager.HasComponent<Game.Routes.TransportStop>(connectedStop))
                     stopDuration = RouteUtils.GetStopDuration(prefabLineData, EntityManager.GetComponentData<Game.Routes.TransportStop>(connectedStop));
             }
             return math.max(0f, stopDuration * 60f);
@@ -2269,9 +2304,14 @@ namespace RapidTransitMod
             if (!wpBuffers.TryGetBuffer(line, out var wps) || wps.Length == 0)
                 return Entity.Null;
             Entity stationA = wps[0].m_Waypoint;
-            if (!EntityManager.HasComponent<Connected>(stationA))
+            if (stationA == Entity.Null
+                || !EntityManager.Exists(stationA)
+                || !EntityManager.HasComponent<Connected>(stationA))
                 return Entity.Null;
-            return EntityManager.GetComponentData<Connected>(stationA).m_Connected;
+            Entity connected = EntityManager.GetComponentData<Connected>(stationA).m_Connected;
+            return connected != Entity.Null && EntityManager.Exists(connected)
+                ? connected
+                : Entity.Null;
         }
 
     }

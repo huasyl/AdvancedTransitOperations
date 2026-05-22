@@ -22,6 +22,10 @@ namespace RapidTransitMod
             m_HoldingSkipLogCache.Clear();
             m_LateDispatchLogCache.Clear();
             m_YieldSkipLogCache.Clear();
+            m_OriginDispatchTraceLogCache.Clear();
+            m_OriginDispatchTraceLastLogFrameCache.Clear();
+            m_DispatchSlotHeldLogCache.Clear();
+            m_DispatchSlotHeldLastLogFrameCache.Clear();
         }
 
         public string GetCurrentGameTimeLabel()

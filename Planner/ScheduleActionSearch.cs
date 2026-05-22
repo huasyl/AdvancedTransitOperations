@@ -41,7 +41,7 @@ namespace RapidTransitMod.Planner
                     .Where(stationId => !string.IsNullOrEmpty(stationId))
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
-                plan.ExpressSavedMinutes = ComputeExpressSavedMinutes(context, catchupEvents);
+                plan.ExpressSavedMinutes = ComputeExpressSavedMinutes(context, runtimeCatalog);
                 plan.LocalWaitMinutes = ComputeLocalWaitMinutes(catchupEvents);
                 plan.UnresolvedRiskMinutes = PlannerMath.Round2(riskClusters.Sum(cluster => cluster.UnresolvedRiskMinutes));
                 plan.RobustnessRiskMinutes = PlannerMath.Round2(riskClusters.Sum(cluster => cluster.RobustnessRiskMinutes));
@@ -59,6 +59,7 @@ namespace RapidTransitMod.Planner
                     baseWorkingRows,
                     context.WorkingRows);
                 plan.ProblemIssues = BuildProblemIssues(context, plan, riskClusters, catchupEvents);
+                plan.ProblemIssues.AddRange(BuildOriginDepartureGapIssues(plan.AdjustedRows, runtimeCatalog));
                 plan.FrontendSummary = BuildFrontendSummary(context, plan);
                 plan.PreviewRows = BuildPreviewRows(context, catchupEvents, runtimeCatalog);
                 plan.Status = ResolvePlanStatus(plan, diagnostics);
@@ -70,25 +71,292 @@ namespace RapidTransitMod.Planner
 
         private static float ComputeExpressSavedMinutes(
             PlannerContext context,
-            List<PlannerCatchupEvent> catchupEvents)
+            PlannerRuntimeCatalog runtimeCatalog)
         {
-            Dictionary<string, float> savedByTripId = new Dictionary<string, float>(StringComparer.Ordinal);
-            foreach (PlannerCatchupEvent catchupEvent in catchupEvents ?? new List<PlannerCatchupEvent>())
+            float totalSavedMinutes = 0f;
+            int targetCount = 0;
+            foreach (string targetLineId in (context?.TargetLineIds ?? Array.Empty<string>())
+                .Where(lineId => !string.IsNullOrEmpty(lineId))
+                .Distinct(StringComparer.Ordinal))
             {
-                if (catchupEvent == null || string.IsNullOrEmpty(catchupEvent.ExpressTripId))
+                if (runtimeCatalog == null
+                    || !runtimeCatalog.ModelsByLineId.TryGetValue(targetLineId, out PlannerLineRuntimeModel expressModel))
                 {
                     continue;
                 }
-                if (!savedByTripId.TryGetValue(catchupEvent.ExpressTripId, out float current)
-                    || catchupEvent.ExpressSavedMinutes > current)
+
+                float currentRuntimeMinutes = ResolveLineRuntimeMinutes(expressModel);
+                float baselineRuntimeMinutes = currentRuntimeMinutes + ComputeFullStopBaselineExtraMinutes(context, expressModel);
+                totalSavedMinutes += Math.Max(0f, baselineRuntimeMinutes - currentRuntimeMinutes);
+                targetCount += 1;
+            }
+
+            return targetCount == 0
+                ? 0f
+                : PlannerMath.Round2(totalSavedMinutes / targetCount);
+        }
+
+        private static float ResolveLineRuntimeMinutes(PlannerLineRuntimeModel model)
+        {
+            if (model == null)
+            {
+                return 0f;
+            }
+
+            if (model.TotalMinuteSpan > 0f)
+            {
+                return model.TotalMinuteSpan;
+            }
+
+            if (model.AtomBoundaryMinuteOffsets == null || model.AtomBoundaryMinuteOffsets.Length == 0)
+            {
+                return 0f;
+            }
+
+            return Math.Max(0f, model.AtomBoundaryMinuteOffsets[model.AtomBoundaryMinuteOffsets.Length - 1]);
+        }
+
+        private static float ComputeFullStopBaselineExtraMinutes(
+            PlannerContext context,
+            PlannerLineRuntimeModel expressModel)
+        {
+            if (context == null || expressModel == null)
+            {
+                return 0f;
+            }
+
+            HashSet<int> targetBuildings = new HashSet<int>();
+            foreach (DepartureControlSystem.DispatchPlannerStationDto station in expressModel.Stations)
+            {
+                if (station != null && station.buildingEntityIndex >= 0)
                 {
-                    savedByTripId[catchupEvent.ExpressTripId] = catchupEvent.ExpressSavedMinutes;
+                    targetBuildings.Add(station.buildingEntityIndex);
                 }
             }
 
-            return savedByTripId.Count == 0
-                ? 0f
-                : PlannerMath.Round2(savedByTripId.Values.Sum() / savedByTripId.Count);
+            float extraMinutes = 0f;
+            foreach (PlannerStationOffset stationOffset in expressModel.StationOffsets)
+            {
+                if (stationOffset == null || stationOffset.ShouldStop)
+                {
+                    continue;
+                }
+
+                extraMinutes += ResolveAverageDwellForStation(context, stationOffset.StationId)
+                    + PlannerDefaults.StopStartLossMinutesPerSkippedStop;
+            }
+
+            foreach (KeyValuePair<int, int> stop in CollectProjectedBaselineStops(context, expressModel, targetBuildings))
+            {
+                extraMinutes += ResolveAverageDwellForBuilding(context, stop.Key)
+                    + PlannerDefaults.StopStartLossMinutesPerSkippedStop;
+            }
+
+            return PlannerMath.Round2(extraMinutes);
+        }
+
+        private static Dictionary<int, int> CollectProjectedBaselineStops(
+            PlannerContext context,
+            PlannerLineRuntimeModel expressModel,
+            HashSet<int> targetBuildings)
+        {
+            Dictionary<int, int> projectedStopsByBuilding = new Dictionary<int, int>();
+            if (context == null
+                || expressModel == null
+                || expressModel.Stations.Count < 2
+                || string.IsNullOrEmpty(expressModel.SourceLineId))
+            {
+                return projectedStopsByBuilding;
+            }
+
+            int pathStartAtom = expressModel.Stations[0].trackAtomIndex;
+            int pathEndAtom = expressModel.Stations[expressModel.Stations.Count - 1].trackAtomIndex;
+            if (pathStartAtom < 0 || pathEndAtom <= pathStartAtom)
+            {
+                pathStartAtom = 0;
+                pathEndAtom = Math.Max(0, expressModel.TrackAtomCount);
+            }
+
+            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors
+                ?? Array.Empty<DepartureControlSystem.DispatchPlannerSharedCorridorDto>())
+            {
+                if (corridor == null
+                    || !string.Equals(corridor.traversalRelation, "SameDirection", StringComparison.OrdinalIgnoreCase)
+                    || corridor.hasMirroredContext
+                    || corridor.orderedRun <= 0
+                    || corridor.physicalOverlap <= 0)
+                {
+                    continue;
+                }
+
+                string sourceLineId;
+                int targetStartAtom;
+                int targetEndAtom;
+                int sourceStartAtom;
+                int sourceEndAtom;
+                if (string.Equals(corridor.lineId, expressModel.SourceLineId, StringComparison.Ordinal))
+                {
+                    sourceLineId = corridor.otherLineId ?? string.Empty;
+                    targetStartAtom = corridor.lineStartAtomIndex;
+                    targetEndAtom = corridor.lineEndAtomIndexExclusive;
+                    sourceStartAtom = corridor.otherStartAtomIndex;
+                    sourceEndAtom = corridor.otherEndAtomIndexExclusive;
+                }
+                else if (string.Equals(corridor.otherLineId, expressModel.SourceLineId, StringComparison.Ordinal))
+                {
+                    sourceLineId = corridor.lineId ?? string.Empty;
+                    targetStartAtom = corridor.otherStartAtomIndex;
+                    targetEndAtom = corridor.otherEndAtomIndexExclusive;
+                    sourceStartAtom = corridor.lineStartAtomIndex;
+                    sourceEndAtom = corridor.lineEndAtomIndexExclusive;
+                }
+                else
+                {
+                    continue;
+                }
+
+                AddProjectedBaselineStopsFromSource(
+                    context,
+                    sourceLineId,
+                    targetStartAtom,
+                    targetEndAtom,
+                    sourceStartAtom,
+                    sourceEndAtom,
+                    pathStartAtom,
+                    pathEndAtom,
+                    targetBuildings,
+                    projectedStopsByBuilding);
+            }
+
+            return projectedStopsByBuilding;
+        }
+
+        private static void AddProjectedBaselineStopsFromSource(
+            PlannerContext context,
+            string sourceLineId,
+            int targetStartAtomIndex,
+            int targetEndAtomIndexExclusive,
+            int sourceStartAtomIndex,
+            int sourceEndAtomIndexExclusive,
+            int pathStartAtom,
+            int pathEndAtom,
+            HashSet<int> targetBuildings,
+            Dictionary<int, int> projectedStopsByBuilding)
+        {
+            if (string.IsNullOrEmpty(sourceLineId)
+                || !context.StationsByLineId.TryGetValue(sourceLineId, out List<DepartureControlSystem.DispatchPlannerStationDto> sourceStations))
+            {
+                return;
+            }
+
+            int sourceStart = Math.Min(sourceStartAtomIndex, sourceEndAtomIndexExclusive);
+            int sourceEnd = Math.Max(sourceStartAtomIndex, sourceEndAtomIndexExclusive);
+            int targetStart = Math.Min(targetStartAtomIndex, targetEndAtomIndexExclusive);
+            int targetEnd = Math.Max(targetStartAtomIndex, targetEndAtomIndexExclusive);
+            int tolerance = PlannerDefaults.BypassStationEndpointToleranceAtoms;
+            foreach (DepartureControlSystem.DispatchPlannerStationDto sourceStation in sourceStations)
+            {
+                if (sourceStation == null
+                    || sourceStation.buildingEntityIndex < 0
+                    || !sourceStation.canConfigureBypass
+                    || targetBuildings.Contains(sourceStation.buildingEntityIndex)
+                    || sourceStation.trackAtomIndex < sourceStart - tolerance
+                    || sourceStation.trackAtomIndex > sourceEnd + tolerance)
+                {
+                    continue;
+                }
+
+                int projectedAtomIndex = ProjectSourceAtomToTargetCorridor(
+                    sourceStation.trackAtomIndex,
+                    sourceStart,
+                    sourceEnd,
+                    targetStart,
+                    targetEnd);
+                if (projectedAtomIndex <= pathStartAtom || projectedAtomIndex >= pathEndAtom)
+                {
+                    continue;
+                }
+
+                if (!projectedStopsByBuilding.ContainsKey(sourceStation.buildingEntityIndex))
+                {
+                    projectedStopsByBuilding[sourceStation.buildingEntityIndex] = projectedAtomIndex;
+                }
+            }
+        }
+
+        private static int ProjectSourceAtomToTargetCorridor(
+            int sourceAtomIndex,
+            int sourceStartAtomIndex,
+            int sourceEndAtomIndexExclusive,
+            int targetStartAtomIndex,
+            int targetEndAtomIndexExclusive)
+        {
+            int sourceLength = Math.Max(1, sourceEndAtomIndexExclusive - sourceStartAtomIndex);
+            int targetLength = Math.Max(1, targetEndAtomIndexExclusive - targetStartAtomIndex);
+            float ratio = Math.Max(0f, Math.Min(1f, (sourceAtomIndex - sourceStartAtomIndex) / (float)sourceLength));
+            return targetStartAtomIndex + (int)Math.Round(targetLength * ratio);
+        }
+
+        private static float ResolveAverageDwellForStation(PlannerContext context, string stationId)
+        {
+            if (context == null
+                || string.IsNullOrEmpty(stationId)
+                || !context.StationsById.TryGetValue(stationId, out DepartureControlSystem.DispatchPlannerStationDto station))
+            {
+                return 0f;
+            }
+
+            if (context.StopDwellByStationId.TryGetValue(station.id ?? string.Empty, out DepartureControlSystem.DispatchPlannerStationDwellObservationDto observed)
+                && observed.sampleCount > 0
+                && observed.averageMinutes > 0f)
+            {
+                return PlannerMath.Round2(observed.averageMinutes);
+            }
+
+            if (station.profileDwellMinutes > 0f)
+            {
+                return PlannerMath.Round2(station.profileDwellMinutes);
+            }
+
+            return ResolveAverageDwellForBuilding(context, station.buildingEntityIndex);
+        }
+
+        private static float ResolveAverageDwellForBuilding(PlannerContext context, int buildingEntityIndex)
+        {
+            if (context == null || buildingEntityIndex < 0)
+            {
+                return 0f;
+            }
+
+            List<float> observedDwellMinutes = new List<float>();
+            List<float> profileDwellMinutes = new List<float>();
+            foreach (DepartureControlSystem.DispatchPlannerStationDto station in context.StationsById.Values)
+            {
+                if (station == null || station.buildingEntityIndex != buildingEntityIndex)
+                {
+                    continue;
+                }
+
+                if (context.StopDwellByStationId.TryGetValue(station.id ?? string.Empty, out DepartureControlSystem.DispatchPlannerStationDwellObservationDto observed)
+                    && observed.sampleCount > 0
+                    && observed.averageMinutes > 0f)
+                {
+                    observedDwellMinutes.Add(observed.averageMinutes);
+                }
+                else if (station.profileDwellMinutes > 0f)
+                {
+                    profileDwellMinutes.Add(station.profileDwellMinutes);
+                }
+            }
+
+            if (observedDwellMinutes.Count > 0)
+            {
+                return PlannerMath.Round2(observedDwellMinutes.Sum() / observedDwellMinutes.Count);
+            }
+
+            return profileDwellMinutes.Count > 0
+                ? PlannerMath.Round2(profileDwellMinutes.Sum() / profileDwellMinutes.Count)
+                : 0f;
         }
 
         private static float ComputeLocalWaitMinutes(List<PlannerCatchupEvent> catchupEvents)
@@ -203,6 +471,97 @@ namespace RapidTransitMod.Planner
             }
 
             return issues;
+        }
+
+        private static List<DepartureControlSystem.DispatchPlannerProblemIssueDto> BuildOriginDepartureGapIssues(
+            List<PlannerWorkingRow> rows,
+            PlannerRuntimeCatalog runtimeCatalog)
+        {
+            List<DepartureControlSystem.DispatchPlannerProblemIssueDto> issues =
+                new List<DepartureControlSystem.DispatchPlannerProblemIssueDto>();
+            Dictionary<string, List<PlannerOriginDeparture>> departuresByOrigin =
+                new Dictionary<string, List<PlannerOriginDeparture>>(StringComparer.Ordinal);
+
+            foreach (PlannerWorkingRow row in rows ?? new List<PlannerWorkingRow>())
+            {
+                if (row == null
+                    || string.IsNullOrEmpty(row.LineId)
+                    || runtimeCatalog == null
+                    || !runtimeCatalog.ModelsByLineId.TryGetValue(row.LineId, out PlannerLineRuntimeModel model))
+                {
+                    continue;
+                }
+
+                string originStationId = model.Line?.originStationId ?? string.Empty;
+                if (string.IsNullOrEmpty(originStationId))
+                    continue;
+
+                if (!departuresByOrigin.TryGetValue(originStationId, out List<PlannerOriginDeparture> departures))
+                {
+                    departures = new List<PlannerOriginDeparture>();
+                    departuresByOrigin[originStationId] = departures;
+                }
+
+                departures.Add(new PlannerOriginDeparture
+                {
+                    LineId = row.LineId,
+                    TripId = row.Id ?? string.Empty,
+                    OriginStationId = originStationId,
+                    Minute = row.Minute
+                });
+            }
+
+            foreach (List<PlannerOriginDeparture> departures in departuresByOrigin.Values)
+            {
+                PlannerOriginDeparture[] ordered = departures
+                    .OrderBy(item => item.Minute)
+                    .ThenBy(item => item.LineId, StringComparer.Ordinal)
+                    .ThenBy(item => item.TripId, StringComparer.Ordinal)
+                    .ToArray();
+                for (int i = 1; i < ordered.Length; i++)
+                {
+                    AddOriginDepartureGapIssue(issues, ordered[i - 1], ordered[i]);
+                }
+                if (ordered.Length > 1 && ordered[0].Minute != ordered[ordered.Length - 1].Minute)
+                {
+                    AddOriginDepartureGapIssue(issues, ordered[ordered.Length - 1], ordered[0]);
+                }
+            }
+
+            return issues;
+        }
+
+        private static void AddOriginDepartureGapIssue(
+            List<DepartureControlSystem.DispatchPlannerProblemIssueDto> issues,
+            PlannerOriginDeparture previous,
+            PlannerOriginDeparture next)
+        {
+            int gap = GetForwardMinuteGap(previous.Minute, next.Minute);
+            if (gap >= PlannerDefaults.DefaultMinDepartureGapMinutes)
+                return;
+
+            issues.Add(new DepartureControlSystem.DispatchPlannerProblemIssueDto
+            {
+                type = "originDepartureGap",
+                severity = "high",
+                yieldingLineId = next.LineId,
+                priorityLineId = previous.LineId,
+                yieldingTripId = next.TripId,
+                priorityTripId = previous.TripId,
+                severityMinutes = PlannerDefaults.DefaultMinDepartureGapMinutes - gap,
+                riskMinutes = PlannerDefaults.DefaultMinDepartureGapMinutes - gap,
+                lineIds = new[] { previous.LineId, next.LineId }
+            });
+        }
+
+        private static int GetForwardMinuteGap(int previousMinutes, int nextMinutes)
+        {
+            const int dayMinutes = 24 * 60;
+            int previous = ((previousMinutes % dayMinutes) + dayMinutes) % dayMinutes;
+            int next = ((nextMinutes % dayMinutes) + dayMinutes) % dayMinutes;
+            return next >= previous
+                ? next - previous
+                : dayMinutes - previous + next;
         }
 
         private static List<DepartureControlSystem.DispatchPlannerScheduleActionDto> BuildStructuredScheduleActions(
@@ -415,6 +774,12 @@ namespace RapidTransitMod.Planner
             {
                 return "blocked";
             }
+            if (plan.ProblemIssues.Any(item =>
+                string.Equals(item.type, "originDepartureGap", StringComparison.Ordinal)
+                && string.Equals(item.severity, "high", StringComparison.Ordinal)))
+            {
+                return "blocked";
+            }
             if (plan.CatchupEvents.Any(item =>
                 string.Equals(item.ResolutionState, "actionable", StringComparison.Ordinal)
                 && !string.Equals(item.PairRole, "fixed-fixed", StringComparison.Ordinal)))
@@ -530,6 +895,14 @@ namespace RapidTransitMod.Planner
         private static string[] ResolveRegionIdsForLine(List<PlannerRiskCluster> riskClusters, string lineId)
         {
             return ResolveClusterIdsForLine(riskClusters, lineId);
+        }
+
+        private sealed class PlannerOriginDeparture
+        {
+            public string LineId = string.Empty;
+            public string TripId = string.Empty;
+            public string OriginStationId = string.Empty;
+            public int Minute = 0;
         }
     }
 }

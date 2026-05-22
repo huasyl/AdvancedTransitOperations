@@ -10,6 +10,26 @@ import WorkbenchScrollArea from "./components/WorkbenchScrollArea";
 const NATIVE_SCHEDULE_PERSIST_KEY = "rtm.nativeSchedule.frontendDraft.v1";
 const NATIVE_SCHEDULE_PERSIST_SCHEMA_VERSION = 3;
 const MIN_LINE_SETTING_MINUTES = 5;
+const SAVE_OPERATION_START_TIMEOUT_MS = 5000;
+const SAVE_OPERATION_STATUS_TIMEOUT_MS = 5000;
+const SAVE_OPERATION_TOTAL_TIMEOUT_MS = 15000;
+
+function waitForDelay(delayMs) {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    })
+  ]);
+}
+
+function isTerminalSaveOperationState(state) {
+  return state === "completed" || state === "failed" || state === "missing" || state === "superseded";
+}
 
 function DemoTextField({
   label,
@@ -747,6 +767,54 @@ function serializeNativeLineDraftRows(rows = []) {
     }));
 }
 
+function serializeNativeLineDraftRowsByLineId(rows = []) {
+  const rowsByLineId = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const lineId = row?.lineId || row?.serviceId || "";
+    if (!lineId) {
+      return;
+    }
+
+    if (!rowsByLineId.has(lineId)) {
+      rowsByLineId.set(lineId, []);
+    }
+    rowsByLineId.get(lineId).push({ ...row, lineId });
+  });
+
+  return [...rowsByLineId.entries()].map(([lineId, lineRows]) => ({
+    lineId,
+    lineDraftRows: serializeNativeLineDraftRows(lineRows)
+  }));
+}
+
+function mapSnapshotPlanRefs(planRefs = []) {
+  const next = {};
+  (Array.isArray(planRefs) ? planRefs : []).forEach((entry) => {
+    const lineId = String(entry?.lineId || entry?.contract?.draftKey || "");
+    if (!lineId || !entry?.contract || typeof entry.contract !== "object") {
+      return;
+    }
+
+    next[lineId] = {
+      ...entry.contract,
+      draftKey: lineId
+    };
+  });
+  return next;
+}
+
+function serializePlanRefs(planRefsByLine = {}) {
+  return Object.entries(planRefsByLine || {})
+    .filter(([lineId, contract]) => lineId && contract && typeof contract === "object")
+    .map(([lineId, contract]) => ({
+      lineId,
+      contract: {
+        ...contract,
+        draftKey: lineId
+      }
+    }));
+}
+
 function mapSnapshotManualRows(rows = [], fallbackLineId = "") {
   return (Array.isArray(rows) ? rows : []).map((row, index) => ({
     id: row?.id || `manual-${index + 1}`,
@@ -901,8 +969,12 @@ function offsetModeFromDirection(direction) {
   return direction === "early" ? "before" : "after";
 }
 
+function findLineOptionById(lineId) {
+  return LINE_OPTIONS.find((line) => line.id === lineId) ?? null;
+}
+
 function getLineOptionById(lineId) {
-  return LINE_OPTIONS.find((line) => line.id === lineId) ?? LINE_OPTIONS[0];
+  return findLineOptionById(lineId) ?? LINE_OPTIONS[0];
 }
 
 function getLineOptionByKind(kind, corridorId = "", fallbackToAny = true) {
@@ -948,29 +1020,30 @@ function buildCombinedNote(noteType, t, values = {}) {
 function createSummaryEntry({
   id,
   time,
+  lineId,
   serviceId,
   kind,
   source = "manual",
   note = ""
 }, t) {
-  const selectedOption = getLineOptionById(serviceId);
-  const resolvedKind = normalizeKind(kind || selectedOption.kind);
-  const lineOption = selectedOption;
+  const resolvedLineId = lineId || serviceId || "";
+  const lineOption = resolvedLineId ? findLineOptionById(resolvedLineId) : null;
+  const resolvedKind = normalizeKind(kind || lineOption?.kind);
 
   return {
     id,
-    lineId: lineOption.id,
-    serviceId: lineOption.id,
-    lineNameKey: lineOption.nameKey,
-    lineName: getLocalizedLineName(lineOption, t),
-    lineColor: lineOption.color,
+    lineId: resolvedLineId,
+    serviceId: resolvedLineId,
+    lineNameKey: lineOption?.nameKey || "",
+    lineName: lineOption ? getLocalizedLineName(lineOption, t) : (resolvedLineId || "(missing lineId)"),
+    lineColor: lineOption?.color || "#9ca3af",
     time,
     kind: resolvedKind,
     source,
     note: note || t("combined.note.direct"),
-    originId: lineOption.originId,
-    originStationId: lineOption.originStationId,
-    origin: getLocalizedOriginLabel(lineOption.originId, t)
+    originId: lineOption?.originId || "",
+    originStationId: lineOption?.originStationId || "",
+    origin: lineOption ? getLocalizedOriginLabel(lineOption.originId, t) : ""
   };
 }
 
@@ -985,31 +1058,25 @@ function getSummaryRowsSignature(rows) {
     .join("||");
 }
 
-function normalizeSummaryEntries(rows, t) {
-  const seen = new Set();
+function getCircularMinuteGap(leftMinute, rightMinute) {
+  const dayMinutes = 24 * 60;
+  const left = ((Math.round(leftMinute) % dayMinutes) + dayMinutes) % dayMinutes;
+  const right = ((Math.round(rightMinute) % dayMinutes) + dayMinutes) % dayMinutes;
+  const directGap = Math.abs(right - left);
+  return Math.min(directGap, dayMinutes - directGap);
+}
 
+function normalizeSummaryEntries(rows, t) {
   return (Array.isArray(rows) ? rows : [])
     .map((row, index) => createSummaryEntry({
       id: row?.id || `summary-${index + 1}`,
       time: row?.time || "",
-      serviceId: row?.serviceId || getLineOptionByKind(normalizeKind(row?.type)).id,
+      lineId: row?.lineId || row?.serviceId || "",
+      serviceId: row?.serviceId || row?.lineId || "",
       kind: row?.kind || normalizeKind(row?.type),
       source: row?.source || "manual",
       note: row?.note || t("combined.note.direct")
-    }, t))
-    .filter((row) => {
-      if (timeToMinutes(row.time) === null) {
-        return false;
-      }
-
-      const key = `${row.lineId}|${row.kind}|${row.time}|${row.source}`;
-      if (seen.has(key)) {
-        return false;
-      }
-
-      seen.add(key);
-      return true;
-    });
+    }, t));
 }
 
 const SUMMARY_ROWS = [
@@ -1101,20 +1168,48 @@ function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) {
     lineKinds.set(row.lineId, kinds);
   });
 
-  rowsWithMinutes.sort((left, right) => left.minute - right.minute);
   const tooCloseIds = new Set();
-  for (let index = 1; index < rowsWithMinutes.length; index += 1) {
-    const current = rowsWithMinutes[index];
-    const previous = rowsWithMinutes[index - 1];
-    if (!current.row.originStationId || current.row.originStationId !== previous.row.originStationId) {
-      continue;
+  const rowsByOrigin = new Map();
+  rowsWithMinutes.forEach((entry) => {
+    const originStationId = entry.row.originStationId || "";
+    if (!originStationId) {
+      return;
     }
 
-    if (current.minute - previous.minute < MIN_DEPARTURE_INTERVAL_MINUTES) {
-      tooCloseIds.add(current.row?.id);
-      tooCloseIds.add(previous.row?.id);
+    if (!rowsByOrigin.has(originStationId)) {
+      rowsByOrigin.set(originStationId, []);
     }
-  }
+    rowsByOrigin.get(originStationId).push(entry);
+  });
+
+  rowsByOrigin.forEach((originRows) => {
+    originRows.sort((left, right) => left.minute - right.minute);
+    for (let index = 1; index < originRows.length; index += 1) {
+      const current = originRows[index];
+      const previous = originRows[index - 1];
+      if (current.minute - previous.minute < MIN_DEPARTURE_INTERVAL_MINUTES) {
+        tooCloseIds.add(current.row?.id);
+        tooCloseIds.add(previous.row?.id);
+      }
+    }
+
+    if (originRows.length > 1 && originRows[0].minute !== originRows[originRows.length - 1].minute) {
+      const first = originRows[0];
+      const last = originRows[originRows.length - 1];
+      if (getCircularMinuteGap(first.minute, last.minute) < MIN_DEPARTURE_INTERVAL_MINUTES) {
+        tooCloseIds.add(first.row?.id);
+        tooCloseIds.add(last.row?.id);
+      }
+    }
+  });
+
+  rowsWithMinutes.sort((left, right) => {
+    if (left.minute !== right.minute) {
+      return left.minute - right.minute;
+    }
+
+    return String(left.row?.id || "").localeCompare(String(right.row?.id || ""));
+  });
 
   return rowsWithMinutes
     .map(({ row }) => {
@@ -1137,7 +1232,7 @@ function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) {
         conflictReasons.push(formatConflictReason("gap", t, "compact", { minutes: MIN_DEPARTURE_INTERVAL_MINUTES }));
       }
 
-      const lineOption = getLineOptionById(row.lineId);
+      const lineOption = findLineOptionById(row.lineId || row.serviceId || "");
 
       return {
         ...row,
@@ -1148,8 +1243,8 @@ function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) {
               ? t("schedule.source.planner")
               : t("schedule.source.manual"),
         note: row.note || t("combined.note.direct"),
-        lineName: row.lineName || getLocalizedLineName(lineOption, t),
-        origin: getLocalizedOriginLabel(row.originId || lineOption.originId, t),
+        lineName: row.lineName || (lineOption ? getLocalizedLineName(lineOption, t) : (row.lineId || "(missing lineId)")),
+        origin: row.origin || (lineOption ? getLocalizedOriginLabel(row.originId || lineOption.originId, t) : ""),
         isApplied: appliedRowKeySet instanceof Set && appliedRowKeySet.has(getSummaryRowKey(row)),
         isConflict,
         conflictReasonLabel: conflictReasons.join("/"),
@@ -1807,12 +1902,7 @@ function SummaryTable({
                   <button
                     type="button"
                     className="dw-demo-link-danger dw-demo-row-action"
-                    onClick={() => {
-                      if (row.lineId === editableLineId || row.serviceId === editableLineId) {
-                        onRemoveRow(row.id);
-                      }
-                    }}
-                    disabled={row.lineId !== editableLineId && row.serviceId !== editableLineId}
+                    onClick={() => onRemoveRow(row.id)}
                   >
                     {t("nativeSchedule.summary.action.remove")}
                   </button>
@@ -1840,6 +1930,8 @@ function SummarySection({
   onClearSummary,
   onApplySchedule,
   onLocateConflict,
+  isApplyingSchedule,
+  footerNote,
   dropdownPortalHostRef
 }) {
   const { t } = useNativeScheduleI18n();
@@ -1871,16 +1963,18 @@ function SummarySection({
 
       <div className="dw-demo-footer">
         <button type="button" className="dw-demo-flat-button is-muted" onClick={onClearSummary}>{t("nativeSchedule.summary.action.clear")}</button>
+        {footerNote ? <span className={`dw-demo-footer-note ${footerNote.tone ? `is-${footerNote.tone}` : ""}`}>{footerNote.text}</span> : null}
         <button
           type="button"
-          className={`dw-demo-primary dw-demo-cta ${hasConflicts ? "is-conflict" : hasAppliedSchedule ? "is-applied" : ""}`}
+          className={`dw-demo-primary dw-demo-cta ${hasConflicts ? "is-conflict" : hasAppliedSchedule ? "is-applied" : ""}${isApplyingSchedule ? " is-loading" : ""}`}
+          disabled={isApplyingSchedule}
           onClick={hasConflicts ? onLocateConflict : onApplySchedule}
         >
           <span className="dw-demo-button-content">
             <span className="dw-demo-button-icon-wrap" aria-hidden="true">
               {hasConflicts ? <DemoAlertIcon /> : hasAppliedSchedule ? <DemoAppliedStateIcon /> : <DemoPlayIcon />}
             </span>
-            <span>{hasConflicts ? t("nativeSchedule.summary.action.locateConflict") : hasAppliedSchedule ? t("nativeSchedule.summary.action.applied") : t("nativeSchedule.summary.action.apply")}</span>
+            <span>{isApplyingSchedule ? t("nativeSchedule.summary.action.applying") : hasConflicts ? t("nativeSchedule.summary.action.locateConflict") : hasAppliedSchedule ? t("nativeSchedule.summary.action.applied") : t("nativeSchedule.summary.action.apply")}</span>
           </span>
         </button>
       </div>
@@ -2169,6 +2263,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   const [summaryEntries, setSummaryEntries] = useState(() => normalizeSummaryEntries([], t));
   const [autoRules, setAutoRules] = useState([]);
   const [manualDrafts, setManualDrafts] = useState([]);
+  const [planRefsByLine, setPlanRefsByLine] = useState({});
   const [manualInput, setManualInput] = useState("12:00");
   const [editorStart, setEditorStart] = useState("08:00");
   const [editorEnd, setEditorEnd] = useState("10:00");
@@ -2177,6 +2272,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   const [autoOffsetMinutesText, setAutoOffsetMinutesText] = useState("");
   const [appliedSummarySignature, setAppliedSummarySignature] = useState("");
   const [appliedSummaryRowKeys, setAppliedSummaryRowKeys] = useState([]);
+  const [isApplyingSchedule, setIsApplyingSchedule] = useState(false);
   const [summaryFilter, setSummaryFilter] = useState("all");
   const [panelMessage, setPanelMessage] = useState(null);
   const summaryScrollRef = useRef(null);
@@ -2187,6 +2283,9 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   const lastHydratedSnapshotRef = useRef(null);
   const suppressNextSnapshotRef = useRef(false);
   const skipNextBackendSaveRef = useRef(false);
+  const latestDraftSaveOperationRunIdRef = useRef(0);
+  const latestApplySaveOperationRunIdRef = useRef(0);
+  const applyingSaveOperationRef = useRef(false);
 
   const planLineOptions = useMemo(
     () => buildPlanLineOptions(LINE_OPTIONS),
@@ -2344,9 +2443,10 @@ function NativeScheduleDemoPage({ registerHostActions }) {
 
     return summaryRows;
   }, [selectedLine.id, summaryFilter, summaryRows]);
-  const conflictCount = visibleSummaryRows.filter((row) => row.isConflict).length;
+  const conflictCount = summaryRows.filter((row) => row.isConflict).length;
   const earliestStart = visibleSummaryRows[0]?.time || "--:--";
   const summaryStateLabel = hasAppliedSchedule ? t("nativeSchedule.summary.section.applied") : t("nativeSchedule.summary.section.pending");
+  const summaryFooterNote = panelMessage?.scope === "summary" ? panelMessage : null;
   const autoFooterNote =
     panelMessage?.scope === "auto"
       ? panelMessage
@@ -2419,27 +2519,34 @@ function NativeScheduleDemoPage({ registerHostActions }) {
       mapSnapshotSummaryRows(
         Array.isArray(snapshot?.combinedDraftRows)
           ? snapshot.combinedDraftRows
-          : Array.isArray(snapshot?.combinedStagedRows)
-            ? snapshot.combinedStagedRows
-            : Array.isArray(snapshot?.lineDraftRows)
-              ? snapshot.lineDraftRows
-              : snapshot?.stagedRows
+          : Array.isArray(snapshot?.lineDraftRows)
+            ? snapshot.lineDraftRows
+            : []
       ),
       t
     );
     const nextSummarySignature = getSummaryRowsSignature(nextSummaryEntries);
     const currentSummaryRowKeys = nextSummaryEntries.map((row) => getSummaryRowKey(row));
+    const nextAppliedEntries = normalizeSummaryEntries(
+      mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
+      t
+    );
+    const nextAppliedRowKeysFromRuntime = new Set(nextAppliedEntries.map((row) => getSummaryRowKey(row)));
     const previousAppliedRowKeySet = new Set(
       Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []
     );
     const nextAppliedSummarySignature =
-      snapshot?.rulesApplied || snapshot?.draftApplied
-        ? nextSummarySignature
-        : (appliedSummarySignature || "");
+      nextAppliedEntries.length > 0
+        ? getSummaryRowsSignature(nextAppliedEntries)
+        : snapshot?.rulesApplied || snapshot?.draftApplied
+          ? nextSummarySignature
+          : (appliedSummarySignature || "");
     const nextAppliedSummaryRowKeys =
-      snapshot?.rulesApplied || snapshot?.draftApplied
-        ? currentSummaryRowKeys
-        : currentSummaryRowKeys.filter((rowKey) => previousAppliedRowKeySet.has(rowKey));
+      nextAppliedEntries.length > 0
+        ? currentSummaryRowKeys.filter((rowKey) => nextAppliedRowKeysFromRuntime.has(rowKey))
+        : snapshot?.rulesApplied || snapshot?.draftApplied
+          ? currentSummaryRowKeys
+          : currentSummaryRowKeys.filter((rowKey) => previousAppliedRowKeySet.has(rowKey));
 
     setActiveRightTab((current) => (current === "manual" ? "manual" : "auto"));
     setSelectedLineId(sourceLine.id);
@@ -2451,6 +2558,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     setSummaryEntries(nextSummaryEntries);
     setAutoRules(nextAutoRules);
     setManualDrafts(nextManualDrafts);
+    setPlanRefsByLine(mapSnapshotPlanRefs(snapshot?.planRefs));
     setManualInput(typeof persistedState?.manualInput === "string" ? persistedState.manualInput : "12:00");
     setEditorStart(typeof persistedState?.editorStart === "string" ? persistedState.editorStart : "08:00");
     setEditorEnd(typeof persistedState?.editorEnd === "string" ? persistedState.editorEnd : "10:00");
@@ -2558,7 +2666,19 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   ]);
 
   async function saveNativeWorkbenchDraft({ applyDraft = false } = {}) {
-    const currentLineRows = summaryEntries.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
+    if (!applyDraft && applyingSaveOperationRef.current) {
+      return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
+    }
+
+    const runRef = applyDraft ? latestApplySaveOperationRunIdRef : latestDraftSaveOperationRunIdRef;
+    const runId = runRef.current + 1;
+    runRef.current = runId;
+    if (applyDraft) {
+      applyingSaveOperationRef.current = true;
+      setIsApplyingSchedule(true);
+      latestDraftSaveOperationRunIdRef.current += 1;
+    }
+
     const currentManualRows = manualDrafts.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const currentAutoRows = autoRules.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const request = {
@@ -2567,15 +2687,63 @@ function NativeScheduleDemoPage({ registerHostActions }) {
       mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
       manualRows: serializeNativeManualRows(currentManualRows),
       autoRules: serializeNativeAutoRules(currentAutoRows),
-      lineDraftRows: serializeNativeLineDraftRows(currentLineRows),
+      lineDraftRowsByLineId: serializeNativeLineDraftRowsByLineId(summaryEntries),
+      planRefs: serializePlanRefs(planRefsByLine),
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
       applyDraft,
-      nativeScheduleWriter: true
+      nativeScheduleWriter: true,
+      returnSnapshot: false
     };
 
     suppressNextSnapshotRef.current = true;
     try {
-      const result = await workbenchApi.saveNativeDraft?.(request);
+      const operationDeadline = Date.now() + SAVE_OPERATION_TOTAL_TIMEOUT_MS;
+      const startedOperation = await withTimeout(
+        workbenchApi.startNativeSaveOperation?.(request),
+        SAVE_OPERATION_START_TIMEOUT_MS,
+        "save-operation-start-timeout"
+      );
+      if (!startedOperation?.operationId) {
+        throw new Error(startedOperation?.error || "save-operation-start-failed");
+      }
+
+      let latestStatus = startedOperation;
+      while (runRef.current === runId && !isTerminalSaveOperationState(latestStatus?.state)) {
+        if (Date.now() > operationDeadline) {
+          throw new Error("save-operation-timeout");
+        }
+
+        await waitForDelay(applyDraft ? 50 : 120);
+        latestStatus = await withTimeout(
+          workbenchApi.getNativeSaveOperationStatus?.(startedOperation.operationId),
+          SAVE_OPERATION_STATUS_TIMEOUT_MS,
+          "save-operation-status-timeout"
+        );
+      }
+
+      if (runRef.current !== runId) {
+        suppressNextSnapshotRef.current = false;
+        if (applyDraft) {
+          throw new Error("apply-operation-interrupted");
+        }
+
+        return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
+      }
+
+      if (latestStatus?.state === "superseded") {
+        suppressNextSnapshotRef.current = false;
+        if (applyDraft) {
+          throw new Error("apply-operation-superseded");
+        }
+
+        return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
+      }
+
+      if (!latestStatus || latestStatus.state === "missing" || latestStatus.state === "failed") {
+        throw new Error(latestStatus?.error || "save-operation-failed");
+      }
+
+      const result = latestStatus.result || { success: false, errors: [], warnings: [], version: "", snapshot: null };
       if (result?.snapshot) {
         applyHydratedState(result.snapshot, null);
       } else {
@@ -2586,6 +2754,11 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     } catch (error) {
       suppressNextSnapshotRef.current = false;
       throw error;
+    } finally {
+      if (applyDraft && runRef.current === runId) {
+        applyingSaveOperationRef.current = false;
+        setIsApplyingSchedule(false);
+      }
     }
   }
 
@@ -2599,11 +2772,19 @@ function NativeScheduleDemoPage({ registerHostActions }) {
       return undefined;
     }
 
+    if (applyingSaveOperationRef.current) {
+      return undefined;
+    }
+
     const timeoutId = window.setTimeout(async () => {
       try {
+        if (applyingSaveOperationRef.current) {
+          return;
+        }
+
         await saveNativeWorkbenchDraft({ applyDraft: false });
       } catch {}
-    }, 400);
+    }, 1800);
 
     return () => {
       window.clearTimeout(timeoutId);
@@ -2615,11 +2796,31 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     selectedLineId,
     summaryEntries,
     t,
+    planRefsByLine,
     workbenchApi
   ]);
 
   function clearPanelMessage() {
     setPanelMessage(null);
+  }
+
+  function dropPlanRefs(lineIds) {
+    const ids = [...new Set((Array.isArray(lineIds) ? lineIds : [lineIds]).filter(Boolean))];
+    if (ids.length === 0) {
+      return;
+    }
+
+    setPlanRefsByLine((current) => {
+      let changed = false;
+      const next = { ...(current || {}) };
+      ids.forEach((lineId) => {
+        if (Object.prototype.hasOwnProperty.call(next, lineId)) {
+          delete next[lineId];
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
   }
 
   function markLocalDataDirty() {
@@ -2660,6 +2861,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     }
 
     markLocalDataDirty();
+    dropPlanRefs(selectedLine.id);
     updateRuntimeLineOption(selectedLine.id, { kind: nextType });
     setSelectedLineType(nextType);
     setManualDrafts((current) => sortManualDraftRows(
@@ -2814,15 +3016,14 @@ function NativeScheduleDemoPage({ registerHostActions }) {
 
   function removeSummaryRow(rowId) {
     const target = summaryEntries.find((row) => row.id === rowId);
-    if (target && target.lineId !== selectedLine.id && target.serviceId !== selectedLine.id) {
-      return;
-    }
     markLocalDataDirty();
+    dropPlanRefs(target?.lineId || target?.serviceId || "");
     setSummaryEntries((current) => current.filter((row) => row.id !== rowId));
   }
 
   function clearSummaryTable() {
     markLocalDataDirty();
+    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => {
       if (summaryFilter === "current") {
         return current.filter((row) => row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
@@ -2906,6 +3107,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     }
 
     markLocalDataDirty();
+    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
     setPanelMessage({
       scope: "manual",
@@ -2971,6 +3173,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     }
 
     markLocalDataDirty();
+    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
     setPanelMessage({
       scope: "auto",
@@ -2982,27 +3185,60 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   }
 
   async function handleApplySchedule() {
+    setPanelMessage({ scope: "summary", tone: "neutral", text: t("nativeSchedule.message.summary.applying") });
     try {
       const result = await saveNativeWorkbenchDraft({ applyDraft: true });
+      if (result?.superseded) {
+        throw new Error("apply-operation-superseded");
+      }
+
       if (!result?.success) {
+        const message = Array.isArray(result?.errors) && result.errors.length > 0
+          ? result.errors.join("; ")
+          : t("nativeSchedule.message.summary.saveFailed", { message: "unknown" });
+        setPanelMessage({ scope: "summary", tone: "error", text: t("nativeSchedule.message.summary.applyFailed", { message }) });
         return;
       }
-    } catch {}
+
+      if (!result.version) {
+        throw new Error("apply-operation-missing-version");
+      }
+
+      setPanelMessage({
+        scope: "summary",
+        tone: "neutral",
+        text: t("nativeSchedule.message.summary.applySuccess", { version: result.version || "" })
+      });
+      setAppliedSummarySignature(getSummaryRowsSignature(summaryEntries));
+      setAppliedSummaryRowKeys(summaryEntries.map((row) => getSummaryRowKey(row)));
+    } catch (error) {
+      setPanelMessage({
+        scope: "summary",
+        tone: "error",
+        text: t("nativeSchedule.message.summary.applyFailed", { message: error?.message || "unknown" })
+      });
+    }
   }
 
   function handleLocateConflict() {
-    const scrollContainer = summaryScrollRef.current;
-    const firstConflictRow = scrollContainer?.querySelector(".dw-demo-summary-row.is-conflict");
-    if (!scrollContainer || !firstConflictRow) {
-      return;
+    if (summaryFilter !== "all") {
+      setSummaryFilter("all");
     }
 
-    const containerRect = scrollContainer.getBoundingClientRect();
-    const rowRect = firstConflictRow.getBoundingClientRect();
-    const deltaTop = rowRect.top - containerRect.top;
-    const nextScrollTop =
-      scrollContainer.scrollTop + deltaTop - Math.max(0, Math.round((scrollContainer.clientHeight - firstConflictRow.clientHeight) / 2));
-    scrollContainer.scrollTop = Math.max(0, nextScrollTop);
+    window.setTimeout(() => {
+      const scrollContainer = summaryScrollRef.current;
+      const firstConflictRow = scrollContainer?.querySelector(".dw-demo-summary-row.is-conflict");
+      if (!scrollContainer || !firstConflictRow) {
+        return;
+      }
+
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const rowRect = firstConflictRow.getBoundingClientRect();
+      const deltaTop = rowRect.top - containerRect.top;
+      const nextScrollTop =
+        scrollContainer.scrollTop + deltaTop - Math.max(0, Math.round((scrollContainer.clientHeight - firstConflictRow.clientHeight) / 2));
+      scrollContainer.scrollTop = Math.max(0, nextScrollTop);
+    }, 0);
   }
 
   return (
@@ -3089,6 +3325,8 @@ function NativeScheduleDemoPage({ registerHostActions }) {
           onClearSummary={clearSummaryTable}
           onApplySchedule={handleApplySchedule}
           onLocateConflict={handleLocateConflict}
+          isApplyingSchedule={isApplyingSchedule}
+          footerNote={summaryFooterNote}
           dropdownPortalHostRef={dropdownPortalHostRef}
         />
 

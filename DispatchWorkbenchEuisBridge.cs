@@ -240,10 +240,14 @@ namespace RapidTransitMod
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.loadPlannerContext", new Func<string>(HandleLoadPlannerContext));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.exportPlannerInput", new Func<string>(HandleLoadPlannerContext));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.startPlannerJob", new Func<string, string>(HandleStartPlannerJob));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getPlannerJobStatus", new Func<string, string>(HandleGetPlannerJobStatus));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.runPlanner", new Func<string, string>(HandleRunPlanner));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getRuntimeObservationSnapshot", new Func<string>(HandleGetRuntimeObservationSnapshot));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.startNativeSaveOperation", new Func<string, string>(HandleStartNativeSaveOperation));
+            view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getNativeSaveOperationStatus", new Func<string, string>(HandleGetNativeSaveOperationStatus));
             view.BindCall(EuisModder + "::" + EuisAcronym + ".workbench.getLocale", new Func<string>(HandleGetLocale));
         }
 
@@ -376,6 +380,16 @@ namespace RapidTransitMod
             return DepartureControlSystem.Instance?.RunWorkbenchPlannerJson(requestJson) ?? string.Empty;
         }
 
+        private static string HandleStartPlannerJob(string requestJson)
+        {
+            return DepartureControlSystem.Instance?.StartWorkbenchPlannerJobJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleGetPlannerJobStatus(string jobId)
+        {
+            return DepartureControlSystem.Instance?.GetWorkbenchPlannerJobStatusJson(jobId) ?? string.Empty;
+        }
+
         private static string HandleGetRuntimeObservationSnapshot()
         {
             return DepartureControlSystem.Instance?.GetRuntimeObservationSnapshotJson() ?? string.Empty;
@@ -393,6 +407,22 @@ namespace RapidTransitMod
             string resultJson = DepartureControlSystem.Instance?.SaveWorkbenchDraftJson(requestJson) ?? string.Empty;
             DispatchWorkbenchUISystem.PublishSaveResultJson(resultJson);
             return resultJson;
+        }
+
+        private static string HandleStartNativeSaveOperation(string requestJson)
+        {
+            Mod.log.Info($"[WorkbenchSaveOperationBridge] startNativeSaveOperation length={requestJson?.Length ?? 0}");
+            return DepartureControlSystem.Instance?.StartWorkbenchSaveOperationJson(requestJson) ?? string.Empty;
+        }
+
+        private static string HandleGetNativeSaveOperationStatus(string operationId)
+        {
+            if (string.IsNullOrWhiteSpace(operationId))
+            {
+                Mod.log.Info("[WorkbenchSaveOperationBridge] getNativeSaveOperationStatus empty id");
+            }
+
+            return DepartureControlSystem.Instance?.GetWorkbenchSaveOperationStatusJson(operationId) ?? string.Empty;
         }
 
         private static string BuildLegacyReadonlySaveResultJson()
@@ -560,9 +590,13 @@ namespace RapidTransitMod
             registerCall("workbench.refreshMetadata", new Func<string>(HandleRefreshMetadata));
             registerCall("workbench.loadPlannerContext", new Func<string>(HandleLoadPlannerContext));
             registerCall("workbench.exportPlannerInput", new Func<string>(HandleLoadPlannerContext));
+            registerCall("workbench.startPlannerJob", new Func<string, string>(HandleStartPlannerJob));
+            registerCall("workbench.getPlannerJobStatus", new Func<string, string>(HandleGetPlannerJobStatus));
             registerCall("workbench.runPlanner", new Func<string, string>(HandleRunPlanner));
             registerCall("workbench.saveWorkbenchDraft", new Func<string, string>(HandleSaveDraft));
             registerCall("workbench.saveNativeWorkbenchDraft", new Func<string, string>(HandleSaveNativeDraft));
+            registerCall("workbench.startNativeSaveOperation", new Func<string, string>(HandleStartNativeSaveOperation));
+            registerCall("workbench.getNativeSaveOperationStatus", new Func<string, string>(HandleGetNativeSaveOperationStatus));
             registerCall("workbench.getLocale", new Func<string>(HandleGetLocale));
         }
 

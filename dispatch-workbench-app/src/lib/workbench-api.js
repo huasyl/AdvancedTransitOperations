@@ -29,9 +29,13 @@ const CALLS = {
   setBroadcastPreviewVolume: "suhua::rt.workbench.setBroadcastPreviewVolume",
   refreshMetadata: "suhua::rt.workbench.refreshMetadata",
   loadPlannerContext: "suhua::rt.workbench.loadPlannerContext",
+  startPlannerJob: "suhua::rt.workbench.startPlannerJob",
+  getPlannerJobStatus: "suhua::rt.workbench.getPlannerJobStatus",
   runPlanner: "suhua::rt.workbench.runPlanner",
   saveWorkbenchDraft: "suhua::rt.workbench.saveWorkbenchDraft",
   saveNativeWorkbenchDraft: "suhua::rt.workbench.saveNativeWorkbenchDraft",
+  startNativeSaveOperation: "suhua::rt.workbench.startNativeSaveOperation",
+  getNativeSaveOperationStatus: "suhua::rt.workbench.getNativeSaveOperationStatus",
   getLocale: "suhua::rt.workbench.getLocale"
 };
 
@@ -78,8 +82,12 @@ function createEmptyBroadcastSnapshot() {
     assets: [],
     version: "",
     sourceMode: "game-backend",
+    lineApplied: false,
+    lineDraftDirty: false,
+    volumeDirty: false,
     draftApplied: false,
     draftDirty: false,
+    warnings: [],
     volume: 80
   };
 }
@@ -145,6 +153,26 @@ function createEmptyPlannerResult() {
     selectedPlan: null,
     diagnostics: [],
     performance: null
+  };
+}
+
+function createEmptyPlannerJobStatus() {
+  return {
+    success: false,
+    jobId: "",
+    state: "missing",
+    error: "",
+    result: null
+  };
+}
+
+function createEmptySaveOperationStatus() {
+  return {
+    success: false,
+    operationId: "",
+    state: "missing",
+    error: "",
+    result: null
   };
 }
 
@@ -231,6 +259,7 @@ function createBroadcastVolumeResult() {
     success: false,
     error: "",
     volume: 80,
+    volumeDirty: false,
     snapshot: null
   };
 }
@@ -357,6 +386,16 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.loadPlannerContext);
       return parsePayload(payload, createEmptyPlannerInput());
     },
+    async startPlannerJob(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.startPlannerJob, JSON.stringify(request ?? {}));
+      return parsePayload(payload, createEmptyPlannerJobStatus());
+    },
+    async getPlannerJobStatus(jobId = "") {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.getPlannerJobStatus, jobId || "");
+      return parsePayload(payload, createEmptyPlannerJobStatus());
+    },
     async runPlanner(request) {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.runPlanner, JSON.stringify(request ?? {}));
@@ -383,6 +422,16 @@ function createLiveApi() {
         version: "",
         snapshot: createEmptySnapshot()
       });
+    },
+    async startNativeSaveOperation(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.startNativeSaveOperation, JSON.stringify(request ?? {}));
+      return parsePayload(payload, createEmptySaveOperationStatus());
+    },
+    async getNativeSaveOperationStatus(operationId = "") {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.getNativeSaveOperationStatus, operationId || "");
+      return parsePayload(payload, createEmptySaveOperationStatus());
     },
     async getLocale() {
       try {

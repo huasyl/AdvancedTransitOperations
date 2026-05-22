@@ -1846,6 +1846,11 @@
   color: #dfaaaa;
 }
 
+.dw-demo-primary.is-loading {
+  background-color: #3d7f8c;
+  color: #d3f6fb;
+}
+
 .dw-demo-primary:hover {
   border-color: rgba(111, 205, 222, 0.54);
   background-color: #76d4e2;

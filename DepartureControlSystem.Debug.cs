@@ -5,6 +5,7 @@ using Game.Common;
 using Game.Routes;
 using Game.SceneFlow;
 using Game.UI.InGame;
+using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -64,6 +65,136 @@ namespace RapidTransitMod
             }
 
             return false;
+        }
+
+        private static string FormatDispatchTraceSlot(int targetMin)
+            => targetMin >= 0 ? SlotStr(targetMin) : "-";
+
+        private void LogOriginDispatchTrace(
+            string reason,
+            Entity vehicle,
+            Entity line,
+            Entity route,
+            DynamicBuffer<RouteWaypoint> wps,
+            VehicleState state,
+            int targetMin,
+            int nowMin,
+            int curWpIdx,
+            bool atA,
+            bool boarding,
+            bool lastBoarding,
+            uint nowFrame,
+            string extra = "")
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            int cachedWpIdx = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWp) ? cachedWp : -1;
+            bool hasForcedReady = m_ForcedOriginReadyFrame.TryGetValue(vehicle, out uint forcedReadyFrame) && forcedReadyFrame > nowFrame;
+            bool hasBvMisfire = m_BVMisfire.Contains(vehicle);
+            int currentSlot = m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentAssignedSlot) ? currentAssignedSlot : -1;
+            string key = reason
+                + "|state=" + state
+                + "|target=" + targetMin
+                + "|current=" + currentSlot
+                + "|curWp=" + curWpIdx
+                + "|cached=" + cachedWpIdx
+                + "|atA=" + (atA ? "1" : "0")
+                + "|boarding=" + (boarding ? "1" : "0")
+                + "|last=" + (lastBoarding ? "1" : "0")
+                + "|forced=" + (hasForcedReady ? "1" : "0")
+                + "|misfire=" + (hasBvMisfire ? "1" : "0");
+
+            if (!ShouldEmitVehicleLogWithCooldown(
+                    m_OriginDispatchTraceLogCache,
+                    m_OriginDispatchTraceLastLogFrameCache,
+                    vehicle,
+                    key,
+                    nowFrame,
+                    ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
+            {
+                return;
+            }
+
+            float distanceToOriginMeters = wps.Length > 0 ? GetDistanceToOriginMeters(vehicle, wps) : -1f;
+            bool hasAssistPending = TryGetAssistLaunchPending(vehicle, route, targetMin, out AssistLaunchPendingRecord assistPending);
+            int assistTargetMin = hasAssistPending ? assistPending.TargetMin : -1;
+            uint forcedReadyRemainingFrames = hasForcedReady ? forcedReadyFrame - nowFrame : 0;
+
+            log.Info("[OriginDispatchTrace] reason=" + reason
+                + " line=" + line.Index
+                + " route=" + route.Index
+                + " vehicle=" + vehicle.Index
+                + " state=" + state
+                + " now=" + SlotStr(nowMin)
+                + " target=" + FormatDispatchTraceSlot(targetMin)
+                + " current=" + FormatDispatchTraceSlot(currentSlot)
+                + " atA=" + (atA ? "1" : "0")
+                + " boarding=" + (boarding ? "1" : "0")
+                + " lastBoarding=" + (lastBoarding ? "1" : "0")
+                + " curWpIdx=" + curWpIdx
+                + " cachedWpIdx=" + cachedWpIdx
+                + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?")
+                + " forcedReadyFrames=" + forcedReadyRemainingFrames
+                + " assistPending=" + (hasAssistPending ? ("1(" + FormatDispatchTraceSlot(assistTargetMin) + ")") : "0")
+                + " bvMisfire=" + (hasBvMisfire ? "1" : "0")
+                + (string.IsNullOrWhiteSpace(extra) ? string.Empty : " " + extra));
+        }
+
+        private void LogDispatchSlotHeld(
+            Entity line,
+            int slot,
+            Entity holder,
+            Entity route,
+            DynamicBuffer<RouteWaypoint> wps,
+            int nowMin,
+            uint nowFrame,
+            string reason)
+        {
+            if (line == Entity.Null || holder == Entity.Null || !EntityManager.Exists(holder))
+                return;
+
+            VehicleState holderState = m_VehicleState.TryGetValue(holder, out var st) ? st : VehicleState.Running;
+            if (holderState != VehicleState.Holding)
+                return;
+
+            int holderTarget = m_VehicleTargetMin.TryGetValue(holder, out int target) ? target : -1;
+            int holderCurrent = m_VehicleCurrentSlot.TryGetValue(holder, out int current) ? current : -1;
+            int holderCachedWp = m_CachedWpIdx.TryGetValue(holder, out int cachedWp) ? cachedWp : -1;
+            string key = reason
+                + "|slot=" + slot
+                + "|holder=" + holder.Index
+                + "|state=" + holderState
+                + "|target=" + holderTarget
+                + "|current=" + holderCurrent
+                + "|cached=" + holderCachedWp;
+
+            if (!ShouldEmitVehicleLogWithCooldown(
+                    m_DispatchSlotHeldLogCache,
+                    m_DispatchSlotHeldLastLogFrameCache,
+                    line,
+                    key,
+                    nowFrame,
+                    ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
+            {
+                return;
+            }
+
+            bool holderBoarding = EntityManager.HasComponent<PublicTransport>(holder)
+                && (EntityManager.GetComponentData<PublicTransport>(holder).m_State & PublicTransportFlags.Boarding) != 0;
+            float distanceToOriginMeters = wps.Length > 0 ? GetDistanceToOriginMeters(holder, wps) : -1f;
+            log.Info("[DispatchSlotHeld] reason=" + reason
+                + " line=" + line.Index
+                + " route=" + route.Index
+                + " now=" + SlotStr(nowMin)
+                + " slot=" + SlotStr(slot)
+                + " holder=" + holder.Index
+                + " state=" + holderState
+                + " target=" + FormatDispatchTraceSlot(holderTarget)
+                + " current=" + FormatDispatchTraceSlot(holderCurrent)
+                + " cachedWpIdx=" + holderCachedWp
+                + " boarding=" + (holderBoarding ? "1" : "0")
+                + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?"));
         }
 
         private void ObserveBvMisfireCandidate(

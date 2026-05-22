@@ -1147,6 +1147,127 @@ function AnimatedFadePresence({ visible, className, children }) {
   );
 }
 
+function BroadcastPreviewVolumeControl({
+  label,
+  value,
+  onCommit
+}) {
+  const [localVolume, setLocalVolume] = useState(value);
+  const [isDragging, setIsDragging] = useState(false);
+  const trackRef = useRef(null);
+  const pendingVolumeRef = useRef(value);
+  const isSavingRef = useRef(false);
+  const commitTokenRef = useRef(0);
+
+  useEffect(() => {
+    if (!isDragging && !isSavingRef.current) {
+      pendingVolumeRef.current = value;
+      setLocalVolume(value);
+    }
+  }, [isDragging, value]);
+
+  useEffect(() => {
+    if (!isDragging) {
+      return undefined;
+    }
+
+    function updateVolumeFromClientX(clientX) {
+      const track = trackRef.current;
+      if (!(track instanceof HTMLElement)) {
+        return;
+      }
+
+      const rect = track.getBoundingClientRect();
+      if (rect.width <= 0) {
+        return;
+      }
+
+      const progress = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const nextVolume = Math.round(progress * 100);
+      pendingVolumeRef.current = nextVolume;
+      setLocalVolume(nextVolume);
+    }
+
+    function handleMouseMove(event) {
+      updateVolumeFromClientX(event.clientX);
+    }
+
+    function handleMouseUp() {
+      setIsDragging(false);
+      void submitVolume(pendingVolumeRef.current);
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDragging, onCommit]);
+
+  async function submitVolume(nextVolume) {
+    const commitToken = commitTokenRef.current + 1;
+    commitTokenRef.current = commitToken;
+    isSavingRef.current = true;
+
+    try {
+      const result = await onCommit(nextVolume);
+      if (commitToken !== commitTokenRef.current || !result) {
+        return;
+      }
+
+      if (Number.isFinite(result.volume)) {
+        pendingVolumeRef.current = result.volume;
+        setLocalVolume(result.volume);
+      }
+    } finally {
+      if (commitToken === commitTokenRef.current) {
+        isSavingRef.current = false;
+      }
+    }
+  }
+
+  function handleMouseDown(event) {
+    event.preventDefault();
+
+    const track = trackRef.current;
+    if (!(track instanceof HTMLElement)) {
+      return;
+    }
+
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return;
+    }
+
+    const progress = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const nextVolume = Math.round(progress * 100);
+    pendingVolumeRef.current = nextVolume;
+    setLocalVolume(nextVolume);
+    setIsDragging(true);
+  }
+
+  return (
+    <div className="dw-bc-preview-volume">
+      <span className="dw-bc-preview-volume-label">{label}</span>
+      <span className="dw-bc-preview-volume-icon-shell">
+        <VolumeIcon className="dw-bc-preview-volume-icon" />
+      </span>
+      <div
+        ref={trackRef}
+        className="dw-bc-preview-volume-hitbox"
+        onMouseDown={handleMouseDown}
+      >
+        <div className="dw-bc-preview-volume-track">
+          <div className="dw-bc-preview-volume-fill" style={{ width: `${localVolume}%` }} />
+          <div className="dw-bc-preview-volume-thumb" style={{ left: `${localVolume}%` }} />
+        </div>
+      </div>
+      <span className="dw-bc-preview-volume-value">{`${localVolume}%`}</span>
+    </div>
+  );
+}
+
 function SequenceRule({
   rule,
   trayContext,
@@ -1365,6 +1486,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   const [stations, setStations] = useState([]);
   const [turnbackPoints, setTurnbackPoints] = useState([]);
   const [platformAnnouncements, setPlatformAnnouncements] = useState([]);
+  const [broadcastWarnings, setBroadcastWarnings] = useState([]);
   const [trayContext, setTrayContext] = useState(null);
   const [trayCategory, setTrayCategory] = useState("asset");
   const [mappingTray, setMappingTray] = useState(null);
@@ -1376,9 +1498,9 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   const [previewingAssetName, setPreviewingAssetName] = useState("");
   const [previewingRuleId, setPreviewingRuleId] = useState("");
   const [broadcastPreviewVolume, setBroadcastPreviewVolume] = useState(80);
-  const [isDraggingBroadcastVolume, setIsDraggingBroadcastVolume] = useState(false);
-  const [broadcastDraftApplied, setBroadcastDraftApplied] = useState(false);
-  const [broadcastDraftDirty, setBroadcastDraftDirty] = useState(false);
+  const [broadcastLineApplied, setBroadcastLineApplied] = useState(false);
+  const [broadcastLineDraftDirty, setBroadcastLineDraftDirty] = useState(false);
+  const [broadcastVolumeDirty, setBroadcastVolumeDirty] = useState(false);
   const [isApplyingBroadcastConfig, setIsApplyingBroadcastConfig] = useState(false);
   const [broadcastApplyError, setBroadcastApplyError] = useState("");
   const [isAssetExplorerOpen, setIsAssetExplorerOpen] = useState(false);
@@ -1403,16 +1525,13 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   const bodyScrollRef = useRef(null);
   const bodyPadRef = useRef(null);
   const mappingBindingListRef = useRef(null);
-  const previewVolumeTrackRef = useRef(null);
   const dropdownPortalHostRef = useRef(null);
   const removeTimersRef = useRef([]);
   const mappingBindFeedbackTimerRef = useRef(null);
   const mappingBindScrollFrameRef = useRef(0);
   const mappingBindTransformCleanupRef = useRef(null);
   const pageEnterTimerRef = useRef(null);
-  const previewVolumeCommitTimerRef = useRef(null);
   const wasInlineTrayVisibleRef = useRef(false);
-  const pendingPreviewVolumeRef = useRef(80);
   const hasBroadcastHydratedRef = useRef(false);
   const hasBackendLineHydratedRef = useRef(false);
   const hasBroadcastRulesHydratedRef = useRef(false);
@@ -1509,6 +1628,7 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     mapIgnoreCandidate: t("broadcast.mapping.ignoreCandidate"),
     mapConfirmDisambiguation: t("broadcast.mapping.confirmDisambiguation"),
     mapBindLanguageAudio: t("broadcast.mapping.bindLanguageAudio"),
+    warningTitle: t("broadcast.warning.title"),
     variableSlot: t("broadcast.variable.slot", { index: "{index}" }),
     unresolvedTurnback: t("broadcast.variable.unresolvedTurnback"),
     previewRule: t("broadcast.rule.preview"),
@@ -2186,6 +2306,15 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
   }
 
   function applyBroadcastSnapshot(snapshot) {
+    const nextVolumeDirty = typeof snapshot?.volumeDirty === "boolean"
+      ? snapshot.volumeDirty
+      : false;
+    const nextLineApplied = typeof snapshot?.lineApplied === "boolean"
+      ? snapshot.lineApplied
+      : Boolean(snapshot?.draftApplied);
+    const nextLineDraftDirty = typeof snapshot?.lineDraftDirty === "boolean"
+      ? snapshot.lineDraftDirty
+      : (Boolean(snapshot?.draftDirty) && !nextVolumeDirty);
     const backendLines = extractBackendLineOptions(snapshot);
     const hasBackendLines = backendLines.length > 0;
     const nextLineOptions = hasBackendLines
@@ -2213,9 +2342,12 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     }
 
     setSelectedLineId(nextSelectedLineId);
-    setBroadcastDraftApplied(Boolean(snapshot?.draftApplied));
-    setBroadcastDraftDirty(Boolean(snapshot?.draftDirty));
-    setBroadcastPreviewVolume(Number.isFinite(snapshot?.volume) ? snapshot.volume : 80);
+    setBroadcastLineApplied(nextLineApplied);
+    setBroadcastLineDraftDirty(nextLineDraftDirty);
+    setBroadcastVolumeDirty(nextVolumeDirty);
+    const snapshotVolume = Number.isFinite(snapshot?.volume) ? snapshot.volume : 80;
+    setBroadcastPreviewVolume(snapshotVolume);
+    setBroadcastWarnings(Array.isArray(snapshot?.warnings) ? snapshot.warnings.filter((warning) => typeof warning === "string" && warning) : []);
     setIsApplyingBroadcastConfig(false);
     setBroadcastApplyError("");
     setTurnbackPoints(
@@ -2356,28 +2488,26 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
       window.clearTimeout(mappingBindTransformCleanupRef.current);
       mappingBindTransformCleanupRef.current = null;
     }
-    if (previewVolumeCommitTimerRef.current) {
-      window.clearTimeout(previewVolumeCommitTimerRef.current);
-      previewVolumeCommitTimerRef.current = null;
-    }
   }, []);
 
-  function commitBroadcastPreviewVolume(nextVolume, immediate = false) {
-    pendingPreviewVolumeRef.current = nextVolume;
-    if (previewVolumeCommitTimerRef.current) {
-      window.clearTimeout(previewVolumeCommitTimerRef.current);
-      previewVolumeCommitTimerRef.current = null;
-    }
+  async function commitBroadcastPreviewVolume(nextVolume) {
+    try {
+      const result = await workbenchApi.setBroadcastPreviewVolume?.(nextVolume);
+      if (!result) {
+        return null;
+      }
 
-    if (immediate) {
-      workbenchApi.setBroadcastPreviewVolume?.(pendingPreviewVolumeRef.current);
-      return;
+      if (Number.isFinite(result.volume)) {
+        setBroadcastPreviewVolume(result.volume);
+      }
+      if (typeof result.volumeDirty === "boolean") {
+        setBroadcastVolumeDirty(result.volumeDirty);
+      }
+      return result;
+    } catch (error) {
+      console.error("[RT Broadcast Workbench] save preview volume failed", error);
+      return null;
     }
-
-    previewVolumeCommitTimerRef.current = window.setTimeout(() => {
-      previewVolumeCommitTimerRef.current = null;
-      workbenchApi.setBroadcastPreviewVolume?.(pendingPreviewVolumeRef.current);
-    }, 120);
   }
 
   useEffect(() => {
@@ -2407,45 +2537,6 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
       unsubscribe?.();
     };
   }, [workbenchApi]);
-
-  useEffect(() => {
-    if (!isDraggingBroadcastVolume) {
-      return undefined;
-    }
-
-    function updateVolumeFromClientX(clientX) {
-      const track = previewVolumeTrackRef.current;
-      if (!(track instanceof HTMLElement)) {
-        return;
-      }
-
-      const rect = track.getBoundingClientRect();
-      if (rect.width <= 0) {
-        return;
-      }
-
-      const progress = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      const nextVolume = Math.round(progress * 100);
-      setBroadcastPreviewVolume(nextVolume);
-      commitBroadcastPreviewVolume(nextVolume);
-    }
-
-    function handleMouseMove(event) {
-      updateVolumeFromClientX(event.clientX);
-    }
-
-    function handleMouseUp() {
-      commitBroadcastPreviewVolume(pendingPreviewVolumeRef.current, true);
-      setIsDraggingBroadcastVolume(false);
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isDraggingBroadcastVolume, workbenchApi]);
 
   useEffect(() => {
     let disposed = false;
@@ -3117,32 +3208,13 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     try {
       await workbenchApi.playBroadcastRulePreview?.({
         lineId: selectedLineIdRef.current || "",
-        ruleId,
-        volume: broadcastPreviewVolume
+        ruleId
       });
     } catch (error) {
       console.error("[RT Broadcast Workbench] play rule preview failed", error);
     }
 
     setPreviewingRuleId(ruleId);
-  }
-
-  function handleBroadcastPreviewVolumeMouseDown(event) {
-    const track = previewVolumeTrackRef.current;
-    if (!(track instanceof HTMLElement)) {
-      return;
-    }
-
-    const rect = track.getBoundingClientRect();
-    if (rect.width <= 0) {
-      return;
-    }
-
-    const progress = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    const nextVolume = Math.round(progress * 100);
-    setBroadcastPreviewVolume(nextVolume);
-    commitBroadcastPreviewVolume(nextVolume);
-    setIsDraggingBroadcastVolume(true);
   }
 
   function removeAssetFromUi(assetName) {
@@ -3403,6 +3475,8 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
     setMappingTray(broadcastVariableMappingIssue.stationId);
   }
 
+  const broadcastDraftDirty = broadcastLineDraftDirty || broadcastVolumeDirty;
+  const broadcastDraftApplied = broadcastLineApplied && !broadcastLineDraftDirty && !broadcastVolumeDirty;
   const isBroadcastConfigApplied = broadcastDraftApplied && !broadcastDraftDirty;
   const broadcastFooterTone = broadcastApplyError
     ? "error"
@@ -3544,6 +3618,17 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
               />
             </div>
           </div>
+
+          {broadcastWarnings.length > 0 ? (
+            <div className="dw-bc-warning-box">
+              <div className="dw-bc-warning-title">{broadcastLabels.warningTitle}</div>
+              <div className="dw-bc-warning-list">
+                {broadcastWarnings.map((warning, index) => (
+                  <div key={`warning:${index}`} className="dw-bc-warning-item">{warning}</div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <WorkbenchScrollArea className="dw-bc-body" externalScrollRef={bodyScrollRef} metricsKey={`${renderedTab}:${Boolean(isCreatingRule)}:${Boolean(trayContext || mappingTray)}:${stations.length}:${platformRules.length}:${availableAssetLibrary.length}`}>
             <div className="dw-bc-body-pad" ref={bodyPadRef}>
@@ -3977,21 +4062,11 @@ export default function BroadcastWorkbenchPage({ pageEnterSequence = 0 }) {
                 <span className={`dw-bc-footer-dot is-${broadcastFooterTone}`} />
                 <span>{broadcastFooterText}</span>
               </div>
-              <div className="dw-bc-preview-volume">
-                <span className="dw-bc-preview-volume-label">{broadcastLabels.previewVolume}</span>
-                <span className="dw-bc-preview-volume-icon-shell">
-                  <VolumeIcon className="dw-bc-preview-volume-icon" />
-                </span>
-                <div
-                  ref={previewVolumeTrackRef}
-                  className="dw-bc-preview-volume-track"
-                  onMouseDown={handleBroadcastPreviewVolumeMouseDown}
-                >
-                  <div className="dw-bc-preview-volume-fill" style={{ width: `${broadcastPreviewVolume}%` }} />
-                  <div className="dw-bc-preview-volume-thumb" style={{ left: `${broadcastPreviewVolume}%` }} />
-                </div>
-                <span className="dw-bc-preview-volume-value">{`${broadcastPreviewVolume}%`}</span>
-              </div>
+              <BroadcastPreviewVolumeControl
+                label={broadcastLabels.previewVolume}
+                value={broadcastPreviewVolume}
+                onCommit={commitBroadcastPreviewVolume}
+              />
             </div>
             <button
               type="button"

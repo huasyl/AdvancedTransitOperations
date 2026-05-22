@@ -249,6 +249,7 @@ namespace RapidTransitMod
             public Entity Vehicle = Entity.Null;
             public int TargetMinute = -1;
             public Entity Station = Entity.Null;
+            public ResolvedStopKind Kind = ResolvedStopKind.Stop;
             public int WaypointIndex = -1;
             public bool IsOrigin;
             public string ArrivalTime = string.Empty;
@@ -330,10 +331,10 @@ namespace RapidTransitMod
             if (!hasAppliedRows)
                 return;
 
-            SeedRuntimeObservationFromAppliedWorkbenchState(GetPreferredWorkbenchLineId());
+            SeedObservationFromAppliedRows(GetPreferredWorkbenchLineId());
         }
 
-        private void SeedRuntimeObservationFromAppliedWorkbenchState(string selectedLineId)
+        private void SeedObservationFromAppliedRows(string selectedLineId)
         {
             m_RuntimeObservationSession = new RuntimeObservationSession
             {
@@ -465,6 +466,7 @@ namespace RapidTransitMod
             Entity vehicle,
             Entity line,
             Entity station,
+            ResolvedStopKind kind,
             int waypointIndex,
             bool isOrigin,
             bool arrival,
@@ -485,6 +487,7 @@ namespace RapidTransitMod
                 Vehicle = vehicle,
                 TargetMinute = TryGetRuntimeObservedVehicleTargetMinute(vehicle),
                 Station = station,
+                Kind = kind,
                 WaypointIndex = waypointIndex,
                 IsOrigin = isOrigin,
                 ArrivalTime = arrival ? clockTime : string.Empty,
@@ -694,9 +697,9 @@ namespace RapidTransitMod
                 lineId = stopEvent.Line != Entity.Null ? GetWorkbenchLineId(stopEvent.Line) : string.Empty,
                 vehicleIndex = stopEvent.Vehicle != Entity.Null ? stopEvent.Vehicle.Index : -1,
                 targetMinute = stopEvent.TargetMinute,
-                stationId = CreateWorkbenchOriginStationId(stopEvent.Station),
+                stationId = CreateStopId(stopEvent.Station, stopEvent.Kind),
                 plannerStationId = BuildRuntimeObservationPlannerStationId(stopEvent.Line, stopEvent.WaypointIndex),
-                stationName = ResolveWorkbenchStationName(stopEvent.Station),
+                stationName = ResolveStopName(stopEvent.Station, stopEvent.Kind),
                 waypointIndex = stopEvent.WaypointIndex,
                 isOrigin = stopEvent.IsOrigin,
                 arrivalTime = stopEvent.ArrivalTime,

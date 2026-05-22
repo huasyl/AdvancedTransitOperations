@@ -268,7 +268,7 @@ namespace RapidTransitMod.Planner
                 frontendSummary = plan.FrontendSummary ?? BuildFallbackFrontendSummary(context, plan),
                 timetablePreviewRows = plan.PreviewRows.ToArray(),
                 plannerBaselineRows = BuildPlannerRows(plan.BaselineRows, "plannerBaseline"),
-                plannerReplacementRows = BuildPlannerRows(plan.AdjustedRows, "plannerReplacement"),
+                plannerReplacementRows = BuildPlannerRows(plan.AdjustedRows, "planner", forceSource: true),
                 changedWindows = BuildChangedWindows(context, plan, regions),
                 diagnostics = plan.Diagnostics.Select(BuildDiagnostic).ToArray()
             };
@@ -276,7 +276,8 @@ namespace RapidTransitMod.Planner
 
         private static DepartureControlSystem.DispatchWorkbenchStagedRowDto[] BuildPlannerRows(
             IEnumerable<PlannerWorkingRow> rows,
-            string source)
+            string source,
+            bool forceSource = false)
         {
             return (rows ?? Array.Empty<PlannerWorkingRow>())
                 .Where(row => row != null && !string.IsNullOrEmpty(row.LineId))
@@ -289,7 +290,7 @@ namespace RapidTransitMod.Planner
                     lineId = row.LineId,
                     time = PlannerMath.MinutesToTime(row.Minute),
                     kind = string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase) ? "express" : "local",
-                    source = string.IsNullOrEmpty(row.Source) ? source : row.Source,
+                    source = forceSource || string.IsNullOrEmpty(row.Source) ? source : row.Source,
                     note = row.Note ?? string.Empty
                 })
                 .ToArray();

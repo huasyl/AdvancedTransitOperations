@@ -275,6 +275,14 @@ function waitForMinimumDuration(startedAt, minimumMs) {
   return new Promise((resolve) => setTimeout(resolve, remainingMs));
 }
 
+function waitForDelay(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function isTerminalPlannerJobState(state) {
+  return state === "completed" || state === "failed" || state === "missing";
+}
+
 function pickPlannerDraft(plannerInput) {
   const drafts = Array.isArray(plannerInput?.drafts) ? plannerInput.drafts : [];
   const validLineIds = new Set(
@@ -988,6 +996,11 @@ function formatIssueMessage(issue, clusterById, resolvers, t) {
       return t("planner.issueMessage.fixedLineAffected", {
         lineNames: joinDisplayValues((issue?.lineIds || []).map((lineId) => resolvers.resolveLineName(lineId)))
       });
+    case "originDepartureGap":
+      return t("planner.issueMessage.originDepartureGap", {
+        lineNames: joinDisplayValues((issue?.lineIds || []).map((lineId) => resolvers.resolveLineName(lineId))),
+        gap: formatNumberValue(5 - Number(issue?.severityMinutes || 0))
+      });
     default:
       return "";
   }
@@ -1381,7 +1394,8 @@ function normalizePlannerRow(row, index, importedNote, prefix) {
 function buildPlannerReplacementRows(planDetail, importedNote) {
   return (Array.isArray(planDetail?.plannerReplacementRows) ? planDetail.plannerReplacementRows : [])
     .map((row, index) => normalizePlannerRow(row, index, importedNote, "planner-replacement"))
-    .filter((row) => row.lineId && row.time);
+    .filter((row) => row.lineId && row.time)
+    .map((row) => ({ ...row, source: "planner" }));
 }
 
 function buildPlannerBaselineRows(planDetail) {
@@ -1407,21 +1421,59 @@ function buildPlannerImportContract(plannerResult, activePlan, importedRows) {
   };
 }
 
-function buildPlannerStagedRowKey(row) {
-  const kind = row?.kind === "express" ? "express" : "local";
-  return `${row?.lineId || ""}|${kind}|${row?.time || ""}`;
+function buildPlannerPlanRefs(plannerResult, activePlan, importedRows) {
+  const contract = buildPlannerImportContract(plannerResult, activePlan, importedRows);
+  if (!contract) {
+    return [];
+  }
+
+  return [...new Set((Array.isArray(importedRows) ? importedRows : []).map((row) => row?.lineId).filter(Boolean))]
+    .map((lineId) => ({
+      lineId,
+      contract: {
+        ...contract,
+        draftKey: lineId
+      }
+    }));
 }
 
-function getSnapshotCombinedDraftRows(snapshot) {
-  return Array.isArray(snapshot?.combinedDraftRows)
-    ? snapshot.combinedDraftRows
-    : Array.isArray(snapshot?.combinedStagedRows)
-      ? snapshot.combinedStagedRows
-      : Array.isArray(snapshot?.lineDraftRows)
-        ? snapshot.lineDraftRows
-        : Array.isArray(snapshot?.stagedRows)
-          ? snapshot.stagedRows
-          : [];
+function buildPlannerStagedRowKey(row) {
+  const kind = row?.kind === "express" ? "express" : "local";
+  const rowId = String(row?.id || "");
+  return rowId
+    ? `${row?.lineId || ""}|${kind}|${rowId}|${row?.time || ""}`
+    : `${row?.lineId || ""}|${kind}|${row?.time || ""}`;
+}
+
+function getSnapshotLineDraftRowsByLineId(snapshot) {
+  const rowsByLineId = new Map();
+  if (Array.isArray(snapshot?.lineDraftRowsByLineId)) {
+    snapshot.lineDraftRowsByLineId.forEach((block) => {
+      const lineId = String(block?.lineId || "");
+      if (!lineId) {
+        return;
+      }
+
+      rowsByLineId.set(
+        lineId,
+        (Array.isArray(block?.lineDraftRows) ? block.lineDraftRows : [])
+          .map((row, index) => normalizePlannerRow(row, index, row?.note || "", "current-draft"))
+          .filter((row) => row.lineId && row.time)
+      );
+    });
+    return rowsByLineId;
+  }
+
+  (Array.isArray(snapshot?.lineDraftRows) ? snapshot.lineDraftRows : [])
+    .map((row, index) => normalizePlannerRow(row, index, row?.note || "", "current-draft"))
+    .filter((row) => row.lineId && row.time)
+    .forEach((row) => {
+      if (!rowsByLineId.has(row.lineId)) {
+        rowsByLineId.set(row.lineId, []);
+      }
+      rowsByLineId.get(row.lineId).push(row);
+    });
+  return rowsByLineId;
 }
 
 function isPlannerRowInsideWindow(row, windowStartMinutes, windowEndMinutes) {
@@ -1442,29 +1494,33 @@ function buildPlannerReplacementDraftBlocks(snapshot, baselineRows, replacementR
   }
 
   const affectedLineSet = new Set(affectedLineIds);
-  const combinedRows = getSnapshotCombinedDraftRows(snapshot)
-    .map((row, index) => normalizePlannerRow(row, index, row?.note || "", "current-draft"))
-    .filter((row) => row.lineId && row.time);
+  const rowsByLineId = getSnapshotLineDraftRowsByLineId(snapshot);
 
   for (const lineId of affectedLineIds) {
-    const currentKeys = combinedRows
-      .filter((row) => row.lineId === lineId && isPlannerRowInsideWindow(row, startMinutes, endMinutes))
+    const currentRows = rowsByLineId.get(lineId) || [];
+    const currentKeys = currentRows
+      .filter((row) => isPlannerRowInsideWindow(row, startMinutes, endMinutes))
       .map(buildPlannerStagedRowKey)
       .sort();
-    const baselineKeys = baselineRows
-      .filter((row) => row.lineId === lineId && isPlannerRowInsideWindow(row, startMinutes, endMinutes))
+    const baselineRowsInWindow = baselineRows
+      .filter((row) => row.lineId === lineId && isPlannerRowInsideWindow(row, startMinutes, endMinutes));
+    const baselineKeys = baselineRowsInWindow
       .map(buildPlannerStagedRowKey)
       .sort();
+    const baselineIsRuntimeOnly = baselineRowsInWindow.length > 0
+      && baselineRowsInWindow.every((row) => row?.source === "tripDerived");
+    if (currentKeys.length === 0 && baselineIsRuntimeOnly) {
+      continue;
+    }
     if (currentKeys.length !== baselineKeys.length || currentKeys.some((key, index) => key !== baselineKeys[index])) {
       return null;
     }
   }
 
   return affectedLineIds.map((lineId) => {
-    const preservedRows = combinedRows
-      .filter((row) =>
-        row.lineId === lineId
-        && !isPlannerRowInsideWindow(row, startMinutes, endMinutes));
+    const currentRows = rowsByLineId.get(lineId) || [];
+    const preservedRows = currentRows
+      .filter((row) => !isPlannerRowInsideWindow(row, startMinutes, endMinutes));
     const insertedRows = replacementRows
       .filter((row) => row.lineId === lineId && isPlannerRowInsideWindow(row, startMinutes, endMinutes));
     const lineDraftRows = [...preservedRows, ...insertedRows]
@@ -1579,6 +1635,8 @@ function PlannerPlanTabs({ plans, activeId, onChange, labels }) {
 export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
   const { t } = useNativeScheduleI18n();
   const dropdownPortalHostRef = useRef(null);
+  const generateRunIdRef = useRef(0);
+  const pageAliveRef = useRef(true);
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [analysisStart, setAnalysisStart] = useState("05:00");
   const [analysisEnd, setAnalysisEnd] = useState("09:00");
@@ -1716,12 +1774,21 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
     || !plannerInput
     || lineOptions.length === 0
     || !!analysisTimeError;
+  const importReferenceOnly = expressSource === "virtual" && !!plannerResult && !!activePlan?.rawPlan;
   const importDisabled = isGenerating
     || isImportingDraft
     || !plannerResult
     || !activePlan?.rawPlan
     || showGenericPlanError
+    || importReferenceOnly
     || !!importedPlanId;
+
+  useEffect(() => {
+    return () => {
+      pageAliveRef.current = false;
+      generateRunIdRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1864,18 +1931,16 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
   }
 
   async function handleGenerate() {
+    const runId = generateRunIdRef.current + 1;
+    generateRunIdRef.current = runId;
     const loadingStartedAt = Date.now();
     setIsGenerating(true);
     setPlannerLoadError("");
     setPlannerResult(null);
     await waitForUiPaint();
     try {
-      const latestPlannerInput = await workbenchApi.loadPlannerContext?.();
-      if (latestPlannerInput) {
-        setPlannerInput(latestPlannerInput);
-      }
       const request = buildPlannerRequest({
-        plannerInput: latestPlannerInput || plannerInput,
+        plannerInput,
         analysisStart,
         analysisEnd,
         adjustableLines,
@@ -1894,7 +1959,31 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         forcedOvertakes,
         forcedBypassOptions
       });
-      const result = await workbenchApi.runPlanner?.(request);
+
+      const startedJob = await workbenchApi.startPlannerJob?.(request);
+      if (!startedJob?.jobId) {
+        throw new Error(startedJob?.error || "planner-job-start-failed");
+      }
+
+      let latestStatus = startedJob;
+      while (pageAliveRef.current && generateRunIdRef.current === runId && !isTerminalPlannerJobState(latestStatus?.state)) {
+        await waitForDelay(120);
+        latestStatus = await workbenchApi.getPlannerJobStatus?.(startedJob.jobId);
+      }
+
+      if (!pageAliveRef.current || generateRunIdRef.current !== runId) {
+        return;
+      }
+
+      if (!latestStatus || latestStatus.state === "missing") {
+        throw new Error(latestStatus?.error || "planner-job-not-found");
+      }
+
+      if (latestStatus.state === "failed") {
+        throw new Error(latestStatus.error || "planner-job-failed");
+      }
+
+      const result = latestStatus.result || null;
       setPlannerResult(result || null);
       if (!result?.success) {
         const diagnosticMessage = (result?.diagnostics || [])
@@ -1904,11 +1993,15 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         setPlannerLoadError(diagnosticMessage);
       }
     } catch (error) {
-      setPlannerResult(null);
-      setPlannerLoadError(error?.message || "planner-run-failed");
+      if (pageAliveRef.current && generateRunIdRef.current === runId) {
+        setPlannerResult(null);
+        setPlannerLoadError(error?.message || "planner-run-failed");
+      }
     } finally {
-      await waitForMinimumDuration(loadingStartedAt, 300);
-      setIsGenerating(false);
+      if (pageAliveRef.current && generateRunIdRef.current === runId) {
+        await waitForMinimumDuration(loadingStartedAt, 300);
+        setIsGenerating(false);
+      }
     }
   }
 
@@ -1988,7 +2081,7 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         lineSettings: buildPlannerLineSettingsForSave(snapshot.lines),
         applyDraft: false,
         nativeScheduleWriter: true,
-        plannerImportContract: buildPlannerImportContract(plannerResult, activePlan, replacementRows)
+        planRefs: buildPlannerPlanRefs(plannerResult, activePlan, replacementRows)
       };
 
       const result = await workbenchApi.saveNativeDraft?.(request);
@@ -2449,7 +2542,7 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                     onClick={handleWritePlanToDraft}
                     disabled={importDisabled}
                   >
-                    {t("planner.footer.apply")}
+                    {importReferenceOnly ? t("planner.footer.referenceOnly") : t("planner.footer.apply")}
                   </button>
                 </footer>
               ) : null}

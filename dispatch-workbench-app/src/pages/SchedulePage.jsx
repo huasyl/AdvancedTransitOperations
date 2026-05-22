@@ -71,9 +71,7 @@ export default function SchedulePage({
     maxStationDwellInput !== "" && Number.isFinite(maxStationDwellInputValue) && maxStationDwellInputValue < MIN_LINE_SETTING_MINUTES;
 
   useEffect(() => {
-    if (saveState?.message) {
-      setActionMessage(saveState.message);
-    }
+    setActionMessage(saveState?.message || "");
   }, [saveState]);
 
   useEffect(() => {

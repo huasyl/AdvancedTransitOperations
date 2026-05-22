@@ -33,10 +33,10 @@ export function createEmptySnapshot(overrides = {}) {
     manualRows: emptyManualRows,
     autoRules: emptyAutoRules,
     lineDraftRows: emptyLineDraftRows,
+    lineDraftRowsByLineId: [],
     combinedDraftRows: emptyLineDraftRows,
     appliedRows: emptyLineDraftRows,
-    stagedRows: emptyLineDraftRows,
-    combinedStagedRows: emptyLineDraftRows,
+    planRefs: [],
     version: "empty",
     sourceMode: "backend-fallback",
     ...overrides

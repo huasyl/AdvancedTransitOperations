@@ -24,9 +24,11 @@ namespace RapidTransitMod
         private sealed class BroadcastResolvedStation
         {
             public Entity StopEntity;
+            public Entity AnchorEntity;
             public int WaypointIndex;
             public int Order;
             public string StationId = string.Empty;
+            public string LegacyStationId = string.Empty;
             public string Name = string.Empty;
         }
 
@@ -154,13 +156,13 @@ namespace RapidTransitMod
             public ulong Signature;
             public BroadcastResolvedStation[] Stations = Array.Empty<BroadcastResolvedStation>();
             public BroadcastResolvedStation[] StationByWaypoint = Array.Empty<BroadcastResolvedStation>();
+            public Dictionary<string, BroadcastResolvedStation> StationById =
+                new Dictionary<string, BroadcastResolvedStation>(StringComparer.Ordinal);
             public int[] StationOrderByWaypoint = Array.Empty<int>();
             public int[] NormalizedStationWaypointByWaypoint = Array.Empty<int>();
             public int[] NextDistinctStationWaypointByWaypoint = Array.Empty<int>();
             public int TerminalStationWaypointIndex = -1;
             public BroadcastResolvedStation[] TurnbackStations = Array.Empty<BroadcastResolvedStation>();
-            public Dictionary<string, string> PlatformRepresentativeStationIdByStationId =
-                new Dictionary<string, string>(StringComparer.Ordinal);
         }
 
         private const int BroadcastRuntimeClipCacheLimit = 24;
@@ -179,9 +181,9 @@ namespace RapidTransitMod
         private static readonly FieldInfo s_AudioManagerWorldGroupField =
             typeof(AudioManager).GetField("m_WorldGroup", BindingFlags.Instance | BindingFlags.NonPublic);
 
-        private readonly Dictionary<Entity, Entity> m_BroadcastLastStopAndOpenStopByVehicle = new Dictionary<Entity, Entity>();
-        private readonly Dictionary<Entity, Entity> m_BroadcastLastLeaveStationStopByVehicle = new Dictionary<Entity, Entity>();
-        private readonly Dictionary<Entity, Entity> m_BroadcastLastBypassWaitingStopByVehicle = new Dictionary<Entity, Entity>();
+        private readonly Dictionary<Entity, string> m_BroadcastLastStopAndOpenStopByVehicle = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BroadcastLastLeaveStationStopByVehicle = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BroadcastLastBypassWaitingStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, BroadcastProgressTriggerState> m_BroadcastProgressTriggerStateByVehicle =
             new Dictionary<Entity, BroadcastProgressTriggerState>();
         private readonly Dictionary<Entity, BroadcastPlatformApproachTriggerState> m_BroadcastPlatformApproachTriggerStateByVehicle =
@@ -199,6 +201,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, int> m_BroadcastNextStopWaypointIndexByVehicle = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, BroadcastLineStationContextCache> m_BroadcastLineStationContextCaches =
             new Dictionary<Entity, BroadcastLineStationContextCache>();
+        private readonly HashSet<string> m_BroadcastRuntimeCheckedLineIds =
+            new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<Entity, BroadcastRuntimeSequenceState> m_BroadcastSequenceStateByVehicle =
             new Dictionary<Entity, BroadcastRuntimeSequenceState>();
         private readonly Dictionary<string, BroadcastRuntimeClipCacheEntry> m_BroadcastRuntimeClipCache =
@@ -1143,12 +1147,12 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (IsDuplicateBroadcastTrigger(vehicle, triggerId, context.CurrentStopEntity))
+            if (IsDuplicateBroadcastTrigger(vehicle, triggerId, stationContext.CurrentStationId))
             {
                 return false;
             }
 
-            RememberBroadcastTriggerStop(vehicle, triggerId, context.CurrentStopEntity);
+            RememberBroadcastTriggerStop(vehicle, triggerId, stationContext.CurrentStationId);
             UpdateBroadcastVehiclePanelState(vehicle, context.CurrentStationName, context.NextStationName);
             TryStartBroadcastSequence(vehicle, context, triggerId);
             return true;
@@ -1180,9 +1184,9 @@ namespace RapidTransitMod
                 && followedVehicle == broadcastVehicle;
         }
 
-        private bool IsDuplicateBroadcastTrigger(Entity vehicle, string triggerId, Entity currentStop)
+        private bool IsDuplicateBroadcastTrigger(Entity vehicle, string triggerId, string currentStationId)
         {
-            if (vehicle == Entity.Null || currentStop == Entity.Null)
+            if (vehicle == Entity.Null || string.IsNullOrWhiteSpace(currentStationId))
             {
                 return false;
             }
@@ -1190,22 +1194,22 @@ namespace RapidTransitMod
             switch (triggerId ?? string.Empty)
             {
                 case "stop_and_open":
-                    return m_BroadcastLastStopAndOpenStopByVehicle.TryGetValue(vehicle, out Entity stopAndOpenStop)
-                        && stopAndOpenStop == currentStop;
+                    return m_BroadcastLastStopAndOpenStopByVehicle.TryGetValue(vehicle, out string stopAndOpenStop)
+                        && string.Equals(stopAndOpenStop, currentStationId, StringComparison.Ordinal);
                 case "leave_station":
-                    return m_BroadcastLastLeaveStationStopByVehicle.TryGetValue(vehicle, out Entity leaveStop)
-                        && leaveStop == currentStop;
+                    return m_BroadcastLastLeaveStationStopByVehicle.TryGetValue(vehicle, out string leaveStop)
+                        && string.Equals(leaveStop, currentStationId, StringComparison.Ordinal);
                 case "bypass_waiting":
-                    return m_BroadcastLastBypassWaitingStopByVehicle.TryGetValue(vehicle, out Entity bypassStop)
-                        && bypassStop == currentStop;
+                    return m_BroadcastLastBypassWaitingStopByVehicle.TryGetValue(vehicle, out string bypassStop)
+                        && string.Equals(bypassStop, currentStationId, StringComparison.Ordinal);
                 default:
                     return false;
             }
         }
 
-        private void RememberBroadcastTriggerStop(Entity vehicle, string triggerId, Entity currentStop)
+        private void RememberBroadcastTriggerStop(Entity vehicle, string triggerId, string currentStationId)
         {
-            if (vehicle == Entity.Null || currentStop == Entity.Null)
+            if (vehicle == Entity.Null || string.IsNullOrWhiteSpace(currentStationId))
             {
                 return;
             }
@@ -1213,13 +1217,13 @@ namespace RapidTransitMod
             switch (triggerId ?? string.Empty)
             {
                 case "stop_and_open":
-                    m_BroadcastLastStopAndOpenStopByVehicle[vehicle] = currentStop;
+                    m_BroadcastLastStopAndOpenStopByVehicle[vehicle] = currentStationId;
                     break;
                 case "leave_station":
-                    m_BroadcastLastLeaveStationStopByVehicle[vehicle] = currentStop;
+                    m_BroadcastLastLeaveStationStopByVehicle[vehicle] = currentStationId;
                     break;
                 case "bypass_waiting":
-                    m_BroadcastLastBypassWaitingStopByVehicle[vehicle] = currentStop;
+                    m_BroadcastLastBypassWaitingStopByVehicle[vehicle] = currentStationId;
                     break;
             }
         }
@@ -1245,6 +1249,19 @@ namespace RapidTransitMod
                     && string.Equals(rule.triggerId, triggerId, StringComparison.Ordinal)
                     && rule.nodes != null
                     && rule.nodes.Length > 0);
+        }
+
+        private void EnsureBroadcastRuntimeLineState(string lineId, Entity line)
+        {
+            if (string.IsNullOrWhiteSpace(lineId)
+                || line == Entity.Null
+                || m_BroadcastRuntimeCheckedLineIds.Contains(lineId))
+            {
+                return;
+            }
+
+            EnsureBroadcastLineStateMigrated(lineId, line, out _);
+            m_BroadcastRuntimeCheckedLineIds.Add(lineId);
         }
 
         private bool IsBroadcastSequenceActiveForTrigger(Entity vehicle, string triggerId)
@@ -1358,6 +1375,7 @@ namespace RapidTransitMod
                 }
 
                 DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(runtime.Entity, true);
+                EnsureBroadcastRuntimeLineState(runtime.Id, runtime.Entity);
                 Dictionary<string, Dictionary<int, Entity>> approachCandidatesByStation = null;
                 foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in lineAnnouncements)
                 {
@@ -1386,13 +1404,14 @@ namespace RapidTransitMod
                         }
 
                         if (!IsBroadcastPlatformStationIdle(runtime.Entity, waypoints, normalizedIdleStationId)
-                            || !TryBuildBroadcastPlatformTriggerContext(runtime.Entity, waypoints, stationId, out BroadcastTriggerContext context))
+                            || !TryResolveBroadcastStationById(runtime.Entity, waypoints, stationId, out BroadcastResolvedStation station)
+                            || !TryBuildBroadcastStationOnlyContext(runtime.Id, station, out BroadcastTriggerContext context))
                         {
                             continue;
                         }
 
                         string sequenceKey = BuildBroadcastPlatformIdleSequenceKey(runtime.Id, stationId);
-                        if (TryStartBroadcastPlatformSequence(sequenceKey, context.CurrentStopEntity, context, announcement))
+                        if (TryStartBroadcastPlatformSequence(sequenceKey, station.StopEntity, context, announcement))
                         {
                             uint cooldownFrames = (uint)Math.Max(1, announcement.cooldownGameMinutes) * (uint)SIM_FRAMES_PER_MINUTE;
                             m_BroadcastPlatformAnnouncementCooldownUntilFrame[cooldownKey] = nowFrame + cooldownFrames;
@@ -1461,7 +1480,6 @@ namespace RapidTransitMod
             BroadcastWorkbenchPlatformAnnouncementDto announcement,
             Dictionary<string, Dictionary<int, Entity>> approachCandidatesByStation)
         {
-            BroadcastTriggerContext stationAudioContext = default;
             LineTrackChain chain = null;
             if (runtime == null
                 || runtime.Entity == Entity.Null
@@ -1474,7 +1492,7 @@ namespace RapidTransitMod
                 || candidatesByPhase.Count == 0
                 || !TryGetLineTrackChain(runtime.Entity, waypoints, out chain)
                 || chain == null
-                || !TryBuildBroadcastPlatformTriggerContext(runtime.Entity, waypoints, stationId, out stationAudioContext))
+                || !TryResolveBroadcastStationById(runtime.Entity, waypoints, stationId, out BroadcastResolvedStation station))
             {
                 return;
             }
@@ -1491,28 +1509,8 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                string overrideTurnbackStationName = string.Empty;
-                List<BroadcastWorkbenchStationBindingDto> overrideTurnbackStationBindings = null;
-                string normalizedNextStationId = NormalizeBroadcastPlatformRepresentativeStationId(
-                    runtime.Entity,
-                    waypoints,
-                    state.StationContext.NextStationId);
-                string normalizedTurnbackStationId = NormalizeBroadcastPlatformRepresentativeStationId(
-                    runtime.Entity,
-                    waypoints,
-                    state.StationContext.TurnbackStationId);
-                if (string.Equals(normalizedNextStationId, stationId, StringComparison.Ordinal)
-                    && string.Equals(normalizedTurnbackStationId, stationId, StringComparison.Ordinal)
-                    && !string.IsNullOrEmpty(stationAudioContext.TurnbackStationName))
-                {
-                    overrideTurnbackStationName = stationAudioContext.TurnbackStationName;
-                    overrideTurnbackStationBindings = stationAudioContext.TurnbackStationBindings;
-                }
-
                 if (!TryBuildBroadcastTriggerContext(
                         state.StationContext,
-                        overrideTurnbackStationName,
-                        overrideTurnbackStationBindings,
                         out BroadcastTriggerContext vehicleContext))
                 {
                     continue;
@@ -1526,7 +1524,7 @@ namespace RapidTransitMod
                     state.NextStopWaypointIndex);
                 if (TryStartBroadcastPlatformSequence(
                         sequenceKey,
-                        stationAudioContext.CurrentStopEntity,
+                        station.StopEntity,
                         vehicleContext,
                         announcement))
                 {
@@ -1676,11 +1674,13 @@ namespace RapidTransitMod
         }
 
         private bool TryGetEnabledBroadcastPlatformApproachAnnouncement(
+            Entity line,
             string lineId,
             string stationId,
             out BroadcastWorkbenchPlatformAnnouncementDto announcement)
         {
             announcement = null;
+            EnsureBroadcastRuntimeLineState(lineId, line);
             if (string.IsNullOrWhiteSpace(lineId)
                 || string.IsNullOrWhiteSpace(stationId)
                 || !m_BroadcastLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
@@ -1709,6 +1709,7 @@ namespace RapidTransitMod
         private bool LineHasEnabledBroadcastPlatformAnnouncements(Entity line)
         {
             string lineId = GetDraftKey(GetWorkbenchLineId(line));
+            EnsureBroadcastRuntimeLineState(lineId, line);
             if (string.IsNullOrWhiteSpace(lineId)
                 || !m_BroadcastLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
                 || lineAnnouncements == null)
@@ -1925,6 +1926,7 @@ namespace RapidTransitMod
                 || string.Equals(stationContext.CurrentStationId, stationContext.NextStationId, StringComparison.Ordinal)
                 || IsBroadcastPlatformApproachSuppressedForOriginReturn(vehicle, stationContext)
                 || !TryGetEnabledBroadcastPlatformApproachAnnouncement(
+                    line,
                     stationContext.LineId,
                     representativeNextStationId,
                     out _)
@@ -2013,6 +2015,7 @@ namespace RapidTransitMod
                 || string.IsNullOrWhiteSpace(lineId)
                 || string.IsNullOrWhiteSpace(representativeOriginStationId)
                 || !TryGetEnabledBroadcastPlatformApproachAnnouncement(
+                    line,
                     lineId,
                     representativeOriginStationId,
                     out _))
@@ -2443,6 +2446,7 @@ namespace RapidTransitMod
             m_BroadcastCurrentStopWaypointIndexByVehicle.Clear();
             m_BroadcastNextStopWaypointIndexByVehicle.Clear();
             m_BroadcastLineStationContextCaches.Clear();
+            m_BroadcastRuntimeCheckedLineIds.Clear();
             m_BroadcastPlatformAnnouncementCooldownUntilFrame.Clear();
             m_BroadcastPlatformStationBusyUntilFrame.Clear();
             m_BroadcastPlatformStationQuietSinceFrame.Clear();
@@ -2992,6 +2996,7 @@ namespace RapidTransitMod
                 return false;
             }
 
+            EnsureBroadcastRuntimeLineState(stationContext.LineId, line);
             return TryBuildBroadcastTriggerContext(stationContext, out context);
         }
 
@@ -3045,13 +3050,13 @@ namespace RapidTransitMod
             return true;
         }
 
-        private bool TryBuildBroadcastPlatformTriggerContext(
+        private bool TryResolveBroadcastStationById(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             string stationId,
-            out BroadcastTriggerContext context)
+            out BroadcastResolvedStation station)
         {
-            context = default;
+            station = null;
             if (line == Entity.Null
                 || string.IsNullOrWhiteSpace(stationId)
                 || !TryGetBroadcastLineStationContextCache(line, waypoints, out BroadcastLineStationContextCache cache))
@@ -3059,44 +3064,52 @@ namespace RapidTransitMod
                 return false;
             }
 
-            BroadcastResolvedStation currentStation = cache.Stations
-                .FirstOrDefault(station => station != null && string.Equals(station.StationId, stationId, StringComparison.Ordinal));
-            if (currentStation == null)
+            if (cache.StationById != null
+                && cache.StationById.TryGetValue(stationId, out BroadcastResolvedStation cachedStation))
+            {
+                station = cachedStation;
+            }
+            else
+            {
+                station = cache.Stations
+                    .FirstOrDefault(station => station != null && string.Equals(station.StationId, stationId, StringComparison.Ordinal));
+            }
+            return station != null;
+        }
+
+        private bool TryBuildBroadcastStationOnlyContext(
+            string lineId,
+            BroadcastResolvedStation station,
+            out BroadcastTriggerContext context)
+        {
+            context = default;
+            if (string.IsNullOrWhiteSpace(lineId)
+                || station == null
+                || station.StopEntity == Entity.Null)
             {
                 return false;
             }
 
-            TryGetBroadcastNextStationAfterWaypointIndex(cache, currentStation.WaypointIndex, out BroadcastResolvedStation nextStation);
-            BroadcastResolvedStation terminalStation = cache.Stations.Length > 0 ? cache.Stations[0] : null;
-            BroadcastResolvedStation turnbackStation =
-                ResolveBroadcastTurnbackStationAfterWaypoint(cache, currentStation);
-            string lineId = GetDraftKey(GetWorkbenchLineId(line));
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
                 GetBroadcastAppliedLineStationBindings(lineId);
             List<BroadcastWorkbenchStationBindingDto> currentStationBindings =
-                ResolveBroadcastBoundBindings(lineBindings, currentStation.StationId);
-            List<BroadcastWorkbenchStationBindingDto> nextStationBindings =
-                ResolveBroadcastBoundBindings(lineBindings, nextStation?.StationId);
-            List<BroadcastWorkbenchStationBindingDto> terminalStationBindings =
-                ResolveBroadcastBoundBindings(lineBindings, terminalStation?.StationId);
-            List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings =
-                ResolveBroadcastBoundBindings(lineBindings, turnbackStation?.StationId);
+                ResolveBroadcastBoundBindings(lineBindings, station.StationId);
 
             context = new BroadcastTriggerContext(
                 lineId,
-                currentStation.StopEntity,
-                currentStation.Name,
-                nextStation?.Name ?? string.Empty,
-                terminalStation?.Name ?? string.Empty,
-                turnbackStation?.Name ?? string.Empty,
+                station.StopEntity,
+                station.Name,
+                string.Empty,
+                string.Empty,
+                string.Empty,
                 ResolveBroadcastBoundAssetName(currentStationBindings, 1),
-                ResolveBroadcastBoundAssetName(nextStationBindings, 1),
-                ResolveBroadcastBoundAssetName(terminalStationBindings, 1),
-                ResolveBroadcastBoundAssetName(turnbackStationBindings, 1),
+                string.Empty,
+                string.Empty,
+                string.Empty,
                 currentStationBindings,
-                nextStationBindings,
-                terminalStationBindings,
-                turnbackStationBindings);
+                null,
+                null,
+                null);
             return true;
         }
 
@@ -3171,23 +3184,31 @@ namespace RapidTransitMod
         private List<BroadcastResolvedStation> BuildBroadcastResolvedStations(DynamicBuffer<RouteWaypoint> waypoints)
         {
             List<BroadcastResolvedStation> stations = new List<BroadcastResolvedStation>();
-            HashSet<Entity> seenStops = new HashSet<Entity>();
+            HashSet<Entity> seenStations = new HashSet<Entity>();
             for (int i = 0; i < waypoints.Length; i++)
             {
-                Entity stopEntity = ResolveWorkbenchStopEntity(waypoints[i].m_Waypoint);
-                if (stopEntity == Entity.Null || !seenStops.Add(stopEntity))
+                Entity waypoint = waypoints[i].m_Waypoint;
+                Entity stopEntity = ResolveWorkbenchStopEntity(waypoint);
+                Entity anchorEntity = ResolveStationAnchor(waypoint);
+                Entity identityEntity = stopEntity != Entity.Null ? stopEntity : anchorEntity;
+                if (anchorEntity == Entity.Null || identityEntity == Entity.Null || !seenStations.Add(identityEntity))
                 {
                     continue;
                 }
 
                 int order = stations.Count;
+                string stationId = EnsureStationAnchorKey(anchorEntity);
                 stations.Add(new BroadcastResolvedStation
                 {
-                    StopEntity = stopEntity,
+                    StopEntity = stopEntity != Entity.Null ? stopEntity : anchorEntity,
+                    AnchorEntity = anchorEntity,
                     WaypointIndex = i,
                     Order = order,
-                    StationId = CreateWorkbenchStationId(order),
-                    Name = ResolveWorkbenchStationName(stopEntity)
+                    StationId = stationId,
+                    LegacyStationId = CreateWorkbenchStationId(order),
+                    Name = stopEntity != Entity.Null
+                        ? ResolveWorkbenchStationName(stopEntity)
+                        : ResolveWorkbenchEntityName(anchorEntity)
                 });
             }
 
@@ -3228,26 +3249,34 @@ namespace RapidTransitMod
             }
 
             List<BroadcastResolvedStation> stations = new List<BroadcastResolvedStation>();
-            Dictionary<Entity, int> stationOrderByStop = new Dictionary<Entity, int>();
+            Dictionary<Entity, int> stationOrderByIdentity = new Dictionary<Entity, int>();
             for (int waypointIndex = 0; waypointIndex < waypointCount; waypointIndex++)
             {
-                Entity stopEntity = ResolveWorkbenchStopEntity(waypoints[waypointIndex].m_Waypoint);
-                if (stopEntity == Entity.Null)
+                Entity waypoint = waypoints[waypointIndex].m_Waypoint;
+                Entity stopEntity = ResolveWorkbenchStopEntity(waypoint);
+                Entity anchorEntity = ResolveStationAnchor(waypoint);
+                Entity identityEntity = stopEntity != Entity.Null ? stopEntity : anchorEntity;
+                if (anchorEntity == Entity.Null || identityEntity == Entity.Null)
                 {
                     continue;
                 }
 
-                if (!stationOrderByStop.TryGetValue(stopEntity, out int order))
+                if (!stationOrderByIdentity.TryGetValue(identityEntity, out int order))
                 {
                     order = stations.Count;
-                    stationOrderByStop[stopEntity] = order;
+                    stationOrderByIdentity[identityEntity] = order;
+                    string stationId = EnsureStationAnchorKey(anchorEntity);
                     stations.Add(new BroadcastResolvedStation
                     {
-                        StopEntity = stopEntity,
+                        StopEntity = stopEntity != Entity.Null ? stopEntity : anchorEntity,
+                        AnchorEntity = anchorEntity,
                         WaypointIndex = waypointIndex,
                         Order = order,
-                        StationId = CreateWorkbenchStationId(order),
-                        Name = ResolveWorkbenchStationName(stopEntity)
+                        StationId = stationId,
+                        LegacyStationId = CreateWorkbenchStationId(order),
+                        Name = stopEntity != Entity.Null
+                            ? ResolveWorkbenchStationName(stopEntity)
+                            : ResolveWorkbenchEntityName(anchorEntity)
                     });
                 }
 
@@ -3255,17 +3284,29 @@ namespace RapidTransitMod
                 normalizedStationWaypointByWaypoint[waypointIndex] = stations[order].WaypointIndex;
                 stationByWaypoint[waypointIndex] = new BroadcastResolvedStation
                 {
-                    StopEntity = stopEntity,
+                    StopEntity = stopEntity != Entity.Null ? stopEntity : anchorEntity,
+                    AnchorEntity = anchorEntity,
                     WaypointIndex = waypointIndex,
                     Order = order,
                     StationId = stations[order].StationId,
+                    LegacyStationId = stations[order].LegacyStationId,
                     Name = stations[order].Name
                 };
             }
 
             BroadcastResolvedStation[] stationArray = stations.ToArray();
-            Dictionary<string, string> platformRepresentativeStationIdByStationId =
-                BuildBroadcastPlatformRepresentativeStationIdMap(stationArray);
+            Dictionary<string, BroadcastResolvedStation> stationById =
+                new Dictionary<string, BroadcastResolvedStation>(StringComparer.Ordinal);
+            for (int i = 0; i < stationArray.Length; i++)
+            {
+                BroadcastResolvedStation station = stationArray[i];
+                if (station != null
+                    && !string.IsNullOrWhiteSpace(station.StationId)
+                    && !stationById.ContainsKey(station.StationId))
+                {
+                    stationById[station.StationId] = station;
+                }
+            }
             for (int waypointIndex = 0; waypointIndex < waypointCount; waypointIndex++)
             {
                 for (int offset = 0; offset < waypointCount; offset++)
@@ -3289,53 +3330,14 @@ namespace RapidTransitMod
                 StationOrderByWaypoint = stationOrderByWaypoint,
                 NormalizedStationWaypointByWaypoint = normalizedStationWaypointByWaypoint,
                 NextDistinctStationWaypointByWaypoint = nextDistinctStationWaypointByWaypoint,
+                StationById = stationById,
                 TerminalStationWaypointIndex = stationArray.Length > 0
                     ? stationArray[0].WaypointIndex
-                    : -1,
-                PlatformRepresentativeStationIdByStationId = platformRepresentativeStationIdByStationId
+                    : -1
             };
             cache.TurnbackStations = ResolveBroadcastTurnbackStations(line, waypoints, cache);
             m_BroadcastLineStationContextCaches[line] = cache;
             return stationArray.Length > 0;
-        }
-
-        private Dictionary<string, string> BuildBroadcastPlatformRepresentativeStationIdMap(
-            BroadcastResolvedStation[] stations)
-        {
-            Dictionary<string, string> representativeIdByStationId =
-                new Dictionary<string, string>(StringComparer.Ordinal);
-            Dictionary<string, string> representativeIdByGroupKey =
-                new Dictionary<string, string>(StringComparer.Ordinal);
-            if (stations == null || stations.Length == 0)
-            {
-                return representativeIdByStationId;
-            }
-
-            for (int i = 0; i < stations.Length; i++)
-            {
-                BroadcastResolvedStation station = stations[i];
-                if (station == null || string.IsNullOrWhiteSpace(station.StationId))
-                {
-                    continue;
-                }
-
-                string groupKey = NormalizeBroadcastStationMatchKey(station.Name);
-                if (string.IsNullOrWhiteSpace(groupKey))
-                {
-                    groupKey = station.StationId;
-                }
-
-                if (!representativeIdByGroupKey.TryGetValue(groupKey, out string representativeId)
-                    || string.IsNullOrWhiteSpace(representativeId))
-                {
-                    representativeId = station.StationId;
-                    representativeIdByGroupKey[groupKey] = representativeId;
-                }
-
-                representativeIdByStationId[station.StationId] = representativeId;
-            }
-
-            return representativeIdByStationId;
         }
 
         private string NormalizeBroadcastPlatformRepresentativeStationId(
@@ -3343,16 +3345,7 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> waypoints,
             string stationId)
         {
-            if (string.IsNullOrWhiteSpace(stationId)
-                || !TryGetBroadcastLineStationContextCache(line, waypoints, out BroadcastLineStationContextCache cache)
-                || cache?.PlatformRepresentativeStationIdByStationId == null
-                || !cache.PlatformRepresentativeStationIdByStationId.TryGetValue(stationId, out string representativeStationId)
-                || string.IsNullOrWhiteSpace(representativeStationId))
-            {
-                return stationId ?? string.Empty;
-            }
-
-            return representativeStationId;
+            return stationId ?? string.Empty;
         }
 
         private BroadcastResolvedStation[] ResolveBroadcastTurnbackStations(
@@ -3419,12 +3412,20 @@ namespace RapidTransitMod
                 return false;
             }
 
-            string stationName = ResolveWorkbenchStationName(stationBoundary.StationEntity);
+            Entity anchorEntity = ResolveStationAnchorFromStop(stationBoundary.StationEntity);
+            string stationId = GetStationAnchorKey(anchorEntity);
+            if (!string.IsNullOrWhiteSpace(stationId)
+                && cache.StationById != null
+                && cache.StationById.TryGetValue(stationId, out station))
+            {
+                return true;
+            }
+
             for (int i = 0; i < cache.Stations.Length; i++)
             {
                 BroadcastResolvedStation candidate = cache.Stations[i];
                 if (candidate != null
-                    && string.Equals(candidate.Name, stationName, StringComparison.Ordinal))
+                    && candidate.AnchorEntity == anchorEntity)
                 {
                     station = candidate;
                     return true;

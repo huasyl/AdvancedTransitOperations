@@ -62,6 +62,9 @@ namespace RapidTransitMod
                 LastTraceFrame = 0,
                 LastDispatchGuardLogFrame = 0,
                 LastParkingDiagLogFrame = 0,
+                LastPreCommitLogFrame = 0,
+                LastEndReachedRepairLogFrame = 0,
+                LastRedispatchBlockedLogFrame = 0,
                 LastTraceKey = string.Empty
             };
         }
@@ -728,10 +731,73 @@ namespace RapidTransitMod
                     continue;
                 }
 
+                Entity ownerDepot = EntityManager.HasComponent<Owner>(vehicle)
+                    ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
+                    : Entity.Null;
+                if (ownerDepot == Entity.Null || !EntityManager.HasComponent<Target>(vehicle))
+                    continue;
+
                 int serviceDispatchCount = 0;
                 int publicRequestCount = 0;
                 int cargoRequestCount = 0;
-                bool cleared = false;
+                bool clearedDispatch = false;
+                bool changedState = false;
+                bool changedTarget = false;
+                bool clampedDeparture = false;
+                bool publicWasReturning = false;
+                bool cargoWasReturning = false;
+                bool wasBoarding = false;
+
+                Target target = EntityManager.GetComponentData<Target>(vehicle);
+                Entity headVehicle = ResolveRetireHandoffHeadVehicle(vehicle);
+                bool targetWasRouteWaypoint = target.m_Target != Entity.Null
+                    && EntityManager.Exists(target.m_Target)
+                    && IsRouteWaypointLikeTarget(vehicle, target.m_Target);
+                bool alreadyDepotTarget = IsRetireHandoffDepotSemanticEntity(target.m_Target, ownerDepot);
+                bool alreadyDepotPath = EntityHasDepotPathDestination(vehicle, ownerDepot)
+                    || (headVehicle != vehicle && EntityHasDepotPathDestination(headVehicle, ownerDepot));
+                bool alreadyParkingPath = EntityHasParkingNavigationLane(vehicle)
+                    || (headVehicle != vehicle && EntityHasParkingNavigationLane(headVehicle));
+                PathFlags pathState = 0;
+                if (EntityManager.HasComponent<PathOwner>(vehicle))
+                {
+                    PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
+                    pathState = pathOwner.m_State;
+                }
+                bool alreadyPathfindActive = (pathState & (PathFlags.Pending | PathFlags.Updated)) != 0;
+                TryRepairRetireHandoffEndReached(
+                    vehicle,
+                    headVehicle,
+                    targetWasRouteWaypoint,
+                    pathState,
+                    nowFrame,
+                    watch,
+                    out _);
+                bool pathEndReached = HasTrainLaneFlags(vehicle, TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached)
+                    || (headVehicle != vehicle && HasTrainLaneFlags(headVehicle, TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached));
+                bool handoffBoundaryReady = IsRetireHandoffRouteBoundaryReady(vehicle, headVehicle, pathEndReached, out string handoffBoundary);
+
+                if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+                {
+                    Game.Vehicles.PublicTransport publicSnapshot =
+                        EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                    publicWasReturning = (publicSnapshot.m_State & PublicTransportFlags.Returning) != 0;
+                    wasBoarding |= (publicSnapshot.m_State & PublicTransportFlags.Boarding) != 0;
+                }
+                if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
+                {
+                    Game.Vehicles.CargoTransport cargoSnapshot =
+                        EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
+                    cargoWasReturning = (cargoSnapshot.m_State & CargoTransportFlags.Returning) != 0;
+                    wasBoarding |= (cargoSnapshot.m_State & CargoTransportFlags.Boarding) != 0;
+                }
+                bool officialDepotReturning = (publicWasReturning || cargoWasReturning)
+                    && alreadyDepotTarget;
+
+                bool accelerateOfficialBoardingClose = wasBoarding && handoffBoundaryReady && targetWasRouteWaypoint;
+                uint officialBoardingCloseFrame = nowFrame > OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
+                    ? nowFrame - OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
+                    : 1;
 
                 if (EntityManager.HasBuffer<ServiceDispatch>(vehicle))
                 {
@@ -740,20 +806,50 @@ namespace RapidTransitMod
                     if (dispatchBuffer.Length > 0)
                     {
                         dispatchBuffer.Clear();
-                        cleared = true;
+                        clearedDispatch = true;
                     }
                 }
 
+                bool publicReturning = false;
+                bool cargoReturning = false;
                 if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
                 {
                     Game.Vehicles.PublicTransport publicTransport =
                         EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
                     publicRequestCount = publicTransport.m_RequestCount;
-                    if (publicTransport.m_RequestCount != 0)
+                    PublicTransportFlags oldState = publicTransport.m_State;
+                    bool publicClampedDeparture = false;
+                    publicTransport.m_RequestCount = 0;
+                    if (!officialDepotReturning)
                     {
-                        publicTransport.m_RequestCount = 0;
+                        publicTransport.m_State &= ~(PublicTransportFlags.Returning
+                            | PublicTransportFlags.EnRoute
+                            | PublicTransportFlags.Refueling
+                            | PublicTransportFlags.AbandonRoute);
+                        if ((oldState & PublicTransportFlags.Boarding) != 0
+                            && publicTransport.m_DepartureFrame > nowFrame)
+                        {
+                            publicTransport.m_DepartureFrame = nowFrame;
+                            publicClampedDeparture = true;
+                            clampedDeparture = true;
+                        }
+                        if (accelerateOfficialBoardingClose
+                            && (oldState & PublicTransportFlags.Boarding) != 0)
+                        {
+                            publicTransport.m_DepartureFrame = officialBoardingCloseFrame;
+                            publicTransport.m_MinWaitingDistance = float.MaxValue;
+                            publicTransport.m_MaxBoardingDistance = float.MaxValue;
+                            publicClampedDeparture = true;
+                            clampedDeparture = true;
+                        }
+                    }
+                    publicReturning = true;
+                    if (publicRequestCount != 0
+                        || publicTransport.m_State != oldState
+                        || publicClampedDeparture)
+                    {
                         EntityManager.SetComponentData(vehicle, publicTransport);
-                        cleared = true;
+                        changedState = true;
                     }
                 }
 
@@ -762,31 +858,119 @@ namespace RapidTransitMod
                     Game.Vehicles.CargoTransport cargoTransport =
                         EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
                     cargoRequestCount = cargoTransport.m_RequestCount;
-                    if (cargoTransport.m_RequestCount != 0)
+                    CargoTransportFlags oldState = cargoTransport.m_State;
+                    bool cargoClampedDeparture = false;
+                    cargoTransport.m_RequestCount = 0;
+                    if (!officialDepotReturning)
                     {
-                        cargoTransport.m_RequestCount = 0;
+                        cargoTransport.m_State &= ~(CargoTransportFlags.Returning
+                            | CargoTransportFlags.EnRoute
+                            | CargoTransportFlags.Refueling
+                            | CargoTransportFlags.AbandonRoute);
+                        if ((oldState & CargoTransportFlags.Boarding) != 0
+                            && cargoTransport.m_DepartureFrame > nowFrame)
+                        {
+                            cargoTransport.m_DepartureFrame = nowFrame;
+                            cargoClampedDeparture = true;
+                            clampedDeparture = true;
+                        }
+                        if (accelerateOfficialBoardingClose
+                            && (oldState & CargoTransportFlags.Boarding) != 0)
+                        {
+                            cargoTransport.m_DepartureFrame = officialBoardingCloseFrame;
+                            cargoClampedDeparture = true;
+                            clampedDeparture = true;
+                        }
+                    }
+                    cargoReturning = true;
+                    if (cargoRequestCount != 0
+                        || cargoTransport.m_State != oldState
+                        || cargoClampedDeparture)
+                    {
                         EntityManager.SetComponentData(vehicle, cargoTransport);
-                        cleared = true;
+                        changedState = true;
                     }
                 }
 
-                if (!cleared)
+                if (!officialDepotReturning
+                    && !wasBoarding
+                    && handoffBoundaryReady
+                    && targetWasRouteWaypoint)
+                {
+                    target.m_Target = ownerDepot;
+                    EntityManager.SetComponentData(vehicle, target);
+                    changedTarget = true;
+                }
+
+                bool changed = clearedDispatch
+                    || changedState
+                    || changedTarget
+                    || clampedDeparture;
+                if (!changed)
                     continue;
 
-                bool cooled = watch.LastDispatchGuardLogFrame == 0
-                    || nowFrame - watch.LastDispatchGuardLogFrame >= 180;
-                if (!cooled)
-                    continue;
-
-                watch.LastDispatchGuardLogFrame = nowFrame;
                 string lineTag = m_VehicleLine.TryGetValue(vehicle, out Entity lineEntity)
                     ? "线路" + lineEntity.Index
                     : "线路?";
-                log.Info("[RetireHandoffGuard] " + lineTag + " 车辆" + vehicle.Index
-                    + " 清理未停稳回库车dispatch输入"
-                    + " serviceDispatch=" + serviceDispatchCount
-                    + " publicReq=" + publicRequestCount
-                    + " cargoReq=" + cargoRequestCount);
+
+                bool guardCooled = watch.LastDispatchGuardLogFrame == 0
+                    || nowFrame - watch.LastDispatchGuardLogFrame >= 180;
+                if (clearedDispatch && guardCooled)
+                {
+                    watch.LastDispatchGuardLogFrame = nowFrame;
+                    log.Info("[RetireHandoffGuard] " + lineTag + " 车辆" + vehicle.Index
+                        + " 清理未停稳回库车dispatch输入"
+                        + " serviceDispatch=" + serviceDispatchCount
+                        + " publicReq=" + publicRequestCount
+                        + " cargoReq=" + cargoRequestCount);
+                }
+                bool redispatchBlocked = officialDepotReturning
+                    && (serviceDispatchCount > 0 || publicRequestCount > 0 || cargoRequestCount > 0);
+                bool redispatchCooled = watch.LastRedispatchBlockedLogFrame == 0
+                    || nowFrame - watch.LastRedispatchBlockedLogFrame >= 180;
+                if (redispatchBlocked && redispatchCooled)
+                {
+                    watch.LastRedispatchBlockedLogFrame = nowFrame;
+                    log.Info("[RetireHandoffGuard] " + lineTag + " 车辆" + vehicle.Index
+                        + " 清理官方回库车再派发输入"
+                        + " redispatchBlocked=1"
+                        + " serviceDispatch=" + serviceDispatchCount
+                        + " publicReq=" + publicRequestCount
+                        + " cargoReq=" + cargoRequestCount
+                        + " target=" + DescribeRetireShadowEntity(target.m_Target)
+                        + " targetKind=" + DescribeRetireShadowTargetKind(target.m_Target)
+                        + " path=" + pathState
+                        + " reason=" + watch.ReasonCode);
+                }
+
+                bool preCommitCooled = watch.LastPreCommitLogFrame == 0
+                    || nowFrame - watch.LastPreCommitLogFrame >= 180;
+                if (preCommitCooled)
+                {
+                    watch.LastPreCommitLogFrame = nowFrame;
+                    log.Info("[RetireHandoffArmVanillaReturn] " + lineTag + " 车辆" + vehicle.Index
+                        + " owner=" + DescribeRetireShadowEntity(ownerDepot)
+                        + " target=" + DescribeRetireShadowEntity(target.m_Target)
+                        + " targetKind=" + DescribeRetireShadowTargetKind(target.m_Target)
+                        + " serviceDispatch=" + serviceDispatchCount
+                        + " publicReq=" + publicRequestCount
+                        + " cargoReq=" + cargoRequestCount
+                        + " hadPublic=" + (publicReturning ? "1" : "0")
+                        + " hadCargo=" + (cargoReturning ? "1" : "0")
+                        + " publicWasReturning=" + (publicWasReturning ? "1" : "0")
+                        + " cargoWasReturning=" + (cargoWasReturning ? "1" : "0")
+                        + " wasBoarding=" + (wasBoarding ? "1" : "0")
+                        + " pathEndReached=" + (pathEndReached ? "1" : "0")
+                        + " boundaryReady=" + (handoffBoundaryReady ? "1" : "0")
+                        + " boundary=" + handoffBoundary
+                        + " targetWasRouteWaypoint=" + (targetWasRouteWaypoint ? "1" : "0")
+                        + " changedState=" + (changedState ? "1" : "0")
+                        + " changedTarget=" + (changedTarget ? "1" : "0")
+                        + " clampedDeparture=" + (clampedDeparture ? "1" : "0")
+                        + " acceleratedClose=" + (accelerateOfficialBoardingClose ? "1" : "0")
+                        + " path=" + pathState
+                        + " reason=" + watch.ReasonCode);
+                }
             }
         }
 
@@ -1143,14 +1327,6 @@ namespace RapidTransitMod
         {
             if (watch.AttemptCount == 0)
                 return true;
-            if (nowFrame > watch.LastWriteFrame
-                && targetEntity != Entity.Null
-                && targetEntity != ownerDepot
-                && EntityManager.Exists(targetEntity)
-                && IsRouteWaypointLikeTarget(vehicle, targetEntity))
-            {
-                return true;
-            }
             return nowFrame - watch.LastWriteFrame >= RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES;
         }
 
@@ -1349,6 +1525,198 @@ namespace RapidTransitMod
             return layout[0].m_Vehicle;
         }
 
+        private bool TryRepairRetireHandoffEndReached(
+            Entity vehicle,
+            Entity headVehicle,
+            bool targetWasRouteWaypoint,
+            PathFlags pathState,
+            uint nowFrame,
+            RetireHandoffWatchRecord watch,
+            out string boundary)
+        {
+            boundary = "not-repaired";
+            if (!targetWasRouteWaypoint
+                || (pathState & (PathFlags.Pending
+                    | PathFlags.Obsolete
+                    | PathFlags.Updated
+                    | PathFlags.Stuck
+                    | PathFlags.Failed)) != 0
+                || headVehicle == Entity.Null
+                || !EntityManager.Exists(headVehicle)
+                || !EntityManager.HasComponent<TrainCurrentLane>(headVehicle)
+                || !EntityManager.HasComponent<TrainNavigation>(headVehicle))
+            {
+                return false;
+            }
+
+            TrainNavigation navigation = EntityManager.GetComponentData<TrainNavigation>(headVehicle);
+            if (!(navigation.m_Speed < 0.1f))
+            {
+                boundary = "speed-not-stopped";
+                return false;
+            }
+
+            TrainCurrentLane currentLane = EntityManager.GetComponentData<TrainCurrentLane>(headVehicle);
+            TrainLaneFlags beforeFlags = currentLane.m_Front.m_LaneFlags;
+            TrainLaneFlags movedFlags = 0;
+            int navLenBefore = EntityManager.HasBuffer<TrainNavigationLane>(vehicle)
+                ? EntityManager.GetBuffer<TrainNavigationLane>(vehicle, true).Length
+                : -1;
+            int navConsumed = 0;
+
+            if ((beforeFlags & (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
+                == (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
+            {
+                boundary = "already-path-end-reached";
+                return false;
+            }
+
+            if ((beforeFlags & TrainLaneFlags.EndOfPath) != 0)
+            {
+                boundary = "front-end-of-path";
+            }
+            else if (TryMoveRetireHandoffNavigationEndToFront(vehicle, ref currentLane, out movedFlags, out navConsumed))
+            {
+                boundary = "nav-end-marker";
+            }
+            else if (HasConsumedPathWithoutNavigation(vehicle)
+                || (headVehicle != vehicle && HasConsumedPathWithoutNavigation(headVehicle)))
+            {
+                currentLane.m_Front.m_LaneFlags |= TrainLaneFlags.EndOfPath;
+                boundary = "path-consumed-no-nav";
+            }
+            else
+            {
+                return false;
+            }
+
+            if ((currentLane.m_Front.m_LaneFlags & TrainLaneFlags.EndOfPath) == 0)
+                return false;
+
+            currentLane.m_Front.m_LaneFlags |= TrainLaneFlags.EndReached;
+            EntityManager.SetComponentData(headVehicle, currentLane);
+
+            bool cooled = watch.LastEndReachedRepairLogFrame == 0
+                || nowFrame - watch.LastEndReachedRepairLogFrame >= 180;
+            if (cooled)
+            {
+                watch.LastEndReachedRepairLogFrame = nowFrame;
+                log.Info("[RetireHandoffEndReachedRepair] 车辆" + vehicle.Index
+                    + " head=" + DescribeRetireShadowEntity(headVehicle)
+                    + " frontBefore=" + beforeFlags
+                    + " frontAfter=" + currentLane.m_Front.m_LaneFlags
+                    + " movedFlags=" + movedFlags
+                    + " navLenBefore=" + navLenBefore
+                    + " navConsumed=" + navConsumed
+                    + " speed=" + navigation.m_Speed
+                    + " targetKind=" + (EntityManager.HasComponent<Target>(vehicle)
+                        ? DescribeRetireShadowTargetKind(EntityManager.GetComponentData<Target>(vehicle).m_Target)
+                        : "-")
+                    + " pathState=" + pathState
+                    + " boundary=" + boundary
+                    + " reason=" + watch.ReasonCode);
+            }
+            return true;
+        }
+
+        private bool TryMoveRetireHandoffNavigationEndToFront(
+            Entity vehicle,
+            ref TrainCurrentLane currentLane,
+            out TrainLaneFlags movedFlags,
+            out int navConsumed)
+        {
+            movedFlags = 0;
+            navConsumed = 0;
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasBuffer<TrainNavigationLane>(vehicle))
+            {
+                return false;
+            }
+
+            DynamicBuffer<TrainNavigationLane> navigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(vehicle);
+            for (int i = 0; i < navigationLanes.Length; i++)
+            {
+                TrainLaneFlags flags = navigationLanes[i].m_Flags;
+                if ((flags & (TrainLaneFlags.EndOfPath | TrainLaneFlags.Return)) == 0)
+                    continue;
+
+                movedFlags = flags & (TrainLaneFlags.EndOfPath | TrainLaneFlags.Return);
+                currentLane.m_Front.m_LaneFlags |= movedFlags;
+                navConsumed = i + 1;
+                navigationLanes.RemoveRange(0, navConsumed);
+                return (currentLane.m_Front.m_LaneFlags & TrainLaneFlags.EndOfPath) != 0;
+            }
+
+            return false;
+        }
+
+        private bool IsRetireHandoffRouteBoundaryReady(
+            Entity vehicle,
+            Entity headVehicle,
+            bool strictPathEndReached,
+            out string boundary)
+        {
+            if (strictPathEndReached
+                || HasTrainLaneFlags(headVehicle, TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
+            {
+                boundary = "path-end-reached";
+                return true;
+            }
+
+            bool vehicleEndOfPath = HasTrainLaneFlags(vehicle, TrainLaneFlags.EndOfPath);
+            bool headEndOfPath = headVehicle != vehicle && HasTrainLaneFlags(headVehicle, TrainLaneFlags.EndOfPath);
+            if ((vehicleEndOfPath || headEndOfPath)
+                && HasNoTrainNavigation(vehicle)
+                && (headVehicle == vehicle || HasNoTrainNavigation(headVehicle)))
+            {
+                boundary = "end-of-path-without-nav";
+                return true;
+            }
+
+            if (HasConsumedPathWithoutNavigation(vehicle)
+                || (headVehicle != vehicle && HasConsumedPathWithoutNavigation(headVehicle)))
+            {
+                boundary = "path-consumed-no-nav";
+                return true;
+            }
+
+            boundary = "not-ready";
+            return false;
+        }
+
+        private bool HasTrainLaneFlags(Entity entity, TrainLaneFlags flags)
+        {
+            return entity != Entity.Null
+                && EntityManager.Exists(entity)
+                && EntityManager.HasComponent<TrainCurrentLane>(entity)
+                && (EntityManager.GetComponentData<TrainCurrentLane>(entity).m_Front.m_LaneFlags & flags) == flags;
+        }
+
+        private bool HasNoTrainNavigation(Entity entity)
+        {
+            return entity != Entity.Null
+                && EntityManager.Exists(entity)
+                && EntityManager.HasBuffer<TrainNavigationLane>(entity)
+                && EntityManager.GetBuffer<TrainNavigationLane>(entity, true).Length == 0;
+        }
+
+        private bool HasConsumedPathWithoutNavigation(Entity entity)
+        {
+            if (entity == Entity.Null
+                || !EntityManager.Exists(entity)
+                || !HasNoTrainNavigation(entity)
+                || !EntityManager.HasBuffer<PathElement>(entity)
+                || !EntityManager.HasComponent<PathOwner>(entity))
+            {
+                return false;
+            }
+
+            DynamicBuffer<PathElement> path = EntityManager.GetBuffer<PathElement>(entity, true);
+            PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(entity);
+            return path.Length >= 0 && pathOwner.m_ElementIndex >= path.Length;
+        }
+
         private bool IsRetireHandoffDepotSemanticEntity(Entity entity, Entity ownerDepot)
         {
             if (entity == Entity.Null
@@ -1506,64 +1874,15 @@ namespace RapidTransitMod
             uint nowFrame,
             string lineTag)
         {
-            if (EntityManager.HasBuffer<ServiceDispatch>(vehicle))
-            {
-                DynamicBuffer<ServiceDispatch> dispatchBuffer = ecb.SetBuffer<ServiceDispatch>(vehicle);
-                dispatchBuffer.Clear();
-            }
-
-            if (EntityManager.HasComponent<Game.Vehicles.CargoTransport>(vehicle))
-            {
-                Game.Vehicles.CargoTransport cargoTransport = EntityManager.GetComponentData<Game.Vehicles.CargoTransport>(vehicle);
-                cargoTransport.m_RequestCount = 0;
-                cargoTransport.m_State &= ~(CargoTransportFlags.EnRoute
-                    | CargoTransportFlags.Refueling
-                    | CargoTransportFlags.AbandonRoute);
-                ecb.SetComponent(vehicle, cargoTransport);
-            }
-
-            if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
-            {
-                Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
-                publicTransport.m_RequestCount = 0;
-                publicTransport.m_State &= ~(PublicTransportFlags.EnRoute
-                    | PublicTransportFlags.Refueling
-                    | PublicTransportFlags.AbandonRoute);
-                ecb.SetComponent(vehicle, publicTransport);
-            }
-
-            if (EntityManager.HasComponent<Train>(vehicle))
-            {
-                Train train = EntityManager.GetComponentData<Train>(vehicle);
-                train.m_Flags &= ~Game.Vehicles.TrainFlags.IgnoreParkedVehicle;
-                ecb.SetComponent(vehicle, train);
-            }
-
-            Target target = EntityManager.GetComponentData<Target>(vehicle);
-            target.m_Target = ownerDepot;
-
-            if (EntityManager.HasComponent<PathOwner>(vehicle))
-            {
-                PathOwner pathOwner = EntityManager.GetComponentData<PathOwner>(vehicle);
-                pathOwner.m_State &= ~PathFlags.Failed;
-                pathOwner.m_State |= PathFlags.Obsolete;
-                ecb.SetComponent(vehicle, pathOwner);
-            }
-
-            ecb.SetComponent(vehicle, target);
-            if (!EntityManager.HasComponent<PathfindUpdated>(vehicle))
-                ecb.AddComponent<PathfindUpdated>(vehicle);
-            if (!EntityManager.HasComponent<Updated>(vehicle))
-                ecb.AddComponent<Updated>(vehicle);
-
             watch.LastWriteFrame = nowFrame;
             watch.AttemptCount = (byte)(watch.AttemptCount + 1);
-            RecordRetireShadowSnapshot(vehicle, "handoff-queued");
+            RecordRetireShadowSnapshot(vehicle, "handoff-precommit-requested");
             if (watch.HasIntervention || watch.AttemptCount > 2)
             {
                 log.Info("[RetireHandoffRetry] " + lineTag + " 车辆" + vehicle.Index
                     + " attempt=" + watch.AttemptCount
                     + " target=depot#" + ownerDepot.Index
+                    + " mode=precommit"
                     + " reason=" + watch.ReasonCode);
             }
         }
@@ -2077,6 +2396,15 @@ namespace RapidTransitMod
                         }
                         if (currentHolder != Entity.Null && currentHolderTier == 0)
                         {
+                            LogDispatchSlotHeld(
+                                line,
+                                slot,
+                                currentHolder,
+                                line,
+                                wps,
+                                nowMin,
+                                nowFrame,
+                                "idle-or-holding-holder");
                             slot = (slot + SLOT_INTERVAL) % 1440;
                             continue;
                         }
@@ -2695,10 +3023,29 @@ namespace RapidTransitMod
                     Entity line = ResolveVehicleLine(v);
                     if (!IsWorkbenchTimetableApplied(line)) continue;
                     if (!m_VehicleState.TryGetValue(v, out var state)) continue;
+                    int targetMin = m_VehicleTargetMin.TryGetValue(v, out int tm) ? tm : -1;
                     if (!publicTransportLookup.HasComponent(v)
                         || !targetLookup.HasComponent(v)
                         || !currentRouteLookup.HasComponent(v))
                     {
+                        if (targetMin >= 0 || state == VehicleState.Holding || state == VehicleState.Preparing)
+                        {
+                            LogVehicleStateOnce(
+                                m_OriginDispatchTraceLogCache,
+                                v,
+                                "runtime-skip-core|state=" + state
+                                    + "|target=" + targetMin
+                                    + "|pt=" + (publicTransportLookup.HasComponent(v) ? "1" : "0")
+                                    + "|tgt=" + (targetLookup.HasComponent(v) ? "1" : "0")
+                                    + "|route=" + (currentRouteLookup.HasComponent(v) ? "1" : "0"),
+                                "[OriginDispatchTrace] reason=runtime-skip-core line=" + line.Index
+                                    + " vehicle=" + v.Index
+                                    + " state=" + state
+                                    + " target=" + FormatDispatchTraceSlot(targetMin)
+                                    + " hasPublicTransport=" + (publicTransportLookup.HasComponent(v) ? "1" : "0")
+                                    + " hasTarget=" + (targetLookup.HasComponent(v) ? "1" : "0")
+                                    + " hasCurrentRoute=" + (currentRouteLookup.HasComponent(v) ? "1" : "0"));
+                        }
                         continue;
                     }
 
@@ -2707,11 +3054,26 @@ namespace RapidTransitMod
                     var cr = currentRouteLookup[v];
                     Entity routeEnt = cr.m_Route;
 
-                    if (!wpBuffers.TryGetBuffer(routeEnt, out var wps) || wps.Length < 2) continue;
+                    if (!wpBuffers.TryGetBuffer(routeEnt, out var wps) || wps.Length < 2)
+                    {
+                        if (targetMin >= 0 || state == VehicleState.Holding || state == VehicleState.Preparing)
+                        {
+                            LogVehicleStateOnce(
+                                m_OriginDispatchTraceLogCache,
+                                v,
+                                "runtime-skip-wps|route=" + routeEnt.Index,
+                                "[OriginDispatchTrace] reason=runtime-skip-wps line=" + line.Index
+                                    + " route=" + routeEnt.Index
+                                    + " vehicle=" + v.Index
+                                    + " state=" + state
+                                    + " target=" + FormatDispatchTraceSlot(targetMin)
+                                    + " hasWpBuffer=" + (wpBuffers.TryGetBuffer(routeEnt, out _) ? "1" : "0"));
+                        }
+                        continue;
+                    }
                     int waypointCount = wps.Length;
 
                     bool boarding = (pt.m_State & PublicTransportFlags.Boarding) != 0;
-                    int targetMin = m_VehicleTargetMin.TryGetValue(v, out int tm) ? tm : -1;
                     uint nowFrame = m_SimulationSystem.frameIndex;
                     bool suppressForcedMidStopBoardingGhost = state == VehicleState.Running
                         && boarding
@@ -2773,6 +3135,25 @@ namespace RapidTransitMod
                             DoRetire(v, pt, tgt, ecb, "BVMisfire超时");
                             continue;
                         }
+                        int misfireCurWpIdx = m_CachedWpIdx.TryGetValue(v, out int misfireCachedWpIdx) ? misfireCachedWpIdx : -1;
+                        bool misfireAtA = state == VehicleState.Preparing
+                            ? HasPreparingVehicleReachedOrigin(v, wps, boarding, misfireCurWpIdx)
+                            : (misfireCurWpIdx == 0);
+                        LogOriginDispatchTrace(
+                            "bv-misfire-latched",
+                            v,
+                            lineEnt,
+                            routeEnt,
+                            wps,
+                            state,
+                            targetMin,
+                            nowMin,
+                            misfireCurWpIdx,
+                            misfireAtA,
+                            boarding,
+                            m_LastBoarding.TryGetValue(v, out bool misfireLastBoarding) && misfireLastBoarding,
+                            nowFrame,
+                            "misfireAgeFrames=" + (m_BVMisfireStartFrame.TryGetValue(v, out uint loggedMisfireStart) ? (nowFrame - loggedMisfireStart).ToString() : "?"));
                         string misfireLabel = m_ForcedMidStopBoardingGraceUntil.TryGetValue(v, out uint forcedDepartGraceUntil)
                             && nowFrame < forcedDepartGraceUntil
                             ? "停站超时协助中 #" + v.Index
@@ -2834,12 +3215,19 @@ namespace RapidTransitMod
                                     ArmBroadcastLeaveStationTrigger(v, lineEnt, wps, previousCachedWpIdx);
                                     if (state == VehicleState.Running && previousCachedWpIdx >= 0)
                                     {
-                                        Entity departedStop = GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
-                                        Entity departedStopEntity = ResolveWorkbenchStopEntity(wps[previousCachedWpIdx].m_Waypoint);
-                                        string departedStopName = ResolveWorkbenchEntityName(departedStop);
+                                        StopRef departedStop = ResolveStop(
+                                            wps[previousCachedWpIdx].m_Waypoint,
+                                            GetLatestStop(v));
+                                        Entity departedStopEntity = departedStop.Ent;
+                                        Entity departedStopBuilding = departedStop.Kind == ResolvedStopKind.Building
+                                            ? departedStop.Ent
+                                            : GetStationBuildingForWaypoint(wps, previousCachedWpIdx);
+                                        string departedStopName = departedStop.Kind == ResolvedStopKind.Building
+                                            ? ResolveWorkbenchEntityName(departedStopEntity)
+                                            : ResolveWorkbenchEntityName(departedStopBuilding);
                                         if (string.IsNullOrWhiteSpace(departedStopName))
                                         {
-                                            departedStopName = "stop#" + departedStop.Index;
+                                            departedStopName = "stop#" + departedStopEntity.Index;
                                         }
 
                                         int nextWaypointIndex = previousCachedWpIdx + 1 < waypointCount
@@ -3117,11 +3505,40 @@ namespace RapidTransitMod
                                 }
                                 if (IsWaitingForcedOriginDwell(v, nowFrame))
                                 {
+                                    LogOriginDispatchTrace(
+                                        "holding-not-at-origin-forced-dwell",
+                                        v,
+                                        lineEnt,
+                                        routeEnt,
+                                        wps,
+                                        state,
+                                        targetMin,
+                                        nowMin,
+                                        curWpIdx,
+                                        atA,
+                                        boarding,
+                                        lastBoarding,
+                                        nowFrame);
                                     pt.m_DepartureFrame = nowFrame + 9999;
                                     ecb.SetComponent(v, pt);
                                     SetUILabel(v, targetMin >= 0 ? "候车 " + SlotStr(targetMin) + vTag : "候车 等待调度" + vTag);
                                     break;
                                 }
+                                LogOriginDispatchTrace(
+                                    "holding-not-at-origin-abnormal-running",
+                                    v,
+                                    lineEnt,
+                                    routeEnt,
+                                    wps,
+                                    state,
+                                    targetMin,
+                                    nowMin,
+                                    curWpIdx,
+                                    atA,
+                                    boarding,
+                                    lastBoarding,
+                                    nowFrame,
+                                    "assistPending=0");
                                 m_VehicleState[v] = VehicleState.Running;
                                 m_VehiclePreparingStartFrame.Remove(v);
                                 m_ForcedOriginReadyFrame.Remove(v);
@@ -3169,6 +3586,20 @@ namespace RapidTransitMod
                                 }
                                 else
                                 {
+                                    LogOriginDispatchTrace(
+                                        "holding-no-target-demote-idle",
+                                        v,
+                                        lineEnt,
+                                        routeEnt,
+                                        wps,
+                                        state,
+                                        targetMin,
+                                        nowMin,
+                                        curWpIdx,
+                                        atA,
+                                        boarding,
+                                        lastBoarding,
+                                        nowFrame);
                                     m_VehicleState[v] = VehicleState.Idle;
                                     if (!m_VehicleIdleStartFrame.ContainsKey(v))
                                         m_VehicleIdleStartFrame[v] = nowFrame;
@@ -3181,6 +3612,20 @@ namespace RapidTransitMod
 
                             if (ShouldRetireWaitingVehicleForFarFutureTarget(routeEnt, nowMin, targetMin))
                             {
+                                LogOriginDispatchTrace(
+                                    "holding-far-future-retire",
+                                    v,
+                                    lineEnt,
+                                    routeEnt,
+                                    wps,
+                                    state,
+                                    targetMin,
+                                    nowMin,
+                                    curWpIdx,
+                                    atA,
+                                    boarding,
+                                    lastBoarding,
+                                    nowFrame);
                                 DoRetire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMin, targetMin));
                                 ClearBypassYieldState(v);
                                 break;
@@ -3191,6 +3636,20 @@ namespace RapidTransitMod
                                 ClearBypassYieldState(v, "始发候车不参与待避");
                                 if (IsDispatchTargetAlreadyOccupied(routeEnt, v, targetMin))
                                 {
+                                    LogOriginDispatchTrace(
+                                        "holding-occupied-release",
+                                        v,
+                                        lineEnt,
+                                        routeEnt,
+                                        wps,
+                                        state,
+                                        targetMin,
+                                        nowMin,
+                                        curWpIdx,
+                                        atA,
+                                        boarding,
+                                        lastBoarding,
+                                        nowFrame);
                                     m_VehicleTargetMin[v] = -1;
                                     pt.m_DepartureFrame = nowFrame + 9999;
                                     ecb.SetComponent(v, pt);
@@ -3206,6 +3665,20 @@ namespace RapidTransitMod
 
                                 if (IsWaitingForcedOriginDwell(v, nowFrame))
                                 {
+                                    LogOriginDispatchTrace(
+                                        "holding-time-reached-forced-dwell",
+                                        v,
+                                        lineEnt,
+                                        routeEnt,
+                                        wps,
+                                        state,
+                                        targetMin,
+                                        nowMin,
+                                        curWpIdx,
+                                        atA,
+                                        boarding,
+                                        lastBoarding,
+                                        nowFrame);
                                     pt.m_DepartureFrame = nowFrame + 9999;
                                     ecb.SetComponent(v, pt);
                                     SetUILabel(v, CanLateDispatchSlot(nowMin, targetMin)
@@ -3239,6 +3712,21 @@ namespace RapidTransitMod
                                             + " wp=" + curWpIdx);
                                     }
                                     ArmAssistLaunchPending(v, routeEnt, targetMin);
+                                    LogOriginDispatchTrace(
+                                        "holding-boarding-assist-pending",
+                                        v,
+                                        lineEnt,
+                                        routeEnt,
+                                        wps,
+                                        state,
+                                        targetMin,
+                                        nowMin,
+                                        curWpIdx,
+                                        atA,
+                                        boarding,
+                                        lastBoarding,
+                                        nowFrame,
+                                        "assistRefreshed=" + (shouldRefreshOriginAssist ? "1" : "0"));
                                     SetUILabel(v, "结束上客 " + SlotStr(targetMin) + vTag);
                                     break;
                                 }
@@ -3308,6 +3796,20 @@ namespace RapidTransitMod
                             }
                             else
                             {
+                                LogOriginDispatchTrace(
+                                    "holding-waiting-window",
+                                    v,
+                                    lineEnt,
+                                    routeEnt,
+                                    wps,
+                                    state,
+                                    targetMin,
+                                    nowMin,
+                                    curWpIdx,
+                                    atA,
+                                    boarding,
+                                    lastBoarding,
+                                    nowFrame);
                                 ClearBypassYieldState(v);
                                 pt.m_DepartureFrame = nowFrame + 9999;
                                 ecb.SetComponent(v, pt);
@@ -3919,6 +4421,8 @@ namespace RapidTransitMod
                     ClearVehicleTraversalSliceLapDebug(dead);
                     m_BvWaypointMismatchLogCache.Remove(dead);
                     m_BvTrackAnchorRecoveryLogCache.Remove(dead);
+                    m_OriginDispatchTraceLogCache.Remove(dead);
+                    m_OriginDispatchTraceLastLogFrameCache.Remove(dead);
                     m_PreparingTargetDriftLogCache.Remove(dead);
                     m_CrossLineCandidateLogCache.Remove(dead);
                     m_RouteVehicleOwnerMismatchLogCache.Remove(dead);
@@ -4394,10 +4898,15 @@ namespace RapidTransitMod
 
         private Entity GetConnectedStopForWaypoint(Entity waypoint)
         {
-            if (waypoint == Entity.Null || !EntityManager.HasComponent<Connected>(waypoint))
+            if (waypoint == Entity.Null
+                || !EntityManager.Exists(waypoint)
+                || !EntityManager.HasComponent<Connected>(waypoint))
                 return Entity.Null;
 
-            return EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            Entity connected = EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            return connected != Entity.Null && EntityManager.Exists(connected)
+                ? connected
+                : Entity.Null;
         }
 
         private static void InjectModifier(DynamicBuffer<RouteModifier> mods, float delta)
@@ -4529,7 +5038,9 @@ namespace RapidTransitMod
             bool includePreparingVehicles = true)
         {
             Entity stationA = wps[0].m_Waypoint;
-            Entity stopA = EntityManager.HasComponent<Connected>(stationA)
+            Entity stopA = stationA != Entity.Null
+                && EntityManager.Exists(stationA)
+                && EntityManager.HasComponent<Connected>(stationA)
                 ? EntityManager.GetComponentData<Connected>(stationA).m_Connected
                 : Entity.Null;
             if (stopA == Entity.Null || !EntityManager.HasComponent<Game.Objects.Transform>(stopA))
