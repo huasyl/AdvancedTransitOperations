@@ -49,7 +49,7 @@ namespace RapidTransitMod.Planner
                     .Where(stationId => !string.IsNullOrEmpty(stationId))
                     .Distinct(StringComparer.Ordinal)
                     .Count();
-                plan.RetimedTripCount = CountRetimedTrips(baseWorkingRows, context.WorkingRows);
+                plan.RetimedTripCount = CountRetimedTrips(baseWorkingRows, context.WorkingRows, context, activeExpressOffsetMinutes);
                 plan.StructuredScheduleActions = BuildStructuredScheduleActions(
                     context,
                     riskClusters,
@@ -591,6 +591,8 @@ namespace RapidTransitMod.Planner
                     affectedLineIds = affectedLineIds,
                     affectedLineId = affectedLineIds.Length > 0 ? affectedLineIds[0] : string.Empty,
                     affectedTripIds = new string[0],
+                    priorityTripIds = new string[0],
+                    predictedHoldPairs = Array.Empty<DepartureControlSystem.DispatchPlannerPredictedHoldPairDto>(),
                     tripIds = new string[0],
                     deltaPattern = new[] { (float)activeExpressOffsetMinutes },
                     deltaMinutes = Math.Abs(activeExpressOffsetMinutes),
@@ -622,6 +624,8 @@ namespace RapidTransitMod.Planner
                     affectedLineIds = string.IsNullOrEmpty(affectedLineId) ? new string[0] : new[] { affectedLineId },
                     affectedLineId = affectedLineId,
                     affectedTripIds = new string[0],
+                    priorityTripIds = new string[0],
+                    predictedHoldPairs = Array.Empty<DepartureControlSystem.DispatchPlannerPredictedHoldPairDto>(),
                     tripIds = new string[0],
                     deltaPattern = new float[0],
                     deltaMinutes = 0f,
@@ -636,14 +640,13 @@ namespace RapidTransitMod.Planner
                 .Where(row =>
                     row != null
                     && !string.IsNullOrEmpty(row.Id)
-                    && !string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase)
                     && baselineById.TryGetValue(row.Id, out PlannerWorkingRow baseline)
-                    && baseline.Minute != row.Minute)
+                    && ResolveResidualRetimeDeltaMinutes(context, row, baseline, activeExpressOffsetMinutes) != 0)
                 .GroupBy(row => row.LineId ?? string.Empty, StringComparer.Ordinal))
             {
                 PlannerWorkingRow[] rows = lineGroup.ToArray();
                 float[] deltaPattern = rows
-                    .Select(row => (float)(row.Minute - baselineById[row.Id].Minute))
+                    .Select(row => (float)ResolveResidualRetimeDeltaMinutes(context, row, baselineById[row.Id], activeExpressOffsetMinutes))
                     .ToArray();
                 string[] tripIds = rows
                     .Select(row => row.Id)
@@ -651,12 +654,13 @@ namespace RapidTransitMod.Planner
                     .Distinct(StringComparer.Ordinal)
                     .ToArray();
                 float deltaMinutes = deltaPattern.Length == 0 ? 0f : deltaPattern.Max(delta => Math.Abs(delta));
+                bool hasExpressTrips = rows.Any(row => string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase));
                 actions.Add(new DepartureControlSystem.DispatchPlannerScheduleActionDto
                 {
                     actionType = "retime",
                     type = "retime",
-                    shape = "localWindow",
-                    reason = "retimeAdjustableLocalTrips",
+                    shape = hasExpressTrips ? "tripVector" : "localWindow",
+                    reason = hasExpressTrips ? "retimeTargetExpressTrips" : "retimeAdjustableLocalTrips",
                     targetRegionIds = ResolveRegionIdsForLine(riskClusters, lineGroup.Key),
                     reasonRegionIds = ResolveRegionIdsForLine(riskClusters, lineGroup.Key),
                     clusterIds = ResolveClusterIdsForLine(riskClusters, lineGroup.Key),
@@ -665,6 +669,8 @@ namespace RapidTransitMod.Planner
                     affectedLineIds = new[] { lineGroup.Key },
                     affectedLineId = lineGroup.Key,
                     affectedTripIds = tripIds,
+                    priorityTripIds = new string[0],
+                    predictedHoldPairs = Array.Empty<DepartureControlSystem.DispatchPlannerPredictedHoldPairDto>(),
                     tripIds = tripIds,
                     deltaPattern = deltaPattern,
                     deltaMinutes = PlannerMath.Round2(deltaMinutes),
@@ -689,6 +695,24 @@ namespace RapidTransitMod.Planner
                     .Select(item => item.LocalTripId)
                     .Where(id => !string.IsNullOrEmpty(id))
                     .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                string[] priorityTripIds = eventsByLine
+                    .Select(item => string.IsNullOrEmpty(item.PriorityTripId) ? item.ExpressTripId : item.PriorityTripId)
+                    .Where(id => !string.IsNullOrEmpty(id))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                DepartureControlSystem.DispatchPlannerPredictedHoldPairDto[] predictedHoldPairs = eventsByLine
+                    .Select(item => new DepartureControlSystem.DispatchPlannerPredictedHoldPairDto
+                    {
+                        catchupId = item.EventId ?? string.Empty,
+                        yieldingLineId = string.IsNullOrEmpty(item.YieldingLineId) ? item.LocalLineId : item.YieldingLineId,
+                        priorityLineId = string.IsNullOrEmpty(item.PriorityLineId) ? item.ExpressLineId : item.PriorityLineId,
+                        yieldingTripId = string.IsNullOrEmpty(item.YieldingTripId) ? item.LocalTripId : item.YieldingTripId,
+                        priorityTripId = string.IsNullOrEmpty(item.PriorityTripId) ? item.ExpressTripId : item.PriorityTripId,
+                        stationId = item.SelectedBypassStation?.StationId ?? string.Empty,
+                        catchupTime = PlannerMath.MinutesToTime((int)Math.Round(item.CatchupMinute)),
+                        plannedHoldMinutes = PlannerMath.Round2(item.ResolvedHoldMinutes)
+                    })
                     .ToArray();
                 string[] clusterIds = eventsByLine
                     .SelectMany(item => clusterIdsByCatchupEventId.TryGetValue(item.EventId ?? string.Empty, out string[] ids) ? ids : Array.Empty<string>())
@@ -718,6 +742,8 @@ namespace RapidTransitMod.Planner
                     affectedLineIds = new[] { lineGroup.Key },
                     affectedLineId = lineGroup.Key,
                     affectedTripIds = tripIds,
+                    priorityTripIds = priorityTripIds,
+                    predictedHoldPairs = predictedHoldPairs,
                     tripIds = tripIds,
                     deltaPattern = eventsByLine.Select(item => PlannerMath.Round2(item.ResolvedHoldMinutes)).ToArray(),
                     deltaMinutes = PlannerMath.Round2(deltaMinutes),
@@ -865,7 +891,11 @@ namespace RapidTransitMod.Planner
             return rows;
         }
 
-        private static int CountRetimedTrips(List<PlannerWorkingRow> baselineRows, List<PlannerWorkingRow> adjustedRows)
+        private static int CountRetimedTrips(
+            List<PlannerWorkingRow> baselineRows,
+            List<PlannerWorkingRow> adjustedRows,
+            PlannerContext context,
+            int activeExpressOffsetMinutes)
         {
             Dictionary<string, PlannerWorkingRow> baselineById = (baselineRows ?? new List<PlannerWorkingRow>())
                 .ToDictionary(row => row.Id, StringComparer.Ordinal);
@@ -873,9 +903,40 @@ namespace RapidTransitMod.Planner
                 .Count(row =>
                     row != null
                     && !string.IsNullOrEmpty(row.Id)
-                    && !string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase)
                     && baselineById.TryGetValue(row.Id, out PlannerWorkingRow baseline)
-                    && baseline.Minute != row.Minute);
+                    && ResolveResidualRetimeDeltaMinutes(context, row, baseline, activeExpressOffsetMinutes) != 0);
+        }
+
+        private static int ResolveResidualRetimeDeltaMinutes(
+            PlannerContext context,
+            PlannerWorkingRow adjustedRow,
+            PlannerWorkingRow baselineRow,
+            int activeExpressOffsetMinutes)
+        {
+            if (adjustedRow == null || baselineRow == null)
+            {
+                return 0;
+            }
+
+            int scheduleShiftMinutes = adjustedRow.Minute - baselineRow.Minute;
+            return scheduleShiftMinutes - ResolveUniformTargetExpressOffsetMinutes(context, adjustedRow, activeExpressOffsetMinutes);
+        }
+
+        private static int ResolveUniformTargetExpressOffsetMinutes(
+            PlannerContext context,
+            PlannerWorkingRow row,
+            int activeExpressOffsetMinutes)
+        {
+            if (activeExpressOffsetMinutes == 0
+                || row == null
+                || !string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase))
+            {
+                return 0;
+            }
+
+            return (context?.TargetLineIds ?? Array.Empty<string>()).Contains(row.LineId ?? string.Empty)
+                ? activeExpressOffsetMinutes
+                : 0;
         }
 
         private static string[] ResolveClusterIdsForLine(List<PlannerRiskCluster> riskClusters, string lineId)

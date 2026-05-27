@@ -58,6 +58,9 @@ namespace RapidTransitMod
                 log.Info("Boarding close patch disabled: " + ex.GetType().Name + ": " + ex.Message);
             }
             updateSystem.UpdateAt<DepartureControlSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportLineSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<RetireHandoffDispatchGuardSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, DepartureControlSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, TrainNavigationSystem>(SystemUpdatePhase.GameSimulation);

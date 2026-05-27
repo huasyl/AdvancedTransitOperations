@@ -505,6 +505,22 @@ function formatMinutesLabel(value) {
   return `${formatNumberValue(value)}m`;
 }
 
+function readHighestCapacityConsumptionPercent(diagnostic) {
+  const percentValue = Number(diagnostic?.highestCapacityConsumptionPercent);
+  if (Number.isFinite(percentValue)) {
+    return percentValue;
+  }
+  const ratioValue = Number(diagnostic?.highestCapacityConsumptionRatio);
+  if (Number.isFinite(ratioValue)) {
+    return ratioValue * 100;
+  }
+  return 0;
+}
+
+function formatPercentLabel(value) {
+  return `${formatNumberValue(value)}%`;
+}
+
 function joinDisplayValues(values, separator = " / ", emptyValue = "--") {
   const parts = (Array.isArray(values) ? values : [])
     .map((value) => String(value || "").trim())
@@ -1217,6 +1233,7 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
 
   const resolvers = buildPlannerResolvers(plannerInput, result, t);
   const summaryById = new Map((result.planSummaries || []).map((plan) => [plan.planId, plan]));
+  const baselineHighestCapacityConsumptionPercent = readHighestCapacityConsumptionPercent(result.baselineCapacityDiagnostic);
   const plans = planDetails.map((plan, planIndex) => {
     const summary = summaryById.get(plan.planId) || {};
     const riskClusters = Array.isArray(plan.riskClusters) ? plan.riskClusters : [];
@@ -1235,6 +1252,11 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
     });
     const affectedWaitTripCount = affectedWaitTripIds.size;
     const localWaitMinutes = Number(summary.localWaitMinutes ?? plan.metrics?.localWaitMinutes ?? 0);
+    const optimizedHighestCapacityConsumptionPercent = readHighestCapacityConsumptionPercent(
+      summary.capacityDiagnostic
+      ?? plan.capacityDiagnostic
+      ?? (result.selectedPlan?.planId === plan.planId ? result.selectedPlan?.capacityDiagnostic : null)
+    );
     const problemIssues = Array.isArray(plan.problemIssues) ? plan.problemIssues : [];
     const timetableRows = Array.isArray(plan.timetablePreviewRows) ? plan.timetablePreviewRows : [];
     const changedWindows = Array.isArray(plan.changedWindows) ? plan.changedWindows : [];
@@ -1257,7 +1279,8 @@ function mapPlannerResultToDisplay(result, plannerInput, t) {
       badgeLabel: formatPlannerBadgeLabel(badgeStatus, primaryRiskItems, t),
       metrics: {
         expressSave: Number(summary.expressSavedMinutes ?? plan.metrics?.expressSavedMinutes ?? 0),
-        localWait: localWaitMinutes,
+        baselineHighestCapacityConsumptionPercent,
+        optimizedHighestCapacityConsumptionPercent,
         averageLocalWait: affectedWaitTripCount > 0
           ? Number((localWaitMinutes / affectedWaitTripCount).toFixed(1))
           : 0,
@@ -1736,7 +1759,14 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         title: t("planner.objective.balanced"),
         type: "optimal",
         badgeLabel: t("planner.badge.feasible"),
-        metrics: { expressSave: 0, localWait: 0, overtakes: 0 },
+        metrics: {
+          expressSave: 0,
+          baselineHighestCapacityConsumptionPercent: 0,
+          optimizedHighestCapacityConsumptionPercent: 0,
+          averageLocalWait: 0,
+          affectedWaitTrips: 0,
+          overtakes: 0
+        },
         stations: "--",
         diagnostics: [t("planner.empty.noPlanGenerated")],
         risks: [],
@@ -1960,30 +1990,40 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
         forcedBypassOptions
       });
 
-      const startedJob = await workbenchApi.startPlannerJob?.(request);
-      if (!startedJob?.jobId) {
-        throw new Error(startedJob?.error || "planner-job-start-failed");
+      const isPlannerLab = typeof window !== "undefined" && window.__RT_PLANNER_LAB__ === true;
+      let result = null;
+      if (isPlannerLab) {
+        result = await workbenchApi.runPlanner?.(request);
+        if (!result) {
+          throw new Error("planner-run-failed");
+        }
+      } else {
+        const startedJob = await workbenchApi.startPlannerJob?.(request);
+        if (!startedJob?.jobId) {
+          throw new Error(startedJob?.error || "planner-job-start-failed");
+        }
+
+        let latestStatus = startedJob;
+        while (pageAliveRef.current && generateRunIdRef.current === runId && !isTerminalPlannerJobState(latestStatus?.state)) {
+          await waitForDelay(120);
+          latestStatus = await workbenchApi.getPlannerJobStatus?.(startedJob.jobId);
+        }
+
+        if (!pageAliveRef.current || generateRunIdRef.current !== runId) {
+          return;
+        }
+
+        if (!latestStatus || latestStatus.state === "missing") {
+          throw new Error(latestStatus?.error || "planner-job-not-found");
+        }
+
+        if (latestStatus.state === "failed") {
+          throw new Error(latestStatus.error || "planner-job-failed");
+        }
+
+        result = latestStatus.result || null;
       }
 
-      let latestStatus = startedJob;
-      while (pageAliveRef.current && generateRunIdRef.current === runId && !isTerminalPlannerJobState(latestStatus?.state)) {
-        await waitForDelay(120);
-        latestStatus = await workbenchApi.getPlannerJobStatus?.(startedJob.jobId);
-      }
-
-      if (!pageAliveRef.current || generateRunIdRef.current !== runId) {
-        return;
-      }
-
-      if (!latestStatus || latestStatus.state === "missing") {
-        throw new Error(latestStatus?.error || "planner-job-not-found");
-      }
-
-      if (latestStatus.state === "failed") {
-        throw new Error(latestStatus.error || "planner-job-failed");
-      }
-
-      const result = latestStatus.result || null;
       setPlannerResult(result || null);
       if (!result?.success) {
         const diagnosticMessage = (result?.diagnostics || [])
@@ -2403,7 +2443,15 @@ export default function PlannerWorkbenchPage({ pageEnterSequence = 0 }) {
                         <div className="dw-planner-section-rule" />
                         <div className="dw-planner-metrics-row">
                           <PlannerMetric label={t("planner.metrics.expressSave")} value={`${activePlan?.metrics?.expressSave ?? 0}m`} tone="success" />
-                          <PlannerMetric label={t("planner.metrics.localWait")} value={`${activePlan?.metrics?.localWait ?? 0}m`} tone={activePlan?.type === "warning" ? "warning" : "default"} />
+                          <PlannerMetric
+                            label={t("planner.metrics.baselineHighestCapacityConsumption")}
+                            value={formatPercentLabel(activePlan?.metrics?.baselineHighestCapacityConsumptionPercent ?? 0)}
+                          />
+                          <PlannerMetric
+                            label={t("planner.metrics.optimizedHighestCapacityConsumption")}
+                            value={formatPercentLabel(activePlan?.metrics?.optimizedHighestCapacityConsumptionPercent ?? 0)}
+                            tone={activePlan?.type === "warning" ? "warning" : "default"}
+                          />
                           <PlannerMetric label={t("planner.metrics.averageLocalWait")} value={`${activePlan?.metrics?.averageLocalWait ?? 0}m`} tone="default" />
                           <PlannerMetric label={t("planner.metrics.affectedWaitTrips")} value={`${activePlan?.metrics?.affectedWaitTrips ?? 0}`} />
                           <PlannerMetric label={t("planner.metrics.bypassCount")} value={`${activePlan?.metrics?.overtakes ?? 0}`} />

@@ -1,0 +1,256 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 960px;
+  min-height: 100vh;
+  background: #f8fafc;
+  color: #1e293b;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+}
+
+button,
+input,
+textarea {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+}
+
+.tdp-root {
+  display: flex;
+  min-height: 100vh;
+  background: #f8fafc;
+}
+
+.tdp-panel {
+  width: 360px;
+  min-height: 100vh;
+  padding: 24px 16px;
+  background: #ffffff;
+  border-right: 1px solid #cbd5e1;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.10);
+  overflow-y: auto;
+}
+
+.tdp-panel-header {
+  margin-bottom: 24px;
+}
+
+.tdp-panel h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  line-height: 1.2;
+  color: #0f172a;
+}
+
+.tdp-panel p,
+.tdp-preview-header p,
+.tdp-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #475569;
+}
+
+.tdp-section {
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.tdp-section h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.3;
+  color: #334155;
+}
+
+.tdp-segmented {
+  display: flex;
+  padding: 8px;
+  margin-bottom: 12px;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+
+.tdp-segment {
+  flex: 1 1 auto;
+  height: 42px;
+  padding: 0 8px;
+  margin: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tdp-segment + .tdp-segment {
+  margin-left: 8px;
+}
+
+.tdp-segment-active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
+.tdp-field {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  margin-top: 8px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.tdp-field span {
+  width: 96px;
+}
+
+.tdp-field input {
+  flex: 1 1 auto;
+  cursor: pointer;
+}
+
+.tdp-field strong {
+  width: 32px;
+  margin-left: 12px;
+  color: #0f172a;
+  font-size: 14px;
+  text-align: right;
+}
+
+.tdp-check {
+  display: flex;
+  align-items: center;
+  height: 42px;
+  margin-top: 8px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tdp-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0 12px 0 0;
+  cursor: pointer;
+}
+
+.tdp-legend {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.tdp-legend-row {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.tdp-legend-row + .tdp-legend-row {
+  border-top: 1px solid #e2e8f0;
+}
+
+.tdp-swatch {
+  width: 24px;
+  height: 12px;
+  margin-right: 12px;
+  border-radius: 999px;
+}
+
+.tdp-legend-name {
+  width: 76px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.tdp-legend-status {
+  flex: 1 1 auto;
+  color: #475569;
+  font-size: 12px;
+  text-align: right;
+}
+
+.tdp-mock {
+  max-height: 220px;
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tdp-preview {
+  flex: 1 1 auto;
+  min-height: 100vh;
+  padding: 24px;
+  background: #eef2f7;
+  color: #0f172a;
+}
+
+.tdp-preview-dark {
+  background: #101820;
+  color: #e2e8f0;
+}
+
+.tdp-preview-header {
+  display: flex;
+  align-items: center;
+  height: 52px;
+  margin-bottom: 16px;
+}
+
+.tdp-preview-header h2 {
+  margin: 0;
+  color: currentColor;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.tdp-preview-header p {
+  margin-left: 16px;
+  color: #64748b;
+}
+
+.tdp-preview-dark .tdp-preview-header p {
+  color: #94a3b8;
+}
+
+.tdp-svg-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 116px);
+  padding: 24px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+}
+
+.tdp-preview-dark .tdp-svg-stage {
+  border-color: #334155;
+  background: #16212c;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+}
+
+.tdp-svg-stage svg {
+  width: 100%;
+  max-width: 980px;
+  height: auto;
+  max-height: calc(100vh - 180px);
+}

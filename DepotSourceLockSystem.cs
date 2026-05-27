@@ -495,6 +495,9 @@ namespace RapidTransitMod
                     ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(request);
                     TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
                     Entity line = vehicleRequest.m_Route;
+                    if (EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
+                        continue;
+
                     if (line == Entity.Null
                         || !EntityManager.Exists(line)
                         || !lineLookup.HasComponent(line))
@@ -506,7 +509,7 @@ namespace RapidTransitMod
                         continue;
 
                     DepartureControlSystem control = DepartureControlSystem.Instance;
-                    if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(line))
+                    if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(request, line))
                     {
                         DestroySuppressedManagedLineRequest(request, line);
                         continue;
@@ -868,6 +871,13 @@ namespace RapidTransitMod
                     Entity line = request.m_Route;
                     if (line == Entity.Null || !EntityManager.Exists(line))
                         continue;
+
+                    DepartureControlSystem control = DepartureControlSystem.Instance;
+                    if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(requestEntity, line))
+                    {
+                        DestroySuppressedManagedLineRequest(requestEntity, line);
+                        continue;
+                    }
 
                     Entity configuredDepot = GetConfiguredDepotForLine(line);
                     if (!IsDepotCompatibleWithLine(configuredDepot, line))

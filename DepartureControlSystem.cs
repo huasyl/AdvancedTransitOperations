@@ -66,6 +66,13 @@ namespace RapidTransitMod
             public int SampleCount;
         }
 
+        private struct StationStopDwellObservation
+        {
+            public float AverageFrames;
+            public int SampleCount;
+            public uint LastObservedFrame;
+        }
+
         private struct StopDwellSession
         {
             public Entity Line;
@@ -574,6 +581,8 @@ namespace RapidTransitMod
         private NativeHashMap<Entity, uint> m_StopDwellStartFrame;
         private NativeHashMap<Entity, uint> m_VehicleDispatchRequestStartFrame;
         private readonly Dictionary<ulong, StopDwellObservation> m_WaypointStopDwellObservations = new Dictionary<ulong, StopDwellObservation>();
+        private readonly Dictionary<string, StationStopDwellObservation> m_StationStopDwellObservations =
+            new Dictionary<string, StationStopDwellObservation>(StringComparer.Ordinal);
         private readonly Dictionary<Entity, StopDwellSession> m_StopDwellSessions = new Dictionary<Entity, StopDwellSession>();
         private readonly Dictionary<Entity, LineMileageModel> m_LineMileageModels = new Dictionary<Entity, LineMileageModel>();
         private SharedLocalCorridorGraph m_SharedLocalCorridorGraph;
@@ -609,7 +618,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, uint> m_RetireShadowLastFrame = new Dictionary<Entity, uint>();
         private uint m_LastDeferredBoardingTailCleanupFrame;
         private static bool IsTraversalSliceObservationPersistenceEnabled() => true;
-        private static bool IsStopDwellObservationPersistenceEnabled() => true;
+        private static bool IsStopDwellObservationPersistenceEnabled() => false;
+        private static bool IsStationStopDwellObservationPersistenceEnabled() => true;
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
@@ -678,6 +688,24 @@ namespace RapidTransitMod
         private bool m_TraversalSliceObservationCacheLoaded = false;
         private bool m_StopDwellObservationBufferReady = false;
         private bool m_StopDwellObservationCacheLoaded = false;
+        private bool m_StationStopDwellObservationBufferReady = false;
+        private bool m_StationStopDwellObservationCacheLoaded = false;
+        private int m_LastStationStopDwellLegacyBufferCount = 0;
+        private int m_LastStationStopDwellLegacyRestoredCount = 0;
+        private int m_LastStationStopDwellAnchorBufferCount = 0;
+        private int m_LastStationStopDwellAnchorRestoredCount = 0;
+        private uint m_StationAnchorObservationDiagLastLogFrame = 0;
+        private ulong m_StationAnchorDiagAcceptedSamples = 0;
+        private ulong m_StationAnchorDiagLegacyWritten = 0;
+        private ulong m_StationAnchorDiagAnchorWritten = 0;
+        private ulong m_StationAnchorDiagAnchorMissing = 0;
+        private ulong m_StationAnchorDiagAnchorRejectedOriginOrTerminal = 0;
+        private ulong m_StationAnchorDiagSuspiciousOriginOrTerminal = 0;
+        private ulong m_StationAnchorDiagSuspiciousLongDwell = 0;
+        private ulong m_StationAnchorDiagTotalAnchorMissing = 0;
+        private ulong m_StationAnchorDiagTotalAnchorRejectedOriginOrTerminal = 0;
+        private ulong m_StationAnchorDiagTotalSuspiciousOriginOrTerminal = 0;
+        private ulong m_StationAnchorDiagTotalSuspiciousLongDwell = 0;
         private bool m_VehicleCacheBufferReady = false;
         private bool m_DispatchCacheBufferReady = false;
         private bool m_BypassStationBufferReady = false;
@@ -693,12 +721,66 @@ namespace RapidTransitMod
             return m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0;
         }
 
-        internal bool ShouldDestroyOfficialTransportVehicleRequest(Entity line)
+        internal bool IsRtManagedLine(Entity line)
+        {
+            return line != Entity.Null
+                && EntityManager.Exists(line)
+                && !EntityManager.HasComponent<Disabled>(line)
+                && IsWorkbenchTimetableApplied(line);
+        }
+
+        internal bool TryGetRtSpawnTarget(Entity line, out int targetCount)
+        {
+            targetCount = 0;
+            if (line == Entity.Null || !m_SpawningLines.IsCreated)
+                return false;
+
+            return m_SpawningLines.TryGetValue(line, out targetCount);
+        }
+
+        internal int CountRtActiveVehicles(Entity line)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return 0;
+
+            BufferLookup<RouteVehicle> routeVehicles = GetBufferLookup<RouteVehicle>(true);
+            return CountActiveVehicles(line, routeVehicles);
+        }
+
+        internal bool IsRtParkedVehicleRequest(Entity request, Entity line)
+        {
+            if (request == Entity.Null
+                || !EntityManager.Exists(request)
+                || !EntityManager.HasComponent<RtVehicleRequestSentinel>(request)
+                || !EntityManager.HasComponent<TransportVehicleRequest>(request))
+            {
+                return false;
+            }
+
+            TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
+            return line == Entity.Null || vehicleRequest.m_Route == line;
+        }
+
+        internal bool IsRtSpawnPermitRequest(Entity request, Entity line)
+        {
+            if (request == Entity.Null
+                || !EntityManager.Exists(request)
+                || !EntityManager.HasComponent<RtSpawnPermitRequest>(request)
+                || !EntityManager.HasComponent<TransportVehicleRequest>(request))
+            {
+                return false;
+            }
+
+            TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
+            return line == Entity.Null || vehicleRequest.m_Route == line;
+        }
+
+        internal bool ShouldDestroyOfficialTransportVehicleRequest(Entity request, Entity line)
         {
             if (line == Entity.Null || !EntityManager.Exists(line) || !IsWorkbenchTimetableApplied(line))
                 return false;
 
-            if (m_SpawningLines.ContainsKey(line))
+            if (IsRtParkedVehicleRequest(request, line) || IsRtSpawnPermitRequest(request, line))
                 return false;
 
             if (!EntityManager.HasBuffer<RouteVehicle>(line))
@@ -714,6 +796,11 @@ namespace RapidTransitMod
             }
 
             return true;
+        }
+
+        internal bool ShouldDestroyOfficialTransportVehicleRequest(Entity line)
+        {
+            return ShouldDestroyOfficialTransportVehicleRequest(Entity.Null, line);
         }
         private NativeHashSet<Entity> m_DiagnosedLines;
 
@@ -783,6 +870,7 @@ namespace RapidTransitMod
         private const uint LINE_ORDERED_RUNTIME_FORCE_FULL_SORT_INTERVAL_FRAMES = 360;
         private const uint LINE_ORDERED_PROBE_LOG_INTERVAL_FRAMES = 3600;
         private const uint DIRECTION_COMPARE_PROBE_LOG_INTERVAL_FRAMES = 3600;
+        private const uint STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES = 3600;
         private const uint DIRECTION_COMPARE_LOG_COOLDOWN_FRAMES = 1800;
         private const int TURNBACK_REPEAT_MIN_PRIMARY_ATOMS = 3;
         private const int TURNBACK_REPEAT_MIN_UNIQUE_LANES = 2;
@@ -1127,6 +1215,7 @@ namespace RapidTransitMod
             lateSlot = -1;
             int prevSlot = GetPreviousSlotMin(nowMin);
             if (!IsCurrentOrRecentDispatchableSlot(nowMin, prevSlot)) return false;
+            if (IsDispatchTargetAlreadyOccupied(line, v, prevSlot)) return false;
 
             var rvBuffers = GetBufferLookup<RouteVehicle>(true);
             if (!rvBuffers.TryGetBuffer(line, out var rvs)) return false;
@@ -1217,6 +1306,8 @@ namespace RapidTransitMod
             lateTarget = -1;
             int prevTarget = GetPreviousScheduledTargetMin(nowMin, targets);
             if (prevTarget < 0 || !IsCurrentOrRecentDispatchableSlot(nowMin, prevTarget))
+                return false;
+            if (IsDispatchTargetAlreadyOccupied(line, v, prevTarget))
                 return false;
 
             var rvBuffers = GetBufferLookup<RouteVehicle>(true);

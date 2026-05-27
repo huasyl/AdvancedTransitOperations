@@ -88,10 +88,10 @@ namespace RapidTransitMod
             EnsureLapCacheBuffer();
             EnsureVehicleCacheBuffer();
             EnsureDispatchCacheBuffer();
-            if (IsStopDwellObservationPersistenceEnabled())
+            if (IsStationStopDwellObservationPersistenceEnabled())
             {
-                EnsureStopDwellObservationBuffer();
-                RestoreStopDwellObservationsFromBuffer();
+                EnsureStationStopDwellObservationBuffer();
+                RestoreStationStopDwellObservationsFromBuffer();
             }
             if (IsTraversalSliceObservationPersistenceEnabled())
             {
@@ -341,9 +341,13 @@ namespace RapidTransitMod
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
             m_WaypointStopDwellObservations.Clear();
+            m_StationStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
             m_StopDwellObservationBufferReady = false;
             m_StopDwellObservationCacheLoaded = false;
+            m_StationStopDwellObservationBufferReady = false;
+            m_StationStopDwellObservationCacheLoaded = false;
+            ClearStationAnchorObservationDiagnosticsState();
             m_TraversalRunSliceObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
@@ -359,6 +363,7 @@ namespace RapidTransitMod
             m_StopDwellStartFrame.Clear();
             m_StopDwellStartFrame.Clear();
             m_WaypointStopDwellObservations.Clear();
+            m_StationStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
             ClearBypassRuntimeState();
             m_LineTrackChainFrameSnapshots.Clear();
@@ -428,9 +433,13 @@ namespace RapidTransitMod
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
             m_WaypointStopDwellObservations.Clear();
+            m_StationStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
             m_StopDwellObservationBufferReady = false;
             m_StopDwellObservationCacheLoaded = false;
+            m_StationStopDwellObservationBufferReady = false;
+            m_StationStopDwellObservationCacheLoaded = false;
+            ClearStationAnchorObservationDiagnosticsState();
             m_TraversalRunSliceObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
@@ -445,6 +454,7 @@ namespace RapidTransitMod
             m_ForcedOriginBoardingGraceUntil.Clear();
             m_AssistLaunchPendingByVehicle.Clear();
             m_WaypointStopDwellObservations.Clear();
+            m_StationStopDwellObservations.Clear();
             m_StopDwellSessions.Clear();
             ClearBypassRuntimeState();
             m_LineTrackChainFrameSnapshots.Clear();

@@ -370,9 +370,40 @@ namespace RapidTransitMod.Planner
         public List<DepartureControlSystem.DispatchPlannerScheduleActionDto> StructuredScheduleActions = new List<DepartureControlSystem.DispatchPlannerScheduleActionDto>();
         public List<DepartureControlSystem.DispatchPlannerProblemIssueDto> ProblemIssues = new List<DepartureControlSystem.DispatchPlannerProblemIssueDto>();
         public DepartureControlSystem.DispatchPlannerFrontendSummaryDto FrontendSummary;
+        public PlannerCapacityDiagnostic CapacityDiagnostic;
         public List<PlannerWorkingRow> BaselineRows = new List<PlannerWorkingRow>();
         public List<PlannerWorkingRow> AdjustedRows = new List<PlannerWorkingRow>();
         public List<DepartureControlSystem.DispatchPlannerPreviewRowDto> PreviewRows = new List<DepartureControlSystem.DispatchPlannerPreviewRowDto>();
+    }
+
+    internal sealed class PlannerCapacityDiagnostic
+    {
+        public bool Success = false;
+        public string OverallVerdict = "insufficientData";
+        public bool CapacityLikely = false;
+        public float MinGapMinutes = 0f;
+        public float HighestCapacityConsumptionRatio = 0f;
+        public float HighestCapacityConsumptionPercent = 0f;
+        public float HighestCompressedSpanMinutes = 0f;
+        public float HighestZeroGapConsumptionRatio = 0f;
+        public float RequiredMaxShiftMinutes = 0f;
+        public float RequiredMaxWaitMinutes = 0f;
+        public float MinResidualSlackMinutes = 0f;
+        public string CriticalResourceId = string.Empty;
+        public string CriticalTargetLineId = string.Empty;
+        public string[] CriticalCoverageLineIds = new string[0];
+        public string[] CriticalCoverageLines = new string[0];
+        public int CriticalTargetStartAtomIndex = -1;
+        public int CriticalTargetEndAtomIndexExclusive = -1;
+        public int TripCount = 0;
+        public int ExportedSharedCorridorCount = 0;
+        public int ValidSharedCorridorCount = 0;
+        public int RelevantSharedCorridorCount = 0;
+        public int ProjectedIntervalCount = 0;
+        public int ElementarySectionCount = 0;
+        public int ReportGroupCount = 0;
+        public string Reason = string.Empty;
+        public string Summary = string.Empty;
     }
 
     internal sealed class PlannerContext
@@ -424,6 +455,7 @@ namespace RapidTransitMod.Planner
         public List<PlannerRiskCluster> RiskClusters = new List<PlannerRiskCluster>();
         public List<PlannerOptimizationRegion> OptimizationRegions = new List<PlannerOptimizationRegion>();
         public List<PlannerPlanModel> Plans = new List<PlannerPlanModel>();
+        public PlannerCapacityDiagnostic BaselineCapacityDiagnostic;
         public List<PlannerValidationIssue> Diagnostics = new List<PlannerValidationIssue>();
     }
 

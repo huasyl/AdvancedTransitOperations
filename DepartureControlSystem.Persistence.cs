@@ -77,6 +77,8 @@ namespace RapidTransitMod
             }
 
             m_StopDwellObservationCacheLoaded = true;
+            m_LastStationStopDwellLegacyBufferCount = buffer.Length;
+            m_LastStationStopDwellLegacyRestoredCount = restoredCount;
             log.Info("[恢复] StopDwellObservations buffer=" + buffer.Length
                 + " restored=" + restoredCount
                 + " legacyTopologyFallback=" + restoredByLegacyTopologyCount
@@ -136,6 +138,113 @@ namespace RapidTransitMod
             return TryGetObservationPersistenceProfileSignature(line, out signature);
         }
 
+        private void EnsureStationStopDwellObservationBuffer()
+        {
+            if (!IsStationStopDwellObservationPersistenceEnabled())
+                return;
+
+            if (m_StationStopDwellObservationBufferReady)
+                return;
+
+            Entity city = m_CitySystem.City;
+            if (city == Entity.Null)
+                return;
+
+            if (!EntityManager.HasBuffer<StationStopDwellObservationElement>(city))
+                EntityManager.AddBuffer<StationStopDwellObservationElement>(city);
+
+            m_StationStopDwellObservationBufferReady = true;
+        }
+
+        private void RestoreStationStopDwellObservationsFromBuffer()
+        {
+            if (!IsStationStopDwellObservationPersistenceEnabled())
+                return;
+
+            if (m_StationStopDwellObservationCacheLoaded || !m_StationStopDwellObservationBufferReady)
+                return;
+
+            Entity city = m_CitySystem.City;
+            if (city == Entity.Null || !EntityManager.HasBuffer<StationStopDwellObservationElement>(city))
+                return;
+
+            m_StationStopDwellObservations.Clear();
+            var buffer = EntityManager.GetBuffer<StationStopDwellObservationElement>(city, true);
+            int restoredCount = 0;
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                StationStopDwellObservationElement entry = buffer[i];
+                string observationKey = entry.m_StationAnchorId.ToString();
+                if (string.IsNullOrWhiteSpace(observationKey)
+                    || !IsStationStopDwellObservationKey(observationKey)
+                    || !(entry.m_AverageFrames > 0f)
+                    || entry.m_SampleCount <= 0)
+                {
+                    continue;
+                }
+
+                m_StationStopDwellObservations[observationKey] = new StationStopDwellObservation
+                {
+                    AverageFrames = entry.m_AverageFrames,
+                    SampleCount = math.max(0, entry.m_SampleCount),
+                    LastObservedFrame = entry.m_LastObservedFrame
+                };
+                restoredCount++;
+            }
+
+            m_StationStopDwellObservationCacheLoaded = true;
+            m_LastStationStopDwellAnchorBufferCount = buffer.Length;
+            m_LastStationStopDwellAnchorRestoredCount = restoredCount;
+            log.Info("[StopDwellAnchorRestore] anchorBuffer=" + buffer.Length
+                + " anchorRestored=" + restoredCount
+                + " legacyBuffer=" + m_LastStationStopDwellLegacyBufferCount
+                + " legacyRestored=" + m_LastStationStopDwellLegacyRestoredCount
+                + " legacyPreserved=1");
+        }
+
+        private void FlushStationStopDwellObservation(string observationKey, StationStopDwellObservation observation)
+        {
+            if (!IsStationStopDwellObservationPersistenceEnabled())
+                return;
+
+            if (string.IsNullOrWhiteSpace(observationKey)
+                || !IsStationStopDwellObservationKey(observationKey)
+                || !(observation.AverageFrames > 0f)
+                || observation.SampleCount <= 0
+                || !m_StationStopDwellObservationBufferReady)
+            {
+                return;
+            }
+
+            Entity city = m_CitySystem.City;
+            if (city == Entity.Null || !EntityManager.HasBuffer<StationStopDwellObservationElement>(city))
+                return;
+
+            var buffer = EntityManager.GetBuffer<StationStopDwellObservationElement>(city);
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                if (!string.Equals(buffer[i].m_StationAnchorId.ToString(), observationKey, System.StringComparison.Ordinal))
+                    continue;
+
+                buffer[i] = new StationStopDwellObservationElement
+                {
+                    m_StationAnchorId = observationKey,
+                    m_AverageFrames = observation.AverageFrames,
+                    m_SampleCount = observation.SampleCount,
+                    m_LastObservedFrame = observation.LastObservedFrame
+                };
+                return;
+            }
+
+            buffer.Add(new StationStopDwellObservationElement
+            {
+                m_StationAnchorId = observationKey,
+                m_AverageFrames = observation.AverageFrames,
+                m_SampleCount = observation.SampleCount,
+                m_LastObservedFrame = observation.LastObservedFrame
+            });
+        }
+
         private void EnsureTraversalSliceObservationBuffer()
         {
             if (!IsTraversalSliceObservationPersistenceEnabled())
@@ -182,13 +291,11 @@ namespace RapidTransitMod
 
                 bool signatureMatched = TryGetTraversalSliceObservationProfileSignature(entry.m_LineEntity, out ulong currentSignature)
                     && currentSignature == entry.m_ProfileSignature;
-                if (!signatureMatched && !CanRestoreLegacyTraversalSliceObservation(entry.m_LineEntity, entry.m_SliceIndex))
+                if (!signatureMatched)
                 {
                     skippedSignatureMismatchCount++;
                     continue;
                 }
-                if (!signatureMatched)
-                    restoredByLegacyTopologyCount++;
 
                 ulong key = MakeTraversalSliceObservationKey(entry.m_LineEntity, entry.m_SliceIndex);
                 m_TraversalRunSliceObservations[key] = new TraversalSliceObservation(

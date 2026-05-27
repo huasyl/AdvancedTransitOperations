@@ -228,6 +228,27 @@ namespace RapidTransitMod
         }
 
         [DataContract]
+        public class DispatchPlannerPredictedHoldPairDto
+        {
+            [DataMember]
+            public string catchupId;
+            [DataMember]
+            public string yieldingLineId;
+            [DataMember]
+            public string priorityLineId;
+            [DataMember]
+            public string yieldingTripId;
+            [DataMember]
+            public string priorityTripId;
+            [DataMember]
+            public string stationId;
+            [DataMember]
+            public string catchupTime;
+            [DataMember]
+            public float plannedHoldMinutes;
+        }
+
+        [DataContract]
         public class DispatchPlannerScheduleActionDto
         {
             [DataMember]
@@ -254,6 +275,10 @@ namespace RapidTransitMod
             public string affectedLineId;
             [DataMember]
             public string[] affectedTripIds;
+            [DataMember]
+            public string[] priorityTripIds;
+            [DataMember]
+            public DispatchPlannerPredictedHoldPairDto[] predictedHoldPairs;
             [DataMember]
             public string[] tripIds;
             [DataMember]
@@ -401,6 +426,65 @@ namespace RapidTransitMod
             public int retimedTripCount;
             [DataMember]
             public int recommendedExpressOffsetDeltaMinutes;
+            [DataMember]
+            public DispatchPlannerCapacityDiagnosticDto capacityDiagnostic;
+        }
+
+        [DataContract]
+        public class DispatchPlannerCapacityDiagnosticDto
+        {
+            [DataMember]
+            public bool success;
+            [DataMember]
+            public string overallVerdict;
+            [DataMember]
+            public bool capacityLikely;
+            [DataMember]
+            public float minGapMinutes;
+            [DataMember]
+            public float highestCapacityConsumptionRatio;
+            [DataMember]
+            public float highestCapacityConsumptionPercent;
+            [DataMember]
+            public float highestCompressedSpanMinutes;
+            [DataMember]
+            public float highestZeroGapConsumptionRatio;
+            [DataMember]
+            public float requiredMaxShiftMinutes;
+            [DataMember]
+            public float requiredMaxWaitMinutes;
+            [DataMember]
+            public float minResidualSlackMinutes;
+            [DataMember]
+            public string criticalResourceId;
+            [DataMember]
+            public string criticalTargetLineId;
+            [DataMember]
+            public string[] criticalCoverageLineIds;
+            [DataMember]
+            public string[] criticalCoverageLines;
+            [DataMember]
+            public int criticalTargetStartAtomIndex;
+            [DataMember]
+            public int criticalTargetEndAtomIndexExclusive;
+            [DataMember]
+            public int tripCount;
+            [DataMember]
+            public int exportedSharedCorridorCount;
+            [DataMember]
+            public int validSharedCorridorCount;
+            [DataMember]
+            public int relevantSharedCorridorCount;
+            [DataMember]
+            public int projectedIntervalCount;
+            [DataMember]
+            public int elementarySectionCount;
+            [DataMember]
+            public int reportGroupCount;
+            [DataMember]
+            public string reason;
+            [DataMember]
+            public string summary;
         }
 
         [DataContract]
@@ -605,6 +689,8 @@ namespace RapidTransitMod
             [DataMember]
             public DispatchPlannerPlanMetricsDto metrics;
             [DataMember]
+            public DispatchPlannerCapacityDiagnosticDto capacityDiagnostic;
+            [DataMember]
             public string[] selectedBypassStationIds;
             [DataMember]
             public DispatchPlannerRiskClusterDto[] riskClusters;
@@ -664,6 +750,8 @@ namespace RapidTransitMod
             public DispatchPlannerInputSummaryDto inputSummary;
             [DataMember]
             public DispatchPlannerLineRoleSummaryDto lineRoleSummary;
+            [DataMember]
+            public DispatchPlannerCapacityDiagnosticDto baselineCapacityDiagnostic;
             [DataMember]
             public string defaultPlanId;
             [DataMember]

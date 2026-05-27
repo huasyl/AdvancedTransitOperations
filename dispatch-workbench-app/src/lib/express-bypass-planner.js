@@ -677,6 +677,14 @@ function normalizeTraversalSlice(slice = {}) {
     sliceIndex: clampNumber(slice.sliceIndex, -1),
     startAtomIndex: clampNumber(slice.startAtomIndex, -1),
     endAtomIndexExclusive: clampNumber(slice.endAtomIndexExclusive, -1),
+    startEventKind: slice.startEventKind || "unknown",
+    endEventKind: slice.endEventKind || "unknown",
+    startWaypointIndex: clampNumber(slice.startWaypointIndex, -1),
+    endWaypointIndex: clampNumber(slice.endWaypointIndex, -1),
+    stationTraversalKind: slice.stationTraversalKind || "none",
+    stationWaypointIndex: clampNumber(slice.stationWaypointIndex, -1),
+    stationStopMinutes: clampNumber(slice.stationStopMinutes, 0),
+    observedIncludesStationStop: slice.observedIncludesStationStop === true,
     modelRunMinutes: clampNumber(slice.modelRunMinutes, 0),
     observedAverageMinutes: clampNumber(slice.observedAverageMinutes, 0),
     observedFastMinutes: clampNumber(slice.observedFastMinutes, 0),
@@ -1227,28 +1235,49 @@ function resolveTraversalSliceRuntimeMinutes(slice) {
   };
 }
 
-function buildAtomBoundaryMinuteOffsets(stations, stationOffsetsById, lineTrack, segmentRuntimeByStationPair = null) {
-  const trackAtomCount = clampNumber(lineTrack?.trackAtomCount, 0);
-  if (trackAtomCount <= 0) {
-    return [0];
+function findStationOffsetForTraversalSlice(stations, stationOffsetsById, slice) {
+  if (slice.stationTraversalKind !== "stop" || slice.stationWaypointIndex < 0) {
+    return null;
   }
 
-  const runMinutesByAtom = new Array(trackAtomCount).fill(0);
-  asArray(lineTrack?.traversalSlices).forEach((slice) => {
-    const startAtomIndex = Math.max(0, clampNumber(slice.startAtomIndex, -1));
-    const endAtomIndexExclusive = Math.min(trackAtomCount, clampNumber(slice.endAtomIndexExclusive, -1));
-    if (endAtomIndexExclusive <= startAtomIndex) {
-      return;
-    }
+  const station = asArray(stations).find((candidate) =>
+    candidate.waypointIndex === slice.stationWaypointIndex
+    && clampNumber(candidate.trackAtomIndex, -1) >= clampNumber(slice.startAtomIndex, -1)
+    && clampNumber(candidate.trackAtomIndex, -1) <= clampNumber(slice.endAtomIndexExclusive, -1)
+  );
+  if (!station) {
+    return null;
+  }
 
-    const runtime = resolveTraversalSliceRuntimeMinutes(slice);
-    const atomCount = Math.max(1, endAtomIndexExclusive - startAtomIndex);
-    const perAtomMinutes = runtime.minutes / atomCount;
-    for (let atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex += 1) {
-      runMinutesByAtom[atomIndex] += perAtomMinutes;
-    }
-  });
+  return stationOffsetsById.get(station.id) || null;
+}
 
+function resolveTraversalSliceRuntimeForStopPattern(slice, stations, stationOffsetsById, dwellIncludedWaypointIndices = null) {
+  const stationOffset = findStationOffsetForTraversalSlice(stations, stationOffsetsById, slice);
+  if (stationOffset && stationOffset.shouldStop === false) {
+    const modelMinutes = Math.max(slice.modelRunMinutes, 0);
+    return {
+      minutes: modelMinutes,
+      source: modelMinutes > 0 ? "modelSkipStop" : "fallback",
+      confidence: Math.min(clampNumber(slice.confidence, 0.2), 0.55),
+      variabilityMinutes: estimateVariabilityMinutes(modelMinutes, 0.45, 0)
+    };
+  }
+
+  const runtime = resolveTraversalSliceRuntimeMinutes(slice);
+  if (stationOffset
+    && stationOffset.shouldStop !== false
+    && slice.observedIncludesStationStop
+    && slice.observedSampleCount > 0
+    && slice.observedAverageMinutes > 0
+    && dwellIncludedWaypointIndices instanceof Set) {
+    dwellIncludedWaypointIndices.add(stationOffset.stationId);
+  }
+
+  return runtime;
+}
+
+function fillMissingRunMinutesByAtom(stations, segmentRuntimeByStationPair, runMinutesByAtom, coveredBySlice) {
   asArray(stations).forEach((station, stationIndex) => {
     if (stationIndex >= stations.length - 1) {
       return;
@@ -1256,22 +1285,83 @@ function buildAtomBoundaryMinuteOffsets(stations, stationOffsetsById, lineTrack,
 
     const nextStation = stations[stationIndex + 1];
     const runtime = segmentRuntimeByStationPair?.get(`${station.id}->${nextStation.id}`);
-    if (!runtime || runtime.source !== "tripObserved" || !(runtime.minutes > 0)) {
+    if (!runtime || !(runtime.minutes > 0)) {
       return;
     }
 
     const startAtomIndex = Math.max(0, clampNumber(station.trackAtomIndex, -1));
-    const endAtomIndexExclusive = Math.min(trackAtomCount, clampNumber(nextStation.trackAtomIndex, -1));
+    const endAtomIndexExclusive = Math.min(runMinutesByAtom.length, clampNumber(nextStation.trackAtomIndex, -1));
     if (endAtomIndexExclusive <= startAtomIndex) {
       return;
     }
 
+    const perAtomMinutes = runtime.minutes / Math.max(1, endAtomIndexExclusive - startAtomIndex);
+    for (let atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex += 1) {
+      if (!coveredBySlice[atomIndex]) {
+        runMinutesByAtom[atomIndex] = perAtomMinutes;
+      }
+    }
+  });
+}
+
+function fillMissingVariabilitySquareByAtom(stations, segmentRuntimeByStationPair, variabilitySquareByAtom, coveredBySlice) {
+  asArray(stations).forEach((station, stationIndex) => {
+    if (stationIndex >= stations.length - 1) {
+      return;
+    }
+
+    const nextStation = stations[stationIndex + 1];
+    const runtime = segmentRuntimeByStationPair?.get(`${station.id}->${nextStation.id}`);
+    if (!runtime || !(runtime.variabilityMinutes > 0)) {
+      return;
+    }
+
+    const startAtomIndex = Math.max(0, clampNumber(station.trackAtomIndex, -1));
+    const endAtomIndexExclusive = Math.min(variabilitySquareByAtom.length, clampNumber(nextStation.trackAtomIndex, -1));
+    if (endAtomIndexExclusive <= startAtomIndex) {
+      return;
+    }
+
+    const perAtomVariabilityMinutes = runtime.variabilityMinutes / Math.max(1, endAtomIndexExclusive - startAtomIndex);
+    const perAtomVariabilitySquare = perAtomVariabilityMinutes * perAtomVariabilityMinutes;
+    for (let atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex += 1) {
+      if (!coveredBySlice[atomIndex]) {
+        variabilitySquareByAtom[atomIndex] = perAtomVariabilitySquare;
+      }
+    }
+  });
+}
+
+function buildAtomBoundaryMinuteOffsets(stations, stationOffsetsById, lineTrack, segmentRuntimeByStationPair = null) {
+  const trackAtomCount = clampNumber(lineTrack?.trackAtomCount, 0);
+  if (trackAtomCount <= 0) {
+    return [0];
+  }
+
+  const runMinutesByAtom = new Array(trackAtomCount).fill(0);
+  const coveredBySlice = new Array(trackAtomCount).fill(false);
+  const dwellIncludedWaypointIndices = new Set();
+  asArray(lineTrack?.traversalSlices).forEach((slice) => {
+    const startAtomIndex = Math.max(0, clampNumber(slice.startAtomIndex, -1));
+    const endAtomIndexExclusive = Math.min(trackAtomCount, clampNumber(slice.endAtomIndexExclusive, -1));
+    if (endAtomIndexExclusive <= startAtomIndex) {
+      return;
+    }
+
+    const runtime = resolveTraversalSliceRuntimeForStopPattern(
+      slice,
+      stations,
+      stationOffsetsById,
+      dwellIncludedWaypointIndices
+    );
     const atomCount = Math.max(1, endAtomIndexExclusive - startAtomIndex);
     const perAtomMinutes = runtime.minutes / atomCount;
     for (let atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex += 1) {
-      runMinutesByAtom[atomIndex] = perAtomMinutes;
+      runMinutesByAtom[atomIndex] += perAtomMinutes;
+      coveredBySlice[atomIndex] = true;
     }
   });
+  fillMissingRunMinutesByAtom(stations, segmentRuntimeByStationPair, runMinutesByAtom, coveredBySlice);
 
   const dwellMinutesByBoundary = new Array(trackAtomCount + 1).fill(0);
   asArray(stations).forEach((station, stationIndex) => {
@@ -1281,6 +1371,9 @@ function buildAtomBoundaryMinuteOffsets(stations, stationOffsetsById, lineTrack,
       return;
     }
     if (stationIndex === 0) {
+      return;
+    }
+    if (dwellIncludedWaypointIndices.has(station.id)) {
       return;
     }
 
@@ -1308,6 +1401,8 @@ function buildAtomBoundaryVariabilityOffsets(stations, stationOffsetsById, lineT
   }
 
   const variabilitySquareByAtom = new Array(trackAtomCount).fill(0);
+  const coveredBySlice = new Array(trackAtomCount).fill(false);
+  const dwellIncludedWaypointIndices = new Set();
   asArray(lineTrack?.traversalSlices).forEach((slice) => {
     const startAtomIndex = Math.max(0, clampNumber(slice.startAtomIndex, -1));
     const endAtomIndexExclusive = Math.min(trackAtomCount, clampNumber(slice.endAtomIndexExclusive, -1));
@@ -1315,43 +1410,29 @@ function buildAtomBoundaryVariabilityOffsets(stations, stationOffsetsById, lineT
       return;
     }
 
-    const runtime = resolveTraversalSliceRuntimeMinutes(slice);
+    const runtime = resolveTraversalSliceRuntimeForStopPattern(
+      slice,
+      stations,
+      stationOffsetsById,
+      dwellIncludedWaypointIndices
+    );
     const atomCount = Math.max(1, endAtomIndexExclusive - startAtomIndex);
     const perAtomVariabilityMinutes = runtime.variabilityMinutes / atomCount;
     for (let atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex += 1) {
       variabilitySquareByAtom[atomIndex] += perAtomVariabilityMinutes * perAtomVariabilityMinutes;
+      coveredBySlice[atomIndex] = true;
     }
   });
-
-  asArray(stations).forEach((station, stationIndex) => {
-    if (stationIndex >= stations.length - 1) {
-      return;
-    }
-
-    const nextStation = stations[stationIndex + 1];
-    const runtime = segmentRuntimeByStationPair?.get(`${station.id}->${nextStation.id}`);
-    if (!runtime || runtime.source !== "tripObserved" || !(runtime.variabilityMinutes > 0)) {
-      return;
-    }
-
-    const startAtomIndex = Math.max(0, clampNumber(station.trackAtomIndex, -1));
-    const endAtomIndexExclusive = Math.min(trackAtomCount, clampNumber(nextStation.trackAtomIndex, -1));
-    if (endAtomIndexExclusive <= startAtomIndex) {
-      return;
-    }
-
-    const atomCount = Math.max(1, endAtomIndexExclusive - startAtomIndex);
-    const perAtomVariabilityMinutes = runtime.variabilityMinutes / atomCount;
-    for (let atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex += 1) {
-      variabilitySquareByAtom[atomIndex] = perAtomVariabilityMinutes * perAtomVariabilityMinutes;
-    }
-  });
+  fillMissingVariabilitySquareByAtom(stations, segmentRuntimeByStationPair, variabilitySquareByAtom, coveredBySlice);
 
   const dwellVariabilitySquareByBoundary = new Array(trackAtomCount + 1).fill(0);
   asArray(stations).forEach((station, stationIndex) => {
     const stationOffset = stationOffsetsById.get(station.id);
     const boundaryIndex = clampNumber(station.trackAtomIndex, -1);
     if (!stationOffset || boundaryIndex < 0 || boundaryIndex > trackAtomCount || stationIndex === 0) {
+      return;
+    }
+    if (dwellIncludedWaypointIndices.has(station.id)) {
       return;
     }
 
@@ -1390,6 +1471,74 @@ function getAtomBoundaryVariabilityOffset(lineRuntimeModel, atomIndex) {
 
   const clampedIndex = Math.max(0, Math.min(offsets.length - 1, Math.round(atomIndex)));
   return offsets[clampedIndex];
+}
+
+function hasUsableAtomRuntime(lineTrack) {
+  return clampNumber(lineTrack?.trackAtomCount, 0) > 0
+    && asArray(lineTrack?.traversalSlices).some((slice) =>
+      clampNumber(slice.endAtomIndexExclusive, -1) > clampNumber(slice.startAtomIndex, -1)
+    );
+}
+
+function applyStationTimelineFromAtomOffsets(stations, stationOffsets, atomBoundaryMinuteOffsets) {
+  const offsetModel = { atomBoundaryMinuteOffsets };
+  asArray(stations).forEach((station, stationIndex) => {
+    const stationOffset = stationOffsets[stationIndex];
+    if (!stationOffset) {
+      return;
+    }
+
+    const departureMinute = stationIndex === 0
+      ? 0
+      : getAtomBoundaryMinuteOffset(offsetModel, station.trackAtomIndex);
+    const arrivalMinute = stationOffset.shouldStop
+      ? Math.max(0, departureMinute - clampNumber(stationOffset.dwellMinutes, 0))
+      : departureMinute;
+    stationOffset.arrivalMinute = Number(arrivalMinute.toFixed(4));
+    stationOffset.departureMinute = Number(departureMinute.toFixed(4));
+  });
+}
+
+function rebuildSegmentRuntimeOffsetsFromAtomTimeline(
+  stations,
+  stationOffsets,
+  segmentRuntimeOffsets,
+  segmentRuntimeByStationPair,
+  atomBoundaryVariabilityOffsets
+) {
+  segmentRuntimeOffsets.length = 0;
+  segmentRuntimeByStationPair.clear();
+  const variabilityModel = { atomBoundaryMinuteOffsets: atomBoundaryVariabilityOffsets };
+  for (let index = 0; index < stations.length - 1; index += 1) {
+    const station = stations[index];
+    const nextStation = stations[index + 1];
+    const stationOffset = stationOffsets[index];
+    const nextStationOffset = stationOffsets[index + 1];
+    if (!station || !nextStation || !stationOffset || !nextStationOffset) {
+      continue;
+    }
+
+    const minutes = Math.max(0, nextStationOffset.arrivalMinute - stationOffset.departureMinute);
+    const variabilityMinutes = Math.max(
+      0,
+      getAtomBoundaryMinuteOffset(variabilityModel, nextStation.trackAtomIndex)
+        - getAtomBoundaryMinuteOffset(variabilityModel, station.trackAtomIndex)
+    );
+    const segmentRuntime = {
+      fromStationId: station.id,
+      toStationId: nextStation.id,
+      fromOrder: station.order,
+      toOrder: nextStation.order,
+      minutes: Number(minutes.toFixed(4)),
+      averageMinutes: Number(minutes.toFixed(4)),
+      source: "atomSlice",
+      sampleCount: 0,
+      confidence: 0.65,
+      variabilityMinutes: Number(variabilityMinutes.toFixed(4))
+    };
+    segmentRuntimeOffsets.push(segmentRuntime);
+    segmentRuntimeByStationPair.set(`${station.id}->${nextStation.id}`, segmentRuntime);
+  }
 }
 
 function shouldExpressStopAtStation(line, station, stopStationIdSet, stationIndex, stationCount) {
@@ -1511,6 +1660,16 @@ function buildLineRuntimeModel(normalizedInput, lineId, options = {}) {
     lineTrack,
     segmentRuntimeByStationPair
   );
+  if (hasUsableAtomRuntime(lineTrack)) {
+    applyStationTimelineFromAtomOffsets(stations, stationOffsets, atomBoundaryMinuteOffsets);
+    rebuildSegmentRuntimeOffsetsFromAtomTimeline(
+      stations,
+      stationOffsets,
+      segmentRuntimeOffsets,
+      segmentRuntimeByStationPair,
+      atomBoundaryVariabilityOffsets
+    );
+  }
 
   return {
     line,
@@ -2997,7 +3156,9 @@ export function buildLocalObservedModel(rawInput, options = {}) {
 
     lineRuntimeModels.set(lineId, runtimeModel);
     const observedStationCount = runtimeModel.stationOffsets.filter((stationOffset) => stationOffset.dwellSource === "observed").length;
-    const observedRuntimeSegmentCount = runtimeModel.segmentRuntimeOffsets.filter((segmentRuntime) => segmentRuntime.source === "tripObserved").length;
+    const observedRuntimeSegmentCount = runtimeModel.segmentRuntimeOffsets.filter((segmentRuntime) =>
+      segmentRuntime.source === "tripObserved" || segmentRuntime.source === "atomSlice"
+    ).length;
     const totalStationCount = runtimeModel.stationOffsets.length;
     const observedConfidence = totalStationCount > 0
       ? observedStationCount / totalStationCount

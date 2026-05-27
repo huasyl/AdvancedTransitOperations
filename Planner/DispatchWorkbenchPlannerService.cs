@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace RapidTransitMod.Planner
 {
@@ -13,6 +15,7 @@ namespace RapidTransitMod.Planner
         private readonly BypassCandidateEvaluator m_BypassEvaluator = new BypassCandidateEvaluator();
         private readonly ScheduleActionSearch m_Search = new ScheduleActionSearch();
         private readonly PlanScorer m_Scorer = new PlanScorer();
+        private readonly SharedCorridorCapacityDiagnosticService m_CapacityDiagnosticService = new SharedCorridorCapacityDiagnosticService();
         private readonly PlannerResultProjector m_Projector = new PlannerResultProjector();
 
         public DepartureControlSystem.DispatchPlannerResult Execute(
@@ -40,6 +43,10 @@ namespace RapidTransitMod.Planner
             {
                 return m_Projector.Project(state);
             }
+            state.BaselineCapacityDiagnostic = m_CapacityDiagnosticService.Analyze(
+                context,
+                state.RuntimeCatalog,
+                baseWorkingRows);
 
             List<int> offsetVariants = BuildExpressOffsetVariants(context);
             List<string[]> stationSets = BuildVirtualBypassStationSets(context, state.PursuitTrunks);
@@ -48,64 +55,114 @@ namespace RapidTransitMod.Planner
                 stationSets.Add(new string[0]);
             }
 
-            List<PlannerPlanModel> candidatePlans = new List<PlannerPlanModel>();
-            for (int offsetIndex = 0; offsetIndex < offsetVariants.Count; offsetIndex++)
+            PlannerBestPlanCollector bestPlans = new PlannerBestPlanCollector();
+            Parallel.ForEach(Enumerable.Range(0, offsetVariants.Count), CreatePlannerParallelOptions(), offsetIndex =>
             {
                 int offsetMinutes = offsetVariants[offsetIndex];
-                context.ActiveExpressOffsetMinutes = offsetMinutes;
-                List<PlannerWorkingRow> offsetWorkingRows = BuildOffsetWorkingRows(context, baseWorkingRows, offsetMinutes);
+                PlannerContext searchContext = ClonePlannerContext(context);
+                searchContext.ActiveExpressOffsetMinutes = offsetMinutes;
+                CatchupDetector catchupDetector = new CatchupDetector();
+                OptimizationRegionBuilder regionBuilder = new OptimizationRegionBuilder();
+                BypassCandidateEvaluator bypassEvaluator = new BypassCandidateEvaluator();
+                ScheduleActionSearch search = new ScheduleActionSearch();
+                PlanScorer scorer = new PlanScorer();
+                List<PlannerValidationIssue> diagnostics = new List<PlannerValidationIssue>(state.Diagnostics);
+                Dictionary<string, PlannerSearchEvaluation> evaluationCache = new Dictionary<string, PlannerSearchEvaluation>(StringComparer.Ordinal);
+                List<PlannerWorkingRow> offsetWorkingRows = BuildOffsetWorkingRows(searchContext, baseWorkingRows, offsetMinutes);
+                List<PlannerWorkingRow> repairedOffsetWorkingRows = TryRepairOriginDepartureGaps(
+                    searchContext,
+                    state.RuntimeCatalog,
+                    baseWorkingRows,
+                    offsetWorkingRows);
+                if (repairedOffsetWorkingRows == null)
+                {
+                    return;
+                }
                 for (int stationSetIndex = 0; stationSetIndex < stationSets.Count; stationSetIndex++)
                 {
-                    context.ActiveVirtualBypassStationIds = stationSets[stationSetIndex];
-                    context.WorkingRows = offsetWorkingRows;
-                    List<PlannerCatchupEvent> catchupEvents = m_CatchupDetector.Detect(context, state.RuntimeCatalog, state.PursuitTrunks);
-                    List<PlannerRiskCluster> riskClusters = m_RegionBuilder.BuildRiskClusters(context, catchupEvents);
-                    m_BypassEvaluator.Enrich(riskClusters, context);
-                    List<PlannerPlanModel> plans = m_Search.BuildInitialPlans(
-                        context,
-                        riskClusters,
-                        catchupEvents,
-                        state.Diagnostics,
+                    searchContext.ActiveVirtualBypassStationIds = stationSets[stationSetIndex];
+                    searchContext.WorkingRows = CloneWorkingRows(repairedOffsetWorkingRows);
+                    PlannerSearchEvaluation evaluation = GetOrCreateSearchEvaluation(
+                        evaluationCache,
+                        searchContext,
+                        state.RuntimeCatalog,
+                        state.PursuitTrunks,
+                        catchupDetector,
+                        regionBuilder,
+                        bypassEvaluator,
+                        stationSets[stationSetIndex]);
+                    List<PlannerPlanModel> plans = search.BuildInitialPlans(
+                        searchContext,
+                        evaluation.RiskClusters,
+                        evaluation.CatchupEvents,
+                        diagnostics,
                         state.RuntimeCatalog,
                         stationSets[stationSetIndex],
                         offsetMinutes,
                         string.Empty,
                         baseWorkingRows);
-                    candidatePlans.AddRange(plans);
+                    AddCandidatePlans(bestPlans, plans, scorer);
                     if (offsetIndex == 0 && stationSetIndex == 0)
                     {
-                        state.CatchupEvents = catchupEvents;
-                        state.RiskClusters = riskClusters;
-                        state.OptimizationRegions = m_RegionBuilder.BuildOptimizationRegions(riskClusters);
-                        state.Trips = m_CatchupDetector.BuildTrips(context, state.RuntimeCatalog);
+                        lock (state)
+                        {
+                            state.CatchupEvents = evaluation.CatchupEvents;
+                            state.RiskClusters = evaluation.RiskClusters;
+                            state.OptimizationRegions = regionBuilder.BuildOptimizationRegions(evaluation.RiskClusters);
+                            state.Trips = catchupDetector.BuildTrips(searchContext, state.RuntimeCatalog);
+                        }
                     }
 
-                    List<PlannerRetimeVariant> retimeVariants = BuildLocalRetimeVariants(context, offsetWorkingRows, catchupEvents);
+                    List<PlannerRetimeVariant> retimeVariants = BuildTripRetimeVariants(searchContext, searchContext.WorkingRows, evaluation.CatchupEvents);
                     for (int retimeIndex = 0; retimeIndex < retimeVariants.Count; retimeIndex++)
                     {
                         PlannerRetimeVariant retimeVariant = retimeVariants[retimeIndex];
-                        context.WorkingRows = retimeVariant.Rows;
-                        List<PlannerCatchupEvent> retimedCatchupEvents = m_CatchupDetector.Detect(context, state.RuntimeCatalog, state.PursuitTrunks);
-                        List<PlannerRiskCluster> retimedRiskClusters = m_RegionBuilder.BuildRiskClusters(context, retimedCatchupEvents);
-                        m_BypassEvaluator.Enrich(retimedRiskClusters, context);
-                        candidatePlans.AddRange(m_Search.BuildInitialPlans(
-                            context,
-                            retimedRiskClusters,
-                            retimedCatchupEvents,
-                            state.Diagnostics,
+                        List<PlannerWorkingRow> repairedRetimeRows = TryRepairOriginDepartureGaps(
+                            searchContext,
+                            state.RuntimeCatalog,
+                            baseWorkingRows,
+                            retimeVariant.Rows);
+                        if (repairedRetimeRows == null)
+                        {
+                            continue;
+                        }
+
+                        searchContext.WorkingRows = repairedRetimeRows;
+                        PlannerSearchEvaluation retimedEvaluation = GetOrCreateSearchEvaluation(
+                            evaluationCache,
+                            searchContext,
+                            state.RuntimeCatalog,
+                            state.PursuitTrunks,
+                            catchupDetector,
+                            regionBuilder,
+                            bypassEvaluator,
+                            stationSets[stationSetIndex]);
+                        AddCandidatePlans(bestPlans, search.BuildInitialPlans(
+                            searchContext,
+                            retimedEvaluation.RiskClusters,
+                            retimedEvaluation.CatchupEvents,
+                            diagnostics,
                             state.RuntimeCatalog,
                             stationSets[stationSetIndex],
                             offsetMinutes,
                             retimeVariant.Key,
-                            baseWorkingRows));
+                            baseWorkingRows),
+                            scorer);
                     }
                 }
-            }
-            for (int i = 0; i < candidatePlans.Count; i++)
+            });
+            state.Plans = bestPlans.ToSelectedPlans();
+            for (int planIndex = 0; planIndex < state.Plans.Count; planIndex++)
             {
-                m_Scorer.Apply(candidatePlans[i]);
+                PlannerPlanModel plan = state.Plans[planIndex];
+                List<PlannerWorkingRow> capacityRows = plan.AdjustedRows != null && plan.AdjustedRows.Count > 0
+                    ? plan.AdjustedRows
+                    : baseWorkingRows;
+                plan.CapacityDiagnostic = m_CapacityDiagnosticService.Analyze(
+                    context,
+                    state.RuntimeCatalog,
+                    capacityRows);
             }
-            state.Plans = SelectBestPlansByObjective(candidatePlans);
 
             if (state.Diagnostics.Count == 0)
             {
@@ -118,12 +175,151 @@ namespace RapidTransitMod.Planner
             return m_Projector.Project(state);
         }
 
+        private static ParallelOptions CreatePlannerParallelOptions()
+        {
+            int workerCount = Math.Max(1, Environment.ProcessorCount - 1);
+            return new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Min(workerCount, 4)
+            };
+        }
+
+        private static void AddCandidatePlans(
+            PlannerBestPlanCollector bestPlans,
+            IEnumerable<PlannerPlanModel> plans,
+            PlanScorer scorer)
+        {
+            if (bestPlans == null || plans == null || scorer == null)
+            {
+                return;
+            }
+
+            foreach (PlannerPlanModel plan in plans)
+            {
+                if (plan != null)
+                {
+                    scorer.Apply(plan);
+                    bestPlans.Add(plan);
+                }
+            }
+        }
+
+        private static PlannerContext ClonePlannerContext(PlannerContext source)
+        {
+            return new PlannerContext
+            {
+                Snapshot = source.Snapshot,
+                Request = source.Request,
+                SelectedDraft = source.SelectedDraft,
+                SelectedLineIds = CloneStringArray(source.SelectedLineIds),
+                EffectiveLineIds = CloneStringArray(source.EffectiveLineIds),
+                AutoFixedConstraintLineIds = CloneStringArray(source.AutoFixedConstraintLineIds),
+                SuppressedFixedVsFixedClusterCount = source.SuppressedFixedVsFixedClusterCount,
+                AdjustableLineIds = CloneStringArray(source.AdjustableLineIds),
+                FixedLineIds = CloneStringArray(source.FixedLineIds),
+                TargetLineIds = CloneStringArray(source.TargetLineIds),
+                ActiveVirtualBypassStationIds = CloneStringArray(source.ActiveVirtualBypassStationIds),
+                ActiveExpressOffsetMinutes = source.ActiveExpressOffsetMinutes,
+                SelectedLocalLineIds = CloneStringArray(source.SelectedLocalLineIds),
+                SelectedExpressLineIds = CloneStringArray(source.SelectedExpressLineIds),
+                VirtualExpressLineId = source.VirtualExpressLineId,
+                SelectedExpressStopStationIds = CloneStringArray(source.SelectedExpressStopStationIds),
+                ForcedBypassStationIds = CloneStringArray(source.ForcedBypassStationIds),
+                WindowStart = source.WindowStart,
+                WindowEnd = source.WindowEnd,
+                WindowStartMinute = source.WindowStartMinute,
+                WindowEndMinute = source.WindowEndMinute,
+                ExpressSourceMode = source.ExpressSourceMode,
+                DepartureMode = source.DepartureMode,
+                VirtualExpressBaseLineId = source.VirtualExpressBaseLineId,
+                LinesById = source.LinesById,
+                StationsById = source.StationsById,
+                StationsByLineId = source.StationsByLineId,
+                SegmentsByLineId = source.SegmentsByLineId,
+                LineTracksByLineId = source.LineTracksByLineId,
+                StopDwellByStationId = source.StopDwellByStationId,
+                StationRuntimeByLinePair = source.StationRuntimeByLinePair,
+                ConfiguredBypassStationsByLineId = source.ConfiguredBypassStationsByLineId,
+                CandidateBypassStationsByLineId = source.CandidateBypassStationsByLineId,
+                WorkingRows = CloneWorkingRows(source.WorkingRows),
+                ValidationIssues = new List<PlannerValidationIssue>(source.ValidationIssues)
+            };
+        }
+
+        private static string[] CloneStringArray(string[] source)
+        {
+            return source == null ? new string[0] : source.ToArray();
+        }
+
+        private static PlannerSearchEvaluation GetOrCreateSearchEvaluation(
+            Dictionary<string, PlannerSearchEvaluation> evaluationCache,
+            PlannerContext context,
+            PlannerRuntimeCatalog runtimeCatalog,
+            List<PursuitTrunk> pursuitTrunks,
+            CatchupDetector catchupDetector,
+            OptimizationRegionBuilder regionBuilder,
+            BypassCandidateEvaluator bypassEvaluator,
+            string[] stationSet)
+        {
+            string key = BuildSearchEvaluationKey(stationSet, context.WorkingRows);
+            if (evaluationCache != null && evaluationCache.TryGetValue(key, out PlannerSearchEvaluation cached))
+            {
+                return cached;
+            }
+
+            List<PlannerCatchupEvent> catchupEvents = catchupDetector.Detect(context, runtimeCatalog, pursuitTrunks);
+            List<PlannerRiskCluster> riskClusters = regionBuilder.BuildRiskClusters(context, catchupEvents);
+            bypassEvaluator.Enrich(riskClusters, context);
+            PlannerSearchEvaluation evaluation = new PlannerSearchEvaluation
+            {
+                CatchupEvents = catchupEvents,
+                RiskClusters = riskClusters
+            };
+            if (evaluationCache != null)
+            {
+                evaluationCache[key] = evaluation;
+            }
+            return evaluation;
+        }
+
+        private static string BuildSearchEvaluationKey(string[] stationSet, IEnumerable<PlannerWorkingRow> rows)
+        {
+            return BuildStationSetKey(stationSet) + "||" + BuildWorkingRowsSignature(rows);
+        }
+
+        private static string BuildStationSetKey(string[] stationSet)
+        {
+            return string.Join("+", (stationSet ?? new string[0])
+                .Where(stationId => !string.IsNullOrEmpty(stationId))
+                .OrderBy(stationId => stationId, StringComparer.Ordinal));
+        }
+
+        private static string BuildWorkingRowsSignature(IEnumerable<PlannerWorkingRow> rows)
+        {
+            return string.Join(";",
+                (rows ?? Array.Empty<PlannerWorkingRow>())
+                    .Where(row => row != null)
+                    .OrderBy(row => row.Minute)
+                    .ThenBy(row => row.LineId, StringComparer.Ordinal)
+                    .ThenBy(row => row.Id, StringComparer.Ordinal)
+                    .Select(row => (row.LineId ?? string.Empty)
+                        + "|" + (row.Id ?? string.Empty)
+                        + "|" + row.Minute.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + "|" + (row.Kind ?? string.Empty)));
+        }
+
         private static int ComparePlans(PlannerPlanModel left, PlannerPlanModel right)
         {
             int infeasibleCompare = GetInfeasibleRank(left).CompareTo(GetInfeasibleRank(right));
             if (infeasibleCompare != 0)
             {
                 return infeasibleCompare;
+            }
+
+            int originGapCompare = HasBlockingOriginDepartureGap(left).CompareTo(HasBlockingOriginDepartureGap(right));
+            if (originGapCompare != 0)
+            {
+                return originGapCompare;
             }
 
             int unresolvedCompare = left.UnresolvedRiskMinutes.CompareTo(right.UnresolvedRiskMinutes);
@@ -182,6 +378,13 @@ namespace RapidTransitMod.Planner
             return string.Equals(status, "infeasible", System.StringComparison.OrdinalIgnoreCase) ? 4 : 2;
         }
 
+        private static bool HasBlockingOriginDepartureGap(PlannerPlanModel plan)
+        {
+            return (plan?.ProblemIssues ?? new List<DepartureControlSystem.DispatchPlannerProblemIssueDto>()).Any(item =>
+                string.Equals(item?.type, "originDepartureGap", System.StringComparison.Ordinal)
+                && string.Equals(item?.severity, "high", System.StringComparison.Ordinal));
+        }
+
         private static List<PlannerPlanModel> SelectBestPlansByObjective(List<PlannerPlanModel> candidatePlans)
         {
             Dictionary<string, List<PlannerPlanModel>> plansByObjective = new Dictionary<string, List<PlannerPlanModel>>(System.StringComparer.Ordinal);
@@ -214,6 +417,46 @@ namespace RapidTransitMod.Planner
             }
 
             return selectedPlans;
+        }
+
+        private sealed class PlannerBestPlanCollector
+        {
+            private readonly object m_Sync = new object();
+            private readonly Dictionary<string, PlannerPlanModel> m_BestByObjective =
+                new Dictionary<string, PlannerPlanModel>(System.StringComparer.Ordinal);
+
+            public void Add(PlannerPlanModel plan)
+            {
+                if (plan == null || string.IsNullOrEmpty(plan.ObjectiveId))
+                {
+                    return;
+                }
+
+                lock (m_Sync)
+                {
+                    if (!m_BestByObjective.TryGetValue(plan.ObjectiveId, out PlannerPlanModel current)
+                        || ComparePlans(plan, current) < 0)
+                    {
+                        m_BestByObjective[plan.ObjectiveId] = plan;
+                    }
+                }
+            }
+
+            public List<PlannerPlanModel> ToSelectedPlans()
+            {
+                lock (m_Sync)
+                {
+                    List<PlannerPlanModel> selectedPlans = new List<PlannerPlanModel>();
+                    foreach (PlannerObjectiveDefinition objective in PlannerDefaults.Objectives)
+                    {
+                        if (m_BestByObjective.TryGetValue(objective.Id, out PlannerPlanModel plan))
+                        {
+                            selectedPlans.Add(plan);
+                        }
+                    }
+                    return selectedPlans;
+                }
+            }
         }
 
         private static string BuildPlanSignature(PlannerPlanModel plan)
@@ -321,28 +564,92 @@ namespace RapidTransitMod.Planner
             return rows;
         }
 
-        private static List<PlannerRetimeVariant> BuildLocalRetimeVariants(
+        private static List<PlannerRetimeVariant> BuildTripRetimeVariants(
             PlannerContext context,
             List<PlannerWorkingRow> baseRows,
             List<PlannerCatchupEvent> catchupEvents)
         {
-            int maxRetimeMinutes = System.Math.Max(0, context.Request.maxLocalRetimeMinutes);
-            if (maxRetimeMinutes <= 0)
+            int maxLocalRetimeMinutes = System.Math.Max(0, context.Request.maxLocalRetimeMinutes);
+            int maxTargetExpressRetimeMinutes = ResolveTargetExpressRetimeBudgetMinutes(context);
+            if (maxLocalRetimeMinutes <= 0 && maxTargetExpressRetimeMinutes <= 0)
             {
                 return new List<PlannerRetimeVariant>();
             }
 
             HashSet<string> adjustableLineIds = new HashSet<string>(context.AdjustableLineIds ?? new string[0], System.StringComparer.Ordinal);
-            Dictionary<string, int> shiftsByTripId = new Dictionary<string, int>(System.StringComparer.Ordinal);
+            HashSet<string> targetLineIds = new HashSet<string>(context.TargetLineIds ?? new string[0], System.StringComparer.Ordinal);
+            Dictionary<string, int> localSuggestedShiftsByTripId = new Dictionary<string, int>(System.StringComparer.Ordinal);
             List<PlannerRetimeVariant> variants = new List<PlannerRetimeVariant>();
             HashSet<string> variantKeys = new HashSet<string>(System.StringComparer.Ordinal);
 
-            List<PlannerCatchupEvent> candidateEvents = (catchupEvents ?? new List<PlannerCatchupEvent>())
-                .Where(item =>
-                    item != null
-                    && !string.IsNullOrEmpty(item.LocalTripId)
-                    && adjustableLineIds.Contains(item.LocalLineId))
-                .ToList();
+            if (maxLocalRetimeMinutes > 0)
+            {
+                List<PlannerCatchupEvent> localCandidateEvents = (catchupEvents ?? new List<PlannerCatchupEvent>())
+                    .Where(item =>
+                        item != null
+                        && !string.IsNullOrEmpty(item.LocalTripId)
+                        && adjustableLineIds.Contains(item.LocalLineId))
+                    .ToList();
+                foreach (PlannerCatchupEvent catchupEvent in BuildOrderedLocalRetimeEvents(localCandidateEvents))
+                {
+                    int deltaMinutes = ResolveRetimeDeltaMinutes(catchupEvent, maxLocalRetimeMinutes);
+                    if (deltaMinutes <= 0)
+                    {
+                        continue;
+                    }
+
+                    AddRetimeVariant(variants, variantKeys, baseRows, catchupEvent.LocalTripId, -deltaMinutes);
+                    AddRetimeVariant(variants, variantKeys, baseRows, catchupEvent.LocalTripId, deltaMinutes);
+
+                    if (!localSuggestedShiftsByTripId.ContainsKey(catchupEvent.LocalTripId))
+                    {
+                        localSuggestedShiftsByTripId[catchupEvent.LocalTripId] = -deltaMinutes;
+                    }
+                }
+            }
+
+            if (maxTargetExpressRetimeMinutes > 0)
+            {
+                List<PlannerCatchupEvent> expressCandidateEvents = (catchupEvents ?? new List<PlannerCatchupEvent>())
+                    .Where(item =>
+                        item != null
+                        && (string.Equals(item.PairRole, "target-adjustable", System.StringComparison.Ordinal)
+                            || string.Equals(item.PairRole, "target-fixed", System.StringComparison.Ordinal))
+                        && !string.IsNullOrEmpty(ResolveTargetExpressTripId(item, targetLineIds)))
+                    .ToList();
+                foreach (PlannerCatchupEvent catchupEvent in BuildOrderedTargetExpressRetimeEvents(expressCandidateEvents, targetLineIds))
+                {
+                    string targetTripId = ResolveTargetExpressTripId(catchupEvent, targetLineIds);
+                    if (string.IsNullOrEmpty(targetTripId))
+                    {
+                        continue;
+                    }
+
+                    int deltaMinutes = ResolveRetimeDeltaMinutes(catchupEvent, maxTargetExpressRetimeMinutes);
+                    if (deltaMinutes <= 0)
+                    {
+                        continue;
+                    }
+
+                    int preferredDirection = ResolveTargetExpressPreferredShiftDirection(catchupEvent, targetLineIds);
+                    AddRetimeVariant(variants, variantKeys, baseRows, targetTripId, preferredDirection * deltaMinutes);
+                    if (deltaMinutes > PlannerDefaults.PursuitCurveSampleStepMinutes)
+                    {
+                        AddRetimeVariant(variants, variantKeys, baseRows, targetTripId, preferredDirection * (deltaMinutes / 2));
+                    }
+                }
+            }
+
+            if (localSuggestedShiftsByTripId.Count > 1)
+            {
+                AddRetimeVariant(variants, variantKeys, baseRows, localSuggestedShiftsByTripId);
+            }
+
+            return variants;
+        }
+
+        private static List<PlannerCatchupEvent> BuildOrderedLocalRetimeEvents(List<PlannerCatchupEvent> candidateEvents)
+        {
             List<PlannerCatchupEvent> orderedEvents = new List<PlannerCatchupEvent>();
             HashSet<string> eventIds = new HashSet<string>(System.StringComparer.Ordinal);
             foreach (PlannerCatchupEvent catchupEvent in candidateEvents
@@ -370,29 +677,115 @@ namespace RapidTransitMod.Planner
                 }
             }
 
-            foreach (PlannerCatchupEvent catchupEvent in orderedEvents)
+            return orderedEvents;
+        }
+
+        private static List<PlannerCatchupEvent> BuildOrderedTargetExpressRetimeEvents(
+            List<PlannerCatchupEvent> candidateEvents,
+            HashSet<string> targetLineIds)
+        {
+            List<PlannerCatchupEvent> orderedEvents = new List<PlannerCatchupEvent>();
+            HashSet<string> eventIds = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (PlannerCatchupEvent catchupEvent in candidateEvents
+                .GroupBy(item => ResolveTargetExpressTripId(item, targetLineIds), System.StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderByDescending(item => item.UnresolvedRiskMinutes + item.RobustnessRiskMinutes)
+                    .ThenByDescending(item => item.RequiredHoldMinutes)
+                    .First()))
             {
-                int deltaMinutes = ResolveRetimeDeltaMinutes(catchupEvent, maxRetimeMinutes);
-                if (deltaMinutes <= 0)
+                if (eventIds.Add(catchupEvent.EventId ?? string.Empty))
                 {
-                    continue;
-                }
-
-                AddRetimeVariant(variants, variantKeys, baseRows, catchupEvent.LocalTripId, -deltaMinutes);
-                AddRetimeVariant(variants, variantKeys, baseRows, catchupEvent.LocalTripId, deltaMinutes);
-
-                if (!shiftsByTripId.ContainsKey(catchupEvent.LocalTripId))
-                {
-                    shiftsByTripId[catchupEvent.LocalTripId] = -deltaMinutes;
+                    orderedEvents.Add(catchupEvent);
                 }
             }
 
-            if (shiftsByTripId.Count > 1)
+            foreach (PlannerCatchupEvent catchupEvent in candidateEvents
+                .OrderByDescending(item => item.UnresolvedRiskMinutes + item.RobustnessRiskMinutes)
+                .ThenByDescending(item => item.RequiredHoldMinutes)
+                .Take(4))
             {
-                AddRetimeVariant(variants, variantKeys, baseRows, shiftsByTripId);
+                if (eventIds.Add(catchupEvent.EventId ?? string.Empty))
+                {
+                    orderedEvents.Add(catchupEvent);
+                }
             }
 
-            return variants;
+            return orderedEvents;
+        }
+
+        private static int ResolveTargetExpressRetimeBudgetMinutes(PlannerContext context)
+        {
+            if (context == null || context.Request == null)
+            {
+                return 0;
+            }
+
+            return System.Math.Max(0, context.Request.maxOffsetMinutes - System.Math.Abs(context.ActiveExpressOffsetMinutes));
+        }
+
+        private static string ResolveTargetExpressTripId(
+            PlannerCatchupEvent catchupEvent,
+            HashSet<string> targetLineIds)
+        {
+            if (catchupEvent == null || targetLineIds == null || targetLineIds.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            string priorityTripId = string.IsNullOrEmpty(catchupEvent.PriorityTripId) ? catchupEvent.ExpressTripId : catchupEvent.PriorityTripId;
+            if (!string.IsNullOrEmpty(priorityTripId)
+                && targetLineIds.Contains(catchupEvent.PriorityLineId ?? string.Empty))
+            {
+                return priorityTripId;
+            }
+
+            string yieldingTripId = string.IsNullOrEmpty(catchupEvent.YieldingTripId) ? catchupEvent.LocalTripId : catchupEvent.YieldingTripId;
+            if (!string.IsNullOrEmpty(yieldingTripId)
+                && targetLineIds.Contains(catchupEvent.YieldingLineId ?? string.Empty))
+            {
+                return yieldingTripId;
+            }
+
+            if (!string.IsNullOrEmpty(catchupEvent.ExpressTripId)
+                && targetLineIds.Contains(catchupEvent.ExpressLineId ?? string.Empty))
+            {
+                return catchupEvent.ExpressTripId;
+            }
+
+            if (!string.IsNullOrEmpty(catchupEvent.LocalTripId)
+                && targetLineIds.Contains(catchupEvent.LocalLineId ?? string.Empty))
+            {
+                return catchupEvent.LocalTripId;
+            }
+
+            return string.Empty;
+        }
+
+        private static int ResolveTargetExpressPreferredShiftDirection(
+            PlannerCatchupEvent catchupEvent,
+            HashSet<string> targetLineIds)
+        {
+            if (catchupEvent == null || targetLineIds == null || targetLineIds.Count == 0)
+            {
+                return 1;
+            }
+
+            if (targetLineIds.Contains(catchupEvent.PriorityLineId ?? string.Empty))
+            {
+                return 1;
+            }
+
+            if (targetLineIds.Contains(catchupEvent.YieldingLineId ?? string.Empty))
+            {
+                return -1;
+            }
+
+            if (targetLineIds.Contains(catchupEvent.ExpressLineId ?? string.Empty))
+            {
+                return 1;
+            }
+
+            return targetLineIds.Contains(catchupEvent.LocalLineId ?? string.Empty) ? -1 : 1;
         }
 
         private static int ResolveRetimeDeltaMinutes(PlannerCatchupEvent catchupEvent, int maxRetimeMinutes)
@@ -478,6 +871,274 @@ namespace RapidTransitMod.Planner
                 Key = key,
                 Rows = rows
             });
+        }
+
+        private static List<PlannerWorkingRow> TryRepairOriginDepartureGaps(
+            PlannerContext context,
+            PlannerRuntimeCatalog runtimeCatalog,
+            List<PlannerWorkingRow> baselineRows,
+            List<PlannerWorkingRow> candidateRows)
+        {
+            List<PlannerWorkingRow> rows = CloneWorkingRows(candidateRows);
+            if (rows.Count <= 1)
+            {
+                return rows;
+            }
+
+            Dictionary<string, PlannerWorkingRow> baselineById = (baselineRows ?? new List<PlannerWorkingRow>())
+                .Where(row => row != null && !string.IsNullOrEmpty(row.Id))
+                .ToDictionary(row => row.Id, System.StringComparer.Ordinal);
+
+            for (int iteration = 0; iteration < 24; iteration++)
+            {
+                PlannerOriginGapIssue issue = FindWorstOriginDepartureGapIssue(rows, runtimeCatalog);
+                if (issue == null)
+                {
+                    return rows;
+                }
+
+                if (!TryResolveOriginDepartureGapIssue(context, baselineById, rows, issue))
+                {
+                    return null;
+                }
+            }
+
+            return FindWorstOriginDepartureGapIssue(rows, runtimeCatalog) == null ? rows : null;
+        }
+
+        private static PlannerOriginGapIssue FindWorstOriginDepartureGapIssue(
+            List<PlannerWorkingRow> rows,
+            PlannerRuntimeCatalog runtimeCatalog)
+        {
+            PlannerOriginGapIssue worst = null;
+            Dictionary<string, List<PlannerWorkingRow>> rowsByOrigin = new Dictionary<string, List<PlannerWorkingRow>>(System.StringComparer.Ordinal);
+            foreach (PlannerWorkingRow row in rows ?? new List<PlannerWorkingRow>())
+            {
+                if (row == null
+                    || string.IsNullOrEmpty(row.LineId)
+                    || runtimeCatalog == null
+                    || !runtimeCatalog.ModelsByLineId.TryGetValue(row.LineId, out PlannerLineRuntimeModel model))
+                {
+                    continue;
+                }
+
+                string originStationId = model.Line?.originStationId ?? string.Empty;
+                if (string.IsNullOrEmpty(originStationId))
+                {
+                    continue;
+                }
+
+                if (!rowsByOrigin.TryGetValue(originStationId, out List<PlannerWorkingRow> departures))
+                {
+                    departures = new List<PlannerWorkingRow>();
+                    rowsByOrigin[originStationId] = departures;
+                }
+                departures.Add(row);
+            }
+
+            foreach (KeyValuePair<string, List<PlannerWorkingRow>> entry in rowsByOrigin)
+            {
+                PlannerWorkingRow[] ordered = entry.Value
+                    .OrderBy(item => item.Minute)
+                    .ThenBy(item => item.LineId, System.StringComparer.Ordinal)
+                    .ThenBy(item => item.Id, System.StringComparer.Ordinal)
+                    .ToArray();
+                for (int i = 1; i < ordered.Length; i++)
+                {
+                    worst = SelectWorseOriginGapIssue(worst, BuildOriginGapIssue(entry.Key, ordered[i - 1], ordered[i]));
+                }
+                if (ordered.Length > 1 && ordered[0].Minute != ordered[ordered.Length - 1].Minute)
+                {
+                    worst = SelectWorseOriginGapIssue(worst, BuildOriginGapIssue(entry.Key, ordered[ordered.Length - 1], ordered[0]));
+                }
+            }
+
+            return worst;
+        }
+
+        private static PlannerOriginGapIssue BuildOriginGapIssue(
+            string originStationId,
+            PlannerWorkingRow previousRow,
+            PlannerWorkingRow nextRow)
+        {
+            int gapMinutes = GetForwardMinuteGap(previousRow.Minute, nextRow.Minute);
+            if (gapMinutes >= PlannerDefaults.DefaultMinDepartureGapMinutes)
+            {
+                return null;
+            }
+
+            return new PlannerOriginGapIssue
+            {
+                OriginStationId = originStationId ?? string.Empty,
+                PreviousRowId = previousRow.Id ?? string.Empty,
+                NextRowId = nextRow.Id ?? string.Empty,
+                GapMinutes = gapMinutes,
+                DeficitMinutes = PlannerDefaults.DefaultMinDepartureGapMinutes - gapMinutes
+            };
+        }
+
+        private static PlannerOriginGapIssue SelectWorseOriginGapIssue(
+            PlannerOriginGapIssue current,
+            PlannerOriginGapIssue candidate)
+        {
+            if (candidate == null)
+            {
+                return current;
+            }
+
+            if (current == null)
+            {
+                return candidate;
+            }
+
+            if (candidate.DeficitMinutes != current.DeficitMinutes)
+            {
+                return candidate.DeficitMinutes > current.DeficitMinutes ? candidate : current;
+            }
+
+            return string.Compare(candidate.NextRowId, current.NextRowId, System.StringComparison.Ordinal) < 0
+                ? candidate
+                : current;
+        }
+
+        private static bool TryResolveOriginDepartureGapIssue(
+            PlannerContext context,
+            Dictionary<string, PlannerWorkingRow> baselineById,
+            List<PlannerWorkingRow> rows,
+            PlannerOriginGapIssue issue)
+        {
+            if (context == null
+                || baselineById == null
+                || rows == null
+                || issue == null)
+            {
+                return false;
+            }
+
+            Dictionary<string, PlannerWorkingRow> rowsById = rows
+                .Where(row => row != null && !string.IsNullOrEmpty(row.Id))
+                .ToDictionary(row => row.Id, System.StringComparer.Ordinal);
+            if (!rowsById.TryGetValue(issue.PreviousRowId, out PlannerWorkingRow previousRow)
+                || !rowsById.TryGetValue(issue.NextRowId, out PlannerWorkingRow nextRow)
+                || !baselineById.TryGetValue(issue.PreviousRowId, out PlannerWorkingRow previousBaseline)
+                || !baselineById.TryGetValue(issue.NextRowId, out PlannerWorkingRow nextBaseline))
+            {
+                return false;
+            }
+
+            ResolveAllowedMinuteBounds(context, previousRow, previousBaseline, out int previousMinMinute, out _);
+            ResolveAllowedMinuteBounds(context, nextRow, nextBaseline, out _, out int nextMaxMinute);
+
+            int previousEarlierCapacity = System.Math.Max(0, previousRow.Minute - previousMinMinute);
+            int nextLaterCapacity = System.Math.Max(0, nextMaxMinute - nextRow.Minute);
+            int requiredMinutes = issue.DeficitMinutes;
+
+            if (ApplyOriginGapRepair(previousRow, previousEarlierCapacity, nextRow, nextLaterCapacity, requiredMinutes, preferMoveNextLater: true))
+            {
+                return true;
+            }
+
+            return ApplyOriginGapRepair(previousRow, previousEarlierCapacity, nextRow, nextLaterCapacity, requiredMinutes, preferMoveNextLater: false);
+        }
+
+        private static void ResolveAllowedMinuteBounds(
+            PlannerContext context,
+            PlannerWorkingRow row,
+            PlannerWorkingRow baselineRow,
+            out int minMinute,
+            out int maxMinute)
+        {
+            int minute = baselineRow?.Minute ?? row?.Minute ?? 0;
+            if (row == null || baselineRow == null)
+            {
+                minMinute = minute;
+                maxMinute = minute;
+                return;
+            }
+
+            bool isTargetExpress = string.Equals(row.Kind, "express", System.StringComparison.OrdinalIgnoreCase)
+                && (context?.TargetLineIds ?? new string[0]).Contains(row.LineId ?? string.Empty);
+            if (isTargetExpress)
+            {
+                int budget = System.Math.Max(0, context?.Request?.maxOffsetMinutes ?? 0);
+                minMinute = System.Math.Max(0, minute - budget);
+                maxMinute = System.Math.Min(1439, minute + budget);
+                return;
+            }
+
+            bool isAdjustableLocal = (context?.AdjustableLineIds ?? new string[0]).Contains(row.LineId ?? string.Empty);
+            if (isAdjustableLocal)
+            {
+                int budget = System.Math.Max(0, context?.Request?.maxLocalRetimeMinutes ?? 0);
+                minMinute = System.Math.Max(0, minute - budget);
+                maxMinute = System.Math.Min(1439, minute + budget);
+                return;
+            }
+
+            minMinute = minute;
+            maxMinute = minute;
+        }
+
+        private static bool ApplyOriginGapRepair(
+            PlannerWorkingRow previousRow,
+            int previousEarlierCapacity,
+            PlannerWorkingRow nextRow,
+            int nextLaterCapacity,
+            int requiredMinutes,
+            bool preferMoveNextLater)
+        {
+            int moveNext = 0;
+            int movePrevious = 0;
+            if (preferMoveNextLater)
+            {
+                moveNext = System.Math.Min(nextLaterCapacity, requiredMinutes);
+                movePrevious = System.Math.Min(previousEarlierCapacity, System.Math.Max(0, requiredMinutes - moveNext));
+            }
+            else
+            {
+                movePrevious = System.Math.Min(previousEarlierCapacity, requiredMinutes);
+                moveNext = System.Math.Min(nextLaterCapacity, System.Math.Max(0, requiredMinutes - movePrevious));
+            }
+
+            if (moveNext + movePrevious < requiredMinutes)
+            {
+                return false;
+            }
+
+            if (movePrevious > 0)
+            {
+                previousRow.Minute -= movePrevious;
+            }
+            if (moveNext > 0)
+            {
+                nextRow.Minute += moveNext;
+            }
+            return true;
+        }
+
+        private static int GetForwardMinuteGap(int previousMinutes, int nextMinutes)
+        {
+            const int dayMinutes = 24 * 60;
+            int previous = ((previousMinutes % dayMinutes) + dayMinutes) % dayMinutes;
+            int next = ((nextMinutes % dayMinutes) + dayMinutes) % dayMinutes;
+            return next >= previous
+                ? next - previous
+                : dayMinutes - previous + next;
+        }
+
+        private static List<PlannerWorkingRow> CloneWorkingRows(IEnumerable<PlannerWorkingRow> rows)
+        {
+            return (rows ?? System.Array.Empty<PlannerWorkingRow>())
+                .Select(row => new PlannerWorkingRow
+                {
+                    Id = row.Id,
+                    LineId = row.LineId,
+                    Kind = row.Kind,
+                    Minute = row.Minute,
+                    Source = row.Source,
+                    Note = row.Note
+                })
+                .ToList();
         }
 
         private static string BuildRetimeVariantKey(Dictionary<string, int> shiftsByTripId)
@@ -776,6 +1437,21 @@ namespace RapidTransitMod.Planner
                 }
             }
             sets.Add(merged);
+        }
+
+        private sealed class PlannerOriginGapIssue
+        {
+            public string OriginStationId = string.Empty;
+            public string PreviousRowId = string.Empty;
+            public string NextRowId = string.Empty;
+            public int GapMinutes = 0;
+            public int DeficitMinutes = 0;
+        }
+
+        private sealed class PlannerSearchEvaluation
+        {
+            public List<PlannerCatchupEvent> CatchupEvents = new List<PlannerCatchupEvent>();
+            public List<PlannerRiskCluster> RiskClusters = new List<PlannerRiskCluster>();
         }
 
         private sealed class PlannerRetimeVariant

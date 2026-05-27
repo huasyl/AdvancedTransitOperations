@@ -26,6 +26,9 @@ async function readJsonResponse(response, fallbackValue) {
 function installPlannerLabEngine() {
   window.__RT_PLANNER_LAB__ = true;
   window.__RT_NATIVE_SCHEDULE_LOCALE__ = "zh-CN";
+  document.documentElement.style.backgroundColor = "#0a1013";
+  document.body.style.backgroundColor = "#0a1013";
+  document.body.style.margin = "0";
   window.engine = {
     async call(name, payload) {
       if (name === CALLS.loadPlannerContext) {
@@ -53,7 +56,7 @@ function installPlannerLabEngine() {
 function PlannerLabApp() {
   return (
     <NativeScheduleI18nProvider>
-      <div className="dw-native-schedule-root dw-native-workbench-root">
+      <div className="dw-native-schedule-root dw-native-workbench-root" data-planner-lab="true">
         <PlannerWorkbenchPage pageEnterSequence={1} />
       </div>
     </NativeScheduleI18nProvider>

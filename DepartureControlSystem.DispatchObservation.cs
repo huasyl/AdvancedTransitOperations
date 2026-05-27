@@ -730,15 +730,105 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct StationStopDwellAnchor
+        {
+            public readonly string StationAnchorId;
+            public readonly Entity AnchorEntity;
+            public readonly Entity StopEntity;
+            public readonly Entity BuildingEntity;
+
+            public StationStopDwellAnchor(string stationAnchorId, Entity anchorEntity, Entity stopEntity, Entity buildingEntity)
+            {
+                StationAnchorId = stationAnchorId ?? string.Empty;
+                AnchorEntity = anchorEntity;
+                StopEntity = stopEntity;
+                BuildingEntity = buildingEntity;
+            }
+        }
+
+        private bool TryResolveStationStopDwellAnchor(Entity line, int waypointIndex, out StationStopDwellAnchor anchor)
+        {
+            anchor = default;
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || waypointIndex < 0
+                || !EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypointIndex >= waypoints.Length)
+                return false;
+
+            Entity waypoint = waypoints[waypointIndex].m_Waypoint;
+            Entity stopEntity = ResolveWorkbenchStopEntity(waypoint);
+            if (stopEntity == Entity.Null)
+                return false;
+
+            Entity anchorEntity = ResolveStationAnchor(waypoint);
+            if (anchorEntity == Entity.Null)
+                anchorEntity = ResolveStationAnchorFromStop(stopEntity);
+            if (anchorEntity == Entity.Null)
+                return false;
+
+            string stationAnchorId = EnsureStationAnchorKey(anchorEntity);
+            if (string.IsNullOrWhiteSpace(stationAnchorId) || !IsStationAnchorKeyId(stationAnchorId))
+                return false;
+
+            Entity buildingEntity = FindTransportStationFromStop(stopEntity);
+            if (buildingEntity == Entity.Null)
+                buildingEntity = ResolvePassingStationBuilding(stopEntity);
+
+            anchor = new StationStopDwellAnchor(stationAnchorId, anchorEntity, stopEntity, buildingEntity);
+            return true;
+        }
+
+        private string MakeStationStopDwellObservationKey(Entity line, string stationAnchorId)
+        {
+            if (string.IsNullOrWhiteSpace(stationAnchorId) || !IsStationAnchorKeyId(stationAnchorId))
+                return string.Empty;
+
+            string lineId = GetWorkbenchLineId(line);
+            if (string.IsNullOrWhiteSpace(lineId))
+                lineId = line != Entity.Null ? "entity:" + line.Index.ToString() : string.Empty;
+            if (string.IsNullOrWhiteSpace(lineId))
+                return string.Empty;
+
+            return lineId + "|" + stationAnchorId;
+        }
+
+        private static bool IsStationStopDwellObservationKey(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            int separatorIndex = value.IndexOf('|');
+            return separatorIndex > 0
+                && separatorIndex + 1 < value.Length
+                && IsStationAnchorKeyId(value.Substring(separatorIndex + 1));
+        }
+
         private bool TryGetObservedWaypointStopFrames(Entity line, int waypointIndex, out float dwellFrames)
         {
             dwellFrames = 0f;
             if (line == Entity.Null || waypointIndex < 0)
                 return false;
 
-            return m_WaypointStopDwellObservations.TryGetValue(MakeLineWaypointStopObservationKey(line, waypointIndex), out StopDwellObservation observation)
-                && observation.AverageFrames > 0f
-                && (dwellFrames = observation.AverageFrames) > 0f;
+            if (TryResolveStationStopDwellAnchor(line, waypointIndex, out StationStopDwellAnchor anchor))
+            {
+                string observationKey = MakeStationStopDwellObservationKey(line, anchor.StationAnchorId);
+                if (!string.IsNullOrWhiteSpace(observationKey)
+                    && m_StationStopDwellObservations.TryGetValue(observationKey, out StationStopDwellObservation anchorObservation)
+                    && anchorObservation.AverageFrames > 0f
+                    && anchorObservation.SampleCount > 0)
+                {
+                    dwellFrames = anchorObservation.AverageFrames;
+                    return dwellFrames > 0f;
+                }
+            }
+
+            return false;
         }
 
         private bool TryEstimateRemainingBoardingDwellFrames(
@@ -828,30 +918,158 @@ namespace RapidTransitMod
             if (sampleMinutes <= 0f || sampleMinutes > maxObservedMinutes)
                 return;
 
-            ulong key = MakeLineWaypointStopObservationKey(line, waypointIndex);
-            if (m_WaypointStopDwellObservations.TryGetValue(key, out StopDwellObservation existing))
+            RecordStationStopDwellObservation(line, waypointIndex, sampleFrames, nowFrame, sampleMinutes);
+            InvalidateTrackTimingForLine(line);
+        }
+
+        private void RecordStationStopDwellObservation(
+            Entity line,
+            int waypointIndex,
+            float sampleFrames,
+            uint nowFrame,
+            float sampleMinutes)
+        {
+            m_StationAnchorDiagAcceptedSamples++;
+            bool suspiciousOriginOrTerminal = IsSuspiciousOriginOrTerminalStationStopDwellSample(line, waypointIndex);
+            if (suspiciousOriginOrTerminal)
             {
-                int sampleCount = math.min(existing.SampleCount + 1, 8);
-                float averageFrames = existing.SampleCount <= 0
-                    ? sampleFrames
-                    : ((existing.AverageFrames * existing.SampleCount) + sampleFrames) / (existing.SampleCount + 1);
-                m_WaypointStopDwellObservations[key] = new StopDwellObservation
-                {
-                    AverageFrames = averageFrames,
-                    SampleCount = sampleCount
-                };
-                FlushStopDwellObservation(line, waypointIndex, m_WaypointStopDwellObservations[key]);
-                InvalidateTrackTimingForLine(line);
+                m_StationAnchorDiagSuspiciousOriginOrTerminal++;
+                m_StationAnchorDiagTotalSuspiciousOriginOrTerminal++;
+            }
+            if (sampleMinutes > EARLY_STOP_DWELL_CLOSE_MAX_MINUTES)
+            {
+                m_StationAnchorDiagSuspiciousLongDwell++;
+                m_StationAnchorDiagTotalSuspiciousLongDwell++;
+            }
+
+            if (!TryResolveStationStopDwellAnchor(line, waypointIndex, out StationStopDwellAnchor anchor))
+            {
+                m_StationAnchorDiagAnchorMissing++;
+                m_StationAnchorDiagTotalAnchorMissing++;
+                MaybeLogStationAnchorObservationDiagnostics(nowFrame);
                 return;
             }
 
-            m_WaypointStopDwellObservations[key] = new StopDwellObservation
+            if (suspiciousOriginOrTerminal)
+            {
+                m_StationAnchorDiagAnchorRejectedOriginOrTerminal++;
+                m_StationAnchorDiagTotalAnchorRejectedOriginOrTerminal++;
+                MaybeLogStationAnchorObservationDiagnostics(nowFrame);
+                return;
+            }
+
+            string observationKey = MakeStationStopDwellObservationKey(line, anchor.StationAnchorId);
+            if (string.IsNullOrWhiteSpace(observationKey))
+            {
+                m_StationAnchorDiagAnchorMissing++;
+                m_StationAnchorDiagTotalAnchorMissing++;
+                MaybeLogStationAnchorObservationDiagnostics(nowFrame);
+                return;
+            }
+
+            if (m_StationStopDwellObservations.TryGetValue(observationKey, out StationStopDwellObservation existing))
+            {
+                int sampleCount = math.min(existing.SampleCount + 1, 32);
+                float averageFrames = existing.SampleCount <= 0
+                    ? sampleFrames
+                    : ((existing.AverageFrames * existing.SampleCount) + sampleFrames) / (existing.SampleCount + 1);
+                StationStopDwellObservation updated = new StationStopDwellObservation
+                {
+                    AverageFrames = averageFrames,
+                    SampleCount = sampleCount,
+                    LastObservedFrame = nowFrame
+                };
+                m_StationStopDwellObservations[observationKey] = updated;
+                FlushStationStopDwellObservation(observationKey, updated);
+                m_StationAnchorDiagAnchorWritten++;
+                MaybeLogStationAnchorObservationDiagnostics(nowFrame);
+                return;
+            }
+
+            StationStopDwellObservation created = new StationStopDwellObservation
             {
                 AverageFrames = sampleFrames,
-                SampleCount = 1
+                SampleCount = 1,
+                LastObservedFrame = nowFrame
             };
-            FlushStopDwellObservation(line, waypointIndex, m_WaypointStopDwellObservations[key]);
-            InvalidateTrackTimingForLine(line);
+            m_StationStopDwellObservations[observationKey] = created;
+            FlushStationStopDwellObservation(observationKey, created);
+            m_StationAnchorDiagAnchorWritten++;
+            MaybeLogStationAnchorObservationDiagnostics(nowFrame);
+        }
+
+        private bool IsSuspiciousOriginOrTerminalStationStopDwellSample(Entity line, int waypointIndex)
+        {
+            if (line == Entity.Null || waypointIndex < 0 || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+
+            return waypointIndex == 0;
+        }
+
+        private void MaybeLogStationAnchorObservationDiagnostics(uint nowFrame)
+        {
+            if (m_StationAnchorObservationDiagLastLogFrame != 0
+                && nowFrame - m_StationAnchorObservationDiagLastLogFrame < STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES)
+            {
+                return;
+            }
+
+            if (m_StationAnchorDiagAcceptedSamples == 0
+                && m_StationAnchorDiagLegacyWritten == 0
+                && m_StationAnchorDiagAnchorWritten == 0
+                && m_StationAnchorDiagAnchorMissing == 0)
+            {
+                m_StationAnchorObservationDiagLastLogFrame = nowFrame;
+                return;
+            }
+
+            StationAnchorObservationSummaryDto coverage = BuildStationAnchorObservationDiagnostics().summary;
+            log.Info("[StationAnchorDiag] intervalFrames=" + STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
+                + " lines=" + coverage.lineCount
+                + " stopWaypoints=" + coverage.stopWaypointCount
+                + " anchorResolved=" + coverage.anchorResolvedCount
+                + " anchorMissing=" + coverage.anchorMissingCount
+                + " uniqueAnchors=" + coverage.uniqueAnchorCount
+                + " duplicateAnchorOccurrences=" + coverage.duplicateAnchorOccurrenceCount);
+
+            log.Info("[StopDwellAnchorDiag] intervalFrames=" + STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
+                + " accepted=" + m_StationAnchorDiagAcceptedSamples
+                + " legacyWritten=" + m_StationAnchorDiagLegacyWritten
+                + " anchorWritten=" + m_StationAnchorDiagAnchorWritten
+                + " anchorMissing=" + m_StationAnchorDiagAnchorMissing
+                + " anchorRejectedOriginOrTerminal=" + m_StationAnchorDiagAnchorRejectedOriginOrTerminal
+                + " uniqueAnchors=" + m_StationStopDwellObservations.Count
+                + " suspiciousOriginOrTerminal=" + m_StationAnchorDiagSuspiciousOriginOrTerminal
+                + " suspiciousLongDwell=" + m_StationAnchorDiagSuspiciousLongDwell);
+
+            m_StationAnchorObservationDiagLastLogFrame = nowFrame;
+            m_StationAnchorDiagAcceptedSamples = 0;
+            m_StationAnchorDiagLegacyWritten = 0;
+            m_StationAnchorDiagAnchorWritten = 0;
+            m_StationAnchorDiagAnchorMissing = 0;
+            m_StationAnchorDiagAnchorRejectedOriginOrTerminal = 0;
+            m_StationAnchorDiagSuspiciousOriginOrTerminal = 0;
+            m_StationAnchorDiagSuspiciousLongDwell = 0;
+        }
+
+        private void ClearStationAnchorObservationDiagnosticsState()
+        {
+            m_LastStationStopDwellLegacyBufferCount = 0;
+            m_LastStationStopDwellLegacyRestoredCount = 0;
+            m_LastStationStopDwellAnchorBufferCount = 0;
+            m_LastStationStopDwellAnchorRestoredCount = 0;
+            m_StationAnchorObservationDiagLastLogFrame = 0;
+            m_StationAnchorDiagAcceptedSamples = 0;
+            m_StationAnchorDiagLegacyWritten = 0;
+            m_StationAnchorDiagAnchorWritten = 0;
+            m_StationAnchorDiagAnchorMissing = 0;
+            m_StationAnchorDiagAnchorRejectedOriginOrTerminal = 0;
+            m_StationAnchorDiagSuspiciousOriginOrTerminal = 0;
+            m_StationAnchorDiagSuspiciousLongDwell = 0;
+            m_StationAnchorDiagTotalAnchorMissing = 0;
+            m_StationAnchorDiagTotalAnchorRejectedOriginOrTerminal = 0;
+            m_StationAnchorDiagTotalSuspiciousOriginOrTerminal = 0;
+            m_StationAnchorDiagTotalSuspiciousLongDwell = 0;
         }
 
         private bool ShouldForceMidStopDwellTimeout(
@@ -915,13 +1133,11 @@ namespace RapidTransitMod
 
             if (line != Entity.Null
                 && waypointIndex >= 0
-                && m_WaypointStopDwellObservations.TryGetValue(
-                    MakeLineWaypointStopObservationKey(line, waypointIndex),
-                    out StopDwellObservation observation)
-                && observation.AverageFrames > configuredFrames)
+                && TryGetObservedWaypointStopFrames(line, waypointIndex, out float observationFrames)
+                && observationFrames > configuredFrames)
             {
                 earlyCloseFrames = math.min(
-                    observation.AverageFrames - configuredFrames,
+                    observationFrames - configuredFrames,
                     EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)SIM_FRAMES_PER_MINUTE);
             }
 

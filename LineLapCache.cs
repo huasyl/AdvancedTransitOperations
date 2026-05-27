@@ -251,6 +251,32 @@ namespace RapidTransitMod
         }
     }
 
+    [InternalBufferCapacity(1)]
+    public struct StationStopDwellObservationElement : IBufferElementData, ISerializable
+    {
+        public FixedString64Bytes m_StationAnchorId;
+        public float m_AverageFrames;
+        public int m_SampleCount;
+        public uint m_LastObservedFrame;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_StationAnchorId.ToString());
+            writer.Write(m_AverageFrames);
+            writer.Write(m_SampleCount);
+            writer.Write(m_LastObservedFrame);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out string stationAnchorId);
+            m_StationAnchorId = stationAnchorId ?? string.Empty;
+            reader.Read(out m_AverageFrames);
+            reader.Read(out m_SampleCount);
+            reader.Read(out m_LastObservedFrame);
+        }
+    }
+
     [InternalBufferCapacity(32)]
     public struct AppliedWorkbenchLineStateElement : IBufferElementData, ISerializable
     {

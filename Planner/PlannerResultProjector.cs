@@ -17,6 +17,7 @@ namespace RapidTransitMod.Planner
             result.requestEcho = BuildRequestEcho(context);
             result.inputSummary = BuildInputSummary(context, state.RiskClusters);
             result.lineRoleSummary = BuildLineRoleSummary(context);
+            result.baselineCapacityDiagnostic = BuildCapacityDiagnostic(state.BaselineCapacityDiagnostic);
             result.defaultPlanId = projectedPlans.Count > 0 ? projectedPlans[0].PlanId : string.Empty;
             result.plans = projectedPlans.Select(plan => BuildPlanDetail(context, plan)).ToArray();
             result.planSummaries = projectedPlans.Select(BuildPlanSummary).ToArray();
@@ -243,7 +244,8 @@ namespace RapidTransitMod.Planner
                 robustnessRiskMinutes = plan.RobustnessRiskMinutes,
                 addedBypassStationCount = plan.AddedBypassStationCount,
                 retimedTripCount = plan.RetimedTripCount,
-                recommendedExpressOffsetDeltaMinutes = plan.RecommendedExpressOffsetDeltaMinutes
+                recommendedExpressOffsetDeltaMinutes = plan.RecommendedExpressOffsetDeltaMinutes,
+                capacityDiagnostic = BuildCapacityDiagnostic(plan.CapacityDiagnostic)
             };
         }
 
@@ -258,6 +260,7 @@ namespace RapidTransitMod.Planner
                 score = plan.Score,
                 recommendedExpressOffsetDeltaMinutes = plan.RecommendedExpressOffsetDeltaMinutes,
                 metrics = BuildPlanMetrics(plan),
+                capacityDiagnostic = BuildCapacityDiagnostic(plan.CapacityDiagnostic),
                 selectedBypassStationIds = plan.SelectedBypassStationIds.ToArray(),
                 riskClusters = plan.RiskClusters.Select(cluster => BuildRiskCluster(context, plan, cluster)).ToArray(),
                 riskItems = BuildRiskItems(context, plan),
@@ -271,6 +274,45 @@ namespace RapidTransitMod.Planner
                 plannerReplacementRows = BuildPlannerRows(plan.AdjustedRows, "planner", forceSource: true),
                 changedWindows = BuildChangedWindows(context, plan, regions),
                 diagnostics = plan.Diagnostics.Select(BuildDiagnostic).ToArray()
+            };
+        }
+
+        private static DepartureControlSystem.DispatchPlannerCapacityDiagnosticDto BuildCapacityDiagnostic(
+            PlannerCapacityDiagnostic diagnostic)
+        {
+            if (diagnostic == null)
+            {
+                diagnostic = new PlannerCapacityDiagnostic();
+            }
+
+            return new DepartureControlSystem.DispatchPlannerCapacityDiagnosticDto
+            {
+                success = diagnostic.Success,
+                overallVerdict = diagnostic.OverallVerdict ?? string.Empty,
+                capacityLikely = diagnostic.CapacityLikely,
+                minGapMinutes = diagnostic.MinGapMinutes,
+                highestCapacityConsumptionRatio = diagnostic.HighestCapacityConsumptionRatio,
+                highestCapacityConsumptionPercent = diagnostic.HighestCapacityConsumptionPercent,
+                highestCompressedSpanMinutes = diagnostic.HighestCompressedSpanMinutes,
+                highestZeroGapConsumptionRatio = diagnostic.HighestZeroGapConsumptionRatio,
+                requiredMaxShiftMinutes = diagnostic.RequiredMaxShiftMinutes,
+                requiredMaxWaitMinutes = diagnostic.RequiredMaxWaitMinutes,
+                minResidualSlackMinutes = diagnostic.MinResidualSlackMinutes,
+                criticalResourceId = diagnostic.CriticalResourceId ?? string.Empty,
+                criticalTargetLineId = diagnostic.CriticalTargetLineId ?? string.Empty,
+                criticalCoverageLineIds = diagnostic.CriticalCoverageLineIds ?? Array.Empty<string>(),
+                criticalCoverageLines = diagnostic.CriticalCoverageLines ?? Array.Empty<string>(),
+                criticalTargetStartAtomIndex = diagnostic.CriticalTargetStartAtomIndex,
+                criticalTargetEndAtomIndexExclusive = diagnostic.CriticalTargetEndAtomIndexExclusive,
+                tripCount = diagnostic.TripCount,
+                exportedSharedCorridorCount = diagnostic.ExportedSharedCorridorCount,
+                validSharedCorridorCount = diagnostic.ValidSharedCorridorCount,
+                relevantSharedCorridorCount = diagnostic.RelevantSharedCorridorCount,
+                projectedIntervalCount = diagnostic.ProjectedIntervalCount,
+                elementarySectionCount = diagnostic.ElementarySectionCount,
+                reportGroupCount = diagnostic.ReportGroupCount,
+                reason = diagnostic.Reason ?? string.Empty,
+                summary = diagnostic.Summary ?? string.Empty
             };
         }
 
@@ -344,6 +386,8 @@ namespace RapidTransitMod.Planner
                 previewByTripId.TryGetValue(entry.Key, out DepartureControlSystem.DispatchPlannerPreviewRowDto previewRow);
                 int beforeMinute = baselineRow?.Minute ?? adjustedRow.Minute;
                 int scheduleShiftMinutes = adjustedRow.Minute - beforeMinute;
+                int uniformExpressOffsetMinutes = ResolveUniformTargetExpressOffsetMinutes(context, adjustedRow, plan.RecommendedExpressOffsetDeltaMinutes);
+                int residualRetimeMinutes = scheduleShiftMinutes - uniformExpressOffsetMinutes;
                 int predictedDelayMinutes = previewRow?.deltaMinutes ?? 0;
                 int totalDeltaMinutes = scheduleShiftMinutes + predictedDelayMinutes;
                 if (scheduleShiftMinutes == 0 && predictedDelayMinutes == 0)
@@ -352,9 +396,11 @@ namespace RapidTransitMod.Planner
                 }
 
                 string changeType = scheduleShiftMinutes != 0
-                    ? string.Equals(adjustedRow.Kind, "express", StringComparison.OrdinalIgnoreCase)
-                        ? "expressOffset"
-                        : "retime"
+                    ? residualRetimeMinutes != 0
+                        ? "retime"
+                        : string.Equals(adjustedRow.Kind, "express", StringComparison.OrdinalIgnoreCase)
+                            ? "expressOffset"
+                            : "retime"
                     : "predictedHold";
                 rowDiffs.Add(new DepartureControlSystem.DispatchPlannerChangedRowDto
                 {
@@ -433,6 +479,23 @@ namespace RapidTransitMod.Planner
                 changeTypes = changeTypes,
                 rowDiffs = rows.ToArray()
             };
+        }
+
+        private static int ResolveUniformTargetExpressOffsetMinutes(
+            PlannerContext context,
+            PlannerWorkingRow row,
+            int activeExpressOffsetMinutes)
+        {
+            if (activeExpressOffsetMinutes == 0
+                || row == null
+                || !string.Equals(row.Kind, "express", StringComparison.OrdinalIgnoreCase))
+            {
+                return 0;
+            }
+
+            return (context?.TargetLineIds ?? Array.Empty<string>()).Contains(row.LineId ?? string.Empty)
+                ? activeExpressOffsetMinutes
+                : 0;
         }
 
         private static DepartureControlSystem.DispatchPlannerLineRoleSummaryDto BuildLineRoleSummary(PlannerContext context)

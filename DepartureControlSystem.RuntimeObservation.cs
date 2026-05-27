@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
@@ -89,6 +90,9 @@ namespace RapidTransitMod
             [DataMember] public string lineId;
             [DataMember] public string plannedTime;
             [DataMember] public int plannedMinute;
+            [DataMember] public string serviceDate;
+            [DataMember] public int serviceDayIndex;
+            [DataMember] public int occurrenceIndex;
             [DataMember] public string actualDepartureTime;
             [DataMember] public int actualDepartureMinute;
             [DataMember] public int deltaMinutes;
@@ -127,6 +131,9 @@ namespace RapidTransitMod
             [DataMember] public string source;
             [DataMember] public string serviceKind;
             [DataMember] public string plannedTime;
+            [DataMember] public string serviceDate;
+            [DataMember] public int serviceDayIndex;
+            [DataMember] public int occurrenceIndex;
             [DataMember] public string actualDepartureTime;
             [DataMember] public int targetMinute;
             [DataMember] public int actualDepartureMinute;
@@ -146,6 +153,9 @@ namespace RapidTransitMod
             [DataMember] public string tripObservationId;
             [DataMember] public string rowId;
             [DataMember] public string lineId;
+            [DataMember] public string serviceDate;
+            [DataMember] public int serviceDayIndex;
+            [DataMember] public int occurrenceIndex;
             [DataMember] public int vehicleIndex;
             [DataMember] public int targetMinute;
             [DataMember] public string stationId;
@@ -168,8 +178,14 @@ namespace RapidTransitMod
             [DataMember] public string state;
             [DataMember] public string localTripObservationId;
             [DataMember] public string localRowId;
+            [DataMember] public string localServiceDate;
+            [DataMember] public int localServiceDayIndex;
+            [DataMember] public int localOccurrenceIndex;
             [DataMember] public string priorityTripObservationId;
             [DataMember] public string priorityRowId;
+            [DataMember] public string priorityServiceDate;
+            [DataMember] public int priorityServiceDayIndex;
+            [DataMember] public int priorityOccurrenceIndex;
             [DataMember] public string localLineId;
             [DataMember] public string priorityLineId;
             [DataMember] public int localVehicleIndex;
@@ -197,6 +213,9 @@ namespace RapidTransitMod
             [DataMember] public string tripObservationId;
             [DataMember] public string rowId;
             [DataMember] public string lineId;
+            [DataMember] public string serviceDate;
+            [DataMember] public int serviceDayIndex;
+            [DataMember] public int occurrenceIndex;
             [DataMember] public int vehicleIndex;
             [DataMember] public int targetMinute;
             [DataMember] public string corridorId;
@@ -216,6 +235,7 @@ namespace RapidTransitMod
             public string Status = "empty";
             public uint AppliedAtFrame;
             public uint LastUpdatedFrame;
+            public DateTime AppliedGameDate = DateTime.MinValue;
             public readonly Dictionary<string, RuntimeObservedTrip> TripsById =
                 new Dictionary<string, RuntimeObservedTrip>(StringComparer.Ordinal);
             public readonly List<RuntimeObservedStopEvent> StopEvents = new List<RuntimeObservedStopEvent>();
@@ -226,11 +246,15 @@ namespace RapidTransitMod
         private sealed class RuntimeObservedTrip
         {
             public string TripObservationId = string.Empty;
+            public string BaseObservationKey = string.Empty;
             public string State = "pending";
             public string LineId = string.Empty;
             public string RowId = string.Empty;
             public string Source = string.Empty;
             public string ServiceKind = string.Empty;
+            public string ServiceDate = string.Empty;
+            public int ServiceDayIndex = -1;
+            public int OccurrenceIndex = 1;
             public int TargetMinute = -1;
             public int ActualDepartureMinute = -1;
             public Entity Line = Entity.Null;
@@ -245,6 +269,12 @@ namespace RapidTransitMod
         {
             public string EventId = string.Empty;
             public string EventType = string.Empty;
+            public string TripObservationId = string.Empty;
+            public string RowId = string.Empty;
+            public string LineId = string.Empty;
+            public string ServiceDate = string.Empty;
+            public int ServiceDayIndex = -1;
+            public int OccurrenceIndex = 1;
             public Entity Line = Entity.Null;
             public Entity Vehicle = Entity.Null;
             public int TargetMinute = -1;
@@ -263,6 +293,16 @@ namespace RapidTransitMod
         {
             public string EventId = string.Empty;
             public string State = "holding";
+            public string LocalTripObservationId = string.Empty;
+            public string LocalRowId = string.Empty;
+            public string LocalServiceDate = string.Empty;
+            public int LocalServiceDayIndex = -1;
+            public int LocalOccurrenceIndex = 1;
+            public string PriorityTripObservationId = string.Empty;
+            public string PriorityRowId = string.Empty;
+            public string PriorityServiceDate = string.Empty;
+            public int PriorityServiceDayIndex = -1;
+            public int PriorityOccurrenceIndex = 1;
             public Entity LocalLine = Entity.Null;
             public Entity PriorityLine = Entity.Null;
             public Entity LocalVehicle = Entity.Null;
@@ -336,12 +376,14 @@ namespace RapidTransitMod
 
         private void SeedObservationFromAppliedRows(string selectedLineId)
         {
+            DateTime appliedGameDate = ResolveRuntimeObservationGameDate();
             m_RuntimeObservationSession = new RuntimeObservationSession
             {
                 SnapshotId = "runtime-observation-" + (m_SimulationSystem != null ? m_SimulationSystem.frameIndex.ToString() : "0"),
                 Status = "active",
                 AppliedAtFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0,
-                LastUpdatedFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0
+                LastUpdatedFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0,
+                AppliedGameDate = appliedGameDate
             };
             m_RuntimeObservedTripsByLineSlot.Clear();
             m_RuntimeObservedTripsByVehicle.Clear();
@@ -364,19 +406,16 @@ namespace RapidTransitMod
                         continue;
 
                     string rowLineId = !string.IsNullOrEmpty(row.lineId) ? row.lineId : lineId;
-                    RuntimeObservedTrip trip = new RuntimeObservedTrip
-                    {
-                        TripObservationId = "slot|" + rowLineId + "|" + targetMinute + "|" + (row.id ?? string.Empty),
-                        LineId = rowLineId,
-                        Line = lineState.LineEntity,
-                        RowId = row.id ?? string.Empty,
-                        Source = row.source ?? string.Empty,
-                        ServiceKind = row.kind ?? string.Empty,
-                        TargetMinute = targetMinute,
-                        LastUpdatedFrame = m_RuntimeObservationSession.AppliedAtFrame
-                    };
-                    m_RuntimeObservationSession.TripsById[trip.TripObservationId] = trip;
-                    AddRuntimeObservedTripLineSlotIndex(trip);
+                    CreateRuntimeObservedTrip(
+                        lineState.LineEntity,
+                        rowLineId,
+                        row.id ?? string.Empty,
+                        row.source ?? string.Empty,
+                        row.kind ?? string.Empty,
+                        targetMinute,
+                        1,
+                        m_RuntimeObservationSession.AppliedAtFrame,
+                        appliedGameDate);
                 }
             }
 
@@ -388,6 +427,147 @@ namespace RapidTransitMod
             log.Info("[RuntimeObservation] seeded snapshot=" + m_RuntimeObservationSession.SnapshotId
                 + " selectedLine=" + (selectedLineId ?? string.Empty)
                 + " trips=" + m_RuntimeObservationSession.TripsById.Count);
+        }
+
+        private DateTime ResolveRuntimeObservationGameDate()
+        {
+            if (m_TimeSystem != null)
+            {
+                return m_TimeSystem.GetCurrentDateTime().Date;
+            }
+
+            return DateTime.MinValue.Date;
+        }
+
+        private int ResolveRuntimeObservationServiceDayIndex(DateTime serviceDate)
+        {
+            if (m_RuntimeObservationSession == null)
+                return -1;
+
+            DateTime appliedDate = m_RuntimeObservationSession.AppliedGameDate.Date;
+            if (serviceDate == DateTime.MinValue.Date || appliedDate == DateTime.MinValue.Date)
+                return -1;
+
+            return (serviceDate - appliedDate).Days;
+        }
+
+        private static string FormatRuntimeObservationServiceDate(DateTime serviceDate)
+        {
+            return serviceDate == DateTime.MinValue.Date
+                ? string.Empty
+                : serviceDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        private static string BuildRuntimeObservationBaseKey(string lineId, int targetMinute, string rowId)
+        {
+            return (lineId ?? string.Empty)
+                + "|"
+                + targetMinute.ToString(CultureInfo.InvariantCulture)
+                + "|"
+                + (rowId ?? string.Empty);
+        }
+
+        private RuntimeObservedTrip CreateRuntimeObservedTrip(
+            Entity line,
+            string lineId,
+            string rowId,
+            string source,
+            string serviceKind,
+            int targetMinute,
+            int occurrenceIndex,
+            uint nowFrame,
+            DateTime serviceDate)
+        {
+            if (m_RuntimeObservationSession == null)
+                return null;
+
+            RuntimeObservedTrip trip = new RuntimeObservedTrip
+            {
+                TripObservationId = "slot|"
+                    + (lineId ?? string.Empty)
+                    + "|"
+                    + targetMinute.ToString(CultureInfo.InvariantCulture)
+                    + "|"
+                    + (rowId ?? string.Empty)
+                    + "|occ:"
+                    + occurrenceIndex.ToString(CultureInfo.InvariantCulture),
+                BaseObservationKey = BuildRuntimeObservationBaseKey(lineId, targetMinute, rowId),
+                LineId = lineId ?? string.Empty,
+                RowId = rowId ?? string.Empty,
+                Source = source ?? string.Empty,
+                ServiceKind = serviceKind ?? string.Empty,
+                TargetMinute = targetMinute,
+                Line = line,
+                ServiceDate = FormatRuntimeObservationServiceDate(serviceDate),
+                ServiceDayIndex = ResolveRuntimeObservationServiceDayIndex(serviceDate),
+                OccurrenceIndex = Math.Max(1, occurrenceIndex),
+                LastUpdatedFrame = nowFrame
+            };
+            m_RuntimeObservationSession.TripsById[trip.TripObservationId] = trip;
+            AddRuntimeObservedTripLineSlotIndex(trip);
+            return trip;
+        }
+
+        private static bool HasRuntimeObservedTripCompletedCycle(RuntimeObservedTrip trip)
+        {
+            return trip != null
+                && (trip.LaunchFrame > 0
+                    || trip.ActualDepartureMinute >= 0
+                    || string.Equals(trip.State, "departed", StringComparison.Ordinal));
+        }
+
+        private RuntimeObservedTrip CreateNextRuntimeObservedTripOccurrence(RuntimeObservedTrip previousTrip, uint nowFrame)
+        {
+            if (previousTrip == null)
+                return null;
+
+            return CreateRuntimeObservedTrip(
+                previousTrip.Line,
+                previousTrip.LineId,
+                previousTrip.RowId,
+                previousTrip.Source,
+                previousTrip.ServiceKind,
+                previousTrip.TargetMinute,
+                previousTrip.OccurrenceIndex + 1,
+                nowFrame,
+                ResolveRuntimeObservationGameDate());
+        }
+
+        private RuntimeObservedTrip[] GetRuntimeObservedTripActiveOccurrences(Entity line, int targetMinute, uint nowFrame)
+        {
+            if (line == Entity.Null
+                || targetMinute < 0
+                || !m_RuntimeObservedTripsByLineSlot.TryGetValue(BuildRuntimeObservationLineSlotKey(line, targetMinute), out List<RuntimeObservedTrip> trips)
+                || trips == null
+                || trips.Count == 0)
+            {
+                return Array.Empty<RuntimeObservedTrip>();
+            }
+
+            List<RuntimeObservedTrip> activeTrips = new List<RuntimeObservedTrip>();
+            foreach (IGrouping<string, RuntimeObservedTrip> group in trips
+                .Where(trip => trip != null)
+                .GroupBy(trip => trip.BaseObservationKey, StringComparer.Ordinal))
+            {
+                RuntimeObservedTrip latestTrip = group
+                    .OrderByDescending(trip => trip.OccurrenceIndex)
+                    .ThenByDescending(trip => trip.LastUpdatedFrame)
+                    .FirstOrDefault();
+                if (latestTrip == null)
+                    continue;
+
+                if (HasRuntimeObservedTripCompletedCycle(latestTrip))
+                {
+                    latestTrip = CreateNextRuntimeObservedTripOccurrence(latestTrip, nowFrame);
+                }
+
+                if (latestTrip != null)
+                {
+                    activeTrips.Add(latestTrip);
+                }
+            }
+
+            return activeTrips.ToArray();
         }
 
         private void AddRuntimeObservedTripLineSlotIndex(RuntimeObservedTrip trip)
@@ -425,15 +605,19 @@ namespace RapidTransitMod
             if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservationSession == null)
                 return;
 
-            if (!m_RuntimeObservedTripsByLineSlot.TryGetValue(BuildRuntimeObservationLineSlotKey(line, targetMinute), out List<RuntimeObservedTrip> trips))
+            RuntimeObservedTrip[] trips = GetRuntimeObservedTripActiveOccurrences(line, targetMinute, nowFrame);
+            if (trips.Length == 0)
                 return;
 
             foreach (RuntimeObservedTrip trip in trips)
             {
                 trip.State = trip.State == "pending" ? "bound" : trip.State;
                 trip.Vehicle = vehicle;
+                DateTime serviceDate = ResolveRuntimeObservationGameDate();
+                trip.ServiceDate = FormatRuntimeObservationServiceDate(serviceDate);
+                trip.ServiceDayIndex = ResolveRuntimeObservationServiceDayIndex(serviceDate);
                 trip.ReasonCode = reasonCode ?? string.Empty;
-                trip.BindingConfidence = "line-target";
+                trip.BindingConfidence = "target-bound";
                 trip.LastUpdatedFrame = nowFrame;
                 AddRuntimeObservedTripVehicleIndex(vehicle, trip);
             }
@@ -445,13 +629,17 @@ namespace RapidTransitMod
             if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservationSession == null)
                 return;
 
-            if (!m_RuntimeObservedTripsByLineSlot.TryGetValue(BuildRuntimeObservationLineSlotKey(line, targetMinute), out List<RuntimeObservedTrip> trips))
+            RuntimeObservedTrip[] trips = GetRuntimeObservedTripActiveOccurrences(line, targetMinute, launchFrame);
+            if (trips.Length == 0)
                 return;
 
             foreach (RuntimeObservedTrip trip in trips)
             {
                 trip.State = "departed";
                 trip.Vehicle = vehicle;
+                DateTime serviceDate = ResolveRuntimeObservationGameDate();
+                trip.ServiceDate = FormatRuntimeObservationServiceDate(serviceDate);
+                trip.ServiceDayIndex = ResolveRuntimeObservationServiceDayIndex(serviceDate);
                 trip.ActualDepartureMinute = actualMinute;
                 trip.LaunchFrame = launchFrame;
                 trip.ReasonCode = lateDispatch ? "late-dispatch-launch" : "origin-launch";
@@ -476,16 +664,26 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null || line == Entity.Null || station == Entity.Null || m_RuntimeObservationSession == null)
                 return;
 
-            if (!m_RuntimeObservedTripsByVehicle.ContainsKey(vehicle))
+            RuntimeObservedTrip observedTrip = ResolveRuntimeObservedTrip(
+                vehicle,
+                TryGetRuntimeObservedVehicleTargetMinute(vehicle),
+                line);
+            if (observedTrip == null)
                 return;
 
             RuntimeObservedStopEvent stopEvent = new RuntimeObservedStopEvent
             {
                 EventId = "stop|" + vehicle.Index + "|" + station.Index + "|" + frame,
                 EventType = arrival ? "arrival" : "departure",
+                TripObservationId = observedTrip.TripObservationId,
+                RowId = observedTrip.RowId,
+                LineId = observedTrip.LineId,
+                ServiceDate = observedTrip.ServiceDate,
+                ServiceDayIndex = observedTrip.ServiceDayIndex,
+                OccurrenceIndex = observedTrip.OccurrenceIndex,
                 Line = line,
                 Vehicle = vehicle,
-                TargetMinute = TryGetRuntimeObservedVehicleTargetMinute(vehicle),
+                TargetMinute = observedTrip.TargetMinute,
                 Station = station,
                 Kind = kind,
                 WaypointIndex = waypointIndex,
@@ -512,6 +710,15 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null || m_RuntimeObservationSession == null)
                 return;
 
+            RuntimeObservedTrip localTrip = ResolveRuntimeObservedTrip(
+                vehicle,
+                TryGetRuntimeObservedVehicleTargetMinute(vehicle),
+                ResolveVehicleLine(vehicle));
+            RuntimeObservedTrip priorityTrip = ResolveRuntimeObservedTrip(
+                blocker,
+                TryGetRuntimeObservedVehicleTargetMinute(blocker),
+                ResolveVehicleLine(blocker));
+
             if (m_RuntimeActiveBypassByVehicle.TryGetValue(vehicle, out RuntimeObservedBypassEvent activeEvent)
                 && activeEvent.PriorityVehicle == blocker
                 && activeEvent.State == "holding")
@@ -520,6 +727,14 @@ namespace RapidTransitMod
                     activeEvent.HoldStation = holdStation;
                 if (activeEvent.WaypointIndex < 0 && waypointIndex >= 0)
                     activeEvent.WaypointIndex = waypointIndex;
+                if (priorityTrip != null)
+                {
+                    activeEvent.PriorityTripObservationId = priorityTrip.TripObservationId;
+                    activeEvent.PriorityRowId = priorityTrip.RowId;
+                    activeEvent.PriorityServiceDate = priorityTrip.ServiceDate;
+                    activeEvent.PriorityServiceDayIndex = priorityTrip.ServiceDayIndex;
+                    activeEvent.PriorityOccurrenceIndex = priorityTrip.OccurrenceIndex;
+                }
                 activeEvent.LastUpdatedFrame = nowFrame;
                 m_RuntimeObservationSession.LastUpdatedFrame = nowFrame;
                 return;
@@ -538,6 +753,16 @@ namespace RapidTransitMod
             {
                 EventId = "bypass|" + vehicle.Index + "|" + nowFrame,
                 State = "holding",
+                LocalTripObservationId = localTrip?.TripObservationId ?? string.Empty,
+                LocalRowId = localTrip?.RowId ?? string.Empty,
+                LocalServiceDate = localTrip?.ServiceDate ?? string.Empty,
+                LocalServiceDayIndex = localTrip?.ServiceDayIndex ?? -1,
+                LocalOccurrenceIndex = localTrip?.OccurrenceIndex ?? 1,
+                PriorityTripObservationId = priorityTrip?.TripObservationId ?? string.Empty,
+                PriorityRowId = priorityTrip?.RowId ?? string.Empty,
+                PriorityServiceDate = priorityTrip?.ServiceDate ?? string.Empty,
+                PriorityServiceDayIndex = priorityTrip?.ServiceDayIndex ?? -1,
+                PriorityOccurrenceIndex = priorityTrip?.OccurrenceIndex ?? 1,
                 LocalLine = localLine,
                 PriorityLine = priorityLine,
                 LocalVehicle = vehicle,
@@ -577,6 +802,18 @@ namespace RapidTransitMod
             bypassEvent.PriorityVehicle = blocker;
             bypassEvent.PriorityLine = ResolveVehicleLine(blocker);
             bypassEvent.PriorityTargetMinute = TryGetRuntimeObservedVehicleTargetMinute(blocker);
+            RuntimeObservedTrip priorityTrip = ResolveRuntimeObservedTrip(
+                blocker,
+                bypassEvent.PriorityTargetMinute,
+                bypassEvent.PriorityLine);
+            if (priorityTrip != null)
+            {
+                bypassEvent.PriorityTripObservationId = priorityTrip.TripObservationId;
+                bypassEvent.PriorityRowId = priorityTrip.RowId;
+                bypassEvent.PriorityServiceDate = priorityTrip.ServiceDate;
+                bypassEvent.PriorityServiceDayIndex = priorityTrip.ServiceDayIndex;
+                bypassEvent.PriorityOccurrenceIndex = priorityTrip.OccurrenceIndex;
+            }
             bypassEvent.HoldReleaseFrame = nowFrame;
             bypassEvent.ReleaseReason = releaseReason ?? string.Empty;
             bypassEvent.LastUpdatedFrame = nowFrame;
@@ -606,7 +843,7 @@ namespace RapidTransitMod
                 RuntimeObservedCorridorPassageDto[] emptyCorridors = Array.Empty<RuntimeObservedCorridorPassageDto>();
                 return new DispatchRuntimeObservationSnapshotDto
                 {
-                    schemaVersion = 1,
+                    schemaVersion = 2,
                     snapshotId = string.Empty,
                     status = "empty",
                     generatedAtFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0,
@@ -636,7 +873,7 @@ namespace RapidTransitMod
 
             return new DispatchRuntimeObservationSnapshotDto
             {
-                schemaVersion = 1,
+                schemaVersion = 2,
                 snapshotId = session.SnapshotId,
                 status = session.Status,
                 generatedAtFrame = m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0,
@@ -670,6 +907,9 @@ namespace RapidTransitMod
                 source = trip.Source,
                 serviceKind = trip.ServiceKind,
                 plannedTime = trip.TargetMinute >= 0 ? SlotStr(trip.TargetMinute) : string.Empty,
+                serviceDate = trip.ServiceDate,
+                serviceDayIndex = trip.ServiceDayIndex,
+                occurrenceIndex = trip.OccurrenceIndex,
                 actualDepartureTime = trip.ActualDepartureMinute >= 0 ? SlotStr(trip.ActualDepartureMinute) : string.Empty,
                 targetMinute = trip.TargetMinute,
                 actualDepartureMinute = trip.ActualDepartureMinute,
@@ -684,17 +924,18 @@ namespace RapidTransitMod
 
         private RuntimeObservedStopEventDto BuildRuntimeObservedStopEventDto(RuntimeObservedStopEvent stopEvent)
         {
-            RuntimeObservedTrip observedTrip = ResolveRuntimeObservedTrip(
-                stopEvent.Vehicle,
-                stopEvent.TargetMinute,
-                stopEvent.Line);
             return new RuntimeObservedStopEventDto
             {
                 eventId = stopEvent.EventId,
                 eventType = stopEvent.EventType,
-                tripObservationId = observedTrip?.TripObservationId ?? string.Empty,
-                rowId = observedTrip?.RowId ?? string.Empty,
-                lineId = stopEvent.Line != Entity.Null ? GetWorkbenchLineId(stopEvent.Line) : string.Empty,
+                tripObservationId = stopEvent.TripObservationId,
+                rowId = stopEvent.RowId,
+                lineId = !string.IsNullOrEmpty(stopEvent.LineId)
+                    ? stopEvent.LineId
+                    : (stopEvent.Line != Entity.Null ? GetWorkbenchLineId(stopEvent.Line) : string.Empty),
+                serviceDate = stopEvent.ServiceDate,
+                serviceDayIndex = stopEvent.ServiceDayIndex,
+                occurrenceIndex = stopEvent.OccurrenceIndex,
                 vehicleIndex = stopEvent.Vehicle != Entity.Null ? stopEvent.Vehicle.Index : -1,
                 targetMinute = stopEvent.TargetMinute,
                 stationId = CreateStopId(stopEvent.Station, stopEvent.Kind),
@@ -713,22 +954,20 @@ namespace RapidTransitMod
 
         private RuntimeObservedBypassEventDto BuildRuntimeObservedBypassEventDto(RuntimeObservedBypassEvent bypassEvent)
         {
-            RuntimeObservedTrip localTrip = ResolveRuntimeObservedTrip(
-                bypassEvent.LocalVehicle,
-                bypassEvent.LocalTargetMinute,
-                bypassEvent.LocalLine);
-            RuntimeObservedTrip priorityTrip = ResolveRuntimeObservedTrip(
-                bypassEvent.PriorityVehicle,
-                bypassEvent.PriorityTargetMinute,
-                bypassEvent.PriorityLine);
             return new RuntimeObservedBypassEventDto
             {
                 eventId = bypassEvent.EventId,
                 state = bypassEvent.State,
-                localTripObservationId = localTrip?.TripObservationId ?? string.Empty,
-                localRowId = localTrip?.RowId ?? string.Empty,
-                priorityTripObservationId = priorityTrip?.TripObservationId ?? string.Empty,
-                priorityRowId = priorityTrip?.RowId ?? string.Empty,
+                localTripObservationId = bypassEvent.LocalTripObservationId,
+                localRowId = bypassEvent.LocalRowId,
+                localServiceDate = bypassEvent.LocalServiceDate,
+                localServiceDayIndex = bypassEvent.LocalServiceDayIndex,
+                localOccurrenceIndex = bypassEvent.LocalOccurrenceIndex,
+                priorityTripObservationId = bypassEvent.PriorityTripObservationId,
+                priorityRowId = bypassEvent.PriorityRowId,
+                priorityServiceDate = bypassEvent.PriorityServiceDate,
+                priorityServiceDayIndex = bypassEvent.PriorityServiceDayIndex,
+                priorityOccurrenceIndex = bypassEvent.PriorityOccurrenceIndex,
                 localLineId = bypassEvent.LocalLine != Entity.Null ? GetWorkbenchLineId(bypassEvent.LocalLine) : string.Empty,
                 priorityLineId = bypassEvent.PriorityLine != Entity.Null ? GetWorkbenchLineId(bypassEvent.PriorityLine) : string.Empty,
                 localVehicleIndex = bypassEvent.LocalVehicle != Entity.Null ? bypassEvent.LocalVehicle.Index : -1,
@@ -832,14 +1071,26 @@ namespace RapidTransitMod
             appliedTrips ??= Array.Empty<RuntimeObservedTripDto>();
             bypassEvents ??= Array.Empty<RuntimeObservedBypassEventDto>();
 
-            Dictionary<string, RuntimeObservedTripDto> tripsByRowId = appliedTrips
+            Dictionary<string, RuntimeObservedTripDto> latestTripsByRowId = appliedTrips
                 .Where(trip => !string.IsNullOrEmpty(trip?.rowId))
                 .GroupBy(trip => trip.rowId, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.lastUpdatedFrame).First(), StringComparer.Ordinal);
-            Dictionary<string, RuntimeObservedTripDto> tripsBySemanticKey = appliedTrips
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .OrderByDescending(item => item.occurrenceIndex)
+                        .ThenByDescending(item => item.lastUpdatedFrame)
+                        .First(),
+                    StringComparer.Ordinal);
+            Dictionary<string, RuntimeObservedTripDto> latestTripsBySemanticKey = appliedTrips
                 .Where(trip => trip != null)
                 .GroupBy(trip => BuildRuntimeObservationTripSemanticKey(trip.lineId, trip.serviceKind, trip.targetMinute), StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.lastUpdatedFrame).First(), StringComparer.Ordinal);
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .OrderByDescending(item => item.occurrenceIndex)
+                        .ThenByDescending(item => item.lastUpdatedFrame)
+                        .First(),
+                    StringComparer.Ordinal);
 
             Dictionary<string, (string PlanId, string ContractTripId)> contractTripByRowId =
                 new Dictionary<string, (string PlanId, string ContractTripId)>(StringComparer.Ordinal);
@@ -863,12 +1114,12 @@ namespace RapidTransitMod
                 string contractPlanId = string.Empty;
                 string contractTripId = string.Empty;
                 if (!string.IsNullOrEmpty(baselineRow.rowId)
-                    && tripsByRowId.TryGetValue(baselineRow.rowId, out RuntimeObservedTripDto rowMatchedTrip))
+                    && latestTripsByRowId.TryGetValue(baselineRow.rowId, out RuntimeObservedTripDto rowMatchedTrip))
                 {
                     observedTrip = rowMatchedTrip;
-                    matchMode = "rowId";
+                    matchMode = "rowId-latest-occurrence";
                 }
-                else if (tripsBySemanticKey.TryGetValue(
+                else if (latestTripsBySemanticKey.TryGetValue(
                     BuildRuntimeObservationTripSemanticKey(
                         baselineRow.lineId,
                         baselineRow.serviceKind,
@@ -876,7 +1127,7 @@ namespace RapidTransitMod
                     out RuntimeObservedTripDto semanticMatchedTrip))
                 {
                     observedTrip = semanticMatchedTrip;
-                    matchMode = "line-kind-time";
+                    matchMode = "line-kind-time-latest-occurrence";
                 }
                 if (!string.IsNullOrEmpty(baselineRow.rowId)
                     && contractTripByRowId.TryGetValue(baselineRow.rowId, out var contractRef))
@@ -892,6 +1143,9 @@ namespace RapidTransitMod
                     lineId = baselineRow.lineId,
                     plannedTime = baselineRow.plannedTime,
                     plannedMinute = baselineRow.plannedMinute,
+                    serviceDate = observedTrip?.serviceDate ?? string.Empty,
+                    serviceDayIndex = observedTrip?.serviceDayIndex ?? -1,
+                    occurrenceIndex = observedTrip?.occurrenceIndex ?? 0,
                     actualDepartureTime = observedTrip?.actualDepartureTime ?? string.Empty,
                     actualDepartureMinute = observedTrip?.actualDepartureMinute ?? -1,
                     deltaMinutes = observedTrip?.deltaMinutes ?? 0,
@@ -950,32 +1204,32 @@ namespace RapidTransitMod
                         case "predictedHold":
                         {
                             RuntimeObservedBypassEventDto[] matchedBypassEvents = bypassEvents
-                                .Where(item => tripRowIds.Contains(item.localRowId))
+                                .Where(item =>
+                                    tripRowIds.Contains(item.localRowId)
+                                    && (stationIds.Length == 0 || stationIds.Contains(item.holdPlannerStationId)))
+                                .GroupBy(item => item.localTripObservationId ?? string.Empty, StringComparer.Ordinal)
+                                .Select(group => group
+                                    .OrderByDescending(item => item.localOccurrenceIndex)
+                                    .ThenByDescending(item => item.lastUpdatedFrame)
+                                    .First())
                                 .ToArray();
                             actualMinutes = matchedBypassEvents.Length > 0
                                 ? matchedBypassEvents.Max(item => item.actualHoldMinutes)
                                 : 0f;
-                            bool stationMatched = stationIds.Length == 0
-                                || matchedBypassEvents.Any(item => stationIds.Contains(item.holdPlannerStationId));
                             if (matchedBypassEvents.Length == 0)
                             {
                                 status = "unobserved";
-                                reason = "no-bypass-event";
-                            }
-                            else if (!stationMatched)
-                            {
-                                status = "wrongStation";
-                                reason = "hold-station-mismatch";
+                                reason = "no-bypass-event-latest-occurrence";
                             }
                             else if (actualMinutes + 0.25f < expectedMinutes)
                             {
                                 status = "shortfall";
-                                reason = "hold-shortfall";
+                                reason = "hold-shortfall-latest-occurrence";
                             }
                             else
                             {
                                 status = "satisfied";
-                                reason = "hold-observed";
+                                reason = "hold-observed-latest-occurrence";
                             }
                             break;
                         }
@@ -1062,7 +1316,13 @@ namespace RapidTransitMod
                         case "bypassSet":
                         {
                             bool anyBypassObserved = stationIds.Length > 0
-                                && bypassEvents.Any(item => stationIds.Contains(item.holdPlannerStationId));
+                                && bypassEvents
+                                    .Where(item => stationIds.Contains(item.holdPlannerStationId))
+                                    .GroupBy(item => item.localTripObservationId ?? string.Empty, StringComparer.Ordinal)
+                                    .Any(group => group
+                                        .OrderByDescending(item => item.localOccurrenceIndex)
+                                        .ThenByDescending(item => item.lastUpdatedFrame)
+                                        .FirstOrDefault() != null);
                             status = anyBypassObserved ? "observed" : "unobserved";
                             reason = anyBypassObserved ? "bypass-station-used" : "bypass-station-unused";
                             actualMinutes = 0f;
@@ -1097,7 +1357,7 @@ namespace RapidTransitMod
             RuntimeObservedAttainmentSummaryDto summary = new RuntimeObservedAttainmentSummaryDto
             {
                 baselineTripCount = baselineRows.Length,
-                observedTripCount = appliedTrips.Length,
+                observedTripCount = tripResults.Count(item => item.occurrenceIndex > 0),
                 launchedTripCount = tripResults.Count(item => item.actualDepartureMinute >= 0),
                 missingTripCount = tripResults.Count(item => string.Equals(item.state, "missing", StringComparison.Ordinal)),
                 plannerContractCount = plannerContracts.Length,
@@ -1215,20 +1475,29 @@ namespace RapidTransitMod
                 return null;
             }
 
-            RuntimeObservedTrip exact = trips.FirstOrDefault(trip =>
-                trip != null
-                && trip.TargetMinute == preferredTargetMinute
-                && (preferredLine == Entity.Null || trip.Line == preferredLine));
+            RuntimeObservedTrip exact = trips
+                .Where(trip =>
+                    trip != null
+                    && trip.TargetMinute == preferredTargetMinute
+                    && (preferredLine == Entity.Null || trip.Line == preferredLine))
+                .OrderByDescending(trip => trip.OccurrenceIndex)
+                .ThenByDescending(trip => trip.LastUpdatedFrame)
+                .FirstOrDefault();
             if (exact != null)
                 return exact;
 
-            RuntimeObservedTrip sameLine = trips.FirstOrDefault(trip => trip != null && (preferredLine == Entity.Null || trip.Line == preferredLine));
+            RuntimeObservedTrip sameLine = trips
+                .Where(trip => trip != null && (preferredLine == Entity.Null || trip.Line == preferredLine))
+                .OrderByDescending(trip => trip.OccurrenceIndex)
+                .ThenByDescending(trip => trip.LastUpdatedFrame)
+                .FirstOrDefault();
             if (sameLine != null)
                 return sameLine;
 
             return trips
                 .Where(trip => trip != null)
-                .OrderByDescending(trip => trip.LastUpdatedFrame)
+                .OrderByDescending(trip => trip.OccurrenceIndex)
+                .ThenByDescending(trip => trip.LastUpdatedFrame)
                 .FirstOrDefault();
         }
 

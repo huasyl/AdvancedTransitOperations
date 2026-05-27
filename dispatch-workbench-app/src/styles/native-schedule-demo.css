@@ -85,6 +85,10 @@
   --dw-native-font-family: var(--dw-native-font-family-cjk);
 }
 
+.dw-native-schedule-root[data-planner-lab="true"] {
+  background: #0a1013;
+}
+
 .dw-native-workbench-root {
   display: flex;
   flex-direction: column;

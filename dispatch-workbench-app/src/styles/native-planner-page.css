@@ -633,16 +633,25 @@
 .dw-planner-metrics-row {
   display: flex;
   align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .dw-planner-metric {
-  width: 20%;
-  flex: 0 0 20%;
+  width: 33.333%;
+  flex: 0 0 33.333%;
   min-width: 0;
 }
 
 .dw-planner-metric + .dw-planner-metric {
   padding-left: 12px;
+}
+
+.dw-planner-metric:nth-child(3n + 1) {
+  padding-left: 0;
+}
+
+.dw-planner-metric:nth-child(n + 4) {
+  margin-top: 16px;
 }
 
 .dw-planner-metric-label {

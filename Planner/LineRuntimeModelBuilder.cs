@@ -149,6 +149,11 @@ namespace RapidTransitMod.Planner
 
             model.AtomBoundaryMinuteOffsets = BuildAtomBoundaryMinuteOffsets(model);
             model.AtomBoundaryVariabilityOffsets = BuildAtomBoundaryVariabilityOffsets(model);
+            if (HasUsableAtomRuntime(model))
+            {
+                ApplyStationTimelineFromAtomOffsets(model);
+                RebuildSegmentRuntimeOffsetsFromAtomTimeline(model);
+            }
             model.TotalMinuteSpan = model.StationOffsets.Count > 0
                 ? model.StationOffsets[model.StationOffsets.Count - 1].DepartureMinute
                 : 0f;
@@ -362,39 +367,120 @@ namespace RapidTransitMod.Planner
             return PlannerMath.EstimateVariabilityMinutes(baseMinutes, confidence, slice.observedSampleCount, slice.observedFastMinutes);
         }
 
-        private static float[] BuildAtomBoundaryMinuteOffsets(PlannerLineRuntimeModel model)
+        private static bool HasUsableAtomRuntime(PlannerLineRuntimeModel model)
         {
-            int trackAtomCount = Math.Max(0, model.TrackAtomCount);
-            if (trackAtomCount <= 0)
+            if (model == null
+                || model.TrackAtomCount <= 0
+                || model.LineTrack?.traversalSlices == null
+                || model.LineTrack.traversalSlices.Length == 0)
             {
-                return new[] { 0f };
+                return false;
             }
 
-            float[] runMinutesByAtom = new float[trackAtomCount];
-            foreach (DepartureControlSystem.DispatchPlannerTraversalSliceDto slice in model.LineTrack?.traversalSlices ?? new DepartureControlSystem.DispatchPlannerTraversalSliceDto[0])
+            foreach (DepartureControlSystem.DispatchPlannerTraversalSliceDto slice in model.LineTrack.traversalSlices)
             {
-                int startAtomIndex = Math.Max(0, slice.startAtomIndex);
-                int endAtomIndexExclusive = Math.Min(trackAtomCount, slice.endAtomIndexExclusive);
-                if (endAtomIndexExclusive <= startAtomIndex)
+                if (slice != null && slice.endAtomIndexExclusive > slice.startAtomIndex)
                 {
-                    continue;
+                    return true;
                 }
+            }
+            return false;
+        }
 
-                float runtimeMinutes = ResolveTraversalSliceRuntimeMinutes(slice);
-                int atomCount = Math.Max(1, endAtomIndexExclusive - startAtomIndex);
-                float perAtomMinutes = runtimeMinutes / atomCount;
-                for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
+        private static PlannerStationOffset FindStationOffsetForTraversalSlice(
+            PlannerLineRuntimeModel model,
+            DepartureControlSystem.DispatchPlannerTraversalSliceDto slice)
+        {
+            if (model == null
+                || slice == null
+                || !string.Equals(slice.stationTraversalKind, "stop", StringComparison.Ordinal)
+                || slice.stationWaypointIndex < 0)
+            {
+                return null;
+            }
+
+            foreach (DepartureControlSystem.DispatchPlannerStationDto station in model.Stations)
+            {
+                if (station != null
+                    && station.waypointIndex == slice.stationWaypointIndex
+                    && station.trackAtomIndex >= slice.startAtomIndex
+                    && station.trackAtomIndex <= slice.endAtomIndexExclusive
+                    && model.StationOffsetsById.TryGetValue(station.id ?? string.Empty, out PlannerStationOffset stationOffset))
                 {
-                    runMinutesByAtom[atomIndex] += perAtomMinutes;
+                    return stationOffset;
                 }
             }
 
+            return null;
+        }
+
+        private static float ResolveTraversalSliceRuntimeForStopPattern(
+            PlannerLineRuntimeModel model,
+            DepartureControlSystem.DispatchPlannerTraversalSliceDto slice,
+            HashSet<string> dwellIncludedStationIds)
+        {
+            PlannerStationOffset stationOffset = FindStationOffsetForTraversalSlice(model, slice);
+            if (stationOffset != null && !stationOffset.ShouldStop)
+            {
+                return Math.Max(slice?.modelRunMinutes ?? 0f, 0f);
+            }
+
+            float runtimeMinutes = ResolveTraversalSliceRuntimeMinutes(slice);
+            if (stationOffset != null
+                && stationOffset.ShouldStop
+                && slice != null
+                && slice.observedIncludesStationStop
+                && slice.observedSampleCount > 0
+                && slice.observedAverageMinutes > 0f
+                && dwellIncludedStationIds != null)
+            {
+                dwellIncludedStationIds.Add(stationOffset.StationId);
+            }
+            return runtimeMinutes;
+        }
+
+        private static float ResolveTraversalSliceVariabilityForStopPattern(
+            PlannerLineRuntimeModel model,
+            DepartureControlSystem.DispatchPlannerTraversalSliceDto slice,
+            HashSet<string> dwellIncludedStationIds)
+        {
+            PlannerStationOffset stationOffset = FindStationOffsetForTraversalSlice(model, slice);
+            if (stationOffset != null && !stationOffset.ShouldStop)
+            {
+                float modelMinutes = Math.Max(slice?.modelRunMinutes ?? 0f, 0f);
+                return PlannerMath.EstimateVariabilityMinutes(modelMinutes, 0.45f, 0, 0f);
+            }
+
+            float variabilityMinutes = ResolveTraversalSliceVariabilityMinutes(slice);
+            if (stationOffset != null
+                && stationOffset.ShouldStop
+                && slice != null
+                && slice.observedIncludesStationStop
+                && slice.observedSampleCount > 0
+                && slice.observedAverageMinutes > 0f
+                && dwellIncludedStationIds != null)
+            {
+                dwellIncludedStationIds.Add(stationOffset.StationId);
+            }
+            return variabilityMinutes;
+        }
+
+        private static void FillMissingRunMinutesByAtom(
+            PlannerLineRuntimeModel model,
+            float[] runMinutesByAtom,
+            bool[] coveredBySlice)
+        {
+            if (model == null || runMinutesByAtom == null || coveredBySlice == null)
+            {
+                return;
+            }
+
+            int trackAtomCount = runMinutesByAtom.Length;
             for (int stationIndex = 0; stationIndex + 1 < model.Stations.Count; stationIndex++)
             {
                 DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
                 DepartureControlSystem.DispatchPlannerStationDto nextStation = model.Stations[stationIndex + 1];
                 if (!model.SegmentRuntimeByStationPair.TryGetValue(station.id + "->" + nextStation.id, out PlannerSegmentRuntime runtime)
-                    || !string.Equals(runtime.Source, "tripObserved", StringComparison.OrdinalIgnoreCase)
                     || !(runtime.Minutes > 0f))
                 {
                     continue;
@@ -407,13 +493,100 @@ namespace RapidTransitMod.Planner
                     continue;
                 }
 
-                int atomCount = Math.Max(1, endAtomIndexExclusive - startAtomIndex);
-                float perAtomMinutes = runtime.Minutes / atomCount;
+                int missingAtomCount = 0;
                 for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
                 {
-                    runMinutesByAtom[atomIndex] = perAtomMinutes;
+                    if (!coveredBySlice[atomIndex])
+                    {
+                        missingAtomCount++;
+                    }
+                }
+                if (missingAtomCount <= 0)
+                {
+                    continue;
+                }
+
+                float perAtomMinutes = runtime.Minutes / Math.Max(1, endAtomIndexExclusive - startAtomIndex);
+                for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
+                {
+                    if (!coveredBySlice[atomIndex])
+                    {
+                        runMinutesByAtom[atomIndex] = perAtomMinutes;
+                    }
                 }
             }
+        }
+
+        private static void FillMissingVariabilitySquareByAtom(
+            PlannerLineRuntimeModel model,
+            float[] variabilitySquareByAtom,
+            bool[] coveredBySlice)
+        {
+            if (model == null || variabilitySquareByAtom == null || coveredBySlice == null)
+            {
+                return;
+            }
+
+            int trackAtomCount = variabilitySquareByAtom.Length;
+            for (int stationIndex = 0; stationIndex + 1 < model.Stations.Count; stationIndex++)
+            {
+                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
+                DepartureControlSystem.DispatchPlannerStationDto nextStation = model.Stations[stationIndex + 1];
+                if (!model.SegmentRuntimeByStationPair.TryGetValue(station.id + "->" + nextStation.id, out PlannerSegmentRuntime runtime)
+                    || !(runtime.VariabilityMinutes > 0f))
+                {
+                    continue;
+                }
+
+                int startAtomIndex = Math.Max(0, station.trackAtomIndex);
+                int endAtomIndexExclusive = Math.Min(trackAtomCount, nextStation.trackAtomIndex);
+                if (endAtomIndexExclusive <= startAtomIndex)
+                {
+                    continue;
+                }
+
+                float perAtomVariabilityMinutes = runtime.VariabilityMinutes / Math.Max(1, endAtomIndexExclusive - startAtomIndex);
+                float perAtomVariabilitySquare = perAtomVariabilityMinutes * perAtomVariabilityMinutes;
+                for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
+                {
+                    if (!coveredBySlice[atomIndex])
+                    {
+                        variabilitySquareByAtom[atomIndex] = perAtomVariabilitySquare;
+                    }
+                }
+            }
+        }
+
+        private static float[] BuildAtomBoundaryMinuteOffsets(PlannerLineRuntimeModel model)
+        {
+            int trackAtomCount = Math.Max(0, model.TrackAtomCount);
+            if (trackAtomCount <= 0)
+            {
+                return new[] { 0f };
+            }
+
+            float[] runMinutesByAtom = new float[trackAtomCount];
+            bool[] coveredBySlice = new bool[trackAtomCount];
+            HashSet<string> dwellIncludedStationIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (DepartureControlSystem.DispatchPlannerTraversalSliceDto slice in model.LineTrack?.traversalSlices ?? new DepartureControlSystem.DispatchPlannerTraversalSliceDto[0])
+            {
+                int startAtomIndex = Math.Max(0, slice.startAtomIndex);
+                int endAtomIndexExclusive = Math.Min(trackAtomCount, slice.endAtomIndexExclusive);
+                if (endAtomIndexExclusive <= startAtomIndex)
+                {
+                    continue;
+                }
+
+                float runtimeMinutes = ResolveTraversalSliceRuntimeForStopPattern(model, slice, dwellIncludedStationIds);
+                int atomCount = Math.Max(1, endAtomIndexExclusive - startAtomIndex);
+                float perAtomMinutes = runtimeMinutes / atomCount;
+                for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
+                {
+                    runMinutesByAtom[atomIndex] += perAtomMinutes;
+                    coveredBySlice[atomIndex] = true;
+                }
+            }
+            FillMissingRunMinutesByAtom(model, runMinutesByAtom, coveredBySlice);
 
             float[] dwellMinutesByBoundary = new float[trackAtomCount + 1];
             for (int stationIndex = 0; stationIndex < model.Stations.Count; stationIndex++)
@@ -426,6 +599,10 @@ namespace RapidTransitMod.Planner
 
                 int boundaryIndex = station.trackAtomIndex;
                 if (boundaryIndex < 0 || boundaryIndex > trackAtomCount || stationIndex == 0)
+                {
+                    continue;
+                }
+                if (dwellIncludedStationIds.Contains(station.id ?? string.Empty))
                 {
                     continue;
                 }
@@ -457,6 +634,8 @@ namespace RapidTransitMod.Planner
             }
 
             float[] variabilitySquareByAtom = new float[trackAtomCount];
+            bool[] coveredBySlice = new bool[trackAtomCount];
+            HashSet<string> dwellIncludedStationIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (DepartureControlSystem.DispatchPlannerTraversalSliceDto slice in model.LineTrack?.traversalSlices ?? new DepartureControlSystem.DispatchPlannerTraversalSliceDto[0])
             {
                 int startAtomIndex = Math.Max(0, slice.startAtomIndex);
@@ -466,40 +645,16 @@ namespace RapidTransitMod.Planner
                     continue;
                 }
 
-                float variabilityMinutes = ResolveTraversalSliceVariabilityMinutes(slice);
+                float variabilityMinutes = ResolveTraversalSliceVariabilityForStopPattern(model, slice, dwellIncludedStationIds);
                 int atomCount = Math.Max(1, endAtomIndexExclusive - startAtomIndex);
                 float perAtomVariabilityMinutes = variabilityMinutes / atomCount;
                 for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
                 {
                     variabilitySquareByAtom[atomIndex] += perAtomVariabilityMinutes * perAtomVariabilityMinutes;
+                    coveredBySlice[atomIndex] = true;
                 }
             }
-
-            for (int stationIndex = 0; stationIndex + 1 < model.Stations.Count; stationIndex++)
-            {
-                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
-                DepartureControlSystem.DispatchPlannerStationDto nextStation = model.Stations[stationIndex + 1];
-                if (!model.SegmentRuntimeByStationPair.TryGetValue(station.id + "->" + nextStation.id, out PlannerSegmentRuntime runtime)
-                    || !string.Equals(runtime.Source, "tripObserved", StringComparison.OrdinalIgnoreCase)
-                    || !(runtime.VariabilityMinutes > 0f))
-                {
-                    continue;
-                }
-
-                int startAtomIndex = Math.Max(0, station.trackAtomIndex);
-                int endAtomIndexExclusive = Math.Min(trackAtomCount, nextStation.trackAtomIndex);
-                if (endAtomIndexExclusive <= startAtomIndex)
-                {
-                    continue;
-                }
-
-                int atomCount = Math.Max(1, endAtomIndexExclusive - startAtomIndex);
-                float perAtomVariabilityMinutes = runtime.VariabilityMinutes / atomCount;
-                for (int atomIndex = startAtomIndex; atomIndex < endAtomIndexExclusive; atomIndex++)
-                {
-                    variabilitySquareByAtom[atomIndex] = perAtomVariabilityMinutes * perAtomVariabilityMinutes;
-                }
-            }
+            FillMissingVariabilitySquareByAtom(model, variabilitySquareByAtom, coveredBySlice);
 
             float[] dwellVariabilitySquareByBoundary = new float[trackAtomCount + 1];
             for (int stationIndex = 0; stationIndex < model.Stations.Count; stationIndex++)
@@ -512,6 +667,10 @@ namespace RapidTransitMod.Planner
 
                 int boundaryIndex = station.trackAtomIndex;
                 if (boundaryIndex < 0 || boundaryIndex > trackAtomCount || stationIndex == 0)
+                {
+                    continue;
+                }
+                if (dwellIncludedStationIds.Contains(station.id ?? string.Empty))
                 {
                     continue;
                 }
@@ -532,6 +691,85 @@ namespace RapidTransitMod.Planner
             }
 
             return offsets;
+        }
+
+        private static float GetAtomBoundaryMinuteOffset(float[] offsets, int atomIndex)
+        {
+            if (offsets == null || offsets.Length == 0)
+            {
+                return 0f;
+            }
+
+            int clampedIndex = Math.Max(0, Math.Min(offsets.Length - 1, atomIndex));
+            return offsets[clampedIndex];
+        }
+
+        private static void ApplyStationTimelineFromAtomOffsets(PlannerLineRuntimeModel model)
+        {
+            if (model == null || model.AtomBoundaryMinuteOffsets == null || model.AtomBoundaryMinuteOffsets.Length == 0)
+            {
+                return;
+            }
+
+            for (int stationIndex = 0; stationIndex < model.Stations.Count && stationIndex < model.StationOffsets.Count; stationIndex++)
+            {
+                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
+                PlannerStationOffset stationOffset = model.StationOffsets[stationIndex];
+                float departureMinute = stationIndex == 0
+                    ? 0f
+                    : GetAtomBoundaryMinuteOffset(model.AtomBoundaryMinuteOffsets, station.trackAtomIndex);
+                float arrivalMinute = stationOffset.ShouldStop
+                    ? Math.Max(0f, departureMinute - stationOffset.DwellMinutes)
+                    : departureMinute;
+                stationOffset.ArrivalMinute = PlannerMath.Round4(arrivalMinute);
+                stationOffset.DepartureMinute = PlannerMath.Round4(departureMinute);
+            }
+        }
+
+        private static float GetStationVariabilityMinute(PlannerLineRuntimeModel model, DepartureControlSystem.DispatchPlannerStationDto station)
+        {
+            if (model == null || station == null)
+            {
+                return 0f;
+            }
+
+            return GetAtomBoundaryMinuteOffset(model.AtomBoundaryVariabilityOffsets, station.trackAtomIndex);
+        }
+
+        private static void RebuildSegmentRuntimeOffsetsFromAtomTimeline(PlannerLineRuntimeModel model)
+        {
+            if (model == null)
+            {
+                return;
+            }
+
+            model.SegmentRuntimeOffsets.Clear();
+            model.SegmentRuntimeByStationPair.Clear();
+            for (int index = 0; index + 1 < model.Stations.Count; index++)
+            {
+                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[index];
+                DepartureControlSystem.DispatchPlannerStationDto nextStation = model.Stations[index + 1];
+                PlannerStationOffset stationOffset = model.StationOffsets[index];
+                PlannerStationOffset nextStationOffset = model.StationOffsets[index + 1];
+                float minutes = Math.Max(0f, nextStationOffset.ArrivalMinute - stationOffset.DepartureMinute);
+                float variabilityMinutes = Math.Max(
+                    0f,
+                    GetStationVariabilityMinute(model, nextStation) - GetStationVariabilityMinute(model, station));
+                PlannerSegmentRuntime runtime = new PlannerSegmentRuntime
+                {
+                    FromStationId = station.id ?? string.Empty,
+                    ToStationId = nextStation.id ?? string.Empty,
+                    FromOrder = station.order,
+                    ToOrder = nextStation.order,
+                    Minutes = PlannerMath.Round4(minutes),
+                    AverageMinutes = PlannerMath.Round4(minutes),
+                    Confidence = 0.65f,
+                    VariabilityMinutes = PlannerMath.Round4(variabilityMinutes),
+                    Source = "atomSlice"
+                };
+                model.SegmentRuntimeOffsets.Add(runtime);
+                model.SegmentRuntimeByStationPair[station.id + "->" + nextStation.id] = runtime;
+            }
         }
     }
 }

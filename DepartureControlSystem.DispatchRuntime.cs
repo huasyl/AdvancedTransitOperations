@@ -3821,8 +3821,7 @@ namespace RapidTransitMod
                             break;
 
                         case VehicleState.Running:
-                            if (IsAppliedWorkbenchExpressLine(lineEnt))
-                                UpdateVehicleTraversalSliceObservation(v, lineEnt, wps, nowFrame);
+                            UpdateVehicleTraversalSliceObservation(v, lineEnt, wps, nowFrame);
 
                             bool shouldBroadcastForTrackedVehicle = ShouldBroadcastForTrackedVehicle(v);
                             bool hasPlatformApproachWatch = LineHasEnabledBroadcastPlatformApproachAnnouncements(routeEnt);

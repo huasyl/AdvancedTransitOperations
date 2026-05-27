@@ -56,6 +56,7 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestDumpTrackModel", RequestDumpTrackModel));
             AddBinding(new TriggerBinding(kGroup, "requestDumpPlannerInput", RequestDumpPlannerInput));
             AddBinding(new TriggerBinding(kGroup, "requestDumpRuntimeObservation", RequestDumpRuntimeObservation));
+            AddBinding(new TriggerBinding(kGroup, "requestDumpStationAnchorObservation", RequestDumpStationAnchorObservation));
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
@@ -200,7 +201,8 @@ namespace RapidTransitMod
             AppendJsonBool(sb, "showDumpTrackModelAction", snapshot.ShowDumpTrackModelAction);
             AppendJsonBool(sb, "showDumpPlannerInputAction", snapshot.ShowDumpPlannerInputAction);
             AppendJsonBool(sb, "showDumpRuntimeObservationAction", snapshot.ShowDumpRuntimeObservationAction);
-            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction || snapshot.ShowDumpRuntimeObservationAction);
+            AppendJsonBool(sb, "showDumpStationAnchorObservationAction", snapshot.ShowDumpStationAnchorObservationAction);
+            AppendJsonBool(sb, "showActions", snapshot.ShowRetireAction || snapshot.ShowForceDepartAction || snapshot.ShowReevaluateAction || snapshot.ShowLineSpawnAction || snapshot.ShowDumpTrackModelAction || snapshot.ShowDumpPlannerInputAction || snapshot.ShowDumpRuntimeObservationAction || snapshot.ShowDumpStationAnchorObservationAction);
             AppendJsonBool(sb, "showBypassStationToggle", snapshot.ShowBypassStationToggle);
             AppendJsonBool(sb, "bypassStationChecked", snapshot.BypassStationChecked);
             if (sb[sb.Length - 1] == ',')
@@ -407,6 +409,16 @@ namespace RapidTransitMod
                 return;
 
             DepartureControlSystem.Instance.RequestDumpRuntimeObservationSnapshot();
+            m_LastVehicle = Entity.Null;
+            m_LastSnapshotVersion = 0;
+        }
+
+        private void RequestDumpStationAnchorObservation()
+        {
+            if (DepartureControlSystem.Instance == null)
+                return;
+
+            DepartureControlSystem.Instance.RequestDumpStationAnchorObservationDiagnostics();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
