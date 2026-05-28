@@ -246,7 +246,7 @@ namespace RapidTransitMod
                 Entity finalEntity = resolvedEntity != Entity.Null ? resolvedEntity : moveItVisibleEntity;
                 m_LastMoveItEntity = finalEntity;
 
-                DepartureControlSystem moveItControl = DepartureControlSystem.Instance;
+                DispatchRuntimeSystem moveItControl = DispatchRuntimeSystem.Instance;
                 string summaryText = moveItControl != null
                     ? moveItControl.BuildDevSightLaneTooltipSummary(finalEntity)
                     : "target  " + FormatEntity(moveItVisibleEntity);
@@ -256,7 +256,7 @@ namespace RapidTransitMod
 
             if (TryGetMoveItOverlayOwner(out Entity moveItOverlayOwner))
             {
-                DepartureControlSystem moveItControl = DepartureControlSystem.Instance;
+                DispatchRuntimeSystem moveItControl = DispatchRuntimeSystem.Instance;
                 string summaryText = moveItControl != null
                     ? moveItControl.BuildDevSightLaneTooltipSummary(moveItOverlayOwner)
                     : "target  " + FormatEntity(moveItOverlayOwner);
@@ -266,7 +266,7 @@ namespace RapidTransitMod
 
             if (TryGetMoveItSearcherEntity(out Entity moveItEntity))
             {
-                DepartureControlSystem moveItControl = DepartureControlSystem.Instance;
+                DispatchRuntimeSystem moveItControl = DispatchRuntimeSystem.Instance;
                 string summaryText = moveItControl != null
                     ? moveItControl.BuildDevSightLaneTooltipSummary(moveItEntity)
                     : "target  " + FormatEntity(moveItEntity);
@@ -713,7 +713,7 @@ namespace RapidTransitMod
 
         private string BuildTooltipText(RaycastResult result, DevSightProbe probe)
         {
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control != null
                 && probe.NetEntity != Entity.Null
                 && probe.NetHasSubLane
@@ -743,7 +743,7 @@ namespace RapidTransitMod
             return control.BuildDevSightLaneTooltipSummary(resolvedTarget);
         }
 
-        private string BuildNetBoundLaneText(DepartureControlSystem control, DevSightProbe probe)
+        private string BuildNetBoundLaneText(DispatchRuntimeSystem control, DevSightProbe probe)
         {
             StringBuilder sb = new StringBuilder(512);
             sb.Append("target  ").Append(FormatEntity(probe.NetEntity));

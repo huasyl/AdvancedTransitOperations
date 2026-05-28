@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Game.Common;
+using Game.Objects;
 using Game.Prefabs;
 using Game.Routes;
 using Game.Vehicles;
@@ -8,43 +9,8 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
-        private readonly struct TraversalSliceSamplingPlan
-        {
-            public readonly bool Available;
-            public readonly int SegmentIndex;
-            public readonly float SegmentPosition;
-            public readonly uint SampleIntervalFrames;
-            public readonly bool IsHighSampling;
-            public readonly bool IsMediumSampling;
-            public readonly bool HasUpcomingCutPoint;
-            public readonly float UpcomingCutPointProgress;
-            public readonly float UpcomingCutPointDistance;
-
-            public TraversalSliceSamplingPlan(
-                bool available,
-                int segmentIndex,
-                float segmentPosition,
-                uint sampleIntervalFrames,
-                bool isHighSampling,
-                bool isMediumSampling,
-                bool hasUpcomingCutPoint,
-                float upcomingCutPointProgress,
-                float upcomingCutPointDistance)
-            {
-                Available = available;
-                SegmentIndex = segmentIndex;
-                SegmentPosition = segmentPosition;
-                SampleIntervalFrames = sampleIntervalFrames;
-                IsHighSampling = isHighSampling;
-                IsMediumSampling = isMediumSampling;
-                HasUpcomingCutPoint = hasUpcomingCutPoint;
-                UpcomingCutPointProgress = upcomingCutPointProgress;
-                UpcomingCutPointDistance = upcomingCutPointDistance;
-            }
-        }
-
         private void RecordLapStart(Entity v, string reason = "")
         {
             string lineTag = m_VehicleLine.TryGetValue(v, out Entity le) ? "line" + le.Index : "line?";
@@ -58,8 +24,7 @@ namespace RapidTransitMod
 
             float currentOdo = EntityManager.GetComponentData<Odometer>(v).m_Distance;
             uint nowFrame = m_SimulationSystem.frameIndex;
-            m_VehicleLapStartOdometer[v] = currentOdo;
-            m_VehicleLapStartFrame[v] = nowFrame;
+            m_LapObservations.Start(v, currentOdo, nowFrame);
             string curSlot = m_VehicleCurrentSlot.TryGetValue(v, out int cs) ? SlotStr(cs) : "-";
             int cachedWp = m_CachedWpIdx.TryGetValue(v, out int cw) ? cw : -1;
             log.Info("[LapStart] " + lineTag + " vehicle" + v.Index
@@ -74,18 +39,17 @@ namespace RapidTransitMod
         {
             if (!EntityManager.HasComponent<Odometer>(v))
                 return;
-            if (!m_VehicleLapStartOdometer.TryGetValue(v, out float startOdo))
+            if (!m_LapObservations.TryStart(v, out float startOdo))
                 return;
 
             float current = EntityManager.GetComponentData<Odometer>(v).m_Distance;
             float lapDist = current - startOdo;
             string lineTag = m_VehicleLine.TryGetValue(v, out Entity le) ? "line" + le.Index : "line?";
 
-            if (m_RestoredRunning.Contains(v))
+            if (m_LapObservations.ConsumeRestored(v))
             {
-                m_RestoredRunning.Remove(v);
                 if (lapDist > 0f)
-                    m_VehicleLapDistance[v] = lapDist;
+                    m_LapObservations.SetDistance(v, lapDist);
                 ClearVehicleTraversalSliceLapDebug(v);
                 log.Info("[LapStatsSkipRestored] " + lineTag + " vehicle" + v.Index
                     + " lapDist=" + (lapDist / 1000f).ToString("F2") + "km"
@@ -95,7 +59,7 @@ namespace RapidTransitMod
 
             if (lapDist > 0f)
             {
-                m_VehicleLapDistance[v] = lapDist;
+                m_LapObservations.SetDistance(v, lapDist);
                 float maintenanceRange = 0f;
                 if (EntityManager.HasComponent<PrefabRef>(v))
                 {
@@ -112,10 +76,10 @@ namespace RapidTransitMod
                     + " lap=" + (lapDist / 1000f).ToString("F2") + "km" + maintStr);
             }
 
-            if (m_VehicleLapStartFrame.TryGetValue(v, out uint startFrame))
+            if (m_LapObservations.TryStartFrame(v, out uint startFrame))
             {
                 uint framesDelta = m_SimulationSystem.frameIndex - startFrame;
-                m_VehicleLapFrames[v] = framesDelta;
+                m_LapObservations.SetFrames(v, framesDelta);
                 float realMin = framesDelta / (float)SIM_FRAMES_PER_MINUTE;
                 log.Info("[LapStats] " + lineTag + " vehicle" + v.Index
                     + " lap=" + realMin.ToString("F1") + "min/" + framesDelta + "frames");
@@ -211,7 +175,7 @@ namespace RapidTransitMod
 
             if (vehicle != Entity.Null
                 && line != Entity.Null
-                && m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession existingSession)
+                && m_TraversalSlices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession existingSession)
                 && existingSession.Line == line
                 && existingSession.SliceIndex >= 0
                 && TryGetLineTrackChain(line, waypoints, out LineTrackChain existingChain)
@@ -224,7 +188,8 @@ namespace RapidTransitMod
                 if (existingAtomIndex >= existingSlice.StartAtomIndex
                     && existingAtomIndex < existingSlice.EndAtomIndexExclusive)
                 {
-                    m_VehicleTraversalSliceLastSampleFrame[vehicle] = nowFrame;
+                    MaybeRecordTraversalPositionSample(vehicle, line, existingChain, existingSession.SliceIndex, existingCursor, nowFrame);
+                    m_TraversalSlices.LastSampleFrames[vehicle] = nowFrame;
                     return;
                 }
             }
@@ -237,22 +202,22 @@ namespace RapidTransitMod
                     out int sliceIndex,
                     out VehicleTrackCursor cursor))
             {
-                if (m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession droppedSession))
+                if (m_TraversalSlices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession droppedSession))
                     RecordTraversalSliceLapDebugDropped(vehicle, droppedSession.SliceIndex);
-                m_VehicleTraversalSliceSessions.Remove(vehicle);
-                m_VehicleTraversalSliceSamplingPlans.Remove(vehicle);
+                m_TraversalSlices.Sessions.Remove(vehicle);
+                m_TraversalSlices.Plans.Remove(vehicle);
                 return;
             }
 
-            if (m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
+            if (m_TraversalSlices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
                 && session.Line == line
                 && session.SliceIndex == sliceIndex)
             {
-                m_VehicleTraversalSliceLastSampleFrame[vehicle] = nowFrame;
+                m_TraversalSlices.LastSampleFrames[vehicle] = nowFrame;
                 return;
             }
 
-            FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame);
+            FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame, cursor.AtomCursorIndex, cursor.AtomPosition01);
             if (chain != null
                 && chain.TraversalProfile != null
                 && sliceIndex >= 0
@@ -261,9 +226,10 @@ namespace RapidTransitMod
                 RecordTraversalSliceLapDebugStart(vehicle, chain.TraversalProfile.RunSlices[sliceIndex], cursor.AtomCursorIndex, cursor.AtomPosition01);
             }
 
-            m_VehicleTraversalSliceSamplingPlans.Remove(vehicle);
-            m_VehicleTraversalSliceSessions[vehicle] = new VehicleTraversalSliceSession(line, sliceIndex, nowFrame, cursor.AtomCursorIndex, cursor.AtomPosition01);
-            m_VehicleTraversalSliceLastSampleFrame[vehicle] = nowFrame;
+            m_TraversalSlices.Plans.Remove(vehicle);
+            m_TraversalSlices.Sessions[vehicle] = new VehicleTraversalSliceSession(line, sliceIndex, nowFrame, cursor.AtomCursorIndex, cursor.AtomPosition01);
+            MaybeRecordTraversalPositionSample(vehicle, line, chain, sliceIndex, cursor, nowFrame);
+            m_TraversalSlices.LastSampleFrames[vehicle] = nowFrame;
         }
 
         private bool ShouldSampleVehicleTraversalSliceObservation(
@@ -278,7 +244,7 @@ namespace RapidTransitMod
             if (plan.IsHighSampling)
                 return true;
 
-            if (!m_VehicleTraversalSliceLastSampleFrame.TryGetValue(vehicle, out uint lastSampleFrame))
+            if (!m_TraversalSlices.LastSampleFrames.TryGetValue(vehicle, out uint lastSampleFrame))
                 return true;
 
             return nowFrame <= lastSampleFrame
@@ -296,22 +262,22 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypoints.Length == 0
-                || !m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
+                || !m_TraversalSlices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
                 || session.Line != line)
             {
-                m_VehicleTraversalSliceSamplingPlans.Remove(vehicle);
+                m_TraversalSlices.Plans.Remove(vehicle);
                 return false;
             }
 
-            if (!m_LineTrackChains.TryGetValue(line, out LineTrackChain chain)
-                || chain?.TraversalProfile == null
-                || chain.TraversalProfile.SegmentSliceCutPointProgresses == null)
+            if (!m_TrackModelQuery.TryProfile(line, out LineTraversalProfile profile)
+                || !m_TrackModelQuery.TryChain(line, out LineTrackChain chain)
+                || profile.SegmentSliceCutPointProgresses == null)
             {
-                m_VehicleTraversalSliceSamplingPlans.Remove(vehicle);
+                m_TraversalSlices.Plans.Remove(vehicle);
                 return false;
             }
 
-            if (m_VehicleTraversalSliceSamplingPlans.TryGetValue(vehicle, out TraversalSliceSamplingPlanCache cachedPlan)
+            if (m_TraversalSlices.Plans.TryGetValue(vehicle, out TraversalSliceSamplingPlanCache cachedPlan)
                 && cachedPlan.Line == line
                 && cachedPlan.ChainSignature == chain.Signature
                 && cachedPlan.SliceIndex == session.SliceIndex
@@ -323,13 +289,13 @@ namespace RapidTransitMod
 
             if (!TryBuildTraversalSliceSamplingPlanUncached(vehicle, waypoints, chain, out plan))
             {
-                m_VehicleTraversalSliceSamplingPlans.Remove(vehicle);
+                m_TraversalSlices.Plans.Remove(vehicle);
                 return false;
             }
 
             uint refreshFrames = math.max(1u, plan.SampleIntervalFrames);
             uint nextRefreshFrame = nowFrame + refreshFrames;
-            m_VehicleTraversalSliceSamplingPlans[vehicle] = new TraversalSliceSamplingPlanCache(
+            m_TraversalSlices.Plans[vehicle] = new TraversalSliceSamplingPlanCache(
                 line,
                 chain.Signature,
                 session.SliceIndex,
@@ -411,40 +377,111 @@ namespace RapidTransitMod
             return true;
         }
 
-        private void FinalizeVehicleTraversalSliceObservation(Entity vehicle, uint nowFrame)
+        private void FinalizeVehicleTraversalSliceObservation(
+            Entity vehicle,
+            uint nowFrame,
+            int exitAtomIndex = -1,
+            float exitAtomPosition01 = 0f)
         {
             if (vehicle == Entity.Null
-                || !m_VehicleTraversalSliceSessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
+                || !m_TraversalSlices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
                 || session.Line == Entity.Null
                 || session.SliceIndex < 0
                 || nowFrame <= session.EnterFrame)
             {
-                m_VehicleTraversalSliceSessions.Remove(vehicle);
-                m_VehicleTraversalSliceSamplingPlans.Remove(vehicle);
+                m_TraversalSlices.Sessions.Remove(vehicle);
+                m_TraversalSlices.Plans.Remove(vehicle);
                 return;
             }
 
             float observedFrames = nowFrame - session.EnterFrame;
+            m_TraversalSlices.RecordActualSample(new TraversalSliceActualSample(
+                session.Line,
+                vehicle,
+                session.SliceIndex,
+                session.EnterFrame,
+                nowFrame,
+                session.EnterAtomIndex,
+                session.EnterAtomPosition01,
+                exitAtomIndex,
+                exitAtomPosition01));
             RecordTraversalSliceLapDebugFinalize(vehicle, session.SliceIndex, observedFrames);
             ulong key = MakeTraversalSliceObservationKey(session.Line, session.SliceIndex);
-            if (m_TraversalRunSliceObservations.TryGetValue(key, out TraversalSliceObservation existing))
+            if (m_TraversalSlices.TryObservation(key, out TraversalSliceObservation existing))
             {
                 int sampleCount = existing.SampleCount + 1;
                 float averageFrames = ((existing.AverageFrames * existing.SampleCount) + observedFrames) / sampleCount;
                 float fastBaselineFrames = ComputeFastTraversalBaselineFrames(existing.FastBaselineFrames, observedFrames);
                 TraversalSliceObservation updated = new TraversalSliceObservation(averageFrames, fastBaselineFrames, sampleCount, nowFrame);
-                m_TraversalRunSliceObservations[key] = updated;
+                m_TraversalSlices.Record(key, updated);
                 FlushTraversalSliceObservation(session.Line, session.SliceIndex, updated);
             }
             else
             {
                 TraversalSliceObservation created = new TraversalSliceObservation(observedFrames, observedFrames, 1, nowFrame);
-                m_TraversalRunSliceObservations[key] = created;
+                m_TraversalSlices.Record(key, created);
                 FlushTraversalSliceObservation(session.Line, session.SliceIndex, created);
             }
 
-            m_VehicleTraversalSliceSessions.Remove(vehicle);
-            m_VehicleTraversalSliceSamplingPlans.Remove(vehicle);
+            m_TraversalSlices.Sessions.Remove(vehicle);
+            m_TraversalSlices.Plans.Remove(vehicle);
+        }
+
+        private void MaybeRecordTraversalPositionSample(
+            Entity vehicle,
+            Entity line,
+            LineTrackChain chain,
+            int sliceIndex,
+            VehicleTrackCursor cursor,
+            uint nowFrame)
+        {
+            if (vehicle == Entity.Null || line == Entity.Null || chain == null)
+                return;
+
+            uint sampleIntervalFrames = (uint)math.max(1f, math.round((float)SIM_FRAMES_PER_MINUTE));
+            if (m_TraversalSlices.LastPositionSampleFrames.TryGetValue(vehicle, out uint lastFrame)
+                && nowFrame > lastFrame
+                && nowFrame - lastFrame < sampleIntervalFrames)
+            {
+                return;
+            }
+
+            m_TraversalSlices.LastPositionSampleFrames[vehicle] = nowFrame;
+            Entity physicalLane = Entity.Null;
+            int atomIndex = math.clamp(cursor.AtomCursorIndex, 0, math.max(0, chain.TrackAtoms.Count - 1));
+            if (atomIndex >= 0 && atomIndex < chain.TrackAtoms.Count)
+                physicalLane = chain.TrackAtoms[atomIndex].Key.PhysicalLaneKey;
+
+            int segmentIndex = cursor.SegmentIndex;
+            float segmentPosition = -1f;
+            if (TryGetRouteProgress(vehicle, out int routeNextWaypointIndex, out float routeSegmentPosition))
+            {
+                segmentIndex = routeNextWaypointIndex == 0
+                    ? math.max(0, chain.SegmentRanges.Count - 1)
+                    : routeNextWaypointIndex - 1;
+                segmentPosition = math.saturate(routeSegmentPosition);
+            }
+
+            float speedMetersPerSecond = 0f;
+            if (EntityManager.HasComponent<Moving>(vehicle))
+                speedMetersPerSecond = math.length(EntityManager.GetComponentData<Moving>(vehicle).m_Velocity);
+
+            float odometerMeters = -1f;
+            if (EntityManager.HasComponent<Odometer>(vehicle))
+                odometerMeters = EntityManager.GetComponentData<Odometer>(vehicle).m_Distance;
+
+            m_TraversalSlices.RecordPositionSample(new TraversalPositionSample(
+                line,
+                vehicle,
+                nowFrame,
+                sliceIndex,
+                segmentIndex,
+                segmentPosition,
+                atomIndex,
+                math.saturate(cursor.AtomPosition01),
+                physicalLane,
+                speedMetersPerSecond,
+                odometerMeters));
         }
 
         private static float ComputeFastTraversalBaselineFrames(float existingFastBaselineFrames, float observedFrames)
@@ -508,7 +545,7 @@ namespace RapidTransitMod
                 return effectiveRunFrames > 0f;
 
             ulong key = MakeTraversalSliceObservationKey(line, slice.SliceIndex);
-            if (m_TraversalRunSliceObservations.TryGetValue(key, out TraversalSliceObservation observation)
+            if (m_TraversalSlices.TryObservation(key, out TraversalSliceObservation observation)
                 && observation.SampleCount > 0
                 && observation.FastBaselineFrames > 0f)
             {
@@ -544,11 +581,11 @@ namespace RapidTransitMod
             float enterOffsetAtoms = math.max(0f, enterCoordinate - slice.StartAtomIndex);
             bool midSliceStart = enterOffsetAtoms > 0.05f;
             ulong key = MakeVehicleTraversalSliceLapDebugKey(vehicle, slice.SliceIndex);
-            if (!m_VehicleTraversalSliceLapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
+            if (!m_TraversalSlices.LapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
                 aggregate = default;
 
             aggregate.RecordStart(enterOffsetAtoms, midSliceStart);
-            m_VehicleTraversalSliceLapDebug[key] = aggregate;
+            m_TraversalSlices.LapDebug[key] = aggregate;
         }
 
         private void RecordTraversalSliceLapDebugDropped(Entity vehicle, int sliceIndex)
@@ -557,11 +594,11 @@ namespace RapidTransitMod
                 return;
 
             ulong key = MakeVehicleTraversalSliceLapDebugKey(vehicle, sliceIndex);
-            if (!m_VehicleTraversalSliceLapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
+            if (!m_TraversalSlices.LapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
                 aggregate = default;
 
             aggregate.DroppedWithoutFinalizeCount++;
-            m_VehicleTraversalSliceLapDebug[key] = aggregate;
+            m_TraversalSlices.LapDebug[key] = aggregate;
         }
 
         private void RecordTraversalSliceLapDebugFinalize(Entity vehicle, int sliceIndex, float observedFrames)
@@ -570,20 +607,20 @@ namespace RapidTransitMod
                 return;
 
             ulong key = MakeVehicleTraversalSliceLapDebugKey(vehicle, sliceIndex);
-            if (!m_VehicleTraversalSliceLapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
+            if (!m_TraversalSlices.LapDebug.TryGetValue(key, out TraversalSliceLapDebugAggregate aggregate))
                 aggregate = default;
 
             aggregate.RecordFinalize(observedFrames);
-            m_VehicleTraversalSliceLapDebug[key] = aggregate;
+            m_TraversalSlices.LapDebug[key] = aggregate;
         }
 
         private void ClearVehicleTraversalSliceLapDebug(Entity vehicle)
         {
-            if (vehicle == Entity.Null || m_VehicleTraversalSliceLapDebug.Count == 0)
+            if (vehicle == Entity.Null || m_TraversalSlices.LapDebug.Count == 0)
                 return;
 
             List<ulong> removeKeys = null;
-            foreach (var kvp in m_VehicleTraversalSliceLapDebug)
+            foreach (var kvp in m_TraversalSlices.LapDebug)
             {
                 if ((int)(kvp.Key >> 32) != vehicle.Index)
                     continue;
@@ -597,7 +634,7 @@ namespace RapidTransitMod
                 return;
 
             for (int i = 0; i < removeKeys.Count; i++)
-                m_VehicleTraversalSliceLapDebug.Remove(removeKeys[i]);
+                m_TraversalSlices.LapDebug.Remove(removeKeys[i]);
         }
 
         private void LogTraversalProfileLapSlices(
@@ -627,11 +664,11 @@ namespace RapidTransitMod
                 float staticRunFrames = math.max(0f, slice.RunFrames);
                 TryGetEffectiveTraversalRunSliceFrames(line, slice, out float effectiveRunFrames);
                 ulong observationKey = MakeTraversalSliceObservationKey(line, slice.SliceIndex);
-                bool hasObservation = m_TraversalRunSliceObservations.TryGetValue(observationKey, out TraversalSliceObservation observation)
+                bool hasObservation = m_TraversalSlices.TryObservation(observationKey, out TraversalSliceObservation observation)
                     && observation.SampleCount > 0
                     && observation.AverageFrames > 0f;
                 ulong lapDebugKey = MakeVehicleTraversalSliceLapDebugKey(vehicle, slice.SliceIndex);
-                bool hasLapDebug = m_VehicleTraversalSliceLapDebug.TryGetValue(lapDebugKey, out TraversalSliceLapDebugAggregate lapDebug);
+                bool hasLapDebug = m_TraversalSlices.LapDebug.TryGetValue(lapDebugKey, out TraversalSliceLapDebugAggregate lapDebug);
                 string lapDebugText = string.Empty;
                 if (hasLapDebug && lapDebug.StartCount > 0)
                 {
@@ -819,7 +856,7 @@ namespace RapidTransitMod
             {
                 string observationKey = MakeStationStopDwellObservationKey(line, anchor.StationAnchorId);
                 if (!string.IsNullOrWhiteSpace(observationKey)
-                    && m_StationStopDwellObservations.TryGetValue(observationKey, out StationStopDwellObservation anchorObservation)
+                    && m_StopDwell.TryStation(observationKey, out StationStopDwellObservation anchorObservation)
                     && anchorObservation.AverageFrames > 0f
                     && anchorObservation.SampleCount > 0)
                 {
@@ -855,7 +892,7 @@ namespace RapidTransitMod
             if ((EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State & PublicTransportFlags.Boarding) == 0)
                 return false;
 
-            if (!m_StopDwellStartFrame.TryGetValue(vehicle, out uint dwellSinceFrame) || nowFrame <= dwellSinceFrame)
+            if (!m_StopDwell.TryStart(vehicle, out uint dwellSinceFrame) || nowFrame <= dwellSinceFrame)
                 return false;
 
             float elapsedFrames = nowFrame - dwellSinceFrame;
@@ -893,17 +930,15 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null || line == Entity.Null || waypointIndex < 0)
                 return;
 
-            m_StopDwellSessions[vehicle] = new StopDwellSession(line, waypointIndex, nowFrame);
+            m_StopDwell.Begin(vehicle, line, waypointIndex, nowFrame);
         }
 
         private void TryRecordObservedStopDwellOnBoardingEnd(Entity vehicle, Entity line, int fallbackWaypointIndex, uint nowFrame)
         {
             if (vehicle == Entity.Null || line == Entity.Null)
                 return;
-            if (!m_StopDwellSessions.TryGetValue(vehicle, out StopDwellSession session))
+            if (!m_StopDwell.End(vehicle, out StopDwellSession session))
                 return;
-
-            m_StopDwellSessions.Remove(vehicle);
 
             int waypointIndex = session.WaypointIndex >= 0 ? session.WaypointIndex : fallbackWaypointIndex;
             if (waypointIndex < 0 || session.Line != line || nowFrame <= session.StartFrame)
@@ -967,7 +1002,7 @@ namespace RapidTransitMod
                 return;
             }
 
-            if (m_StationStopDwellObservations.TryGetValue(observationKey, out StationStopDwellObservation existing))
+            if (m_StopDwell.TryStation(observationKey, out StationStopDwellObservation existing))
             {
                 int sampleCount = math.min(existing.SampleCount + 1, 32);
                 float averageFrames = existing.SampleCount <= 0
@@ -979,7 +1014,7 @@ namespace RapidTransitMod
                     SampleCount = sampleCount,
                     LastObservedFrame = nowFrame
                 };
-                m_StationStopDwellObservations[observationKey] = updated;
+                m_StopDwell.RecordStation(observationKey, updated);
                 FlushStationStopDwellObservation(observationKey, updated);
                 m_StationAnchorDiagAnchorWritten++;
                 MaybeLogStationAnchorObservationDiagnostics(nowFrame);
@@ -992,7 +1027,7 @@ namespace RapidTransitMod
                 SampleCount = 1,
                 LastObservedFrame = nowFrame
             };
-            m_StationStopDwellObservations[observationKey] = created;
+            m_StopDwell.RecordStation(observationKey, created);
             FlushStationStopDwellObservation(observationKey, created);
             m_StationAnchorDiagAnchorWritten++;
             MaybeLogStationAnchorObservationDiagnostics(nowFrame);
@@ -1038,7 +1073,7 @@ namespace RapidTransitMod
                 + " anchorWritten=" + m_StationAnchorDiagAnchorWritten
                 + " anchorMissing=" + m_StationAnchorDiagAnchorMissing
                 + " anchorRejectedOriginOrTerminal=" + m_StationAnchorDiagAnchorRejectedOriginOrTerminal
-                + " uniqueAnchors=" + m_StationStopDwellObservations.Count
+                + " uniqueAnchors=" + m_StopDwell.Stations.Count
                 + " suspiciousOriginOrTerminal=" + m_StationAnchorDiagSuspiciousOriginOrTerminal
                 + " suspiciousLongDwell=" + m_StationAnchorDiagSuspiciousLongDwell);
 
@@ -1088,7 +1123,7 @@ namespace RapidTransitMod
             maxDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line);
             if (!boarding || currentWaypointIndex <= 0 || currentWaypointIndex >= waypointCount)
             {
-                if (m_StopDwellStartFrame.Remove(vehicle))
+                if (m_StopDwell.RemoveStart(vehicle))
                 {
                     ClearForcedMidStopClosingConsist(vehicle);
                     log.Info("[StopDwellEnd] line" + line.Index
@@ -1104,10 +1139,10 @@ namespace RapidTransitMod
             if (maxDwellMinutes <= 0)
                 return false;
 
-            if (!m_StopDwellStartFrame.TryGetValue(vehicle, out dwellSinceFrame))
+            if (!m_StopDwell.TryStart(vehicle, out dwellSinceFrame))
             {
                 dwellSinceFrame = nowFrame;
-                m_StopDwellStartFrame[vehicle] = dwellSinceFrame;
+                m_StopDwell.SetStart(vehicle, dwellSinceFrame);
                 dwellDeadlineFrame = ComputeAdjustedStopDwellDeadlineFrame(line, currentWaypointIndex, dwellSinceFrame, maxDwellMinutes);
                 log.Info("[StopDwellBegin] line" + line.Index
                     + " vehicle" + vehicle.Index

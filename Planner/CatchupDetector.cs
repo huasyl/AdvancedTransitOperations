@@ -73,6 +73,8 @@ namespace RapidTransitMod.Planner
                             trunk,
                             gapProfile,
                             catchupPoint,
+                            localModel,
+                            expressModel,
                             corridorStations,
                             holdBudgetMinutes);
                         if (!canHoldYieldingLine)
@@ -318,7 +320,7 @@ namespace RapidTransitMod.Planner
                 return;
             }
 
-            List<DepartureControlSystem.DispatchPlannerStationDto> stations = model.Stations
+            List<DispatchPlannerStationDto> stations = model.Stations
                 .Where(station => station != null && station.trackAtomIndex >= 0 && !string.IsNullOrEmpty(station.id))
                 .OrderBy(station => station.trackAtomIndex)
                 .ThenBy(station => station.order)
@@ -328,11 +330,11 @@ namespace RapidTransitMod.Planner
                 return;
             }
 
-            DepartureControlSystem.DispatchPlannerStationDto before = null;
-            DepartureControlSystem.DispatchPlannerStationDto after = null;
+            DispatchPlannerStationDto before = null;
+            DispatchPlannerStationDto after = null;
             for (int index = 0; index < stations.Count; index++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = stations[index];
+                DispatchPlannerStationDto station = stations[index];
                 if (station.trackAtomIndex <= atomIndex)
                 {
                     before = station;
@@ -625,6 +627,8 @@ namespace RapidTransitMod.Planner
             PursuitTrunk trunk,
             PlannerGapProfile gapProfile,
             PlannerCatchupPoint catchupPoint,
+            PlannerLineRuntimeModel localModel,
+            PlannerLineRuntimeModel expressModel,
             List<PlannerBypassStation> stations,
             float holdBudgetMinutes)
         {
@@ -632,11 +636,15 @@ namespace RapidTransitMod.Planner
             foreach (PlannerBypassStation station in stations)
             {
                 PlannerBypassEvaluation evaluation = EvaluateBypassStation(
+                    context,
                     localTrip,
+                    expressTrip,
                     trunk,
                     gapProfile,
                     catchupPoint,
-                    station);
+                    station,
+                    localModel,
+                    expressModel);
                 if (evaluation != null)
                 {
                     evaluations.Add(evaluation);
@@ -680,11 +688,15 @@ namespace RapidTransitMod.Planner
         }
 
         private static PlannerBypassEvaluation EvaluateBypassStation(
+            PlannerContext context,
             PlannerTripModel localTrip,
+            PlannerTripModel expressTrip,
             PursuitTrunk trunk,
             PlannerGapProfile gapProfile,
             PlannerCatchupPoint catchupPoint,
-            PlannerBypassStation station)
+            PlannerBypassStation station,
+            PlannerLineRuntimeModel localModel,
+            PlannerLineRuntimeModel expressModel)
         {
             int axisSampleCount = Math.Max(1, trunk.AxisSampleCount);
             int localLength = Math.Max(1, trunk.LocalEndAtomIndexExclusive - trunk.LocalStartAtomIndex);
@@ -713,9 +725,23 @@ namespace RapidTransitMod.Planner
 
             float holdNeededMinutes = PlannerMath.Round2(Math.Max(0f, gapAtStationMinutes + PlannerDefaults.MinSharedGapMinutes));
             float robustnessHoldNeededMinutes = PlannerMath.Round2(Math.Max(holdNeededMinutes, gapAtStationMinutes + PlannerDefaults.RobustnessMarginTargetMinutes));
-            float targetHoldMinutes = robustnessHoldNeededMinutes;
             PlannerStationEvent localStationEvent = localTrip.StationEvents.FirstOrDefault(eventItem =>
                 string.Equals(eventItem.StationId, station.StationId, StringComparison.Ordinal));
+            int localDepartureBoundaryAtomIndex = ResolveBypassStationDepartureBoundaryAtomIndex(localModel, station);
+            float stationDepartureMinute = localStationEvent != null
+                ? localStationEvent.DepartureMinute
+                : localDepartureBoundaryAtomIndex >= 0
+                    ? localTrip.DepartureMinute + GetAtomBoundaryMinuteOffset(localTrip.AtomBoundaryMinuteOffsets, localDepartureBoundaryAtomIndex)
+                    : gapProfile.Samples[axisIndex].LocalMinute;
+            float releaseHoldMinutes = ComputeReleaseHoldMinutes(
+                context,
+                expressTrip,
+                trunk,
+                stationDepartureMinute,
+                localDepartureBoundaryAtomIndex);
+            holdNeededMinutes = PlannerMath.Round2(Math.Max(holdNeededMinutes, releaseHoldMinutes));
+            robustnessHoldNeededMinutes = PlannerMath.Round2(Math.Max(robustnessHoldNeededMinutes, releaseHoldMinutes));
+            float targetHoldMinutes = robustnessHoldNeededMinutes;
 
             PlannerBypassEvaluation evaluation = new PlannerBypassEvaluation();
             evaluation.StationId = station.StationId;
@@ -730,10 +756,90 @@ namespace RapidTransitMod.Planner
             evaluation.TargetHoldMinutes = targetHoldMinutes;
             evaluation.LocalStationMinute = PlannerMath.Round2(gapProfile.Samples[axisIndex].LocalMinute);
             evaluation.ExpressStationMinute = PlannerMath.Round2(gapProfile.Samples[axisIndex].ExpressMinute);
-            evaluation.StationDepartureMinute = localStationEvent != null
-                ? PlannerMath.Round2(localStationEvent.DepartureMinute)
-                : evaluation.LocalStationMinute;
+            evaluation.StationDepartureMinute = PlannerMath.Round2(stationDepartureMinute);
             return evaluation;
+        }
+
+        private static int ResolveBypassStationDepartureBoundaryAtomIndex(
+            PlannerLineRuntimeModel localModel,
+            PlannerBypassStation station)
+        {
+            if (localModel == null
+                || station == null
+                || localModel.LineTrack?.traversalSlices == null
+                || localModel.Stations == null)
+            {
+                return station?.TrackAtomIndex ?? -1;
+            }
+
+            DispatchPlannerStationDto stationDto = localModel.Stations.FirstOrDefault(candidate =>
+                candidate != null && string.Equals(candidate.id, station.StationId, StringComparison.Ordinal));
+            if (stationDto == null || stationDto.waypointIndex < 0)
+            {
+                return station.TrackAtomIndex;
+            }
+
+            foreach (DispatchPlannerTraversalSliceDto slice in localModel.LineTrack.traversalSlices)
+            {
+                if (slice == null
+                    || !string.Equals(slice.stationTraversalKind, "stop", StringComparison.Ordinal)
+                    || slice.stationWaypointIndex != stationDto.waypointIndex
+                    || !string.Equals(slice.endEventKind, "departure", StringComparison.Ordinal)
+                    || slice.endAtomIndexExclusive <= slice.startAtomIndex)
+                {
+                    continue;
+                }
+
+                return slice.endAtomIndexExclusive;
+            }
+
+            return station.TrackAtomIndex;
+        }
+
+        private static float ComputeReleaseHoldMinutes(
+            PlannerContext context,
+            PlannerTripModel expressTrip,
+            PursuitTrunk trunk,
+            float stationDepartureMinute,
+            int localDepartureBoundaryAtomIndex)
+        {
+            if (context?.Snapshot?.runtimeParams == null
+                || expressTrip == null
+                || trunk == null
+                || localDepartureBoundaryAtomIndex < 0)
+            {
+                return 0f;
+            }
+
+            int releaseAtoms = (int)Math.Ceiling(Math.Max(0f, context.Snapshot.runtimeParams.localBypassExitReleaseAtoms));
+            if (releaseAtoms <= 0)
+            {
+                return 0f;
+            }
+
+            int localReleaseBoundaryAtomIndex = localDepartureBoundaryAtomIndex + releaseAtoms;
+            int expressReleaseBoundaryAtomIndex = MapLocalBoundaryAtomIndexToExpressBoundaryAtomIndex(trunk, localReleaseBoundaryAtomIndex);
+            float expressReleaseMinute = expressTrip.DepartureMinute
+                + GetAtomBoundaryMinuteOffset(expressTrip.AtomBoundaryMinuteOffsets, expressReleaseBoundaryAtomIndex);
+            return Math.Max(0f, expressReleaseMinute - stationDepartureMinute);
+        }
+
+        private static int MapLocalBoundaryAtomIndexToExpressBoundaryAtomIndex(
+            PursuitTrunk trunk,
+            int localBoundaryAtomIndex)
+        {
+            if (trunk == null)
+            {
+                return localBoundaryAtomIndex;
+            }
+
+            int clampedLocalBoundaryAtomIndex = Math.Max(
+                trunk.LocalStartAtomIndex,
+                Math.Min(trunk.LocalEndAtomIndexExclusive, localBoundaryAtomIndex));
+            int localBoundaryOffset = clampedLocalBoundaryAtomIndex - trunk.LocalStartAtomIndex;
+            return Math.Max(
+                trunk.ExpressStartAtomIndex,
+                Math.Min(trunk.ExpressEndAtomIndexExclusive, trunk.ExpressStartAtomIndex + localBoundaryOffset));
         }
 
         private static List<PlannerCatchupEvent> MergeCatchupEvents(List<PlannerCatchupEvent> events)

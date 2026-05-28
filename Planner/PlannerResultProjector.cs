@@ -7,9 +7,9 @@ namespace RapidTransitMod.Planner
 {
     internal sealed class PlannerResultProjector
     {
-        public DepartureControlSystem.DispatchPlannerResult Project(PlannerExecutionState state)
+        public DispatchPlannerResult Project(PlannerExecutionState state)
         {
-            DepartureControlSystem.DispatchPlannerResult result = new DepartureControlSystem.DispatchPlannerResult();
+            DispatchPlannerResult result = new DispatchPlannerResult();
             PlannerContext context = state.Context;
             List<PlannerPlanModel> projectedPlans = SelectPlansForFrontend(state.Plans);
             result.success = state.Diagnostics.All(issue => !string.Equals(issue.Level, "error", StringComparison.Ordinal));
@@ -23,7 +23,7 @@ namespace RapidTransitMod.Planner
             result.planSummaries = projectedPlans.Select(BuildPlanSummary).ToArray();
             result.selectedPlan = result.plans.Length > 0 ? result.plans[0] : null;
             result.diagnostics = state.Diagnostics.Select(BuildDiagnostic).ToArray();
-            result.performance = new DepartureControlSystem.DispatchPlannerPerformanceDto
+            result.performance = new DispatchPlannerPerformanceDto
             {
                 engineMode = "backend-analysis",
                 localLineCount = context.SelectedLocalLineIds.Length,
@@ -180,9 +180,9 @@ namespace RapidTransitMod.Planner
                 + "|retimed=" + plan.RetimedTripCount;
         }
 
-        private static DepartureControlSystem.DispatchPlannerRequestEchoDto BuildRequestEcho(PlannerContext context)
+        private static DispatchPlannerRequestEchoDto BuildRequestEcho(PlannerContext context)
         {
-            return new DepartureControlSystem.DispatchPlannerRequestEchoDto
+            return new DispatchPlannerRequestEchoDto
             {
                 draftKey = context.Request.draftKey,
                 analysisWindowId = context.Request.analysisWindowId,
@@ -208,12 +208,12 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerInputSummaryDto BuildInputSummary(
+        private static DispatchPlannerInputSummaryDto BuildInputSummary(
             PlannerContext context,
             List<PlannerRiskCluster> riskClusters)
         {
             int draftTripCount = (context.SelectedDraft?.trips?.Length ?? 0);
-            return new DepartureControlSystem.DispatchPlannerInputSummaryDto
+            return new DispatchPlannerInputSummaryDto
             {
                 localLineIds = context.SelectedLocalLineIds ?? Array.Empty<string>(),
                 expressSourceCode = context.ExpressSourceMode,
@@ -230,9 +230,9 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerPlanSummaryDto BuildPlanSummary(PlannerPlanModel plan)
+        private static DispatchPlannerPlanSummaryDto BuildPlanSummary(PlannerPlanModel plan)
         {
-            return new DepartureControlSystem.DispatchPlannerPlanSummaryDto
+            return new DispatchPlannerPlanSummaryDto
             {
                 planId = plan.PlanId,
                 objectiveId = plan.ObjectiveId,
@@ -249,10 +249,10 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerPlanDetailDto BuildPlanDetail(PlannerContext context, PlannerPlanModel plan)
+        private static DispatchPlannerPlanDetailDto BuildPlanDetail(PlannerContext context, PlannerPlanModel plan)
         {
             List<PlannerOptimizationRegion> regions = new OptimizationRegionBuilder().BuildOptimizationRegions(plan.RiskClusters ?? new List<PlannerRiskCluster>());
-            return new DepartureControlSystem.DispatchPlannerPlanDetailDto
+            return new DispatchPlannerPlanDetailDto
             {
                 planId = plan.PlanId,
                 objectiveId = plan.ObjectiveId,
@@ -277,7 +277,7 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerCapacityDiagnosticDto BuildCapacityDiagnostic(
+        private static DispatchPlannerCapacityDiagnosticDto BuildCapacityDiagnostic(
             PlannerCapacityDiagnostic diagnostic)
         {
             if (diagnostic == null)
@@ -285,7 +285,7 @@ namespace RapidTransitMod.Planner
                 diagnostic = new PlannerCapacityDiagnostic();
             }
 
-            return new DepartureControlSystem.DispatchPlannerCapacityDiagnosticDto
+            return new DispatchPlannerCapacityDiagnosticDto
             {
                 success = diagnostic.Success,
                 overallVerdict = diagnostic.OverallVerdict ?? string.Empty,
@@ -316,7 +316,7 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchWorkbenchStagedRowDto[] BuildPlannerRows(
+        private static DispatchWorkbenchStagedRowDto[] BuildPlannerRows(
             IEnumerable<PlannerWorkingRow> rows,
             string source,
             bool forceSource = false)
@@ -326,7 +326,7 @@ namespace RapidTransitMod.Planner
                 .OrderBy(row => row.LineId, StringComparer.Ordinal)
                 .ThenBy(row => row.Minute)
                 .ThenBy(row => row.Id, StringComparer.Ordinal)
-                .Select((row, index) => new DepartureControlSystem.DispatchWorkbenchStagedRowDto
+                .Select((row, index) => new DispatchWorkbenchStagedRowDto
                 {
                     id = string.IsNullOrEmpty(row.Id) ? source + "-" + (index + 1).ToString() : row.Id,
                     lineId = row.LineId,
@@ -338,9 +338,9 @@ namespace RapidTransitMod.Planner
                 .ToArray();
         }
 
-        private static DepartureControlSystem.DispatchPlannerPlanMetricsDto BuildPlanMetrics(PlannerPlanModel plan)
+        private static DispatchPlannerPlanMetricsDto BuildPlanMetrics(PlannerPlanModel plan)
         {
-            return new DepartureControlSystem.DispatchPlannerPlanMetricsDto
+            return new DispatchPlannerPlanMetricsDto
             {
                 expressSavedMinutes = plan.ExpressSavedMinutes,
                 localWaitMinutes = plan.LocalWaitMinutes,
@@ -352,10 +352,10 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerOptimizationRegionDto[] BuildOptimizationRegions(
+        private static DispatchPlannerOptimizationRegionDto[] BuildOptimizationRegions(
             List<PlannerOptimizationRegion> regions)
         {
-            return regions.Select(region => new DepartureControlSystem.DispatchPlannerOptimizationRegionDto
+            return regions.Select(region => new DispatchPlannerOptimizationRegionDto
             {
                 regionId = region.RegionId,
                 clusterIds = region.ClusterIds.ToArray(),
@@ -369,21 +369,21 @@ namespace RapidTransitMod.Planner
             }).ToArray();
         }
 
-        private static DepartureControlSystem.DispatchPlannerChangedWindowDto[] BuildChangedWindows(
+        private static DispatchPlannerChangedWindowDto[] BuildChangedWindows(
             PlannerContext context,
             PlannerPlanModel plan,
             List<PlannerOptimizationRegion> regions)
         {
             Dictionary<string, PlannerWorkingRow> baselineById = plan.BaselineRows.ToDictionary(row => row.Id, StringComparer.Ordinal);
             Dictionary<string, PlannerWorkingRow> adjustedById = plan.AdjustedRows.ToDictionary(row => row.Id, StringComparer.Ordinal);
-            Dictionary<string, DepartureControlSystem.DispatchPlannerPreviewRowDto> previewByTripId = plan.PreviewRows.ToDictionary(row => row.tripId, StringComparer.Ordinal);
+            Dictionary<string, DispatchPlannerPreviewRowDto> previewByTripId = plan.PreviewRows.ToDictionary(row => row.tripId, StringComparer.Ordinal);
 
-            List<DepartureControlSystem.DispatchPlannerChangedRowDto> rowDiffs = new List<DepartureControlSystem.DispatchPlannerChangedRowDto>();
+            List<DispatchPlannerChangedRowDto> rowDiffs = new List<DispatchPlannerChangedRowDto>();
             foreach (KeyValuePair<string, PlannerWorkingRow> entry in adjustedById)
             {
                 PlannerWorkingRow adjustedRow = entry.Value;
                 baselineById.TryGetValue(entry.Key, out PlannerWorkingRow baselineRow);
-                previewByTripId.TryGetValue(entry.Key, out DepartureControlSystem.DispatchPlannerPreviewRowDto previewRow);
+                previewByTripId.TryGetValue(entry.Key, out DispatchPlannerPreviewRowDto previewRow);
                 int beforeMinute = baselineRow?.Minute ?? adjustedRow.Minute;
                 int scheduleShiftMinutes = adjustedRow.Minute - beforeMinute;
                 int uniformExpressOffsetMinutes = ResolveUniformTargetExpressOffsetMinutes(context, adjustedRow, plan.RecommendedExpressOffsetDeltaMinutes);
@@ -402,7 +402,7 @@ namespace RapidTransitMod.Planner
                             ? "expressOffset"
                             : "retime"
                     : "predictedHold";
-                rowDiffs.Add(new DepartureControlSystem.DispatchPlannerChangedRowDto
+                rowDiffs.Add(new DispatchPlannerChangedRowDto
                 {
                     tripId = adjustedRow.Id,
                     lineId = adjustedRow.LineId,
@@ -420,26 +420,26 @@ namespace RapidTransitMod.Planner
 
             if (rowDiffs.Count == 0)
             {
-                return Array.Empty<DepartureControlSystem.DispatchPlannerChangedWindowDto>();
+                return Array.Empty<DispatchPlannerChangedWindowDto>();
             }
 
-            List<DepartureControlSystem.DispatchPlannerChangedWindowDto> windows = new List<DepartureControlSystem.DispatchPlannerChangedWindowDto>();
-            List<DepartureControlSystem.DispatchPlannerChangedRowDto> ordered = rowDiffs
+            List<DispatchPlannerChangedWindowDto> windows = new List<DispatchPlannerChangedWindowDto>();
+            List<DispatchPlannerChangedRowDto> ordered = rowDiffs
                 .OrderBy(row => PlannerMath.TimeToMinutes(row.beforeTime) ?? 0)
                 .ThenBy(row => row.lineId, StringComparer.Ordinal)
                 .ToList();
 
-            List<DepartureControlSystem.DispatchPlannerChangedRowDto> currentRows = new List<DepartureControlSystem.DispatchPlannerChangedRowDto>();
+            List<DispatchPlannerChangedRowDto> currentRows = new List<DispatchPlannerChangedRowDto>();
             int previousMinute = -1000;
             for (int i = 0; i < ordered.Count; i++)
             {
-                DepartureControlSystem.DispatchPlannerChangedRowDto row = ordered[i];
+                DispatchPlannerChangedRowDto row = ordered[i];
                 int rowMinute = PlannerMath.TimeToMinutes(row.beforeTime) ?? 0;
                 bool startsNewWindow = currentRows.Count == 0 || rowMinute - previousMinute > 30;
                 if (startsNewWindow && currentRows.Count > 0)
                 {
                     windows.Add(BuildChangedWindow(context, currentRows, regions, windows.Count));
-                    currentRows = new List<DepartureControlSystem.DispatchPlannerChangedRowDto>();
+                    currentRows = new List<DispatchPlannerChangedRowDto>();
                 }
 
                 currentRows.Add(row);
@@ -454,9 +454,9 @@ namespace RapidTransitMod.Planner
             return windows.ToArray();
         }
 
-        private static DepartureControlSystem.DispatchPlannerChangedWindowDto BuildChangedWindow(
+        private static DispatchPlannerChangedWindowDto BuildChangedWindow(
             PlannerContext context,
-            List<DepartureControlSystem.DispatchPlannerChangedRowDto> rows,
+            List<DispatchPlannerChangedRowDto> rows,
             List<PlannerOptimizationRegion> regions,
             int windowIndex)
         {
@@ -468,7 +468,7 @@ namespace RapidTransitMod.Planner
                 || candidate.PriorityLineIds.Intersect(lineIds, StringComparer.Ordinal).Any());
             int fromMinute = rows.Select(row => PlannerMath.TimeToMinutes(row.beforeTime) ?? 0).DefaultIfEmpty(0).Min();
             int toMinute = rows.Select(row => PlannerMath.TimeToMinutes(row.afterTime) ?? 0).DefaultIfEmpty(fromMinute).Max();
-            return new DepartureControlSystem.DispatchPlannerChangedWindowDto
+            return new DispatchPlannerChangedWindowDto
             {
                 windowId = "window-" + windowIndex,
                 regionId = region?.RegionId ?? string.Empty,
@@ -498,13 +498,13 @@ namespace RapidTransitMod.Planner
                 : 0;
         }
 
-        private static DepartureControlSystem.DispatchPlannerLineRoleSummaryDto BuildLineRoleSummary(PlannerContext context)
+        private static DispatchPlannerLineRoleSummaryDto BuildLineRoleSummary(PlannerContext context)
         {
             string[] effectiveLineIds = context.EffectiveLineIds ?? context.SelectedLineIds ?? new string[0];
             HashSet<string> adjustable = new HashSet<string>(context.AdjustableLineIds ?? new string[0], StringComparer.Ordinal);
             HashSet<string> fixedLines = new HashSet<string>(context.FixedLineIds ?? new string[0], StringComparer.Ordinal);
             HashSet<string> targets = new HashSet<string>(context.TargetLineIds ?? new string[0], StringComparer.Ordinal);
-            return new DepartureControlSystem.DispatchPlannerLineRoleSummaryDto
+            return new DispatchPlannerLineRoleSummaryDto
             {
                 effectiveLineIds = effectiveLineIds,
                 adjustableLineIds = context.AdjustableLineIds ?? new string[0],
@@ -512,7 +512,7 @@ namespace RapidTransitMod.Planner
                 targetLineIds = context.TargetLineIds ?? new string[0],
                 autoFixedConstraintLineIds = context.AutoFixedConstraintLineIds ?? new string[0],
                 suppressedFixedVsFixedClusterCount = context.SuppressedFixedVsFixedClusterCount,
-                roles = effectiveLineIds.Select(lineId => new DepartureControlSystem.DispatchPlannerLineRoleDto
+                roles = effectiveLineIds.Select(lineId => new DispatchPlannerLineRoleDto
                 {
                     lineId = lineId,
                     participates = true,
@@ -523,18 +523,18 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerFrontendSummaryDto BuildFallbackFrontendSummary(
+        private static DispatchPlannerFrontendSummaryDto BuildFallbackFrontendSummary(
             PlannerContext context,
             PlannerPlanModel plan)
         {
-            return new DepartureControlSystem.DispatchPlannerFrontendSummaryDto
+            return new DispatchPlannerFrontendSummaryDto
             {
                 effectiveLineIds = context.EffectiveLineIds ?? context.SelectedLineIds ?? new string[0],
                 adjustableLineIds = context.AdjustableLineIds ?? new string[0],
                 fixedLineIds = context.FixedLineIds ?? new string[0],
                 targetLineIds = context.TargetLineIds ?? new string[0],
                 actuallyAdjustedLineIds = new string[0],
-                issueCountsByType = new DepartureControlSystem.DispatchPlannerIssueCountDto[0],
+                issueCountsByType = new DispatchPlannerIssueCountDto[0],
                 actionCount = plan.StructuredScheduleActions.Count,
                 catchupClusterCount = plan.RiskClusters.Count,
                 unresolvedRiskMinutes = plan.UnresolvedRiskMinutes,
@@ -542,12 +542,12 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerRiskClusterDto BuildRiskCluster(
+        private static DispatchPlannerRiskClusterDto BuildRiskCluster(
             PlannerContext context,
             PlannerPlanModel plan,
             PlannerRiskCluster cluster)
         {
-            return new DepartureControlSystem.DispatchPlannerRiskClusterDto
+            return new DispatchPlannerRiskClusterDto
             {
                 clusterId = cluster.ClusterId,
                 severityLevel = cluster.UnresolvedRiskMinutes > 0f ? "high" : cluster.RobustnessRiskMinutes > 0f ? "fragile" : "ok",
@@ -565,13 +565,13 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerRiskEventDto[] BuildRiskEvents(
+        private static DispatchPlannerRiskEventDto[] BuildRiskEvents(
             PlannerPlanModel plan,
             PlannerRiskCluster cluster)
         {
             if (plan == null || cluster == null)
             {
-                return Array.Empty<DepartureControlSystem.DispatchPlannerRiskEventDto>();
+                return Array.Empty<DispatchPlannerRiskEventDto>();
             }
 
             HashSet<string> catchupIds = new HashSet<string>(cluster.CatchupIds ?? new List<string>(), StringComparer.Ordinal);
@@ -590,7 +590,7 @@ namespace RapidTransitMod.Planner
                 .ToArray();
         }
 
-        private static DepartureControlSystem.DispatchPlannerRiskItemDto[] BuildRiskItems(
+        private static DispatchPlannerRiskItemDto[] BuildRiskItems(
             PlannerContext context,
             PlannerPlanModel plan)
         {
@@ -632,14 +632,14 @@ namespace RapidTransitMod.Planner
             return 3;
         }
 
-        private static DepartureControlSystem.DispatchPlannerRiskItemDto BuildRiskItem(
+        private static DispatchPlannerRiskItemDto BuildRiskItem(
             PlannerContext context,
             PlannerCatchupEvent catchupEvent,
             Dictionary<string, PlannerWorkingRow> adjustedRowsById)
         {
             string yieldingTripId = string.IsNullOrEmpty(catchupEvent.YieldingTripId) ? catchupEvent.LocalTripId : catchupEvent.YieldingTripId;
             string priorityTripId = string.IsNullOrEmpty(catchupEvent.PriorityTripId) ? catchupEvent.ExpressTripId : catchupEvent.PriorityTripId;
-            return new DepartureControlSystem.DispatchPlannerRiskItemDto
+            return new DispatchPlannerRiskItemDto
             {
                 riskId = catchupEvent.EventId,
                 problemType = string.IsNullOrEmpty(catchupEvent.ProblemType) ? ResolveProblemTypeFallback(catchupEvent) : catchupEvent.ProblemType,
@@ -681,13 +681,13 @@ namespace RapidTransitMod.Planner
                 : "lowMargin";
         }
 
-        private static DepartureControlSystem.DispatchPlannerRiskEventDto BuildRiskEvent(
+        private static DispatchPlannerRiskEventDto BuildRiskEvent(
             PlannerCatchupEvent catchupEvent,
             Dictionary<string, PlannerWorkingRow> adjustedRowsById)
         {
             string yieldingTripId = string.IsNullOrEmpty(catchupEvent.YieldingTripId) ? catchupEvent.LocalTripId : catchupEvent.YieldingTripId;
             string priorityTripId = string.IsNullOrEmpty(catchupEvent.PriorityTripId) ? catchupEvent.ExpressTripId : catchupEvent.PriorityTripId;
-            return new DepartureControlSystem.DispatchPlannerRiskEventDto
+            return new DispatchPlannerRiskEventDto
             {
                 eventId = catchupEvent.EventId,
                 statusCode = ResolveRiskEventStatus(catchupEvent),
@@ -766,9 +766,9 @@ namespace RapidTransitMod.Planner
             return "handled";
         }
 
-        private static DepartureControlSystem.DispatchPlannerDiagnosticDto BuildDiagnostic(PlannerValidationIssue issue)
+        private static DispatchPlannerDiagnosticDto BuildDiagnostic(PlannerValidationIssue issue)
         {
-            return new DepartureControlSystem.DispatchPlannerDiagnosticDto
+            return new DispatchPlannerDiagnosticDto
             {
                 level = issue.Level,
                 code = issue.Code,
@@ -794,7 +794,7 @@ namespace RapidTransitMod.Planner
                 return "虚拟快车";
             }
 
-            return context.LinesById.TryGetValue(lineId, out DepartureControlSystem.DispatchPlannerLineDto line)
+            return context.LinesById.TryGetValue(lineId, out DispatchPlannerLineDto line)
                 ? line.name ?? lineId
                 : lineId;
         }

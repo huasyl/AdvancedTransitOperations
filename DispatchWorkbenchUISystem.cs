@@ -22,6 +22,7 @@ namespace RapidTransitMod
         {
             base.OnCreate();
             s_Instance = this;
+            WorkbenchApi.Initialize();
 
             AddBinding(m_SnapshotJsonBinding = new ValueBinding<string>(kGroup, "snapshotJson", string.Empty));
             AddBinding(m_SaveResultJsonBinding = new ValueBinding<string>(kGroup, "saveResultJson", string.Empty));
@@ -49,14 +50,12 @@ namespace RapidTransitMod
 
         private void RefreshSnapshot()
         {
-            string snapshotJson = DepartureControlSystem.Instance?.RefreshWorkbenchSnapshotJson() ?? string.Empty;
-            PublishSnapshotJson(snapshotJson);
+            WorkbenchApi.RefreshSnapshot();
         }
 
         private void SaveWorkbenchDraft(string requestJson)
         {
-            string resultJson = DepartureControlSystem.Instance?.SaveWorkbenchDraftJson(requestJson) ?? string.Empty;
-            PublishSaveResultJson(resultJson);
+            WorkbenchApi.SaveNativeDraft(requestJson);
         }
 
         internal static void PublishSnapshotJson(string snapshotJson)

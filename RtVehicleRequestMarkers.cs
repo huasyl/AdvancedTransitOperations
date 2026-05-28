@@ -3,25 +3,11 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    internal struct RtVehicleRequestSentinel : IComponentData, ISerializable
+    internal struct RtVehicleRequestSentinel : IComponentData, IEmptySerializable
     {
-        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
-        {
-        }
-
-        public void Deserialize<TReader>(TReader reader) where TReader : IReader
-        {
-        }
     }
 
-    internal struct RtSpawnPermitRequest : IComponentData, ISerializable
+    internal struct RtSpawnPermitRequest : IComponentData, IEmptySerializable
     {
-        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
-        {
-        }
-
-        public void Deserialize<TReader>(TReader reader) where TReader : IReader
-        {
-        }
     }
 }

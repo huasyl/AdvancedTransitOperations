@@ -451,6 +451,16 @@
   flex: 0 0 120px;
 }
 
+.dw-demo-field.is-features {
+  width: 304px;
+  flex: 0 0 304px;
+}
+
+.dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-field.is-features {
+  width: 384px;
+  flex: 0 0 384px;
+}
+
 .dw-demo-field.is-hold .dw-demo-input-row,
 .dw-demo-field.is-dwell .dw-demo-input-row {
   width: 84px;
@@ -655,6 +665,19 @@
 .dw-demo-toggle.is-active.is-express {
   background-color: rgba(192, 132, 252, 0.16);
   color: #c084fc;
+}
+
+.dw-demo-feature-toggle-group {
+  display: flex;
+  height: 46px;
+  box-sizing: border-box;
+}
+
+.dw-demo-feature-toggle {
+  padding: 0 8px;
+  font-size: 14px;
+  line-height: 16px;
+  white-space: normal;
 }
 
 .dw-demo-offset-control {

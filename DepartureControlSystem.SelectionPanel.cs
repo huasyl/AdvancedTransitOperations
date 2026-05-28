@@ -11,7 +11,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         public struct SelectedPanelSnapshot
         {
@@ -56,7 +56,7 @@ namespace RapidTransitMod
         public void FillDebugInfo(Entity entity, InfoList list)
         {
             if (entity == Entity.Null) return;
-            if (m_VehicleState.ContainsKey(entity))
+            if (m_VehicleView.Contains(entity))
             {
                 FillVehicleDebugInfo(entity, list);
                 return;
@@ -78,7 +78,7 @@ namespace RapidTransitMod
         public bool IsManagedVehicle(Entity entity)
         {
             Entity resolvedVehicle = ResolveSelectedVehicleEntity(entity);
-            return resolvedVehicle != Entity.Null && m_VehicleState.ContainsKey(resolvedVehicle);
+            return resolvedVehicle != Entity.Null && m_VehicleView.Contains(resolvedVehicle);
         }
 
         public bool CanConfigureBypassStation(Entity entity)
@@ -195,7 +195,7 @@ namespace RapidTransitMod
         {
             vehicle = ResolveSelectedVehicleEntity(vehicle);
             summaryLabel = "State";
-            summaryValue = m_VehicleState.TryGetValue(vehicle, out var vehicleState) ? vehicleState.ToString() : "Unknown";
+            summaryValue = m_VehicleView.TryGetState(vehicle, out var vehicleState) ? vehicleState.ToString() : "Unknown";
         }
 
         public void FillSelectedLineInfo(Entity line, InfoList list)
@@ -233,14 +233,14 @@ namespace RapidTransitMod
                         continue;
 
                     total++;
-                    if (m_NearingTerminus.Contains(vehicle))
+                    if (m_VehicleView.IsInbound(vehicle))
                         nearingTerminus++;
-                    if (m_VehicleTargetMin.TryGetValue(vehicle, out int targetSlot) && targetSlot == nextSlot)
+                    if (m_VehicleView.TryGetTarget(vehicle, out int targetSlot) && targetSlot == nextSlot)
                         targetingNextSlot++;
-                    if (m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentSlot) && currentSlot == nextSlot)
+                    if (m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot == nextSlot)
                         occupyingNextSlot++;
 
-                    if (!m_VehicleState.TryGetValue(vehicle, out var state))
+                    if (!m_VehicleView.TryGetState(vehicle, out var state))
                         continue;
 
                     switch (state)
@@ -364,13 +364,13 @@ namespace RapidTransitMod
                 return;
 
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            string state = m_VehicleState.TryGetValue(vehicle, out var vehicleState)
+            string state = m_VehicleView.TryGetState(vehicle, out var vehicleState)
                 ? GetVehiclePanelStateCode(vehicle, vehicleState)
                 : "Unknown";
             Entity line = ResolveVehicleLine(vehicle);
             string lineStr = line != Entity.Null ? line.Index.ToString() : "-";
-            string targetStr = m_VehicleTargetMin.TryGetValue(vehicle, out int targetMin) && targetMin >= 0 ? SlotStr(targetMin) : "-";
-            string currentStr = m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
+            string targetStr = m_VehicleView.TryGetTarget(vehicle, out int targetMin) && targetMin >= 0 ? SlotStr(targetMin) : "-";
+            string currentStr = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
             string progress = BuildVehicleProgressSummary(vehicle);
             string eta = EstimateVehicleEtaText(vehicle, line, vehicleState);
             string alerts = BuildVehicleAlertSummary(vehicle, line, nowMin, targetMin);
@@ -424,14 +424,14 @@ namespace RapidTransitMod
                         continue;
 
                     total++;
-                    if (m_NearingTerminus.Contains(vehicle))
+                    if (m_VehicleView.IsInbound(vehicle))
                         nearingTerminus++;
-                    if (isManagedLine && m_VehicleTargetMin.TryGetValue(vehicle, out int targetSlot) && targetSlot == nextSlot)
+                    if (isManagedLine && m_VehicleView.TryGetTarget(vehicle, out int targetSlot) && targetSlot == nextSlot)
                         nextSlotOccupancy++;
-                    if (isManagedLine && m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentSlot) && currentSlot == nextSlot)
+                    if (isManagedLine && m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot == nextSlot)
                         nextSlotOccupancy++;
 
-                    if (!m_VehicleState.TryGetValue(vehicle, out var state))
+                    if (!m_VehicleView.TryGetState(vehicle, out var state))
                         continue;
 
                     switch (state)
@@ -503,13 +503,13 @@ namespace RapidTransitMod
                 return false;
 
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            bool isManagedVehicle = m_VehicleState.TryGetValue(vehicle, out var vehicleState);
+            bool isManagedVehicle = m_VehicleView.TryGetState(vehicle, out var vehicleState);
             PublicTransportFlags nativeFlags = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
                 ? EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State
                 : 0;
             Entity line = ResolveVehicleLine(vehicle);
-            int targetMin = m_VehicleTargetMin.TryGetValue(vehicle, out int targetSlot) ? targetSlot : -1;
-            int currentMin = m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentSlot) ? currentSlot : -1;
+            int targetMin = m_VehicleView.TryGetTarget(vehicle, out int targetSlot) ? targetSlot : -1;
+            int currentMin = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) ? currentSlot : -1;
             string state = isManagedVehicle ? GetVehiclePanelStateCode(vehicle, vehicleState) : DescribeNativeVehicleState(nativeFlags);
             string alertText = isManagedVehicle
                 ? BuildVehicleAlertSummary(vehicle, line, nowMin, targetMin)
@@ -575,16 +575,16 @@ namespace RapidTransitMod
             }
 
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            bool isManagedVehicle = m_VehicleState.TryGetValue(vehicle, out var vehicleState);
+            bool isManagedVehicle = m_VehicleView.TryGetState(vehicle, out var vehicleState);
             PublicTransportFlags nativeFlags = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
                 ? EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State
                 : 0;
             string state = isManagedVehicle ? GetVehiclePanelStateCode(vehicle, vehicleState) : DescribeNativeVehicleState(nativeFlags);
             Entity line = ResolveVehicleLine(vehicle);
             string lineStr = line != Entity.Null ? "#" + line.Index : "-";
-            int targetMin = m_VehicleTargetMin.TryGetValue(vehicle, out int targetSlot) ? targetSlot : -1;
+            int targetMin = m_VehicleView.TryGetTarget(vehicle, out int targetSlot) ? targetSlot : -1;
             string targetStr = targetMin >= 0 ? SlotStr(targetMin) : "-";
-            string currentStr = m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
+            string currentStr = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
             string stopDwell = BuildVehicleStopDwellValue(vehicle);
             string inboundTime = BuildVehicleInboundTimeValue(vehicle);
 
@@ -631,10 +631,7 @@ namespace RapidTransitMod
             if (!IsManagedVehicle(vehicle))
                 return false;
 
-            m_VehicleTargetMin[vehicle] = -1;
-            m_VehiclePreparingStartFrame.Remove(vehicle);
-            m_VehicleDispatchRequestStartFrame.Remove(vehicle);
-            m_VehicleIdleStartFrame.Remove(vehicle);
+            m_RuntimeController.Reevaluate(vehicle);
             InvalidatePanelData();
             return true;
         }
@@ -774,7 +771,7 @@ namespace RapidTransitMod
             waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
             if (waypoints.Length == 0
                 || !TryBuildTraversalSliceSamplingPlan(vehicle, line, waypoints, out plan)
-                || !m_LineTrackChains.TryGetValue(line, out chain)
+                || !m_TrackModelQuery.TryChain(line, out chain)
                 || chain == null
                 || plan.SegmentIndex < 0
                 || plan.SegmentIndex >= chain.SegmentRanges.Count)
@@ -812,14 +809,14 @@ namespace RapidTransitMod
 
         private string GetVehiclePanelStateCode(Entity vehicle, VehicleState vehicleState)
         {
-            if (m_BypassYieldBlocker.ContainsKey(vehicle)
+            if (m_BypassDecision.TryGetLatchedBlocker(vehicle, out _)
                 && (vehicleState == VehicleState.Holding || vehicleState == VehicleState.Running))
             {
                 return "Yielding";
             }
 
             if (vehicleState == VehicleState.Holding
-                && (!m_VehicleTargetMin.TryGetValue(vehicle, out int holdingTarget) || holdingTarget < 0))
+                && (!m_VehicleView.TryGetTarget(vehicle, out int holdingTarget) || holdingTarget < 0))
             {
                 return "Idle";
             }

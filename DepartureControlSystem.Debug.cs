@@ -11,7 +11,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private void SetUILabel(Entity v, string msg)
         {
@@ -90,9 +90,9 @@ namespace RapidTransitMod
                 return;
 
             int cachedWpIdx = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWp) ? cachedWp : -1;
-            bool hasForcedReady = m_ForcedOriginReadyFrame.TryGetValue(vehicle, out uint forcedReadyFrame) && forcedReadyFrame > nowFrame;
+            bool hasForcedReady = m_VehicleView.TryGetReady(vehicle, out uint forcedReadyFrame) && forcedReadyFrame > nowFrame;
             bool hasBvMisfire = m_BVMisfire.Contains(vehicle);
-            int currentSlot = m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentAssignedSlot) ? currentAssignedSlot : -1;
+            int currentSlot = m_VehicleView.TryGetSlot(vehicle, out int currentAssignedSlot) ? currentAssignedSlot : -1;
             string key = reason
                 + "|state=" + state
                 + "|target=" + targetMin
@@ -154,12 +154,12 @@ namespace RapidTransitMod
             if (line == Entity.Null || holder == Entity.Null || !EntityManager.Exists(holder))
                 return;
 
-            VehicleState holderState = m_VehicleState.TryGetValue(holder, out var st) ? st : VehicleState.Running;
+            VehicleState holderState = m_VehicleView.TryGetState(holder, out var st) ? st : VehicleState.Running;
             if (holderState != VehicleState.Holding)
                 return;
 
-            int holderTarget = m_VehicleTargetMin.TryGetValue(holder, out int target) ? target : -1;
-            int holderCurrent = m_VehicleCurrentSlot.TryGetValue(holder, out int current) ? current : -1;
+            int holderTarget = m_VehicleView.TryGetTarget(holder, out int target) ? target : -1;
+            int holderCurrent = m_VehicleView.TryGetSlot(holder, out int current) ? current : -1;
             int holderCachedWp = m_CachedWpIdx.TryGetValue(holder, out int cachedWp) ? cachedWp : -1;
             string key = reason
                 + "|slot=" + slot
@@ -272,14 +272,14 @@ namespace RapidTransitMod
                 alerts = AppendAlert(alerts, "yielding-for:" + blockerVehicle.Index);
             if (m_BVMisfire.Contains(vehicle))
                 alerts = AppendAlert(alerts, "bv-misfire");
-            if (m_NearingTerminus.Contains(vehicle))
+            if (m_VehicleView.IsInbound(vehicle))
                 alerts = AppendAlert(alerts, "nearing-terminus");
-            if (m_LaunchCooldownUntil.TryGetValue(vehicle, out uint cooldownUntil) && m_SimulationSystem.frameIndex < cooldownUntil)
+            if (m_VehicleView.TryGetCooldown(vehicle, out uint cooldownUntil) && m_SimulationSystem.frameIndex < cooldownUntil)
                 alerts = AppendAlert(alerts, "launch-cooldown");
             if (targetMin >= 0 && IsSlotExpired(nowMin, targetMin))
                 alerts = AppendAlert(alerts, "target-expired");
             if (line != Entity.Null
-                && m_VehicleState.TryGetValue(vehicle, out var state)
+                && m_VehicleView.TryGetState(vehicle, out var state)
                 && state == VehicleState.Idle
                 && ShouldProtectIdleFromYield(line, vehicle, nowMin))
                 alerts = AppendAlert(alerts, "yield-protected");
@@ -289,7 +289,7 @@ namespace RapidTransitMod
         private string BuildVehicleProgressSummary(Entity vehicle)
         {
             string cachedWaypoint = m_CachedWpIdx.TryGetValue(vehicle, out int waypointIndex) ? waypointIndex.ToString() : "-";
-            string lapDistance = m_VehicleLapDistance.TryGetValue(vehicle, out float distance) && distance >= 0f
+            string lapDistance = m_LapObservations.TryDistance(vehicle, out float distance) && distance >= 0f
                 ? (distance / 1000f).ToString("F2") + " km"
                 : "-";
             return "wp " + cachedWaypoint + " / lap " + lapDistance;
@@ -336,7 +336,7 @@ namespace RapidTransitMod
 
         private string BuildVehicleStopDwellValue(Entity vehicle)
         {
-            if (!m_StopDwellStartFrame.TryGetValue(vehicle, out uint dwellSinceFrame))
+            if (!m_StopDwell.TryStart(vehicle, out uint dwellSinceFrame))
                 return "-";
 
             uint elapsedFrames = m_SimulationSystem.frameIndex > dwellSinceFrame
@@ -347,10 +347,10 @@ namespace RapidTransitMod
 
         private string BuildVehicleInboundTimeValue(Entity vehicle)
         {
-            if (m_VehiclePreparingStartFrame.TryGetValue(vehicle, out uint prepStartFrame))
+            if (m_VehicleView.TryGetPreparing(vehicle, out uint prepStartFrame))
                 return SlotStr((int)(prepStartFrame / (uint)SIM_FRAMES_PER_MINUTE) % 1440);
 
-            if (m_OriginArrivalCandidateSinceFrame.TryGetValue(vehicle, out uint originSinceFrame))
+            if (m_VehicleView.TryGetOrigin(vehicle, out uint originSinceFrame))
                 return SlotStr((int)(originSinceFrame / (uint)SIM_FRAMES_PER_MINUTE) % 1440);
 
             return "-";
@@ -399,19 +399,19 @@ namespace RapidTransitMod
 
         private void FillVehicleDebugInfo(Entity v, InfoList list)
         {
-            string state = m_VehicleState.TryGetValue(v, out var st) ? st.ToString() : "Unknown";
-            string lineStr = m_VehicleLine.TryGetValue(v, out Entity line) ? line.Index.ToString() : "-";
-            string targetStr = m_VehicleTargetMin.TryGetValue(v, out int targetMin) && targetMin >= 0 ? SlotStr(targetMin) : "-";
-            string currentStr = m_VehicleCurrentSlot.TryGetValue(v, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
+            string state = m_VehicleView.TryGetState(v, out var st) ? st.ToString() : "Unknown";
+            string lineStr = m_VehicleView.TryGetLine(v, out Entity line) ? line.Index.ToString() : "-";
+            string targetStr = m_VehicleView.TryGetTarget(v, out int targetMin) && targetMin >= 0 ? SlotStr(targetMin) : "-";
+            string currentStr = m_VehicleView.TryGetSlot(v, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
             string cachedWp = m_CachedWpIdx.TryGetValue(v, out int wp) ? wp.ToString() : "-";
-            string tagged = BoolDebugStr(m_NearingTerminus.Contains(v));
-            string cooldown = BoolDebugStr(m_LaunchCooldownUntil.TryGetValue(v, out uint cd) && m_SimulationSystem.frameIndex < cd);
+            string tagged = BoolDebugStr(m_VehicleView.IsInbound(v));
+            string cooldown = BoolDebugStr(m_VehicleView.TryGetCooldown(v, out uint cd) && m_SimulationSystem.frameIndex < cd);
             string misfire = BoolDebugStr(m_BVMisfire.Contains(v));
-            string lapStartFrame = m_VehicleLapStartFrame.TryGetValue(v, out uint lsf) ? lsf.ToString() : "-";
-            string lapFrames = m_VehicleLapFrames.TryGetValue(v, out uint lf) ? lf.ToString() : "-";
-            string lapDistance = m_VehicleLapDistance.TryGetValue(v, out float ld) && ld >= 0f ? (ld / 1000f).ToString("F2") + "km" : "-";
-            string prepStart = m_VehiclePreparingStartFrame.TryGetValue(v, out uint psf) ? psf.ToString() : "-";
-            string idleStart = m_VehicleIdleStartFrame.TryGetValue(v, out uint isf) ? isf.ToString() : "-";
+            string lapStartFrame = m_LapObservations.TryStartFrame(v, out uint lsf) ? lsf.ToString() : "-";
+            string lapFrames = m_LapObservations.TryFrames(v, out uint lf) ? lf.ToString() : "-";
+            string lapDistance = m_LapObservations.TryDistance(v, out float ld) && ld >= 0f ? (ld / 1000f).ToString("F2") + "km" : "-";
+            string prepStart = m_VehicleView.TryGetPreparing(v, out uint psf) ? psf.ToString() : "-";
+            string idleStart = m_VehicleView.TryGetIdle(v, out uint isf) ? isf.ToString() : "-";
 
             AddDebugItem(list, "车辆", "Vehicle", v.Index.ToString());
             AddDebugItem(list, "状态", "State", state);
@@ -455,8 +455,8 @@ namespace RapidTransitMod
                     Entity v = rvs[i].m_Vehicle;
                     if (!EntityManager.Exists(v)) continue;
                     total++;
-                    if (m_NearingTerminus.Contains(v)) tagged++;
-                    if (!m_VehicleState.TryGetValue(v, out var st)) continue;
+                    if (m_VehicleView.IsInbound(v)) tagged++;
+                    if (!m_VehicleView.TryGetState(v, out var st)) continue;
                     switch (st)
                     {
                         case VehicleState.Preparing: preparing++; break;

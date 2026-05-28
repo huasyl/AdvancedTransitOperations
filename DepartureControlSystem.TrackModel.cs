@@ -12,14 +12,34 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
-        private readonly Dictionary<Entity, LineTrackChain> m_LineTrackChains = new Dictionary<Entity, LineTrackChain>();
+        private TrackModelStore m_TrackModels = null!;
+        private TrackModelBuilder m_TrackModelBuilder = null!;
+        private TrackModelQuery m_TrackModelQuery = null!;
+        private TrackModelCoordinator m_TrackModelCoordinator = null!;
+
+        private Dictionary<Entity, LineTrackChain> m_LineTrackChains => m_TrackModels.Chains;
+        private HashSet<Entity> m_DirtyTrackLines => m_TrackModels.DirtyLines;
+        private Dictionary<TrackAtomKey, List<SharedTrackOccurrence>> m_SharedTrackIndex => m_TrackModelBuilder.Track;
+        private Dictionary<Entity, List<SharedPhysicalOccurrence>> m_SharedPhysicalTrackIndex => m_TrackModelBuilder.Physical;
+        private uint m_SharedTrackIndexVersion => m_TrackModelBuilder.Version();
+        private bool m_SharedTrackIndexDirty
+        {
+            get => m_TrackModelBuilder.Dirty();
+            set
+            {
+                if (value)
+                {
+                    m_TrackModelBuilder.MarkDirty();
+                    return;
+                }
+
+                m_TrackModelBuilder.ClearDirty();
+            }
+        }
+
         private readonly Dictionary<Entity, List<DevSightLaneOccurrence>> m_DevSightLaneIndex = new Dictionary<Entity, List<DevSightLaneOccurrence>>();
-        private readonly Dictionary<TrackAtomKey, List<SharedTrackOccurrence>> m_SharedTrackIndex = new Dictionary<TrackAtomKey, List<SharedTrackOccurrence>>();
-        private readonly Dictionary<Entity, List<SharedPhysicalOccurrence>> m_SharedPhysicalTrackIndex = new Dictionary<Entity, List<SharedPhysicalOccurrence>>();
-        private readonly Dictionary<Entity, VehicleTrackCursor> m_VehicleTrackCursorHints = new Dictionary<Entity, VehicleTrackCursor>();
-        private readonly Dictionary<Entity, VehicleTrackCursorFrameSnapshot> m_VehicleTrackCursorFrameSnapshots = new Dictionary<Entity, VehicleTrackCursorFrameSnapshot>();
         private readonly Dictionary<Entity, uint> m_SuspectProgressSinceFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, uint> m_SuspectProgressLastValidationFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, bool> m_SuspectProgressProjectionInvalid = new Dictionary<Entity, bool>();
@@ -64,10 +84,6 @@ namespace RapidTransitMod
         private readonly List<Entity> m_ProtectedIntervalOrderedCandidateKeys = new List<Entity>();
         private readonly List<int> m_ProtectedIntervalOrderedSourceAtomIndices = new List<int>();
         private readonly List<int> m_ProtectedIntervalOrderedCandidateAtomIndices = new List<int>();
-        private uint m_SharedTrackIndexVersion = 1;
-        private readonly HashSet<Entity> m_DirtyTrackLines = new HashSet<Entity>();
-        private bool m_SharedTrackIndexDirty = true;
-
         public string BuildDevSightLaneTooltipSummary(Entity laneEntity)
         {
             if (laneEntity == Entity.Null)
@@ -201,7 +217,7 @@ namespace RapidTransitMod
         {
             sharedLineCount = 0;
             mirroredContext = false;
-            if (!m_SharedTrackIndex.TryGetValue(key, out List<SharedTrackOccurrence> occurrences)
+            if (!m_TrackModelQuery.TryTrack(key, out List<SharedTrackOccurrence> occurrences)
                 || occurrences == null
                 || occurrences.Count == 0)
             {
@@ -220,7 +236,7 @@ namespace RapidTransitMod
                 return false;
 
             TrackAtomKey mirroredKey = new TrackAtomKey(key.PhysicalLaneKey, key.NextTarget, key.PreviousTarget);
-            if (m_SharedTrackIndex.TryGetValue(mirroredKey, out List<SharedTrackOccurrence> mirroredOccurrences)
+            if (m_TrackModelQuery.TryTrack(mirroredKey, out List<SharedTrackOccurrence> mirroredOccurrences)
                 && mirroredOccurrences != null)
             {
                 foreach (SharedTrackOccurrence occurrence in mirroredOccurrences)
@@ -241,7 +257,7 @@ namespace RapidTransitMod
             sharedLineCount = 0;
             mirroredContext = false;
 
-            if (!m_SharedPhysicalTrackIndex.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
+            if (!m_TrackModelQuery.TryPhysical(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
                 || occurrences == null
                 || occurrences.Count == 0)
             {
@@ -270,7 +286,7 @@ namespace RapidTransitMod
         {
             mirroredContext = false;
             if (otherLine == Entity.Null
-                || !m_SharedPhysicalTrackIndex.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
+                || !m_TrackModelQuery.TryPhysical(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
                 || occurrences == null)
             {
                 return false;

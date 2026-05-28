@@ -48,7 +48,7 @@ namespace RapidTransitMod
         Retiring = 5,
     }
 
-    public partial class DepartureControlSystem : GameSystemBase
+    public partial class DispatchRuntimeSystem : GameSystemBase, IBypassDecisionRuntime, IBypassControlRuntime
     {
         private CameraUpdateSystem m_CameraUpdateSystem;
 
@@ -58,33 +58,6 @@ namespace RapidTransitMod
             public float m_BaseLoopFrames;
             public int m_Offset;
             public int m_Count;
-        }
-
-        private struct StopDwellObservation
-        {
-            public float AverageFrames;
-            public int SampleCount;
-        }
-
-        private struct StationStopDwellObservation
-        {
-            public float AverageFrames;
-            public int SampleCount;
-            public uint LastObservedFrame;
-        }
-
-        private struct StopDwellSession
-        {
-            public Entity Line;
-            public int WaypointIndex;
-            public uint StartFrame;
-
-            public StopDwellSession(Entity line, int waypointIndex, uint startFrame)
-            {
-                Line = line;
-                WaypointIndex = waypointIndex;
-                StartFrame = startFrame;
-            }
         }
 
         private readonly struct AssistLaunchPendingRecord
@@ -397,98 +370,6 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct TraversalSliceObservation
-        {
-            public readonly float AverageFrames;
-            public readonly float FastBaselineFrames;
-            public readonly int SampleCount;
-            public readonly uint LastObservedFrame;
-
-            public TraversalSliceObservation(float averageFrames, float fastBaselineFrames, int sampleCount, uint lastObservedFrame)
-            {
-                AverageFrames = averageFrames;
-                FastBaselineFrames = fastBaselineFrames;
-                SampleCount = sampleCount;
-                LastObservedFrame = lastObservedFrame;
-            }
-        }
-
-        private readonly struct TraversalSliceSamplingPlanCache
-        {
-            public readonly Entity Line;
-            public readonly ulong ChainSignature;
-            public readonly int SliceIndex;
-            public readonly uint NextRefreshFrame;
-            public readonly TraversalSliceSamplingPlan Plan;
-
-            public TraversalSliceSamplingPlanCache(Entity line, ulong chainSignature, int sliceIndex, uint nextRefreshFrame, TraversalSliceSamplingPlan plan)
-            {
-                Line = line;
-                ChainSignature = chainSignature;
-                SliceIndex = sliceIndex;
-                NextRefreshFrame = nextRefreshFrame;
-                Plan = plan;
-            }
-        }
-
-        private readonly struct VehicleTraversalSliceSession
-        {
-            public readonly Entity Line;
-            public readonly int SliceIndex;
-            public readonly uint EnterFrame;
-            public readonly int EnterAtomIndex;
-            public readonly float EnterAtomPosition01;
-
-            public VehicleTraversalSliceSession(Entity line, int sliceIndex, uint enterFrame, int enterAtomIndex, float enterAtomPosition01)
-            {
-                Line = line;
-                SliceIndex = sliceIndex;
-                EnterFrame = enterFrame;
-                EnterAtomIndex = enterAtomIndex;
-                EnterAtomPosition01 = enterAtomPosition01;
-            }
-        }
-
-        private struct TraversalSliceLapDebugAggregate
-        {
-            public int StartCount;
-            public int FinalizeCount;
-            public int MidSliceStartCount;
-            public int DroppedWithoutFinalizeCount;
-            public float EnterOffsetSumAtoms;
-            public float MaxEnterOffsetAtoms;
-            public float ObservedFramesSum;
-            public float MinObservedFrames;
-            public float MaxObservedFrames;
-
-            public void RecordStart(float enterOffsetAtoms, bool midSliceStart)
-            {
-                StartCount++;
-                EnterOffsetSumAtoms += enterOffsetAtoms;
-                if (enterOffsetAtoms > MaxEnterOffsetAtoms)
-                    MaxEnterOffsetAtoms = enterOffsetAtoms;
-                if (midSliceStart)
-                    MidSliceStartCount++;
-            }
-
-            public void RecordFinalize(float observedFrames)
-            {
-                FinalizeCount++;
-                ObservedFramesSum += observedFrames;
-                if (FinalizeCount == 1)
-                {
-                    MinObservedFrames = observedFrames;
-                    MaxObservedFrames = observedFrames;
-                    return;
-                }
-
-                if (observedFrames < MinObservedFrames)
-                    MinObservedFrames = observedFrames;
-                if (observedFrames > MaxObservedFrames)
-                    MaxObservedFrames = observedFrames;
-            }
-        }
-
         private sealed class LineMileageModel
         {
             public ulong Signature;
@@ -531,7 +412,7 @@ namespace RapidTransitMod
             public float SegmentPosition;
         }
 
-        public static DepartureControlSystem Instance = null!;
+        public static DispatchRuntimeSystem Instance = null!;
         private TimedLogger log = Mod.log;
         private SimulationSystem m_SimulationSystem = null!;
         private TimeSystem m_TimeSystem = null!;
@@ -539,16 +420,14 @@ namespace RapidTransitMod
         private EndFrameBarrier m_EndFrameBarrier = null!;
 
         // ── 车辆状态 ──
-        private NativeHashMap<Entity, VehicleState> m_VehicleState;
-        private NativeHashMap<Entity, int> m_VehicleTargetMin;
-        private NativeHashMap<Entity, float> m_VehicleLapStartOdometer;
-        private NativeHashMap<Entity, float> m_VehicleLapDistance;
-        private NativeHashMap<Entity, uint> m_VehicleLapStartFrame;
-        private NativeHashMap<Entity, uint> m_VehicleLapFrames;
-        private NativeHashMap<Entity, uint> m_VehicleIdleStartFrame;
-        private NativeHashMap<Entity, uint> m_VehiclePreparingStartFrame;
-        private NativeHashMap<Entity, int> m_VehicleCurrentSlot;
-        private NativeHashMap<Entity, uint> m_VehicleLastLaunchFrame;
+        private VehicleRuntimeStateStore m_VehicleRuntime = null!;
+        private VehicleRuntimeRegistry m_VehicleRegistry = null!;
+        private VehicleRuntimeView m_VehicleView = null!;
+        private DispatchRuntimeController m_RuntimeController = null!;
+        private LapObservationStore m_LapObservations = null!;
+        private StopDwellStore m_StopDwell = null!;
+        private TraversalSliceStore m_TraversalSlices = null!;
+        private RuntimeObservationStore m_RuntimeObservations = null!;
         private NativeHashMap<Entity, FixedString64Bytes> m_UICache;
         private NativeHashMap<Entity, bool> m_LastBoarding;
         private NativeHashMap<Entity, int> m_CachedWpIdx;
@@ -556,38 +435,29 @@ namespace RapidTransitMod
         private NativeHashMap<Entity, uint> m_BVMisfireStartFrame;
         private NativeHashMap<Entity, uint> m_ForcedMidStopBoardingGraceUntil;
         private NativeHashMap<Entity, uint> m_ForcedMidStopBoardingHardCloseAfter;
-        private NativeHashMap<Entity, Entity> m_VehicleLine;
         /// <summary>
         /// 已进入最后一个 waypoint 的车辆集合。
         /// Idle 转 Holding 前检查本线路是否有此标签的车距始发站 350 米内，有则回库。
         /// </summary>
-        private NativeHashSet<Entity> m_NearingTerminus;
         /// <summary>
         /// 发车冷却：发车后屏蔽 boarding 变化检测的截止帧。
         /// 防止车辆物理上尚未离开始发站时原生系统触发的假进站 / 假 BV 误写。
         /// </summary>
-        private NativeHashMap<Entity, uint> m_LaunchCooldownUntil;
         private NativeHashMap<Entity, uint> m_LastRetireFixLogFrame;
         private NativeHashMap<Entity, uint> m_RetireFixCooldownUntil;
         private NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
         private NativeHashMap<Entity, byte> m_RetireFixCount;
-        // [修复2] 存档恢复后的 Running 车标记。UpdateLapStats 检测到后跳过写 m_VehicleLapFrames。
-        // 防止倒推假起点算出的偏低圈时污染调度 ETA，导致系统静默。
-        private NativeHashSet<Entity> m_RestoredRunning;
-        private NativeHashMap<Entity, uint> m_OriginArrivalCandidateSinceFrame;
-        private NativeHashMap<Entity, uint> m_ForcedOriginReadyFrame;
-        private NativeHashMap<Entity, uint> m_ForcedOriginBoardingGraceUntil;
         private readonly Dictionary<Entity, AssistLaunchPendingRecord> m_AssistLaunchPendingByVehicle = new Dictionary<Entity, AssistLaunchPendingRecord>();
-        private NativeHashMap<Entity, uint> m_StopDwellStartFrame;
-        private NativeHashMap<Entity, uint> m_VehicleDispatchRequestStartFrame;
-        private readonly Dictionary<ulong, StopDwellObservation> m_WaypointStopDwellObservations = new Dictionary<ulong, StopDwellObservation>();
-        private readonly Dictionary<string, StationStopDwellObservation> m_StationStopDwellObservations =
-            new Dictionary<string, StationStopDwellObservation>(StringComparer.Ordinal);
-        private readonly Dictionary<Entity, StopDwellSession> m_StopDwellSessions = new Dictionary<Entity, StopDwellSession>();
         private readonly Dictionary<Entity, LineMileageModel> m_LineMileageModels = new Dictionary<Entity, LineMileageModel>();
         private SharedLocalCorridorGraph m_SharedLocalCorridorGraph;
+        private BypassDecision m_BypassDecision = null!;
+        private BypassControl m_BypassControl = null!;
         private readonly Dictionary<Entity, string> m_BypassDecisionLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BypassQueuedLocalOverrideLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassDepartureGateLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassHoldFrameLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassReleaseDiagLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_BypassExitClearLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_PreparingSlotLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_PreparingTargetDriftLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_CrossLineCandidateLogCache = new Dictionary<Entity, string>();
@@ -621,11 +491,6 @@ namespace RapidTransitMod
         private static bool IsStopDwellObservationPersistenceEnabled() => false;
         private static bool IsStationStopDwellObservationPersistenceEnabled() => true;
         private readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<ulong, TraversalSliceObservation> m_TraversalRunSliceObservations = new Dictionary<ulong, TraversalSliceObservation>();
-        private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_VehicleTraversalSliceSessions = new Dictionary<Entity, VehicleTraversalSliceSession>();
-        private readonly Dictionary<Entity, uint> m_VehicleTraversalSliceLastSampleFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<Entity, TraversalSliceSamplingPlanCache> m_VehicleTraversalSliceSamplingPlans = new Dictionary<Entity, TraversalSliceSamplingPlanCache>();
-        private readonly Dictionary<ulong, TraversalSliceLapDebugAggregate> m_VehicleTraversalSliceLapDebug = new Dictionary<ulong, TraversalSliceLapDebugAggregate>();
         private readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> m_LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
         private readonly Dictionary<Entity, LineOrderedRuntimeState> m_LineOrderedRuntimeStates = new Dictionary<Entity, LineOrderedRuntimeState>();
         private readonly Dictionary<Entity, string> m_LineOrderedRuntimeForceRefreshReasons = new Dictionary<Entity, string>();
@@ -726,7 +591,7 @@ namespace RapidTransitMod
             return line != Entity.Null
                 && EntityManager.Exists(line)
                 && !EntityManager.HasComponent<Disabled>(line)
-                && IsWorkbenchTimetableApplied(line);
+                && IsDispatchRuntimeManagedLine(line);
         }
 
         internal bool TryGetRtSpawnTarget(Entity line, out int targetCount)
@@ -777,7 +642,7 @@ namespace RapidTransitMod
 
         internal bool ShouldDestroyOfficialTransportVehicleRequest(Entity request, Entity line)
         {
-            if (line == Entity.Null || !EntityManager.Exists(line) || !IsWorkbenchTimetableApplied(line))
+            if (line == Entity.Null || !EntityManager.Exists(line) || !IsDispatchRuntimeManagedLine(line))
                 return false;
 
             if (IsRtParkedVehicleRequest(request, line) || IsRtSpawnPermitRequest(request, line))
@@ -926,16 +791,24 @@ namespace RapidTransitMod
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
             m_CameraUpdateSystem = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
 
-            m_VehicleState = new NativeHashMap<Entity, VehicleState>(1024, Allocator.Persistent);
-            m_VehicleTargetMin = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            m_VehicleLapStartOdometer = new NativeHashMap<Entity, float>(1024, Allocator.Persistent);
-            m_VehicleLapDistance = new NativeHashMap<Entity, float>(1024, Allocator.Persistent);
-            m_VehicleLapStartFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            m_VehicleLapFrames = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            m_VehicleIdleStartFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            m_VehiclePreparingStartFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            m_VehicleCurrentSlot = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            m_VehicleLastLaunchFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
+            m_VehicleRuntime = new VehicleRuntimeStateStore();
+            m_VehicleRuntime.Init();
+            m_VehicleRegistry = new VehicleRuntimeRegistry(m_VehicleRuntime);
+            m_VehicleView = new VehicleRuntimeView(m_VehicleRuntime);
+            m_RuntimeController = new DispatchRuntimeController(m_VehicleRegistry);
+            m_LapObservations = new LapObservationStore();
+            m_LapObservations.Init();
+            m_StopDwell = new StopDwellStore();
+            m_StopDwell.Init();
+            m_TraversalSlices = new TraversalSliceStore();
+            m_RuntimeObservations = new RuntimeObservationStore();
+            m_TrackModels = new TrackModelStore();
+            m_TrackModelBuilder = new TrackModelBuilder();
+            m_TrackModelQuery = new TrackModelQuery(m_TrackModels, m_TrackModelBuilder);
+            m_TrackModelCoordinator = new TrackModelCoordinator(m_TrackModels, m_TrackModelBuilder);
+            m_TrackProjector = new TrackProjector();
+            m_BypassDecision = new BypassDecision((IBypassDecisionRuntime)this);
+            m_BypassControl = new BypassControl((IBypassControlRuntime)this, m_BypassDecision);
             m_UICache = new NativeHashMap<Entity, FixedString64Bytes>(1024, Allocator.Persistent);
             m_LastBoarding = new NativeHashMap<Entity, bool>(1024, Allocator.Persistent);
             m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
@@ -943,8 +816,6 @@ namespace RapidTransitMod
             m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
             m_ForcedMidStopBoardingHardCloseAfter = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_VehicleLine = new NativeHashMap<Entity, Entity>(1024, Allocator.Persistent);
-            m_LaunchCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_LastRetireFixLogFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_RetireFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_PreparingFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
@@ -960,14 +831,6 @@ namespace RapidTransitMod
             m_LineTimeProfileStopFrames = new NativeList<float>(256, Allocator.Persistent);
             m_JustLaunched = new NativeHashSet<Entity>(64, Allocator.Persistent);
             m_DiagnosedLines = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            m_NearingTerminus = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            m_RestoredRunning = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            m_OriginArrivalCandidateSinceFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_ForcedOriginReadyFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_ForcedOriginBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_StopDwellStartFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_VehicleDispatchRequestStartFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_BypassYieldBlocker = new NativeHashMap<Entity, Entity>(256, Allocator.Persistent);
             m_LineSpawnRequestFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
 
             m_VehicleQuery = GetEntityQuery(new EntityQueryDesc
@@ -1015,16 +878,22 @@ namespace RapidTransitMod
         protected override void OnDestroy()
         {
             if (ReferenceEquals(Instance, this)) Instance = null!;
-            if (m_VehicleState.IsCreated) m_VehicleState.Dispose();
-            if (m_VehicleTargetMin.IsCreated) m_VehicleTargetMin.Dispose();
-            if (m_VehicleLapStartOdometer.IsCreated) m_VehicleLapStartOdometer.Dispose();
-            if (m_VehicleLapDistance.IsCreated) m_VehicleLapDistance.Dispose();
-            if (m_VehicleLapStartFrame.IsCreated) m_VehicleLapStartFrame.Dispose();
-            if (m_VehicleLapFrames.IsCreated) m_VehicleLapFrames.Dispose();
-            if (m_VehicleIdleStartFrame.IsCreated) m_VehicleIdleStartFrame.Dispose();
-            if (m_VehiclePreparingStartFrame.IsCreated) m_VehiclePreparingStartFrame.Dispose();
-            if (m_VehicleCurrentSlot.IsCreated) m_VehicleCurrentSlot.Dispose();
-            if (m_VehicleLastLaunchFrame.IsCreated) m_VehicleLastLaunchFrame.Dispose();
+            m_RuntimeController = null!;
+            m_VehicleView = null!;
+            m_VehicleRegistry = null!;
+            if (m_BypassDecision != null) m_BypassDecision.Dispose();
+            m_TrackModelCoordinator = null!;
+            m_TrackModelQuery = null!;
+            m_TrackModelBuilder = null!;
+            m_TrackModels = null!;
+            m_BypassControl = null!;
+            m_BypassDecision = null!;
+            m_TrackProjector = null!;
+            if (m_VehicleRuntime != null) m_VehicleRuntime.Dispose();
+            if (m_LapObservations != null) m_LapObservations.Dispose();
+            if (m_StopDwell != null) m_StopDwell.Dispose();
+            m_TraversalSlices = null!;
+            m_RuntimeObservations = null!;
             if (m_UICache.IsCreated) m_UICache.Dispose();
             if (m_LastBoarding.IsCreated) m_LastBoarding.Dispose();
             if (m_CachedWpIdx.IsCreated) m_CachedWpIdx.Dispose();
@@ -1032,8 +901,6 @@ namespace RapidTransitMod
             if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
             if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();
             if (m_ForcedMidStopBoardingHardCloseAfter.IsCreated) m_ForcedMidStopBoardingHardCloseAfter.Dispose();
-            if (m_VehicleLine.IsCreated) m_VehicleLine.Dispose();
-            if (m_LaunchCooldownUntil.IsCreated) m_LaunchCooldownUntil.Dispose();
             if (m_LastRetireFixLogFrame.IsCreated) m_LastRetireFixLogFrame.Dispose();
             if (m_RetireFixCooldownUntil.IsCreated) m_RetireFixCooldownUntil.Dispose();
             if (m_PreparingFixCooldownUntil.IsCreated) m_PreparingFixCooldownUntil.Dispose();
@@ -1049,14 +916,6 @@ namespace RapidTransitMod
             if (m_LineTimeProfileStopFrames.IsCreated) m_LineTimeProfileStopFrames.Dispose();
             if (m_JustLaunched.IsCreated) m_JustLaunched.Dispose();
             if (m_DiagnosedLines.IsCreated) m_DiagnosedLines.Dispose();
-            if (m_NearingTerminus.IsCreated) m_NearingTerminus.Dispose();
-            if (m_RestoredRunning.IsCreated) m_RestoredRunning.Dispose();
-            if (m_OriginArrivalCandidateSinceFrame.IsCreated) m_OriginArrivalCandidateSinceFrame.Dispose();
-            if (m_ForcedOriginReadyFrame.IsCreated) m_ForcedOriginReadyFrame.Dispose();
-            if (m_ForcedOriginBoardingGraceUntil.IsCreated) m_ForcedOriginBoardingGraceUntil.Dispose();
-            if (m_StopDwellStartFrame.IsCreated) m_StopDwellStartFrame.Dispose();
-            if (m_VehicleDispatchRequestStartFrame.IsCreated) m_VehicleDispatchRequestStartFrame.Dispose();
-            if (m_BypassYieldBlocker.IsCreated) m_BypassYieldBlocker.Dispose();
             if (m_LineSpawnRequestFrame.IsCreated) m_LineSpawnRequestFrame.Dispose();
             m_LineMileageModels.Clear();
             m_SharedLocalCorridorGraph = null;
@@ -1066,7 +925,7 @@ namespace RapidTransitMod
         public bool DisplayDebugFor(Entity entity, Entity prefab)
         {
             if (entity == Entity.Null) return false;
-            if (m_VehicleState.ContainsKey(entity)) return true;
+            if (m_VehicleView.Contains(entity)) return true;
             if (EntityManager.HasComponent<TransportLine>(entity) && EntityManager.HasComponent<RouteWaypoint>(entity)) return true;
             return false;
         }
@@ -1231,7 +1090,7 @@ namespace RapidTransitMod
                     && (otherState == VehicleState.Preparing || otherState == VehicleState.Idle || otherState == VehicleState.Holding))
                     return false;
 
-                m_VehicleTargetMin[other] = -1;
+                m_RuntimeController.ReleaseTarget(other);
                 LogVehicleStateOnce(
                     m_LateDispatchLogCache,
                     v,
@@ -1242,7 +1101,7 @@ namespace RapidTransitMod
                         + " state=" + (m_VehicleState.TryGetValue(other, out var releasedState) ? releasedState.ToString() : "?"));
             }
 
-            m_VehicleTargetMin[v] = prevSlot;
+            m_RuntimeController.Target(v, prevSlot);
             lateSlot = prevSlot;
             if (CanLateDispatchSlot(nowMin, prevSlot))
             {
@@ -1268,7 +1127,7 @@ namespace RapidTransitMod
             out int assignedTarget)
         {
             assignedTarget = -1;
-            if (line == Entity.Null || vehicle == Entity.Null || !IsWorkbenchTimetableApplied(line))
+            if (line == Entity.Null || vehicle == Entity.Null || !IsDispatchRuntimeManagedLine(line))
                 return false;
 
             int nextTarget = GetNextManagedDispatchTarget(line, nowMin);
@@ -1325,7 +1184,7 @@ namespace RapidTransitMod
                     && (otherState == VehicleState.Preparing || otherState == VehicleState.Idle || otherState == VehicleState.Holding))
                     return false;
 
-                m_VehicleTargetMin[other] = -1;
+                m_RuntimeController.ReleaseTarget(other);
                 LogVehicleStateOnce(
                     m_LateDispatchLogCache,
                     v,
@@ -1336,7 +1195,7 @@ namespace RapidTransitMod
                         + " state=" + (m_VehicleState.TryGetValue(other, out var releasedState) ? releasedState.ToString() : "?"));
             }
 
-            m_VehicleTargetMin[v] = prevTarget;
+            m_RuntimeController.Target(v, prevTarget);
             lateTarget = prevTarget;
             if (CanLateDispatchSlot(nowMin, prevTarget))
             {
@@ -2262,7 +2121,7 @@ namespace RapidTransitMod
         private float ResolveProfileScale(Entity v, float baseLoopFrames)
         {
             if (baseLoopFrames <= 0f) return 1f;
-            if (!m_VehicleLapFrames.TryGetValue(v, out uint observedLoopFrames) || observedLoopFrames == 0)
+            if (!m_LapObservations.TryFrames(v, out uint observedLoopFrames) || observedLoopFrames == 0)
                 return 1f;
 
             float rawScale = observedLoopFrames / baseLoopFrames;
@@ -2352,7 +2211,7 @@ namespace RapidTransitMod
                     return cachedWaypointEstimate * scale;
             }
 
-            float lapFrames = m_VehicleLapFrames.TryGetValue(v, out uint vehicleLapFrames) && vehicleLapFrames > 0
+            float lapFrames = m_LapObservations.TryFrames(v, out uint vehicleLapFrames) && vehicleLapFrames > 0
                 ? vehicleLapFrames
                 : 0f;
             if (lapFrames <= 0f && lineHasHistory && lineDurationFrames > 0f)
@@ -2361,7 +2220,7 @@ namespace RapidTransitMod
             if (lapFrames <= 0f)
                 return float.MaxValue;
 
-            if (m_VehicleLapStartFrame.TryGetValue(v, out uint lapStartFrame))
+            if (m_LapObservations.TryStartFrame(v, out uint lapStartFrame))
                 return math.max(0f, lapFrames - (float)(nowFrame - lapStartFrame));
 
             return float.MaxValue;

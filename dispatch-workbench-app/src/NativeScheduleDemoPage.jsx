@@ -13,6 +13,12 @@ const MIN_LINE_SETTING_MINUTES = 5;
 const SAVE_OPERATION_START_TIMEOUT_MS = 5000;
 const SAVE_OPERATION_STATUS_TIMEOUT_MS = 5000;
 const SAVE_OPERATION_TOTAL_TIMEOUT_MS = 15000;
+const DEFAULT_RUNTIME_FEATURE_SETTINGS = {
+  dispatchEnabled: true,
+  bypassEnabled: true,
+  broadcastEnabled: true,
+  depotLockEnabled: true
+};
 
 function waitForDelay(delayMs) {
   return new Promise((resolve) => window.setTimeout(resolve, delayMs));
@@ -664,6 +670,19 @@ function buildRuntimeCatalog(snapshot, metadataSnapshot, persistedState, t) {
   };
 }
 
+function normalizeRuntimeFeatureSettings(featureSettings) {
+  if (!featureSettings || typeof featureSettings !== "object") {
+    return { ...DEFAULT_RUNTIME_FEATURE_SETTINGS };
+  }
+
+  return {
+    dispatchEnabled: featureSettings.dispatchEnabled !== false,
+    bypassEnabled: featureSettings.bypassEnabled !== false,
+    broadcastEnabled: featureSettings.broadcastEnabled !== false,
+    depotLockEnabled: featureSettings.depotLockEnabled !== false
+  };
+}
+
 function createNativeMergedViewForSave(selectedLineId, snapshotMergedView = null) {
   const sourceView =
     snapshotMergedView && typeof snapshotMergedView === "object"
@@ -699,6 +718,16 @@ function serializeNativeLineSettings(lines = LINE_OPTIONS) {
       allowedDepotId: line.depotId === "any-depot" ? "" : (line.depotId || ""),
       serviceKind: normalizeKind(line.kind)
     }));
+}
+
+function serializeRuntimeFeatureSettings(featureSettings) {
+  const normalized = normalizeRuntimeFeatureSettings(featureSettings);
+  return {
+    dispatchEnabled: normalized.dispatchEnabled,
+    bypassEnabled: normalized.bypassEnabled,
+    broadcastEnabled: normalized.broadcastEnabled,
+    depotLockEnabled: normalized.depotLockEnabled
+  };
 }
 
 function serializeNativeManualRows(rows = []) {
@@ -2254,6 +2283,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
   const [origin, setOrigin] = useState(LINE_OPTIONS[0]?.originId || "");
   const [holdMinutes, setHoldMinutes] = useState(LINE_OPTIONS[0]?.hold || "");
   const [dwellMinutes, setDwellMinutes] = useState(LINE_OPTIONS[0]?.dwell || "");
+  const [featureSettings, setFeatureSettings] = useState(() => ({ ...DEFAULT_RUNTIME_FEATURE_SETTINGS }));
   const holdMinutesValue = Number(holdMinutes);
   const dwellMinutesValue = Number(dwellMinutes);
   const holdMinutesTooSmall =
@@ -2555,6 +2585,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     setOrigin(sourceLine.originId);
     setHoldMinutes(sourceLine.hold);
     setDwellMinutes(sourceLine.dwell);
+    setFeatureSettings(normalizeRuntimeFeatureSettings(snapshot?.featureSettings));
     setSummaryEntries(nextSummaryEntries);
     setAutoRules(nextAutoRules);
     setManualDrafts(nextManualDrafts);
@@ -2690,6 +2721,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
       lineDraftRowsByLineId: serializeNativeLineDraftRowsByLineId(summaryEntries),
       planRefs: serializePlanRefs(planRefsByLine),
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
+      featureSettings: serializeRuntimeFeatureSettings(featureSettings),
       applyDraft,
       nativeScheduleWriter: true,
       returnSnapshot: false
@@ -2791,6 +2823,7 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     };
   }, [
     autoRules,
+    featureSettings,
     catalogRevision,
     manualDrafts,
     selectedLineId,
@@ -2914,6 +2947,18 @@ function NativeScheduleDemoPage({ registerHostActions }) {
     markLocalDataDirty();
     setDwellMinutes(value);
     updateRuntimeLineOption(selectedLine.id, { dwell: value });
+  }
+
+  function handleFeatureToggle(featureKey) {
+    if (!Object.prototype.hasOwnProperty.call(DEFAULT_RUNTIME_FEATURE_SETTINGS, featureKey)) {
+      return;
+    }
+
+    markLocalDataDirty();
+    setFeatureSettings((current) => ({
+      ...normalizeRuntimeFeatureSettings(current),
+      [featureKey]: !normalizeRuntimeFeatureSettings(current)[featureKey]
+    }));
   }
 
   function handleEditorStartChange(value) {
@@ -3309,6 +3354,39 @@ function NativeScheduleDemoPage({ registerHostActions }) {
 
         <DemoTextField label={holdMinutesTooSmall ? "\u4e0d\u5f97\u5c0f\u4e8e5\u5206" : t("nativeSchedule.topbar.holdMinutes")} value={holdMinutes} onCommit={handleHoldMinutesChange} onDraftChange={setHoldMinutes} className={`is-hold${holdMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
         <DemoTextField label={dwellMinutesTooSmall ? "\u4e0d\u5f97\u5c0f\u4e8e5\u5206" : t("nativeSchedule.topbar.dwellMinutes")} value={dwellMinutes} onCommit={handleDwellMinutesChange} onDraftChange={setDwellMinutes} className={`is-dwell${dwellMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
+        <div className="dw-demo-field is-features">
+          <label className="dw-demo-label">{t("nativeSchedule.topbar.runtimeFeatures")}</label>
+          <div className="dw-demo-feature-toggle-group">
+            <button
+              type="button"
+              className={`dw-demo-toggle dw-demo-feature-toggle ${featureSettings.dispatchEnabled ? "is-active" : ""}`}
+              onClick={() => handleFeatureToggle("dispatchEnabled")}
+            >
+              {t("nativeSchedule.feature.dispatch")}
+            </button>
+            <button
+              type="button"
+              className={`dw-demo-toggle dw-demo-feature-toggle ${featureSettings.bypassEnabled ? "is-active" : ""}`}
+              onClick={() => handleFeatureToggle("bypassEnabled")}
+            >
+              {t("nativeSchedule.feature.bypass")}
+            </button>
+            <button
+              type="button"
+              className={`dw-demo-toggle dw-demo-feature-toggle ${featureSettings.broadcastEnabled ? "is-active" : ""}`}
+              onClick={() => handleFeatureToggle("broadcastEnabled")}
+            >
+              {t("nativeSchedule.feature.broadcast")}
+            </button>
+            <button
+              type="button"
+              className={`dw-demo-toggle dw-demo-feature-toggle ${featureSettings.depotLockEnabled ? "is-active" : ""}`}
+              onClick={() => handleFeatureToggle("depotLockEnabled")}
+            >
+              {t("nativeSchedule.feature.depotLock")}
+            </button>
+          </div>
+        </div>
         </div>
         <div className="dw-demo-main">
         <SummarySection

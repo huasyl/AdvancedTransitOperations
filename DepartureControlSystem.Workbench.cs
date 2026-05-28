@@ -20,7 +20,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private const string StationAnchorKeyPrefix = "sak:";
         private static readonly FieldInfo s_NameTypeField =
@@ -30,576 +30,17 @@ namespace RapidTransitMod
         private static readonly FieldInfo s_NameArgsField =
             typeof(NameSystem.Name).GetField("m_NameArgs", BindingFlags.Instance | BindingFlags.NonPublic);
 
-        [DataContract]
-        public class DispatchWorkbenchSnapshot
-        {
-            [DataMember] 
-            public string selectedLineId;
-            [DataMember]
-            public string selectedEditLine;
-            [DataMember]
-            public DispatchWorkbenchMergedView mergedView;
-            [DataMember]
-            public DispatchWorkbenchLineDto[] lines;
-            [DataMember]
-            public DispatchWorkbenchDepotDto[] depots;
-            [DataMember]
-            public DispatchWorkbenchStationDto[] stations;
-            [DataMember]
-            public DispatchWorkbenchTripDto[] trips;
-            [DataMember]
-            public DispatchWorkbenchManualRowDto[] manualRows;
-            [DataMember]
-            public DispatchWorkbenchAutoRuleDto[] autoRules;
-            [DataMember]
-            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
-            [DataMember]
-            public DispatchWorkbenchLineDraftRowsDto[] lineDraftRowsByLineId;
-            [DataMember]
-            public DispatchWorkbenchStagedRowDto[] combinedDraftRows;
-            [DataMember]
-            public DispatchWorkbenchStagedRowDto[] appliedRows;
-            [DataMember]
-            public DispatchWorkbenchPlanRefDto[] planRefs;
-            [DataMember]
-            public string version;
-            [DataMember]
-            public string sourceMode;
-            [DataMember]
-            public bool rulesApplied;
-            [DataMember]
-            public bool draftApplied;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchLineSettingDto
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public int originHoldLimitMinutes;
-            [DataMember]
-            public int maxStationDwellMinutes;
-            [DataMember]
-            public string allowedDepotId;
-            [DataMember]
-            public string serviceKind;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchDepotDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public string transportType;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchSaveRequest
-        {
-            [DataMember]
-            public string selectedLineId;
-            [DataMember]
-            public string selectedEditLine;
-            [DataMember]
-            public DispatchWorkbenchMergedView mergedView;
-            [DataMember]
-            public DispatchWorkbenchManualRowDto[] manualRows;
-            [DataMember]
-            public DispatchWorkbenchAutoRuleDto[] autoRules;
-            [DataMember]
-            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
-            [DataMember]
-            public DispatchWorkbenchLineDraftRowsDto[] lineDraftRowsByLineId;
-            [DataMember(EmitDefaultValue = false)]
-            public DispatchWorkbenchStagedRowDto[] stagedRows;
-            [DataMember]
-            public DispatchWorkbenchLineSettingDto[] lineSettings;
-            [DataMember]
-            public bool markRulesApplied;
-            [DataMember]
-            public bool applyDraft;
-            [DataMember]
-            public bool nativeScheduleWriter;
-            [DataMember]
-            public bool? returnSnapshot;
-            [DataMember]
-            public DispatchWorkbenchPlanRefDto[] planRefs;
-            [DataMember]
-            public DispatchWorkbenchPlannerImportContractDto plannerImportContract;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchLineDraftRowsDto
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchPlanRefDto
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public DispatchWorkbenchPlannerImportContractDto contract;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchSaveResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string[] errors;
-            [DataMember]
-            public string[] warnings;
-            [DataMember]
-            public string version;
-            [DataMember]
-            public string[] appliedLineIds;
-            [DataMember]
-            public DispatchWorkbenchSnapshot snapshot;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchSaveOperationStatusDto
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string operationId;
-            [DataMember]
-            public string state;
-            [DataMember]
-            public string error;
-            [DataMember]
-            public DispatchWorkbenchSaveResult result;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchPersistentState
-        {
-            [DataMember]
-            public string preferredLineId;
-            [DataMember]
-            public DispatchWorkbenchLineSettingDto[] lineSettings;
-            [DataMember]
-            public DispatchWorkbenchPersistedDraftState[] drafts;
-            [DataMember]
-            public string broadcastAssetDirectory;
-            [DataMember]
-            public BroadcastWorkbenchPersistedAssetState[] broadcastAssets;
-            [DataMember]
-            public BroadcastWorkbenchPersistedLineBindingState[] broadcastDraftLineBindings;
-            [DataMember]
-            public BroadcastWorkbenchPersistedLineBindingState[] broadcastDraftLegacyLineBindings;
-            [DataMember]
-            public BroadcastWorkbenchPersistedRuleState[] broadcastDraftRules;
-            [DataMember]
-            public BroadcastWorkbenchPersistedPlatformAnnouncementState[] broadcastDraftPlatformAnnouncements;
-            [DataMember]
-            public BroadcastWorkbenchPersistedPlatformAnnouncementState[] broadcastDraftLegacyPlatformAnnouncements;
-            [DataMember]
-            public BroadcastWorkbenchPersistedLineBindingState[] broadcastLineBindings;
-            [DataMember]
-            public BroadcastWorkbenchPersistedLineBindingState[] broadcastLegacyLineBindings;
-            [DataMember]
-            public BroadcastWorkbenchPersistedRuleState[] broadcastRules;
-            [DataMember]
-            public BroadcastWorkbenchPersistedPlatformAnnouncementState[] broadcastPlatformAnnouncements;
-            [DataMember]
-            public BroadcastWorkbenchPersistedPlatformAnnouncementState[] broadcastLegacyPlatformAnnouncements;
-            [DataMember]
-            public BroadcastWorkbenchPersistedAppliedState broadcastAppliedState;
-            [DataMember]
-            public int? broadcastDraftVolume;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchPlannerImportContractDto
-        {
-            [DataMember]
-            public string draftKey;
-            [DataMember]
-            public string importedFrom;
-            [DataMember]
-            public string importedPlanId;
-            [DataMember]
-            public string importedObjectiveId;
-            [DataMember]
-            public string[] importedLineIds;
-            [DataMember]
-            public DispatchPlannerRequestEchoDto requestEcho;
-            [DataMember]
-            public DispatchPlannerPlanDetailDto plan;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchPersistedDraftState
-        {
-            [DataMember]
-            public string lineKey;
-            [DataMember]
-            public string selectedLineId;
-            [DataMember]
-            public string selectedEditLine;
-            [DataMember]
-            public DispatchWorkbenchMergedView mergedView;
-            [DataMember]
-            public DispatchWorkbenchManualRowDto[] manualRows;
-            [DataMember]
-            public DispatchWorkbenchAutoRuleDto[] autoRules;
-            [DataMember]
-            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
-            [DataMember(EmitDefaultValue = false)]
-            public DispatchWorkbenchStagedRowDto[] stagedRows;
-            [DataMember]
-            public bool rulesApplied;
-            [DataMember]
-            public bool draftApplied;
-            [DataMember]
-            public DispatchWorkbenchPlannerImportContractDto plannerImportContract;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchMergedView
-        {
-            [DataMember]
-            public string localLineId;
-            [DataMember]
-            public string expressLineId;
-            [DataMember]
-            public string[] localLineIds;
-            [DataMember]
-            public string[] expressLineIds;
-            [DataMember]
-            public bool isLoop;
-            [DataMember]
-            public string turnbackStationId;
-            [DataMember]
-            public string direction;
-            [DataMember]
-            public string windowStart;
-            [DataMember]
-            public string windowEnd;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchLineDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string sourceLineId;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public string kind;
-            [DataMember]
-            public string direction;
-            [DataMember]
-            public int stationCount;
-            [DataMember]
-            public string color;
-            [DataMember]
-            public string originStationId;
-            [DataMember]
-            public string originStationName;
-            [DataMember]
-            public int originHoldLimitMinutes;
-            [DataMember]
-            public int maxStationDwellMinutes;
-            [DataMember]
-            public string transportType;
-            [DataMember]
-            public string allowedDepotId;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchStationConflictDto
-        {
-            [DataMember]
-            public string assetName;
-            [DataMember]
-            public string suggestedLang;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchStationDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public int order;
-            [DataMember]
-            public float distance;
-            [DataMember]
-            public bool hasSiding;
-            [DataMember]
-            public DispatchWorkbenchStationConflictDto[] conflictAssets;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchTripStopDto
-        {
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string time;
-            [DataMember]
-            public string arrivalTime;
-            [DataMember]
-            public string departureTime;
-            [DataMember]
-            public string stopType;
-            [DataMember]
-            public int? waitMinutes;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchTripDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string kind;
-            [DataMember]
-            public string depart;
-            [DataMember]
-            public int realtimeSegment;
-            [DataMember]
-            public float realtimeProgress;
-            [DataMember]
-            public string realtimeFromStationId;
-            [DataMember]
-            public string realtimeToStationId;
-            [DataMember]
-            public string realtimeTime;
-            [DataMember]
-            public DispatchWorkbenchTripStopDto[] stops;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchManualRowDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string time;
-            [DataMember]
-            public string kind;
-            [DataMember]
-            public string offsetMode;
-            [DataMember]
-            public string offsetMinutes;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchAutoRuleDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public bool enabled;
-            [DataMember]
-            public string start;
-            [DataMember]
-            public string end;
-            [DataMember]
-            public string kind;
-            [DataMember]
-            public double departuresPerHour;
-            [DataMember]
-            public double localPerHour;
-            [DataMember]
-            public double expressPerHour;
-            [DataMember]
-            public string expressOffsetMode;
-            [DataMember]
-            public int expressOffsetMinutes;
-        }
-
-        [DataContract]
-        public class DispatchWorkbenchStagedRowDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string time;
-            [DataMember]
-            public string kind;
-            [DataMember]
-            public string source;
-            [DataMember]
-            public string note;
-        }
-
-        private sealed class DispatchWorkbenchDraftState
-        {
-            public string SelectedLineId = string.Empty;
-            public string SelectedEditLine = "local";
-            public DispatchWorkbenchMergedView MergedView = new DispatchWorkbenchMergedView
-            {
-                localLineIds = Array.Empty<string>(),
-                expressLineIds = Array.Empty<string>(),
-                isLoop = true,
-                turnbackStationId = string.Empty,
-                direction = "up",
-                windowStart = string.Empty,
-                windowEnd = string.Empty
-            };
-            public List<DispatchWorkbenchManualRowDto> ManualRows = new List<DispatchWorkbenchManualRowDto>();
-            public List<DispatchWorkbenchAutoRuleDto> AutoRules = new List<DispatchWorkbenchAutoRuleDto>();
-            public List<DispatchWorkbenchStagedRowDto> StagedRows = new List<DispatchWorkbenchStagedRowDto>();
-            public bool RulesApplied = false;
-            public bool DraftApplied = false;
-            public DispatchWorkbenchPlannerImportContractDto PlannerImportContract;
-            public readonly Dictionary<string, int[]> AppliedDepartureMinutesCache = new Dictionary<string, int[]>(StringComparer.Ordinal);
-        }
-
-        private sealed class AppliedWorkbenchLineState
-        {
-            public Entity LineEntity = Entity.Null;
-            public int OriginHoldLimitMinutes = DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
-            public int MaxStationDwellMinutes = DEFAULT_MAX_STATION_DWELL_MINUTES;
-            public List<DispatchWorkbenchStagedRowDto> AppliedRows = new List<DispatchWorkbenchStagedRowDto>();
-            public List<DispatchWorkbenchStagedRowDto> StagedRows
-            {
-                get => AppliedRows;
-                set => AppliedRows = value ?? new List<DispatchWorkbenchStagedRowDto>();
-            }
-            public int[] DepartureMinutesCache = Array.Empty<int>();
-        }
-
-        private sealed class WorkbenchLineRuntime
-        {
-            public Entity Entity;
-            public string Id = string.Empty;
-            public string Name = string.Empty;
-            public string Kind = "local";
-            public string TransportType = string.Empty;
-            public int RouteNumber = int.MaxValue;
-            public int StationCount = 0;
-            public string Color = string.Empty;
-            public string OriginStationId = string.Empty;
-            public string OriginStationName = string.Empty;
-        }
-
-        private sealed class WorkbenchRealtimeStopRecord
-        {
-            public Entity StopEntity;
-            public ResolvedStopKind Kind;
-            public string ArrivalTime = string.Empty;
-            public string DepartureTime = string.Empty;
-            public uint LastUpdatedFrame;
-        }
-
-        private sealed class WorkbenchRealtimeTripRecord
-        {
-            public int Sequence;
-            public readonly List<WorkbenchRealtimeStopRecord> Stops = new List<WorkbenchRealtimeStopRecord>();
-            public uint LastUpdatedFrame;
-        }
-
-        private sealed class WorkbenchRealtimeVehicleRecord
-        {
-            public Entity Vehicle;
-            public Entity Line;
-            public string Kind = "local";
-            public int NextSequence = 1;
-            public readonly List<WorkbenchRealtimeTripRecord> Trips = new List<WorkbenchRealtimeTripRecord>();
-        }
-
-        private enum ResolvedStopKind
-        {
-            Stop = 0,
-            Building = 1
-        }
-
-        private readonly struct StopRef
-        {
-            public readonly Entity Ent;
-            public readonly ResolvedStopKind Kind;
-
-            public StopRef(Entity ent, ResolvedStopKind kind)
-            {
-                Ent = ent;
-                Kind = kind;
-            }
-        }
-
-        private readonly struct WorkbenchLineFrameSnapshot
-        {
-            public readonly Entity Line;
-            public readonly uint Frame;
-            public readonly string LineId;
-            public readonly string LineKey;
-            public readonly bool TimetableApplied;
-            public readonly string ConfiguredServiceKind;
-            public readonly string AppliedServiceKind;
-            public readonly string EffectiveServiceKind;
-
-            public WorkbenchLineFrameSnapshot(
-                Entity line,
-                uint frame,
-                string lineId,
-                string lineKey,
-                bool timetableApplied,
-                string configuredServiceKind,
-                string appliedServiceKind,
-                string effectiveServiceKind)
-            {
-                Line = line;
-                Frame = frame;
-                LineId = lineId ?? string.Empty;
-                LineKey = lineKey ?? string.Empty;
-                TimetableApplied = timetableApplied;
-                ConfiguredServiceKind = configuredServiceKind ?? string.Empty;
-                AppliedServiceKind = appliedServiceKind ?? string.Empty;
-                EffectiveServiceKind = effectiveServiceKind ?? string.Empty;
-            }
-        }
-
-        private readonly struct ConfiguredAllowedDepotCacheEntry
-        {
-            public readonly Entity Line;
-            public readonly string LineId;
-            public readonly string AllowedDepotId;
-            public readonly Entity CanonicalDepot;
-            public readonly ulong SettingsVersion;
-
-            public ConfiguredAllowedDepotCacheEntry(
-                Entity line,
-                string lineId,
-                string allowedDepotId,
-                Entity canonicalDepot,
-                ulong settingsVersion)
-            {
-                Line = line;
-                LineId = lineId ?? string.Empty;
-                AllowedDepotId = allowedDepotId ?? string.Empty;
-                CanonicalDepot = canonicalDepot;
-                SettingsVersion = settingsVersion;
-            }
-        }
-
-        private readonly Dictionary<string, DispatchWorkbenchDraftState> m_WorkbenchDrafts = new Dictionary<string, DispatchWorkbenchDraftState>();
+        private readonly WorkbenchDraftStore m_WorkbenchDrafts = new WorkbenchDraftStore();
+        private readonly AppliedTimetableStore m_AppliedTimetableStore = new AppliedTimetableStore();
+        private readonly AppliedTimetableValidator m_AppliedTimetableValidator = new AppliedTimetableValidator();
+        private readonly LineSettingsStore m_LineSettingsStore = new LineSettingsStore();
+        private readonly RuntimeFeatureSettingsStore m_RuntimeFeatureSettingsStore = new RuntimeFeatureSettingsStore();
+        private WorkbenchRuntimeConfigAdapter m_WorkbenchRuntimeConfig;
+        private WorkbenchQueryService m_WorkbenchQuery;
+        private WorkbenchSnapshotBuilder m_WorkbenchSnapshotBuilder;
+        private WorkbenchPersistence m_WorkbenchPersistence;
+        private WorkbenchCommandHandler m_WorkbenchCommandHandler;
+        private WorkbenchSaveService m_WorkbenchSaveService;
         private readonly Dictionary<string, DispatchWorkbenchPlannerImportContractDto> m_AppliedPlannerImportContracts =
             new Dictionary<string, DispatchWorkbenchPlannerImportContractDto>(StringComparer.Ordinal);
         private readonly Dictionary<string, int> m_WorkbenchLineOriginHoldLimits = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -622,8 +63,6 @@ namespace RapidTransitMod
         private int m_ConfiguredAllowedDepotCacheFallbackResolves;
         private string m_LastWorkbenchSnapshotLogKey = string.Empty;
         private string m_LastAppliedWorkbenchInspectLogKey = string.Empty;
-        private string m_WorkbenchPreferredLineId = string.Empty;
-        private bool m_WorkbenchPersistenceLoaded = false;
         private bool m_AppliedWorkbenchPersistenceLoaded = false;
         private const int DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES = 20;
         private const int DEFAULT_MAX_STATION_DWELL_MINUTES = 10;
@@ -631,12 +70,199 @@ namespace RapidTransitMod
         private const int MAX_ORIGIN_HOLD_LIMIT_MINUTES = 120;
         private const uint CONFIGURED_ALLOWED_DEPOT_CACHE_LOG_INTERVAL_FRAMES = 3600u;
         private static readonly bool ENABLE_WORKBENCH_INTEGRITY_REPORT = true;
-        private const int MaxWorkbenchSaveOperationHistory = 24;
-        private static readonly TimeSpan WorkbenchSaveOperationRetention = TimeSpan.FromMinutes(5);
-        private readonly object m_WorkbenchSaveOperationSync = new object();
-        private readonly Dictionary<string, WorkbenchSaveOperationState> m_WorkbenchSaveOperations =
-            new Dictionary<string, WorkbenchSaveOperationState>(StringComparer.Ordinal);
-        private int m_WorkbenchSaveOperationGeneration;
+
+        private WorkbenchRuntimeConfigAdapter GetWorkbenchRuntimeConfig()
+        {
+            if (m_WorkbenchRuntimeConfig != null)
+                return m_WorkbenchRuntimeConfig;
+
+            m_WorkbenchRuntimeConfig = new WorkbenchRuntimeConfigAdapter(
+                m_AppliedTimetableStore,
+                m_LineSettingsStore,
+                m_AppliedTimetableValidator,
+                LineIdentityService.GetKey,
+                GetWorkbenchStoreLineKey,
+                LineIdentityService.GetId,
+                NormalizeOriginHoldLimitMinutes,
+                NormalizeMaxStationDwellMinutes,
+                NormalizeWorkbenchAllowedDepotIdFromSnapshot,
+                NormalizeWorkbenchServiceKind,
+                BuildAppliedDepartureMinutes,
+                ParseTimeMinutes,
+                message => Mod.log.Info(message));
+            return m_WorkbenchRuntimeConfig;
+        }
+
+        private WorkbenchQueryService GetWorkbenchQuery()
+        {
+            if (m_WorkbenchQuery != null)
+                return m_WorkbenchQuery;
+
+            m_WorkbenchQuery = new WorkbenchQueryService(
+                m_WorkbenchDrafts,
+                m_AppliedTimetableStore,
+                m_AppliedWorkbenchLines,
+                BuildWorkbenchLinesStable,
+                BuildWorkbenchDepots,
+                BuildWorkbenchStations,
+                BuildRealtimeWorkbenchTrips,
+                BuildWorkbenchLineDraftRowsByLineId,
+                CloneWorkbenchLineRuntime,
+                CloneWorkbenchDepot,
+                CloneStagedRow,
+                ClonePlannerImportContract,
+                BuildAppliedRowNote,
+                GetStoreLineId,
+                MinutesToSlotString,
+                (rows, draftKey) => HasWorkbenchRowsForDraft(rows, draftKey));
+            return m_WorkbenchQuery;
+        }
+
+        private WorkbenchSnapshotBuilder GetWorkbenchSnapshotBuilder()
+        {
+            if (m_WorkbenchSnapshotBuilder != null)
+                return m_WorkbenchSnapshotBuilder;
+
+            m_WorkbenchSnapshotBuilder = new WorkbenchSnapshotBuilder(
+                GetWorkbenchQuery(),
+                m_WorkbenchDrafts,
+                GetOrCreateWorkbenchDraft,
+                lineId => m_WorkbenchDrafts.SetPreferredLineId(lineId),
+                GetPreferredWorkbenchLineId,
+                EnsureMergedViewDefaultsStable,
+                CollectWorkbenchDraftRules,
+                CloneStagedRow,
+                line => GetWorkbenchOriginHoldLimitMinutes(line),
+                line => GetWorkbenchMaxStationDwellMinutes(line),
+                line => GetWorkbenchAllowedDepotId(line),
+                LogWorkbenchSnapshot,
+                WriteWorkbenchIntegrityReport);
+            return m_WorkbenchSnapshotBuilder;
+        }
+
+        private WorkbenchPersistence GetWorkbenchPersistence()
+        {
+            if (m_WorkbenchPersistence != null)
+                return m_WorkbenchPersistence;
+
+            m_WorkbenchPersistence = new WorkbenchPersistence(
+                EntityManager,
+                () => m_CitySystem.City,
+                m_WorkbenchDrafts,
+                m_WorkbenchLineOriginHoldLimits,
+                m_WorkbenchLineMaxStationDwellMinutes,
+                m_WorkbenchLineAllowedDepots,
+                m_WorkbenchLineServiceKinds,
+                m_AppliedWorkbenchLines,
+                ClearLineSettingsStore,
+                InvalidateConfiguredAllowedDepotCache,
+                ApplyRuntimeFeatureSettings,
+                BuildRuntimeFeatureSettingsDto,
+                ApplyWorkbenchLineSettings,
+                persisted =>
+                {
+                    persisted.broadcastAssetDirectory = m_BroadcastAssetDirectory;
+                    persisted.broadcastAssets = BuildPersistedBroadcastAssetStates();
+                    persisted.broadcastDraftLineBindings = BuildPersistedBroadcastDraftLineBindingStates();
+                    persisted.broadcastDraftRules = BuildPersistedBroadcastDraftRuleStates();
+                    persisted.broadcastDraftPlatformAnnouncements = BuildPersistedBroadcastDraftPlatformAnnouncementStates();
+                    persisted.broadcastLineBindings = BuildPersistedBroadcastLineBindingStates();
+                    persisted.broadcastRules = BuildPersistedBroadcastRuleStates();
+                    persisted.broadcastPlatformAnnouncements = BuildPersistedBroadcastPlatformAnnouncementStates();
+                    persisted.broadcastAppliedState = BuildPersistedBroadcastAppliedState();
+                    persisted.broadcastDraftVolume = m_BroadcastDraftVolumePercent;
+                },
+                persisted =>
+                {
+                    RestoreBroadcastWorkbenchPersistence(
+                        persisted?.broadcastAssetDirectory,
+                        persisted?.broadcastAssets,
+                        persisted?.broadcastDraftLineBindings,
+                        persisted?.broadcastDraftRules,
+                        persisted?.broadcastDraftPlatformAnnouncements,
+                        persisted?.broadcastLineBindings,
+                        persisted?.broadcastRules,
+                        persisted?.broadcastPlatformAnnouncements,
+                        persisted?.broadcastAppliedState,
+                        persisted?.broadcastDraftVolume ?? 80);
+                },
+                EnumerateWorkbenchLineSettingIds,
+                GetWorkbenchOriginHoldLimitMinutes,
+                GetWorkbenchMaxStationDwellMinutes,
+                GetWorkbenchAllowedDepotId,
+                GetWorkbenchConfiguredLineServiceKind,
+                BuildWorkbenchRuntimeLineIdsForRestore,
+                ApplyCurrentTimeWindowDefaults,
+                CloneManualRow,
+                CloneAutoRule,
+                CloneStagedRow,
+                ClonePlannerImportContract,
+                DeduplicateRowsByIdLast,
+                DeduplicateWorkbenchManualRowsForMigration,
+                DeduplicateWorkbenchAutoRulesForMigration,
+                DeduplicateWorkbenchStagedRowsForMigration,
+                ParseTimeMinutes,
+                SummarizeWorkbenchDraftRows,
+                LogWorkbenchException);
+            return m_WorkbenchPersistence;
+        }
+
+        private WorkbenchCommandHandler GetWorkbenchCommandHandler()
+        {
+            if (m_WorkbenchCommandHandler != null)
+                return m_WorkbenchCommandHandler;
+
+            m_WorkbenchCommandHandler = new WorkbenchCommandHandler(
+                GetWorkbenchQuery(),
+                m_WorkbenchDrafts,
+                () => m_WorkbenchSnapshotVersion,
+                AdvanceWorkbenchSnapshotVersion,
+                BuildWorkbenchSnapshot,
+                GetOrCreateWorkbenchDraft,
+                lineId => m_WorkbenchDrafts.SetPreferredLineId(lineId),
+                ApplyRuntimeFeatureSettings,
+                AreRuntimeFeatureSettingsEquivalent,
+                ApplyWorkbenchLineSettings,
+                AreWorkbenchLineSettingsEquivalent,
+                (lineKey, rows, runtimeLines) => ValidateAppliedWorkbenchCandidateRows(lineKey, rows, runtimeLines),
+                ValidateWorkbenchRequest,
+                EnumerateWorkbenchLineSettingIds,
+                GetWorkbenchConfiguredLineServiceKind,
+                CloneManualRow,
+                CloneAutoRule,
+                CloneStagedRow,
+                ClonePlannerImportContract,
+                DeduplicateRowsByIdLast,
+                AreMergedViewsEquivalent,
+                AreManualRowsEquivalent,
+                AreAutoRulesEquivalent,
+                AreStagedRowsEquivalent,
+                ArePlannerImportContractsEquivalent,
+                RefreshAppliedWorkbenchLineSettings,
+                ApplyWorkbenchDraftRowsToAppliedRuntime,
+                SeedObservationFromAppliedRows,
+                InvalidateAppliedWorkbenchTrackModelState,
+                SaveWorkbenchPersistence,
+                SaveAppliedWorkbenchPersistence,
+                WorkbenchEvents.PublishSnapshot);
+            return m_WorkbenchCommandHandler;
+        }
+
+        private WorkbenchSaveService GetWorkbenchSaveService()
+        {
+            if (m_WorkbenchSaveService != null)
+                return m_WorkbenchSaveService;
+
+            m_WorkbenchSaveService = new WorkbenchSaveService(
+                GetWorkbenchCommandHandler(),
+                GetWorkbenchPersistence(),
+                BuildWorkbenchSnapshot,
+                () => m_WorkbenchSnapshotVersion,
+                DescribeWorkbenchException,
+                LogWorkbenchException,
+                action => MainThreadDispatcher.RunOnMainThread(action));
+            return m_WorkbenchSaveService;
+        }
 
         protected override void OnGameLoaded(Context serializationContext)
         {
@@ -646,7 +272,7 @@ namespace RapidTransitMod
             TryRestoreAppliedWorkbenchPersistence();
             try
             {
-                DispatchWorkbenchEuisBridge.NotifyWorkbenchSnapshotChanged(BuildWorkbenchSnapshot(GetPreferredWorkbenchLineId()));
+                WorkbenchEvents.PublishSnapshot(BuildWorkbenchSnapshot(GetPreferredWorkbenchLineId()));
             }
             catch (Exception ex)
             {
@@ -656,16 +282,8 @@ namespace RapidTransitMod
 
         private void ResetWorkbenchPersistenceStateForLoad()
         {
-            lock (m_WorkbenchSaveOperationSync)
-            {
-                m_WorkbenchSaveOperationGeneration++;
-                foreach (WorkbenchSaveOperationState operation in m_WorkbenchSaveOperations.Values.ToArray())
-                {
-                    operation?.UpdateStatus("superseded", true, string.Empty, null);
-                }
-                m_WorkbenchSaveOperations.Clear();
-            }
-
+            GetWorkbenchSaveService().ResetForLoad();
+            GetWorkbenchPersistence().ResetForLoad();
             m_WorkbenchDrafts.Clear();
             m_AppliedWorkbenchLines.Clear();
             m_AppliedPlannerImportContracts.Clear();
@@ -673,12 +291,13 @@ namespace RapidTransitMod
             m_WorkbenchLineMaxStationDwellMinutes.Clear();
             m_WorkbenchLineAllowedDepots.Clear();
             m_WorkbenchLineServiceKinds.Clear();
+            ClearAppliedTimetableStore();
+            ClearLineSettingsStore();
+            m_RuntimeFeatureSettingsStore.Reset();
             m_WorkbenchLineFrameSnapshots.Clear();
             m_ConfiguredAllowedDepotCacheByLine.Clear();
-            m_WorkbenchPreferredLineId = string.Empty;
             m_LastWorkbenchSnapshotLogKey = string.Empty;
             m_LastAppliedWorkbenchInspectLogKey = string.Empty;
-            m_WorkbenchPersistenceLoaded = false;
             m_AppliedWorkbenchPersistenceLoaded = false;
         }
 
@@ -707,437 +326,25 @@ namespace RapidTransitMod
         {
             EnsureWorkbenchPersistenceLoaded();
             EnsureAppliedWorkbenchPersistenceLoaded();
-            try
-            {
-                WorkbenchSavePrepareContext context = CaptureWorkbenchSavePrepareContext(requestJson);
-                PreparedWorkbenchSave prepared = PrepareWorkbenchSave(context);
-                DispatchWorkbenchSaveResult result = CommitPreparedWorkbenchSave(prepared, persistImmediately: true);
-                return DispatchWorkbenchJson.Serialize(result);
-            }
-            catch (Exception ex)
-            {
-                LogWorkbenchException("SaveWorkbenchDraftJson", ex);
-                DispatchWorkbenchSaveResult result = CreateWorkbenchSaveFailureResult(
-                    m_WorkbenchSnapshotVersion,
-                    DescribeWorkbenchException(ex));
-                result.snapshot = BuildWorkbenchSnapshot(null);
-                return DispatchWorkbenchJson.Serialize(result);
-            }
+            return GetWorkbenchSaveService().SaveWorkbenchDraftJson(requestJson);
         }
 
         public string StartWorkbenchSaveOperationJson(string requestJson)
         {
-            CleanupWorkbenchSaveOperations();
-
-            string operationId = "save-operation-" + Guid.NewGuid().ToString("N");
-            int generation = GetWorkbenchSaveOperationGeneration();
-            WorkbenchSaveOperationState operation = new WorkbenchSaveOperationState(operationId, requestJson ?? string.Empty, generation);
-            WorkbenchSavePrepareContext context;
-            try
-            {
-                context = CaptureWorkbenchSavePrepareContext(operation.RequestJson);
-            }
-            catch (Exception ex)
-            {
-                LogWorkbenchException("StartWorkbenchSaveOperationJson.CaptureContext", ex);
-                operation.UpdateStatus("failed", false, DescribeWorkbenchException(ex), null);
-                lock (m_WorkbenchSaveOperationSync)
-                {
-                    m_WorkbenchSaveOperations[operationId] = operation;
-                }
-
-                return DispatchWorkbenchJson.Serialize(operation.CreateStatusCopy());
-            }
-
-            lock (m_WorkbenchSaveOperationSync)
-            {
-                if (generation != m_WorkbenchSaveOperationGeneration)
-                {
-                    operation.UpdateStatus("superseded", true, string.Empty, null);
-                    return DispatchWorkbenchJson.Serialize(operation.CreateStatusCopy());
-                }
-
-                m_WorkbenchSaveOperations[operationId] = operation;
-                SupersedeOlderDraftSaveOperations(operation);
-            }
-
-            System.Threading.Tasks.Task.Run(() => RunWorkbenchSaveOperation(operation, context));
-
-            return DispatchWorkbenchJson.Serialize(operation.CreateStatusCopy());
+            EnsureWorkbenchPersistenceLoaded();
+            EnsureAppliedWorkbenchPersistenceLoaded();
+            return GetWorkbenchSaveService().StartWorkbenchSaveOperationJson(requestJson);
         }
 
         public string GetWorkbenchSaveOperationStatusJson(string operationId)
         {
-            CleanupWorkbenchSaveOperations();
-
-            lock (m_WorkbenchSaveOperationSync)
-            {
-                if (string.IsNullOrWhiteSpace(operationId)
-                    || !m_WorkbenchSaveOperations.TryGetValue(operationId, out WorkbenchSaveOperationState operation))
-                {
-                    Mod.log.Info($"[WorkbenchSaveOperation] status missing id={operationId ?? string.Empty}");
-                    return DispatchWorkbenchJson.Serialize(new DispatchWorkbenchSaveOperationStatusDto
-                    {
-                        success = false,
-                        operationId = operationId ?? string.Empty,
-                        state = "missing",
-                        error = "save-operation-not-found",
-                        result = null
-                    });
-                }
-
-                return DispatchWorkbenchJson.Serialize(operation.CreateStatusCopy());
-            }
+            return GetWorkbenchSaveService().GetWorkbenchSaveOperationStatusJson(operationId);
         }
 
-        private void RunWorkbenchSaveOperation(
-            WorkbenchSaveOperationState operation,
-            WorkbenchSavePrepareContext context)
+        private ulong AdvanceWorkbenchSnapshotVersion()
         {
-            if (operation == null)
-                return;
-
-            operation.UpdateStatus("running", true, string.Empty, null);
-            try
-            {
-                if (!IsWorkbenchSaveOperationCurrent(operation))
-                    return;
-
-                PreparedWorkbenchSave prepared = PrepareWorkbenchSave(context);
-                if (!IsWorkbenchSaveOperationCurrent(operation))
-                    return;
-
-                if (operation.IsTerminal)
-                    return;
-
-                if (prepared == null)
-                {
-                    DispatchWorkbenchSaveResult result = CreateWorkbenchSaveFailureResult(
-                        context?.SnapshotVersion ?? m_WorkbenchSnapshotVersion,
-                        "save-operation-prepare-failed");
-                    operation.UpdateStatus("completed", result?.success == true, string.Empty, result);
-                    return;
-                }
-
-                if (prepared.HasErrors)
-                {
-                    MainThreadDispatcher.RunOnMainThread(() =>
-                    {
-                        if (operation.IsTerminal || !IsWorkbenchSaveOperationCurrent(operation))
-                            return;
-
-                        DispatchWorkbenchSaveResult result = CommitPreparedWorkbenchSave(prepared, persistImmediately: false);
-                        operation.UpdateStatus("completed", result?.success == true, string.Empty, result);
-                    });
-                    return;
-                }
-
-                operation.UpdateStatus("committing", true, string.Empty, null);
-                MainThreadDispatcher.RunOnMainThread(() => CommitPreparedWorkbenchSaveOperation(operation, prepared));
-            }
-            catch (Exception ex)
-            {
-                operation.UpdateStatus("failed", false, ex.GetType().Name + ": " + ex.Message, null);
-                LogWorkbenchException("RunWorkbenchSaveOperation", ex);
-            }
-        }
-
-        private void CommitPreparedWorkbenchSaveOperation(
-            WorkbenchSaveOperationState operation,
-            PreparedWorkbenchSave prepared)
-        {
-            if (operation == null || prepared == null || operation.IsTerminal || !IsWorkbenchSaveOperationCurrent(operation))
-                return;
-
-            try
-            {
-                DispatchWorkbenchSaveResult result = CommitPreparedWorkbenchSave(prepared, persistImmediately: false);
-                if (result?.success == true)
-                {
-                    WorkbenchSavePersistencePayload payload = CaptureWorkbenchSavePersistencePayload();
-                    System.Threading.Tasks.Task.Run(() => PrepareWorkbenchSavePersistence(operation, result, payload));
-                    return;
-                }
-                operation.UpdateStatus("completed", result?.success == true, string.Empty, result);
-            }
-            catch (Exception ex)
-            {
-                operation.UpdateStatus("failed", false, DescribeWorkbenchException(ex), null);
-                LogWorkbenchException("CommitPreparedWorkbenchSaveOperation", ex);
-            }
-        }
-
-        private WorkbenchSavePrepareContext CaptureWorkbenchSavePrepareContext(string requestJson)
-        {
-            EnsureWorkbenchPersistenceLoaded();
-            EnsureAppliedWorkbenchPersistenceLoaded();
-
-            return new WorkbenchSavePrepareContext
-            {
-                RequestJson = requestJson ?? string.Empty,
-                SnapshotVersion = m_WorkbenchSnapshotVersion,
-                RuntimeLines = BuildWorkbenchLinesStable()
-                    .Select(CloneWorkbenchLineRuntime)
-                    .ToList(),
-                Depots = BuildWorkbenchDepots()
-                    .Select(CloneWorkbenchDepot)
-                    .ToList(),
-                ServiceKinds = new Dictionary<string, string>(m_WorkbenchLineServiceKinds, StringComparer.Ordinal)
-            };
-        }
-
-        private PreparedWorkbenchSave PrepareWorkbenchSave(WorkbenchSavePrepareContext context)
-        {
-            ulong baseVersion = context?.SnapshotVersion ?? m_WorkbenchSnapshotVersion;
-            PreparedWorkbenchSave prepared = new PreparedWorkbenchSave
-            {
-                SnapshotVersion = baseVersion,
-                RuntimeLines = context?.RuntimeLines ?? new List<WorkbenchLineRuntime>()
-            };
-
-            try
-            {
-                DispatchWorkbenchSaveRequest request =
-                    DispatchWorkbenchJson.Deserialize<DispatchWorkbenchSaveRequest>(context?.RequestJson);
-                List<WorkbenchLineRuntime> runtimeLines = (context?.RuntimeLines ?? new List<WorkbenchLineRuntime>())
-                    .Select(CloneWorkbenchLineRuntime)
-                    .ToList();
-                List<DispatchWorkbenchDepotDto> depots = (context?.Depots ?? new List<DispatchWorkbenchDepotDto>())
-                    .Select(CloneWorkbenchDepot)
-                    .ToList();
-
-                NormalizeRequestedMergedViewFromLineSettings(
-                    request,
-                    runtimeLines,
-                    context?.ServiceKinds);
-                List<string> errors = ValidateWorkbenchRequest(
-                    request,
-                    runtimeLines,
-                    validateApplyOnlyConstraints: request?.applyDraft == true,
-                    depots: depots);
-                prepared.Request = request;
-                prepared.RuntimeLines = runtimeLines;
-                prepared.Errors = errors;
-                prepared.ShouldReturnSnapshot = ShouldReturnSnapshot(request);
-                prepared.LineSettingsChanged = request?.lineSettings != null;
-                return prepared;
-            }
-            catch (Exception ex)
-            {
-                prepared.Errors = new List<string> { DescribeWorkbenchException(ex) };
-                return prepared;
-            }
-        }
-
-        private static DispatchWorkbenchSaveResult CreateWorkbenchSaveFailureResult(
-            ulong version,
-            string error)
-        {
-            return new DispatchWorkbenchSaveResult
-            {
-                success = false,
-                errors = new[] { error ?? string.Empty },
-                warnings = Array.Empty<string>(),
-                version = version.ToString(),
-                appliedLineIds = Array.Empty<string>(),
-                snapshot = null
-            };
-        }
-
-        private DispatchWorkbenchSaveResult CommitPreparedWorkbenchSave(
-            PreparedWorkbenchSave prepared,
-            bool persistImmediately)
-        {
-            DispatchWorkbenchSaveResult result = prepared?.ToResult()
-                ?? CreateWorkbenchSaveFailureResult(m_WorkbenchSnapshotVersion, "save-prepare-failed");
-            if (prepared == null || prepared.HasErrors)
-            {
-                if (prepared?.Request != null)
-                {
-                    result.snapshot = BuildWorkbenchSnapshot(prepared.Request.selectedLineId);
-                }
-                return result;
-            }
-
-            DispatchWorkbenchSaveRequest request = prepared.Request;
-            List<WorkbenchLineRuntime> runtimeLines = prepared.RuntimeLines ?? BuildWorkbenchLinesStable();
-            string lineKey = GetDraftKey(request?.selectedLineId);
-            DispatchWorkbenchDraftState state = GetOrCreateWorkbenchDraft(lineKey);
-            Dictionary<string, List<DispatchWorkbenchStagedRowDto>> nextLineDraftRowsByKey =
-                BuildRequestLineDraftRowsByDraftKey(request, lineKey);
-            List<DispatchWorkbenchManualRowDto> nextManualRows = request.manualRows != null
-                ? request.manualRows.Select(CloneManualRow).ToList()
-                : new List<DispatchWorkbenchManualRowDto>();
-            List<DispatchWorkbenchAutoRuleDto> nextAutoRules = request.autoRules != null
-                ? request.autoRules.Select(CloneAutoRule).ToList()
-                : new List<DispatchWorkbenchAutoRuleDto>();
-            bool hasActiveLineDraftRows = nextLineDraftRowsByKey.TryGetValue(
-                lineKey,
-                out List<DispatchWorkbenchStagedRowDto> activeLineDraftRows);
-            List<DispatchWorkbenchStagedRowDto> nextStagedRows = hasActiveLineDraftRows
-                ? DeduplicateRowsByIdLast(activeLineDraftRows)
-                : state.StagedRows.Select(CloneStagedRow).ToList();
-
-            if (request.applyDraft)
-            {
-                List<string> appliedErrors = ValidateAppliedWorkbenchCandidateRows(
-                    lineKey,
-                    nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
-                    runtimeLines);
-                if (appliedErrors.Count > 0)
-                {
-                    result.success = false;
-                    result.errors = appliedErrors.ToArray();
-                    result.snapshot = BuildWorkbenchSnapshot(request.selectedLineId);
-                    return result;
-                }
-            }
-
-            Dictionary<string, DispatchWorkbenchPlannerImportContractDto> nextPlanRefsByKey =
-                BuildRequestPlanRefsByDraftKey(
-                    request,
-                    nextLineDraftRowsByKey.Keys.Concat(new[] { lineKey }));
-            string requestedSelectedLineId = string.IsNullOrEmpty(request.selectedLineId) ? lineKey : request.selectedLineId;
-            string requestedSelectedEditLine = string.IsNullOrEmpty(request.selectedEditLine) ? "local" : request.selectedEditLine;
-            bool hasAdditionalLineDraftTargets = nextLineDraftRowsByKey.Keys
-                .Any(key => !string.Equals(key, lineKey, StringComparison.Ordinal));
-            bool rulesChanged = !AreManualRowsEquivalent(state.ManualRows, nextManualRows)
-                || !AreAutoRulesEquivalent(state.AutoRules, nextAutoRules)
-                || !AreStagedRowsEquivalent(state.StagedRows, nextStagedRows);
-            DispatchWorkbenchPlannerImportContractDto nextPlanRef = ResolvePlanRef(
-                lineKey,
-                state.PlannerImportContract,
-                nextPlanRefsByKey,
-                rulesChanged,
-                nextStagedRows.Count > 0);
-
-            if (!request.applyDraft
-                && !request.markRulesApplied
-                && !hasAdditionalLineDraftTargets
-                && string.Equals(state.SelectedLineId ?? string.Empty, requestedSelectedLineId, StringComparison.Ordinal)
-                && string.Equals(state.SelectedEditLine ?? string.Empty, requestedSelectedEditLine, StringComparison.Ordinal)
-                && AreMergedViewsEquivalent(state.MergedView, request.mergedView)
-                && AreManualRowsEquivalent(state.ManualRows, nextManualRows)
-                && AreAutoRulesEquivalent(state.AutoRules, nextAutoRules)
-                && AreStagedRowsEquivalent(state.StagedRows, nextStagedRows)
-                && ArePlannerImportContractsEquivalent(state.PlannerImportContract, nextPlanRef)
-                && AreWorkbenchLineSettingsEquivalent(request.lineSettings))
-            {
-                result.success = true;
-                result.version = m_WorkbenchSnapshotVersion.ToString();
-                result.snapshot = null;
-                return result;
-            }
-
-            if (request.lineSettings != null)
-            {
-                ApplyWorkbenchLineSettings(request.lineSettings);
-            }
-            state.SelectedLineId = requestedSelectedLineId;
-            state.SelectedEditLine = requestedSelectedEditLine;
-            state.MergedView = request.mergedView ?? state.MergedView;
-            state.ManualRows = nextManualRows;
-            state.AutoRules = nextAutoRules;
-            state.StagedRows = nextStagedRows;
-            state.PlannerImportContract = nextPlanRef;
-            bool additionalDraftRowsChanged = ApplyAdditionalLineDraftRowsByDraftKey(
-                lineKey,
-                nextLineDraftRowsByKey,
-                nextPlanRefsByKey,
-                request.applyDraft);
-            if (additionalDraftRowsChanged)
-            {
-                rulesChanged = true;
-            }
-            HashSet<string> cleanupLineIds = CollectTouchedWorkbenchLineIds(
-                state.SelectedLineId,
-                state.SelectedEditLine,
-                nextManualRows,
-                nextAutoRules,
-                nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList());
-            foreach (string draftTargetKey in nextLineDraftRowsByKey.Keys)
-            {
-                if (!string.IsNullOrEmpty(draftTargetKey) && !string.Equals(draftTargetKey, "__default__", StringComparison.Ordinal))
-                {
-                    cleanupLineIds.Add(draftTargetKey);
-                }
-            }
-
-            RemoveWorkbenchRowsFromOtherDrafts(
-                new HashSet<string>(nextLineDraftRowsByKey.Keys.Concat(new[] { lineKey }), StringComparer.Ordinal),
-                cleanupLineIds);
-            state.AppliedDepartureMinutesCache.Clear();
-
-            if (rulesChanged)
-            {
-                state.RulesApplied = false;
-                state.DraftApplied = false;
-            }
-            if (request.markRulesApplied)
-            {
-                state.RulesApplied = true;
-            }
-
-            int applyRowCount = nextLineDraftRowsByKey.Values.Sum(rows => rows?.Count ?? 0);
-            if (request.applyDraft && applyRowCount == 0)
-            {
-                result.success = false;
-                result.errors = new[] { "Add rows into the line draft timetable before applying the draft." };
-                m_WorkbenchPreferredLineId = state.SelectedLineId;
-                RefreshAppliedWorkbenchLineSettings();
-                if (persistImmediately)
-                {
-                    SaveWorkbenchPersistence();
-                    SaveAppliedWorkbenchPersistence();
-                }
-                result.snapshot = BuildWorkbenchSnapshot(state.SelectedLineId);
-                return result;
-            }
-
-            if (request.applyDraft && nextLineDraftRowsByKey.ContainsKey(lineKey))
-            {
-                state.DraftApplied = true;
-            }
-
             m_WorkbenchSnapshotVersion++;
-            m_WorkbenchPreferredLineId = state.SelectedLineId;
-            if (request.applyDraft)
-            {
-                ApplyWorkbenchDraftRowsToAppliedRuntime(nextLineDraftRowsByKey.Keys, runtimeLines);
-                SeedObservationFromAppliedRows(state.SelectedLineId);
-            }
-            else
-            {
-                RefreshAppliedWorkbenchLineSettings();
-                if (prepared.LineSettingsChanged)
-                {
-                    InvalidateAppliedWorkbenchTrackModelState();
-                }
-            }
-            if (persistImmediately)
-            {
-                SaveWorkbenchPersistence();
-                SaveAppliedWorkbenchPersistence();
-            }
-            result.success = true;
-            result.version = m_WorkbenchSnapshotVersion.ToString();
-            result.appliedLineIds = request.applyDraft
-                ? nextLineDraftRowsByKey.Keys
-                    .Where(key => !string.IsNullOrEmpty(key) && !string.Equals(key, "__default__", StringComparison.Ordinal))
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(key => key, StringComparer.Ordinal)
-                    .ToArray()
-                : Array.Empty<string>();
-            if (prepared.ShouldReturnSnapshot)
-            {
-                result.snapshot = BuildWorkbenchSnapshot(state.SelectedLineId);
-                DispatchWorkbenchEuisBridge.NotifyWorkbenchSnapshotChanged(result.snapshot);
-            }
-            else
-            {
-                result.snapshot = null;
-            }
-            return result;
+            return m_WorkbenchSnapshotVersion;
         }
 
         private static WorkbenchLineRuntime CloneWorkbenchLineRuntime(WorkbenchLineRuntime line)
@@ -1178,549 +385,26 @@ namespace RapidTransitMod
             return string.IsNullOrWhiteSpace(depotId) ? string.Empty : depotId;
         }
 
-        private static List<AppliedWorkbenchLineStateElement> BuildAppliedWorkbenchLinePersistenceElements(
-            Dictionary<string, AppliedWorkbenchLineState> appliedLines)
-        {
-            List<AppliedWorkbenchLineStateElement> elements = new List<AppliedWorkbenchLineStateElement>();
-            if (appliedLines == null)
-                return elements;
-
-            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in appliedLines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                AppliedWorkbenchLineState state = entry.Value;
-                if (state == null || state.LineEntity == Entity.Null || state.StagedRows == null || state.StagedRows.Count == 0)
-                    continue;
-
-                elements.Add(new AppliedWorkbenchLineStateElement
-                {
-                    m_LineEntity = state.LineEntity,
-                    m_OriginHoldLimitMinutes = NormalizeOriginHoldLimitMinutes(state.OriginHoldLimitMinutes)
-                });
-            }
-
-            return elements;
-        }
-
-        private static List<AppliedWorkbenchStagedRowElement> BuildAppliedWorkbenchRowPersistenceElements(
-            Dictionary<string, AppliedWorkbenchLineState> appliedLines)
-        {
-            List<AppliedWorkbenchStagedRowElement> elements = new List<AppliedWorkbenchStagedRowElement>();
-            if (appliedLines == null)
-                return elements;
-
-            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in appliedLines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                AppliedWorkbenchLineState state = entry.Value;
-                if (state == null || state.LineEntity == Entity.Null || state.StagedRows == null)
-                    continue;
-
-                for (int i = 0; i < state.StagedRows.Count; i++)
-                {
-                    DispatchWorkbenchStagedRowDto row = state.StagedRows[i];
-                    int minute = ParseTimeMinutes(row?.time);
-                    if (minute < 0)
-                        continue;
-
-                    elements.Add(new AppliedWorkbenchStagedRowElement
-                    {
-                        m_LineEntity = state.LineEntity,
-                        m_Order = i,
-                        m_Minute = minute,
-                        m_KindCode = EncodeAppliedRowKind(row?.kind),
-                        m_SourceCode = EncodeAppliedRowSource(row?.source)
-                    });
-                }
-            }
-
-            return elements;
-        }
-
-        private WorkbenchSavePersistencePayload CaptureWorkbenchSavePersistencePayload()
-        {
-            return new WorkbenchSavePersistencePayload
-            {
-                WorkbenchState = BuildWorkbenchPersistenceState(),
-                AppliedLineElements = BuildAppliedWorkbenchLinePersistenceElements(m_AppliedWorkbenchLines),
-                AppliedRowElements = BuildAppliedWorkbenchRowPersistenceElements(m_AppliedWorkbenchLines)
-            };
-        }
-
-        private void PrepareWorkbenchSavePersistence(
-            WorkbenchSaveOperationState operation,
-            DispatchWorkbenchSaveResult result,
-            WorkbenchSavePersistencePayload payload)
-        {
-            try
-            {
-                if (operation == null || operation.IsTerminal || !IsWorkbenchSaveOperationCurrent(operation))
-                    return;
-
-                PreparedWorkbenchSavePersistence prepared = new PreparedWorkbenchSavePersistence
-                {
-                    WorkbenchPersistenceChunks = SplitWorkbenchPersistencePayload(
-                        DispatchWorkbenchJson.Serialize(payload?.WorkbenchState)),
-                    AppliedLineElements = payload?.AppliedLineElements ?? new List<AppliedWorkbenchLineStateElement>(),
-                    AppliedRowElements = payload?.AppliedRowElements ?? new List<AppliedWorkbenchStagedRowElement>()
-                };
-                MainThreadDispatcher.RunOnMainThread(() =>
-                {
-                    try
-                    {
-                        if (operation.IsTerminal || !IsWorkbenchSaveOperationCurrent(operation))
-                            return;
-
-                        WritePreparedWorkbenchPersistence(prepared.WorkbenchPersistenceChunks);
-                        WritePreparedAppliedWorkbenchPersistence(
-                            prepared.AppliedLineElements,
-                            prepared.AppliedRowElements);
-                        operation.UpdateStatus("completed", result?.success == true, string.Empty, result);
-                    }
-                    catch (Exception ex)
-                    {
-                        operation.UpdateStatus("failed", false, DescribeWorkbenchException(ex), null);
-                        LogWorkbenchException("PrepareWorkbenchSavePersistence.Commit", ex);
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                operation.UpdateStatus("failed", false, DescribeWorkbenchException(ex), null);
-                LogWorkbenchException("PrepareWorkbenchSavePersistence", ex);
-            }
-        }
-
-        private void WritePreparedWorkbenchPersistence(List<string> payloadChunks)
-        {
-            EnsureWorkbenchPersistenceBuffer();
-
-            Entity city = m_CitySystem.City;
-            if (city == Entity.Null || !EntityManager.HasBuffer<WorkbenchTimetableStateElement>(city))
-                return;
-
-            var buffer = EntityManager.GetBuffer<WorkbenchTimetableStateElement>(city);
-            buffer.Clear();
-            if (payloadChunks == null || payloadChunks.Count == 0)
-                return;
-
-            for (int i = 0; i < payloadChunks.Count; i++)
-            {
-                buffer.Add(new WorkbenchTimetableStateElement
-                {
-                    m_ChunkIndex = i,
-                    m_PayloadChunk = new FixedString4096Bytes(payloadChunks[i] ?? string.Empty)
-                });
-            }
-        }
-
-        private void WritePreparedAppliedWorkbenchPersistence(
-            List<AppliedWorkbenchLineStateElement> lineElements,
-            List<AppliedWorkbenchStagedRowElement> rowElements)
-        {
-            EnsureAppliedWorkbenchPersistenceBuffers();
-
-            Entity city = m_CitySystem.City;
-            if (city == Entity.Null)
-                return;
-
-            var lineBuffer = EntityManager.GetBuffer<AppliedWorkbenchLineStateElement>(city);
-            var rowBuffer = EntityManager.GetBuffer<AppliedWorkbenchStagedRowElement>(city);
-            lineBuffer.Clear();
-            rowBuffer.Clear();
-
-            if (lineElements != null)
-            {
-                for (int i = 0; i < lineElements.Count; i++)
-                {
-                    lineBuffer.Add(lineElements[i]);
-                }
-            }
-            if (rowElements != null)
-            {
-                for (int i = 0; i < rowElements.Count; i++)
-                {
-                    rowBuffer.Add(rowElements[i]);
-                }
-            }
-        }
-
-        private void CleanupWorkbenchSaveOperations()
-        {
-            DateTime utcNow = DateTime.UtcNow;
-            lock (m_WorkbenchSaveOperationSync)
-            {
-                foreach (string operationId in m_WorkbenchSaveOperations
-                    .Where(entry => entry.Value == null
-                        || (entry.Value.IsTerminal && (utcNow - entry.Value.LastUpdatedUtc) > WorkbenchSaveOperationRetention))
-                    .Select(entry => entry.Key)
-                    .ToArray())
-                {
-                    m_WorkbenchSaveOperations.Remove(operationId);
-                }
-
-                if (m_WorkbenchSaveOperations.Count <= MaxWorkbenchSaveOperationHistory)
-                    return;
-
-                foreach (string operationId in m_WorkbenchSaveOperations
-                    .Where(entry => entry.Value != null && entry.Value.IsTerminal)
-                    .OrderBy(entry => entry.Value.LastUpdatedUtc)
-                    .Take(Math.Max(0, m_WorkbenchSaveOperations.Count - MaxWorkbenchSaveOperationHistory))
-                    .Select(entry => entry.Key)
-                    .ToArray())
-                {
-                    m_WorkbenchSaveOperations.Remove(operationId);
-                }
-            }
-        }
-
-        private int GetWorkbenchSaveOperationGeneration()
-        {
-            lock (m_WorkbenchSaveOperationSync)
-            {
-                return m_WorkbenchSaveOperationGeneration;
-            }
-        }
-
-        private bool IsWorkbenchSaveOperationCurrent(WorkbenchSaveOperationState operation)
-        {
-            if (operation == null)
-                return false;
-
-            lock (m_WorkbenchSaveOperationSync)
-            {
-                return operation.Generation == m_WorkbenchSaveOperationGeneration
-                    && m_WorkbenchSaveOperations.TryGetValue(operation.OperationId, out WorkbenchSaveOperationState current)
-                    && ReferenceEquals(current, operation);
-            }
-        }
-
-        private void SupersedeOlderDraftSaveOperations(WorkbenchSaveOperationState nextOperation)
-        {
-            if (nextOperation == null)
-                return;
-
-            foreach (WorkbenchSaveOperationState pending in m_WorkbenchSaveOperations.Values.ToArray())
-            {
-                if (pending == null || ReferenceEquals(pending, nextOperation))
-                    continue;
-
-                if (pending.IsApplyDraft || pending.IsTerminal)
-                    continue;
-
-                pending.UpdateStatus("superseded", true, string.Empty, null);
-            }
-        }
-
-        private sealed class WorkbenchSavePrepareContext
-        {
-            public string RequestJson = string.Empty;
-            public ulong SnapshotVersion;
-            public List<WorkbenchLineRuntime> RuntimeLines = new List<WorkbenchLineRuntime>();
-            public List<DispatchWorkbenchDepotDto> Depots = new List<DispatchWorkbenchDepotDto>();
-            public Dictionary<string, string> ServiceKinds =
-                new Dictionary<string, string>(StringComparer.Ordinal);
-        }
-
-        private sealed class PreparedWorkbenchSave
-        {
-            public ulong SnapshotVersion;
-            public DispatchWorkbenchSaveRequest Request;
-            public List<WorkbenchLineRuntime> RuntimeLines = new List<WorkbenchLineRuntime>();
-            public List<string> Errors = new List<string>();
-            public bool ShouldReturnSnapshot;
-            public bool LineSettingsChanged;
-
-            public bool HasErrors => Errors != null && Errors.Count > 0;
-
-            public DispatchWorkbenchSaveResult ToResult()
-            {
-                return new DispatchWorkbenchSaveResult
-                {
-                    success = !HasErrors,
-                    errors = Errors?.ToArray() ?? Array.Empty<string>(),
-                warnings = Array.Empty<string>(),
-                version = SnapshotVersion.ToString(),
-                appliedLineIds = Array.Empty<string>(),
-                snapshot = null
-            };
-            }
-        }
-
-        private sealed class WorkbenchSavePersistencePayload
-        {
-            public DispatchWorkbenchPersistentState WorkbenchState;
-            public List<AppliedWorkbenchLineStateElement> AppliedLineElements =
-                new List<AppliedWorkbenchLineStateElement>();
-            public List<AppliedWorkbenchStagedRowElement> AppliedRowElements =
-                new List<AppliedWorkbenchStagedRowElement>();
-        }
-
-        private sealed class PreparedWorkbenchSavePersistence
-        {
-            public List<string> WorkbenchPersistenceChunks = new List<string>();
-            public List<AppliedWorkbenchLineStateElement> AppliedLineElements =
-                new List<AppliedWorkbenchLineStateElement>();
-            public List<AppliedWorkbenchStagedRowElement> AppliedRowElements =
-                new List<AppliedWorkbenchStagedRowElement>();
-        }
-
-        private sealed class WorkbenchSaveOperationState
-        {
-            private readonly object m_Sync = new object();
-            private DispatchWorkbenchSaveOperationStatusDto m_Status;
-
-            public WorkbenchSaveOperationState(string operationId, string requestJson, int generation)
-            {
-                OperationId = operationId ?? string.Empty;
-                RequestJson = requestJson ?? string.Empty;
-                Generation = generation;
-                IsApplyDraft = LooksLikeApplyDraftRequest(RequestJson);
-                LastUpdatedUtc = DateTime.UtcNow;
-                m_Status = new DispatchWorkbenchSaveOperationStatusDto
-                {
-                    success = true,
-                    operationId = OperationId,
-                    state = "queued",
-                    error = string.Empty,
-                    result = null
-                };
-            }
-
-            public string OperationId { get; }
-
-            public string RequestJson { get; }
-
-            public int Generation { get; }
-
-            public bool IsApplyDraft { get; }
-
-            public DateTime LastUpdatedUtc { get; private set; }
-
-            public bool IsTerminal
-            {
-                get
-                {
-                    lock (m_Sync)
-                    {
-                        return IsTerminalState(m_Status?.state);
-                    }
-                }
-            }
-
-            public DispatchWorkbenchSaveOperationStatusDto CreateStatusCopy()
-            {
-                lock (m_Sync)
-                {
-                    return new DispatchWorkbenchSaveOperationStatusDto
-                    {
-                        success = m_Status?.success ?? false,
-                        operationId = m_Status?.operationId ?? string.Empty,
-                        state = m_Status?.state ?? string.Empty,
-                        error = m_Status?.error ?? string.Empty,
-                        result = m_Status?.result
-                    };
-                }
-            }
-
-            public void UpdateStatus(
-                string state,
-                bool success,
-                string error,
-                DispatchWorkbenchSaveResult result)
-            {
-                lock (m_Sync)
-                {
-                    m_Status = new DispatchWorkbenchSaveOperationStatusDto
-                    {
-                        success = success,
-                        operationId = OperationId,
-                        state = state ?? string.Empty,
-                        error = error ?? string.Empty,
-                        result = result
-                    };
-                    LastUpdatedUtc = DateTime.UtcNow;
-                }
-            }
-
-            private static bool IsTerminalState(string state)
-            {
-                return string.Equals(state, "completed", StringComparison.Ordinal)
-                    || string.Equals(state, "failed", StringComparison.Ordinal)
-                    || string.Equals(state, "missing", StringComparison.Ordinal)
-                    || string.Equals(state, "superseded", StringComparison.Ordinal);
-            }
-
-            private static bool LooksLikeApplyDraftRequest(string requestJson)
-            {
-                if (string.IsNullOrEmpty(requestJson))
-                    return false;
-
-                int keyIndex = requestJson.IndexOf("\"applyDraft\"", StringComparison.OrdinalIgnoreCase);
-                if (keyIndex < 0)
-                    return false;
-
-                int colonIndex = requestJson.IndexOf(':', keyIndex);
-                if (colonIndex < 0)
-                    return false;
-
-                int valueIndex = colonIndex + 1;
-                while (valueIndex < requestJson.Length && char.IsWhiteSpace(requestJson[valueIndex]))
-                {
-                    valueIndex++;
-                }
-
-                return valueIndex + 4 <= requestJson.Length
-                    && string.Compare(requestJson, valueIndex, "true", 0, 4, StringComparison.OrdinalIgnoreCase) == 0;
-            }
-        }
-
         private DispatchWorkbenchSnapshot BuildWorkbenchSnapshot(string preferredLineId)
         {
             EnsureWorkbenchPersistenceLoaded();
-            List<WorkbenchLineRuntime> runtimeLines = BuildWorkbenchLinesStable();
-            WorkbenchLineRuntime activeRuntime = runtimeLines.Count > 0
-                ? ResolveActiveWorkbenchLine(runtimeLines, preferredLineId)
-                : null;
-
-            string draftKey = GetDraftKey(activeRuntime?.Id);
-            DispatchWorkbenchDraftState draft = GetOrCreateWorkbenchDraft(draftKey);
-            List<DispatchWorkbenchManualRowDto> mergedManualRows = new List<DispatchWorkbenchManualRowDto>();
-            List<DispatchWorkbenchAutoRuleDto> mergedAutoRules = new List<DispatchWorkbenchAutoRuleDto>();
-            HashSet<string> mergedManualRowIds = new HashSet<string>(StringComparer.Ordinal);
-            HashSet<string> mergedAutoRuleIds = new HashSet<string>(StringComparer.Ordinal);
-            HashSet<string> validRuntimeLineIds = new HashSet<string>(
-                runtimeLines.Select(line => line.Id),
-                StringComparer.Ordinal);
-            List<DispatchWorkbenchStationDto> stations = activeRuntime != null
-                ? BuildWorkbenchStations(activeRuntime.Entity)
-                : new List<DispatchWorkbenchStationDto>();
-
-            if (string.IsNullOrEmpty(draft.SelectedLineId) && activeRuntime != null)
-            {
-                draft.SelectedLineId = activeRuntime.Id;
-            }
-
-            if (activeRuntime != null)
-            {
-                m_WorkbenchPreferredLineId = activeRuntime.Id;
-            }
-
-            EnsureMergedViewDefaultsStable(draft, runtimeLines, activeRuntime);
-            CollectWorkbenchDraftRules(draftKey, validRuntimeLineIds, mergedManualRows, mergedAutoRules, mergedManualRowIds, mergedAutoRuleIds);
-            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                if (string.Equals(entry.Key, draftKey, StringComparison.Ordinal))
-                    continue;
-                CollectWorkbenchDraftRules(entry.Key, validRuntimeLineIds, mergedManualRows, mergedAutoRules, mergedManualRowIds, mergedAutoRuleIds);
-            }
-            List<DispatchWorkbenchTripDto> trips = activeRuntime != null
-                ? BuildRealtimeWorkbenchTrips(activeRuntime, stations, draft)
-                : new List<DispatchWorkbenchTripDto>();
-            List<DispatchWorkbenchDepotDto> depots = BuildWorkbenchDepots();
-            DispatchWorkbenchLineDraftRowsDto[] lineDraftRowsByLineId =
-                BuildWorkbenchLineDraftRowsByLineId(validRuntimeLineIds);
-            DispatchWorkbenchStagedRowDto[] canonicalCombinedDraftRows = lineDraftRowsByLineId
-                .SelectMany(block => block?.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>())
-                .Select(CloneStagedRow)
-                .ToArray();
-            DispatchWorkbenchStagedRowDto[] canonicalActiveLineDraftRows = lineDraftRowsByLineId
-                .FirstOrDefault(block => string.Equals(block?.lineId, activeRuntime?.Id ?? string.Empty, StringComparison.Ordinal))
-                ?.lineDraftRows
-                ?.Select(CloneStagedRow)
-                .ToArray()
-                ?? Array.Empty<DispatchWorkbenchStagedRowDto>();
-            List<DispatchWorkbenchStagedRowDto> activeLineDraftRowsForReport = canonicalActiveLineDraftRows.ToList();
-            List<DispatchWorkbenchStagedRowDto> combinedDraftRowsForReport = canonicalCombinedDraftRows.ToList();
-
-            LogWorkbenchSnapshot(activeRuntime, stations, trips, draft, activeLineDraftRowsForReport, combinedDraftRowsForReport);
-            WriteWorkbenchIntegrityReport(
-                "snapshot",
-                activeRuntime,
-                draftKey,
-                draft,
-                runtimeLines,
-                activeLineDraftRowsForReport,
-                combinedDraftRowsForReport);
-
-            return new DispatchWorkbenchSnapshot
-            {
-                selectedLineId = draft.SelectedLineId,
-                selectedEditLine = draft.SelectedEditLine,
-                mergedView = draft.MergedView,
-                lines = runtimeLines.Select(line => new DispatchWorkbenchLineDto
-                {
-                    id = line.Id,
-                    sourceLineId = line.Entity.Index.ToString(),
-                    name = line.Name,
-                    kind = line.Kind,
-                    direction = "up",
-                    stationCount = line.StationCount,
-                    color = line.Color,
-                    originStationId = line.OriginStationId,
-                    originStationName = line.OriginStationName,
-                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Entity),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Entity),
-                    transportType = line.TransportType,
-                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Entity)
-                }).ToArray(),
-                depots = depots.ToArray(),
-                stations = stations.ToArray(),
-                trips = trips.ToArray(),
-                manualRows = mergedManualRows.ToArray(),
-                autoRules = mergedAutoRules.ToArray(),
-                lineDraftRows = canonicalActiveLineDraftRows,
-                lineDraftRowsByLineId = lineDraftRowsByLineId,
-                combinedDraftRows = canonicalCombinedDraftRows,
-                appliedRows = BuildAppliedWorkbenchRowsSnapshot(),
-                planRefs = BuildPlanRefsSnapshot(),
-                version = m_WorkbenchSnapshotVersion.ToString(),
-                sourceMode = "game-backend",
-                rulesApplied = draft.RulesApplied,
-                draftApplied = draft.DraftApplied
-            };
+            EnsureAppliedWorkbenchPersistenceLoaded();
+            DispatchWorkbenchSnapshot snapshot =
+                GetWorkbenchSnapshotBuilder().Build(preferredLineId, m_WorkbenchSnapshotVersion, "game-backend");
+            snapshot.featureSettings = BuildRuntimeFeatureSettingsDto();
+            return snapshot;
         }
 
         private DispatchWorkbenchSnapshot BuildWorkbenchMetadataSnapshot()
         {
             EnsureWorkbenchPersistenceLoaded();
-            List<WorkbenchLineRuntime> runtimeLines = BuildWorkbenchLinesStable();
-            List<DispatchWorkbenchDepotDto> depots = BuildWorkbenchDepots();
-
-            return new DispatchWorkbenchSnapshot
-            {
-                selectedLineId = GetPreferredWorkbenchLineId(),
-                selectedEditLine = GetPreferredWorkbenchLineId(),
-                mergedView = new DispatchWorkbenchMergedView(),
-                lines = runtimeLines.Select(line => new DispatchWorkbenchLineDto
-                {
-                    id = line.Id,
-                    sourceLineId = line.Entity.Index.ToString(),
-                    name = line.Name,
-                    kind = line.Kind,
-                    direction = "up",
-                    stationCount = line.StationCount,
-                    color = line.Color,
-                    originStationId = line.OriginStationId,
-                    originStationName = line.OriginStationName,
-                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line.Entity),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line.Entity),
-                    transportType = line.TransportType,
-                    allowedDepotId = GetWorkbenchAllowedDepotId(line.Entity)
-                }).ToArray(),
-                depots = depots.ToArray(),
-                stations = Array.Empty<DispatchWorkbenchStationDto>(),
-                trips = Array.Empty<DispatchWorkbenchTripDto>(),
-                manualRows = Array.Empty<DispatchWorkbenchManualRowDto>(),
-                autoRules = Array.Empty<DispatchWorkbenchAutoRuleDto>(),
-                lineDraftRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
-                lineDraftRowsByLineId = Array.Empty<DispatchWorkbenchLineDraftRowsDto>(),
-                combinedDraftRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
-                appliedRows = BuildAppliedWorkbenchRowsSnapshot(),
-                planRefs = BuildPlanRefsSnapshot(),
-                version = m_WorkbenchSnapshotVersion.ToString(),
-                sourceMode = "game-backend",
-                rulesApplied = false,
-                draftApplied = false
-            };
+            EnsureAppliedWorkbenchPersistenceLoaded();
+            DispatchWorkbenchSnapshot snapshot = GetWorkbenchSnapshotBuilder().BuildMetadata(
+                GetPreferredWorkbenchLineId(),
+                m_WorkbenchSnapshotVersion,
+                "game-backend");
+            snapshot.featureSettings = BuildRuntimeFeatureSettingsDto();
+            return snapshot;
         }
 
         private void CollectWorkbenchDraftRules(
@@ -1989,18 +673,40 @@ namespace RapidTransitMod
 
         private string GetPreferredWorkbenchLineId()
         {
-            if (!string.IsNullOrEmpty(m_WorkbenchPreferredLineId))
-                return m_WorkbenchPreferredLineId;
-            if (m_WorkbenchDrafts.Count == 0)
-                return string.Empty;
-
-            KeyValuePair<string, DispatchWorkbenchDraftState> first = m_WorkbenchDrafts.First();
-            return first.Value.SelectedLineId;
+            return m_WorkbenchDrafts.ResolvePreferredLineId();
         }
 
         private string GetDraftKey(string lineId)
         {
-            return string.IsNullOrEmpty(lineId) ? "__default__" : lineId;
+            return WorkbenchDraftStore.GetKey(lineId);
+        }
+
+        private string GetStoreLineId(LineKey lineKey)
+        {
+            return GetWorkbenchRuntimeConfig().GetLineId(lineKey);
+        }
+
+        private LineKey GetStoreLineKey(string lineId)
+        {
+            return GetWorkbenchRuntimeConfig().GetLineKey(lineId);
+        }
+
+        private LineKey GetWorkbenchStoreLineKey(Entity line, string fallbackLineId = null)
+        {
+            string lineId = !string.IsNullOrEmpty(fallbackLineId)
+                ? fallbackLineId
+                : GetWorkbenchLineId(line);
+            if (!string.IsNullOrEmpty(lineId))
+            {
+                return LineIdentityService.GetKey(lineId);
+            }
+
+            return LineIdentityService.GetKey(EntityManager, line, fallbackLineId);
+        }
+
+        private LineKey GetStoreLineKey(Entity line, string fallbackLineId = null)
+        {
+            return GetWorkbenchRuntimeConfig().GetLineKey(line, fallbackLineId);
         }
 
         private string GetWorkbenchLineId(Entity line)
@@ -2048,10 +754,14 @@ namespace RapidTransitMod
             m_PerfProbeWorkbenchLineFrameSnapshotMisses++;
             string lineId = GetWorkbenchLineId(line);
             string lineKey = GetDraftKey(lineId);
-            bool timetableApplied = m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState appliedState);
+            LineKey storeKey = GetStoreLineKey(line, lineId);
+            bool timetableApplied = !storeKey.IsEmpty
+                ? m_AppliedTimetableStore.IsManaged(storeKey)
+                : m_AppliedWorkbenchLines.ContainsKey(lineKey);
+            m_AppliedWorkbenchLines.TryGetValue(lineKey, out AppliedWorkbenchLineState appliedState);
             string configuredServiceKind = GetWorkbenchConfiguredLineServiceKind(lineId);
             string appliedServiceKind = timetableApplied
-                ? GetAppliedWorkbenchLineServiceKind(appliedState)
+                ? GetAppliedWorkbenchLineServiceKind(storeKey, appliedState)
                 : string.Empty;
             string effectiveServiceKind = !string.IsNullOrEmpty(configuredServiceKind)
                 ? configuredServiceKind
@@ -2078,7 +788,63 @@ namespace RapidTransitMod
         private void InvalidateConfiguredAllowedDepotCache()
         {
             m_ConfiguredAllowedDepotCacheByLine.Clear();
-            m_WorkbenchLineSettingsVersion++;
+            m_WorkbenchLineSettingsVersion = Math.Max(
+                m_WorkbenchLineSettingsVersion + 1,
+                m_LineSettingsStore.Version);
+        }
+
+        private void ClearAppliedTimetableStore()
+        {
+            m_AppliedTimetableStore.Clear();
+        }
+
+        private void ClearLineSettingsStore()
+        {
+            m_LineSettingsStore.Clear();
+            m_WorkbenchLineSettingsVersion = Math.Max(
+                m_WorkbenchLineSettingsVersion + 1,
+                m_LineSettingsStore.Version);
+        }
+
+        private IEnumerable<string> EnumerateWorkbenchLineSettingIds()
+        {
+            return GetWorkbenchRuntimeConfig().EnumerateSettingIds(
+                m_WorkbenchLineOriginHoldLimits,
+                m_WorkbenchLineMaxStationDwellMinutes,
+                m_WorkbenchLineAllowedDepots,
+                m_WorkbenchLineServiceKinds);
+        }
+
+        private void SyncLineSettingsStore()
+        {
+            m_WorkbenchLineSettingsVersion = GetWorkbenchRuntimeConfig().SyncSettings(
+                m_WorkbenchLineOriginHoldLimits,
+                m_WorkbenchLineMaxStationDwellMinutes,
+                m_WorkbenchLineAllowedDepots,
+                m_WorkbenchLineServiceKinds,
+                m_WorkbenchLineSettingsVersion);
+        }
+
+        private void SyncAppliedTimetableStore()
+        {
+            GetWorkbenchRuntimeConfig().SyncApplied(m_AppliedWorkbenchLines);
+        }
+
+        private void SyncAppliedTimetableStore(string lineId, AppliedWorkbenchLineState applied)
+        {
+            GetWorkbenchRuntimeConfig().SyncApplied(lineId, applied);
+        }
+
+        private AppliedTimetableState BuildAppliedTimetableState(string lineId, AppliedWorkbenchLineState applied)
+        {
+            return GetWorkbenchRuntimeConfig().BuildAppliedState(lineId, applied);
+        }
+
+        private AppliedTimetableRow[] BuildAppliedTimetableRows(
+            IEnumerable<DispatchWorkbenchStagedRowDto> rows,
+            string lineId)
+        {
+            return GetWorkbenchRuntimeConfig().BuildAppliedRows(rows, lineId);
         }
 
         private void MaybeLogConfiguredAllowedDepotCacheStats(uint nowFrame)
@@ -2114,13 +880,7 @@ namespace RapidTransitMod
 
         private void EnsureWorkbenchPersistenceLoaded()
         {
-            if (m_WorkbenchPersistenceLoaded)
-            {
-                EnsureAppliedWorkbenchPersistenceLoaded();
-                return;
-            }
-
-            TryRestoreWorkbenchPersistence();
+            GetWorkbenchPersistence().EnsureLoaded();
             EnsureAppliedWorkbenchPersistenceLoaded();
         }
 
@@ -2163,72 +923,7 @@ namespace RapidTransitMod
 
         private bool TryRestoreWorkbenchPersistence()
         {
-            if (m_WorkbenchPersistenceLoaded)
-                return true;
-
-            Entity city = m_CitySystem.City;
-            if (city == Entity.Null)
-                return false;
-
-            if (!EntityManager.HasBuffer<WorkbenchTimetableStateElement>(city))
-            {
-                return false;
-            }
-
-            var buffer = EntityManager.GetBuffer<WorkbenchTimetableStateElement>(city, true);
-            if (buffer.Length == 0)
-            {
-                m_WorkbenchPersistenceLoaded = true;
-                return true;
-            }
-
-            try
-            {
-                WorkbenchTimetableStateElement[] orderedEntries = new WorkbenchTimetableStateElement[buffer.Length];
-                for (int i = 0; i < buffer.Length; i++)
-                {
-                    orderedEntries[i] = buffer[i];
-                }
-
-                Array.Sort(orderedEntries, (left, right) => left.m_ChunkIndex.CompareTo(right.m_ChunkIndex));
-
-                StringBuilder payloadBuilder = new StringBuilder();
-                for (int i = 0; i < orderedEntries.Length; i++)
-                {
-                    payloadBuilder.Append(orderedEntries[i].m_PayloadChunk.ToString());
-                }
-
-                string payloadJson = payloadBuilder.ToString();
-
-                if (string.IsNullOrEmpty(payloadJson))
-                {
-                    m_WorkbenchPersistenceLoaded = true;
-                    return true;
-                }
-
-                DispatchWorkbenchPersistentState persisted =
-                    DispatchWorkbenchJson.Deserialize<DispatchWorkbenchPersistentState>(payloadJson);
-
-                if (persisted != null)
-                {
-                    bool persistenceCleaned = RestoreWorkbenchPersistence(persisted);
-                    if (persistenceCleaned)
-                    {
-                        SaveWorkbenchPersistence();
-                    }
-                    Mod.log.Info("[WorkbenchRestore] drafts=" + m_WorkbenchDrafts.Count
-                        + " " + SummarizeWorkbenchDraftRows());
-                }
-
-                m_WorkbenchPersistenceLoaded = true;
-                return true;
-            }
-            catch (Exception ex)
-            {
-                LogWorkbenchException("TryRestoreWorkbenchPersistence", ex);
-                m_WorkbenchPersistenceLoaded = true;
-                return false;
-            }
+            return GetWorkbenchPersistence().TryRestoreWorkbenchPersistence();
         }
 
         private bool TryRestoreAppliedWorkbenchPersistence()
@@ -2241,6 +936,7 @@ namespace RapidTransitMod
             if (city == Entity.Null)
             {
                 m_AppliedWorkbenchLines.Clear();
+                ClearAppliedTimetableStore();
                 return false;
             }
 
@@ -2248,6 +944,7 @@ namespace RapidTransitMod
                 && !EntityManager.HasBuffer<AppliedWorkbenchStagedRowElement>(city))
             {
                 m_AppliedWorkbenchLines.Clear();
+                ClearAppliedTimetableStore();
                 if (m_WorkbenchDrafts.Values.Any(draft =>
                     draft != null && draft.DraftApplied && draft.StagedRows != null && draft.StagedRows.Count > 0))
                 {
@@ -2262,6 +959,7 @@ namespace RapidTransitMod
             }
 
             m_AppliedWorkbenchLines.Clear();
+            ClearAppliedTimetableStore();
 
             try
             {
@@ -2327,6 +1025,7 @@ namespace RapidTransitMod
                 }
 
                 RecoverAppliedStagedRowsFromDrafts();
+                SyncAppliedTimetableStore();
                 if (SyncWorkbenchDraftsFromAppliedState())
                 {
                     SaveWorkbenchPersistence();
@@ -2354,31 +1053,7 @@ namespace RapidTransitMod
 
         private void SaveWorkbenchPersistence()
         {
-            EnsureWorkbenchPersistenceBuffer();
-
-            Entity city = m_CitySystem.City;
-            if (city == Entity.Null || !EntityManager.HasBuffer<WorkbenchTimetableStateElement>(city))
-                return;
-
-            DispatchWorkbenchPersistentState persisted = BuildWorkbenchPersistenceState();
-            string payloadJson = DispatchWorkbenchJson.Serialize(persisted);
-            var buffer = EntityManager.GetBuffer<WorkbenchTimetableStateElement>(city);
-            List<string> payloadChunks = SplitWorkbenchPersistencePayload(payloadJson);
-            buffer.Clear();
-
-            if (payloadChunks.Count == 0)
-            {
-                return;
-            }
-
-            for (int i = 0; i < payloadChunks.Count; i++)
-            {
-                buffer.Add(new WorkbenchTimetableStateElement
-                {
-                    m_ChunkIndex = i,
-                    m_PayloadChunk = new FixedString4096Bytes(payloadChunks[i] ?? string.Empty)
-                });
-            }
+            GetWorkbenchPersistence().SaveWorkbenchPersistence();
         }
 
         private void SaveAppliedWorkbenchPersistence()
@@ -2461,6 +1136,7 @@ namespace RapidTransitMod
                 }
             }
 
+            SyncAppliedTimetableStore();
             RefreshAppliedPlannerContracts();
             SyncWorkbenchDraftsFromAppliedState();
             InvalidateWorkbenchLineFrameSnapshots();
@@ -2513,6 +1189,7 @@ namespace RapidTransitMod
                 m_AppliedWorkbenchLines[draftKey] = applied;
             }
 
+            SyncAppliedTimetableStore();
             RefreshAppliedPlannerContracts();
             SyncWorkbenchDraftsFromAppliedState();
             InvalidateWorkbenchLineFrameSnapshots();
@@ -2677,9 +1354,7 @@ namespace RapidTransitMod
 
         private static DispatchWorkbenchStagedRowDto[] GetRequestLineDraftRows(DispatchWorkbenchSaveRequest request)
         {
-            return request?.lineDraftRows
-                ?? request?.stagedRows
-                ?? Array.Empty<DispatchWorkbenchStagedRowDto>();
+            return request?.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>();
         }
 
         private static Dictionary<string, List<DispatchWorkbenchStagedRowDto>> BuildRequestLineDraftRowsByDraftKey(
@@ -3099,34 +1774,12 @@ namespace RapidTransitMod
 
         private DispatchWorkbenchStagedRowDto[] BuildAppliedWorkbenchRowsSnapshot()
         {
-            if (m_AppliedWorkbenchLines.Count == 0)
-            {
-                return Array.Empty<DispatchWorkbenchStagedRowDto>();
-            }
-
-            return m_AppliedWorkbenchLines
-                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .SelectMany(pair => pair.Value?.StagedRows ?? new List<DispatchWorkbenchStagedRowDto>())
-                .Where(row => row != null)
-                .Select(CloneStagedRow)
-                .ToArray();
+            return GetWorkbenchQuery().BuildAppliedRows();
         }
 
         private DispatchWorkbenchPlanRefDto[] BuildPlanRefsSnapshot()
         {
-            return m_WorkbenchDrafts
-                .Where(entry =>
-                    entry.Value?.PlannerImportContract != null
-                    && HasWorkbenchRowsForDraft(entry.Value?.StagedRows, entry.Key)
-                    && !string.IsNullOrEmpty(entry.Key)
-                    && !string.Equals(entry.Key, "__default__", StringComparison.Ordinal))
-                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
-                .Select(entry => new DispatchWorkbenchPlanRefDto
-                {
-                    lineId = entry.Key,
-                    contract = ClonePlannerImportContract(entry.Value.PlannerImportContract)
-                })
-                .ToArray();
+            return GetWorkbenchQuery().BuildPlanRefs();
         }
 
         private static string BuildAppliedRowNote(byte sourceCode)
@@ -3142,673 +1795,12 @@ namespace RapidTransitMod
 
         private DispatchWorkbenchPersistentState BuildWorkbenchPersistenceState()
         {
-            List<DispatchWorkbenchPersistedDraftState> drafts = new List<DispatchWorkbenchPersistedDraftState>(m_WorkbenchDrafts.Count);
-            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_WorkbenchDrafts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                drafts.Add(CreatePersistedDraftState(entry.Key, entry.Value));
-            }
-
-            DispatchWorkbenchLineSettingDto[] lineSettings = m_WorkbenchLineOriginHoldLimits.Keys
-                .Concat(m_WorkbenchLineMaxStationDwellMinutes.Keys)
-                .Concat(m_WorkbenchLineAllowedDepots.Keys)
-                .Concat(m_WorkbenchLineServiceKinds.Keys)
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(key => key, StringComparer.Ordinal)
-                .Select(lineId => new DispatchWorkbenchLineSettingDto
-                {
-                    lineId = lineId,
-                    originHoldLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(lineId),
-                    maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(lineId),
-                    allowedDepotId = GetWorkbenchAllowedDepotId(lineId),
-                    serviceKind = GetWorkbenchConfiguredLineServiceKind(lineId)
-                })
-                .ToArray();
-
-            return new DispatchWorkbenchPersistentState
-            {
-                preferredLineId = m_WorkbenchPreferredLineId,
-                lineSettings = lineSettings,
-                drafts = drafts.ToArray(),
-                broadcastAssetDirectory = m_BroadcastAssetDirectory,
-                broadcastAssets = BuildPersistedBroadcastAssetStates(),
-                broadcastDraftLineBindings = BuildPersistedBroadcastDraftLineBindingStates(),
-                broadcastDraftLegacyLineBindings = BuildPersistedBroadcastDraftLegacyLineBindingStates(),
-                broadcastDraftRules = BuildPersistedBroadcastDraftRuleStates(),
-                broadcastDraftPlatformAnnouncements = BuildPersistedBroadcastDraftPlatformAnnouncementStates(),
-                broadcastDraftLegacyPlatformAnnouncements = BuildPersistedBroadcastDraftLegacyPlatformAnnouncementStates(),
-                broadcastLineBindings = BuildPersistedBroadcastLineBindingStates(),
-                broadcastLegacyLineBindings = BuildPersistedBroadcastLegacyLineBindingStates(),
-                broadcastRules = BuildPersistedBroadcastRuleStates(),
-                broadcastPlatformAnnouncements = BuildPersistedBroadcastPlatformAnnouncementStates(),
-                broadcastLegacyPlatformAnnouncements = BuildPersistedBroadcastLegacyPlatformAnnouncementStates(),
-                broadcastAppliedState = BuildPersistedBroadcastAppliedState(),
-                broadcastDraftVolume = m_BroadcastDraftVolumePercent
-            };
+            return GetWorkbenchPersistence().BuildState();
         }
 
         private bool RestoreWorkbenchPersistence(DispatchWorkbenchPersistentState persisted)
         {
-            m_WorkbenchDrafts.Clear();
-            m_AppliedPlannerImportContracts.Clear();
-            m_WorkbenchLineOriginHoldLimits.Clear();
-            m_WorkbenchLineMaxStationDwellMinutes.Clear();
-            m_WorkbenchLineAllowedDepots.Clear();
-            m_WorkbenchLineServiceKinds.Clear();
-            InvalidateConfiguredAllowedDepotCache();
-            m_WorkbenchPreferredLineId = persisted?.preferredLineId ?? string.Empty;
-            RestoreBroadcastWorkbenchPersistence(
-                persisted?.broadcastAssetDirectory,
-                persisted?.broadcastAssets,
-                persisted?.broadcastDraftLineBindings,
-                persisted?.broadcastDraftLegacyLineBindings,
-                persisted?.broadcastDraftRules,
-                persisted?.broadcastDraftPlatformAnnouncements,
-                persisted?.broadcastDraftLegacyPlatformAnnouncements,
-                persisted?.broadcastLineBindings,
-                persisted?.broadcastLegacyLineBindings,
-                persisted?.broadcastRules,
-                persisted?.broadcastPlatformAnnouncements,
-                persisted?.broadcastLegacyPlatformAnnouncements,
-                persisted?.broadcastAppliedState,
-                persisted?.broadcastDraftVolume ?? 80);
-
-            if (persisted?.lineSettings != null)
-            {
-                ApplyWorkbenchLineSettings(persisted.lineSettings);
-            }
-
-            if (persisted?.drafts == null)
-                return false;
-
-            for (int i = 0; i < persisted.drafts.Length; i++)
-            {
-                DispatchWorkbenchPersistedDraftState dto = persisted.drafts[i];
-                if (dto == null)
-                    continue;
-
-                string lineKey = !string.IsNullOrEmpty(dto.lineKey)
-                    ? dto.lineKey
-                    : GetDraftKey(dto.selectedLineId);
-
-                m_WorkbenchDrafts[lineKey] = CreateDraftStateFromPersisted(lineKey, dto);
-            }
-
-            return MigrateRestoredWorkbenchDraftRowsByLineId();
-        }
-
-        private enum RestoredWorkbenchRowRepairAction
-        {
-            Keep = 0,
-            Move = 1,
-            Drop = 2
-        }
-
-        private bool MigrateRestoredWorkbenchDraftRowsByLineId()
-        {
-            if (m_WorkbenchDrafts.Count == 0)
-                return false;
-
-            List<KeyValuePair<string, DispatchWorkbenchDraftState>> restoredDrafts =
-                m_WorkbenchDrafts.ToList();
-            HashSet<string> validRuntimeLineIds = BuildWorkbenchRuntimeLineIdsForRestore();
-            HashSet<string> touchedDraftKeys = new HashSet<string>(StringComparer.Ordinal);
-            int relocatedRows = 0;
-            int droppedRows = 0;
-            int createdDrafts = 0;
-
-            for (int draftIndex = 0; draftIndex < restoredDrafts.Count; draftIndex++)
-            {
-                string sourceKey = restoredDrafts[draftIndex].Key;
-                DispatchWorkbenchDraftState sourceDraft = restoredDrafts[draftIndex].Value;
-                if (sourceDraft == null)
-                    continue;
-
-                relocatedRows += MigrateRestoredManualRowsByLineId(
-                    sourceKey,
-                    sourceDraft,
-                    validRuntimeLineIds,
-                    touchedDraftKeys,
-                    ref createdDrafts,
-                    ref droppedRows);
-                relocatedRows += MigrateRestoredAutoRulesByLineId(
-                    sourceKey,
-                    sourceDraft,
-                    validRuntimeLineIds,
-                    touchedDraftKeys,
-                    ref createdDrafts,
-                    ref droppedRows);
-                relocatedRows += MigrateRestoredStagedRowsByLineId(
-                    sourceKey,
-                    sourceDraft,
-                    validRuntimeLineIds,
-                    touchedDraftKeys,
-                    ref createdDrafts,
-                    ref droppedRows);
-            }
-
-            if (relocatedRows == 0 && droppedRows == 0)
-                return false;
-
-            foreach (string draftKey in touchedDraftKeys)
-            {
-                if (!m_WorkbenchDrafts.TryGetValue(draftKey, out DispatchWorkbenchDraftState draft)
-                    || draft == null)
-                {
-                    continue;
-                }
-
-                draft.ManualRows = DeduplicateWorkbenchManualRowsForMigration(draft.ManualRows);
-                draft.AutoRules = DeduplicateWorkbenchAutoRulesForMigration(draft.AutoRules);
-                draft.StagedRows = DeduplicateWorkbenchStagedRowsForMigration(draft.StagedRows);
-                NormalizeMigratedWorkbenchDraftState(draftKey, draft);
-            }
-
-            Mod.log.Info("[WorkbenchDraftMigration] relocatedRows="
-                + relocatedRows
-                + " droppedRows="
-                + droppedRows
-                + " touchedDrafts="
-                + touchedDraftKeys.Count
-                + " createdDrafts="
-                + createdDrafts);
-            return true;
-        }
-
-        private int MigrateRestoredManualRowsByLineId(
-            string sourceKey,
-            DispatchWorkbenchDraftState sourceDraft,
-            HashSet<string> validRuntimeLineIds,
-            HashSet<string> touchedDraftKeys,
-            ref int createdDrafts,
-            ref int droppedRows)
-        {
-            if (sourceDraft.ManualRows == null || sourceDraft.ManualRows.Count == 0)
-                return 0;
-
-            List<DispatchWorkbenchManualRowDto> retainedRows =
-                new List<DispatchWorkbenchManualRowDto>(sourceDraft.ManualRows.Count);
-            int movedRows = 0;
-            for (int i = 0; i < sourceDraft.ManualRows.Count; i++)
-            {
-                DispatchWorkbenchManualRowDto row = sourceDraft.ManualRows[i];
-                RestoredWorkbenchRowRepairAction action = ClassifyRestoredWorkbenchRow(
-                    sourceKey,
-                    row?.lineId,
-                    validRuntimeLineIds,
-                    out string targetKey);
-                if (action == RestoredWorkbenchRowRepairAction.Keep)
-                {
-                    retainedRows.Add(row);
-                    continue;
-                }
-                if (action == RestoredWorkbenchRowRepairAction.Drop)
-                {
-                    touchedDraftKeys.Add(sourceKey);
-                    droppedRows++;
-                    continue;
-                }
-
-                DispatchWorkbenchDraftState targetDraft =
-                    GetOrCreateRestoredWorkbenchMigrationDraft(targetKey, ref createdDrafts);
-                targetDraft.ManualRows.Add(CloneManualRow(row));
-                if (sourceDraft.RulesApplied || sourceDraft.DraftApplied)
-                {
-                    targetDraft.RulesApplied = true;
-                }
-                CopyPlannerImportContractForMigratedDraft(sourceDraft, targetDraft, targetKey);
-                touchedDraftKeys.Add(sourceKey);
-                touchedDraftKeys.Add(targetKey);
-                movedRows++;
-            }
-
-            sourceDraft.ManualRows = retainedRows;
-            return movedRows;
-        }
-
-        private int MigrateRestoredAutoRulesByLineId(
-            string sourceKey,
-            DispatchWorkbenchDraftState sourceDraft,
-            HashSet<string> validRuntimeLineIds,
-            HashSet<string> touchedDraftKeys,
-            ref int createdDrafts,
-            ref int droppedRows)
-        {
-            if (sourceDraft.AutoRules == null || sourceDraft.AutoRules.Count == 0)
-                return 0;
-
-            List<DispatchWorkbenchAutoRuleDto> retainedRules =
-                new List<DispatchWorkbenchAutoRuleDto>(sourceDraft.AutoRules.Count);
-            int movedRules = 0;
-            for (int i = 0; i < sourceDraft.AutoRules.Count; i++)
-            {
-                DispatchWorkbenchAutoRuleDto rule = sourceDraft.AutoRules[i];
-                RestoredWorkbenchRowRepairAction action = ClassifyRestoredWorkbenchRow(
-                    sourceKey,
-                    rule?.lineId,
-                    validRuntimeLineIds,
-                    out string targetKey);
-                if (action == RestoredWorkbenchRowRepairAction.Keep)
-                {
-                    retainedRules.Add(rule);
-                    continue;
-                }
-                if (action == RestoredWorkbenchRowRepairAction.Drop)
-                {
-                    touchedDraftKeys.Add(sourceKey);
-                    droppedRows++;
-                    continue;
-                }
-
-                DispatchWorkbenchDraftState targetDraft =
-                    GetOrCreateRestoredWorkbenchMigrationDraft(targetKey, ref createdDrafts);
-                targetDraft.AutoRules.Add(CloneAutoRule(rule));
-                if (sourceDraft.RulesApplied || sourceDraft.DraftApplied)
-                {
-                    targetDraft.RulesApplied = true;
-                }
-                CopyPlannerImportContractForMigratedDraft(sourceDraft, targetDraft, targetKey);
-                touchedDraftKeys.Add(sourceKey);
-                touchedDraftKeys.Add(targetKey);
-                movedRules++;
-            }
-
-            sourceDraft.AutoRules = retainedRules;
-            return movedRules;
-        }
-
-        private int MigrateRestoredStagedRowsByLineId(
-            string sourceKey,
-            DispatchWorkbenchDraftState sourceDraft,
-            HashSet<string> validRuntimeLineIds,
-            HashSet<string> touchedDraftKeys,
-            ref int createdDrafts,
-            ref int droppedRows)
-        {
-            if (sourceDraft.StagedRows == null || sourceDraft.StagedRows.Count == 0)
-                return 0;
-
-            List<DispatchWorkbenchStagedRowDto> retainedRows =
-                new List<DispatchWorkbenchStagedRowDto>(sourceDraft.StagedRows.Count);
-            int movedRows = 0;
-            for (int i = 0; i < sourceDraft.StagedRows.Count; i++)
-            {
-                DispatchWorkbenchStagedRowDto row = sourceDraft.StagedRows[i];
-                RestoredWorkbenchRowRepairAction action = ClassifyRestoredWorkbenchRow(
-                    sourceKey,
-                    row?.lineId,
-                    validRuntimeLineIds,
-                    out string targetKey);
-                if (action == RestoredWorkbenchRowRepairAction.Keep)
-                {
-                    retainedRows.Add(row);
-                    continue;
-                }
-                if (action == RestoredWorkbenchRowRepairAction.Drop)
-                {
-                    touchedDraftKeys.Add(sourceKey);
-                    droppedRows++;
-                    continue;
-                }
-
-                DispatchWorkbenchDraftState targetDraft =
-                    GetOrCreateRestoredWorkbenchMigrationDraft(targetKey, ref createdDrafts);
-                targetDraft.StagedRows.Add(CloneStagedRow(row));
-                if (sourceDraft.DraftApplied)
-                {
-                    targetDraft.DraftApplied = true;
-                    targetDraft.RulesApplied = true;
-                }
-                else if (sourceDraft.RulesApplied)
-                {
-                    targetDraft.RulesApplied = true;
-                }
-                CopyPlannerImportContractForMigratedDraft(sourceDraft, targetDraft, targetKey);
-                touchedDraftKeys.Add(sourceKey);
-                touchedDraftKeys.Add(targetKey);
-                movedRows++;
-            }
-
-            sourceDraft.StagedRows = retainedRows;
-            return movedRows;
-        }
-
-        private RestoredWorkbenchRowRepairAction ClassifyRestoredWorkbenchRow(
-            string sourceKey,
-            string rowLineId,
-            HashSet<string> validRuntimeLineIds,
-            out string targetKey)
-        {
-            targetKey = string.Empty;
-            if (string.IsNullOrEmpty(rowLineId)
-                || string.Equals(rowLineId, "local", StringComparison.Ordinal)
-                || string.Equals(rowLineId, "express", StringComparison.Ordinal))
-            {
-                return RestoredWorkbenchRowRepairAction.Drop;
-            }
-
-            if (validRuntimeLineIds != null
-                && validRuntimeLineIds.Count > 0
-                && !validRuntimeLineIds.Contains(rowLineId))
-            {
-                return RestoredWorkbenchRowRepairAction.Drop;
-            }
-
-            targetKey = GetDraftKey(rowLineId);
-            return !string.Equals(targetKey, sourceKey ?? string.Empty, StringComparison.Ordinal)
-                ? RestoredWorkbenchRowRepairAction.Move
-                : RestoredWorkbenchRowRepairAction.Keep;
-        }
-
-        private DispatchWorkbenchDraftState GetOrCreateRestoredWorkbenchMigrationDraft(
-            string lineKey,
-            ref int createdDrafts)
-        {
-            if (!m_WorkbenchDrafts.TryGetValue(lineKey, out DispatchWorkbenchDraftState draft)
-                || draft == null)
-            {
-                draft = CreateEmptyWorkbenchDraftState(lineKey);
-                m_WorkbenchDrafts[lineKey] = draft;
-                createdDrafts++;
-            }
-
-            return draft;
-        }
-
-        private void CopyPlannerImportContractForMigratedDraft(
-            DispatchWorkbenchDraftState sourceDraft,
-            DispatchWorkbenchDraftState targetDraft,
-            string targetKey)
-        {
-            if (sourceDraft?.PlannerImportContract == null
-                || targetDraft == null
-                || targetDraft.PlannerImportContract != null)
-            {
-                return;
-            }
-
-            DispatchWorkbenchPlannerImportContractDto contract =
-                ClonePlannerImportContract(sourceDraft.PlannerImportContract);
-            if (contract == null)
-                return;
-
-            contract.draftKey = targetKey;
-            targetDraft.PlannerImportContract = contract;
-        }
-
-        private void NormalizeMigratedWorkbenchDraftState(
-            string draftKey,
-            DispatchWorkbenchDraftState draft)
-        {
-            if (draft == null)
-                return;
-
-            if (string.IsNullOrEmpty(draft.SelectedLineId))
-            {
-                draft.SelectedLineId = draftKey;
-            }
-            if (string.IsNullOrEmpty(draft.SelectedEditLine)
-                || string.Equals(draft.SelectedEditLine, "local", StringComparison.Ordinal)
-                || string.Equals(draft.SelectedEditLine, "express", StringComparison.Ordinal))
-            {
-                draft.SelectedEditLine = draftKey == "__default__" ? string.Empty : draftKey;
-            }
-
-            if (draft.DraftApplied && !HasWorkbenchRowsForDraft(draft.StagedRows, draftKey))
-            {
-                draft.DraftApplied = false;
-            }
-            if (!HasWorkbenchRowsForDraft(draft.StagedRows, draftKey))
-            {
-                draft.PlannerImportContract = null;
-            }
-            if (draft.RulesApplied
-                && !HasWorkbenchRowsForDraft(draft.ManualRows, draftKey)
-                && !HasWorkbenchRulesForDraft(draft.AutoRules, draftKey)
-                && !HasWorkbenchRowsForDraft(draft.StagedRows, draftKey))
-            {
-                draft.RulesApplied = false;
-            }
-
-            if (draft.MergedView == null)
-            {
-                draft.MergedView = new DispatchWorkbenchMergedView
-                {
-                    localLineIds = Array.Empty<string>(),
-                    expressLineIds = Array.Empty<string>(),
-                    isLoop = true,
-                    turnbackStationId = string.Empty,
-                    direction = "up"
-                };
-            }
-
-            ApplyCurrentTimeWindowDefaults(draft.MergedView);
-            draft.AppliedDepartureMinutesCache.Clear();
-        }
-
-        private static bool HasWorkbenchRowsForDraft(
-            List<DispatchWorkbenchManualRowDto> rows,
-            string draftKey)
-        {
-            return rows != null
-                && rows.Any(row => row != null
-                    && string.Equals(GetDraftKeyStatic(row.lineId), draftKey, StringComparison.Ordinal));
-        }
-
-        private static bool HasWorkbenchRulesForDraft(
-            List<DispatchWorkbenchAutoRuleDto> rules,
-            string draftKey)
-        {
-            return rules != null
-                && rules.Any(rule => rule != null
-                    && string.Equals(GetDraftKeyStatic(rule.lineId), draftKey, StringComparison.Ordinal));
-        }
-
-        private static bool HasWorkbenchRowsForDraft(
-            List<DispatchWorkbenchStagedRowDto> rows,
-            string draftKey)
-        {
-            return rows != null
-                && rows.Any(row => row != null
-                    && string.Equals(GetDraftKeyStatic(row.lineId), draftKey, StringComparison.Ordinal));
-        }
-
-        private static string GetDraftKeyStatic(string lineId)
-        {
-            return string.IsNullOrEmpty(lineId) ? "__default__" : lineId;
-        }
-
-        private static DispatchWorkbenchPersistedDraftState CreatePersistedDraftState(string lineKey, DispatchWorkbenchDraftState draft)
-        {
-            return new DispatchWorkbenchPersistedDraftState
-            {
-                lineKey = lineKey,
-                selectedLineId = draft?.SelectedLineId ?? string.Empty,
-                selectedEditLine = draft?.SelectedEditLine ?? string.Empty,
-                mergedView = CloneMergedViewForPersistence(draft?.MergedView),
-                manualRows = draft?.ManualRows?.Select(CloneManualRow).ToArray() ?? Array.Empty<DispatchWorkbenchManualRowDto>(),
-                autoRules = draft?.AutoRules?.Select(CloneAutoRule).ToArray() ?? Array.Empty<DispatchWorkbenchAutoRuleDto>(),
-                lineDraftRows = draft?.StagedRows?.Select(CloneStagedRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
-                rulesApplied = draft?.RulesApplied == true,
-                draftApplied = draft?.DraftApplied == true,
-                plannerImportContract = ClonePlannerImportContract(draft?.PlannerImportContract)
-            };
-        }
-
-        private static DispatchWorkbenchDraftState CreateDraftStateFromPersisted(string lineKey, DispatchWorkbenchPersistedDraftState dto)
-        {
-            DispatchWorkbenchDraftState draft = new DispatchWorkbenchDraftState
-            {
-                SelectedLineId = !string.IsNullOrEmpty(dto.selectedLineId) ? dto.selectedLineId : lineKey,
-                SelectedEditLine = !string.IsNullOrEmpty(dto.selectedEditLine)
-                    ? dto.selectedEditLine
-                    : (lineKey == "__default__" ? string.Empty : lineKey),
-                MergedView = CloneMergedView(dto.mergedView),
-                ManualRows = dto.manualRows?.Select(CloneManualRow).ToList() ?? new List<DispatchWorkbenchManualRowDto>(),
-                AutoRules = dto.autoRules?.Select(CloneAutoRule).ToList() ?? new List<DispatchWorkbenchAutoRuleDto>(),
-                StagedRows = DeduplicateRowsByIdLast(
-                    (dto.lineDraftRows ?? dto.stagedRows)?.Select(CloneStagedRow).ToList()
-                    ?? new List<DispatchWorkbenchStagedRowDto>()),
-                RulesApplied = dto.rulesApplied,
-                DraftApplied = dto.draftApplied,
-                PlannerImportContract = ClonePlannerImportContract(dto.plannerImportContract)
-            };
-
-            if (draft.MergedView == null)
-            {
-                draft.MergedView = new DispatchWorkbenchMergedView();
-            }
-
-            return draft;
-        }
-
-        private static DispatchWorkbenchMergedView CloneMergedView(DispatchWorkbenchMergedView view)
-        {
-            if (view == null)
-            {
-                return new DispatchWorkbenchMergedView
-                {
-                    localLineIds = Array.Empty<string>(),
-                    expressLineIds = Array.Empty<string>(),
-                    isLoop = true,
-                    turnbackStationId = string.Empty,
-                    direction = "up",
-                    windowStart = string.Empty,
-                    windowEnd = string.Empty
-                };
-            }
-
-            return new DispatchWorkbenchMergedView
-            {
-                localLineId = view.localLineId ?? string.Empty,
-                expressLineId = view.expressLineId ?? string.Empty,
-                localLineIds = view.localLineIds != null ? view.localLineIds.ToArray() : Array.Empty<string>(),
-                expressLineIds = view.expressLineIds != null ? view.expressLineIds.ToArray() : Array.Empty<string>(),
-                isLoop = view.isLoop,
-                turnbackStationId = view.turnbackStationId ?? string.Empty,
-                direction = string.IsNullOrEmpty(view.direction) ? "up" : view.direction,
-                windowStart = view.windowStart ?? string.Empty,
-                windowEnd = view.windowEnd ?? string.Empty
-            };
-        }
-
-        private static bool AreMergedViewsEquivalent(DispatchWorkbenchMergedView left, DispatchWorkbenchMergedView right)
-        {
-            if (ReferenceEquals(left, right))
-                return true;
-            if (left == null || right == null)
-                return false;
-
-            List<string> leftLocalIds = NormalizeLineIdList(left.localLineIds, left.localLineId, null);
-            List<string> rightLocalIds = NormalizeLineIdList(right.localLineIds, right.localLineId, null);
-            List<string> leftExpressIds = NormalizeLineIdList(left.expressLineIds, left.expressLineId, null);
-            List<string> rightExpressIds = NormalizeLineIdList(right.expressLineIds, right.expressLineId, null);
-
-            if (left.isLoop != right.isLoop
-                || !string.Equals(left.turnbackStationId ?? string.Empty, right.turnbackStationId ?? string.Empty, StringComparison.Ordinal)
-                || !string.Equals(left.direction ?? string.Empty, right.direction ?? string.Empty, StringComparison.Ordinal)
-                || !string.Equals(left.windowStart ?? string.Empty, right.windowStart ?? string.Empty, StringComparison.Ordinal)
-                || !string.Equals(left.windowEnd ?? string.Empty, right.windowEnd ?? string.Empty, StringComparison.Ordinal)
-                || leftLocalIds.Count != rightLocalIds.Count
-                || leftExpressIds.Count != rightExpressIds.Count)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < leftLocalIds.Count; i++)
-            {
-                if (!string.Equals(leftLocalIds[i], rightLocalIds[i], StringComparison.Ordinal))
-                    return false;
-            }
-
-            for (int i = 0; i < leftExpressIds.Count; i++)
-            {
-                if (!string.Equals(leftExpressIds[i], rightExpressIds[i], StringComparison.Ordinal))
-                    return false;
-            }
-
-            return true;
-        }
-
-        private static DispatchWorkbenchMergedView CloneMergedViewForPersistence(DispatchWorkbenchMergedView view)
-        {
-            DispatchWorkbenchMergedView mergedView = CloneMergedView(view);
-            mergedView.windowStart = string.Empty;
-            mergedView.windowEnd = string.Empty;
-            return mergedView;
-        }
-
-        private static List<string> SplitWorkbenchPersistencePayload(string payloadJson)
-        {
-            if (string.IsNullOrEmpty(payloadJson))
-                return new List<string>();
-
-            List<string> chunks = new List<string>();
-            int offset = 0;
-            while (offset < payloadJson.Length)
-            {
-                int chunkLength = FindWorkbenchPersistenceChunkLength(payloadJson, offset);
-                if (chunkLength <= 0)
-                {
-                    chunkLength = 1;
-                }
-
-                chunks.Add(payloadJson.Substring(offset, chunkLength));
-                offset += chunkLength;
-            }
-
-            return chunks;
-        }
-
-        private static int FindWorkbenchPersistenceChunkLength(string payloadJson, int offset)
-        {
-            int remaining = payloadJson.Length - offset;
-            if (remaining <= 0)
-                return 0;
-
-            int low = 1;
-            int high = remaining;
-            int best = 1;
-
-            while (low <= high)
-            {
-                int mid = low + (high - low) / 2;
-                int candidateLength = AdjustWorkbenchPersistenceChunkLength(payloadJson, offset, mid);
-                if (candidateLength <= 0)
-                {
-                    high = mid - 1;
-                    continue;
-                }
-
-                string candidate = payloadJson.Substring(offset, candidateLength);
-                FixedString4096Bytes fixedCandidate = candidate;
-                if (fixedCandidate.ToString() == candidate)
-                {
-                    best = candidateLength;
-                    low = candidateLength + 1;
-                }
-                else
-                {
-                    high = candidateLength - 1;
-                }
-            }
-
-            return best;
-        }
-
-        private static int AdjustWorkbenchPersistenceChunkLength(string payloadJson, int offset, int proposedLength)
-        {
-            int endIndex = Math.Min(payloadJson.Length, offset + proposedLength);
-            if (endIndex <= offset)
-                return 0;
-
-            if (endIndex < payloadJson.Length
-                && char.IsHighSurrogate(payloadJson[endIndex - 1])
-                && char.IsLowSurrogate(payloadJson[endIndex]))
-            {
-                endIndex--;
-            }
-
-            return endIndex - offset;
+            return GetWorkbenchPersistence().RestoreState(persisted);
         }
 
         private bool IsWorkbenchTimetableApplied(Entity line)
@@ -3819,11 +1811,47 @@ namespace RapidTransitMod
             return snapshot.TimetableApplied;
         }
 
+        internal bool IsDispatchFeatureEnabled()
+        {
+            return m_RuntimeFeatureSettingsStore.DispatchEnabled;
+        }
+
+        internal bool IsBypassFeatureEnabled()
+        {
+            return m_RuntimeFeatureSettingsStore.BypassEnabled;
+        }
+
+        internal bool IsBroadcastFeatureEnabled()
+        {
+            return m_RuntimeFeatureSettingsStore.BroadcastEnabled;
+        }
+
+        internal bool IsDepotLockFeatureEnabled()
+        {
+            return m_RuntimeFeatureSettingsStore.DepotLockEnabled;
+        }
+
+        private bool IsDispatchRuntimeManagedLine(Entity line)
+        {
+            return IsDispatchFeatureEnabled() && IsWorkbenchTimetableApplied(line);
+        }
+
+        private bool IsBypassRuntimeFeatureEnabled()
+        {
+            return m_BypassRuntimeEnabled && IsBypassFeatureEnabled();
+        }
+
         private int[] GetAppliedWorkbenchDepartureMinutes(Entity line)
         {
             if (!TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
                 || !snapshot.TimetableApplied)
                 return Array.Empty<int>();
+
+            LineKey storeKey = GetStoreLineKey(line, snapshot.LineId);
+            if (!storeKey.IsEmpty && m_AppliedTimetableStore.TryGet(storeKey, out AppliedTimetableState appliedState))
+            {
+                return appliedState.DepartureMinutes ?? Array.Empty<int>();
+            }
 
             if (!m_AppliedWorkbenchLines.TryGetValue(snapshot.LineKey, out AppliedWorkbenchLineState state)
                 || state.StagedRows == null
@@ -3895,14 +1923,20 @@ namespace RapidTransitMod
                 || !snapshot.TimetableApplied)
                 return string.Empty;
 
-            if (!m_AppliedWorkbenchLines.TryGetValue(snapshot.LineKey, out AppliedWorkbenchLineState state)
-                || state.StagedRows == null
-                || state.StagedRows.Count == 0)
+            LineKey storeKey = GetStoreLineKey(line, snapshot.LineId);
+            if (!string.IsNullOrEmpty(snapshot.EffectiveServiceKind))
+                return snapshot.EffectiveServiceKind;
+
+            if (!storeKey.IsEmpty
+                && m_AppliedTimetableStore.TryGet(storeKey, out AppliedTimetableState appliedState))
             {
-                return string.Empty;
+                return appliedState.ServiceKind ?? string.Empty;
             }
 
-            return snapshot.EffectiveServiceKind;
+            if (!m_AppliedWorkbenchLines.TryGetValue(snapshot.LineKey, out AppliedWorkbenchLineState state))
+                return string.Empty;
+
+            return GetAppliedWorkbenchLineServiceKind(state);
         }
 
         private static string GetAppliedWorkbenchLineServiceKind(AppliedWorkbenchLineState state)
@@ -3934,6 +1968,17 @@ namespace RapidTransitMod
             return "local";
         }
 
+        private string GetAppliedWorkbenchLineServiceKind(LineKey lineKey, AppliedWorkbenchLineState fallbackState)
+        {
+            if (!lineKey.IsEmpty
+                && m_AppliedTimetableStore.TryGet(lineKey, out AppliedTimetableState state))
+            {
+                return state.ServiceKind ?? string.Empty;
+            }
+
+            return GetAppliedWorkbenchLineServiceKind(fallbackState);
+        }
+
         private string GetEffectiveWorkbenchLineServiceKind(string lineKey, AppliedWorkbenchLineState applied)
         {
             string configuredKind = GetWorkbenchConfiguredLineServiceKind(lineKey);
@@ -3942,7 +1987,7 @@ namespace RapidTransitMod
                 return configuredKind;
             }
 
-            return GetAppliedWorkbenchLineServiceKind(applied);
+            return GetAppliedWorkbenchLineServiceKind(GetStoreLineKey(lineKey), applied);
         }
 
         private string GetEffectiveWorkbenchLineServiceKind(Entity line, AppliedWorkbenchLineState applied)
@@ -3953,7 +1998,7 @@ namespace RapidTransitMod
                 return configuredKind;
             }
 
-            return GetAppliedWorkbenchLineServiceKind(applied);
+            return GetAppliedWorkbenchLineServiceKind(GetStoreLineKey(line), applied);
         }
 
         private bool IsAppliedWorkbenchLocalLine(Entity line)
@@ -4065,6 +2110,58 @@ namespace RapidTransitMod
             }
             draft.MergedView.direction = string.IsNullOrEmpty(draft.MergedView.direction) ? "up" : draft.MergedView.direction;
             ApplyCurrentTimeWindowDefaults(draft.MergedView);
+        }
+
+        private static bool AreMergedViewsEquivalent(DispatchWorkbenchMergedView left, DispatchWorkbenchMergedView right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null)
+                return false;
+
+            List<string> leftLocalIds = NormalizeLineIdList(left.localLineIds, left.localLineId, null);
+            List<string> rightLocalIds = NormalizeLineIdList(right.localLineIds, right.localLineId, null);
+            List<string> leftExpressIds = NormalizeLineIdList(left.expressLineIds, left.expressLineId, null);
+            List<string> rightExpressIds = NormalizeLineIdList(right.expressLineIds, right.expressLineId, null);
+
+            if (left.isLoop != right.isLoop
+                || !string.Equals(left.turnbackStationId ?? string.Empty, right.turnbackStationId ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(left.direction ?? string.Empty, right.direction ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(left.windowStart ?? string.Empty, right.windowStart ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(left.windowEnd ?? string.Empty, right.windowEnd ?? string.Empty, StringComparison.Ordinal)
+                || leftLocalIds.Count != rightLocalIds.Count
+                || leftExpressIds.Count != rightExpressIds.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < leftLocalIds.Count; i++)
+            {
+                if (!string.Equals(leftLocalIds[i], rightLocalIds[i], StringComparison.Ordinal))
+                    return false;
+            }
+
+            for (int i = 0; i < leftExpressIds.Count; i++)
+            {
+                if (!string.Equals(leftExpressIds[i], rightExpressIds[i], StringComparison.Ordinal))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static bool HasWorkbenchRowsForDraft(
+            List<DispatchWorkbenchStagedRowDto> rows,
+            string draftKey)
+        {
+            return rows != null
+                && rows.Any(row => row != null
+                    && string.Equals(GetDraftKeyStatic(row.lineId), draftKey, StringComparison.Ordinal));
+        }
+
+        private static string GetDraftKeyStatic(string lineId)
+        {
+            return WorkbenchDraftStore.GetKey(lineId);
         }
 
         private static List<string> NormalizeLineIdList(string[] ids, string fallbackId, List<WorkbenchLineRuntime> lines)
@@ -4996,7 +3093,7 @@ namespace RapidTransitMod
                     string realtimeTime = null;
                     float realtimeProgress = 0f;
                     bool isLatestTrip = tripIndex == record.Trips.Count - 1;
-                    bool isRunningVehicle = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                    bool isRunningVehicle = m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                         && vehicleState == VehicleState.Running;
                     if (isLatestTrip
                         && isRunningVehicle
@@ -6337,6 +4434,7 @@ namespace RapidTransitMod
                 }
             }
 
+            SyncLineSettingsStore();
             InvalidateConfiguredAllowedDepotCache();
             InvalidateWorkbenchLineFrameSnapshots();
         }
@@ -6355,11 +4453,9 @@ namespace RapidTransitMod
                 }
             }
 
-            HashSet<string> currentLineIds = new HashSet<string>(StringComparer.Ordinal);
-            currentLineIds.UnionWith(m_WorkbenchLineOriginHoldLimits.Keys);
-            currentLineIds.UnionWith(m_WorkbenchLineMaxStationDwellMinutes.Keys);
-            currentLineIds.UnionWith(m_WorkbenchLineAllowedDepots.Keys);
-            currentLineIds.UnionWith(m_WorkbenchLineServiceKinds.Keys);
+            HashSet<string> currentLineIds = new HashSet<string>(
+                EnumerateWorkbenchLineSettingIds(),
+                StringComparer.Ordinal);
 
             if (requested.Count != currentLineIds.Count)
                 return false;
@@ -6381,6 +4477,66 @@ namespace RapidTransitMod
             return true;
         }
 
+        private RuntimeFeatureSettingsDto BuildRuntimeFeatureSettingsDto()
+        {
+            return ToRuntimeFeatureSettingsDto(m_RuntimeFeatureSettingsStore.Get());
+        }
+
+        private bool AreRuntimeFeatureSettingsEquivalent(RuntimeFeatureSettingsDto settings)
+        {
+            if (settings == null)
+                return true;
+
+            RuntimeFeatureSettingsState current = m_RuntimeFeatureSettingsStore.Get();
+            return current.DispatchEnabled == settings.dispatchEnabled
+                && current.BypassEnabled == settings.bypassEnabled
+                && current.BroadcastEnabled == settings.broadcastEnabled
+                && current.DepotLockEnabled == settings.depotLockEnabled;
+        }
+
+        private void ApplyRuntimeFeatureSettings(RuntimeFeatureSettingsDto settings)
+        {
+            RuntimeFeatureSettingsState previous = m_RuntimeFeatureSettingsStore.Get();
+            RuntimeFeatureSettingsState next = ToRuntimeFeatureSettingsState(settings);
+            m_RuntimeFeatureSettingsStore.Set(next);
+
+            if (previous.BypassEnabled && !next.BypassEnabled)
+            {
+                ClearBypassRuntimeState();
+            }
+
+            if (previous.BroadcastEnabled && !next.BroadcastEnabled)
+            {
+                StopBroadcastActivityForFeatureDisable();
+            }
+        }
+
+        private static RuntimeFeatureSettingsDto ToRuntimeFeatureSettingsDto(RuntimeFeatureSettingsState state)
+        {
+            RuntimeFeatureSettingsState normalized = state ?? RuntimeFeatureSettingsState.Default();
+            return new RuntimeFeatureSettingsDto
+            {
+                dispatchEnabled = normalized.DispatchEnabled,
+                bypassEnabled = normalized.BypassEnabled,
+                broadcastEnabled = normalized.BroadcastEnabled,
+                depotLockEnabled = normalized.DepotLockEnabled
+            };
+        }
+
+        private static RuntimeFeatureSettingsState ToRuntimeFeatureSettingsState(RuntimeFeatureSettingsDto settings)
+        {
+            if (settings == null)
+                return RuntimeFeatureSettingsState.Default();
+
+            return new RuntimeFeatureSettingsState
+            {
+                DispatchEnabled = settings.dispatchEnabled,
+                BypassEnabled = settings.bypassEnabled,
+                BroadcastEnabled = settings.broadcastEnabled,
+                DepotLockEnabled = settings.depotLockEnabled
+            };
+        }
+
         private static string NormalizeWorkbenchServiceKind(string kind)
         {
             if (string.IsNullOrEmpty(kind))
@@ -6396,6 +4552,13 @@ namespace RapidTransitMod
             if (string.IsNullOrEmpty(lineId))
                 return DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
 
+            LineKey storeKey = GetStoreLineKey(lineId);
+            if (!storeKey.IsEmpty
+                && m_LineSettingsStore.TryGet(storeKey, out LineSettingsState state))
+            {
+                return state.OriginHoldLimitMinutes;
+            }
+
             return m_WorkbenchLineOriginHoldLimits.TryGetValue(lineId, out int configuredMinutes)
                 ? NormalizeOriginHoldLimitMinutes(configuredMinutes)
                 : DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
@@ -6405,6 +4568,13 @@ namespace RapidTransitMod
         {
             if (string.IsNullOrEmpty(lineId))
                 return string.Empty;
+
+            LineKey storeKey = GetStoreLineKey(lineId);
+            if (!storeKey.IsEmpty
+                && m_LineSettingsStore.TryGet(storeKey, out LineSettingsState state))
+            {
+                return NormalizeWorkbenchServiceKind(state.ConfiguredServiceKind);
+            }
 
             return m_WorkbenchLineServiceKinds.TryGetValue(lineId, out string configuredKind)
                 ? NormalizeWorkbenchServiceKind(configuredKind)
@@ -6416,6 +4586,13 @@ namespace RapidTransitMod
             if (string.IsNullOrEmpty(lineId))
                 return DEFAULT_MAX_STATION_DWELL_MINUTES;
 
+            LineKey storeKey = GetStoreLineKey(lineId);
+            if (!storeKey.IsEmpty
+                && m_LineSettingsStore.TryGet(storeKey, out LineSettingsState state))
+            {
+                return state.MaxStationDwellMinutes;
+            }
+
             return m_WorkbenchLineMaxStationDwellMinutes.TryGetValue(lineId, out int configuredMinutes)
                 ? NormalizeMaxStationDwellMinutes(configuredMinutes)
                 : DEFAULT_MAX_STATION_DWELL_MINUTES;
@@ -6425,6 +4602,13 @@ namespace RapidTransitMod
         {
             if (string.IsNullOrEmpty(lineId))
                 return string.Empty;
+
+            LineKey storeKey = GetStoreLineKey(lineId);
+            if (!storeKey.IsEmpty
+                && m_LineSettingsStore.TryGet(storeKey, out LineSettingsState state))
+            {
+                return NormalizeWorkbenchAllowedDepotIdFromSnapshot(state.AllowedDepotId);
+            }
 
             return m_WorkbenchLineAllowedDepots.TryGetValue(lineId, out string configuredDepotId)
                 ? NormalizeWorkbenchAllowedDepotId(configuredDepotId)
@@ -6439,13 +4623,7 @@ namespace RapidTransitMod
             string stableLineId = TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
                 ? snapshot.LineId
                 : GetWorkbenchLineId(line);
-            if (!string.IsNullOrEmpty(stableLineId)
-                && m_WorkbenchLineOriginHoldLimits.TryGetValue(stableLineId, out int stableMinutes))
-            {
-                return NormalizeOriginHoldLimitMinutes(stableMinutes);
-            }
-
-            return DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES;
+            return GetWorkbenchOriginHoldLimitMinutes(stableLineId);
         }
 
         private string GetWorkbenchConfiguredLineServiceKind(Entity line)
@@ -6460,13 +4638,7 @@ namespace RapidTransitMod
             }
 
             string stableLineId = GetWorkbenchLineId(line);
-            if (!string.IsNullOrEmpty(stableLineId)
-                && m_WorkbenchLineServiceKinds.TryGetValue(stableLineId, out string stableKind))
-            {
-                return NormalizeWorkbenchServiceKind(stableKind);
-            }
-
-            return string.Empty;
+            return GetWorkbenchConfiguredLineServiceKind(stableLineId);
         }
 
         private int GetWorkbenchMaxStationDwellMinutes(Entity line)
@@ -6477,13 +4649,7 @@ namespace RapidTransitMod
             string stableLineId = TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
                 ? snapshot.LineId
                 : GetWorkbenchLineId(line);
-            if (!string.IsNullOrEmpty(stableLineId)
-                && m_WorkbenchLineMaxStationDwellMinutes.TryGetValue(stableLineId, out int stableMinutes))
-            {
-                return NormalizeMaxStationDwellMinutes(stableMinutes);
-            }
-
-            return DEFAULT_MAX_STATION_DWELL_MINUTES;
+            return GetWorkbenchMaxStationDwellMinutes(stableLineId);
         }
 
         private string GetWorkbenchAllowedDepotId(Entity line)
@@ -6492,13 +4658,7 @@ namespace RapidTransitMod
                 return string.Empty;
 
             string stableLineId = GetWorkbenchLineId(line);
-            if (!string.IsNullOrEmpty(stableLineId)
-                && m_WorkbenchLineAllowedDepots.TryGetValue(stableLineId, out string stableDepotId))
-            {
-                return stableDepotId ?? string.Empty;
-            }
-
-            return string.Empty;
+            return GetWorkbenchAllowedDepotId(stableLineId);
         }
 
         public Entity GetConfiguredAllowedDepot(Entity line)
@@ -6514,15 +4674,13 @@ namespace RapidTransitMod
             }
 
             string lineId = GetWorkbenchLineId(line);
-            string depotId = !string.IsNullOrEmpty(lineId)
-                && m_WorkbenchLineAllowedDepots.TryGetValue(lineId, out string stableDepotId)
-                ? stableDepotId ?? string.Empty
-                : string.Empty;
+            string depotId = GetWorkbenchAllowedDepotId(lineId);
+            ulong settingsVersion = GetWorkbenchLineSettingsVersion();
 
             if (m_ConfiguredAllowedDepotCacheByLine.TryGetValue(line, out ConfiguredAllowedDepotCacheEntry cached)
                 && cached.Line == line)
             {
-                if (cached.SettingsVersion != m_WorkbenchLineSettingsVersion)
+                if (cached.SettingsVersion != settingsVersion)
                 {
                     m_ConfiguredAllowedDepotCacheSettingsVersionMisses++;
                     m_ConfiguredAllowedDepotCacheByLine.Remove(line);
@@ -6565,7 +4723,7 @@ namespace RapidTransitMod
                     lineId,
                     string.Empty,
                     Entity.Null,
-                    m_WorkbenchLineSettingsVersion);
+                    settingsVersion);
                 return Entity.Null;
             }
 
@@ -6578,7 +4736,7 @@ namespace RapidTransitMod
                     lineId,
                     depotId,
                     resolvedDepot,
-                    m_WorkbenchLineSettingsVersion);
+                    settingsVersion);
             }
             else
             {
@@ -6590,7 +4748,7 @@ namespace RapidTransitMod
 
         public ulong GetWorkbenchLineSettingsVersion()
         {
-            return m_WorkbenchLineSettingsVersion;
+            return Math.Max(m_WorkbenchLineSettingsVersion, m_LineSettingsStore.Version);
         }
 
         private string NormalizeWorkbenchAllowedDepotId(string depotId)
@@ -6744,26 +4902,6 @@ namespace RapidTransitMod
             EntityQuery rawDepotQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
                 ComponentType.Exclude<Deleted>());
-
-            if (int.TryParse(depotId, out int legacyDepotIndex))
-            {
-                NativeArray<Entity> legacyDepotEntities = rawDepotQuery.ToEntityArray(Allocator.Temp);
-                try
-                {
-                    for (int i = 0; i < legacyDepotEntities.Length; i++)
-                    {
-                        Entity depot = legacyDepotEntities[i];
-                        if (depot.Index == legacyDepotIndex)
-                        {
-                            return CanonicalizeTransportDepotEntity(depot);
-                        }
-                    }
-                }
-                finally
-                {
-                    if (legacyDepotEntities.IsCreated) legacyDepotEntities.Dispose();
-                }
-            }
 
             NativeArray<Entity> depotEntities = rawDepotQuery.ToEntityArray(Allocator.Temp);
             try
@@ -7142,7 +5280,6 @@ namespace RapidTransitMod
                     .ToList();
             if (requestLineDraftRows.Count > 0
                 || request.lineDraftRows != null
-                || request.stagedRows != null
                 || request.lineDraftRowsByLineId != null)
             {
                 const int minOriginDepartureGapMinutes = 5;

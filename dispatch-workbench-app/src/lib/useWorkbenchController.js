@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   emptyAutoRules,
   emptyDepots,
+  emptyFeatureSettings,
   emptyLines,
   emptyManualRows,
   emptyMergedView,
@@ -34,6 +35,19 @@ import { validateManualRows } from "./validation";
 
 function ensureArray(value, fallbackValue) {
   return Array.isArray(value) ? value : fallbackValue;
+}
+
+function normalizeFeatureSettings(value) {
+  if (!value || typeof value !== "object") {
+    return { ...emptyFeatureSettings };
+  }
+
+  return {
+    dispatchEnabled: value.dispatchEnabled !== false,
+    bypassEnabled: value.bypassEnabled !== false,
+    broadcastEnabled: value.broadcastEnabled !== false,
+    depotLockEnabled: value.depotLockEnabled !== false
+  };
 }
 
 function ensureMergedView(value) {
@@ -317,6 +331,7 @@ export function useWorkbenchController() {
   const [manualRows, setManualRows] = useState(emptyManualRows);
   const [autoRules, setAutoRules] = useState(emptyAutoRules);
   const [stagedRows, setStagedRows] = useState(emptyStagedRows);
+  const [featureSettings, setFeatureSettings] = useState(() => ({ ...emptyFeatureSettings }));
   const [saveState, setSaveState] = useState({ status: "idle", message: "" });
   const hasLoadedSnapshotRef = useRef(false);
   const suppressNextSnapshotRef = useRef(false);
@@ -395,6 +410,7 @@ export function useWorkbenchController() {
     setManualRows(nextManualRows);
     setAutoRules(nextAutoRules);
     setStagedRows(nextStagedRows);
+    setFeatureSettings(normalizeFeatureSettings(snapshot.featureSettings));
     hasLoadedSnapshotRef.current = true;
   }
 
@@ -623,7 +639,8 @@ export function useWorkbenchController() {
           manualRows,
           autoRules,
           lineDraftRows: stagedRows,
-          lineSettings: lineSettingsForSave
+          lineSettings: lineSettingsForSave,
+          featureSettings
         });
         if (!applySaveDraftResult(result, { reportFailure: true }) || !result?.snapshot) {
           suppressNextSnapshotRef.current = false;
@@ -644,7 +661,8 @@ export function useWorkbenchController() {
     lineSettingsForSave,
     manualRows,
     autoRules,
-    stagedRows
+    stagedRows,
+    featureSettings
   ]);
 
   function saveDraftImmediately(nextState) {
@@ -666,7 +684,8 @@ export function useWorkbenchController() {
       manualRows: nextState.manualRows ?? manualRows,
       autoRules: nextState.autoRules ?? autoRules,
       lineDraftRows: nextState.stagedRows ?? stagedRows,
-      lineSettings: nextState.lineSettings ?? lineSettingsForSave
+      lineSettings: nextState.lineSettings ?? lineSettingsForSave,
+      featureSettings: nextState.featureSettings ?? featureSettings
     }).then((result) => {
       if (applySaveDraftResult(result, { reportFailure: true })) {
         return;
@@ -945,6 +964,7 @@ export function useWorkbenchController() {
         autoRules,
         lineDraftRows: stagedRows,
         lineSettings: lineSettingsForSave,
+        featureSettings,
         applyDraft: true
       });
       if (applySaveDraftResult(result, { reportFailure: true })) {
@@ -993,6 +1013,8 @@ export function useWorkbenchController() {
     setAutoRules: setAutoRulesGuarded,
     stagedRows,
     setStagedRows: setStagedRowsGuarded,
+    featureSettings,
+    setFeatureSettings,
     validatedRows,
     overviewSideContext,
     scheduleSideContext,

@@ -7,7 +7,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private readonly struct QueuedLocalReleaseScope
         {
@@ -31,10 +31,11 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null || blocker == Entity.Null)
                 return;
 
-            if (m_BypassYieldBlocker.TryGetValue(vehicle, out Entity previousBlocker) && previousBlocker == blocker)
+            if (m_BypassDecision.TryGetLatchedBlocker(vehicle, out Entity previousBlocker) && previousBlocker == blocker)
                 return;
 
-            m_BypassYieldBlocker[vehicle] = blocker;
+            m_BypassReleaseDiagLogCache.Remove(vehicle);
+            m_BypassDecision.SetBlocker(vehicle, blocker);
             RecordRuntimeObservationBypassHoldStart(vehicle, blocker, holdStation, waypointIndex, m_SimulationSystem.frameIndex, stateTag);
             if (!IsBypassRuntimeLoggingEnabled())
                 return;
@@ -46,13 +47,21 @@ namespace RapidTransitMod
 
         private void ClearBypassYieldState(Entity vehicle, string releaseReason = null)
         {
-            if (vehicle == Entity.Null || !m_BypassYieldBlocker.TryGetValue(vehicle, out Entity blocker))
+            if (vehicle == Entity.Null || !m_BypassDecision.TryGetLatchedBlocker(vehicle, out Entity blocker))
                 return;
 
-            m_BypassYieldBlocker.Remove(vehicle);
-            m_BypassHoldCadenceSnapshots.Remove(vehicle);
-            m_BypassConflictEpisodes.Remove(vehicle);
+            m_BypassDecision.ClearBlocker(vehicle);
+            m_BypassDecision.Remove(vehicle, BypassEntryKind.Cadence);
+            m_BypassDecision.Remove(vehicle, BypassEntryKind.Episode);
             RecordRuntimeObservationBypassHoldRelease(vehicle, blocker, m_SimulationSystem.frameIndex, releaseReason);
+            LogVehicleStateOnce(
+                m_BypassReleaseDiagLogCache,
+                vehicle,
+                "release|blocker=" + blocker.Index + "|reason=" + (releaseReason ?? "-"),
+                "[待避释放诊断] vehicle=" + vehicle.Index
+                    + " blocker=" + blocker.Index
+                    + " reason=" + (releaseReason ?? "-")
+                    + " frame=" + m_SimulationSystem.frameIndex);
             if (!IsBypassRuntimeLoggingEnabled())
                 return;
 
@@ -78,13 +87,12 @@ namespace RapidTransitMod
 
         private void ClearBypassRuntimeState()
         {
-            if (m_BypassYieldBlocker.IsCreated)
-                m_BypassYieldBlocker.Clear();
-
-            m_BypassHoldCadenceSnapshots.Clear();
-            m_BypassConflictEpisodes.Clear();
-            m_BypassControlScopeCache.Clear();
+            m_BypassDecision.Clear();
             m_BypassDecisionLogCache.Clear();
+            m_BypassDepartureGateLogCache.Clear();
+            m_BypassHoldFrameLogCache.Clear();
+            m_BypassReleaseDiagLogCache.Clear();
+            m_BypassExitClearLogCache.Clear();
             m_BypassQueuedLocalOverrideLogCache.Clear();
             m_PerfProbeSceneExpressLineLastQueryFrame.Clear();
             ClearBypassTrackModelRuntimeState();
@@ -141,7 +149,7 @@ namespace RapidTransitMod
                 for (int i = 0; i < cadenceKeysToRemove.Count; i++)
                 {
                     Entity vehicle = cadenceKeysToRemove[i];
-                    m_BypassHoldCadenceSnapshots.Remove(vehicle);
+                    m_BypassDecision.Remove(vehicle, BypassEntryKind.Cadence);
                     m_BypassDecisionLogCache.Remove(vehicle);
                     m_BypassQueuedLocalOverrideLogCache.Remove(vehicle);
                 }
@@ -205,7 +213,7 @@ namespace RapidTransitMod
             for (int i = 0; i < cadenceKeysToRemove.Count; i++)
             {
                 Entity vehicle = cadenceKeysToRemove[i];
-                m_BypassHoldCadenceSnapshots.Remove(vehicle);
+                m_BypassDecision.Remove(vehicle, BypassEntryKind.Cadence);
                 m_BypassDecisionLogCache.Remove(vehicle);
                 m_BypassQueuedLocalOverrideLogCache.Remove(vehicle);
             }
@@ -229,207 +237,6 @@ namespace RapidTransitMod
             return mode == BypassConflictMode.Block;
         }
 
-        private void StoreBypassConflictEpisode(
-            BypassControlScope scope,
-            Entity blockerVehicle,
-            Entity expressLine,
-            BypassConflictMode conflictMode,
-            uint nowFrame,
-            bool canClearAfterExit,
-            bool sameStationRequired,
-            bool hasLatchedBlockerProjection,
-            BypassLatchedBlockerProjection latchedBlockerProjection)
-        {
-            if (scope.Vehicle == Entity.Null
-                || blockerVehicle == Entity.Null
-                || !ShouldConflictEpisodeSustainUntilRelease(conflictMode))
-            {
-                m_BypassConflictEpisodes.Remove(scope.Vehicle);
-                return;
-            }
-
-            m_BypassConflictEpisodes[scope.Vehicle] = new BypassConflictEpisode(
-                scope.Vehicle,
-                scope.SceneKey,
-                expressLine,
-                blockerVehicle,
-                conflictMode,
-                nowFrame,
-                nowFrame,
-                canClearAfterExit,
-                sameStationRequired,
-                hasLatchedBlockerProjection,
-                latchedBlockerProjection);
-        }
-
-        private bool TryReuseConflictEpisodeUntilRelease(
-            BypassControlScope scope,
-            DynamicBuffer<RouteWaypoint> localWaypoints,
-            uint nowFrame,
-            out bool shouldHold,
-            out Entity blockerVehicle,
-            out bool canClearAfterExit)
-        {
-            shouldHold = false;
-            blockerVehicle = Entity.Null;
-            canClearAfterExit = true;
-
-            if (!m_BypassConflictEpisodes.TryGetValue(scope.Vehicle, out BypassConflictEpisode episode)
-                || !episode.SceneKey.Equals(scope.SceneKey)
-                || !ShouldConflictEpisodeSustainUntilRelease(episode.Mode)
-                || episode.BlockerVehicle == Entity.Null
-                || !EntityManager.Exists(episode.BlockerVehicle))
-            {
-                return false;
-            }
-
-            blockerVehicle = episode.BlockerVehicle;
-            if (episode.SameStationRequired
-                && !IsExpressBlockerStillWithinBypassStation(blockerVehicle, scope.CurrentBypassBuilding))
-            {
-                return false;
-            }
-
-            if (!TryIsLatchedBypassBlockerBeforeRelease(scope, localWaypoints, episode, blockerVehicle, out bool blockerStillBeforeRelease)
-                || !blockerStillBeforeRelease)
-            {
-                return false;
-            }
-
-            if (!episode.SameStationRequired)
-            {
-                bool shouldRecheckQueuedLocalRelease = nowFrame <= episode.LastQueuedLocalReleaseCheckFrame
-                    || (nowFrame - episode.LastQueuedLocalReleaseCheckFrame) >= BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES;
-                if (shouldRecheckQueuedLocalRelease)
-                {
-                    if (TryShouldReleaseForQueuedLocalAhead(
-                            scope,
-                            localWaypoints,
-                            blockerVehicle,
-                            out _,
-                            out _,
-                            out _))
-                    {
-                        m_BypassConflictEpisodes.Remove(scope.Vehicle);
-                        m_BypassHoldCadenceSnapshots.Remove(scope.Vehicle);
-                        return false;
-                    }
-
-                    m_BypassConflictEpisodes[scope.Vehicle] = new BypassConflictEpisode(
-                        episode.LocalVehicle,
-                        episode.SceneKey,
-                        episode.ExpressLine,
-                        episode.BlockerVehicle,
-                        episode.Mode,
-                        episode.AcquiredFrame,
-                        nowFrame,
-                        episode.CanClearAfterExit,
-                        episode.SameStationRequired,
-                        episode.HasLatchedBlockerProjection,
-                        episode.LatchedBlockerProjection);
-                }
-            }
-
-            shouldHold = true;
-            canClearAfterExit = episode.CanClearAfterExit;
-            m_BypassPerfProbeEpisodeReuses++;
-            return true;
-        }
-
-        private bool TryGetCadencedBypassHoldDecision(
-            Entity localVehicle,
-            Entity localLine,
-            DynamicBuffer<RouteWaypoint> localWaypoints,
-            int currentWaypointIndex,
-            uint nowFrame,
-            out bool shouldHold,
-            out Entity blockerVehicle,
-            out bool canClearAfterExit)
-        {
-            m_BypassPerfProbeCadenceCalls++;
-            shouldHold = false;
-            blockerVehicle = Entity.Null;
-            canClearAfterExit = true;
-
-            if (!m_BypassRuntimeEnabled)
-            {
-                m_BypassHoldCadenceSnapshots.Remove(localVehicle);
-                m_BypassConflictEpisodes.Remove(localVehicle);
-                return true;
-            }
-
-            if (!TryGetBypassControlScope(
-                    localVehicle,
-                    localLine,
-                    localWaypoints,
-                    currentWaypointIndex,
-                    out BypassControlScope scope,
-                    out _))
-            {
-                m_BypassHoldCadenceSnapshots.Remove(localVehicle);
-                m_BypassConflictEpisodes.Remove(localVehicle);
-                return true;
-            }
-
-            if (scope.Line == Entity.Null
-                || !IsWorkbenchTimetableApplied(scope.Line)
-                || !IsAppliedWorkbenchLocalLine(scope.Line))
-            {
-                ClearBypassYieldState(localVehicle, "line-no-longer-local");
-                return true;
-            }
-
-            bool hasLatchedYield = m_BypassYieldBlocker.ContainsKey(localVehicle);
-            if (hasLatchedYield
-                && TryReuseConflictEpisodeUntilRelease(scope, localWaypoints, nowFrame, out shouldHold, out blockerVehicle, out canClearAfterExit))
-            {
-                return true;
-            }
-
-            if (TryReuseBypassHoldCadenceSnapshot(scope, hasLatchedYield, nowFrame, out shouldHold, out blockerVehicle, out canClearAfterExit))
-            {
-                return true;
-            }
-
-            m_BypassPerfProbeCadenceMisses++;
-            shouldHold = ShouldHoldLocalVehicleForExpressBypass(
-                scope,
-                localWaypoints,
-                nowFrame,
-                out blockerVehicle,
-                out string decisionReason,
-                out bool hasLatchedBlockerProjection,
-                out BypassLatchedBlockerProjection latchedBlockerProjection);
-            canClearAfterExit = (hasLatchedYield || shouldHold)
-                && CanClearBypassYieldAfterStationExit(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex);
-            BypassConflictMode conflictMode = InferConflictModeFromDecisionReason(decisionReason);
-            Entity expressLine = blockerVehicle != Entity.Null ? ResolveVehicleLine(blockerVehicle) : Entity.Null;
-            bool sameStationRequired = string.Equals(decisionReason, "track-model-same-station-same-direction-express-departing", StringComparison.Ordinal);
-            if (shouldHold && blockerVehicle != Entity.Null)
-                StoreBypassConflictEpisode(
-                    scope,
-                    blockerVehicle,
-                    expressLine,
-                    conflictMode,
-                    nowFrame,
-                    canClearAfterExit,
-                    sameStationRequired,
-                    hasLatchedBlockerProjection,
-                    latchedBlockerProjection);
-            else
-                m_BypassConflictEpisodes.Remove(scope.Vehicle);
-
-            StoreBypassHoldCadenceSnapshot(
-                scope,
-                hasLatchedYield,
-                nowFrame,
-                shouldHold,
-                canClearAfterExit,
-                conflictMode,
-                blockerVehicle);
-            return true;
-        }
-
         private bool TryGetBypassControlScope(
             Entity localVehicle,
             Entity localLine,
@@ -445,12 +252,12 @@ namespace RapidTransitMod
                 || localLine == Entity.Null
                 || currentWaypointIndex < 0)
             {
-                m_BypassControlScopeCache.Remove(localVehicle);
+                m_BypassDecision.Remove(localVehicle, BypassEntryKind.Scope);
                 failureReason = "local-line-invalid";
                 return false;
             }
 
-            if (m_BypassControlScopeCache.TryGetValue(localVehicle, out BypassControlScopeCacheEntry cachedScope)
+            if (m_BypassDecision.Get(localVehicle, out BypassControlScopeCacheEntry cachedScope)
                 && cachedScope.Line == localLine
                 && cachedScope.WaypointIndex == currentWaypointIndex)
             {
@@ -465,7 +272,7 @@ namespace RapidTransitMod
                     out _,
                     out SceneDefinition sceneDefinition))
             {
-                m_BypassControlScopeCache.Remove(localVehicle);
+                m_BypassDecision.Remove(localVehicle, BypassEntryKind.Scope);
                 failureReason = "scene-definition-missing";
                 return false;
             }
@@ -478,75 +285,11 @@ namespace RapidTransitMod
                 localVehicle,
                 sceneBinding,
                 sceneDefinition);
-            m_BypassControlScopeCache[localVehicle] = new BypassControlScopeCacheEntry(
+            m_BypassDecision.Put(localVehicle, new BypassControlScopeCacheEntry(
                 localLine,
                 currentWaypointIndex,
-                scope);
+                scope));
             return true;
-        }
-
-        private bool TryReuseBypassHoldCadenceSnapshot(
-            BypassControlScope scope,
-            bool hasLatchedYield,
-            uint nowFrame,
-            out bool shouldHold,
-            out Entity blockerVehicle,
-            out bool canClearAfterExit)
-        {
-            shouldHold = false;
-            blockerVehicle = Entity.Null;
-            canClearAfterExit = true;
-
-            if (m_BypassHoldCadenceSnapshots.TryGetValue(scope.Vehicle, out BypassHoldCadenceSnapshot snapshot)
-                && snapshot.SceneKey.Equals(scope.SceneKey)
-                && snapshot.WaypointIndex == scope.WaypointIndex)
-            {
-                if (snapshot.ShouldHold
-                    && (snapshot.Blocker == Entity.Null
-                        || !EntityManager.Exists(snapshot.Blocker)
-                        || ShouldConflictEpisodeSustainUntilRelease(snapshot.ConflictMode)))
-                {
-                    return false;
-                }
-
-                if (snapshot.EvaluatedFrame == nowFrame
-                    || (nowFrame < snapshot.ReevaluateAfterFrame
-                        && (hasLatchedYield || !snapshot.ShouldHold)))
-                {
-                    shouldHold = snapshot.ShouldHold;
-                    blockerVehicle = snapshot.Blocker;
-                    canClearAfterExit = snapshot.CanClearAfterExit;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void StoreBypassHoldCadenceSnapshot(
-            BypassControlScope scope,
-            bool hasLatchedYield,
-            uint nowFrame,
-            bool shouldHold,
-            bool canClearAfterExit,
-            BypassConflictMode conflictMode,
-            Entity blockerVehicle)
-        {
-            uint reevaluateAfterFrame = nowFrame + 1;
-            if (hasLatchedYield && shouldHold)
-                reevaluateAfterFrame = nowFrame + BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES;
-            else if (!hasLatchedYield && !shouldHold)
-                reevaluateAfterFrame = nowFrame + BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES;
-
-            m_BypassHoldCadenceSnapshots[scope.Vehicle] = new BypassHoldCadenceSnapshot(
-                scope.SceneKey,
-                scope.WaypointIndex,
-                nowFrame,
-                reevaluateAfterFrame,
-                shouldHold,
-                canClearAfterExit,
-                conflictMode,
-                blockerVehicle);
         }
 
         private bool TryProjectVehicleToCurrentLocalSceneCoordinate(
@@ -1170,6 +913,14 @@ namespace RapidTransitMod
             Entity blockerVehicle)
         {
             if (shouldYield
+                && CanClearBypassYieldAfterStationExit(localVehicle, localLine, localWaypoints, currentWaypointIndex))
+            {
+                shouldYield = false;
+                blockerVehicle = Entity.Null;
+                reason = "local-left-bypass-station";
+            }
+
+            if (shouldYield
                 && ShouldTrackModelVetoLiveBypassYield(localVehicle, out string trackModelReason))
             {
                 shouldYield = false;
@@ -1266,110 +1017,6 @@ namespace RapidTransitMod
             }
 
             return "建筑#" + building.Index;
-        }
-
-        private bool ShouldHoldLocalVehicleForExpressBypass(
-            Entity localVehicle,
-            Entity localLine,
-            DynamicBuffer<RouteWaypoint> localWaypoints,
-            int currentWaypointIndex,
-            uint nowFrame,
-            out Entity blockerVehicle,
-            out string decisionReason,
-            out bool hasLatchedBlockerProjection,
-            out BypassLatchedBlockerProjection latchedBlockerProjection)
-        {
-            blockerVehicle = Entity.Null;
-            decisionReason = string.Empty;
-            hasLatchedBlockerProjection = false;
-            latchedBlockerProjection = default;
-            if (localLine == Entity.Null
-                || !IsWorkbenchTimetableApplied(localLine)
-                || !IsAppliedWorkbenchLocalLine(localLine))
-            {
-                decisionReason = "local-line-invalid";
-                return FinalizeBypassDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, Entity.Null, Entity.Null, false, "local-line-invalid", Entity.Null);
-            }
-
-            if (!TryGetBypassControlScope(
-                    localVehicle,
-                    localLine,
-                    localWaypoints,
-                    currentWaypointIndex,
-                    out BypassControlScope scope,
-                    out string failureReason))
-            {
-                decisionReason = failureReason ?? string.Empty;
-                return FinalizeBypassDecision(localVehicle, localLine, localWaypoints, currentWaypointIndex, Entity.Null, Entity.Null, false, failureReason, Entity.Null);
-            }
-
-            return ShouldHoldLocalVehicleForExpressBypass(
-                scope,
-                localWaypoints,
-                nowFrame,
-                out blockerVehicle,
-                out decisionReason,
-                out hasLatchedBlockerProjection,
-                out latchedBlockerProjection);
-        }
-
-        private bool ShouldHoldLocalVehicleForExpressBypass(
-            BypassControlScope scope,
-            DynamicBuffer<RouteWaypoint> localWaypoints,
-            uint nowFrame,
-            out Entity blockerVehicle,
-            out string decisionReason,
-            out bool hasLatchedBlockerProjection,
-            out BypassLatchedBlockerProjection latchedBlockerProjection)
-        {
-            blockerVehicle = Entity.Null;
-            decisionReason = string.Empty;
-            hasLatchedBlockerProjection = false;
-            latchedBlockerProjection = default;
-            if (!TryGetTrackModelBypassBaseline(
-                    scope,
-                    localWaypoints,
-                    nowFrame,
-                    out bool shouldYield,
-                    out string trackModelReason,
-                    out Entity trackModelBlocker,
-                    out hasLatchedBlockerProjection,
-                    out latchedBlockerProjection))
-            {
-                decisionReason = "track-model-decision-unavailable";
-                return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "track-model-decision-unavailable", Entity.Null);
-            }
-
-            if (shouldYield
-                && trackModelBlocker != Entity.Null
-                && trackModelReason == "track-model-same-direction-shared-express-approaching")
-            {
-                if (TryShouldReleaseForQueuedLocalAhead(
-                        scope,
-                        localWaypoints,
-                        trackModelBlocker,
-                        out float expressSceneCoordinate,
-                        out float localSceneCoordinate,
-                        out float queuedLocalMeters))
-                {
-                    LogQueuedLocalBypassOverrideOnce(
-                        scope.Vehicle,
-                        scope.Line,
-                        trackModelBlocker,
-                        "release",
-                        "express-behind-nearest-queued-local",
-                        expressSceneCoordinate,
-                        localSceneCoordinate,
-                        queuedLocalMeters);
-                    blockerVehicle = Entity.Null;
-                    decisionReason = "express-behind-nearest-queued-local";
-                    return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, false, "express-behind-nearest-queued-local", Entity.Null);
-                }
-            }
-
-            blockerVehicle = trackModelBlocker;
-            decisionReason = trackModelReason ?? string.Empty;
-            return FinalizeBypassDecision(scope.Vehicle, scope.Line, localWaypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, shouldYield, trackModelReason, trackModelBlocker);
         }
 
         private bool TryShouldReleaseForQueuedLocalAhead(

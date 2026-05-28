@@ -16,7 +16,7 @@ namespace RapidTransitMod
                 if (!__result || vehicle == Entity.Null || testing)
                     return;
 
-                DepartureControlSystem system = DepartureControlSystem.Instance;
+                DispatchRuntimeSystem system = DispatchRuntimeSystem.Instance;
                 if (system == null || !system.ShouldBlockNewBoardingForClosingVehicle(vehicle))
                     return;
 
@@ -32,7 +32,7 @@ namespace RapidTransitMod
         {
             private static void Prefix(ResidentAISystem __instance)
             {
-                DepartureControlSystem system = DepartureControlSystem.Instance;
+                DispatchRuntimeSystem system = DispatchRuntimeSystem.Instance;
                 if (system == null)
                     return;
 
@@ -45,7 +45,7 @@ namespace RapidTransitMod
         {
             private static void Prefix(PetAISystem __instance)
             {
-                DepartureControlSystem system = DepartureControlSystem.Instance;
+                DispatchRuntimeSystem system = DispatchRuntimeSystem.Instance;
                 if (system == null)
                     return;
 

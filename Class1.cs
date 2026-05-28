@@ -37,8 +37,8 @@ namespace RapidTransitMod
 
         internal static string PrefixWithGameTime(string message)
         {
-            string gameTime = DepartureControlSystem.Instance != null
-                ? DepartureControlSystem.Instance.GetCurrentGameTimeLabel()
+            string gameTime = DispatchRuntimeSystem.Instance != null
+                ? DispatchRuntimeSystem.Instance.GetCurrentGameTimeLabel()
                 : string.Empty;
             return gameTime.Length > 0 ? gameTime + " " + message : message;
         }
@@ -57,12 +57,12 @@ namespace RapidTransitMod
                 m_Harmony = null;
                 log.Info("Boarding close patch disabled: " + ex.GetType().Name + ": " + ex.Message);
             }
-            updateSystem.UpdateAt<DepartureControlSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportLineSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<RetireHandoffDispatchGuardSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, DepartureControlSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, TrainNavigationSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RetireHandoffDispatchGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<OriginArrivingStallRepairSystem>(SystemUpdatePhase.GameSimulation);
@@ -82,13 +82,13 @@ namespace RapidTransitMod
                 log.Info("Module path: " + ((AssetData)asset).path);
                 string modRootPath = Path.GetDirectoryName(((AssetData)asset).path);
                 I18n.LoadAll(Path.Combine(modRootPath, "Locales"));
-                DispatchWorkbenchEuisBridge.Initialize(modRootPath);
+                WorkbenchApi.Initialize(modRootPath);
             }
 
             World.DefaultGameObjectInjectionWorld
                 .GetOrCreateSystemManaged<GamePanelUISystem>()
                 .SetDefaultArgs(new DispatchWorkbenchNativePanel());
-            log.Info("Registered native workbench panel: " + typeof(DispatchWorkbenchNativePanel).FullName);
+            log.Info("Registered dispatch workbench panel: " + typeof(DispatchWorkbenchNativePanel).FullName);
 
             log.Info("RapidTransitMod initialized.");
         }

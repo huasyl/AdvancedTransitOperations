@@ -32,7 +32,7 @@ namespace RapidTransitMod
 
         protected override void OnUpdate()
         {
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control == null || m_LineQuery.IsEmptyIgnoreFilter)
                 return;
 
@@ -213,7 +213,7 @@ namespace RapidTransitMod
         }
 
         private bool ShouldPromoteSentinel(
-            DepartureControlSystem control,
+            DispatchRuntimeSystem control,
             Entity line,
             NativeHashSet<Entity> spawnPermitLines)
         {

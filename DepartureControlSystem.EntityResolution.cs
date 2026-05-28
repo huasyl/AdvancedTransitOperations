@@ -9,7 +9,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private Entity ResolveVehicleLine(Entity vehicle)
         {

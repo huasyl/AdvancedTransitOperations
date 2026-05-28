@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.Serialization;
 using System.Text;
 using System.Threading.Tasks;
 using ATL;
@@ -20,7 +19,7 @@ using UnityEngine.Networking;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private const string BroadcastAssetBrowserDrivesToken = "__drives__";
         private const string BroadcastManagedAssetDirectoryName = "BroadcastAssets";
@@ -32,23 +31,15 @@ namespace RapidTransitMod
         private string m_BroadcastExternalBrowseDirectory = string.Empty;
         private readonly Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> m_BroadcastDraftLineStationAssetBindings =
             new Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>>(StringComparer.Ordinal);
-        private readonly Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> m_BroadcastDraftLegacyLineStationAssetBindings =
-            new Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>>(StringComparer.Ordinal);
         private readonly Dictionary<string, List<BroadcastWorkbenchRuleDto>> m_BroadcastDraftLineRules =
             new Dictionary<string, List<BroadcastWorkbenchRuleDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastDraftLinePlatformAnnouncements =
             new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
-        private readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastDraftLegacyLinePlatformAnnouncements =
-            new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> m_BroadcastLineStationAssetBindings =
-            new Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>>(StringComparer.Ordinal);
-        private readonly Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> m_BroadcastLegacyLineStationAssetBindings =
             new Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>>(StringComparer.Ordinal);
         private readonly Dictionary<string, List<BroadcastWorkbenchRuleDto>> m_BroadcastLineRules =
             new Dictionary<string, List<BroadcastWorkbenchRuleDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastLinePlatformAnnouncements =
-            new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
-        private readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastLegacyLinePlatformAnnouncements =
             new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, DispatchWorkbenchStationConflictDto[]>> m_BroadcastPendingAutoBindConflicts =
             new Dictionary<string, Dictionary<string, DispatchWorkbenchStationConflictDto[]>>(StringComparer.Ordinal);
@@ -66,487 +57,12 @@ namespace RapidTransitMod
         private static readonly FieldInfo s_AudioManagerUiGroupField =
             typeof(AudioManager).GetField("m_UIGroup", BindingFlags.Instance | BindingFlags.NonPublic);
 
-        [DataContract]
-        public class BroadcastWorkbenchAssetDto
-        {
-            [DataMember]
-            public string name;
-            [DataMember]
-            public string desc;
-            [DataMember]
-            public string length;
-            [DataMember]
-            public string path;
-            [DataMember]
-            public string extension;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSnapshot
-        {
-            [DataMember]
-            public string selectedLineId;
-            [DataMember]
-            public DispatchWorkbenchLineDto[] lines;
-            [DataMember]
-            public DispatchWorkbenchStationDto[] stations;
-            [DataMember]
-            public BroadcastWorkbenchTurnbackPointDto[] turnbackPoints;
-            [DataMember]
-            public BroadcastWorkbenchStationBindingDto[] stationBindings;
-            [DataMember]
-            public BroadcastWorkbenchRuleDto[] rules;
-            [DataMember]
-            public BroadcastWorkbenchPlatformAnnouncementDto[] platformAnnouncements;
-            [DataMember]
-            public string assetDirectory;
-            [DataMember]
-            public BroadcastWorkbenchAssetDto[] assets;
-            [DataMember]
-            public string version;
-            [DataMember]
-            public string sourceMode;
-            [DataMember]
-            public bool lineApplied;
-            [DataMember]
-            public bool lineDraftDirty;
-            [DataMember]
-            public bool volumeDirty;
-            [DataMember]
-            public bool draftApplied;
-            [DataMember]
-            public bool draftDirty;
-            [DataMember]
-            public int volume;
-            [DataMember]
-            public string[] warnings;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchTurnbackPointDto
-        {
-            [DataMember]
-            public int index;
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string stationName;
-            [DataMember]
-            public bool resolved;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchDirectoryPickerResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public bool pending;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchExternalAssetFileDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public string fullPath;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchStationBindingDto
-        {
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string lang;
-            [DataMember]
-            public int langIndex;
-            [DataMember]
-            public string assetName;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchRuleNodeDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string type;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public string nameKey;
-            [DataMember]
-            public string desc;
-            [DataMember]
-            public string descKey;
-            [DataMember]
-            public int langIndex;
-            [DataMember]
-            public float delaySeconds;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchRuleDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string title;
-            [DataMember]
-            public string titleKey;
-            [DataMember]
-            public string triggerId;
-            [DataMember]
-            public string trigger;
-            [DataMember]
-            public string triggerKey;
-            [DataMember]
-            public BroadcastWorkbenchRuleNodeDto[] nodes;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchPlatformAnnouncementDto
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string stationName;
-            [DataMember]
-            public string title;
-            [DataMember]
-            public string uiTriggerId;
-            [DataMember]
-            public bool enabled;
-            [DataMember]
-            public string triggerId;
-            [DataMember]
-            public int cooldownGameMinutes;
-            [DataMember]
-            public BroadcastWorkbenchRuleNodeDto[] nodes;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchExternalAssetBrowserSnapshot
-        {
-            [DataMember]
-            public string rootPath;
-            [DataMember]
-            public string currentPath;
-            [DataMember]
-            public string parentPath;
-            [DataMember]
-            public string[] folders;
-            [DataMember]
-            public BroadcastWorkbenchExternalAssetFileDto[] files;
-            [DataMember]
-            public string[] allowedExtensions;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchImportExternalAssetsRequest
-        {
-            [DataMember]
-            public string currentPath;
-            [DataMember]
-            public string[] selectedPaths;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchImportExternalAssetsResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public int importedCount;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchAssetPreviewResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string state;
-            [DataMember]
-            public string error;
-            [DataMember]
-            public string assetName;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchAssetPreviewStateDto
-        {
-            [DataMember]
-            public string assetName;
-            [DataMember]
-            public string state;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchRulePreviewRequest
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string ruleId;
-            [DataMember]
-            public int volume;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchRulePreviewResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string state;
-            [DataMember]
-            public string error;
-            [DataMember]
-            public string ruleId;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchRulePreviewStateDto
-        {
-            [DataMember]
-            public string ruleId;
-            [DataMember]
-            public string state;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchVolumeResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-            [DataMember]
-            public int volume;
-            [DataMember]
-            public bool volumeDirty;
-            [DataMember]
-            public BroadcastWorkbenchSnapshot snapshot;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchBindingSlotHintDto
-        {
-            [DataMember]
-            public int langIndex;
-            [DataMember]
-            public string[] labels;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchBindingSlotHintsResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-            [DataMember]
-            public BroadcastWorkbenchBindingSlotHintDto[] slotHints;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchDeleteAssetResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchDeleteAllAssetsResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchAutoBindStationMappingsResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public int boundCount;
-            [DataMember]
-            public string error;
-        }
-
         private sealed class BroadcastWorkbenchStationGroup
         {
             public string Key = string.Empty;
             public DispatchWorkbenchStationDto Representative;
             public List<string> StationIds = new List<string>();
             public Entity AnchorEntity;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSaveStationBindingRequest
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string assetName;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSaveStationBindingsRequest
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public BroadcastWorkbenchStationBindingDto[] bindings;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSaveStationBindingResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSaveRulesRequest
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public BroadcastWorkbenchRuleDto[] rules;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSaveRulesResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSavePlatformAnnouncementRequest
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string stationName;
-            [DataMember]
-            public string title;
-            [DataMember]
-            public string uiTriggerId;
-            [DataMember]
-            public bool enabled;
-            [DataMember]
-            public BroadcastWorkbenchRuleNodeDto[] nodes;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchSavePlatformAnnouncementResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-            [DataMember]
-            public BroadcastWorkbenchSnapshot snapshot;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchApplyRequest
-        {
-            [DataMember]
-            public string lineId;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchApplyResult
-        {
-            [DataMember]
-            public bool success;
-            [DataMember]
-            public string error;
-            [DataMember]
-            public BroadcastWorkbenchSnapshot snapshot;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchPersistedAssetState
-        {
-            [DataMember]
-            public string name;
-            [DataMember]
-            public string desc;
-            [DataMember]
-            public string length;
-            [DataMember]
-            public string extension;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchPersistedLineBindingState
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public BroadcastWorkbenchStationBindingDto[] stationBindings;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchPersistedRuleState
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public BroadcastWorkbenchRuleDto[] rules;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchPersistedPlatformAnnouncementState
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public BroadcastWorkbenchPlatformAnnouncementDto[] announcements;
-        }
-
-        [DataContract]
-        public class BroadcastWorkbenchPersistedAppliedState
-        {
-            [DataMember]
-            public string[] lineIds;
-            [DataMember]
-            public int? volume;
         }
 
         public string LoadBroadcastWorkbenchSnapshotJson(string preferredLineId)
@@ -631,7 +147,7 @@ namespace RapidTransitMod
                 SaveWorkbenchPersistence();
                 result.success = true;
 
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+                WorkbenchEvents.PublishBroadcastSnapshot(
                     BuildBroadcastWorkbenchSnapshot(lineId));
             }
             catch (Exception ex)
@@ -717,7 +233,7 @@ namespace RapidTransitMod
                 SaveWorkbenchPersistence();
                 result.success = true;
                 result.snapshot = BuildBroadcastWorkbenchSnapshot(lineId);
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(result.snapshot);
+                WorkbenchEvents.PublishBroadcastSnapshot(result.snapshot);
             }
             catch (Exception ex)
             {
@@ -816,7 +332,7 @@ namespace RapidTransitMod
                 result.success = true;
                 result.importedCount = importedAssets.Count;
 
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+                WorkbenchEvents.PublishBroadcastSnapshot(
                     BuildBroadcastWorkbenchSnapshot(GetPreferredWorkbenchLineId()));
             }
             catch (Exception ex)
@@ -874,7 +390,7 @@ namespace RapidTransitMod
                 SaveWorkbenchPersistence();
                 result.success = true;
 
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+                WorkbenchEvents.PublishBroadcastSnapshot(
                     BuildBroadcastWorkbenchSnapshot(lineId));
             }
             catch (Exception ex)
@@ -913,7 +429,7 @@ namespace RapidTransitMod
                 SaveWorkbenchPersistence();
                 result.success = true;
 
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+                WorkbenchEvents.PublishBroadcastSnapshot(
                     BuildBroadcastWorkbenchSnapshot(lineId));
             }
             catch (Exception ex)
@@ -1001,7 +517,7 @@ namespace RapidTransitMod
                 SaveWorkbenchPersistence();
                 result.success = true;
 
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+                WorkbenchEvents.PublishBroadcastSnapshot(
                     BuildBroadcastWorkbenchSnapshot(GetPreferredWorkbenchLineId()));
             }
             catch (Exception ex)
@@ -1030,7 +546,7 @@ namespace RapidTransitMod
                 SaveWorkbenchPersistence();
                 result.success = true;
 
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+                WorkbenchEvents.PublishBroadcastSnapshot(
                     BuildBroadcastWorkbenchSnapshot(GetPreferredWorkbenchLineId()));
             }
             catch (Exception ex)
@@ -1152,7 +668,7 @@ namespace RapidTransitMod
                 m_WorkbenchSnapshotVersion++;
                 SaveWorkbenchPersistence();
 
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+                WorkbenchEvents.PublishBroadcastSnapshot(
                     BuildBroadcastWorkbenchSnapshot(resolvedLineId));
             }
             catch (Exception ex)
@@ -1195,7 +711,7 @@ namespace RapidTransitMod
                 BroadcastWorkbenchSnapshot snapshot = BuildBroadcastWorkbenchSnapshot(lineId);
                 result.success = true;
                 result.snapshot = snapshot;
-                DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(snapshot);
+                WorkbenchEvents.PublishBroadcastSnapshot(snapshot);
             }
             catch (Exception ex)
             {
@@ -1277,6 +793,12 @@ namespace RapidTransitMod
             try
             {
                 string requestedAssetName = assetName ?? string.Empty;
+                if (!IsBroadcastFeatureEnabled())
+                {
+                    MainThreadDispatcher.RunOnMainThread(() => StopBroadcastActivityForFeatureDisable());
+                    result.error = "Broadcast preview is disabled.";
+                    return DispatchWorkbenchJson.Serialize(result);
+                }
                 if (string.IsNullOrWhiteSpace(requestedAssetName))
                 {
                     result.error = "Asset name is missing.";
@@ -1324,6 +846,12 @@ namespace RapidTransitMod
             try
             {
                 EnsureWorkbenchPersistenceLoaded();
+                if (!IsBroadcastFeatureEnabled())
+                {
+                    MainThreadDispatcher.RunOnMainThread(() => StopBroadcastActivityForFeatureDisable());
+                    result.error = "Broadcast preview is disabled.";
+                    return DispatchWorkbenchJson.Serialize(result);
+                }
                 BroadcastWorkbenchRulePreviewRequest request =
                     DispatchWorkbenchJson.Deserialize<BroadcastWorkbenchRulePreviewRequest>(requestJson);
                 string lineId = request?.lineId ?? string.Empty;
@@ -1653,7 +1181,7 @@ namespace RapidTransitMod
             m_BroadcastAssetCatalog.Clear();
             m_BroadcastAssetCatalog.AddRange(ScanBroadcastAssetDirectory(normalizedDirectory));
 
-            DispatchWorkbenchEuisBridge.NotifyBroadcastWorkbenchSnapshotChanged(
+            WorkbenchEvents.PublishBroadcastSnapshot(
                 BuildBroadcastWorkbenchSnapshot(GetPreferredWorkbenchLineId()));
         }
 
@@ -2235,6 +1763,13 @@ namespace RapidTransitMod
             }
         }
 
+        private void StopBroadcastActivityForFeatureDisable()
+        {
+            StopBroadcastAssetPreviewOnMainThread(m_BroadcastPreviewAssetName, notify: true);
+            StopBroadcastRulePreviewOnMainThread(m_BroadcastPreviewRuleId, notify: true);
+            ClearAllBroadcastRuntimeState();
+        }
+
         private void EnsureBroadcastRulePreviewAudioSource()
         {
             if (m_BroadcastRulePreviewAudioSource != null)
@@ -2275,7 +1810,7 @@ namespace RapidTransitMod
 
         private void NotifyBroadcastRulePreviewStateChanged(string ruleId, string state, string error)
         {
-            DispatchWorkbenchEuisBridge.NotifyBroadcastRulePreviewStateChanged(new BroadcastWorkbenchRulePreviewStateDto
+            WorkbenchEvents.PublishRulePreview(new BroadcastWorkbenchRulePreviewStateDto
             {
                 ruleId = ruleId ?? string.Empty,
                 state = state ?? string.Empty,
@@ -2485,7 +2020,7 @@ namespace RapidTransitMod
 
         private void NotifyBroadcastAssetPreviewStateChanged(string assetName, string state, string error)
         {
-            DispatchWorkbenchEuisBridge.NotifyBroadcastAssetPreviewStateChanged(new BroadcastWorkbenchAssetPreviewStateDto
+            WorkbenchEvents.PublishAssetPreview(new BroadcastWorkbenchAssetPreviewStateDto
             {
                 assetName = assetName ?? string.Empty,
                 state = state ?? string.Empty,
@@ -2632,65 +2167,7 @@ namespace RapidTransitMod
             out List<BroadcastWorkbenchStationGroup> stationGroups)
         {
             stationGroups = BuildBroadcastWorkbenchStationGroups(line);
-            if (string.IsNullOrWhiteSpace(lineId) || line == Entity.Null || stationGroups.Count == 0)
-            {
-                return false;
-            }
-
-            bool changed = false;
-            changed |= MigrateBroadcastLineBindings(
-                lineId,
-                stationGroups,
-                m_BroadcastDraftLineStationAssetBindings,
-                m_BroadcastDraftLegacyLineStationAssetBindings);
-            changed |= MigrateBroadcastLineBindings(
-                lineId,
-                stationGroups,
-                m_BroadcastLineStationAssetBindings,
-                m_BroadcastLegacyLineStationAssetBindings);
-            changed |= MigrateBroadcastLinePlatformAnnouncements(
-                lineId,
-                stationGroups,
-                m_BroadcastDraftLinePlatformAnnouncements,
-                m_BroadcastDraftLegacyLinePlatformAnnouncements);
-            changed |= MigrateBroadcastLinePlatformAnnouncements(
-                lineId,
-                stationGroups,
-                m_BroadcastLinePlatformAnnouncements,
-                m_BroadcastLegacyLinePlatformAnnouncements);
-            return changed;
-        }
-
-        private static Dictionary<string, string> BuildBroadcastAnchorKeyByLegacyStationId(
-            List<BroadcastWorkbenchStationGroup> stationGroups)
-        {
-            Dictionary<string, string> anchorKeyByLegacyStationId =
-                new Dictionary<string, string>(StringComparer.Ordinal);
-            if (stationGroups == null)
-            {
-                return anchorKeyByLegacyStationId;
-            }
-
-            for (int i = 0; i < stationGroups.Count; i++)
-            {
-                BroadcastWorkbenchStationGroup group = stationGroups[i];
-                string anchorKey = group?.Representative?.id ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(anchorKey) || group?.StationIds == null)
-                {
-                    continue;
-                }
-
-                for (int j = 0; j < group.StationIds.Count; j++)
-                {
-                    string legacyId = group.StationIds[j];
-                    if (!string.IsNullOrWhiteSpace(legacyId))
-                    {
-                        anchorKeyByLegacyStationId[legacyId] = anchorKey;
-                    }
-                }
-            }
-
-            return anchorKeyByLegacyStationId;
+            return false;
         }
 
         private static Dictionary<string, string> BuildBroadcastStationNameByAnchorKey(
@@ -2714,282 +2191,6 @@ namespace RapidTransitMod
             }
 
             return stationNameByAnchorKey;
-        }
-
-        private static string ResolveBroadcastAnchorStationId(
-            string stationId,
-            HashSet<string> validAnchorIds,
-            Dictionary<string, string> anchorKeyByLegacyStationId)
-        {
-            string candidate = stationId ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(candidate))
-            {
-                return string.Empty;
-            }
-
-            if (validAnchorIds != null && validAnchorIds.Contains(candidate))
-            {
-                return candidate;
-            }
-
-            if (anchorKeyByLegacyStationId != null
-                && anchorKeyByLegacyStationId.TryGetValue(candidate, out string mappedAnchorKey)
-                && !string.IsNullOrWhiteSpace(mappedAnchorKey))
-            {
-                return mappedAnchorKey;
-            }
-
-            return string.Empty;
-        }
-
-        private static void AddBroadcastBindingRange(
-            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> target,
-            string stationId,
-            IEnumerable<BroadcastWorkbenchStationBindingDto> bindings)
-        {
-            if (target == null || string.IsNullOrWhiteSpace(stationId) || bindings == null)
-            {
-                return;
-            }
-
-            if (!target.TryGetValue(stationId, out List<BroadcastWorkbenchStationBindingDto> current))
-            {
-                current = new List<BroadcastWorkbenchStationBindingDto>();
-                target[stationId] = current;
-            }
-
-            foreach (BroadcastWorkbenchStationBindingDto binding in bindings)
-            {
-                if (binding != null && !string.IsNullOrWhiteSpace(binding.assetName))
-                {
-                    current.Add(binding);
-                }
-            }
-        }
-
-        private bool MigrateBroadcastLineBindings(
-            string lineId,
-            List<BroadcastWorkbenchStationGroup> stationGroups,
-            Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> source,
-            Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> legacySource)
-        {
-            source.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> currentMain);
-            legacySource.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> currentLegacy);
-            if ((currentMain == null || currentMain.Count == 0)
-                && (currentLegacy == null || currentLegacy.Count == 0))
-            {
-                return false;
-            }
-
-            Dictionary<string, string> anchorKeyByLegacyStationId =
-                BuildBroadcastAnchorKeyByLegacyStationId(stationGroups);
-            HashSet<string> validAnchorIds = new HashSet<string>(
-                stationGroups
-                    .Select(group => group?.Representative?.id ?? string.Empty)
-                    .Where(id => !string.IsNullOrWhiteSpace(id)),
-                StringComparer.Ordinal);
-            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> nextMain =
-                new Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>(StringComparer.Ordinal);
-            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> nextLegacy =
-                new Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>(StringComparer.Ordinal);
-
-            void Consume(Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> bindingsByStationId)
-            {
-                if (bindingsByStationId == null)
-                {
-                    return;
-                }
-
-                foreach (KeyValuePair<string, List<BroadcastWorkbenchStationBindingDto>> entry in bindingsByStationId)
-                {
-                    List<BroadcastWorkbenchStationBindingDto> normalizedBindings =
-                        NormalizeBroadcastStationBindings(entry.Key, entry.Value);
-                    if (normalizedBindings.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    string mappedStationId = ResolveBroadcastAnchorStationId(
-                        entry.Key,
-                        validAnchorIds,
-                        anchorKeyByLegacyStationId);
-                    if (!string.IsNullOrWhiteSpace(mappedStationId))
-                    {
-                        if (nextMain.ContainsKey(mappedStationId))
-                        {
-                            continue;
-                        }
-
-                        AddBroadcastBindingRange(nextMain, mappedStationId, normalizedBindings);
-                    }
-                    else
-                    {
-                        nextLegacy[entry.Key] = normalizedBindings;
-                    }
-                }
-            }
-
-            Consume(currentMain);
-            Consume(currentLegacy);
-
-            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> normalizedMain = nextMain.Count == 0
-                ? null
-                : nextMain
-                    .ToDictionary(
-                        entry => entry.Key,
-                        entry => NormalizeBroadcastStationBindings(entry.Key, entry.Value),
-                        StringComparer.Ordinal);
-            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> normalizedLegacy = nextLegacy.Count == 0
-                ? null
-                : nextLegacy
-                    .ToDictionary(
-                        entry => entry.Key,
-                        entry => NormalizeBroadcastStationBindings(entry.Key, entry.Value),
-                        StringComparer.Ordinal);
-
-            bool changed = !AreBroadcastLineBindingsEqual(currentMain, normalizedMain)
-                || !AreBroadcastLineBindingsEqual(currentLegacy, normalizedLegacy);
-            if (!changed)
-            {
-                return false;
-            }
-
-            if (normalizedMain == null || normalizedMain.Count == 0)
-            {
-                source.Remove(lineId);
-            }
-            else
-            {
-                source[lineId] = normalizedMain;
-            }
-
-            if (normalizedLegacy == null || normalizedLegacy.Count == 0)
-            {
-                legacySource.Remove(lineId);
-            }
-            else
-            {
-                legacySource[lineId] = normalizedLegacy;
-            }
-
-            return true;
-        }
-
-        private bool MigrateBroadcastLinePlatformAnnouncements(
-            string lineId,
-            List<BroadcastWorkbenchStationGroup> stationGroups,
-            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> source,
-            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> legacySource)
-        {
-            source.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> currentMain);
-            legacySource.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> currentLegacy);
-            if ((currentMain == null || currentMain.Count == 0)
-                && (currentLegacy == null || currentLegacy.Count == 0))
-            {
-                return false;
-            }
-
-            Dictionary<string, string> anchorKeyByLegacyStationId =
-                BuildBroadcastAnchorKeyByLegacyStationId(stationGroups);
-            Dictionary<string, string> stationNameByAnchorKey =
-                BuildBroadcastStationNameByAnchorKey(stationGroups);
-            HashSet<string> validAnchorIds = new HashSet<string>(
-                stationNameByAnchorKey.Keys,
-                StringComparer.Ordinal);
-            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> nextMain =
-                new Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>(StringComparer.Ordinal);
-            Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> nextLegacy =
-                new Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>(StringComparer.Ordinal);
-
-            void Consume(Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcementsByKey)
-            {
-                if (announcementsByKey == null)
-                {
-                    return;
-                }
-
-                foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in announcementsByKey)
-                {
-                    BroadcastWorkbenchPlatformAnnouncementDto announcement = entry.Value;
-                    if (announcement == null || string.IsNullOrWhiteSpace(announcement.stationId))
-                    {
-                        continue;
-                    }
-
-                    string mappedStationId = ResolveBroadcastAnchorStationId(
-                        announcement.stationId,
-                        validAnchorIds,
-                        anchorKeyByLegacyStationId);
-                    if (!string.IsNullOrWhiteSpace(mappedStationId))
-                    {
-                        if (nextMain.ContainsKey(BuildBroadcastPlatformAnnouncementStorageKey(mappedStationId, announcement.uiTriggerId)))
-                        {
-                            continue;
-                        }
-
-                        string stationName = stationNameByAnchorKey.TryGetValue(mappedStationId, out string mappedName)
-                            ? mappedName
-                            : announcement.stationName;
-                        BroadcastWorkbenchPlatformAnnouncementDto normalized = CloneBroadcastPlatformAnnouncement(
-                            announcement,
-                            lineId,
-                            mappedStationId,
-                            stationName);
-                        string storageKey = BuildBroadcastPlatformAnnouncementStorageKey(
-                            normalized.stationId,
-                            normalized.uiTriggerId);
-                        if (!string.IsNullOrWhiteSpace(storageKey))
-                        {
-                            nextMain[storageKey] = normalized;
-                        }
-                    }
-                    else
-                    {
-                        BroadcastWorkbenchPlatformAnnouncementDto legacyAnnouncement = CloneBroadcastPlatformAnnouncement(
-                            announcement,
-                            lineId,
-                            announcement.stationId,
-                            announcement.stationName);
-                        string storageKey = BuildBroadcastPlatformAnnouncementStorageKey(
-                            legacyAnnouncement.stationId,
-                            legacyAnnouncement.uiTriggerId);
-                        if (!string.IsNullOrWhiteSpace(storageKey))
-                        {
-                            nextLegacy[storageKey] = legacyAnnouncement;
-                        }
-                    }
-                }
-            }
-
-            Consume(currentMain);
-            Consume(currentLegacy);
-
-            bool changed = !AreBroadcastPlatformAnnouncementsEqual(currentMain, nextMain)
-                || !AreBroadcastPlatformAnnouncementsEqual(currentLegacy, nextLegacy);
-            if (!changed)
-            {
-                return false;
-            }
-
-            if (nextMain.Count == 0)
-            {
-                source.Remove(lineId);
-            }
-            else
-            {
-                source[lineId] = nextMain;
-            }
-
-            if (nextLegacy.Count == 0)
-            {
-                legacySource.Remove(lineId);
-            }
-            else
-            {
-                legacySource[lineId] = nextLegacy;
-            }
-
-            return true;
         }
 
         private List<BroadcastWorkbenchStationGroup> BuildBroadcastWorkbenchStationGroups(Entity line)
@@ -3341,17 +2542,6 @@ namespace RapidTransitMod
                 m_BroadcastLineStationAssetBindings.Remove(lineId);
             }
 
-            if (m_BroadcastDraftLegacyLineStationAssetBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> draftLegacyBindings)
-                && draftLegacyBindings != null
-                && draftLegacyBindings.Count > 0)
-            {
-                m_BroadcastLegacyLineStationAssetBindings[lineId] = CloneBroadcastLineBindings(draftLegacyBindings);
-            }
-            else
-            {
-                m_BroadcastLegacyLineStationAssetBindings.Remove(lineId);
-            }
-
             if (m_BroadcastDraftLineRules.TryGetValue(lineId, out List<BroadcastWorkbenchRuleDto> draftRules)
                 && draftRules != null
                 && draftRules.Count > 0)
@@ -3376,17 +2566,6 @@ namespace RapidTransitMod
             {
                 m_BroadcastLinePlatformAnnouncements.Remove(lineId);
             }
-
-            if (m_BroadcastDraftLegacyLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> draftLegacyAnnouncements)
-                && draftLegacyAnnouncements != null
-                && draftLegacyAnnouncements.Count > 0)
-            {
-                m_BroadcastLegacyLinePlatformAnnouncements[lineId] = CloneBroadcastLinePlatformAnnouncements(draftLegacyAnnouncements);
-            }
-            else
-            {
-                m_BroadcastLegacyLinePlatformAnnouncements.Remove(lineId);
-            }
         }
 
         private bool IsBroadcastLineDraftDirty(string lineId)
@@ -3394,13 +2573,6 @@ namespace RapidTransitMod
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> appliedBindings = GetBroadcastAppliedLineStationBindings(lineId);
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> draftBindings = GetBroadcastDraftLineStationBindingsOrNull(lineId);
             if (!AreBroadcastLineBindingsEqual(appliedBindings, draftBindings))
-            {
-                return true;
-            }
-
-            m_BroadcastLegacyLineStationAssetBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> appliedLegacyBindings);
-            m_BroadcastDraftLegacyLineStationAssetBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> draftLegacyBindings);
-            if (!AreBroadcastLineBindingsEqual(appliedLegacyBindings, draftLegacyBindings))
             {
                 return true;
             }
@@ -3421,39 +2593,12 @@ namespace RapidTransitMod
                 return true;
             }
 
-            m_BroadcastLegacyLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> appliedLegacyAnnouncements);
-            m_BroadcastDraftLegacyLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> draftLegacyAnnouncements);
-            return !AreBroadcastPlatformAnnouncementsEqual(appliedLegacyAnnouncements, draftLegacyAnnouncements);
+            return false;
         }
 
         private string[] BuildBroadcastWarnings(string lineId)
         {
-            List<string> warnings = new List<string>();
-            bool hasLegacyBindings =
-                (m_BroadcastDraftLegacyLineStationAssetBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> draftLegacyBindings)
-                    && draftLegacyBindings != null
-                    && draftLegacyBindings.Count > 0)
-                || (m_BroadcastLegacyLineStationAssetBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> appliedLegacyBindings)
-                    && appliedLegacyBindings != null
-                    && appliedLegacyBindings.Count > 0);
-            if (hasLegacyBindings)
-            {
-                warnings.Add("Some legacy station bindings could not be matched to current stations. They were kept out of active runtime.");
-            }
-
-            bool hasLegacyAnnouncements =
-                (m_BroadcastDraftLegacyLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> draftLegacyAnnouncements)
-                    && draftLegacyAnnouncements != null
-                    && draftLegacyAnnouncements.Count > 0)
-                || (m_BroadcastLegacyLinePlatformAnnouncements.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> appliedLegacyAnnouncements)
-                    && appliedLegacyAnnouncements != null
-                    && appliedLegacyAnnouncements.Count > 0);
-            if (hasLegacyAnnouncements)
-            {
-                warnings.Add("Some legacy platform announcements could not be matched to current stations. They were kept out of active runtime.");
-            }
-
-            return warnings.ToArray();
+            return Array.Empty<string>();
         }
 
         private bool RemoveBroadcastAsset(string assetName)
@@ -3522,9 +2667,7 @@ namespace RapidTransitMod
 
             m_BroadcastAssetCatalog.Clear();
             m_BroadcastDraftLineStationAssetBindings.Clear();
-            m_BroadcastDraftLegacyLineStationAssetBindings.Clear();
             m_BroadcastLineStationAssetBindings.Clear();
-            m_BroadcastLegacyLineStationAssetBindings.Clear();
             RemoveAllBroadcastAssetNodesFromRules();
             MainThreadDispatcher.RunOnMainThread(RemoveAllBroadcastRuntimeAssets);
         }
@@ -3537,15 +2680,11 @@ namespace RapidTransitMod
             }
 
             RemoveBroadcastAssetReferencesFromBindings(m_BroadcastDraftLineStationAssetBindings, assetName);
-            RemoveBroadcastAssetReferencesFromBindings(m_BroadcastDraftLegacyLineStationAssetBindings, assetName);
             RemoveBroadcastAssetReferencesFromBindings(m_BroadcastLineStationAssetBindings, assetName);
-            RemoveBroadcastAssetReferencesFromBindings(m_BroadcastLegacyLineStationAssetBindings, assetName);
             RemoveBroadcastAssetReferencesFromRules(m_BroadcastDraftLineRules, assetName);
             RemoveBroadcastAssetReferencesFromRules(m_BroadcastLineRules, assetName);
             RemoveBroadcastAssetReferencesFromPlatformAnnouncements(m_BroadcastDraftLinePlatformAnnouncements, assetName);
-            RemoveBroadcastAssetReferencesFromPlatformAnnouncements(m_BroadcastDraftLegacyLinePlatformAnnouncements, assetName);
             RemoveBroadcastAssetReferencesFromPlatformAnnouncements(m_BroadcastLinePlatformAnnouncements, assetName);
-            RemoveBroadcastAssetReferencesFromPlatformAnnouncements(m_BroadcastLegacyLinePlatformAnnouncements, assetName);
         }
 
         private void RemoveAllBroadcastAssetNodesFromRules()
@@ -3553,9 +2692,7 @@ namespace RapidTransitMod
             RemoveAllBroadcastAssetNodesFromRuleSet(m_BroadcastDraftLineRules);
             RemoveAllBroadcastAssetNodesFromRuleSet(m_BroadcastLineRules);
             RemoveAllBroadcastAssetNodesFromPlatformAnnouncements(m_BroadcastDraftLinePlatformAnnouncements);
-            RemoveAllBroadcastAssetNodesFromPlatformAnnouncements(m_BroadcastDraftLegacyLinePlatformAnnouncements);
             RemoveAllBroadcastAssetNodesFromPlatformAnnouncements(m_BroadcastLinePlatformAnnouncements);
-            RemoveAllBroadcastAssetNodesFromPlatformAnnouncements(m_BroadcastLegacyLinePlatformAnnouncements);
         }
 
         private Dictionary<string, string> BuildBroadcastAssetMatchLookup()
@@ -4390,19 +3527,9 @@ namespace RapidTransitMod
             return BuildPersistedBroadcastLineBindingStates(m_BroadcastDraftLineStationAssetBindings);
         }
 
-        private BroadcastWorkbenchPersistedLineBindingState[] BuildPersistedBroadcastDraftLegacyLineBindingStates()
-        {
-            return BuildPersistedBroadcastLineBindingStates(m_BroadcastDraftLegacyLineStationAssetBindings);
-        }
-
         private BroadcastWorkbenchPersistedLineBindingState[] BuildPersistedBroadcastLineBindingStates()
         {
             return BuildPersistedBroadcastLineBindingStates(m_BroadcastLineStationAssetBindings);
-        }
-
-        private BroadcastWorkbenchPersistedLineBindingState[] BuildPersistedBroadcastLegacyLineBindingStates()
-        {
-            return BuildPersistedBroadcastLineBindingStates(m_BroadcastLegacyLineStationAssetBindings);
         }
 
         private static BroadcastWorkbenchPersistedLineBindingState[] BuildPersistedBroadcastLineBindingStates(
@@ -4455,19 +3582,9 @@ namespace RapidTransitMod
             return BuildPersistedBroadcastPlatformAnnouncementStates(m_BroadcastDraftLinePlatformAnnouncements);
         }
 
-        private BroadcastWorkbenchPersistedPlatformAnnouncementState[] BuildPersistedBroadcastDraftLegacyPlatformAnnouncementStates()
-        {
-            return BuildPersistedBroadcastPlatformAnnouncementStates(m_BroadcastDraftLegacyLinePlatformAnnouncements);
-        }
-
         private BroadcastWorkbenchPersistedPlatformAnnouncementState[] BuildPersistedBroadcastPlatformAnnouncementStates()
         {
             return BuildPersistedBroadcastPlatformAnnouncementStates(m_BroadcastLinePlatformAnnouncements);
-        }
-
-        private BroadcastWorkbenchPersistedPlatformAnnouncementState[] BuildPersistedBroadcastLegacyPlatformAnnouncementStates()
-        {
-            return BuildPersistedBroadcastPlatformAnnouncementStates(m_BroadcastLegacyLinePlatformAnnouncements);
         }
 
         private static BroadcastWorkbenchPersistedPlatformAnnouncementState[] BuildPersistedBroadcastPlatformAnnouncementStates(
@@ -4516,29 +3633,21 @@ namespace RapidTransitMod
             string broadcastAssetDirectory,
             BroadcastWorkbenchPersistedAssetState[] persistedAssets,
             BroadcastWorkbenchPersistedLineBindingState[] persistedDraftLineBindings,
-            BroadcastWorkbenchPersistedLineBindingState[] persistedDraftLegacyLineBindings,
             BroadcastWorkbenchPersistedRuleState[] persistedDraftRules,
             BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedDraftPlatformAnnouncements,
-            BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedDraftLegacyPlatformAnnouncements,
             BroadcastWorkbenchPersistedLineBindingState[] persistedLineBindings,
-            BroadcastWorkbenchPersistedLineBindingState[] persistedLegacyLineBindings,
             BroadcastWorkbenchPersistedRuleState[] persistedRules,
             BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedPlatformAnnouncements,
-            BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedLegacyPlatformAnnouncements,
             BroadcastWorkbenchPersistedAppliedState persistedAppliedState,
             int persistedDraftVolume)
         {
             m_BroadcastAssetCatalog.Clear();
             m_BroadcastDraftLineStationAssetBindings.Clear();
-            m_BroadcastDraftLegacyLineStationAssetBindings.Clear();
             m_BroadcastDraftLineRules.Clear();
             m_BroadcastDraftLinePlatformAnnouncements.Clear();
-            m_BroadcastDraftLegacyLinePlatformAnnouncements.Clear();
             m_BroadcastLineStationAssetBindings.Clear();
-            m_BroadcastLegacyLineStationAssetBindings.Clear();
             m_BroadcastLineRules.Clear();
             m_BroadcastLinePlatformAnnouncements.Clear();
-            m_BroadcastLegacyLinePlatformAnnouncements.Clear();
             m_BroadcastAppliedLineIds.Clear();
             m_BroadcastRuntimeCheckedLineIds.Clear();
             m_BroadcastDraftVolumePercent = ClampBroadcastVolumePercent(persistedDraftVolume);
@@ -4593,10 +3702,6 @@ namespace RapidTransitMod
                 m_BroadcastDraftLineStationAssetBindings,
                 persistedDraftLineBindings);
 
-            RestoreBroadcastLineBindingsInto(
-                m_BroadcastDraftLegacyLineStationAssetBindings,
-                persistedDraftLegacyLineBindings);
-
             RestoreBroadcastRulesInto(
                 m_BroadcastDraftLineRules,
                 persistedDraftRules);
@@ -4605,17 +3710,9 @@ namespace RapidTransitMod
                 m_BroadcastDraftLinePlatformAnnouncements,
                 persistedDraftPlatformAnnouncements);
 
-            RestoreBroadcastPlatformAnnouncementsInto(
-                m_BroadcastDraftLegacyLinePlatformAnnouncements,
-                persistedDraftLegacyPlatformAnnouncements);
-
             RestoreBroadcastLineBindingsInto(
                 m_BroadcastLineStationAssetBindings,
                 persistedLineBindings);
-
-            RestoreBroadcastLineBindingsInto(
-                m_BroadcastLegacyLineStationAssetBindings,
-                persistedLegacyLineBindings);
 
             RestoreBroadcastRulesInto(
                 m_BroadcastLineRules,
@@ -4624,10 +3721,6 @@ namespace RapidTransitMod
             RestoreBroadcastPlatformAnnouncementsInto(
                 m_BroadcastLinePlatformAnnouncements,
                 persistedPlatformAnnouncements);
-
-            RestoreBroadcastPlatformAnnouncementsInto(
-                m_BroadcastLegacyLinePlatformAnnouncements,
-                persistedLegacyPlatformAnnouncements);
 
             if (persistedAppliedState?.lineIds != null)
             {

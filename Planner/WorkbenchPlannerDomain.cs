@@ -185,10 +185,10 @@ namespace RapidTransitMod.Planner
         public int StationCount = 0;
         public int TrackAtomCount = 0;
         public float TotalMinuteSpan = 0f;
-        public DepartureControlSystem.DispatchPlannerLineDto Line;
-        public DepartureControlSystem.DispatchPlannerLineTrackDto LineTrack;
-        public List<DepartureControlSystem.DispatchPlannerStationDto> Stations = new List<DepartureControlSystem.DispatchPlannerStationDto>();
-        public List<DepartureControlSystem.DispatchPlannerSegmentDto> Segments = new List<DepartureControlSystem.DispatchPlannerSegmentDto>();
+        public DispatchPlannerLineDto Line;
+        public DispatchPlannerLineTrackDto LineTrack;
+        public List<DispatchPlannerStationDto> Stations = new List<DispatchPlannerStationDto>();
+        public List<DispatchPlannerSegmentDto> Segments = new List<DispatchPlannerSegmentDto>();
         public List<PlannerStationOffset> StationOffsets = new List<PlannerStationOffset>();
         public Dictionary<string, PlannerStationOffset> StationOffsetsById = new Dictionary<string, PlannerStationOffset>(StringComparer.Ordinal);
         public List<PlannerSegmentRuntime> SegmentRuntimeOffsets = new List<PlannerSegmentRuntime>();
@@ -367,13 +367,13 @@ namespace RapidTransitMod.Planner
         public List<PlannerRiskCluster> RiskClusters = new List<PlannerRiskCluster>();
         public List<PlannerCatchupEvent> CatchupEvents = new List<PlannerCatchupEvent>();
         public List<string> SelectedBypassStationIds = new List<string>();
-        public List<DepartureControlSystem.DispatchPlannerScheduleActionDto> StructuredScheduleActions = new List<DepartureControlSystem.DispatchPlannerScheduleActionDto>();
-        public List<DepartureControlSystem.DispatchPlannerProblemIssueDto> ProblemIssues = new List<DepartureControlSystem.DispatchPlannerProblemIssueDto>();
-        public DepartureControlSystem.DispatchPlannerFrontendSummaryDto FrontendSummary;
+        public List<DispatchPlannerScheduleActionDto> StructuredScheduleActions = new List<DispatchPlannerScheduleActionDto>();
+        public List<DispatchPlannerProblemIssueDto> ProblemIssues = new List<DispatchPlannerProblemIssueDto>();
+        public DispatchPlannerFrontendSummaryDto FrontendSummary;
         public PlannerCapacityDiagnostic CapacityDiagnostic;
         public List<PlannerWorkingRow> BaselineRows = new List<PlannerWorkingRow>();
         public List<PlannerWorkingRow> AdjustedRows = new List<PlannerWorkingRow>();
-        public List<DepartureControlSystem.DispatchPlannerPreviewRowDto> PreviewRows = new List<DepartureControlSystem.DispatchPlannerPreviewRowDto>();
+        public List<DispatchPlannerPreviewRowDto> PreviewRows = new List<DispatchPlannerPreviewRowDto>();
     }
 
     internal sealed class PlannerCapacityDiagnostic
@@ -408,9 +408,9 @@ namespace RapidTransitMod.Planner
 
     internal sealed class PlannerContext
     {
-        public DepartureControlSystem.DispatchPlannerExportSnapshot Snapshot = new DepartureControlSystem.DispatchPlannerExportSnapshot();
-        public DepartureControlSystem.DispatchPlannerRequest Request = new DepartureControlSystem.DispatchPlannerRequest();
-        public DepartureControlSystem.DispatchPlannerDraftDto SelectedDraft;
+        public DispatchPlannerExportSnapshot Snapshot = new DispatchPlannerExportSnapshot();
+        public DispatchPlannerRequest Request = new DispatchPlannerRequest();
+        public DispatchPlannerDraftDto SelectedDraft;
         public string[] SelectedLineIds = new string[0];
         public string[] EffectiveLineIds = new string[0];
         public string[] AutoFixedConstraintLineIds = new string[0];
@@ -432,12 +432,12 @@ namespace RapidTransitMod.Planner
         public string ExpressSourceMode = "virtual";
         public string DepartureMode = "fixedInterval";
         public string VirtualExpressBaseLineId = string.Empty;
-        public Dictionary<string, DepartureControlSystem.DispatchPlannerLineDto> LinesById = new Dictionary<string, DepartureControlSystem.DispatchPlannerLineDto>(StringComparer.Ordinal);
-        public Dictionary<string, DepartureControlSystem.DispatchPlannerStationDto> StationsById = new Dictionary<string, DepartureControlSystem.DispatchPlannerStationDto>(StringComparer.Ordinal);
-        public Dictionary<string, List<DepartureControlSystem.DispatchPlannerStationDto>> StationsByLineId = new Dictionary<string, List<DepartureControlSystem.DispatchPlannerStationDto>>(StringComparer.Ordinal);
-        public Dictionary<string, List<DepartureControlSystem.DispatchPlannerSegmentDto>> SegmentsByLineId = new Dictionary<string, List<DepartureControlSystem.DispatchPlannerSegmentDto>>(StringComparer.Ordinal);
-        public Dictionary<string, DepartureControlSystem.DispatchPlannerLineTrackDto> LineTracksByLineId = new Dictionary<string, DepartureControlSystem.DispatchPlannerLineTrackDto>(StringComparer.Ordinal);
-        public Dictionary<string, DepartureControlSystem.DispatchPlannerStationDwellObservationDto> StopDwellByStationId = new Dictionary<string, DepartureControlSystem.DispatchPlannerStationDwellObservationDto>(StringComparer.Ordinal);
+        public Dictionary<string, DispatchPlannerLineDto> LinesById = new Dictionary<string, DispatchPlannerLineDto>(StringComparer.Ordinal);
+        public Dictionary<string, DispatchPlannerStationDto> StationsById = new Dictionary<string, DispatchPlannerStationDto>(StringComparer.Ordinal);
+        public Dictionary<string, List<DispatchPlannerStationDto>> StationsByLineId = new Dictionary<string, List<DispatchPlannerStationDto>>(StringComparer.Ordinal);
+        public Dictionary<string, List<DispatchPlannerSegmentDto>> SegmentsByLineId = new Dictionary<string, List<DispatchPlannerSegmentDto>>(StringComparer.Ordinal);
+        public Dictionary<string, DispatchPlannerLineTrackDto> LineTracksByLineId = new Dictionary<string, DispatchPlannerLineTrackDto>(StringComparer.Ordinal);
+        public Dictionary<string, DispatchPlannerStationDwellObservationDto> StopDwellByStationId = new Dictionary<string, DispatchPlannerStationDwellObservationDto>(StringComparer.Ordinal);
         public Dictionary<string, PlannerObservedRuntimeSummary> StationRuntimeByLinePair = new Dictionary<string, PlannerObservedRuntimeSummary>(StringComparer.Ordinal);
         public Dictionary<string, List<PlannerBypassStation>> ConfiguredBypassStationsByLineId = new Dictionary<string, List<PlannerBypassStation>>(StringComparer.Ordinal);
         public Dictionary<string, List<PlannerBypassStation>> CandidateBypassStationsByLineId = new Dictionary<string, List<PlannerBypassStation>>(StringComparer.Ordinal);

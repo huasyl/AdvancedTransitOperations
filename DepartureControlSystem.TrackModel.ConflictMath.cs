@@ -12,7 +12,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private static bool ShouldIncludeIntervalAtom(TrackAtom atom)
         {

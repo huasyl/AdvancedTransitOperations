@@ -5,16 +5,16 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
-        private enum BypassConflictMode : byte
+        internal enum BypassConflictMode : byte
         {
             Unknown = 0,
             Block = 1,
             EtaRefresh = 2,
         }
 
-        private readonly struct SceneKey : IEquatable<SceneKey>
+        internal readonly struct SceneKey : IEquatable<SceneKey>
         {
             public readonly Entity Line;
             public readonly Entity CurrentBypassBuilding;
@@ -59,7 +59,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct SceneDefinition
+        internal readonly struct SceneDefinition
         {
             public readonly SceneKey Key;
             public readonly Entity Line;
@@ -97,7 +97,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct VehicleSceneBinding
+        internal readonly struct VehicleSceneBinding
         {
             public readonly Entity Vehicle;
             public readonly SceneKey SceneKey;
@@ -111,7 +111,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct BypassConflictEpisode
+        internal readonly struct BypassConflictEpisode
         {
             public readonly Entity LocalVehicle;
             public readonly SceneKey SceneKey;
@@ -152,7 +152,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct BypassLatchedBlockerProjection
+        internal readonly struct BypassLatchedBlockerProjection
         {
             public readonly bool Available;
             public readonly Entity ExpressLine;
@@ -218,7 +218,7 @@ namespace RapidTransitMod
             }
         }
 
-        private struct BypassHoldCadenceSnapshot
+        internal struct BypassHoldCadenceSnapshot
         {
             public SceneKey SceneKey;
             public int WaypointIndex;
@@ -250,7 +250,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct BypassControlScope
+        internal readonly struct BypassControlScope
         {
             public readonly Entity Vehicle;
             public readonly VehicleSceneBinding SceneBinding;
@@ -273,7 +273,7 @@ namespace RapidTransitMod
             public SceneKey SceneKey => Scene.Key;
         }
 
-        private readonly struct BypassControlScopeCacheEntry
+        internal readonly struct BypassControlScopeCacheEntry
         {
             public readonly Entity Line;
             public readonly int WaypointIndex;
@@ -290,10 +290,6 @@ namespace RapidTransitMod
             }
         }
 
-        private NativeHashMap<Entity, Entity> m_BypassYieldBlocker;
-        private readonly Dictionary<Entity, BypassControlScopeCacheEntry> m_BypassControlScopeCache = new Dictionary<Entity, BypassControlScopeCacheEntry>();
-        private readonly Dictionary<Entity, BypassHoldCadenceSnapshot> m_BypassHoldCadenceSnapshots = new Dictionary<Entity, BypassHoldCadenceSnapshot>();
-        private readonly Dictionary<Entity, BypassConflictEpisode> m_BypassConflictEpisodes = new Dictionary<Entity, BypassConflictEpisode>();
         private bool m_BypassRuntimeEnabled = true;
     }
 }

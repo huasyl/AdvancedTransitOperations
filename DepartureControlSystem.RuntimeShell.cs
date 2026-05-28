@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         protected override void OnUpdate()
         {
@@ -307,17 +307,8 @@ namespace RapidTransitMod
                     ecb.AddComponent<Deleted>(e);
             }
             ents.Dispose();
-            m_VehicleState.Clear();
-            m_VehicleTargetMin.Clear();
-            m_VehicleLapStartOdometer.Clear();
-            m_VehicleLapDistance.Clear();
-            m_VehicleLapStartFrame.Clear();
-            m_VehicleLapFrames.Clear();
-            m_VehicleIdleStartFrame.Clear();
-            m_VehiclePreparingStartFrame.Clear();
-            m_VehicleDispatchRequestStartFrame.Clear();
-            m_VehicleCurrentSlot.Clear();
-            m_VehicleLastLaunchFrame.Clear();
+            m_VehicleRegistry.Clear();
+            m_LapObservations.Clear();
             m_UICache.Clear();
             m_LastBoarding.Clear();
             m_CachedWpIdx.Clear();
@@ -325,12 +316,10 @@ namespace RapidTransitMod
             m_BVMisfireStartFrame.Clear();
             m_ForcedMidStopBoardingGraceUntil.Clear();
             m_ForcedMidStopBoardingHardCloseAfter.Clear();
-            m_VehicleLine.Clear();
             m_RetireHandoffWatch.Clear();
             m_RetireShadowHistory.Clear();
             m_RetireShadowLastSnapshot.Clear();
             m_RetireShadowLastFrame.Clear();
-            m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
             m_PreparingFixCooldownUntil.Clear();
@@ -340,31 +329,19 @@ namespace RapidTransitMod
             m_LastSpawnBlockedLogFrame.Clear();
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
-            m_WaypointStopDwellObservations.Clear();
-            m_StationStopDwellObservations.Clear();
-            m_StopDwellSessions.Clear();
+            m_StopDwell.Clear();
             m_StopDwellObservationBufferReady = false;
             m_StopDwellObservationCacheLoaded = false;
             m_StationStopDwellObservationBufferReady = false;
             m_StationStopDwellObservationCacheLoaded = false;
             ClearStationAnchorObservationDiagnosticsState();
-            m_TraversalRunSliceObservations.Clear();
+            m_TraversalSlices.Clear();
+            m_RuntimeObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
-            m_VehicleTraversalSliceLastSampleFrame.Clear();
-            m_VehicleTraversalSliceSamplingPlans.Clear();
             m_JustLaunched.Clear();
             m_DiagnosedLines.Clear();
-            m_RestoredRunning.Clear();
-            m_OriginArrivalCandidateSinceFrame.Clear();
-            m_ForcedOriginReadyFrame.Clear();
-            m_ForcedOriginBoardingGraceUntil.Clear();
             m_AssistLaunchPendingByVehicle.Clear();
-            m_StopDwellStartFrame.Clear();
-            m_StopDwellStartFrame.Clear();
-            m_WaypointStopDwellObservations.Clear();
-            m_StationStopDwellObservations.Clear();
-            m_StopDwellSessions.Clear();
             ClearBypassRuntimeState();
             m_LineTrackChainFrameSnapshots.Clear();
             m_LineWaypointIndexLookups.Clear();
@@ -399,17 +376,8 @@ namespace RapidTransitMod
         private void ClearRuntimeTrackingState()
         {
             ClearAllBroadcastRuntimeState();
-            m_VehicleState.Clear();
-            m_VehicleTargetMin.Clear();
-            m_VehicleLapStartOdometer.Clear();
-            m_VehicleLapDistance.Clear();
-            m_VehicleLapStartFrame.Clear();
-            m_VehicleLapFrames.Clear();
-            m_VehicleIdleStartFrame.Clear();
-            m_VehiclePreparingStartFrame.Clear();
-            m_VehicleDispatchRequestStartFrame.Clear();
-            m_VehicleCurrentSlot.Clear();
-            m_VehicleLastLaunchFrame.Clear();
+            m_VehicleRegistry.Clear();
+            m_LapObservations.Clear();
             m_UICache.Clear();
             m_LastBoarding.Clear();
             m_CachedWpIdx.Clear();
@@ -417,12 +385,10 @@ namespace RapidTransitMod
             m_BVMisfireStartFrame.Clear();
             m_ForcedMidStopBoardingGraceUntil.Clear();
             m_ForcedMidStopBoardingHardCloseAfter.Clear();
-            m_VehicleLine.Clear();
             m_RetireHandoffWatch.Clear();
             m_RetireShadowHistory.Clear();
             m_RetireShadowLastSnapshot.Clear();
             m_RetireShadowLastFrame.Clear();
-            m_LaunchCooldownUntil.Clear();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
             m_PreparingFixCooldownUntil.Clear();
@@ -432,30 +398,19 @@ namespace RapidTransitMod
             m_LastSpawnBlockedLogFrame.Clear();
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
-            m_WaypointStopDwellObservations.Clear();
-            m_StationStopDwellObservations.Clear();
-            m_StopDwellSessions.Clear();
+            m_StopDwell.Clear();
             m_StopDwellObservationBufferReady = false;
             m_StopDwellObservationCacheLoaded = false;
             m_StationStopDwellObservationBufferReady = false;
             m_StationStopDwellObservationCacheLoaded = false;
             ClearStationAnchorObservationDiagnosticsState();
-            m_TraversalRunSliceObservations.Clear();
+            m_TraversalSlices.Clear();
+            m_RuntimeObservations.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
-            m_VehicleTraversalSliceLastSampleFrame.Clear();
-            m_VehicleTraversalSliceSamplingPlans.Clear();
             m_JustLaunched.Clear();
             m_DiagnosedLines.Clear();
-            m_NearingTerminus.Clear();
-            m_RestoredRunning.Clear();
-            m_OriginArrivalCandidateSinceFrame.Clear();
-            m_ForcedOriginReadyFrame.Clear();
-            m_ForcedOriginBoardingGraceUntil.Clear();
             m_AssistLaunchPendingByVehicle.Clear();
-            m_WaypointStopDwellObservations.Clear();
-            m_StationStopDwellObservations.Clear();
-            m_StopDwellSessions.Clear();
             ClearBypassRuntimeState();
             m_LineTrackChainFrameSnapshots.Clear();
             m_LineWaypointIndexLookups.Clear();

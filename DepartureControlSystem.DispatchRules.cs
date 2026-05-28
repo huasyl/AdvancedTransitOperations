@@ -5,7 +5,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private static int NextSlotMin(int nowMin)
             => ((nowMin / SLOT_INTERVAL) + 1) * SLOT_INTERVAL % 1440;
@@ -90,7 +90,7 @@ namespace RapidTransitMod
 
         private int GetFallbackProtectTarget(Entity line, int nowMin)
         {
-            if (line != Entity.Null && IsWorkbenchTimetableApplied(line))
+            if (line != Entity.Null && IsDispatchRuntimeManagedLine(line))
             {
                 int nextManagedTarget = GetNextManagedDispatchTarget(line, nowMin);
                 if (nextManagedTarget >= 0)
@@ -102,7 +102,7 @@ namespace RapidTransitMod
 
         private bool ShouldRetireWaitingVehicleForFarFutureTarget(Entity line, int nowMin, int targetMin)
         {
-            if (line == Entity.Null || !IsWorkbenchTimetableApplied(line) || targetMin < 0)
+            if (line == Entity.Null || !IsDispatchRuntimeManagedLine(line) || targetMin < 0)
                 return false;
             if (IsCurrentOrRecentDispatchableSlot(nowMin, targetMin))
                 return false;
@@ -200,7 +200,7 @@ namespace RapidTransitMod
 
         private int GetNextManagedDispatchTarget(Entity line, int nowMin)
         {
-            if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
+            if (line == Entity.Null || !IsDispatchRuntimeManagedLine(line))
                 return -1;
 
             int[] appliedTargets = GetAppliedWorkbenchDepartureMinutes(line);

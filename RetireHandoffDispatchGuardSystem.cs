@@ -20,7 +20,7 @@ namespace RapidTransitMod
             if (GameManager.instance.gameMode != GameMode.Game)
                 return;
 
-            DepartureControlSystem.Instance?.GuardRetireHandoffDispatchInputs(m_SimulationSystem.frameIndex);
+            DispatchRuntimeSystem.Instance?.GuardRetireHandoffDispatchInputs(m_SimulationSystem.frameIndex);
         }
     }
 }

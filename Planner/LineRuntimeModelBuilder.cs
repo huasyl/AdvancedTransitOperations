@@ -55,20 +55,20 @@ namespace RapidTransitMod.Planner
             string sourceLineId,
             bool treatAsVirtualExpress)
         {
-            if (!context.LinesById.TryGetValue(sourceLineId, out DepartureControlSystem.DispatchPlannerLineDto sourceLine))
+            if (!context.LinesById.TryGetValue(sourceLineId, out DispatchPlannerLineDto sourceLine))
             {
                 return null;
             }
 
-            if (!context.StationsByLineId.TryGetValue(sourceLineId, out List<DepartureControlSystem.DispatchPlannerStationDto> sourceStations))
+            if (!context.StationsByLineId.TryGetValue(sourceLineId, out List<DispatchPlannerStationDto> sourceStations))
             {
                 return null;
             }
 
-            List<DepartureControlSystem.DispatchPlannerSegmentDto> sourceSegments = context.SegmentsByLineId.TryGetValue(sourceLineId, out List<DepartureControlSystem.DispatchPlannerSegmentDto> segments)
+            List<DispatchPlannerSegmentDto> sourceSegments = context.SegmentsByLineId.TryGetValue(sourceLineId, out List<DispatchPlannerSegmentDto> segments)
                 ? segments
-                : new List<DepartureControlSystem.DispatchPlannerSegmentDto>();
-            DepartureControlSystem.DispatchPlannerLineTrackDto lineTrack = context.LineTracksByLineId.TryGetValue(sourceLineId, out DepartureControlSystem.DispatchPlannerLineTrackDto track)
+                : new List<DispatchPlannerSegmentDto>();
+            DispatchPlannerLineTrackDto lineTrack = context.LineTracksByLineId.TryGetValue(sourceLineId, out DispatchPlannerLineTrackDto track)
                 ? track
                 : null;
 
@@ -90,7 +90,7 @@ namespace RapidTransitMod.Planner
 
             for (int index = 0; index < sourceStations.Count; index++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = sourceStations[index];
+                DispatchPlannerStationDto station = sourceStations[index];
                 PlannerObservedRuntimeSummary dwellSummary = ResolveStationDwellMinutes(context, station);
                 bool shouldStop = ShouldStopAtStation(model.Kind, station, expressStopStationIds, index, sourceStations.Count);
                 float skippedStopStartLossMinutes = shouldStop || index == 0 || index == sourceStations.Count - 1
@@ -125,8 +125,8 @@ namespace RapidTransitMod.Planner
                     continue;
                 }
 
-                DepartureControlSystem.DispatchPlannerSegmentDto segment = sourceSegments[index];
-                DepartureControlSystem.DispatchPlannerStationDto nextStation = index + 1 < sourceStations.Count ? sourceStations[index + 1] : null;
+                DispatchPlannerSegmentDto segment = sourceSegments[index];
+                DispatchPlannerStationDto nextStation = index + 1 < sourceStations.Count ? sourceStations[index + 1] : null;
                 PlannerSegmentRuntime fallbackRuntime = ResolveSegmentRuntime(segment, null);
                 PlannerObservedRuntimeSummary observedRuntime = ResolveObservedStationRuntime(
                     context,
@@ -163,7 +163,7 @@ namespace RapidTransitMod.Planner
         private static HashSet<string> BuildExpressStopStationIdSet(
             PlannerContext context,
             string sourceLineId,
-            List<DepartureControlSystem.DispatchPlannerStationDto> stations,
+            List<DispatchPlannerStationDto> stations,
             bool treatAsVirtualExpress)
         {
             HashSet<string> stopIds = new HashSet<string>(StringComparer.Ordinal);
@@ -174,7 +174,7 @@ namespace RapidTransitMod.Planner
 
             for (int i = 0; i < stations.Count; i++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = stations[i];
+                DispatchPlannerStationDto station = stations[i];
                 if (context.SelectedExpressStopStationIds.Contains(station.workbenchStationId ?? string.Empty))
                 {
                     stopIds.Add(station.id);
@@ -186,10 +186,10 @@ namespace RapidTransitMod.Planner
 
         private static PlannerObservedRuntimeSummary ResolveStationDwellMinutes(
             PlannerContext context,
-            DepartureControlSystem.DispatchPlannerStationDto station)
+            DispatchPlannerStationDto station)
         {
             if (station != null
-                && context.StopDwellByStationId.TryGetValue(station.id ?? string.Empty, out DepartureControlSystem.DispatchPlannerStationDwellObservationDto observed)
+                && context.StopDwellByStationId.TryGetValue(station.id ?? string.Empty, out DispatchPlannerStationDwellObservationDto observed)
                 && observed.sampleCount > 0
                 && observed.averageMinutes > 0f)
             {
@@ -236,8 +236,8 @@ namespace RapidTransitMod.Planner
         private static PlannerObservedRuntimeSummary ResolveObservedStationRuntime(
             PlannerContext context,
             string lineId,
-            DepartureControlSystem.DispatchPlannerStationDto fromStation,
-            DepartureControlSystem.DispatchPlannerStationDto toStation,
+            DispatchPlannerStationDto fromStation,
+            DispatchPlannerStationDto toStation,
             PlannerSegmentRuntime fallbackRuntime)
         {
             if (fromStation == null || toStation == null)
@@ -273,7 +273,7 @@ namespace RapidTransitMod.Planner
         }
 
         private static PlannerSegmentRuntime ResolveSegmentRuntime(
-            DepartureControlSystem.DispatchPlannerSegmentDto segment,
+            DispatchPlannerSegmentDto segment,
             PlannerObservedRuntimeSummary observedRuntime)
         {
             if (observedRuntime != null && observedRuntime.SampleCount > 0 && observedRuntime.Minutes > 0f)
@@ -316,7 +316,7 @@ namespace RapidTransitMod.Planner
 
         private static bool ShouldStopAtStation(
             string kind,
-            DepartureControlSystem.DispatchPlannerStationDto station,
+            DispatchPlannerStationDto station,
             HashSet<string> expressStopStationIds,
             int stationIndex,
             int stationCount)
@@ -339,7 +339,7 @@ namespace RapidTransitMod.Planner
             return station != null && expressStopStationIds.Contains(station.id ?? string.Empty);
         }
 
-        private static float ResolveTraversalSliceRuntimeMinutes(DepartureControlSystem.DispatchPlannerTraversalSliceDto slice)
+        private static float ResolveTraversalSliceRuntimeMinutes(DispatchPlannerTraversalSliceDto slice)
         {
             if (slice == null)
             {
@@ -351,7 +351,7 @@ namespace RapidTransitMod.Planner
                 : Math.Max(slice.modelRunMinutes, 0f);
         }
 
-        private static float ResolveTraversalSliceVariabilityMinutes(DepartureControlSystem.DispatchPlannerTraversalSliceDto slice)
+        private static float ResolveTraversalSliceVariabilityMinutes(DispatchPlannerTraversalSliceDto slice)
         {
             if (slice == null)
             {
@@ -377,7 +377,7 @@ namespace RapidTransitMod.Planner
                 return false;
             }
 
-            foreach (DepartureControlSystem.DispatchPlannerTraversalSliceDto slice in model.LineTrack.traversalSlices)
+            foreach (DispatchPlannerTraversalSliceDto slice in model.LineTrack.traversalSlices)
             {
                 if (slice != null && slice.endAtomIndexExclusive > slice.startAtomIndex)
                 {
@@ -389,7 +389,7 @@ namespace RapidTransitMod.Planner
 
         private static PlannerStationOffset FindStationOffsetForTraversalSlice(
             PlannerLineRuntimeModel model,
-            DepartureControlSystem.DispatchPlannerTraversalSliceDto slice)
+            DispatchPlannerTraversalSliceDto slice)
         {
             if (model == null
                 || slice == null
@@ -399,7 +399,7 @@ namespace RapidTransitMod.Planner
                 return null;
             }
 
-            foreach (DepartureControlSystem.DispatchPlannerStationDto station in model.Stations)
+            foreach (DispatchPlannerStationDto station in model.Stations)
             {
                 if (station != null
                     && station.waypointIndex == slice.stationWaypointIndex
@@ -416,7 +416,7 @@ namespace RapidTransitMod.Planner
 
         private static float ResolveTraversalSliceRuntimeForStopPattern(
             PlannerLineRuntimeModel model,
-            DepartureControlSystem.DispatchPlannerTraversalSliceDto slice,
+            DispatchPlannerTraversalSliceDto slice,
             HashSet<string> dwellIncludedStationIds)
         {
             PlannerStationOffset stationOffset = FindStationOffsetForTraversalSlice(model, slice);
@@ -441,7 +441,7 @@ namespace RapidTransitMod.Planner
 
         private static float ResolveTraversalSliceVariabilityForStopPattern(
             PlannerLineRuntimeModel model,
-            DepartureControlSystem.DispatchPlannerTraversalSliceDto slice,
+            DispatchPlannerTraversalSliceDto slice,
             HashSet<string> dwellIncludedStationIds)
         {
             PlannerStationOffset stationOffset = FindStationOffsetForTraversalSlice(model, slice);
@@ -478,8 +478,8 @@ namespace RapidTransitMod.Planner
             int trackAtomCount = runMinutesByAtom.Length;
             for (int stationIndex = 0; stationIndex + 1 < model.Stations.Count; stationIndex++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
-                DepartureControlSystem.DispatchPlannerStationDto nextStation = model.Stations[stationIndex + 1];
+                DispatchPlannerStationDto station = model.Stations[stationIndex];
+                DispatchPlannerStationDto nextStation = model.Stations[stationIndex + 1];
                 if (!model.SegmentRuntimeByStationPair.TryGetValue(station.id + "->" + nextStation.id, out PlannerSegmentRuntime runtime)
                     || !(runtime.Minutes > 0f))
                 {
@@ -530,8 +530,8 @@ namespace RapidTransitMod.Planner
             int trackAtomCount = variabilitySquareByAtom.Length;
             for (int stationIndex = 0; stationIndex + 1 < model.Stations.Count; stationIndex++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
-                DepartureControlSystem.DispatchPlannerStationDto nextStation = model.Stations[stationIndex + 1];
+                DispatchPlannerStationDto station = model.Stations[stationIndex];
+                DispatchPlannerStationDto nextStation = model.Stations[stationIndex + 1];
                 if (!model.SegmentRuntimeByStationPair.TryGetValue(station.id + "->" + nextStation.id, out PlannerSegmentRuntime runtime)
                     || !(runtime.VariabilityMinutes > 0f))
                 {
@@ -568,7 +568,7 @@ namespace RapidTransitMod.Planner
             float[] runMinutesByAtom = new float[trackAtomCount];
             bool[] coveredBySlice = new bool[trackAtomCount];
             HashSet<string> dwellIncludedStationIds = new HashSet<string>(StringComparer.Ordinal);
-            foreach (DepartureControlSystem.DispatchPlannerTraversalSliceDto slice in model.LineTrack?.traversalSlices ?? new DepartureControlSystem.DispatchPlannerTraversalSliceDto[0])
+            foreach (DispatchPlannerTraversalSliceDto slice in model.LineTrack?.traversalSlices ?? new DispatchPlannerTraversalSliceDto[0])
             {
                 int startAtomIndex = Math.Max(0, slice.startAtomIndex);
                 int endAtomIndexExclusive = Math.Min(trackAtomCount, slice.endAtomIndexExclusive);
@@ -591,7 +591,7 @@ namespace RapidTransitMod.Planner
             float[] dwellMinutesByBoundary = new float[trackAtomCount + 1];
             for (int stationIndex = 0; stationIndex < model.Stations.Count; stationIndex++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
+                DispatchPlannerStationDto station = model.Stations[stationIndex];
                 if (!model.StationOffsetsById.TryGetValue(station.id, out PlannerStationOffset stationOffset))
                 {
                     continue;
@@ -636,7 +636,7 @@ namespace RapidTransitMod.Planner
             float[] variabilitySquareByAtom = new float[trackAtomCount];
             bool[] coveredBySlice = new bool[trackAtomCount];
             HashSet<string> dwellIncludedStationIds = new HashSet<string>(StringComparer.Ordinal);
-            foreach (DepartureControlSystem.DispatchPlannerTraversalSliceDto slice in model.LineTrack?.traversalSlices ?? new DepartureControlSystem.DispatchPlannerTraversalSliceDto[0])
+            foreach (DispatchPlannerTraversalSliceDto slice in model.LineTrack?.traversalSlices ?? new DispatchPlannerTraversalSliceDto[0])
             {
                 int startAtomIndex = Math.Max(0, slice.startAtomIndex);
                 int endAtomIndexExclusive = Math.Min(trackAtomCount, slice.endAtomIndexExclusive);
@@ -659,7 +659,7 @@ namespace RapidTransitMod.Planner
             float[] dwellVariabilitySquareByBoundary = new float[trackAtomCount + 1];
             for (int stationIndex = 0; stationIndex < model.Stations.Count; stationIndex++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
+                DispatchPlannerStationDto station = model.Stations[stationIndex];
                 if (!model.StationOffsetsById.TryGetValue(station.id, out PlannerStationOffset stationOffset))
                 {
                     continue;
@@ -713,7 +713,7 @@ namespace RapidTransitMod.Planner
 
             for (int stationIndex = 0; stationIndex < model.Stations.Count && stationIndex < model.StationOffsets.Count; stationIndex++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[stationIndex];
+                DispatchPlannerStationDto station = model.Stations[stationIndex];
                 PlannerStationOffset stationOffset = model.StationOffsets[stationIndex];
                 float departureMinute = stationIndex == 0
                     ? 0f
@@ -726,7 +726,7 @@ namespace RapidTransitMod.Planner
             }
         }
 
-        private static float GetStationVariabilityMinute(PlannerLineRuntimeModel model, DepartureControlSystem.DispatchPlannerStationDto station)
+        private static float GetStationVariabilityMinute(PlannerLineRuntimeModel model, DispatchPlannerStationDto station)
         {
             if (model == null || station == null)
             {
@@ -747,8 +747,8 @@ namespace RapidTransitMod.Planner
             model.SegmentRuntimeByStationPair.Clear();
             for (int index = 0; index + 1 < model.Stations.Count; index++)
             {
-                DepartureControlSystem.DispatchPlannerStationDto station = model.Stations[index];
-                DepartureControlSystem.DispatchPlannerStationDto nextStation = model.Stations[index + 1];
+                DispatchPlannerStationDto station = model.Stations[index];
+                DispatchPlannerStationDto nextStation = model.Stations[index + 1];
                 PlannerStationOffset stationOffset = model.StationOffsets[index];
                 PlannerStationOffset nextStationOffset = model.StationOffsets[index + 1];
                 float minutes = Math.Max(0f, nextStationOffset.ArrivalMinute - stationOffset.DepartureMinute);

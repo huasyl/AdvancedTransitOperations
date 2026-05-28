@@ -9,7 +9,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         [DataContract]
         public sealed class StationAnchorObservationDiagnosticsDto
@@ -154,7 +154,7 @@ namespace RapidTransitMod
 
                         stopWaypointCount++;
                         ulong legacyKey = MakeLineWaypointStopObservationKey(line, waypointIndex);
-                        bool hasLegacy = m_WaypointStopDwellObservations.TryGetValue(legacyKey, out StopDwellObservation legacyObservation)
+                        bool hasLegacy = m_StopDwell.TryWaypoint(legacyKey, out StopDwellObservation legacyObservation)
                             && legacyObservation.SampleCount > 0
                             && legacyObservation.AverageFrames > 0f;
 
@@ -173,7 +173,7 @@ namespace RapidTransitMod
                             mappingStatus = hasLegacy ? "mapped" : "mapped-no-legacy";
                             observationKey = MakeStationStopDwellObservationKey(line, stationAnchorId);
 
-                            if (m_StationStopDwellObservations.TryGetValue(observationKey, out StationStopDwellObservation anchorObservation)
+                            if (m_StopDwell.TryStation(observationKey, out StationStopDwellObservation anchorObservation)
                                 && anchorObservation.SampleCount > 0
                                 && anchorObservation.AverageFrames > 0f)
                             {
@@ -233,7 +233,7 @@ namespace RapidTransitMod
                 .OrderBy(group => group.ObservationKey, StringComparer.Ordinal)
                 .Select(group =>
                 {
-                    m_StationStopDwellObservations.TryGetValue(group.ObservationKey, out StationStopDwellObservation observation);
+                    m_StopDwell.TryStation(group.ObservationKey, out StationStopDwellObservation observation);
                     return new StationAnchorGroupDto
                     {
                         anchorObservationKey = group.ObservationKey,
@@ -265,10 +265,10 @@ namespace RapidTransitMod
                 },
                 stopDwell = new StationAnchorStopDwellSummaryDto
                 {
-                    legacyObservationCount = m_WaypointStopDwellObservations.Count,
-                    anchorObservationCount = m_StationStopDwellObservations.Count,
-                    legacySampleCount = m_WaypointStopDwellObservations.Values.Sum(item => math.max(0, item.SampleCount)),
-                    anchorSampleCount = m_StationStopDwellObservations.Values.Sum(item => math.max(0, item.SampleCount)),
+                    legacyObservationCount = m_StopDwell.Waypoints.Count,
+                    anchorObservationCount = m_StopDwell.Stations.Count,
+                    legacySampleCount = m_StopDwell.Waypoints.Values.Sum(item => math.max(0, item.SampleCount)),
+                    anchorSampleCount = m_StopDwell.Stations.Values.Sum(item => math.max(0, item.SampleCount)),
                     anchorMissingWriteCount = m_StationAnchorDiagTotalAnchorMissing,
                     anchorRejectedOriginOrTerminalCount = m_StationAnchorDiagTotalAnchorRejectedOriginOrTerminal,
                     suspiciousOriginOrTerminalCount = m_StationAnchorDiagTotalSuspiciousOriginOrTerminal,

@@ -20,6 +20,12 @@ export const emptyLines = [];
 export const emptyDepots = [];
 export const emptyStations = [];
 export const emptyTrips = [];
+export const emptyFeatureSettings = {
+  dispatchEnabled: true,
+  bypassEnabled: true,
+  broadcastEnabled: true,
+  depotLockEnabled: true
+};
 
 export function createEmptySnapshot(overrides = {}) {
   return {
@@ -39,6 +45,7 @@ export function createEmptySnapshot(overrides = {}) {
     planRefs: [],
     version: "empty",
     sourceMode: "backend-fallback",
+    featureSettings: { ...emptyFeatureSettings },
     ...overrides
   };
 }

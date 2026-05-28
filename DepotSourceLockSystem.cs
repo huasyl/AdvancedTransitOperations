@@ -278,6 +278,13 @@ namespace RapidTransitMod
         {
             ClearFrameDepotCaches();
             CleanupConfiguredRequestTracking();
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            if (control != null && !control.IsDepotLockFeatureEnabled())
+            {
+                TickDepotFrameCacheLogging();
+                return;
+            }
+
             if ((m_PendingRequestQuery.IsEmptyIgnoreFilter && m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
                 || m_DepotQuery.IsEmptyIgnoreFilter
                 || m_LineQuery.IsEmptyIgnoreFilter)
@@ -355,7 +362,7 @@ namespace RapidTransitMod
             if (m_LineRuntimeSnapshots.Count == 0)
                 return;
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             ulong settingsVersion = control != null
                 ? control.GetWorkbenchLineSettingsVersion()
                 : 0ul;
@@ -406,7 +413,7 @@ namespace RapidTransitMod
 
         private uint GetCurrentFrame()
         {
-            return DepartureControlSystem.Instance?.GetCurrentSimulationFrameIndex() ?? 0u;
+            return DispatchRuntimeSystem.Instance?.GetCurrentSimulationFrameIndex() ?? 0u;
         }
 
         private void RememberConfiguredDepotBlockedRequest(
@@ -415,7 +422,7 @@ namespace RapidTransitMod
             Entity configuredDepot,
             Entity blockedLane)
         {
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (request == Entity.Null
                 || line == Entity.Null
                 || configuredDepot == Entity.Null
@@ -440,7 +447,7 @@ namespace RapidTransitMod
             if (!m_ConfiguredDepotBlockedRequests.TryGetValue(request, out ConfiguredDepotBlockedRequestState state))
                 return false;
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control == null
                 || state.Request != request
                 || state.Line != line
@@ -508,7 +515,7 @@ namespace RapidTransitMod
                     if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
                         continue;
 
-                    DepartureControlSystem control = DepartureControlSystem.Instance;
+                    DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
                     if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(request, line))
                     {
                         DestroySuppressedManagedLineRequest(request, line);
@@ -570,7 +577,7 @@ namespace RapidTransitMod
             if (line == Entity.Null || !EntityManager.Exists(line))
                 return false;
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control == null)
                 return false;
 
@@ -872,7 +879,7 @@ namespace RapidTransitMod
                     if (line == Entity.Null || !EntityManager.Exists(line))
                         continue;
 
-                    DepartureControlSystem control = DepartureControlSystem.Instance;
+                    DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
                     if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(requestEntity, line))
                     {
                         DestroySuppressedManagedLineRequest(requestEntity, line);
@@ -1000,7 +1007,7 @@ namespace RapidTransitMod
                 return false;
             }
 
-            Entity owner = DepartureControlSystem.Instance?.CanonicalizeTransportDepotEntity(
+            Entity owner = DispatchRuntimeSystem.Instance?.CanonicalizeTransportDepotEntity(
                 EntityManager.GetComponentData<Owner>(vehicle).m_Owner) ?? Entity.Null;
             if (owner != configuredDepot)
                 return false;
@@ -1324,7 +1331,7 @@ namespace RapidTransitMod
             }
 
             m_ConfiguredDepotFrameCacheMisses++;
-            configuredDepot = DepartureControlSystem.Instance?.GetConfiguredAllowedDepot(line) ?? Entity.Null;
+            configuredDepot = DispatchRuntimeSystem.Instance?.GetConfiguredAllowedDepot(line) ?? Entity.Null;
             m_FrameConfiguredDepotByLine[line] = configuredDepot;
             return configuredDepot;
         }
@@ -1435,7 +1442,7 @@ namespace RapidTransitMod
                 return false;
             }
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control == null)
                 return false;
 
@@ -1534,7 +1541,7 @@ namespace RapidTransitMod
             if (blockerCandidate == Entity.Null || configuredDepot == Entity.Null)
                 return false;
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control == null)
                 return false;
 

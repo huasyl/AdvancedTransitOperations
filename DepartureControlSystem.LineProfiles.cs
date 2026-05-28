@@ -7,7 +7,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private float GetDistanceToOriginMeters(Entity v, DynamicBuffer<RouteWaypoint> wps)
         {
@@ -45,25 +45,26 @@ namespace RapidTransitMod
                 return true;
             }
 
-            m_PerfProbeOriginSettleSlowPathEntered++;
-            bool hasCurrentSnapshot = m_VehicleTrackCursorFrameSnapshots.TryGetValue(vehicle, out VehicleTrackCursorFrameSnapshot snapshot)
-                && snapshot.Frame == m_SimulationSystem.frameIndex
-                && snapshot.Available;
-            if (!hasCurrentSnapshot)
-                m_PerfProbeOriginSettlePreSnapshotMisses++;
-
             Entity line = ResolveVehicleLine(vehicle);
             if (line == Entity.Null
-                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
-                || !hasCurrentSnapshot
-                || snapshot.LineEntity != line
-                || snapshot.ChainSignature != chain.Signature
-                || !snapshot.Available)
+                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
             {
                 return false;
             }
 
-            int atomCursorIndex = snapshot.Cursor.AtomCursorIndex;
+            m_PerfProbeOriginSettleSlowPathEntered++;
+            if (!m_TrackProjector.TrySnapshot(
+                    vehicle,
+                    line,
+                    chain.Signature,
+                    m_SimulationSystem.frameIndex,
+                    out VehicleTrackCursor cursor))
+            {
+                m_PerfProbeOriginSettlePreSnapshotMisses++;
+                return false;
+            }
+
+            int atomCursorIndex = cursor.AtomCursorIndex;
             if (atomCursorIndex < 0 || atomCursorIndex >= chain.TrackAtoms.Count)
                 return false;
 
@@ -96,26 +97,26 @@ namespace RapidTransitMod
                 float originDist = GetDistanceToOriginMeters(v, wps);
                 if (originDist > ORIGIN_FORCE_IDLE_RADIUS_METERS)
                 {
-                    m_OriginArrivalCandidateSinceFrame.Remove(v);
+                    m_RuntimeController.ClearOriginCandidate(v);
                     return false;
                 }
 
                 if (!TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition))
                 {
-                    m_OriginArrivalCandidateSinceFrame.Remove(v);
+                    m_RuntimeController.ClearOriginCandidate(v);
                     return false;
                 }
 
                 if (nextWaypointIndex != 0 || segmentPosition < ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS)
                 {
-                    m_OriginArrivalCandidateSinceFrame.Remove(v);
+                    m_RuntimeController.ClearOriginCandidate(v);
                     return false;
                 }
             }
 
             if (!m_OriginArrivalCandidateSinceFrame.TryGetValue(v, out uint sinceFrame))
             {
-                m_OriginArrivalCandidateSinceFrame[v] = nowFrame;
+                m_RuntimeController.SetOriginCandidate(v, nowFrame);
                 return false;
             }
 

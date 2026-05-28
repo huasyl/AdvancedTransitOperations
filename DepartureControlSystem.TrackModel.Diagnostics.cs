@@ -10,7 +10,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private string FormatTrackModelStationLabel(Entity building, int waypointIndex)
         {
@@ -696,7 +696,7 @@ namespace RapidTransitMod
                 if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                     continue;
 
-                string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                string state = m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                     ? vehicleState.ToString()
                     : "Unknown";
 
@@ -781,7 +781,7 @@ namespace RapidTransitMod
                     if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                         continue;
 
-                    string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                    string state = m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                         ? vehicleState.ToString()
                         : "Unknown";
 
@@ -826,7 +826,7 @@ namespace RapidTransitMod
                     if (expressVehicle == Entity.Null || expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
                         continue;
 
-                    string state = m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState)
+                    string state = m_VehicleView.TryGetState(expressVehicle, out VehicleState expressState)
                         ? expressState.ToString()
                         : "Unknown";
 
@@ -1439,7 +1439,7 @@ namespace RapidTransitMod
         {
             if (expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
                 return false;
-            if (!m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressState) || expressState != VehicleState.Running)
+            if (!m_VehicleView.TryGetState(expressVehicle, out VehicleState expressState) || expressState != VehicleState.Running)
                 return false;
             sawRunningVehicle = true;
             int localProtectedIntervalIndex = FindProtectedIntervalIndex(localChain, protectedInterval);
@@ -1735,7 +1735,7 @@ namespace RapidTransitMod
                     if (expressVehicle == Entity.Null || expressVehicle == localVehicle || !EntityManager.Exists(expressVehicle))
                         continue;
 
-                    if (!m_VehicleState.TryGetValue(expressVehicle, out VehicleState expressVehicleState)
+                    if (!m_VehicleView.TryGetState(expressVehicle, out VehicleState expressVehicleState)
                         || expressVehicleState != VehicleState.Running)
                     {
                         continue;

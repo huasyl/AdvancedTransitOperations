@@ -7,12 +7,12 @@ namespace RapidTransitMod.Planner
     internal sealed class PlannerInputNormalizer
     {
         public PlannerContext Normalize(
-            DepartureControlSystem.DispatchPlannerExportSnapshot snapshot,
-            DepartureControlSystem.DispatchPlannerRequest request)
+            DispatchPlannerExportSnapshot snapshot,
+            DispatchPlannerRequest request)
         {
             PlannerContext context = new PlannerContext();
-            context.Snapshot = snapshot ?? new DepartureControlSystem.DispatchPlannerExportSnapshot();
-            context.Request = request ?? new DepartureControlSystem.DispatchPlannerRequest();
+            context.Snapshot = snapshot ?? new DispatchPlannerExportSnapshot();
+            context.Request = request ?? new DispatchPlannerRequest();
             context.WindowStart = string.IsNullOrEmpty(context.Request.windowStart) ? "00:00" : context.Request.windowStart;
             context.WindowEnd = string.IsNullOrEmpty(context.Request.windowEnd) ? "23:59" : context.Request.windowEnd;
             context.WindowStartMinute = PlannerMath.TimeToMinutes(context.WindowStart) ?? 0;
@@ -75,7 +75,7 @@ namespace RapidTransitMod.Planner
 
         private static void BuildLineMaps(PlannerContext context)
         {
-            foreach (DepartureControlSystem.DispatchPlannerLineDto line in context.Snapshot.lines ?? new DepartureControlSystem.DispatchPlannerLineDto[0])
+            foreach (DispatchPlannerLineDto line in context.Snapshot.lines ?? new DispatchPlannerLineDto[0])
             {
                 if (line != null && !string.IsNullOrEmpty(line.id))
                 {
@@ -86,7 +86,7 @@ namespace RapidTransitMod.Planner
 
         private static void BuildStationMaps(PlannerContext context)
         {
-            foreach (DepartureControlSystem.DispatchPlannerStationDto station in context.Snapshot.stations ?? new DepartureControlSystem.DispatchPlannerStationDto[0])
+            foreach (DispatchPlannerStationDto station in context.Snapshot.stations ?? new DispatchPlannerStationDto[0])
             {
                 if (station == null || string.IsNullOrEmpty(station.id))
                 {
@@ -94,15 +94,15 @@ namespace RapidTransitMod.Planner
                 }
 
                 context.StationsById[station.id] = station;
-                if (!context.StationsByLineId.TryGetValue(station.lineId ?? string.Empty, out List<DepartureControlSystem.DispatchPlannerStationDto> lineStations))
+                if (!context.StationsByLineId.TryGetValue(station.lineId ?? string.Empty, out List<DispatchPlannerStationDto> lineStations))
                 {
-                    lineStations = new List<DepartureControlSystem.DispatchPlannerStationDto>();
+                    lineStations = new List<DispatchPlannerStationDto>();
                     context.StationsByLineId[station.lineId ?? string.Empty] = lineStations;
                 }
                 lineStations.Add(station);
             }
 
-            foreach (KeyValuePair<string, List<DepartureControlSystem.DispatchPlannerStationDto>> entry in context.StationsByLineId)
+            foreach (KeyValuePair<string, List<DispatchPlannerStationDto>> entry in context.StationsByLineId)
             {
                 entry.Value.Sort((left, right) => left.order.CompareTo(right.order));
             }
@@ -110,22 +110,22 @@ namespace RapidTransitMod.Planner
 
         private static void BuildSegmentMaps(PlannerContext context)
         {
-            foreach (DepartureControlSystem.DispatchPlannerSegmentDto segment in context.Snapshot.segments ?? new DepartureControlSystem.DispatchPlannerSegmentDto[0])
+            foreach (DispatchPlannerSegmentDto segment in context.Snapshot.segments ?? new DispatchPlannerSegmentDto[0])
             {
                 if (segment == null || string.IsNullOrEmpty(segment.lineId))
                 {
                     continue;
                 }
 
-                if (!context.SegmentsByLineId.TryGetValue(segment.lineId, out List<DepartureControlSystem.DispatchPlannerSegmentDto> lineSegments))
+                if (!context.SegmentsByLineId.TryGetValue(segment.lineId, out List<DispatchPlannerSegmentDto> lineSegments))
                 {
-                    lineSegments = new List<DepartureControlSystem.DispatchPlannerSegmentDto>();
+                    lineSegments = new List<DispatchPlannerSegmentDto>();
                     context.SegmentsByLineId[segment.lineId] = lineSegments;
                 }
                 lineSegments.Add(segment);
             }
 
-            foreach (KeyValuePair<string, List<DepartureControlSystem.DispatchPlannerSegmentDto>> entry in context.SegmentsByLineId)
+            foreach (KeyValuePair<string, List<DispatchPlannerSegmentDto>> entry in context.SegmentsByLineId)
             {
                 entry.Value.Sort((left, right) => left.fromOrder.CompareTo(right.fromOrder));
             }
@@ -133,7 +133,7 @@ namespace RapidTransitMod.Planner
 
         private static void BuildLineTrackMaps(PlannerContext context)
         {
-            foreach (DepartureControlSystem.DispatchPlannerLineTrackDto track in context.Snapshot.currentTrackScenario?.lines ?? new DepartureControlSystem.DispatchPlannerLineTrackDto[0])
+            foreach (DispatchPlannerLineTrackDto track in context.Snapshot.currentTrackScenario?.lines ?? new DispatchPlannerLineTrackDto[0])
             {
                 if (track != null && !string.IsNullOrEmpty(track.lineId))
                 {
@@ -144,7 +144,7 @@ namespace RapidTransitMod.Planner
 
         private static void BuildObservationMaps(PlannerContext context)
         {
-            foreach (DepartureControlSystem.DispatchPlannerStationDwellObservationDto dwell in context.Snapshot.observations?.stopDwell ?? new DepartureControlSystem.DispatchPlannerStationDwellObservationDto[0])
+            foreach (DispatchPlannerStationDwellObservationDto dwell in context.Snapshot.observations?.stopDwell ?? new DispatchPlannerStationDwellObservationDto[0])
             {
                 if (dwell != null && !string.IsNullOrEmpty(dwell.stationId))
                 {
@@ -154,9 +154,9 @@ namespace RapidTransitMod.Planner
 
             Dictionary<string, List<float>> samplesByPair = new Dictionary<string, List<float>>(StringComparer.Ordinal);
             HashSet<string> seenTrips = new HashSet<string>(StringComparer.Ordinal);
-            foreach (DepartureControlSystem.DispatchPlannerDraftDto draft in context.Snapshot.drafts ?? new DepartureControlSystem.DispatchPlannerDraftDto[0])
+            foreach (DispatchPlannerDraftDto draft in context.Snapshot.drafts ?? new DispatchPlannerDraftDto[0])
             {
-                foreach (DepartureControlSystem.DispatchWorkbenchTripDto trip in draft?.trips ?? new DepartureControlSystem.DispatchWorkbenchTripDto[0])
+                foreach (DispatchWorkbenchTripDto trip in draft?.trips ?? new DispatchWorkbenchTripDto[0])
                 {
                     if (trip == null || string.IsNullOrEmpty(trip.lineId))
                     {
@@ -164,7 +164,7 @@ namespace RapidTransitMod.Planner
                     }
 
                     string stopSignature = string.Join(";",
-                        (trip.stops ?? new DepartureControlSystem.DispatchWorkbenchTripStopDto[0])
+                        (trip.stops ?? new DispatchWorkbenchTripStopDto[0])
                             .Select(stop => (stop?.stationId ?? string.Empty)
                                 + "|"
                                 + (stop?.arrivalTime ?? string.Empty)
@@ -176,11 +176,11 @@ namespace RapidTransitMod.Planner
                         continue;
                     }
 
-                    DepartureControlSystem.DispatchWorkbenchTripStopDto[] stops = trip.stops ?? new DepartureControlSystem.DispatchWorkbenchTripStopDto[0];
+                    DispatchWorkbenchTripStopDto[] stops = trip.stops ?? new DispatchWorkbenchTripStopDto[0];
                     for (int index = 0; index + 1 < stops.Length; index++)
                     {
-                        DepartureControlSystem.DispatchWorkbenchTripStopDto fromStop = stops[index];
-                        DepartureControlSystem.DispatchWorkbenchTripStopDto toStop = stops[index + 1];
+                        DispatchWorkbenchTripStopDto fromStop = stops[index];
+                        DispatchWorkbenchTripStopDto toStop = stops[index + 1];
                         if (fromStop == null
                             || toStop == null
                             || string.IsNullOrEmpty(fromStop.stationId)
@@ -239,11 +239,11 @@ namespace RapidTransitMod.Planner
         private static void BuildBypassMap(
             PlannerContext context,
             Dictionary<string, List<PlannerBypassStation>> destination,
-            DepartureControlSystem.DispatchPlannerBypassStationDto[] stations,
+            DispatchPlannerBypassStationDto[] stations,
             bool configured,
             bool candidate)
         {
-            foreach (DepartureControlSystem.DispatchPlannerBypassStationDto station in stations ?? new DepartureControlSystem.DispatchPlannerBypassStationDto[0])
+            foreach (DispatchPlannerBypassStationDto station in stations ?? new DispatchPlannerBypassStationDto[0])
             {
                 if (station == null || string.IsNullOrEmpty(station.lineId))
                 {
@@ -280,7 +280,7 @@ namespace RapidTransitMod.Planner
 
         private static void BuildTemporaryStopBypassCandidates(PlannerContext context)
         {
-            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DepartureControlSystem.DispatchPlannerSharedCorridorDto[0])
+            foreach (DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DispatchPlannerSharedCorridorDto[0])
             {
                 if (!IsValidSameDirectionCorridor(corridor))
                 {
@@ -319,7 +319,7 @@ namespace RapidTransitMod.Planner
             if (string.IsNullOrEmpty(targetLineId)
                 || string.IsNullOrEmpty(sourceLineId)
                 || string.Equals(targetLineId, sourceLineId, StringComparison.Ordinal)
-                || !context.StationsByLineId.TryGetValue(sourceLineId, out List<DepartureControlSystem.DispatchPlannerStationDto> sourceStations))
+                || !context.StationsByLineId.TryGetValue(sourceLineId, out List<DispatchPlannerStationDto> sourceStations))
             {
                 return;
             }
@@ -346,7 +346,7 @@ namespace RapidTransitMod.Planner
                 existingIds.Add(station.StationId ?? string.Empty);
             }
 
-            foreach (DepartureControlSystem.DispatchPlannerStationDto sourceStation in sourceStations)
+            foreach (DispatchPlannerStationDto sourceStation in sourceStations)
             {
                 if (sourceStation == null
                     || string.IsNullOrEmpty(sourceStation.id)
@@ -385,7 +385,7 @@ namespace RapidTransitMod.Planner
             int buildingEntityIndex)
         {
             if (buildingEntityIndex < 0
-                || !context.StationsByLineId.TryGetValue(targetLineId ?? string.Empty, out List<DepartureControlSystem.DispatchPlannerStationDto> targetStations))
+                || !context.StationsByLineId.TryGetValue(targetLineId ?? string.Empty, out List<DispatchPlannerStationDto> targetStations))
             {
                 return false;
             }
@@ -409,17 +409,17 @@ namespace RapidTransitMod.Planner
         private static int ResolveTrackAtomIndex(PlannerContext context, string stationId)
         {
             return !string.IsNullOrEmpty(stationId)
-                && context.StationsById.TryGetValue(stationId, out DepartureControlSystem.DispatchPlannerStationDto station)
+                && context.StationsById.TryGetValue(stationId, out DispatchPlannerStationDto station)
                 ? station.trackAtomIndex
                 : -1;
         }
 
-        private static DepartureControlSystem.DispatchPlannerDraftDto SelectDraft(PlannerContext context)
+        private static DispatchPlannerDraftDto SelectDraft(PlannerContext context)
         {
-            DepartureControlSystem.DispatchPlannerDraftDto[] drafts = context.Snapshot.drafts ?? new DepartureControlSystem.DispatchPlannerDraftDto[0];
+            DispatchPlannerDraftDto[] drafts = context.Snapshot.drafts ?? new DispatchPlannerDraftDto[0];
             if (!string.IsNullOrEmpty(context.Request.draftKey))
             {
-                DepartureControlSystem.DispatchPlannerDraftDto exact = drafts.FirstOrDefault(draft =>
+                DispatchPlannerDraftDto exact = drafts.FirstOrDefault(draft =>
                     string.Equals(draft?.lineKey, context.Request.draftKey, StringComparison.Ordinal));
                 if (exact != null)
                 {
@@ -479,7 +479,7 @@ namespace RapidTransitMod.Planner
         private static bool IsSelectableLocalLine(PlannerContext context, string lineId)
         {
             if (string.IsNullOrEmpty(lineId)
-                || !context.LinesById.TryGetValue(lineId, out DepartureControlSystem.DispatchPlannerLineDto line))
+                || !context.LinesById.TryGetValue(lineId, out DispatchPlannerLineDto line))
             {
                 return false;
             }
@@ -542,7 +542,7 @@ namespace RapidTransitMod.Planner
 
             HashSet<string> stops = new HashSet<string>(StringComparer.Ordinal);
             HashSet<string> expressLineSet = new HashSet<string>(context.SelectedExpressLineIds ?? new string[0], StringComparer.Ordinal);
-            foreach (DepartureControlSystem.DispatchWorkbenchTripDto trip in EnumeratePlannerTrips(context))
+            foreach (DispatchWorkbenchTripDto trip in EnumeratePlannerTrips(context))
             {
                 if (trip == null
                     || !string.Equals(trip.kind, "express", StringComparison.OrdinalIgnoreCase)
@@ -551,7 +551,7 @@ namespace RapidTransitMod.Planner
                     continue;
                 }
 
-                foreach (DepartureControlSystem.DispatchWorkbenchTripStopDto stop in trip.stops ?? new DepartureControlSystem.DispatchWorkbenchTripStopDto[0])
+                foreach (DispatchWorkbenchTripStopDto stop in trip.stops ?? new DispatchWorkbenchTripStopDto[0])
                 {
                     if (stop != null
                         && !string.IsNullOrEmpty(stop.stationId)
@@ -670,7 +670,7 @@ namespace RapidTransitMod.Planner
                 return discovered;
             }
 
-            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DepartureControlSystem.DispatchPlannerSharedCorridorDto[0])
+            foreach (DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DispatchPlannerSharedCorridorDto[0])
             {
                 if (!IsValidSameDirectionCorridor(corridor))
                 {
@@ -707,7 +707,7 @@ namespace RapidTransitMod.Planner
             discovered.Add(lineId);
         }
 
-        private static bool IsValidSameDirectionCorridor(DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor)
+        private static bool IsValidSameDirectionCorridor(DispatchPlannerSharedCorridorDto corridor)
         {
             return corridor != null
                 && string.Equals(corridor.traversalRelation, "SameDirection", StringComparison.OrdinalIgnoreCase)
@@ -718,7 +718,7 @@ namespace RapidTransitMod.Planner
 
         private static bool HasLineActivityInsideWindow(PlannerContext context, string lineId)
         {
-            foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in EnumeratePlannerDraftRows(context))
+            foreach (DispatchWorkbenchStagedRowDto row in EnumeratePlannerDraftRows(context))
             {
                 if (row == null || !string.Equals(row.lineId, lineId, StringComparison.Ordinal))
                 {
@@ -731,7 +731,7 @@ namespace RapidTransitMod.Planner
                 }
             }
 
-            foreach (DepartureControlSystem.DispatchWorkbenchTripDto trip in EnumeratePlannerTrips(context))
+            foreach (DispatchWorkbenchTripDto trip in EnumeratePlannerTrips(context))
             {
                 if (trip == null || !string.Equals(trip.lineId, lineId, StringComparison.Ordinal))
                 {
@@ -753,11 +753,11 @@ namespace RapidTransitMod.Planner
             HashSet<string> selectedLineSet = new HashSet<string>(context.SelectedLineIds ?? new string[0], StringComparer.Ordinal);
             HashSet<string> rowIds = new HashSet<string>(StringComparer.Ordinal);
 
-            List<DepartureControlSystem.DispatchWorkbenchStagedRowDto> stagedRows =
+            List<DispatchWorkbenchStagedRowDto> stagedRows =
                 EnumeratePlannerDraftRows(context).ToList();
             if (stagedRows.Count > 0)
             {
-                foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in stagedRows)
+                foreach (DispatchWorkbenchStagedRowDto row in stagedRows)
                 {
                     if (row == null)
                     {
@@ -801,7 +801,7 @@ namespace RapidTransitMod.Planner
             if (rows.Count == 0 || missingLineIds.Count > 0)
             {
                 HashSet<string> tripLineFilter = rows.Count == 0 ? selectedLineSet : missingLineIds;
-                foreach (DepartureControlSystem.DispatchWorkbenchTripDto trip in EnumeratePlannerTrips(context))
+                foreach (DispatchWorkbenchTripDto trip in EnumeratePlannerTrips(context))
                 {
                     if (trip == null || !tripLineFilter.Contains(trip.lineId ?? string.Empty))
                     {
@@ -858,16 +858,16 @@ namespace RapidTransitMod.Planner
             return rows;
         }
 
-        private static IEnumerable<DepartureControlSystem.DispatchWorkbenchStagedRowDto> EnumeratePlannerDraftRows(PlannerContext context)
+        private static IEnumerable<DispatchWorkbenchStagedRowDto> EnumeratePlannerDraftRows(PlannerContext context)
         {
-            foreach (DepartureControlSystem.DispatchPlannerDraftDto draft in context?.Snapshot?.drafts
-                ?? new DepartureControlSystem.DispatchPlannerDraftDto[0])
+            foreach (DispatchPlannerDraftDto draft in context?.Snapshot?.drafts
+                ?? new DispatchPlannerDraftDto[0])
             {
-                DepartureControlSystem.DispatchWorkbenchStagedRowDto[] rows =
+                DispatchWorkbenchStagedRowDto[] rows =
                     draft?.lineDraftRows
                     ?? draft?.stagedRows
-                    ?? new DepartureControlSystem.DispatchWorkbenchStagedRowDto[0];
-                foreach (DepartureControlSystem.DispatchWorkbenchStagedRowDto row in rows)
+                    ?? new DispatchWorkbenchStagedRowDto[0];
+                foreach (DispatchWorkbenchStagedRowDto row in rows)
                 {
                     if (row != null)
                     {
@@ -877,12 +877,12 @@ namespace RapidTransitMod.Planner
             }
         }
 
-        private static IEnumerable<DepartureControlSystem.DispatchWorkbenchTripDto> EnumeratePlannerTrips(PlannerContext context)
+        private static IEnumerable<DispatchWorkbenchTripDto> EnumeratePlannerTrips(PlannerContext context)
         {
             HashSet<string> seenTripIds = new HashSet<string>(StringComparer.Ordinal);
-            foreach (DepartureControlSystem.DispatchPlannerDraftDto draft in context.Snapshot?.drafts ?? new DepartureControlSystem.DispatchPlannerDraftDto[0])
+            foreach (DispatchPlannerDraftDto draft in context.Snapshot?.drafts ?? new DispatchPlannerDraftDto[0])
             {
-                foreach (DepartureControlSystem.DispatchWorkbenchTripDto trip in draft?.trips ?? new DepartureControlSystem.DispatchWorkbenchTripDto[0])
+                foreach (DispatchWorkbenchTripDto trip in draft?.trips ?? new DispatchWorkbenchTripDto[0])
                 {
                     if (trip == null)
                     {
@@ -903,7 +903,7 @@ namespace RapidTransitMod.Planner
         private static IEnumerable<PlannerWorkingRow> BuildVirtualExpressRows(PlannerContext context)
         {
             List<PlannerWorkingRow> rows = new List<PlannerWorkingRow>();
-            if (!context.LinesById.TryGetValue(context.VirtualExpressBaseLineId, out DepartureControlSystem.DispatchPlannerLineDto baseLine))
+            if (!context.LinesById.TryGetValue(context.VirtualExpressBaseLineId, out DispatchPlannerLineDto baseLine))
             {
                 return rows;
             }

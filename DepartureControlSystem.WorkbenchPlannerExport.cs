@@ -2,8 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.Serialization;
+using Colossal.Mathematics;
 using Game.Common;
+using Game.Net;
 using Game.Objects;
 using Game.Routes;
 using Unity.Entities;
@@ -11,439 +12,8 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
-        [DataContract]
-        public class DispatchPlannerExportSnapshot
-        {
-            [DataMember]
-            public string version;
-            [DataMember]
-            public uint generatedAtFrame;
-            [DataMember]
-            public DispatchPlannerLineDto[] lines;
-            [DataMember]
-            public DispatchPlannerStationDto[] stations;
-            [DataMember]
-            public DispatchPlannerSegmentDto[] segments;
-            [DataMember]
-            public DispatchPlannerBypassStationDto[] configuredBypassStations;
-            [DataMember]
-            public DispatchPlannerBypassStationDto[] candidateBypassStations;
-            [DataMember]
-            public DispatchPlannerTrackScenarioDto currentTrackScenario;
-            [DataMember]
-            public DispatchPlannerObservationSummaryDto observations;
-            [DataMember]
-            public DispatchPlannerRuntimeParamsDto runtimeParams;
-            [DataMember]
-            public DispatchPlannerDraftDto[] drafts;
-        }
-
-        [DataContract]
-        public class DispatchPlannerLineDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public int entityIndex;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public string kind;
-            [DataMember]
-            public string configuredKind;
-            [DataMember]
-            public string transportType;
-            [DataMember]
-            public int routeNumber;
-            [DataMember]
-            public int stationCount;
-            [DataMember]
-            public string color;
-            [DataMember]
-            public string originStationId;
-            [DataMember]
-            public string originStationName;
-            [DataMember]
-            public int originHoldLimitMinutes;
-            [DataMember]
-            public int maxStationDwellMinutes;
-            [DataMember]
-            public string allowedDepotId;
-            [DataMember]
-            public bool hasTimeProfile;
-            [DataMember]
-            public float estimatedLoopMinutes;
-        }
-
-        [DataContract]
-        public class DispatchPlannerStationDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string workbenchStationId;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public int order;
-            [DataMember]
-            public int waypointIndex;
-            [DataMember]
-            public int trackAtomIndex;
-            [DataMember]
-            public int stopEntityIndex;
-            [DataMember]
-            public int buildingEntityIndex;
-            [DataMember]
-            public float distanceMeters;
-            [DataMember]
-            public float positionX;
-            [DataMember]
-            public float positionY;
-            [DataMember]
-            public float positionZ;
-            [DataMember]
-            public bool canConfigureBypass;
-            [DataMember]
-            public bool isConfiguredBypass;
-            [DataMember]
-            public float profileDwellMinutes;
-            [DataMember]
-            public float observedDwellMinutes;
-            [DataMember]
-            public int observedDwellSampleCount;
-            [DataMember]
-            public string dwellSource;
-            [DataMember]
-            public float confidence;
-        }
-
-        [DataContract]
-        public class DispatchPlannerSegmentDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string fromStationId;
-            [DataMember]
-            public string toStationId;
-            [DataMember]
-            public int fromOrder;
-            [DataMember]
-            public int toOrder;
-            [DataMember]
-            public int fromWaypointIndex;
-            [DataMember]
-            public int toWaypointIndex;
-            [DataMember]
-            public float distanceMeters;
-            [DataMember]
-            public float profileMinutes;
-            [DataMember]
-            public float estimatedMinutes;
-            [DataMember]
-            public string source;
-            [DataMember]
-            public float confidence;
-        }
-
-        [DataContract]
-        public class DispatchPlannerBypassStationDto
-        {
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string workbenchStationId;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string name;
-            [DataMember]
-            public int order;
-            [DataMember]
-            public int buildingEntityIndex;
-            [DataMember]
-            public bool isConfigured;
-            [DataMember]
-            public bool isVirtualCandidate;
-            [DataMember]
-            public string reason;
-        }
-
-        [DataContract]
-        public class DispatchPlannerTrackScenarioDto
-        {
-            [DataMember]
-            public string scenarioId;
-            [DataMember]
-            public string scenarioType;
-            [DataMember]
-            public DispatchPlannerLineTrackDto[] lines;
-            [DataMember]
-            public DispatchPlannerSharedCorridorDto[] sharedCorridors;
-            [DataMember]
-            public int configuredBypassStationCount;
-            [DataMember]
-            public int candidateBypassStationCount;
-            [DataMember]
-            public int sharedCorridorCount;
-            [DataMember]
-            public float confidence;
-        }
-
-        [DataContract]
-        public class DispatchPlannerLineTrackDto
-        {
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public bool available;
-            [DataMember]
-            public string unavailableReason;
-            [DataMember]
-            public string chainSignature;
-            [DataMember]
-            public int trackAtomCount;
-            [DataMember]
-            public int controlPointCount;
-            [DataMember]
-            public int sharedRunCount;
-            [DataMember]
-            public int protectedIntervalCount;
-            [DataMember]
-            public int protectedSharedIntervalCount;
-            [DataMember]
-            public string executionMode;
-            [DataMember]
-            public DispatchPlannerProtectedIntervalDto[] protectedIntervals;
-            [DataMember]
-            public DispatchPlannerTraversalSliceDto[] traversalSlices;
-        }
-
-        [DataContract]
-        public class DispatchPlannerProtectedIntervalDto
-        {
-            [DataMember]
-            public int intervalIndex;
-            [DataMember]
-            public string fromStationId;
-            [DataMember]
-            public string toStationId;
-            [DataMember]
-            public int fromBuildingEntityIndex;
-            [DataMember]
-            public int toBuildingEntityIndex;
-            [DataMember]
-            public int startControlPointIndex;
-            [DataMember]
-            public int endControlPointIndex;
-            [DataMember]
-            public int startAtomIndex;
-            [DataMember]
-            public int endAtomIndexExclusive;
-            [DataMember]
-            public float baseMinutes;
-            [DataMember]
-            public int sharedSegmentCount;
-            [DataMember]
-            public int maxSharedLineCount;
-            [DataMember]
-            public bool hasMirroredContext;
-            [DataMember]
-            public float minEntryOffsetMinutes;
-            [DataMember]
-            public float maxClearOffsetMinutes;
-            [DataMember]
-            public float confidence;
-        }
-
-        [DataContract]
-        public class DispatchPlannerTraversalSliceDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public int sliceIndex;
-            [DataMember]
-            public int startAtomIndex;
-            [DataMember]
-            public int endAtomIndexExclusive;
-            [DataMember]
-            public int physicalLaneCount;
-            [DataMember]
-            public string startEventKind;
-            [DataMember]
-            public string endEventKind;
-            [DataMember]
-            public int startWaypointIndex;
-            [DataMember]
-            public int endWaypointIndex;
-            [DataMember]
-            public string stationTraversalKind;
-            [DataMember]
-            public int stationWaypointIndex;
-            [DataMember]
-            public float stationStopMinutes;
-            [DataMember]
-            public bool observedIncludesStationStop;
-            [DataMember]
-            public float modelRunMinutes;
-            [DataMember]
-            public float observedAverageMinutes;
-            [DataMember]
-            public float observedFastMinutes;
-            [DataMember]
-            public int observedSampleCount;
-            [DataMember]
-            public uint lastObservedFrame;
-            [DataMember]
-            public string source;
-            [DataMember]
-            public float confidence;
-        }
-
-        [DataContract]
-        public class DispatchPlannerSharedCorridorDto
-        {
-            [DataMember]
-            public string id;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public string otherLineId;
-            [DataMember]
-            public int lineStartAtomIndex;
-            [DataMember]
-            public int lineEndAtomIndexExclusive;
-            [DataMember]
-            public int otherStartAtomIndex;
-            [DataMember]
-            public int otherEndAtomIndexExclusive;
-            [DataMember]
-            public string lineStartStationId;
-            [DataMember]
-            public string lineEndStationId;
-            [DataMember]
-            public string otherStartStationId;
-            [DataMember]
-            public string otherEndStationId;
-            [DataMember]
-            public int lineSharedSliceCount;
-            [DataMember]
-            public int otherSharedSliceCount;
-            [DataMember]
-            public int lineBridgedGapAtoms;
-            [DataMember]
-            public int otherBridgedGapAtoms;
-            [DataMember]
-            public int physicalOverlap;
-            [DataMember]
-            public int orderedRun;
-            [DataMember]
-            public bool hasMirroredContext;
-            [DataMember]
-            public int maxSharedLineCount;
-            [DataMember]
-            public string traversalRelation;
-            [DataMember]
-            public bool hasCanonicalDirection;
-            [DataMember]
-            public bool lineAlongCanonical;
-            [DataMember]
-            public bool otherAlongCanonical;
-            [DataMember]
-            public float confidence;
-        }
-
-        [DataContract]
-        public class DispatchPlannerObservationSummaryDto
-        {
-            [DataMember]
-            public int stopDwellObservationCount;
-            [DataMember]
-            public int stopDwellSampleCount;
-            [DataMember]
-            public int traversalSliceObservationCount;
-            [DataMember]
-            public int traversalSliceSampleCount;
-            [DataMember]
-            public DispatchPlannerStationDwellObservationDto[] stopDwell;
-            [DataMember]
-            public DispatchPlannerTraversalSliceDto[] traversalSlices;
-        }
-
-        [DataContract]
-        public class DispatchPlannerStationDwellObservationDto
-        {
-            [DataMember]
-            public string stationId;
-            [DataMember]
-            public string lineId;
-            [DataMember]
-            public int waypointIndex;
-            [DataMember]
-            public float averageMinutes;
-            [DataMember]
-            public int sampleCount;
-            [DataMember]
-            public string source;
-            [DataMember]
-            public float confidence;
-        }
-
-        [DataContract]
-        public class DispatchPlannerRuntimeParamsDto
-        {
-            [DataMember]
-            public double simFramesPerMinute;
-            [DataMember]
-            public int defaultOriginHoldLimitMinutes;
-            [DataMember]
-            public int defaultMaxStationDwellMinutes;
-            [DataMember]
-            public float trackModelEntryClearSafetyGapMinutes;
-            [DataMember]
-            public float localBypassExitReleaseAtoms;
-            [DataMember]
-            public float localBypassTrainTailClearAtoms;
-            [DataMember]
-            public int minStrongProtectedIntervalOverlapAtoms;
-            [DataMember]
-            public int minStrongProtectedIntervalOrderedRun;
-            [DataMember]
-            public string compatibilityMode;
-        }
-
-        [DataContract]
-        public class DispatchPlannerDraftDto
-        {
-            [DataMember]
-            public string lineKey;
-            [DataMember]
-            public string selectedLineId;
-            [DataMember]
-            public string selectedEditLine;
-            [DataMember]
-            public DispatchWorkbenchMergedView mergedView;
-            [DataMember]
-            public DispatchWorkbenchManualRowDto[] manualRows;
-            [DataMember]
-            public DispatchWorkbenchStagedRowDto[] lineDraftRows;
-            [DataMember(EmitDefaultValue = false)]
-            public DispatchWorkbenchStagedRowDto[] stagedRows;
-            [DataMember]
-            public DispatchWorkbenchAutoRuleDto[] autoRules;
-            [DataMember]
-            public DispatchWorkbenchTripDto[] trips;
-        }
 
         private sealed class PlannerStationRecord
         {
@@ -688,7 +258,7 @@ namespace RapidTransitMod
             {
                 string observationKey = MakeStationStopDwellObservationKey(line, anchor.StationAnchorId);
                 if (!string.IsNullOrWhiteSpace(observationKey)
-                    && m_StationStopDwellObservations.TryGetValue(observationKey, out StationStopDwellObservation anchorObservation)
+                    && m_StopDwell.TryStation(observationKey, out StationStopDwellObservation anchorObservation)
                     && anchorObservation.SampleCount > 0
                     && anchorObservation.AverageFrames > 0f)
                 {
@@ -770,7 +340,7 @@ namespace RapidTransitMod
                 DispatchPlannerLineTrackDto lineTrack = BuildPlannerLineTrack(runtime, waypoints, stationRecords);
                 lineTracks.Add(lineTrack);
                 if (lineTrack.available
-                    && TryGetLineTrackChain(runtime.Entity, waypoints, out LineTrackChain chain)
+                    && m_TrackModelQuery.TryChain(runtime.Entity, out LineTrackChain chain)
                     && chain != null)
                 {
                     chainByLineId[runtime.Id] = chain;
@@ -808,7 +378,8 @@ namespace RapidTransitMod
                     available = false,
                     unavailableReason = "no-track-chain",
                     protectedIntervals = Array.Empty<DispatchPlannerProtectedIntervalDto>(),
-                    traversalSlices = Array.Empty<DispatchPlannerTraversalSliceDto>()
+                    traversalSlices = Array.Empty<DispatchPlannerTraversalSliceDto>(),
+                    trackAtoms = Array.Empty<DispatchPlannerTrackAtomDto>()
                 };
             }
 
@@ -829,8 +400,127 @@ namespace RapidTransitMod
                 protectedSharedIntervalCount = chain.ProtectedSharedIntervals.Count,
                 executionMode = chain.ExecutionMode.ToString(),
                 protectedIntervals = BuildPlannerProtectedIntervals(runtime.Id, chain, stationRecords),
-                traversalSlices = BuildPlannerTraversalSlices(runtime.Id, runtime.Entity, chain)
+                traversalSlices = BuildPlannerTraversalSlices(runtime.Id, runtime.Entity, chain),
+                trackAtoms = BuildPlannerTrackAtoms(chain)
             };
+        }
+
+        private DispatchPlannerTrackAtomDto[] BuildPlannerTrackAtoms(LineTrackChain chain)
+        {
+            if (chain == null || chain.TrackAtoms == null || chain.TrackAtoms.Count == 0)
+                return Array.Empty<DispatchPlannerTrackAtomDto>();
+
+            List<DispatchPlannerTrackAtomDto> atoms = new List<DispatchPlannerTrackAtomDto>(chain.TrackAtoms.Count);
+            for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                bool hasCurve = TryGetPlannerTrackAtomCurve(atom, out Entity curveEntity, out Curve curve);
+                bool hasTrackLane = TryGetPlannerTrackAtomTrackLane(atom, out TrackLane trackLane);
+                float traversalLengthMeters = 0f;
+                if (hasCurve)
+                {
+                    float start = math.saturate(atom.TargetDelta.x);
+                    float end = math.saturate(atom.TargetDelta.y);
+                    if (math.abs(end - start) > 0.0001f)
+                    {
+                        Bounds1 bounds = new Bounds1(math.min(start, end), math.max(start, end));
+                        traversalLengthMeters = MathUtils.Length(curve.m_Bezier.xz, bounds);
+                    }
+                }
+
+                atoms.Add(new DispatchPlannerTrackAtomDto
+                {
+                    atomIndex = atomIndex,
+                    sourceTargetEntityIndex = atom.SourceTarget == Entity.Null ? -1 : atom.SourceTarget.Index,
+                    physicalLaneEntityIndex = atom.Key.PhysicalLaneKey == Entity.Null ? -1 : atom.Key.PhysicalLaneKey.Index,
+                    targetDeltaStart = atom.TargetDelta.x,
+                    targetDeltaEnd = atom.TargetDelta.y,
+                    sourceFlags = atom.SourceFlags.ToString(),
+                    atomClass = atom.AtomClass.ToString(),
+                    traversalDir = atom.TraversalDir.ToString(),
+                    hasCurve = hasCurve,
+                    curveEntityIndex = hasCurve ? curveEntity.Index : -1,
+                    curveLengthMeters = hasCurve ? curve.m_Length : 0f,
+                    traversalLengthMeters = traversalLengthMeters,
+                    bezierAx = hasCurve ? curve.m_Bezier.a.x : 0f,
+                    bezierAy = hasCurve ? curve.m_Bezier.a.y : 0f,
+                    bezierAz = hasCurve ? curve.m_Bezier.a.z : 0f,
+                    bezierBx = hasCurve ? curve.m_Bezier.b.x : 0f,
+                    bezierBy = hasCurve ? curve.m_Bezier.b.y : 0f,
+                    bezierBz = hasCurve ? curve.m_Bezier.b.z : 0f,
+                    bezierCx = hasCurve ? curve.m_Bezier.c.x : 0f,
+                    bezierCy = hasCurve ? curve.m_Bezier.c.y : 0f,
+                    bezierCz = hasCurve ? curve.m_Bezier.c.z : 0f,
+                    bezierDx = hasCurve ? curve.m_Bezier.d.x : 0f,
+                    bezierDy = hasCurve ? curve.m_Bezier.d.y : 0f,
+                    bezierDz = hasCurve ? curve.m_Bezier.d.z : 0f,
+                    hasTrackLane = hasTrackLane,
+                    speedLimitMetersPerSecond = hasTrackLane ? trackLane.m_SpeedLimit : 0f,
+                    curviness = hasTrackLane ? trackLane.m_Curviness : 0f,
+                    trackLaneFlags = hasTrackLane ? trackLane.m_Flags.ToString() : string.Empty,
+                    trackLaneFlagsRaw = hasTrackLane ? (int)trackLane.m_Flags : 0
+                });
+            }
+
+            return atoms.ToArray();
+        }
+
+        private bool TryGetPlannerTrackAtomCurve(TrackAtom atom, out Entity curveEntity, out Curve curve)
+        {
+            curveEntity = Entity.Null;
+            curve = default;
+            if (TryGetPlannerEntityCurve(atom.SourceTarget, out curve))
+            {
+                curveEntity = atom.SourceTarget;
+                return true;
+            }
+
+            if (atom.Key.PhysicalLaneKey != atom.SourceTarget
+                && TryGetPlannerEntityCurve(atom.Key.PhysicalLaneKey, out curve))
+            {
+                curveEntity = atom.Key.PhysicalLaneKey;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryGetPlannerEntityCurve(Entity entity, out Curve curve)
+        {
+            curve = default;
+            if (entity == Entity.Null
+                || !EntityManager.Exists(entity)
+                || !EntityManager.HasComponent<Curve>(entity))
+            {
+                return false;
+            }
+
+            curve = EntityManager.GetComponentData<Curve>(entity);
+            return true;
+        }
+
+        private bool TryGetPlannerTrackAtomTrackLane(TrackAtom atom, out TrackLane trackLane)
+        {
+            trackLane = default;
+            if (TryGetPlannerEntityTrackLane(atom.Key.PhysicalLaneKey, out trackLane))
+                return true;
+
+            return atom.SourceTarget != atom.Key.PhysicalLaneKey
+                && TryGetPlannerEntityTrackLane(atom.SourceTarget, out trackLane);
+        }
+
+        private bool TryGetPlannerEntityTrackLane(Entity entity, out TrackLane trackLane)
+        {
+            trackLane = default;
+            if (entity == Entity.Null
+                || !EntityManager.Exists(entity)
+                || !EntityManager.HasComponent<TrackLane>(entity))
+            {
+                return false;
+            }
+
+            trackLane = EntityManager.GetComponentData<TrackLane>(entity);
+            return true;
         }
 
         private void PopulatePlannerStationTrackAtomIndices(
@@ -912,7 +602,7 @@ namespace RapidTransitMod
             for (int i = 0; i < chain.TraversalProfile.RunSlices.Count; i++)
             {
                 TraversalRunSlice slice = chain.TraversalProfile.RunSlices[i];
-                bool hasObservation = m_TraversalRunSliceObservations.TryGetValue(
+                bool hasObservation = m_TraversalSlices.TryObservation(
                     MakeTraversalSliceObservationKey(line, slice.SliceIndex),
                     out TraversalSliceObservation observation)
                     && observation.SampleCount > 0
@@ -1147,8 +837,73 @@ namespace RapidTransitMod
                 traversalSliceObservationCount = traversalObservationCount,
                 traversalSliceSampleCount = traversalSampleCount,
                 stopDwell = stopDwell.ToArray(),
-                traversalSlices = traversalSlices.ToArray()
+                traversalSlices = traversalSlices.ToArray(),
+                traversalSliceActualSamples = BuildPlannerTraversalSliceActualSamples(),
+                traversalPositionSamples = BuildPlannerTraversalPositionSamples()
             };
+        }
+
+        private DispatchPlannerTraversalSliceActualSampleDto[] BuildPlannerTraversalSliceActualSamples()
+        {
+            List<DispatchPlannerTraversalSliceActualSampleDto> samples =
+                new List<DispatchPlannerTraversalSliceActualSampleDto>();
+            foreach (TraversalSliceActualSample sample in m_TraversalSlices.RecentActualSamples)
+            {
+                float durationFrames = sample.ExitFrame > sample.EnterFrame
+                    ? sample.ExitFrame - sample.EnterFrame
+                    : 0f;
+                samples.Add(new DispatchPlannerTraversalSliceActualSampleDto
+                {
+                    lineId = ResolvePlannerSampleLineId(sample.Line),
+                    lineEntityIndex = sample.Line == Entity.Null ? -1 : sample.Line.Index,
+                    vehicleEntityIndex = sample.Vehicle == Entity.Null ? -1 : sample.Vehicle.Index,
+                    sliceIndex = sample.SliceIndex,
+                    enterFrame = sample.EnterFrame,
+                    exitFrame = sample.ExitFrame,
+                    durationMinutes = durationFrames / (float)SIM_FRAMES_PER_MINUTE,
+                    enterAtomIndex = sample.EnterAtomIndex,
+                    enterAtomPosition01 = sample.EnterAtomPosition01,
+                    exitAtomIndex = sample.ExitAtomIndex,
+                    exitAtomPosition01 = sample.ExitAtomPosition01
+                });
+            }
+
+            return samples.ToArray();
+        }
+
+        private DispatchPlannerTraversalPositionSampleDto[] BuildPlannerTraversalPositionSamples()
+        {
+            List<DispatchPlannerTraversalPositionSampleDto> samples =
+                new List<DispatchPlannerTraversalPositionSampleDto>();
+            foreach (TraversalPositionSample sample in m_TraversalSlices.RecentPositionSamples)
+            {
+                samples.Add(new DispatchPlannerTraversalPositionSampleDto
+                {
+                    lineId = ResolvePlannerSampleLineId(sample.Line),
+                    lineEntityIndex = sample.Line == Entity.Null ? -1 : sample.Line.Index,
+                    vehicleEntityIndex = sample.Vehicle == Entity.Null ? -1 : sample.Vehicle.Index,
+                    frame = sample.Frame,
+                    sliceIndex = sample.SliceIndex,
+                    segmentIndex = sample.SegmentIndex,
+                    segmentPosition = sample.SegmentPosition,
+                    atomIndex = sample.AtomIndex,
+                    atomPosition01 = sample.AtomPosition01,
+                    physicalLaneEntityIndex = sample.PhysicalLane == Entity.Null ? -1 : sample.PhysicalLane.Index,
+                    speedMetersPerSecond = sample.SpeedMetersPerSecond,
+                    odometerMeters = sample.OdometerMeters
+                });
+            }
+
+            return samples.ToArray();
+        }
+
+        private string ResolvePlannerSampleLineId(Entity line)
+        {
+            if (line == Entity.Null)
+                return string.Empty;
+
+            string lineId = GetWorkbenchLineId(line);
+            return string.IsNullOrWhiteSpace(lineId) ? "entity:" + line.Index.ToString() : lineId;
         }
 
         private DispatchPlannerBypassStationDto[] BuildPlannerBypassStations(

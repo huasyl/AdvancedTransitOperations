@@ -11,7 +11,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private readonly struct SharedPhysicalCorridorRef
         {
@@ -450,7 +450,7 @@ namespace RapidTransitMod
                     if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                         continue;
 
-                    string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                    string state = m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                         ? vehicleState.ToString()
                         : "Unknown";
                     bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
@@ -686,7 +686,7 @@ namespace RapidTransitMod
             sb.Append("[TrackModelReplayDump]").AppendLine();
             sb.Append("time=").Append(SlotStr((int)(m_SimulationSystem.frameIndex / (uint)SIM_FRAMES_PER_MINUTE) % 1440))
               .Append(" lines=").Append(targetLines.Count)
-              .Append(" managedVehicles=").Append(m_VehicleState.Count)
+              .Append(" managedVehicles=").Append(m_VehicleView.Count)
               .AppendLine();
 
             for (int i = 0; i < targetLines.Count; i++)
@@ -1208,8 +1208,8 @@ namespace RapidTransitMod
                 if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                     continue;
 
-                string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState) ? vehicleState.ToString() : "Unknown";
-                int targetMin = m_VehicleTargetMin.TryGetValue(vehicle, out int tm) ? tm : -1;
+                string state = m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState) ? vehicleState.ToString() : "Unknown";
+                int targetMin = m_VehicleView.TryGetTarget(vehicle, out int tm) ? tm : -1;
                 int cachedWp = m_CachedWpIdx.TryGetValue(vehicle, out int cw) ? cw : -1;
                 bool hasRouteProgress = TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition);
                 bool hasCursor = TryProjectVehicleTrackCursor(vehicle, line, waypoints, out VehicleTrackCursor cursor);
@@ -1795,7 +1795,7 @@ namespace RapidTransitMod
                             Entity vehicle = corridorVehicles[rvIndex].m_Vehicle;
                             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                                 continue;
-                            string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                            string state = m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                                 ? vehicleState.ToString()
                                 : "Unknown";
                             if (!TryProjectTrackModelRuntimePosition(vehicle, corridorLine, corridorWaypoints, referenceInterval, out TrackModelRuntimePosition runtimePosition))
@@ -1835,7 +1835,7 @@ namespace RapidTransitMod
                         if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                             continue;
 
-                        string state = m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                        string state = m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                             ? vehicleState.ToString()
                             : "Unknown";
 

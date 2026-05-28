@@ -77,7 +77,7 @@ namespace RapidTransitMod
             if (GameManager.instance.gameMode != GameMode.Game)
                 return;
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control == null || !control.IsRuntimeReadyForOriginArrivingRepair())
                 return;
 
@@ -182,7 +182,7 @@ namespace RapidTransitMod
         }
 
         private bool TryBuildCandidate(
-            DepartureControlSystem control,
+            DispatchRuntimeSystem control,
             Entity vehicle,
             out Candidate candidate,
             out RejectDiagnostic reject)

@@ -4,7 +4,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private readonly Dictionary<Entity, string> m_YieldSkipLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LineLastSpawnTriggerSummary = new Dictionary<Entity, string>();
@@ -15,6 +15,10 @@ namespace RapidTransitMod
         private void ClearDispatchLogCaches()
         {
             m_BypassDecisionLogCache.Clear();
+            m_BypassDepartureGateLogCache.Clear();
+            m_BypassHoldFrameLogCache.Clear();
+            m_BypassReleaseDiagLogCache.Clear();
+            m_BypassExitClearLogCache.Clear();
             m_PreparingSlotLogCache.Clear();
             m_PreparingTargetDriftLogCache.Clear();
             m_CrossLineCandidateLogCache.Clear();

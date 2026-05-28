@@ -9,7 +9,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private void EnsureStopDwellObservationBuffer()
         {
@@ -41,7 +41,7 @@ namespace RapidTransitMod
             if (city == Entity.Null || !EntityManager.HasBuffer<StopDwellObservationElement>(city))
                 return;
 
-            m_WaypointStopDwellObservations.Clear();
+            m_StopDwell.Waypoints.Clear();
             var buffer = EntityManager.GetBuffer<StopDwellObservationElement>(city, true);
             int restoredCount = 0;
             int restoredByLegacyTopologyCount = 0;
@@ -67,12 +67,13 @@ namespace RapidTransitMod
                 if (!signatureMatched)
                     restoredByLegacyTopologyCount++;
 
-                m_WaypointStopDwellObservations[MakeLineWaypointStopObservationKey(entry.m_LineEntity, entry.m_WaypointIndex)] =
+                m_StopDwell.RecordWaypoint(
+                    MakeLineWaypointStopObservationKey(entry.m_LineEntity, entry.m_WaypointIndex),
                     new StopDwellObservation
                     {
                         AverageFrames = entry.m_AverageFrames,
                         SampleCount = math.max(0, entry.m_SampleCount)
-                    };
+                    });
                 restoredCount++;
             }
 
@@ -168,7 +169,7 @@ namespace RapidTransitMod
             if (city == Entity.Null || !EntityManager.HasBuffer<StationStopDwellObservationElement>(city))
                 return;
 
-            m_StationStopDwellObservations.Clear();
+            m_StopDwell.Stations.Clear();
             var buffer = EntityManager.GetBuffer<StationStopDwellObservationElement>(city, true);
             int restoredCount = 0;
             for (int i = 0; i < buffer.Length; i++)
@@ -183,12 +184,14 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                m_StationStopDwellObservations[observationKey] = new StationStopDwellObservation
-                {
-                    AverageFrames = entry.m_AverageFrames,
-                    SampleCount = math.max(0, entry.m_SampleCount),
-                    LastObservedFrame = entry.m_LastObservedFrame
-                };
+                m_StopDwell.RecordStation(
+                    observationKey,
+                    new StationStopDwellObservation
+                    {
+                        AverageFrames = entry.m_AverageFrames,
+                        SampleCount = math.max(0, entry.m_SampleCount),
+                        LastObservedFrame = entry.m_LastObservedFrame
+                    });
                 restoredCount++;
             }
 
@@ -278,10 +281,9 @@ namespace RapidTransitMod
             if (city == Entity.Null || !EntityManager.HasBuffer<TraversalSliceObservationElement>(city))
                 return;
 
-            m_TraversalRunSliceObservations.Clear();
+            m_TraversalSlices.Observations.Clear();
             var buffer = EntityManager.GetBuffer<TraversalSliceObservationElement>(city, true);
             int restoredCount = 0;
-            int restoredByLegacyTopologyCount = 0;
             int skippedSignatureMismatchCount = 0;
             for (int i = 0; i < buffer.Length; i++)
             {
@@ -298,18 +300,19 @@ namespace RapidTransitMod
                 }
 
                 ulong key = MakeTraversalSliceObservationKey(entry.m_LineEntity, entry.m_SliceIndex);
-                m_TraversalRunSliceObservations[key] = new TraversalSliceObservation(
-                    entry.m_AverageFrames,
-                    entry.m_FastBaselineFrames > 0f ? entry.m_FastBaselineFrames : entry.m_AverageFrames,
-                    math.max(0, entry.m_SampleCount),
-                    entry.m_LastObservedFrame);
+                m_TraversalSlices.Record(
+                    key,
+                    new TraversalSliceObservation(
+                        entry.m_AverageFrames,
+                        entry.m_FastBaselineFrames > 0f ? entry.m_FastBaselineFrames : entry.m_AverageFrames,
+                        math.max(0, entry.m_SampleCount),
+                        entry.m_LastObservedFrame));
                 restoredCount++;
             }
 
             m_TraversalSliceObservationCacheLoaded = true;
             log.Info("[恢复] TraversalSliceObservations buffer=" + buffer.Length
                 + " restored=" + restoredCount
-                + " legacyTopologyFallback=" + restoredByLegacyTopologyCount
                 + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
         }
 
@@ -462,28 +465,6 @@ namespace RapidTransitMod
 
             Entity stopEntity = ResolveWorkbenchStopEntity(waypoints[waypointIndex].m_Waypoint);
             return stopEntity != Entity.Null && EntityManager.Exists(stopEntity);
-        }
-
-        private bool CanRestoreLegacyTraversalSliceObservation(Entity line, int sliceIndex)
-        {
-            if (line == Entity.Null
-                || !EntityManager.Exists(line)
-                || sliceIndex < 0
-                || !EntityManager.HasBuffer<RouteWaypoint>(line))
-            {
-                return false;
-            }
-
-            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            if (!TryGetLineTrackChain(line, waypoints, out LineTrackChain chain)
-                || chain == null
-                || chain.TraversalProfile == null
-                || chain.TraversalProfile.RunSlices == null)
-            {
-                return false;
-            }
-
-            return sliceIndex < chain.TraversalProfile.RunSlices.Count;
         }
 
         private void EnsureDispatchCacheBuffer()
@@ -930,10 +911,10 @@ namespace RapidTransitMod
                 {
                     Entity v0 = rvs[i].m_Vehicle;
                     if (!EntityManager.Exists(v0)) continue;
-                    if (m_VehicleLapFrames.TryGetValue(v0, out uint lf) && lf > bestFrames)
+                    if (m_LapObservations.TryFrames(v0, out uint lf) && lf > bestFrames)
                     {
                         bestFrames = lf;
-                        m_VehicleLapDistance.TryGetValue(v0, out bestDist);
+                        m_LapObservations.TryDistance(v0, out bestDist);
                     }
                 }
             }
@@ -1024,14 +1005,14 @@ namespace RapidTransitMod
             var buf = EntityManager.GetBuffer<VehicleStateCacheElement>(city);
             buf.Clear();
 
-            var keys = m_VehicleState.GetKeyArray(Allocator.Temp);
+            var keys = m_VehicleView.Keys(Allocator.Temp);
             for (int i = 0; i < keys.Length; i++)
             {
                 Entity v = keys[i];
-                VehicleState st = m_VehicleState[v];
+                VehicleState st = m_VehicleView.GetState(v);
                 if (st == VehicleState.Retiring) continue;
 
-                int targetMin = m_VehicleTargetMin.TryGetValue(v, out int tm) ? tm : -1;
+                int targetMin = m_VehicleView.TryGetTarget(v, out int tm) ? tm : -1;
                 buf.Add(new VehicleStateCacheElement
                 {
                     m_VehicleEntity = v,
@@ -1059,8 +1040,7 @@ namespace RapidTransitMod
 
                 if (cachedState == VehicleState.Holding)
                 {
-                    m_VehicleState[v] = VehicleState.Holding;
-                    m_VehicleTargetMin[v] = cachedTarget;
+                    m_RuntimeController.RestoreHold(v, cachedTarget);
 
                     if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(v))
                     {
@@ -1078,9 +1058,7 @@ namespace RapidTransitMod
                     if (!allowRunningRestore)
                         return false;
 
-                    m_VehicleState[v] = VehicleState.Running;
-                    m_VehicleTargetMin[v] = -1;
-                    m_VehicleCurrentSlot.Remove(v);
+                    m_RuntimeController.RestoreRun(v);
 
                     float cachedLapDist = 0f;
                     if (m_LapCacheBufferReady && EntityManager.HasBuffer<LineLapCacheElement>(city))
@@ -1099,24 +1077,21 @@ namespace RapidTransitMod
                     if (EntityManager.HasComponent<Odometer>(v))
                     {
                         float currentOdo = EntityManager.GetComponentData<Odometer>(v).m_Distance;
-                        m_VehicleLapStartOdometer[v] = cachedLapDist > 0f
-                            ? currentOdo - cachedLapDist
-                            : currentOdo;
-                        m_VehicleLapStartFrame[v] = m_SimulationSystem.frameIndex;
+                        m_LapObservations.Start(
+                            v,
+                            cachedLapDist > 0f ? currentOdo - cachedLapDist : currentOdo,
+                            m_SimulationSystem.frameIndex);
                         restoredLapStart = true;
                     }
                     else
                     {
-                        m_VehicleLapStartOdometer.Remove(v);
-                        m_VehicleLapStartFrame.Remove(v);
+                        m_LapObservations.StartOdometer.Remove(v);
+                        m_LapObservations.StartFrame.Remove(v);
                     }
-                    m_VehicleLapFrames[v] = 0;
-                    m_VehicleLastLaunchFrame.Remove(v);
-                    m_LaunchCooldownUntil.Remove(v);
+                    m_LapObservations.SetFrames(v, 0);
                     m_BVMisfire.Remove(v);
                     m_BVMisfireStartFrame.Remove(v);
-                    m_OriginArrivalCandidateSinceFrame.Remove(v);
-                    m_RestoredRunning.Add(v);
+                    m_LapObservations.MarkRestored(v);
                     log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
                         + " Running lapDist=" + cachedLapDist.ToString("F1")
                         + " lapStart=" + (restoredLapStart ? "ok" : "missing-odometer")
@@ -1136,11 +1111,7 @@ namespace RapidTransitMod
             if (cachedLapFrames <= 0f) return false;
             if (!TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition)) return false;
 
-            m_VehicleCurrentSlot.Remove(v);
-            m_VehicleTargetMin[v] = -1;
-            m_VehicleLastLaunchFrame.Remove(v);
-            m_LaunchCooldownUntil.Remove(v);
-            m_OriginArrivalCandidateSinceFrame.Remove(v);
+            m_RuntimeController.RestoreRun(v);
 
             float segmentBase = nextWaypointIndex == 0 ? (wps.Length - 1) : (nextWaypointIndex - 1);
             float progress = (segmentBase + math.saturate(segmentPosition)) / math.max(1, wps.Length);
@@ -1150,17 +1121,17 @@ namespace RapidTransitMod
             uint estimatedStartFrame = nowFrame > (uint)(cachedLapFrames * progress)
                 ? nowFrame - (uint)math.round(cachedLapFrames * progress)
                 : 0u;
-            m_VehicleLapStartFrame[v] = estimatedStartFrame;
-            m_VehicleLapFrames[v] = (uint)cachedLapFrames;
+            m_LapObservations.StartFrame[v] = estimatedStartFrame;
+            m_LapObservations.SetFrames(v, (uint)cachedLapFrames);
 
             if (EntityManager.HasComponent<Odometer>(v))
             {
                 float currentOdo = EntityManager.GetComponentData<Odometer>(v).m_Distance;
                 float cachedLapDistance = ReadLineLapDistance(line);
                 if (cachedLapDistance > 0f)
-                    m_VehicleLapStartOdometer[v] = currentOdo - cachedLapDistance * progress;
+                    m_LapObservations.StartOdometer[v] = currentOdo - cachedLapDistance * progress;
                 else
-                    m_VehicleLapStartOdometer[v] = currentOdo;
+                    m_LapObservations.StartOdometer[v] = currentOdo;
             }
 
             log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index

@@ -8,37 +8,37 @@ namespace RapidTransitMod.Planner
     {
         public List<PursuitTrunk> Build(PlannerContext context)
         {
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> rawCorridors = BuildRawCorridors(context);
-            Dictionary<string, List<DepartureControlSystem.DispatchPlannerSharedCorridorDto>> groupedByPair =
-                new Dictionary<string, List<DepartureControlSystem.DispatchPlannerSharedCorridorDto>>(StringComparer.Ordinal);
+            List<DispatchPlannerSharedCorridorDto> rawCorridors = BuildRawCorridors(context);
+            Dictionary<string, List<DispatchPlannerSharedCorridorDto>> groupedByPair =
+                new Dictionary<string, List<DispatchPlannerSharedCorridorDto>>(StringComparer.Ordinal);
 
-            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in rawCorridors)
+            foreach (DispatchPlannerSharedCorridorDto corridor in rawCorridors)
             {
                 string pairKey = corridor.lineId + "|" + corridor.otherLineId;
-                if (!groupedByPair.TryGetValue(pairKey, out List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> list))
+                if (!groupedByPair.TryGetValue(pairKey, out List<DispatchPlannerSharedCorridorDto> list))
                 {
-                    list = new List<DepartureControlSystem.DispatchPlannerSharedCorridorDto>();
+                    list = new List<DispatchPlannerSharedCorridorDto>();
                     groupedByPair[pairKey] = list;
                 }
                 list.Add(corridor);
             }
 
             List<PursuitTrunk> result = new List<PursuitTrunk>();
-            foreach (KeyValuePair<string, List<DepartureControlSystem.DispatchPlannerSharedCorridorDto>> entry in groupedByPair)
+            foreach (KeyValuePair<string, List<DispatchPlannerSharedCorridorDto>> entry in groupedByPair)
             {
-                List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> sorted = entry.Value
+                List<DispatchPlannerSharedCorridorDto> sorted = entry.Value
                     .OrderBy(corridor => corridor.lineStartAtomIndex)
                     .ThenBy(corridor => corridor.otherStartAtomIndex)
                     .ToList();
-                List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> currentGroup = new List<DepartureControlSystem.DispatchPlannerSharedCorridorDto>();
+                List<DispatchPlannerSharedCorridorDto> currentGroup = new List<DispatchPlannerSharedCorridorDto>();
 
                 for (int index = 0; index < sorted.Count; index++)
                 {
-                    DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor = sorted[index];
+                    DispatchPlannerSharedCorridorDto corridor = sorted[index];
                     bool startsNewGroup = currentGroup.Count == 0;
                     if (!startsNewGroup)
                     {
-                        DepartureControlSystem.DispatchPlannerSharedCorridorDto previous = currentGroup[currentGroup.Count - 1];
+                        DispatchPlannerSharedCorridorDto previous = currentGroup[currentGroup.Count - 1];
                         startsNewGroup =
                             corridor.lineStartAtomIndex > previous.lineEndAtomIndexExclusive + PlannerDefaults.PursuitTrunkMergeGapAtoms
                             || corridor.otherStartAtomIndex > previous.otherEndAtomIndexExclusive + PlannerDefaults.PursuitTrunkMergeGapAtoms;
@@ -62,13 +62,13 @@ namespace RapidTransitMod.Planner
             return result;
         }
 
-        private static List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> BuildRawCorridors(PlannerContext context)
+        private static List<DispatchPlannerSharedCorridorDto> BuildRawCorridors(PlannerContext context)
         {
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> result =
-                new List<DepartureControlSystem.DispatchPlannerSharedCorridorDto>();
+            List<DispatchPlannerSharedCorridorDto> result =
+                new List<DispatchPlannerSharedCorridorDto>();
             HashSet<string> selectedLineSet = new HashSet<string>(context.SelectedLineIds ?? new string[0], StringComparer.Ordinal);
 
-            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DepartureControlSystem.DispatchPlannerSharedCorridorDto[0])
+            foreach (DispatchPlannerSharedCorridorDto corridor in context.Snapshot.currentTrackScenario?.sharedCorridors ?? new DispatchPlannerSharedCorridorDto[0])
             {
                 if (corridor == null
                     || !string.Equals(corridor.traversalRelation, "SameDirection", StringComparison.OrdinalIgnoreCase)
@@ -111,7 +111,7 @@ namespace RapidTransitMod.Planner
                     if (string.Equals(corridor.lineId, baseLineId, StringComparison.Ordinal)
                         && selectedLineSet.Contains(corridor.otherLineId ?? string.Empty))
                     {
-                        DepartureControlSystem.DispatchPlannerSharedCorridorDto mapped = CloneCorridor(corridor);
+                        DispatchPlannerSharedCorridorDto mapped = CloneCorridor(corridor);
                         mapped.lineId = context.VirtualExpressLineId;
                         mapped.id = (corridor.id ?? string.Empty).Replace(baseLineId, context.VirtualExpressLineId);
                         AddMappedVirtualCorridor(context, result, mapped);
@@ -119,7 +119,7 @@ namespace RapidTransitMod.Planner
                     else if (string.Equals(corridor.otherLineId, baseLineId, StringComparison.Ordinal)
                         && selectedLineSet.Contains(corridor.lineId ?? string.Empty))
                     {
-                        DepartureControlSystem.DispatchPlannerSharedCorridorDto mapped = CloneCorridor(corridor);
+                        DispatchPlannerSharedCorridorDto mapped = CloneCorridor(corridor);
                         mapped.otherLineId = context.VirtualExpressLineId;
                         mapped.id = (corridor.id ?? string.Empty).Replace(baseLineId, context.VirtualExpressLineId);
                         AddMappedVirtualCorridor(context, result, mapped);
@@ -130,11 +130,11 @@ namespace RapidTransitMod.Planner
             if (string.Equals(context.ExpressSourceMode, "virtual", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrEmpty(context.VirtualExpressBaseLineId)
                 && selectedLineSet.Contains(context.VirtualExpressBaseLineId)
-                && context.LineTracksByLineId.TryGetValue(context.VirtualExpressBaseLineId, out DepartureControlSystem.DispatchPlannerLineTrackDto lineTrack)
-                && context.StationsByLineId.TryGetValue(context.VirtualExpressBaseLineId, out List<DepartureControlSystem.DispatchPlannerStationDto> stations)
+                && context.LineTracksByLineId.TryGetValue(context.VirtualExpressBaseLineId, out DispatchPlannerLineTrackDto lineTrack)
+                && context.StationsByLineId.TryGetValue(context.VirtualExpressBaseLineId, out List<DispatchPlannerStationDto> stations)
                 && stations.Count > 0)
             {
-                DepartureControlSystem.DispatchPlannerSharedCorridorDto fullCorridor = new DepartureControlSystem.DispatchPlannerSharedCorridorDto();
+                DispatchPlannerSharedCorridorDto fullCorridor = new DispatchPlannerSharedCorridorDto();
                 fullCorridor.id = context.VirtualExpressBaseLineId + "|" + context.VirtualExpressLineId + "|full";
                 fullCorridor.lineId = context.VirtualExpressBaseLineId;
                 fullCorridor.otherLineId = context.VirtualExpressLineId;
@@ -157,8 +157,8 @@ namespace RapidTransitMod.Planner
 
         private static void AddMappedVirtualCorridor(
             PlannerContext context,
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> result,
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor)
+            List<DispatchPlannerSharedCorridorDto> result,
+            DispatchPlannerSharedCorridorDto corridor)
         {
             string pairRole = ResolvePairRole(context, corridor.lineId, corridor.otherLineId);
             if (string.Equals(pairRole, "fixed-fixed", StringComparison.Ordinal))
@@ -174,7 +174,7 @@ namespace RapidTransitMod.Planner
         }
 
         private static bool IsTargetExpressToAdjustableCorridor(
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor,
+            DispatchPlannerSharedCorridorDto corridor,
             HashSet<string> selectedExpressLineSet,
             HashSet<string> adjustableLineSet)
         {
@@ -220,9 +220,9 @@ namespace RapidTransitMod.Planner
             return "other";
         }
 
-        private static DepartureControlSystem.DispatchPlannerSharedCorridorDto OrientCorridorForRoles(
+        private static DispatchPlannerSharedCorridorDto OrientCorridorForRoles(
             PlannerContext context,
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor)
+            DispatchPlannerSharedCorridorDto corridor)
         {
             string primaryLineId = corridor.lineId ?? string.Empty;
             string secondaryLineId = corridor.otherLineId ?? string.Empty;
@@ -235,10 +235,10 @@ namespace RapidTransitMod.Planner
             }
             else
             {
-                string primaryKind = context.LinesById.TryGetValue(primaryLineId, out DepartureControlSystem.DispatchPlannerLineDto primaryLine)
+                string primaryKind = context.LinesById.TryGetValue(primaryLineId, out DispatchPlannerLineDto primaryLine)
                     ? primaryLine.kind ?? "local"
                     : string.Equals(primaryLineId, context.VirtualExpressLineId, StringComparison.Ordinal) ? "express" : "local";
-                string secondaryKind = context.LinesById.TryGetValue(secondaryLineId, out DepartureControlSystem.DispatchPlannerLineDto secondaryLine)
+                string secondaryKind = context.LinesById.TryGetValue(secondaryLineId, out DispatchPlannerLineDto secondaryLine)
                     ? secondaryLine.kind ?? "local"
                     : string.Equals(secondaryLineId, context.VirtualExpressLineId, StringComparison.Ordinal) ? "express" : "local";
                 usePrimaryAsYielding = string.Equals(primaryKind, secondaryKind, StringComparison.OrdinalIgnoreCase)
@@ -249,9 +249,9 @@ namespace RapidTransitMod.Planner
             return usePrimaryAsYielding ? CloneCorridor(corridor) : SwapCorridorSides(corridor);
         }
 
-        private static DepartureControlSystem.DispatchPlannerSharedCorridorDto SwapCorridorSides(DepartureControlSystem.DispatchPlannerSharedCorridorDto source)
+        private static DispatchPlannerSharedCorridorDto SwapCorridorSides(DispatchPlannerSharedCorridorDto source)
         {
-            return new DepartureControlSystem.DispatchPlannerSharedCorridorDto
+            return new DispatchPlannerSharedCorridorDto
             {
                 id = source.id,
                 lineId = source.otherLineId,
@@ -273,9 +273,9 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private static DepartureControlSystem.DispatchPlannerSharedCorridorDto CloneCorridor(DepartureControlSystem.DispatchPlannerSharedCorridorDto source)
+        private static DispatchPlannerSharedCorridorDto CloneCorridor(DispatchPlannerSharedCorridorDto source)
         {
-            return new DepartureControlSystem.DispatchPlannerSharedCorridorDto
+            return new DispatchPlannerSharedCorridorDto
             {
                 id = source.id,
                 lineId = source.lineId,
@@ -298,15 +298,15 @@ namespace RapidTransitMod.Planner
         }
 
         private static PursuitTrunk BuildGroupTrunk(
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> group,
+            List<DispatchPlannerSharedCorridorDto> group,
             int groupIndex,
             PlannerContext context)
         {
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto first = group[0];
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto localStart = group.OrderBy(corridor => corridor.lineStartAtomIndex).First();
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto localEnd = group.OrderByDescending(corridor => corridor.lineEndAtomIndexExclusive).First();
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto expressStart = group.OrderBy(corridor => corridor.otherStartAtomIndex).First();
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto expressEnd = group.OrderByDescending(corridor => corridor.otherEndAtomIndexExclusive).First();
+            DispatchPlannerSharedCorridorDto first = group[0];
+            DispatchPlannerSharedCorridorDto localStart = group.OrderBy(corridor => corridor.lineStartAtomIndex).First();
+            DispatchPlannerSharedCorridorDto localEnd = group.OrderByDescending(corridor => corridor.lineEndAtomIndexExclusive).First();
+            DispatchPlannerSharedCorridorDto expressStart = group.OrderBy(corridor => corridor.otherStartAtomIndex).First();
+            DispatchPlannerSharedCorridorDto expressEnd = group.OrderByDescending(corridor => corridor.otherEndAtomIndexExclusive).First();
 
             PursuitTrunk trunk = new PursuitTrunk();
             trunk.TrunkId = first.lineId + "|" + first.otherLineId + "|trunk-group-" + groupIndex;

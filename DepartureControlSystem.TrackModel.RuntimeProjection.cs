@@ -10,7 +10,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private static bool TryFindClosestAtomIndexForLane(
             LineTrackChain chain,
@@ -232,13 +232,13 @@ namespace RapidTransitMod
             float frontCurvePosition = math.saturate(currentLane.m_Front.m_CurvePosition.x);
             float rearCurvePosition = math.saturate(currentLane.m_Rear.m_CurvePosition.x);
 
-            int referenceAtomIndex = m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+            int referenceAtomIndex = m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature
                 ? hint.AtomCursorIndex
                 : -1;
 
-            int preferredSegmentIndex = m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor segmentHint)
+            int preferredSegmentIndex = m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor segmentHint)
                 && segmentHint.LineEntity == line
                 && segmentHint.ChainSignature == chain.Signature
                 ? segmentHint.SegmentIndex
@@ -357,7 +357,7 @@ namespace RapidTransitMod
                 AddSegmentCandidate(waypointIndex == 0 ? segmentCount - 1 : waypointIndex - 1);
             }
 
-            if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+            if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature)
             {
@@ -456,7 +456,7 @@ namespace RapidTransitMod
                     chain,
                     out cursor))
             {
-                if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor trainHint)
+                if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor trainHint)
                     && trainHint.LineEntity == line
                     && trainHint.ChainSignature == chain.Signature)
                 {
@@ -479,7 +479,6 @@ namespace RapidTransitMod
                 if (IsVehicleProgressProjectionInvalid(vehicle, line, chain, cursor.SegmentIndex, cursor.AtomCursorIndex))
                     return false;
 
-                m_VehicleTrackCursorHints[vehicle] = cursor;
                 return true;
             }
 
@@ -554,7 +553,7 @@ namespace RapidTransitMod
                 + math.min(segmentAtomLength - 1, (int)math.floor(segmentAtomLength * math.saturate(segmentPosition)));
 
             float confidence = trustedRouteProgress ? 1f : 0.7f;
-            if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+            if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature)
             {
@@ -587,7 +586,6 @@ namespace RapidTransitMod
                 approximateAtomIndex,
                 math.saturate(segmentPosition),
                 confidence);
-            m_VehicleTrackCursorHints[vehicle] = cursor;
             return true;
         }
 
@@ -603,31 +601,18 @@ namespace RapidTransitMod
                 return false;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
-            if (m_VehicleTrackCursorFrameSnapshots.TryGetValue(vehicle, out VehicleTrackCursorFrameSnapshot snapshot)
-                && snapshot.Frame == nowFrame
-                && snapshot.LineEntity == line
-                && snapshot.ChainSignature == chain.Signature)
-            {
-                cursor = snapshot.Cursor;
-                return snapshot.Available;
-            }
+            return m_TrackProjector.TryPosition(
+                vehicle,
+                line,
+                chain.Signature,
+                nowFrame,
+                Project,
+                out cursor);
 
-            bool available = TryProjectVehicleTrackCursor(vehicle, line, waypoints, chain, out cursor);
-            if (available)
+            bool Project(out VehicleTrackCursor projected)
             {
-                m_VehicleTrackCursorFrameSnapshots[vehicle] = new VehicleTrackCursorFrameSnapshot(
-                    line,
-                    chain.Signature,
-                    nowFrame,
-                    true,
-                    cursor);
+                return TryProjectVehicleTrackCursor(vehicle, line, waypoints, chain, out projected);
             }
-            else
-            {
-                m_VehicleTrackCursorFrameSnapshots.Remove(vehicle);
-            }
-
-            return available;
         }
 
         private bool TryBuildLineRunningVehicleOwnLineRuntimeSnapshot(
@@ -697,7 +682,7 @@ namespace RapidTransitMod
                 return true;
             }
 
-            if (m_VehicleTrackCursorHints.TryGetValue(vehicle, out VehicleTrackCursor hint)
+            if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature)
             {
@@ -736,7 +721,7 @@ namespace RapidTransitMod
             m_SuspectProgressSinceFrame[vehicle] = nowFrame;
             m_SuspectProgressReason[vehicle] = reason ?? "unknown";
             m_SuspectProgressProjectionInvalid.Remove(vehicle);
-            m_VehicleTrackCursorFrameSnapshots.Remove(vehicle);
+            m_TrackProjector.Remove(vehicle, keepCursor: true);
             m_SuspectProgressRecoveryWaypoint.Remove(vehicle);
             m_SuspectProgressValidationCount.Remove(vehicle);
             m_SuspectProgressFirstSample.Remove(vehicle);
@@ -757,7 +742,7 @@ namespace RapidTransitMod
             bool hadState = m_SuspectProgressSinceFrame.Remove(vehicle);
             m_SuspectProgressLastValidationFrame.Remove(vehicle);
             m_SuspectProgressProjectionInvalid.Remove(vehicle);
-            m_VehicleTrackCursorFrameSnapshots.Remove(vehicle);
+            m_TrackProjector.Remove(vehicle, keepCursor: true);
             m_SuspectProgressReason.Remove(vehicle);
             m_SuspectProgressLogCache.Remove(vehicle);
             m_SuspectProgressRecoveryWaypoint.Remove(vehicle);

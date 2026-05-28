@@ -19,7 +19,7 @@ using UnityEngine.Networking;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private sealed class BroadcastResolvedStation
         {
@@ -1160,7 +1160,9 @@ namespace RapidTransitMod
 
         private bool ShouldBroadcastForTrackedVehicle(Entity vehicle)
         {
-            if (vehicle == Entity.Null || m_CameraUpdateSystem == null)
+            if (!IsBroadcastFeatureEnabled()
+                || vehicle == Entity.Null
+                || m_CameraUpdateSystem == null)
             {
                 return false;
             }
@@ -1253,7 +1255,8 @@ namespace RapidTransitMod
 
         private void EnsureBroadcastRuntimeLineState(string lineId, Entity line)
         {
-            if (string.IsNullOrWhiteSpace(lineId)
+            if (!IsBroadcastFeatureEnabled()
+                || string.IsNullOrWhiteSpace(lineId)
                 || line == Entity.Null
                 || m_BroadcastRuntimeCheckedLineIds.Contains(lineId))
             {
@@ -1708,6 +1711,9 @@ namespace RapidTransitMod
 
         private bool LineHasEnabledBroadcastPlatformAnnouncements(Entity line)
         {
+            if (!IsBroadcastFeatureEnabled())
+                return false;
+
             string lineId = GetDraftKey(GetWorkbenchLineId(line));
             EnsureBroadcastRuntimeLineState(lineId, line);
             if (string.IsNullOrWhiteSpace(lineId)
@@ -2160,6 +2166,19 @@ namespace RapidTransitMod
 
         private void TickBroadcastRuntime(uint nowFrame)
         {
+            if (!IsBroadcastFeatureEnabled())
+            {
+                if (m_BroadcastSequenceStateByVehicle.Count > 0
+                    || m_BroadcastPlatformSequenceStateByKey.Count > 0
+                    || m_BroadcastPlatformAnnouncementCooldownUntilFrame.Count > 0
+                    || m_BroadcastPlatformStationBusyUntilFrame.Count > 0
+                    || m_BroadcastPlatformStationQuietSinceFrame.Count > 0)
+                {
+                    ClearAllBroadcastRuntimeState();
+                }
+                return;
+            }
+
             TickBroadcastPlatformAnnouncements(nowFrame);
 
             if (m_BroadcastSequenceStateByVehicle.Count == 0
@@ -2986,6 +3005,10 @@ namespace RapidTransitMod
         {
             context = default;
             stationContext = default;
+            if (!IsBroadcastFeatureEnabled())
+            {
+                return false;
+            }
             if (!TryResolveBroadcastVehicleStationContext(
                     vehicle,
                     line,

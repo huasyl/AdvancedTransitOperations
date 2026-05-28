@@ -12,7 +12,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private bool TryGetExpressFirstSharedAtomAfterCurrentBypassStation(
             LineTrackChain localChain,
@@ -4139,7 +4139,26 @@ namespace RapidTransitMod
             if (!includeLocal)
                 return false;
 
-            return localCoordinate > stationExitCoordinate + LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS;
+            bool canClear = localCoordinate > stationExitCoordinate + LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS;
+            if (canClear && m_BypassDecision.TryGetLatchedBlocker(localVehicle, out Entity blocker))
+            {
+                string lineTag = localLine != Entity.Null ? " line=" + localLine.Index : " line=-";
+                LogVehicleStateOnce(
+                    m_BypassExitClearLogCache,
+                    localVehicle,
+                    "exit-clear|" + localLine.Index + "|" + currentWaypointIndex + "|" + currentBypassBuilding.Index,
+                    "[待避出口清除]" + lineTag
+                        + " vehicle=" + localVehicle.Index
+                        + " blocker=" + blocker.Index
+                        + " wp=" + currentWaypointIndex
+                        + " station=" + currentBypassBuilding.Index
+                        + " coord=" + localCoordinate.ToString("0.0")
+                        + " exit=" + stationExitCoordinate.ToString("0.0")
+                        + " threshold=" + (stationExitCoordinate + LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS).ToString("0.0")
+                        + " confidence=" + localPosition.Confidence.ToString("0.00"));
+            }
+
+            return canClear;
         }
 
         private bool IsVehicleWithinCurrentBypassStation(

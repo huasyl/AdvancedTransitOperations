@@ -30,7 +30,7 @@ namespace RapidTransitMod
         private Entity m_LastRoute;
         private ulong m_LastSnapshotVersion;
         private int m_LastPushFrame = -1;
-        private DepartureControlSystem.SelectedPanelSnapshot m_LastSnapshot;
+        private DispatchRuntimeSystem.SelectedPanelSnapshot m_LastSnapshot;
 
         public override GameMode gameMode => GameMode.Game;
 
@@ -82,7 +82,7 @@ namespace RapidTransitMod
                 return;
             }
 
-            DepartureControlSystem control = DepartureControlSystem.Instance;
+            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
             if (control == null)
             {
                 ResetState(clearSnapshot: true);
@@ -130,7 +130,7 @@ namespace RapidTransitMod
             SetVisibleIfNeeded();
         }
 
-        private bool TryPushSnapshot(DepartureControlSystem control, Entity entity, Entity selectedRoute, bool isVehicle, string dirtyReason, int currentFrame)
+        private bool TryPushSnapshot(DispatchRuntimeSystem control, Entity entity, Entity selectedRoute, bool isVehicle, string dirtyReason, int currentFrame)
         {
             bool built = isVehicle
                 ? control.TryBuildSelectedVehicleSnapshot(entity, out m_LastSnapshot)
@@ -167,7 +167,7 @@ namespace RapidTransitMod
             return m_PendingSelectionFrame >= 0 && (currentFrame - m_PendingSelectionFrame) >= SelectionSettleFrames;
         }
 
-        private static string SerializeSnapshot(DepartureControlSystem.SelectedPanelSnapshot snapshot)
+        private static string SerializeSnapshot(DispatchRuntimeSystem.SelectedPanelSnapshot snapshot)
         {
             StringBuilder sb = new StringBuilder(512);
             sb.Append('{');
@@ -345,26 +345,26 @@ namespace RapidTransitMod
 
         private void RequestVehicleRetire()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
             if (selectedEntity != Entity.Null)
             {
-                DepartureControlSystem.Instance.RequestVehicleRetire(selectedEntity);
+                DispatchRuntimeSystem.Instance.RequestVehicleRetire(selectedEntity);
                 m_LastVehicle = Entity.Null;
             }
         }
 
         private void RequestVehicleForceDepart()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
             if (selectedEntity != Entity.Null)
             {
-                DepartureControlSystem.Instance.RequestVehicleForceDepart(selectedEntity);
+                DispatchRuntimeSystem.Instance.RequestVehicleForceDepart(selectedEntity);
                 m_LastVehicle = Entity.Null;
                 m_LastSnapshotVersion = 0;
             }
@@ -372,66 +372,66 @@ namespace RapidTransitMod
 
         private void RequestVehicleReevaluate()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
             if (selectedEntity != Entity.Null)
             {
-                DepartureControlSystem.Instance.RequestVehicleReevaluate(selectedEntity);
+                DispatchRuntimeSystem.Instance.RequestVehicleReevaluate(selectedEntity);
                 m_LastVehicle = Entity.Null;
             }
         }
 
         private void RequestDumpTrackModel()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
-            DepartureControlSystem.Instance.RequestDumpTrackModelSnapshot();
+            DispatchRuntimeSystem.Instance.RequestDumpTrackModelSnapshot();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
 
         private void RequestDumpPlannerInput()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
-            DepartureControlSystem.Instance.RequestDumpPlannerInputSnapshot();
+            DispatchRuntimeSystem.Instance.RequestDumpPlannerInputSnapshot();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
 
         private void RequestDumpRuntimeObservation()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
-            DepartureControlSystem.Instance.RequestDumpRuntimeObservationSnapshot();
+            DispatchRuntimeSystem.Instance.RequestDumpRuntimeObservationSnapshot();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
 
         private void RequestDumpStationAnchorObservation()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
-            DepartureControlSystem.Instance.RequestDumpStationAnchorObservationDiagnostics();
+            DispatchRuntimeSystem.Instance.RequestDumpStationAnchorObservationDiagnostics();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
 
         private void RequestLineSpawn()
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
             Entity selectedEntity = m_SelectedInfoUISystem.selectedRoute != Entity.Null
                 ? m_SelectedInfoUISystem.selectedRoute
                 : m_SelectedInfoUISystem.selectedEntity;
-            if (selectedEntity != Entity.Null && DepartureControlSystem.Instance.RequestSpawnForLine(selectedEntity))
+            if (selectedEntity != Entity.Null && DispatchRuntimeSystem.Instance.RequestSpawnForLine(selectedEntity))
             {
                 m_LastVehicle = Entity.Null;
                 m_LastRoute = Entity.Null;
@@ -441,11 +441,11 @@ namespace RapidTransitMod
 
         private void SetBypassStation(bool enabled)
         {
-            if (DepartureControlSystem.Instance == null)
+            if (DispatchRuntimeSystem.Instance == null)
                 return;
 
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
-            if (selectedEntity != Entity.Null && DepartureControlSystem.Instance.RequestSetBypassStation(selectedEntity, enabled))
+            if (selectedEntity != Entity.Null && DispatchRuntimeSystem.Instance.RequestSetBypassStation(selectedEntity, enabled))
             {
                 m_LastVehicle = Entity.Null;
                 m_LastSnapshotVersion = 0;

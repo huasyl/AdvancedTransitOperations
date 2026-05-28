@@ -18,9 +18,9 @@ namespace RapidTransitMod.Planner
         private readonly SharedCorridorCapacityDiagnosticService m_CapacityDiagnosticService = new SharedCorridorCapacityDiagnosticService();
         private readonly PlannerResultProjector m_Projector = new PlannerResultProjector();
 
-        public DepartureControlSystem.DispatchPlannerResult Execute(
-            DepartureControlSystem.DispatchPlannerExportSnapshot snapshot,
-            DepartureControlSystem.DispatchPlannerRequest request)
+        public DispatchPlannerResult Execute(
+            DispatchPlannerExportSnapshot snapshot,
+            DispatchPlannerRequest request)
         {
             PlannerContext context = m_Normalizer.Normalize(snapshot, request);
             PlannerExecutionState state = new PlannerExecutionState();
@@ -380,7 +380,7 @@ namespace RapidTransitMod.Planner
 
         private static bool HasBlockingOriginDepartureGap(PlannerPlanModel plan)
         {
-            return (plan?.ProblemIssues ?? new List<DepartureControlSystem.DispatchPlannerProblemIssueDto>()).Any(item =>
+            return (plan?.ProblemIssues ?? new List<DispatchPlannerProblemIssueDto>()).Any(item =>
                 string.Equals(item?.type, "originDepartureGap", System.StringComparison.Ordinal)
                 && string.Equals(item?.severity, "high", System.StringComparison.Ordinal));
         }

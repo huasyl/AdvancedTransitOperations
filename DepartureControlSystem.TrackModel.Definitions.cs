@@ -8,7 +8,7 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private const int MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS = 3;
         private const int MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN = 2;
@@ -23,21 +23,21 @@ namespace RapidTransitMod
         private const int SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD = 12;
         private const float SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS = 120f;
 
-        private enum TrackTraversalDir : byte
+        internal enum TrackTraversalDir : byte
         {
             Unknown = 0,
             Forward = 1,
             Reverse = 2,
         }
 
-        private enum SharedTraversalRelation : byte
+        internal enum SharedTraversalRelation : byte
         {
             Unknown = 0,
             SameDirection = 1,
             OppositeDirection = 2,
         }
 
-        private enum RelativeToTrunkState : byte
+        internal enum RelativeToTrunkState : byte
         {
             Unknown = 0,
             OffTrunk = 1,
@@ -49,7 +49,7 @@ namespace RapidTransitMod
             FutureReturnOnly = 7,
         }
 
-        private enum TrackAtomClass : byte
+        internal enum TrackAtomClass : byte
         {
             Unknown = 0,
             PrimaryLane = 1,
@@ -57,7 +57,7 @@ namespace RapidTransitMod
             FilteredNoise = 3,
         }
 
-        private enum ControlPointKind : byte
+        internal enum ControlPointKind : byte
         {
             Unknown = 0,
             Stop = 1,
@@ -68,7 +68,7 @@ namespace RapidTransitMod
             SharedExit = 6,
         }
 
-        private readonly struct TrackAtomKey : IEquatable<TrackAtomKey>
+        internal readonly struct TrackAtomKey : IEquatable<TrackAtomKey>
         {
             public readonly Entity PhysicalLaneKey;
             public readonly Entity PreviousTarget;
@@ -112,7 +112,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct TrackAtom
+        internal readonly struct TrackAtom
         {
             public readonly TrackAtomKey Key;
             public readonly Entity SourceTarget;
@@ -138,7 +138,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct TrackSegmentRange
+        internal readonly struct TrackSegmentRange
         {
             public readonly int StartAtomIndex;
             public readonly int EndAtomIndexExclusive;
@@ -150,7 +150,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct ControlPointMarker
+        internal readonly struct ControlPointMarker
         {
             public readonly int AtomIndex;
             public readonly int WaypointIndex;
@@ -166,7 +166,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct ControlEdge
+        internal readonly struct ControlEdge
         {
             public readonly int StartControlPointIndex;
             public readonly int EndControlPointIndex;
@@ -189,7 +189,7 @@ namespace RapidTransitMod
             }
         }
 
-        private enum TraversalEventKind : byte
+        internal enum TraversalEventKind : byte
         {
             Unknown = 0,
             Stop = 1,
@@ -198,7 +198,7 @@ namespace RapidTransitMod
             DepartureSplitBoundary = 4,
         }
 
-        private readonly struct TraversalEvent
+        internal readonly struct TraversalEvent
         {
             public readonly int EventIndex;
             public readonly TraversalEventKind Kind;
@@ -230,7 +230,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct TraversalRunSlice
+        internal readonly struct TraversalRunSlice
         {
             public readonly int SliceIndex;
             public readonly int StartAtomIndex;
@@ -259,7 +259,7 @@ namespace RapidTransitMod
             }
         }
 
-        private sealed class LineTraversalProfile
+        internal sealed class LineTraversalProfile
         {
             public readonly List<TraversalEvent> Events = new List<TraversalEvent>();
             public readonly List<TraversalRunSlice> RunSlices = new List<TraversalRunSlice>();
@@ -267,13 +267,13 @@ namespace RapidTransitMod
             public float[][] SegmentSliceCutPointProgresses = Array.Empty<float[]>();
         }
 
-        private enum BypassExecutionMode : byte
+        internal enum BypassExecutionMode : byte
         {
             SimpleSceneScan = 0,
             ComplexLineModel = 1,
         }
 
-        private readonly struct TurnbackBoundary
+        internal readonly struct TurnbackBoundary
         {
             public readonly int AtomIndex;
             public readonly int BeforeSliceIndex;
@@ -336,7 +336,7 @@ namespace RapidTransitMod
             }
         }
 
-        private sealed class LineTrackChain
+        internal sealed class LineTrackChain
         {
             public Entity LineEntity;
             public ulong Signature;
@@ -371,7 +371,7 @@ namespace RapidTransitMod
             public int TurnbackBuildSegmentPairIndex = -1;
         }
 
-        private readonly struct LocalBypassWaypointSceneBinding
+        internal readonly struct LocalBypassWaypointSceneBinding
         {
             public readonly bool Available;
             public readonly SceneKey SceneKey;
@@ -420,7 +420,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct SharedTrackRun
+        internal readonly struct SharedTrackRun
         {
             public readonly int StartAtomIndex;
             public readonly int EndAtomIndexExclusive;
@@ -436,7 +436,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct ControlEdgeSharedSpan
+        internal readonly struct ControlEdgeSharedSpan
         {
             public readonly int ControlEdgeIndex;
             public readonly int StartAtomIndex;
@@ -454,7 +454,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct BypassProtectedInterval
+        internal readonly struct BypassProtectedInterval
         {
             public readonly int StartControlPointIndex;
             public readonly int EndControlPointIndex;
@@ -476,7 +476,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct ProtectedSharedInterval
+        internal readonly struct ProtectedSharedInterval
         {
             public readonly int ProtectedIntervalIndex;
             public readonly int ControlEdgeIndex;
@@ -500,7 +500,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct ProtectedIntervalSummary
+        internal readonly struct ProtectedIntervalSummary
         {
             public readonly int ProtectedIntervalIndex;
             public readonly int SharedSegmentCount;
@@ -923,7 +923,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct TrunkPhaseAlignment : IEquatable<TrunkPhaseAlignment>
+        internal readonly struct TrunkPhaseAlignment : IEquatable<TrunkPhaseAlignment>
         {
             public readonly bool Available;
             public readonly int LocalTraversalPhaseIndex;
@@ -983,7 +983,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct GlobalSharedTrunkSegment : IEquatable<GlobalSharedTrunkSegment>
+        internal readonly struct GlobalSharedTrunkSegment : IEquatable<GlobalSharedTrunkSegment>
         {
             public readonly int LocalCorridorStartAtomIndex;
             public readonly int LocalCorridorEndAtomIndexExclusive;
@@ -1139,7 +1139,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct SharedTrackOccurrence
+        internal readonly struct SharedTrackOccurrence
         {
             public readonly Entity LineEntity;
             public readonly int AtomIndex;
@@ -1153,7 +1153,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct VehicleTrackCursor
+        internal readonly struct VehicleTrackCursor
         {
             public readonly Entity LineEntity;
             public readonly ulong ChainSignature;
@@ -1185,7 +1185,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct VehicleTrackCursorFrameSnapshot
+        internal readonly struct VehicleTrackCursorFrameSnapshot
         {
             public readonly Entity LineEntity;
             public readonly ulong ChainSignature;
@@ -1224,7 +1224,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct SharedPhysicalOccurrence
+        internal readonly struct SharedPhysicalOccurrence
         {
             public readonly Entity LineEntity;
             public readonly int AtomIndex;

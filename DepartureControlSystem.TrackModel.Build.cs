@@ -11,34 +11,30 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
-    public partial class DepartureControlSystem
+    public partial class DispatchRuntimeSystem
     {
         private void InvalidateTrackModel(Entity line)
         {
             if (line == Entity.Null)
                 return;
 
-            m_DirtyTrackLines.Add(line);
+            if (!m_TrackModelCoordinator.Invalidate(line, out LineTrackChain existingChain))
+                existingChain = null;
+
             m_LineTrackChainFrameSnapshots.Remove(line);
             m_LineWaypointIndexLookups.Remove(line);
-            if (m_LineTrackChains.TryGetValue(line, out LineTrackChain existingChain) && existingChain != null)
+            if (existingChain != null)
                 RemoveDevSightLaneIndexForChain(existingChain);
-            m_LineTrackChains.Remove(line);
             ClearBypassRuntimeStateForLine(line);
-            m_SharedTrackIndexDirty = true;
         }
 
         private void InvalidateAllTrackModels()
         {
-            m_DirtyTrackLines.Clear();
-            m_LineTrackChains.Clear();
+            m_TrackModelCoordinator.InvalidateAll();
             m_LineTrackChainFrameSnapshots.Clear();
             m_LineWaypointIndexLookups.Clear();
             m_DevSightLaneIndex.Clear();
-            m_SharedTrackIndex.Clear();
-            m_SharedPhysicalTrackIndex.Clear();
-            m_VehicleTrackCursorHints.Clear();
-            m_VehicleTrackCursorFrameSnapshots.Clear();
+            m_TrackProjector.Clear();
             m_SuspectProgressSinceFrame.Clear();
             m_SuspectProgressLastValidationFrame.Clear();
             m_SuspectProgressProjectionInvalid.Clear();
@@ -48,7 +44,6 @@ namespace RapidTransitMod
             m_SuspectProgressValidationCount.Clear();
             m_SuspectProgressFirstSample.Clear();
             ClearBypassTrackModelRuntimeState();
-            m_SharedTrackIndexDirty = true;
         }
 
         private void ClearBypassTrackModelRuntimeState()
@@ -272,6 +267,11 @@ namespace RapidTransitMod
 
         private bool TryGetLineTrackChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain)
         {
+            return m_TrackModelCoordinator.Ensure(line, waypoints, out chain, TryGetChain);
+        }
+
+        private bool TryGetChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain)
+        {
             chain = null;
             if (line == Entity.Null
                 || waypoints.Length == 0
@@ -302,7 +302,7 @@ namespace RapidTransitMod
 
             ulong signature = ComputeLineTrackChainSignature(line, waypoints, segments);
             LineTrackChain previousChain = null;
-            if (m_LineTrackChains.TryGetValue(line, out chain)
+            if (m_TrackModels.Get(line, out chain)
                 && chain != null
                 && chain.Signature == signature)
             {
@@ -330,14 +330,13 @@ namespace RapidTransitMod
 
             if (previousChain != null)
                 RemoveDevSightLaneIndexForChain(previousChain);
-            m_LineTrackChains[line] = chain;
+            m_TrackModels.Put(line, chain);
             m_LineTrackChainFrameSnapshots[line] = new LineTrackChainFrameSnapshot(
                 nowFrame,
                 waypoints.Length,
                 true,
                 chain);
             AddDevSightLaneIndexForChain(chain);
-            m_DirtyTrackLines.Remove(line);
             m_SharedTrackIndexDirty = true;
             return true;
         }
@@ -2150,6 +2149,11 @@ namespace RapidTransitMod
 
         private void RebuildSharedTrackIndex()
         {
+            RebuildShared();
+        }
+
+        private void RebuildShared()
+        {
             m_SharedTrackIndex.Clear();
             m_SharedPhysicalTrackIndex.Clear();
 
@@ -2199,15 +2203,12 @@ namespace RapidTransitMod
             }
 
             m_SharedTrackIndexDirty = false;
-            m_SharedTrackIndexVersion++;
+            m_TrackModelBuilder.Bump();
         }
 
         private void EnsureSharedTrackIndexCurrent()
         {
-            if (!m_SharedTrackIndexDirty)
-                return;
-
-            RebuildSharedTrackIndex();
+            m_TrackModelCoordinator.RefreshShared(RebuildShared);
         }
 
         private static int ResolveWaypointSegmentIndex(LineTrackChain chain, int atomIndex)

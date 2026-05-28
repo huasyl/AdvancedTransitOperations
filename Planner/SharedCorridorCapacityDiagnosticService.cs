@@ -19,17 +19,17 @@ namespace RapidTransitMod.Planner
                 return empty;
             }
 
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> exportedCorridors =
+            List<DispatchPlannerSharedCorridorDto> exportedCorridors =
                 (context.Snapshot.currentTrackScenario?.sharedCorridors
-                    ?? Array.Empty<DepartureControlSystem.DispatchPlannerSharedCorridorDto>())
+                    ?? Array.Empty<DispatchPlannerSharedCorridorDto>())
                 .Where(corridor => corridor != null)
                 .ToList();
             SharedCorridorCapacityRequestScope request = BuildRequestScope(context);
             List<CapacityTripRecord> trips = BuildTripRecords(runtimeCatalog, rows);
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> validCorridors = exportedCorridors
+            List<DispatchPlannerSharedCorridorDto> validCorridors = exportedCorridors
                 .Where(IsValidCorridor)
                 .ToList();
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> relevantCorridors = validCorridors
+            List<DispatchPlannerSharedCorridorDto> relevantCorridors = validCorridors
                 .Where(corridor => IsRelevantCorridor(corridor, request))
                 .GroupBy(BuildCanonicalCorridorResourceKey, StringComparer.Ordinal)
                 .Select(group => group.First())
@@ -130,7 +130,7 @@ namespace RapidTransitMod.Planner
             return trips;
         }
 
-        private static bool IsValidCorridor(DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor)
+        private static bool IsValidCorridor(DispatchPlannerSharedCorridorDto corridor)
         {
             return corridor != null
                 && string.Equals(corridor.traversalRelation, "sameDirection", StringComparison.OrdinalIgnoreCase)
@@ -140,7 +140,7 @@ namespace RapidTransitMod.Planner
         }
 
         private static bool IsRelevantCorridor(
-            DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor,
+            DispatchPlannerSharedCorridorDto corridor,
             SharedCorridorCapacityRequestScope request)
         {
             return request.TargetLineIds.Count == 0
@@ -148,7 +148,7 @@ namespace RapidTransitMod.Planner
                 || request.TargetLineIds.Contains(corridor.otherLineId ?? string.Empty);
         }
 
-        private static string BuildCanonicalCorridorResourceKey(DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor)
+        private static string BuildCanonicalCorridorResourceKey(DispatchPlannerSharedCorridorDto corridor)
         {
             string left = (corridor.lineId ?? string.Empty) + ":" + corridor.lineStartAtomIndex.ToString(CultureInfo.InvariantCulture) + "-" + corridor.lineEndAtomIndexExclusive.ToString(CultureInfo.InvariantCulture);
             string right = (corridor.otherLineId ?? string.Empty) + ":" + corridor.otherStartAtomIndex.ToString(CultureInfo.InvariantCulture) + "-" + corridor.otherEndAtomIndexExclusive.ToString(CultureInfo.InvariantCulture);
@@ -156,11 +156,11 @@ namespace RapidTransitMod.Planner
         }
 
         private static List<CapacityProjectedInterval> BuildProjectedIntervals(
-            List<DepartureControlSystem.DispatchPlannerSharedCorridorDto> corridors,
+            List<DispatchPlannerSharedCorridorDto> corridors,
             SharedCorridorCapacityRequestScope request)
         {
             List<CapacityProjectedInterval> intervals = new List<CapacityProjectedInterval>();
-            foreach (DepartureControlSystem.DispatchPlannerSharedCorridorDto corridor in corridors)
+            foreach (DispatchPlannerSharedCorridorDto corridor in corridors)
             {
                 bool lineIsTarget = request.TargetLineIds.Count == 0 || request.TargetLineIds.Contains(corridor.lineId ?? string.Empty);
                 bool otherIsTarget = request.TargetLineIds.Contains(corridor.otherLineId ?? string.Empty);
@@ -709,7 +709,7 @@ namespace RapidTransitMod.Planner
                 return "虚拟快车";
             }
 
-            return context.LinesById.TryGetValue(lineId, out DepartureControlSystem.DispatchPlannerLineDto line)
+            return context.LinesById.TryGetValue(lineId, out DispatchPlannerLineDto line)
                 ? line.name ?? lineId
                 : lineId;
         }
