@@ -13,7 +13,7 @@ namespace RapidTransitMod
     {
         private Entity ResolveVehicleLine(Entity vehicle)
         {
-            if (m_VehicleLine.TryGetValue(vehicle, out Entity mappedLine) && mappedLine != Entity.Null)
+            if (m_VehicleView.TryGetLine(vehicle, out Entity mappedLine) && mappedLine != Entity.Null)
                 return mappedLine;
 
             if (EntityManager.HasComponent<CurrentRoute>(vehicle))
@@ -176,7 +176,7 @@ namespace RapidTransitMod
                 if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(current))
                     fallbackVehicle = current;
 
-                if (m_VehicleState.ContainsKey(current))
+                if (m_VehicleView.Contains(current))
                     return current;
 
                 if (EntityManager.HasComponent<Controller>(current))
@@ -208,10 +208,10 @@ namespace RapidTransitMod
 
         private Entity ResolveManagedVehicleFromLayout(Entity original, Entity fallbackVehicle)
         {
-            if (m_VehicleState.Count == 0)
+            if (m_VehicleView.Count == 0)
                 return Entity.Null;
 
-            var managedVehicles = m_VehicleState.GetKeyArray(Allocator.Temp);
+            var managedVehicles = m_VehicleView.Keys(Allocator.Temp);
             try
             {
                 for (int i = 0; i < managedVehicles.Length; i++)
@@ -237,7 +237,7 @@ namespace RapidTransitMod
             return Entity.Null;
         }
 
-        private Entity ResolveRuntimeControllerVehicle(Entity vehicle)
+        internal Entity ResolveRuntimeControllerVehicle(Entity vehicle)
         {
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                 return Entity.Null;

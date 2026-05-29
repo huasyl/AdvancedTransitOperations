@@ -51,6 +51,8 @@ namespace RapidTransitMod
 
         private ulong m_PanelDataVersion = 1;
         private uint m_LastPanelVersionBucket;
+        private SelectionPanelQuery m_SelectionPanelQuery;
+        private SelectionPanelBuilder m_SelectionPanelBuilder;
         private const uint PANEL_VERSION_REFRESH_FRAMES = 30;
 
         public void FillDebugInfo(Entity entity, InfoList list)
@@ -159,7 +161,65 @@ namespace RapidTransitMod
             m_PanelDataVersion++;
         }
 
-        private static string DescribeNativeVehicleState(PublicTransportFlags flags)
+        private SelectionPanelQuery PanelQuery()
+        {
+            if (m_SelectionPanelQuery == null)
+            {
+                m_SelectionPanelQuery = new SelectionPanelQuery(
+                    EntityManager,
+                    m_TimeSystem,
+                    m_SimulationSystem,
+                    m_VehicleView,
+                    m_StopDwell,
+                    m_SpawningLines,
+                    m_LineLastSpawnTriggerSummary,
+                    m_LineLastVehicleRegisterSummary,
+                    m_LineLastHoldingSummary,
+                    m_LineLastDispatchSampleSummary,
+                    ResolveSelectedLineEntity,
+                    ResolveSelectedVehicleEntity,
+                    ResolveVehicleLine,
+                    IsWorkbenchTimetableApplied,
+                    m_DispatchScheduler.NextManagedTarget,
+                    LogAppliedWorkbenchLineState,
+                    ReadLineLapCache,
+                    ReadDispatchCache,
+                    CanConfigureBypassStation,
+                    IsBypassStation,
+                    GetVehiclePanelStateCode,
+                    BuildVehicleTraversalProgressValue,
+                    EstimateVehicleEtaText,
+                    (vehicle, line) =>
+                    {
+                        TryGetBroadcastPanelStationContext(vehicle, line, out string currentStationName, out string nextStationName, out _);
+                        return (currentStationName, nextStationName);
+                    },
+                    BuildVehicleBroadcastEventValue,
+                    BuildVehicleAlertSummary,
+                    BuildLineAlertSummary,
+                    SlotStr,
+                    BoolDebugStr,
+                    LocalizedDispatchLabel,
+                    LocalizedNextSlotLabel,
+                    LocalizedNextSlotCoverageLabel,
+                    LocalizedDispatchCacheLabel,
+                    LocalizedOfficialDispatchValue,
+                    IsChineseLocale,
+                    (int)SIM_FRAMES_PER_MINUTE);
+            }
+
+            return m_SelectionPanelQuery;
+        }
+
+        private SelectionPanelBuilder PanelBuilder()
+        {
+            if (m_SelectionPanelBuilder == null)
+                m_SelectionPanelBuilder = new SelectionPanelBuilder();
+
+            return m_SelectionPanelBuilder;
+        }
+
+        internal static string DescribeNativeVehicleState(PublicTransportFlags flags)
         {
             if ((flags & PublicTransportFlags.Disabled) != 0)
                 return "Disabled";
@@ -178,130 +238,34 @@ namespace RapidTransitMod
 
         public void FillSelectedLineSummary(Entity line, out string summaryLabel, out string summaryValue)
         {
-            if (!IsWorkbenchTimetableApplied(line))
+            if (!PanelQuery().TryLine(line, Entity.Null, out SelectionPanelLineData data))
             {
                 summaryLabel = LocalizedDispatchLabel();
                 summaryValue = LocalizedOfficialDispatchValue();
                 return;
             }
 
-            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            summaryLabel = LocalizedNextSlotLabel();
-            int nextTarget = GetNextManagedDispatchTarget(line, nowMin);
-            summaryValue = nextTarget >= 0 ? SlotStr(nextTarget) : "-";
+            PanelBuilder().FillLineSummary(data, out summaryLabel, out summaryValue);
         }
 
         public void FillSelectedVehicleSummary(Entity vehicle, out string summaryLabel, out string summaryValue)
         {
-            vehicle = ResolveSelectedVehicleEntity(vehicle);
-            summaryLabel = "State";
-            summaryValue = m_VehicleView.TryGetState(vehicle, out var vehicleState) ? vehicleState.ToString() : "Unknown";
+            if (!PanelQuery().TryVehicle(vehicle, out SelectionPanelVehicleData data))
+            {
+                summaryLabel = "State";
+                summaryValue = "Unknown";
+                return;
+            }
+
+            PanelBuilder().FillVehicleSummary(data, out summaryLabel, out summaryValue);
         }
 
         public void FillSelectedLineInfo(Entity line, InfoList list)
         {
-            line = ResolveSelectedLineEntity(line);
-            if (line == Entity.Null)
+            if (!PanelQuery().TryLine(line, Entity.Null, out SelectionPanelLineData data))
                 return;
 
-            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            bool isManagedLine = IsWorkbenchTimetableApplied(line);
-            int nextSlot = isManagedLine ? GetNextManagedDispatchTarget(line, nowMin) : -1;
-            float lapCacheFrames = isManagedLine ? ReadLineLapCache(line) : 0f;
-            float dispatchCacheFrames = isManagedLine ? ReadDispatchCache(line) : 0f;
-            string lapCache = lapCacheFrames > 0f ? (lapCacheFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + " min" : "-";
-            string dispatchCache = dispatchCacheFrames > 0f ? (dispatchCacheFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + " min" : "-";
-
-            int preparing = 0;
-            int holding = 0;
-            int running = 0;
-            int idle = 0;
-            int retiring = 0;
-            int nearingTerminus = 0;
-            int targetingNextSlot = 0;
-            int occupyingNextSlot = 0;
-            int total = 0;
-            int spawning = 0;
-
-            var rvBuffers = GetBufferLookup<RouteVehicle>(true);
-            if (rvBuffers.TryGetBuffer(line, out var routeVehicles))
-            {
-                for (int i = 0; i < routeVehicles.Length; i++)
-                {
-                    Entity vehicle = routeVehicles[i].m_Vehicle;
-                    if (!EntityManager.Exists(vehicle))
-                        continue;
-
-                    total++;
-                    if (m_VehicleView.IsInbound(vehicle))
-                        nearingTerminus++;
-                    if (m_VehicleView.TryGetTarget(vehicle, out int targetSlot) && targetSlot == nextSlot)
-                        targetingNextSlot++;
-                    if (m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot == nextSlot)
-                        occupyingNextSlot++;
-
-                    if (!m_VehicleView.TryGetState(vehicle, out var state))
-                        continue;
-
-                    switch (state)
-                    {
-                        case VehicleState.Preparing:
-                            preparing++;
-                            break;
-                        case VehicleState.Holding:
-                            holding++;
-                            break;
-                        case VehicleState.Running:
-                            running++;
-                            break;
-                        case VehicleState.Idle:
-                            idle++;
-                            break;
-                        case VehicleState.Retiring:
-                            retiring++;
-                            break;
-                    }
-                }
-            }
-
-            if (isManagedLine)
-                m_SpawningLines.TryGetValue(line, out spawning);
-            string spawnTarget = isManagedLine ? spawning.ToString() : "-";
-            string slotCoverage = isManagedLine
-                ? ((targetingNextSlot + occupyingNextSlot) > 0 ? "Occupied" : "Gap")
-                : LocalizedOfficialDispatchValue();
-            string spawnTriggerSummary = m_LineLastSpawnTriggerSummary.TryGetValue(line, out string spawnTriggerText) ? spawnTriggerText : "-";
-            string registerSummary = m_LineLastVehicleRegisterSummary.TryGetValue(line, out string registerText) ? registerText : "-";
-            string holdingSummary = m_LineLastHoldingSummary.TryGetValue(line, out string holdingText) ? holdingText : "-";
-            string dispatchSampleSummary = m_LineLastDispatchSampleSummary.TryGetValue(line, out string dispatchSampleText) ? dispatchSampleText : "-";
-            string anomalies = BuildLineAlertSummary(
-                line,
-                isManagedLine ? (targetingNextSlot + occupyingNextSlot) : 0,
-                nearingTerminus,
-                lapCacheFrames,
-                dispatchCacheFrames,
-                spawning);
-
-            AddDebugItem(list, "线路", "Line", line.Index.ToString());
-            AddDebugItem(list, "当前时间", "Time", SlotStr(nowMin));
-            if (isManagedLine)
-                AddDebugItem(list, LocalizedNextSlotLabel(), "Next Slot", SlotStr(nextSlot));
-            else
-                AddDebugItem(list, LocalizedDispatchLabel(), "Dispatch", LocalizedOfficialDispatchValue());
-            AddDebugItem(list, "车辆概览", "Fleet", total + " total / " + running + " running / " + holding + " holding");
-            AddDebugItem(list, "状态分布", "States", "prep " + preparing + " / idle " + idle + " / retire " + retiring);
-            if (isManagedLine)
-                AddDebugItem(list, LocalizedNextSlotCoverageLabel(), "Next Slot Coverage", slotCoverage + " (" + targetingNextSlot + " target / " + occupyingNextSlot + " active)");
-            else
-                AddDebugItem(list, LocalizedNextSlotCoverageLabel(), "Next Slot Coverage", slotCoverage);
-            AddDebugItem(list, "产车目标", "Spawn Target", spawnTarget);
-            AddDebugItem(list, "圈时缓存", "Lap Cache", lapCache);
-            AddDebugItem(list, LocalizedDispatchCacheLabel(), "Dispatch Cache", dispatchCache);
-            AddDebugItem(list, "真实产车命令", "Spawn Command", spawnTriggerSummary);
-            AddDebugItem(list, "新车注册", "Vehicle Register", registerSummary);
-            AddDebugItem(list, "到站候车", "Arrival Holding", holdingSummary);
-            AddDebugItem(list, "出库用时", "Dispatch Sample", dispatchSampleSummary);
-            AddDebugItem(list, "关键异常", "Alerts", anomalies);
+            PanelBuilder().FillLineInfo(data, list);
         }
 
         public void FillSelectedLineCard(
@@ -313,8 +277,7 @@ namespace RapidTransitMod
             out string meta3,
             out string alertText)
         {
-            line = ResolveSelectedLineEntity(line);
-            if (line == Entity.Null)
+            if (!PanelQuery().TryLine(line, Entity.Null, out SelectionPanelLineData data))
             {
                 summaryLabel = "State";
                 summaryValue = "Unavailable";
@@ -325,65 +288,22 @@ namespace RapidTransitMod
                 return;
             }
 
-            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            bool isManagedLine = IsWorkbenchTimetableApplied(line);
-            int nextSlot = isManagedLine ? GetNextManagedDispatchTarget(line, nowMin) : -1;
-            float lapCacheFrames = isManagedLine ? ReadLineLapCache(line) : 0f;
-            float dispatchCacheFrames = isManagedLine ? ReadDispatchCache(line) : 0f;
-            string lapCache = lapCacheFrames > 0f ? (lapCacheFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + " min" : "-";
-            string dispatchCache = dispatchCacheFrames > 0f ? (dispatchCacheFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + " min" : "-";
-            int spawnPending = 0;
-            if (isManagedLine)
-                m_SpawningLines.TryGetValue(line, out spawnPending);
-            bool hasWaypointData = EntityManager.HasBuffer<RouteWaypoint>(line);
-
-            summaryLabel = isManagedLine ? LocalizedNextSlotLabel() : LocalizedDispatchLabel();
-            summaryValue = isManagedLine ? SlotStr(nextSlot) : LocalizedOfficialDispatchValue();
-            meta1 = "Time: " + SlotStr(nowMin);
-            meta2 = isManagedLine
-                ? "Lap: " + lapCache + " / Managed: " + BoolDebugStr(isManagedLine)
-                : "Lap: - / Managed: " + BoolDebugStr(false);
-            meta3 = isManagedLine
-                ? (hasWaypointData
-                    ? (IsChineseLocale() ? "出库：" : "Dispatch: ") + dispatchCache
-                    : (IsChineseLocale() ? "出库：- / 路点缺失" : "Dispatch: - / Waypoints missing"))
-                : (IsChineseLocale() ? "发车：官方调度" : "Dispatch: official dispatch");
-            alertText = BuildLineAlertSummary(
-                line,
-                isManagedLine && spawnPending > 0 ? 1 : 0,
-                0,
-                lapCacheFrames,
-                dispatchCacheFrames,
-                spawnPending);
+            PanelBuilder().FillLineCard(
+                data,
+                out summaryLabel,
+                out summaryValue,
+                out meta1,
+                out meta2,
+                out meta3,
+                out alertText);
         }
 
         public void FillSelectedVehicleInfo(Entity vehicle, InfoList list)
         {
-            vehicle = ResolveSelectedVehicleEntity(vehicle);
-            if (!ShouldDisplaySelectedVehicleInfo(vehicle))
+            if (!PanelQuery().TryVehicle(vehicle, out SelectionPanelVehicleData data))
                 return;
 
-            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            string state = m_VehicleView.TryGetState(vehicle, out var vehicleState)
-                ? GetVehiclePanelStateCode(vehicle, vehicleState)
-                : "Unknown";
-            Entity line = ResolveVehicleLine(vehicle);
-            string lineStr = line != Entity.Null ? line.Index.ToString() : "-";
-            string targetStr = m_VehicleView.TryGetTarget(vehicle, out int targetMin) && targetMin >= 0 ? SlotStr(targetMin) : "-";
-            string currentStr = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
-            string progress = BuildVehicleProgressSummary(vehicle);
-            string eta = EstimateVehicleEtaText(vehicle, line, vehicleState);
-            string alerts = BuildVehicleAlertSummary(vehicle, line, nowMin, targetMin);
-
-            AddDebugItem(list, "车辆", "Vehicle", vehicle.Index.ToString());
-            AddDebugItem(list, "状态", "State", state);
-            AddDebugItem(list, "所属线路", "Line", lineStr);
-            AddDebugItem(list, "目标班次", "Target Slot", targetStr);
-            AddDebugItem(list, "当前班次", "Current Slot", currentStr);
-            AddDebugItem(list, "到始发ETA", "ETA To Origin", eta);
-            AddDebugItem(list, "运行进度", "Progress", progress);
-            AddDebugItem(list, "关键异常", "Alerts", alerts);
-            AddDebugItem(list, "可用控制", "Controls", "Retire and Re-evaluate are wired in backend");
+            PanelBuilder().FillVehicleInfo(data, list);
         }
 
         public bool TryBuildSelectedLineSnapshot(Entity line, out SelectedPanelSnapshot snapshot)
@@ -393,163 +313,25 @@ namespace RapidTransitMod
 
         public bool TryBuildSelectedLineSnapshot(Entity line, Entity preferredRoute, out SelectedPanelSnapshot snapshot)
         {
-            snapshot = default;
-            Entity selectedEntity = line;
-            line = ResolveSelectedLineEntity(line, preferredRoute);
-            if (line == Entity.Null)
-                return false;
-
-            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            bool isManagedLine = IsWorkbenchTimetableApplied(line);
-            int nextSlot = isManagedLine ? GetNextManagedDispatchTarget(line, nowMin) : -1;
-            if (isManagedLine)
-                LogAppliedWorkbenchLineState(line, nowMin, nextSlot);
-            float lapCacheFrames = isManagedLine ? ReadLineLapCache(line) : 0f;
-            float dispatchCacheFrames = isManagedLine ? ReadDispatchCache(line) : 0f;
-            int total = 0;
-            int running = 0;
-            int holding = 0;
-            int idle = 0;
-            int retiring = 0;
-            int nextSlotOccupancy = 0;
-            int nearingTerminus = 0;
-
-            var rvBuffers = GetBufferLookup<RouteVehicle>(true);
-            if (rvBuffers.TryGetBuffer(line, out var routeVehicles))
+            if (!PanelQuery().TryLine(line, preferredRoute, out SelectionPanelLineData data))
             {
-                for (int i = 0; i < routeVehicles.Length; i++)
-                {
-                    Entity vehicle = routeVehicles[i].m_Vehicle;
-                    if (!EntityManager.Exists(vehicle))
-                        continue;
-
-                    total++;
-                    if (m_VehicleView.IsInbound(vehicle))
-                        nearingTerminus++;
-                    if (isManagedLine && m_VehicleView.TryGetTarget(vehicle, out int targetSlot) && targetSlot == nextSlot)
-                        nextSlotOccupancy++;
-                    if (isManagedLine && m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot == nextSlot)
-                        nextSlotOccupancy++;
-
-                    if (!m_VehicleView.TryGetState(vehicle, out var state))
-                        continue;
-
-                    switch (state)
-                    {
-                        case VehicleState.Running:
-                            running++;
-                            break;
-                        case VehicleState.Holding:
-                            holding++;
-                            break;
-                        case VehicleState.Idle:
-                            idle++;
-                            break;
-                        case VehicleState.Retiring:
-                            retiring++;
-                            break;
-                    }
-                }
+                snapshot = default;
+                return false;
             }
 
-            int spawnPending = 0;
-            if (isManagedLine)
-                m_SpawningLines.TryGetValue(line, out spawnPending);
-            string spawnTriggerSummary = m_LineLastSpawnTriggerSummary.TryGetValue(line, out string spawnTriggerText) ? spawnTriggerText : "-";
-            string registerSummary = m_LineLastVehicleRegisterSummary.TryGetValue(line, out string registerText) ? registerText : "-";
-            string holdingSummary = m_LineLastHoldingSummary.TryGetValue(line, out string holdingText) ? holdingText : "-";
-            string dispatchSampleSummary = m_LineLastDispatchSampleSummary.TryGetValue(line, out string dispatchSampleText) ? dispatchSampleText : "-";
-            snapshot.Mode = "line";
-            snapshot.EntityId = line.Index.ToString();
-            snapshot.PrimaryLabelKey = isManagedLine ? "nextSlot" : "dispatch";
-            snapshot.PrimaryValue = isManagedLine ? SlotStr(nextSlot) : LocalizedOfficialDispatchValue();
-            snapshot.PrimaryValueKind = isManagedLine ? "slot" : "text";
-            snapshot.Detail1LabelKey = IsChineseLocale() ? "线路编号" : "Line ID";
-            snapshot.Detail1Value = line.Index.ToString();
-            snapshot.Detail2LabelKey = IsChineseLocale() ? "当前时间" : "Time";
-            snapshot.Detail2Value = SlotStr(nowMin);
-            snapshot.Detail3LabelKey = IsChineseLocale() ? "真实产车命令" : "Spawn Command";
-            snapshot.Detail3Value = spawnTriggerSummary;
-            snapshot.Detail4LabelKey = IsChineseLocale() ? "新车注册" : "Vehicle Register";
-            snapshot.Detail4Value = registerSummary;
-            snapshot.Detail5LabelKey = IsChineseLocale() ? "到站候车" : "Arrival Holding";
-            snapshot.Detail5Value = holdingSummary;
-            snapshot.Detail6LabelKey = IsChineseLocale() ? "出库用时" : "Dispatch Sample";
-            snapshot.Detail6Value = dispatchSampleSummary;
-            snapshot.Detail7LabelKey = IsChineseLocale() ? "车辆概览" : "Fleet";
-            snapshot.Detail7Value = total + " / " + running + " / " + holding;
-            snapshot.AlertText = BuildLineAlertSummary(
-                line,
-                nextSlotOccupancy,
-                nearingTerminus,
-                lapCacheFrames,
-                dispatchCacheFrames,
-                spawnPending);
-            snapshot.ShowLineSpawnAction = isManagedLine;
-            snapshot.ShowDumpTrackModelAction = true;
-            snapshot.ShowDumpPlannerInputAction = true;
-            snapshot.ShowDumpRuntimeObservationAction = true;
-            snapshot.ShowDumpStationAnchorObservationAction = true;
-            snapshot.ShowBypassStationToggle = CanConfigureBypassStation(selectedEntity);
-            snapshot.BypassStationChecked = snapshot.ShowBypassStationToggle && IsBypassStation(selectedEntity);
+            snapshot = PanelBuilder().BuildLineSnapshot(data);
             return true;
         }
 
         public bool TryBuildSelectedVehicleSnapshot(Entity vehicle, out SelectedPanelSnapshot snapshot)
         {
-            snapshot = default;
-            vehicle = ResolveSelectedVehicleEntity(vehicle);
-            if (!ShouldDisplaySelectedVehicleInfo(vehicle))
+            if (!PanelQuery().TryVehicle(vehicle, out SelectionPanelVehicleData data))
+            {
+                snapshot = default;
                 return false;
+            }
 
-            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            bool isManagedVehicle = m_VehicleView.TryGetState(vehicle, out var vehicleState);
-            PublicTransportFlags nativeFlags = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
-                ? EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State
-                : 0;
-            Entity line = ResolveVehicleLine(vehicle);
-            int targetMin = m_VehicleView.TryGetTarget(vehicle, out int targetSlot) ? targetSlot : -1;
-            int currentMin = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) ? currentSlot : -1;
-            string state = isManagedVehicle ? GetVehiclePanelStateCode(vehicle, vehicleState) : DescribeNativeVehicleState(nativeFlags);
-            string alertText = isManagedVehicle
-                ? BuildVehicleAlertSummary(vehicle, line, nowMin, targetMin)
-                : (line != Entity.Null ? "using-native-fallback" : "vehicle-not-tracked");
-
-            snapshot.Mode = "vehicle";
-            snapshot.EntityId = vehicle.Index.ToString();
-            snapshot.PrimaryLabelKey = "state";
-            snapshot.PrimaryValue = state;
-            snapshot.PrimaryValueKind = "state";
-            snapshot.Detail1LabelKey = "line";
-            snapshot.Detail1Value = line != Entity.Null ? line.Index.ToString() : "-";
-            snapshot.Detail2LabelKey = "progress";
-            snapshot.Detail2Value = BuildVehicleTraversalProgressValue(vehicle);
-            snapshot.Detail3LabelKey = "currentSlot";
-            snapshot.Detail3Value = currentMin >= 0 ? SlotStr(currentMin) : "-";
-            snapshot.Detail4LabelKey = "targetSlot";
-            snapshot.Detail4Value = targetMin >= 0 ? SlotStr(targetMin) : "-";
-            snapshot.Detail5LabelKey = "stopDwell";
-            snapshot.Detail5Value = BuildVehicleStopDwellValue(vehicle);
-            TryGetBroadcastPanelStationContext(
-                vehicle,
-                line,
-                out string currentStationName,
-                out string nextStationName,
-                out _);
-            snapshot.Detail6LabelKey = "currentStation";
-            snapshot.Detail6Value = string.IsNullOrEmpty(currentStationName) ? "-" : currentStationName;
-            snapshot.Detail7LabelKey = "nextStation";
-            snapshot.Detail7Value = string.IsNullOrEmpty(nextStationName) ? "-" : nextStationName;
-            snapshot.Detail8LabelKey = "event";
-            snapshot.Detail8Value = BuildVehicleBroadcastEventValue(vehicle);
-            snapshot.AlertText = alertText;
-            snapshot.ShowRetireAction = isManagedVehicle;
-            snapshot.ShowForceDepartAction = isManagedVehicle;
-            snapshot.ShowReevaluateAction = false;
-            snapshot.ShowDumpTrackModelAction = false;
-            snapshot.ShowDumpPlannerInputAction = false;
-            snapshot.ShowDumpRuntimeObservationAction = false;
-            snapshot.ShowDumpStationAnchorObservationAction = false;
+            snapshot = PanelBuilder().BuildVehicleSnapshot(data);
             return true;
         }
 
@@ -562,8 +344,7 @@ namespace RapidTransitMod
             out string meta3,
             out string alertText)
         {
-            vehicle = ResolveSelectedVehicleEntity(vehicle);
-            if (!ShouldDisplaySelectedVehicleInfo(vehicle))
+            if (!PanelQuery().TryVehicle(vehicle, out SelectionPanelVehicleData data))
             {
                 summaryLabel = "State";
                 summaryValue = "Unavailable";
@@ -574,32 +355,14 @@ namespace RapidTransitMod
                 return;
             }
 
-            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            bool isManagedVehicle = m_VehicleView.TryGetState(vehicle, out var vehicleState);
-            PublicTransportFlags nativeFlags = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
-                ? EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State
-                : 0;
-            string state = isManagedVehicle ? GetVehiclePanelStateCode(vehicle, vehicleState) : DescribeNativeVehicleState(nativeFlags);
-            Entity line = ResolveVehicleLine(vehicle);
-            string lineStr = line != Entity.Null ? "#" + line.Index : "-";
-            int targetMin = m_VehicleView.TryGetTarget(vehicle, out int targetSlot) ? targetSlot : -1;
-            string targetStr = targetMin >= 0 ? SlotStr(targetMin) : "-";
-            string currentStr = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot >= 0 ? SlotStr(currentSlot) : "-";
-            string stopDwell = BuildVehicleStopDwellValue(vehicle);
-            string inboundTime = BuildVehicleInboundTimeValue(vehicle);
-
-            summaryLabel = "State";
-            summaryValue = state;
-            meta1 = "Line: " + lineStr + " / Managed: " + BoolDebugStr(isManagedVehicle);
-            meta2 = isManagedVehicle
-                ? "Slot: " + currentStr + " -> " + targetStr
-                : "Native: " + DescribeNativeVehicleState(nativeFlags);
-            meta3 = IsChineseLocale()
-                ? "停站计时：" + stopDwell + " / 入站时间：" + inboundTime
-                : "Stop dwell: " + stopDwell + " / Inbound: " + inboundTime;
-            alertText = isManagedVehicle
-                ? BuildVehicleAlertSummary(vehicle, line, nowMin, targetMin)
-                : (line != Entity.Null ? "Using native route fallback" : "Vehicle is not currently tracked by RapidTransit");
+            PanelBuilder().FillVehicleCard(
+                data,
+                out summaryLabel,
+                out summaryValue,
+                out meta1,
+                out meta2,
+                out meta3,
+                out alertText);
         }
 
         public bool RequestVehicleRetire(Entity vehicle)
@@ -615,7 +378,7 @@ namespace RapidTransitMod
             Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
             Target target = EntityManager.GetComponentData<Target>(vehicle);
 
-            DoRetire(
+            m_CommandApplier.Retire(
                 vehicle,
                 publicTransport,
                 target,
@@ -662,124 +425,13 @@ namespace RapidTransitMod
                     ? cachedWaypointIndex
                     : -1;
 
-            int scannedPassengers = 0;
-            int readiedPassengers = 0;
-            BoardingCloseAssistStats assistStats = default;
             EntityCommandBuffer commandBuffer = m_EndFrameBarrier.CreateCommandBuffer();
-            PrepareVehicleForOriginalBoardingClose(
-                vehicle,
-                ref pt,
-                commandBuffer,
-                out scannedPassengers,
-                out readiedPassengers,
-                out assistStats);
-            commandBuffer.SetComponent(vehicle, pt);
+            m_CommandApplier.ForceDepart(vehicle, ref pt, m_SimulationSystem.frameIndex, commandBuffer);
             ClearBypassYieldState(vehicle, "UI强制发车");
             SetUILabel(vehicle, "结束上客");
             log.Info("[强制发车协助] 线路" + line.Index + " 车辆" + vehicle.Index
-                + " scannedPassengers=" + scannedPassengers
-                + " readiedPassengers=" + readiedPassengers
-                + " " + FormatBoardingCloseAssistStats(assistStats)
                 + " wp=" + currentWaypointIndex);
             InvalidatePanelData();
-            return true;
-        }
-
-        private string BuildVehicleTraversalProgressValue(Entity vehicle)
-        {
-            vehicle = ResolveSelectedVehicleEntity(vehicle);
-            if (vehicle == Entity.Null)
-                return "-";
-
-            if (!TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition))
-                return IsChineseLocale() ? "未知" : "unknown";
-
-            int progressPercent = (int)math.round(math.saturate(segmentPosition) * 100f);
-            return "wp" + nextWaypointIndex + " / " + progressPercent + "%";
-        }
-
-        private string BuildVehicleTraversalSamplingBandValue(Entity vehicle, Entity line)
-        {
-            if (!TryBuildVehicleTraversalSamplingDisplay(vehicle, line, out TraversalSliceSamplingPlan plan, out _, out _, out _))
-                return "-";
-
-            if (plan.IsHighSampling)
-                return IsChineseLocale() ? "高" : "high";
-            if (plan.IsMediumSampling)
-                return IsChineseLocale() ? "中" : "medium";
-            return IsChineseLocale() ? "低" : "low";
-        }
-
-        private string BuildVehicleTraversalSamplingRateValue(Entity vehicle, Entity line)
-        {
-            if (!TryBuildVehicleTraversalSamplingDisplay(vehicle, line, out TraversalSliceSamplingPlan plan, out _, out _, out _))
-                return "-";
-
-            if (plan.SampleIntervalFrames <= 1)
-                return IsChineseLocale() ? "每帧" : "every frame";
-
-            return IsChineseLocale()
-                ? ("每" + plan.SampleIntervalFrames + "帧")
-                : ("every " + plan.SampleIntervalFrames + "f");
-        }
-
-        private string BuildVehicleTraversalNextCutPointValue(Entity vehicle, Entity line)
-        {
-            if (!TryBuildVehicleTraversalSamplingDisplay(vehicle, line, out TraversalSliceSamplingPlan plan, out LineTrackChain chain, out _, out int segmentAtomStart))
-                return "-";
-
-            if (!plan.HasUpcomingCutPoint)
-                return IsChineseLocale() ? "本段无后续切换点" : "none in segment";
-
-            int cutPointPercent = (int)math.round(plan.UpcomingCutPointProgress * 100f);
-            int deltaPercent = (int)math.round(plan.UpcomingCutPointDistance * 100f);
-            int segmentLengthAtoms = 1;
-            if (chain != null
-                && plan.SegmentIndex >= 0
-                && plan.SegmentIndex < chain.SegmentRanges.Count)
-            {
-                TrackSegmentRange segmentRange = chain.SegmentRanges[plan.SegmentIndex];
-                segmentLengthAtoms = math.max(1, segmentRange.EndAtomIndexExclusive - segmentRange.StartAtomIndex);
-            }
-            int cutPointAtom = math.clamp(
-                segmentAtomStart + (int)math.round(plan.UpcomingCutPointProgress * segmentLengthAtoms),
-                segmentAtomStart,
-                segmentAtomStart + math.max(0, segmentLengthAtoms - 1));
-            return "seg" + plan.SegmentIndex
-                + " / " + cutPointPercent + "%"
-                + " / a" + cutPointAtom
-                + " / +" + deltaPercent + "%";
-        }
-
-        private bool TryBuildVehicleTraversalSamplingDisplay(
-            Entity vehicle,
-            Entity line,
-            out TraversalSliceSamplingPlan plan,
-            out LineTrackChain chain,
-            out DynamicBuffer<RouteWaypoint> waypoints,
-            out int segmentAtomStart)
-        {
-            plan = default;
-            chain = null;
-            waypoints = default;
-            segmentAtomStart = 0;
-
-            vehicle = ResolveSelectedVehicleEntity(vehicle);
-            if (vehicle == Entity.Null || line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
-                return false;
-
-            waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            if (waypoints.Length == 0
-                || !TryBuildTraversalSliceSamplingPlan(vehicle, line, waypoints, out plan)
-                || !m_TrackModelQuery.TryChain(line, out chain)
-                || chain == null
-                || plan.SegmentIndex < 0
-                || plan.SegmentIndex >= chain.SegmentRanges.Count)
-            {
-                return false;
-            }
-
-            segmentAtomStart = chain.SegmentRanges[plan.SegmentIndex].StartAtomIndex;
             return true;
         }
 
@@ -807,21 +459,5 @@ namespace RapidTransitMod
             return true;
         }
 
-        private string GetVehiclePanelStateCode(Entity vehicle, VehicleState vehicleState)
-        {
-            if (m_BypassDecision.TryGetLatchedBlocker(vehicle, out _)
-                && (vehicleState == VehicleState.Holding || vehicleState == VehicleState.Running))
-            {
-                return "Yielding";
-            }
-
-            if (vehicleState == VehicleState.Holding
-                && (!m_VehicleView.TryGetTarget(vehicle, out int holdingTarget) || holdingTarget < 0))
-            {
-                return "Idle";
-            }
-
-            return vehicleState.ToString();
-        }
     }
 }

@@ -8,7 +8,6 @@ using Game.SceneFlow;
 using Game.Simulation;
 using Game.Tools;
 using Game.UI.InGame;
-using HarmonyLib;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -32,7 +31,6 @@ namespace RapidTransitMod
     {
         public const string Id = "RapidTransitMod";
         private static readonly ILog s_RawLog = LogManager.GetLogger(nameof(RapidTransitMod)).SetShowsErrorsInUI(false);
-        private Harmony m_Harmony;
         public static TimedLogger log = new TimedLogger(s_RawLog);
 
         internal static string PrefixWithGameTime(string message)
@@ -46,17 +44,6 @@ namespace RapidTransitMod
         public void OnLoad(UpdateSystem updateSystem)
         {
             log.Info(nameof(OnLoad));
-            try
-            {
-                m_Harmony = new Harmony("RapidTransitMod.BoardingClosePatch");
-                m_Harmony.PatchAll(typeof(Mod).Assembly);
-                log.Info("Boarding close patch initialized.");
-            }
-            catch (System.Exception ex)
-            {
-                m_Harmony = null;
-                log.Info("Boarding close patch disabled: " + ex.GetType().Name + ": " + ex.Message);
-            }
             updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportLineSystem>(SystemUpdatePhase.GameSimulation);
@@ -96,8 +83,6 @@ namespace RapidTransitMod
         public void OnDispose()
         {
             log.Info(nameof(OnDispose));
-            m_Harmony?.UnpatchAll("RapidTransitMod.BoardingClosePatch");
-            m_Harmony = null;
             log.Info("RapidTransitMod disposed.");
         }
     }

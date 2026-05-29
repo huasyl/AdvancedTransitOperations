@@ -2,18 +2,23 @@ using System;
 using System.Collections.Generic;
 using Game;
 using Game.Common;
-using Game.Routes;
 using Game.SceneFlow;
 using Game.UI.InGame;
 using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
     public partial class DispatchRuntimeSystem
     {
-        private void SetUILabel(Entity v, string msg)
+        private readonly Dictionary<Entity, string> m_LineLastSpawnTriggerSummary = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_LineLastVehicleRegisterSummary = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_LineLastHoldingSummary = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_LineLastDispatchSampleSummary = new Dictionary<Entity, string>();
+
+        internal void SetUILabel(Entity v, string msg)
         {
             var fs = new FixedString64Bytes(msg);
             if (!m_UICache.TryGetValue(v, out var cached) || cached != fs)
@@ -23,207 +28,86 @@ namespace RapidTransitMod
             }
         }
 
-        private void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message)
+        public string GetCurrentGameTimeLabel()
         {
-            if (vehicle == Entity.Null)
-            {
-                log.Info(message);
-                return;
-            }
+            if (m_TimeSystem == null)
+                return string.Empty;
 
-            if (cache.TryGetValue(vehicle, out string previous) && previous == key)
-                return;
+            int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
+            if (nowMin < 0)
+                nowMin += 1440;
 
-            cache[vehicle] = key;
-            log.Info(message);
+            return "[游戏时间 " + SlotStr(nowMin) + "]";
         }
 
-        private bool ShouldEmitVehicleLogWithCooldown(
-            Dictionary<Entity, string> keyCache,
-            Dictionary<Entity, uint> lastLogFrameCache,
-            Entity vehicle,
-            string key,
-            uint nowFrame,
-            uint cooldownFrames)
+        private void ClearLineDispatchDebugSummaries()
         {
-            if (vehicle == Entity.Null)
-                return true;
-
-            bool keyChanged = !keyCache.TryGetValue(vehicle, out string previousKey) || previousKey != key;
-            if (keyChanged)
-            {
-                keyCache[vehicle] = key;
-                lastLogFrameCache[vehicle] = nowFrame;
-                return true;
-            }
-
-            if (!lastLogFrameCache.TryGetValue(vehicle, out uint lastLogFrame)
-                || nowFrame >= lastLogFrame + cooldownFrames)
-            {
-                lastLogFrameCache[vehicle] = nowFrame;
-                return true;
-            }
-
-            return false;
+            m_LineLastSpawnTriggerSummary.Clear();
+            m_LineLastVehicleRegisterSummary.Clear();
+            m_LineLastHoldingSummary.Clear();
+            m_LineLastDispatchSampleSummary.Clear();
         }
 
-        private static string FormatDispatchTraceSlot(int targetMin)
-            => targetMin >= 0 ? SlotStr(targetMin) : "-";
-
-        private void LogOriginDispatchTrace(
-            string reason,
-            Entity vehicle,
-            Entity line,
-            Entity route,
-            DynamicBuffer<RouteWaypoint> wps,
-            VehicleState state,
-            int targetMin,
-            int nowMin,
-            int curWpIdx,
-            bool atA,
-            bool boarding,
-            bool lastBoarding,
-            uint nowFrame,
-            string extra = "")
+        private void RecordLineSpawnTriggerSummary(Entity line, int nowMin, int slot, int actualCount)
         {
-            if (vehicle == Entity.Null)
+            if (line == Entity.Null)
                 return;
 
-            int cachedWpIdx = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWp) ? cachedWp : -1;
-            bool hasForcedReady = m_VehicleView.TryGetReady(vehicle, out uint forcedReadyFrame) && forcedReadyFrame > nowFrame;
-            bool hasBvMisfire = m_BVMisfire.Contains(vehicle);
-            int currentSlot = m_VehicleView.TryGetSlot(vehicle, out int currentAssignedSlot) ? currentAssignedSlot : -1;
-            string key = reason
-                + "|state=" + state
-                + "|target=" + targetMin
-                + "|current=" + currentSlot
-                + "|curWp=" + curWpIdx
-                + "|cached=" + cachedWpIdx
-                + "|atA=" + (atA ? "1" : "0")
-                + "|boarding=" + (boarding ? "1" : "0")
-                + "|last=" + (lastBoarding ? "1" : "0")
-                + "|forced=" + (hasForcedReady ? "1" : "0")
-                + "|misfire=" + (hasBvMisfire ? "1" : "0");
-
-            if (!ShouldEmitVehicleLogWithCooldown(
-                    m_OriginDispatchTraceLogCache,
-                    m_OriginDispatchTraceLastLogFrameCache,
-                    vehicle,
-                    key,
-                    nowFrame,
-                    ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
-            {
-                return;
-            }
-
-            float distanceToOriginMeters = wps.Length > 0 ? GetDistanceToOriginMeters(vehicle, wps) : -1f;
-            bool hasAssistPending = TryGetAssistLaunchPending(vehicle, route, targetMin, out AssistLaunchPendingRecord assistPending);
-            int assistTargetMin = hasAssistPending ? assistPending.TargetMin : -1;
-            uint forcedReadyRemainingFrames = hasForcedReady ? forcedReadyFrame - nowFrame : 0;
-
-            log.Info("[OriginDispatchTrace] reason=" + reason
-                + " line=" + line.Index
-                + " route=" + route.Index
-                + " vehicle=" + vehicle.Index
-                + " state=" + state
-                + " now=" + SlotStr(nowMin)
-                + " target=" + FormatDispatchTraceSlot(targetMin)
-                + " current=" + FormatDispatchTraceSlot(currentSlot)
-                + " atA=" + (atA ? "1" : "0")
-                + " boarding=" + (boarding ? "1" : "0")
-                + " lastBoarding=" + (lastBoarding ? "1" : "0")
-                + " curWpIdx=" + curWpIdx
-                + " cachedWpIdx=" + cachedWpIdx
-                + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?")
-                + " forcedReadyFrames=" + forcedReadyRemainingFrames
-                + " assistPending=" + (hasAssistPending ? ("1(" + FormatDispatchTraceSlot(assistTargetMin) + ")") : "0")
-                + " bvMisfire=" + (hasBvMisfire ? "1" : "0")
-                + (string.IsNullOrWhiteSpace(extra) ? string.Empty : " " + extra));
+            m_LineLastSpawnTriggerSummary[line] = SlotStr(nowMin)
+                + " 班次" + SlotStr(slot)
+                + " 真实产车命令 当前=" + actualCount;
         }
 
-        private void LogDispatchSlotHeld(
-            Entity line,
-            int slot,
-            Entity holder,
-            Entity route,
-            DynamicBuffer<RouteWaypoint> wps,
-            int nowMin,
-            uint nowFrame,
-            string reason)
+        private void RecordLineVehicleRegisterSummary(Entity line, int nowMin, Entity vehicle, VehicleState finalState)
         {
-            if (line == Entity.Null || holder == Entity.Null || !EntityManager.Exists(holder))
+            if (line == Entity.Null || vehicle == Entity.Null)
                 return;
 
-            VehicleState holderState = m_VehicleView.TryGetState(holder, out var st) ? st : VehicleState.Running;
-            if (holderState != VehicleState.Holding)
-                return;
-
-            int holderTarget = m_VehicleView.TryGetTarget(holder, out int target) ? target : -1;
-            int holderCurrent = m_VehicleView.TryGetSlot(holder, out int current) ? current : -1;
-            int holderCachedWp = m_CachedWpIdx.TryGetValue(holder, out int cachedWp) ? cachedWp : -1;
-            string key = reason
-                + "|slot=" + slot
-                + "|holder=" + holder.Index
-                + "|state=" + holderState
-                + "|target=" + holderTarget
-                + "|current=" + holderCurrent
-                + "|cached=" + holderCachedWp;
-
-            if (!ShouldEmitVehicleLogWithCooldown(
-                    m_DispatchSlotHeldLogCache,
-                    m_DispatchSlotHeldLastLogFrameCache,
-                    line,
-                    key,
-                    nowFrame,
-                    ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
-            {
-                return;
-            }
-
-            bool holderBoarding = EntityManager.HasComponent<PublicTransport>(holder)
-                && (EntityManager.GetComponentData<PublicTransport>(holder).m_State & PublicTransportFlags.Boarding) != 0;
-            float distanceToOriginMeters = wps.Length > 0 ? GetDistanceToOriginMeters(holder, wps) : -1f;
-            log.Info("[DispatchSlotHeld] reason=" + reason
-                + " line=" + line.Index
-                + " route=" + route.Index
-                + " now=" + SlotStr(nowMin)
-                + " slot=" + SlotStr(slot)
-                + " holder=" + holder.Index
-                + " state=" + holderState
-                + " target=" + FormatDispatchTraceSlot(holderTarget)
-                + " current=" + FormatDispatchTraceSlot(holderCurrent)
-                + " cachedWpIdx=" + holderCachedWp
-                + " boarding=" + (holderBoarding ? "1" : "0")
-                + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?"));
+            string depotSummary = DescribeVehicleOwnerDepot(vehicle);
+            m_LineLastVehicleRegisterSummary[line] = SlotStr(nowMin)
+                + " 车辆" + vehicle.Index
+                + " 注册 -> " + finalState
+                + " depot=" + depotSummary;
         }
 
-        private void ObserveBvMisfireCandidate(
-            Entity vehicle,
-            string lineTag,
-            string phase,
-            string detail,
-            uint nowFrame)
+        private void RecordLineHoldingSummary(Entity line, int nowMin, Entity vehicle, int targetMin)
         {
-            LogVehicleStateOnce(
-                m_BvMisfireObserveLogCache,
-                vehicle,
-                phase + "|" + detail,
-                "[BVObserve] " + lineTag + " 车辆" + vehicle.Index
-                    + " phase=" + phase
-                    + " detail=" + detail
-                    + " enforcement=" + (IsBvMisfireEnforcementEnabled() ? "on" : "off")
-                    + " frame=" + nowFrame);
+            if (line == Entity.Null || vehicle == Entity.Null)
+                return;
 
-            if (IsBvMisfireEnforcementEnabled())
+            m_LineLastHoldingSummary[line] = SlotStr(nowMin)
+                + " 车辆" + vehicle.Index
+                + " 到站/Holding"
+                + (targetMin >= 0 ? " " + SlotStr(targetMin) : " 等待调度");
+        }
+
+        private void RecordLineDispatchSampleSummary(Entity line, int nowMin, Entity vehicle, float sampleMinutes)
+        {
+            if (line == Entity.Null || vehicle == Entity.Null || sampleMinutes <= 0f)
+                return;
+
+            m_LineLastDispatchSampleSummary[line] = SlotStr(nowMin)
+                + " 车辆" + vehicle.Index
+                + " 出库用时=" + sampleMinutes.ToString("F1") + "分钟";
+        }
+
+        private string DescribeVehicleOwnerDepot(Entity vehicle)
+        {
+            if (vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.HasComponent<Owner>(vehicle))
             {
-                m_BVMisfire.Add(vehicle);
-                m_BVMisfireStartFrame[vehicle] = nowFrame;
+                return "-";
             }
-            else
-            {
-                m_BVMisfire.Remove(vehicle);
-                m_BVMisfireStartFrame.Remove(vehicle);
-            }
+
+            Entity depot = EntityManager.GetComponentData<Owner>(vehicle).m_Owner;
+            if (depot == Entity.Null || !EntityManager.Exists(depot))
+                return "-";
+
+            string name = m_NameSystem.GetRenderedLabelName(depot);
+            return string.IsNullOrEmpty(name)
+                ? "#" + depot.Index
+                : ("#" + depot.Index + "[" + name + "]");
         }
 
         private void AddDebugItem(InfoList list, string labelCn, string labelEn, string value)
@@ -276,13 +160,16 @@ namespace RapidTransitMod
                 alerts = AppendAlert(alerts, "nearing-terminus");
             if (m_VehicleView.TryGetCooldown(vehicle, out uint cooldownUntil) && m_SimulationSystem.frameIndex < cooldownUntil)
                 alerts = AppendAlert(alerts, "launch-cooldown");
-            if (targetMin >= 0 && IsSlotExpired(nowMin, targetMin))
+            if (targetMin >= 0 && m_DispatchScheduler.IsExpired(nowMin, targetMin))
                 alerts = AppendAlert(alerts, "target-expired");
             if (line != Entity.Null
                 && m_VehicleView.TryGetState(vehicle, out var state)
                 && state == VehicleState.Idle
-                && ShouldProtectIdleFromYield(line, vehicle, nowMin))
+                && m_DispatchScheduler.ShouldProtectIdle(line, vehicle, nowMin))
+            {
                 alerts = AppendAlert(alerts, "yield-protected");
+            }
+
             return alerts.Length > 0 ? alerts : "None";
         }
 
@@ -293,6 +180,36 @@ namespace RapidTransitMod
                 ? (distance / 1000f).ToString("F2") + " km"
                 : "-";
             return "wp " + cachedWaypoint + " / lap " + lapDistance;
+        }
+
+        private string BuildVehicleTraversalProgressValue(Entity vehicle)
+        {
+            vehicle = ResolveSelectedVehicleEntity(vehicle);
+            if (vehicle == Entity.Null)
+                return "-";
+
+            if (!TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition))
+                return IsChineseLocale() ? "未知" : "unknown";
+
+            int progressPercent = (int)math.round(math.saturate(segmentPosition) * 100f);
+            return "wp" + nextWaypointIndex + " / " + progressPercent + "%";
+        }
+
+        private string GetVehiclePanelStateCode(Entity vehicle, VehicleState vehicleState)
+        {
+            if (m_BypassDecision.TryGetLatchedBlocker(vehicle, out _)
+                && (vehicleState == VehicleState.Holding || vehicleState == VehicleState.Running))
+            {
+                return "Yielding";
+            }
+
+            if (vehicleState == VehicleState.Holding
+                && (!m_VehicleView.TryGetTarget(vehicle, out int holdingTarget) || holdingTarget < 0))
+            {
+                return "Idle";
+            }
+
+            return vehicleState.ToString();
         }
 
         private string EstimateVehicleEtaText(Entity vehicle, Entity line, VehicleState vehicleState)
@@ -307,13 +224,13 @@ namespace RapidTransitMod
 
             if (vehicleState == VehicleState.Preparing)
             {
-                var routeWaypoints = GetBufferLookup<RouteWaypoint>(true);
+                var routeWaypoints = GetBufferLookup<Game.Routes.RouteWaypoint>(true);
                 if (routeWaypoints.TryGetBuffer(line, out var waypoints))
                     etaFrames = EstimatePreparingArrivalFrames(vehicle, line, waypoints, nowFrame, lineDurationFrames);
             }
             else if (vehicleState == VehicleState.Running)
             {
-                var routeWaypoints = GetBufferLookup<RouteWaypoint>(true);
+                var routeWaypoints = GetBufferLookup<Game.Routes.RouteWaypoint>(true);
                 if (routeWaypoints.TryGetBuffer(line, out var waypoints))
                     etaFrames = EstimateRunningArrivalFrames(vehicle, line, waypoints, nowFrame, lineDurationFrames, lineHasHistory);
             }
@@ -433,7 +350,9 @@ namespace RapidTransitMod
         {
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
             bool isManagedLine = IsWorkbenchTimetableApplied(line);
-            int nextSlot = isManagedLine ? GetNextManagedDispatchTarget(line, nowMin) : NextSlotMin(nowMin);
+            int nextSlot = isManagedLine
+                ? m_DispatchScheduler.NextManagedTarget(line, nowMin)
+                : m_DispatchScheduler.NextSlotMin(nowMin);
             float lapCacheFrames = ReadLineLapCache(line);
             float dispatchCacheFrames = ReadDispatchCache(line);
             string lapCache = lapCacheFrames > 0f ? (lapCacheFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "min" : "-";
@@ -447,16 +366,21 @@ namespace RapidTransitMod
             int retiring = 0;
             int tagged = 0;
             int total = 0;
-            var rvBuffers = GetBufferLookup<RouteVehicle>(true);
+            var rvBuffers = GetBufferLookup<Game.Routes.RouteVehicle>(true);
             if (rvBuffers.TryGetBuffer(line, out var rvs))
             {
                 for (int i = 0; i < rvs.Length; i++)
                 {
                     Entity v = rvs[i].m_Vehicle;
-                    if (!EntityManager.Exists(v)) continue;
+                    if (!EntityManager.Exists(v))
+                        continue;
+
                     total++;
-                    if (m_VehicleView.IsInbound(v)) tagged++;
-                    if (!m_VehicleView.TryGetState(v, out var st)) continue;
+                    if (m_VehicleView.IsInbound(v))
+                        tagged++;
+                    if (!m_VehicleView.TryGetState(v, out var st))
+                        continue;
+
                     switch (st)
                     {
                         case VehicleState.Preparing: preparing++; break;

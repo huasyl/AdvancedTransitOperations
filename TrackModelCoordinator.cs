@@ -1,6 +1,5 @@
 using Game.Routes;
 using Unity.Entities;
-using LineTrackChain = RapidTransitMod.DispatchRuntimeSystem.LineTrackChain;
 
 namespace RapidTransitMod
 {

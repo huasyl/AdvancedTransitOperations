@@ -9,6 +9,8 @@ namespace RapidTransitMod
 {
     public partial class DispatchRuntimeSystem
     {
+        private bool m_BypassRuntimeEnabled = true;
+
         private readonly struct QueuedLocalReleaseScope
         {
             public readonly LineTrackChain LocalChain;
@@ -45,7 +47,7 @@ namespace RapidTransitMod
                 + " 等待快车" + blocker.Index + " 先行");
         }
 
-        private void ClearBypassYieldState(Entity vehicle, string releaseReason = null)
+        internal void ClearBypassYieldState(Entity vehicle, string releaseReason = null)
         {
             if (vehicle == Entity.Null || !m_BypassDecision.TryGetLatchedBlocker(vehicle, out Entity blocker))
                 return;
@@ -805,7 +807,7 @@ namespace RapidTransitMod
                 if (otherVehicle == Entity.Null
                     || otherVehicle == scope.Vehicle
                     || !EntityManager.Exists(otherVehicle)
-                    || !m_VehicleState.TryGetValue(otherVehicle, out VehicleState vehicleState)
+                    || !m_VehicleView.TryGetState(otherVehicle, out VehicleState vehicleState)
                     || vehicleState != VehicleState.Running)
                 {
                     continue;

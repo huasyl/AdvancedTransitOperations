@@ -47,7 +47,7 @@ namespace RapidTransitMod
                 Entity vehicle = routeVehicles[i].m_Vehicle;
                 if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                     continue;
-                if (!m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState) || vehicleState != VehicleState.Running)
+                if (!m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState) || vehicleState != VehicleState.Running)
                     continue;
 
                 bool boarding = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)

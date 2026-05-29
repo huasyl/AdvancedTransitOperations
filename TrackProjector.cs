@@ -1,7 +1,5 @@
 using System.Collections.Generic;
 using Unity.Entities;
-using VehicleTrackCursor = RapidTransitMod.DispatchRuntimeSystem.VehicleTrackCursor;
-using VehicleTrackCursorFrameSnapshot = RapidTransitMod.DispatchRuntimeSystem.VehicleTrackCursorFrameSnapshot;
 
 namespace RapidTransitMod
 {
@@ -93,6 +91,6 @@ namespace RapidTransitMod
 
     public partial class DispatchRuntimeSystem
     {
-        private TrackProjector m_TrackProjector = null!;
+        internal TrackProjector m_TrackProjector = null!;
     }
 }

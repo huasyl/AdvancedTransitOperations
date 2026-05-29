@@ -260,7 +260,7 @@ namespace RapidTransitMod
 
         private void EnsureRuntimeObservationSessionSeeded()
         {
-            if (m_RuntimeObservationSession != null)
+            if (m_RuntimeObservations.Session != null)
                 return;
 
             EnsureAppliedWorkbenchPersistenceLoaded();
@@ -278,7 +278,7 @@ namespace RapidTransitMod
         private void SeedObservationFromAppliedRows(string selectedLineId)
         {
             DateTime appliedGameDate = ResolveRuntimeObservationGameDate();
-            m_RuntimeObservationSession = new RuntimeObservationSession
+            m_RuntimeObservations.Session = new RuntimeObservationSession
             {
                 SnapshotId = "runtime-observation-" + (m_SimulationSystem != null ? m_SimulationSystem.frameIndex.ToString() : "0"),
                 Status = "active",
@@ -313,19 +313,19 @@ namespace RapidTransitMod
                         row.kind ?? string.Empty,
                         targetMinute,
                         1,
-                        m_RuntimeObservationSession.AppliedAtFrame,
+                        m_RuntimeObservations.Session.AppliedAtFrame,
                         appliedGameDate);
                 }
             }
 
-            if (m_RuntimeObservationSession.TripsById.Count == 0)
+            if (m_RuntimeObservations.Session.TripsById.Count == 0)
             {
-                m_RuntimeObservationSession.Status = "empty";
+                m_RuntimeObservations.Session.Status = "empty";
             }
 
-            log.Info("[RuntimeObservation] seeded snapshot=" + m_RuntimeObservationSession.SnapshotId
+            log.Info("[RuntimeObservation] seeded snapshot=" + m_RuntimeObservations.Session.SnapshotId
                 + " selectedLine=" + (selectedLineId ?? string.Empty)
-                + " trips=" + m_RuntimeObservationSession.TripsById.Count);
+                + " trips=" + m_RuntimeObservations.Session.TripsById.Count);
         }
 
         private DateTime ResolveRuntimeObservationGameDate()
@@ -340,10 +340,10 @@ namespace RapidTransitMod
 
         private int ResolveRuntimeObservationServiceDayIndex(DateTime serviceDate)
         {
-            if (m_RuntimeObservationSession == null)
+            if (m_RuntimeObservations.Session == null)
                 return -1;
 
-            DateTime appliedDate = m_RuntimeObservationSession.AppliedGameDate.Date;
+            DateTime appliedDate = m_RuntimeObservations.Session.AppliedGameDate.Date;
             if (serviceDate == DateTime.MinValue.Date || appliedDate == DateTime.MinValue.Date)
                 return -1;
 
@@ -377,7 +377,7 @@ namespace RapidTransitMod
             uint nowFrame,
             DateTime serviceDate)
         {
-            if (m_RuntimeObservationSession == null)
+            if (m_RuntimeObservations.Session == null)
                 return null;
 
             RuntimeObservedTrip trip = new RuntimeObservedTrip
@@ -402,7 +402,7 @@ namespace RapidTransitMod
                 OccurrenceIndex = Math.Max(1, occurrenceIndex),
                 LastUpdatedFrame = nowFrame
             };
-            m_RuntimeObservationSession.TripsById[trip.TripObservationId] = trip;
+            m_RuntimeObservations.Session.TripsById[trip.TripObservationId] = trip;
             AddRuntimeObservedTripLineSlotIndex(trip);
             return trip;
         }
@@ -436,7 +436,7 @@ namespace RapidTransitMod
         {
             if (line == Entity.Null
                 || targetMinute < 0
-                || !m_RuntimeObservedTripsByLineSlot.TryGetValue(BuildRuntimeObservationLineSlotKey(line, targetMinute), out List<RuntimeObservedTrip> trips)
+                || !m_RuntimeObservations.TripsByLineSlot.TryGetValue(BuildRuntimeObservationLineSlotKey(line, targetMinute), out List<RuntimeObservedTrip> trips)
                 || trips == null
                 || trips.Count == 0)
             {
@@ -475,10 +475,10 @@ namespace RapidTransitMod
                 return;
 
             string key = BuildRuntimeObservationLineSlotKey(trip.Line, trip.TargetMinute);
-            if (!m_RuntimeObservedTripsByLineSlot.TryGetValue(key, out List<RuntimeObservedTrip> trips))
+            if (!m_RuntimeObservations.TripsByLineSlot.TryGetValue(key, out List<RuntimeObservedTrip> trips))
             {
                 trips = new List<RuntimeObservedTrip>();
-                m_RuntimeObservedTripsByLineSlot[key] = trips;
+                m_RuntimeObservations.TripsByLineSlot[key] = trips;
             }
             trips.Add(trip);
         }
@@ -488,10 +488,10 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null || trip == null)
                 return;
 
-            if (!m_RuntimeObservedTripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips))
+            if (!m_RuntimeObservations.TripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips))
             {
                 trips = new List<RuntimeObservedTrip>();
-                m_RuntimeObservedTripsByVehicle[vehicle] = trips;
+                m_RuntimeObservations.TripsByVehicle[vehicle] = trips;
             }
             if (!trips.Contains(trip))
             {
@@ -501,7 +501,7 @@ namespace RapidTransitMod
 
         private void RecordRuntimeObservationTargetBound(Entity line, Entity vehicle, int targetMinute, uint nowFrame, string reasonCode)
         {
-            if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservationSession == null)
+            if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservations.Session == null)
                 return;
 
             RuntimeObservedTrip[] trips = GetRuntimeObservedTripActiveOccurrences(line, targetMinute, nowFrame);
@@ -520,12 +520,12 @@ namespace RapidTransitMod
                 trip.LastUpdatedFrame = nowFrame;
                 AddRuntimeObservedTripVehicleIndex(vehicle, trip);
             }
-            m_RuntimeObservationSession.LastUpdatedFrame = nowFrame;
+            m_RuntimeObservations.Session.LastUpdatedFrame = nowFrame;
         }
 
         private void RecordRuntimeObservationLaunch(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)
         {
-            if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservationSession == null)
+            if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservations.Session == null)
                 return;
 
             RuntimeObservedTrip[] trips = GetRuntimeObservedTripActiveOccurrences(line, targetMinute, launchFrame);
@@ -546,7 +546,7 @@ namespace RapidTransitMod
                 trip.LastUpdatedFrame = launchFrame;
                 AddRuntimeObservedTripVehicleIndex(vehicle, trip);
             }
-            m_RuntimeObservationSession.LastUpdatedFrame = launchFrame;
+            m_RuntimeObservations.Session.LastUpdatedFrame = launchFrame;
         }
 
         private void RecordRuntimeObservationStopEvent(
@@ -560,7 +560,7 @@ namespace RapidTransitMod
             string clockTime,
             uint frame)
         {
-            if (vehicle == Entity.Null || line == Entity.Null || station == Entity.Null || m_RuntimeObservationSession == null)
+            if (vehicle == Entity.Null || line == Entity.Null || station == Entity.Null || m_RuntimeObservations.Session == null)
                 return;
 
             RuntimeObservedTrip observedTrip = ResolveRuntimeObservedTrip(
@@ -593,9 +593,9 @@ namespace RapidTransitMod
                 DepartureFrame = arrival ? 0 : frame,
                 LastUpdatedFrame = frame
             };
-            m_RuntimeObservationSession.StopEvents.Add(stopEvent);
-            TrimRuntimeObservationList(m_RuntimeObservationSession.StopEvents, 256);
-            m_RuntimeObservationSession.LastUpdatedFrame = frame;
+            m_RuntimeObservations.Session.StopEvents.Add(stopEvent);
+            TrimRuntimeObservationList(m_RuntimeObservations.Session.StopEvents, 256);
+            m_RuntimeObservations.Session.LastUpdatedFrame = frame;
         }
 
         private void RecordRuntimeObservationBypassHoldStart(
@@ -606,7 +606,7 @@ namespace RapidTransitMod
             uint nowFrame,
             string reasonCode)
         {
-            if (vehicle == Entity.Null || m_RuntimeObservationSession == null)
+            if (vehicle == Entity.Null || m_RuntimeObservations.Session == null)
                 return;
 
             RuntimeObservedTrip localTrip = ResolveRuntimeObservedTrip(
@@ -618,7 +618,7 @@ namespace RapidTransitMod
                 TryGetRuntimeObservedVehicleTargetMinute(blocker),
                 ResolveVehicleLine(blocker));
 
-            if (m_RuntimeActiveBypassByVehicle.TryGetValue(vehicle, out RuntimeObservedBypassEvent activeEvent)
+            if (m_RuntimeObservations.ActiveBypassByVehicle.TryGetValue(vehicle, out RuntimeObservedBypassEvent activeEvent)
                 && activeEvent.PriorityVehicle == blocker
                 && activeEvent.State == "holding")
             {
@@ -635,7 +635,7 @@ namespace RapidTransitMod
                     activeEvent.PriorityOccurrenceIndex = priorityTrip.OccurrenceIndex;
                 }
                 activeEvent.LastUpdatedFrame = nowFrame;
-                m_RuntimeObservationSession.LastUpdatedFrame = nowFrame;
+                m_RuntimeObservations.Session.LastUpdatedFrame = nowFrame;
                 return;
             }
             if (activeEvent != null && activeEvent.State == "holding")
@@ -674,12 +674,12 @@ namespace RapidTransitMod
                 DecisionReason = reasonCode ?? "bypass-hold",
                 LastUpdatedFrame = nowFrame
             };
-            m_RuntimeActiveBypassByVehicle[vehicle] = bypassEvent;
-            m_RuntimeObservationSession.BypassEvents.Add(bypassEvent);
-            TrimRuntimeObservationList(m_RuntimeObservationSession.BypassEvents, 128);
-            m_RuntimeObservationSession.LastUpdatedFrame = nowFrame;
+            m_RuntimeObservations.ActiveBypassByVehicle[vehicle] = bypassEvent;
+            m_RuntimeObservations.Session.BypassEvents.Add(bypassEvent);
+            TrimRuntimeObservationList(m_RuntimeObservations.Session.BypassEvents, 128);
+            m_RuntimeObservations.Session.LastUpdatedFrame = nowFrame;
 
-            if (m_RuntimeObservedTripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips))
+            if (m_RuntimeObservations.TripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips))
             {
                 foreach (RuntimeObservedTrip trip in trips)
                 {
@@ -691,10 +691,10 @@ namespace RapidTransitMod
 
         private void RecordRuntimeObservationBypassHoldRelease(Entity vehicle, Entity blocker, uint nowFrame, string releaseReason)
         {
-            if (vehicle == Entity.Null || m_RuntimeObservationSession == null)
+            if (vehicle == Entity.Null || m_RuntimeObservations.Session == null)
                 return;
 
-            if (!m_RuntimeActiveBypassByVehicle.TryGetValue(vehicle, out RuntimeObservedBypassEvent bypassEvent))
+            if (!m_RuntimeObservations.ActiveBypassByVehicle.TryGetValue(vehicle, out RuntimeObservedBypassEvent bypassEvent))
                 return;
 
             bypassEvent.State = "released";
@@ -716,10 +716,10 @@ namespace RapidTransitMod
             bypassEvent.HoldReleaseFrame = nowFrame;
             bypassEvent.ReleaseReason = releaseReason ?? string.Empty;
             bypassEvent.LastUpdatedFrame = nowFrame;
-            m_RuntimeActiveBypassByVehicle.Remove(vehicle);
-            m_RuntimeObservationSession.LastUpdatedFrame = nowFrame;
+            m_RuntimeObservations.ActiveBypassByVehicle.Remove(vehicle);
+            m_RuntimeObservations.Session.LastUpdatedFrame = nowFrame;
 
-            if (m_RuntimeObservedTripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips))
+            if (m_RuntimeObservations.TripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips))
             {
                 foreach (RuntimeObservedTrip trip in trips)
                 {
@@ -733,7 +733,7 @@ namespace RapidTransitMod
         {
             RuntimeObservedBaselineRowDto[] baselineRows = BuildRuntimeObservedBaselineRows();
             RuntimeObservedPlannerContractDto[] plannerContracts = BuildRuntimeObservedPlannerContracts();
-            RuntimeObservationSession session = m_RuntimeObservationSession;
+            RuntimeObservationSession session = m_RuntimeObservations.Session;
             if (session == null)
             {
                 RuntimeObservedTripDto[] emptyTrips = Array.Empty<RuntimeObservedTripDto>();
@@ -1367,7 +1367,7 @@ namespace RapidTransitMod
         private RuntimeObservedTrip ResolveRuntimeObservedTrip(Entity vehicle, int preferredTargetMinute, Entity preferredLine)
         {
             if (vehicle == Entity.Null
-                || !m_RuntimeObservedTripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips)
+                || !m_RuntimeObservations.TripsByVehicle.TryGetValue(vehicle, out List<RuntimeObservedTrip> trips)
                 || trips == null
                 || trips.Count == 0)
             {
@@ -1404,9 +1404,9 @@ namespace RapidTransitMod
         {
             if (vehicle == Entity.Null)
                 return -1;
-            if (m_VehicleCurrentSlot.IsCreated && m_VehicleCurrentSlot.TryGetValue(vehicle, out int currentSlot))
+            if (m_VehicleRuntime.CurrentSlot.IsCreated && m_VehicleView.TryGetSlot(vehicle, out int currentSlot))
                 return currentSlot;
-            if (m_VehicleTargetMin.IsCreated && m_VehicleTargetMin.TryGetValue(vehicle, out int targetMinute))
+            if (m_VehicleRuntime.TargetMin.IsCreated && m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
                 return targetMinute;
             return -1;
         }

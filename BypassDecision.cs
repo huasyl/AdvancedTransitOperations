@@ -3,12 +3,6 @@ using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Entities;
-using BypassConflictEpisode = RapidTransitMod.DispatchRuntimeSystem.BypassConflictEpisode;
-using BypassConflictMode = RapidTransitMod.DispatchRuntimeSystem.BypassConflictMode;
-using BypassControlScope = RapidTransitMod.DispatchRuntimeSystem.BypassControlScope;
-using BypassControlScopeCacheEntry = RapidTransitMod.DispatchRuntimeSystem.BypassControlScopeCacheEntry;
-using BypassHoldCadenceSnapshot = RapidTransitMod.DispatchRuntimeSystem.BypassHoldCadenceSnapshot;
-using BypassLatchedBlockerProjection = RapidTransitMod.DispatchRuntimeSystem.BypassLatchedBlockerProjection;
 
 namespace RapidTransitMod
 {

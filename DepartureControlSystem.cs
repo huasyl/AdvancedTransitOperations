@@ -2,11 +2,11 @@
 // - IsSlotExpired 上限由 SLOT_INTERVAL(30) 改为 SPAWN_LEAD_MIN + SLOT_GRACE_MIN(64)，覆盖所有真过期场景
 // - Holding 过期处理细分：overdue > SLOT_INTERVAL 直接回库，否则释放槽等重新分配
 // - 调度器槽扫描入口加 IsSlotExpired 检查，过期槽直接跳过不参与分配
-// - Running->Idle 时清理 m_VehicleTargetMin，防止旧槽值残留导致下帧直接 Idle->Holding 绕过调度保护
+// - Running->Idle 时清理旧的 targetMin，防止旧槽值残留导致下帧直接 Idle->Holding 绕过调度保护
 // - PuppetMaster：D=0 时改用 iDefault 兜底；每帧清理 m_SpawningLines 中已不存在的线路 Entity 记录
 // - 注册新车时清理 m_UICache，防止旧线路缓存导致 SetUILabel 去重跳过、UI 标签不刷新
 // - m_LineQuery 加 Disabled 过滤，关闭线路后调度器停止处理，现有车跑完当前圈自然 Idle 超时回库
-// - 新增 m_NearingTerminus：车进入最后一个 waypoint 时打标签，Idle->Holding 前检查本线路有无标签车距始发站 <= 350 米，有则回库疏解
+// - 新增末端入站标签：车进入最后一个 waypoint 时打标签，Idle->Holding 前检查本线路有无标签车距始发站 <= 350 米，有则回库疏解
 
 using System;
 using System.Collections.Generic;
@@ -72,32 +72,6 @@ namespace RapidTransitMod
             }
         }
 
-        private sealed class RetireHandoffWatchRecord
-        {
-            public uint RequestedFrame;
-            public uint LastWriteFrame;
-            public byte AttemptCount;
-            public uint SoftAckFrame;
-            public uint HardAckFrame;
-            public Entity LastObservedTarget;
-            public string ReasonCode = string.Empty;
-            public bool HasIntervention;
-            public bool HardAckStallLogged;
-            public uint LastTraceFrame;
-            public uint LastDispatchGuardLogFrame;
-            public uint LastParkingDiagLogFrame;
-            public uint LastPreCommitLogFrame;
-            public uint LastEndReachedRepairLogFrame;
-            public uint LastRedispatchBlockedLogFrame;
-            public string LastTraceKey = string.Empty;
-        }
-
-        private struct DeferredBoardingTailIgnoreEntry
-        {
-            public Entity Vehicle;
-            public uint ExpireFrame;
-        }
-
         private readonly struct VehiclePhysicalTrackPosition
         {
             public readonly Entity Vehicle;
@@ -147,7 +121,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct LineRunningVehicleSnapshot
+        internal readonly struct LineRunningVehicleSnapshot
         {
             public readonly Entity Vehicle;
             public readonly int NextWaypointIndex;
@@ -413,28 +387,29 @@ namespace RapidTransitMod
         }
 
         public static DispatchRuntimeSystem Instance = null!;
-        private TimedLogger log = Mod.log;
-        private SimulationSystem m_SimulationSystem = null!;
+        internal TimedLogger log = Mod.log;
+        internal SimulationSystem m_SimulationSystem = null!;
         private TimeSystem m_TimeSystem = null!;
         private NameSystem m_NameSystem = null!;
         private EndFrameBarrier m_EndFrameBarrier = null!;
 
         // ── 车辆状态 ──
-        private VehicleRuntimeStateStore m_VehicleRuntime = null!;
-        private VehicleRuntimeRegistry m_VehicleRegistry = null!;
-        private VehicleRuntimeView m_VehicleView = null!;
-        private DispatchRuntimeController m_RuntimeController = null!;
-        private LapObservationStore m_LapObservations = null!;
-        private StopDwellStore m_StopDwell = null!;
+        internal VehicleRuntimeStateStore m_VehicleRuntime = null!;
+        internal VehicleRuntimeRegistry m_VehicleRegistry = null!;
+        internal VehicleRuntimeView m_VehicleView = null!;
+        internal DispatchRuntimeController m_RuntimeController = null!;
+        internal LapObservationStore m_LapObservations = null!;
+        private DispatchCommandApplier m_CommandApplier = null!;
+        private DispatchScheduler m_DispatchScheduler = null!;
+        internal StopDwellStore m_StopDwell = null!;
         private TraversalSliceStore m_TraversalSlices = null!;
         private RuntimeObservationStore m_RuntimeObservations = null!;
-        private NativeHashMap<Entity, FixedString64Bytes> m_UICache;
-        private NativeHashMap<Entity, bool> m_LastBoarding;
-        private NativeHashMap<Entity, int> m_CachedWpIdx;
-        private NativeHashSet<Entity> m_BVMisfire;
-        private NativeHashMap<Entity, uint> m_BVMisfireStartFrame;
+        internal NativeHashMap<Entity, FixedString64Bytes> m_UICache;
+        internal NativeHashMap<Entity, bool> m_LastBoarding;
+        internal NativeHashMap<Entity, int> m_CachedWpIdx;
+        internal NativeHashSet<Entity> m_BVMisfire;
+        internal NativeHashMap<Entity, uint> m_BVMisfireStartFrame;
         private NativeHashMap<Entity, uint> m_ForcedMidStopBoardingGraceUntil;
-        private NativeHashMap<Entity, uint> m_ForcedMidStopBoardingHardCloseAfter;
         /// <summary>
         /// 已进入最后一个 waypoint 的车辆集合。
         /// Idle 转 Holding 前检查本线路是否有此标签的车距始发站 350 米内，有则回库。
@@ -443,10 +418,10 @@ namespace RapidTransitMod
         /// 发车冷却：发车后屏蔽 boarding 变化检测的截止帧。
         /// 防止车辆物理上尚未离开始发站时原生系统触发的假进站 / 假 BV 误写。
         /// </summary>
-        private NativeHashMap<Entity, uint> m_LastRetireFixLogFrame;
-        private NativeHashMap<Entity, uint> m_RetireFixCooldownUntil;
-        private NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
-        private NativeHashMap<Entity, byte> m_RetireFixCount;
+        internal NativeHashMap<Entity, uint> m_LastRetireFixLogFrame;
+        internal NativeHashMap<Entity, uint> m_RetireFixCooldownUntil;
+        internal NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
+        internal NativeHashMap<Entity, byte> m_RetireFixCount;
         private readonly Dictionary<Entity, AssistLaunchPendingRecord> m_AssistLaunchPendingByVehicle = new Dictionary<Entity, AssistLaunchPendingRecord>();
         private readonly Dictionary<Entity, LineMileageModel> m_LineMileageModels = new Dictionary<Entity, LineMileageModel>();
         private SharedLocalCorridorGraph m_SharedLocalCorridorGraph;
@@ -463,7 +438,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_CrossLineCandidateLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_RouteVehicleOwnerMismatchLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_HoldingSkipLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, string> m_LateDispatchLogCache = new Dictionary<Entity, string>();
+        internal readonly Dictionary<Entity, string> m_LateDispatchLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_BvMisfireObserveLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_DepartureObserveLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_OriginDispatchTraceLogCache = new Dictionary<Entity, string>();
@@ -475,18 +450,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, string> m_BvTrackAnchorRecoveryLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, TrainHeadSnapshot> m_LastLaunchHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
         private readonly Dictionary<Entity, TrainHeadSnapshot> m_LastBoardingHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
-        private readonly Dictionary<Entity, BoardingDepartureAuditSnapshot> m_LastBoardingAssistSnapshots = new Dictionary<Entity, BoardingDepartureAuditSnapshot>();
-        private readonly Dictionary<Entity, DeferredBoardingTailIgnoreEntry> m_DeferredBoardingTailIgnores = new Dictionary<Entity, DeferredBoardingTailIgnoreEntry>();
-        private readonly HashSet<Entity> m_DeferredBoardingHumanTailIgnores = new HashSet<Entity>();
-        private readonly HashSet<Entity> m_DeferredBoardingPetTailIgnores = new HashSet<Entity>();
-        private readonly List<Entity> m_DeferredBoardingTailScratch = new List<Entity>();
-        private readonly Dictionary<Entity, RetireHandoffWatchRecord> m_RetireHandoffWatch =
-            new Dictionary<Entity, RetireHandoffWatchRecord>();
         private readonly Dictionary<Entity, string> m_MidStopTimeoutLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, List<string>> m_RetireShadowHistory = new Dictionary<Entity, List<string>>();
-        private readonly Dictionary<Entity, string> m_RetireShadowLastSnapshot = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, uint> m_RetireShadowLastFrame = new Dictionary<Entity, uint>();
-        private uint m_LastDeferredBoardingTailCleanupFrame;
         private static bool IsTraversalSliceObservationPersistenceEnabled() => true;
         private static bool IsStopDwellObservationPersistenceEnabled() => false;
         private static bool IsStationStopDwellObservationPersistenceEnabled() => true;
@@ -534,10 +498,10 @@ namespace RapidTransitMod
         private ulong m_LineOrderedProbeHeadCandidateBuilds;
         private ulong m_LineOrderedProbeFallbackCandidateBuilds;
         // ── 线路状态 ──
-        private NativeHashMap<Entity, int> m_SpawningLines;
-        private NativeHashMap<Entity, uint> m_LineSpawnRequestFrame;
-        private NativeHashMap<Entity, uint> m_LastSpawnBlockedLogFrame;
-        private NativeHashMap<ulong, uint> m_LastScheduleDiagnosticLogFrame;
+        internal NativeHashMap<Entity, int> m_SpawningLines;
+        internal NativeHashMap<Entity, uint> m_LineSpawnRequestFrame;
+        internal NativeHashMap<Entity, uint> m_LastSpawnBlockedLogFrame;
+        internal NativeHashMap<ulong, uint> m_LastScheduleDiagnosticLogFrame;
         private NativeHashMap<Entity, ulong> m_LineWaypointSignature;
         private NativeHashMap<Entity, uint> m_LineStableSinceFrame;
         private NativeHashSet<Entity> m_LineInitialAdopted;
@@ -686,18 +650,18 @@ namespace RapidTransitMod
 
         private EntityQuery m_VehicleQuery;
         private EntityQuery m_AllPublicTransportQuery;
-        private EntityQuery m_LineQuery;
+        internal EntityQuery m_LineQuery;
         private EntityQuery m_TransportVehicleRequestQuery;
 
-        private const int SLOT_INTERVAL = 30;
-        private const int SPAWN_LEAD_MIN = 60;
+        internal const int SLOT_INTERVAL = 30;
+        internal const int SPAWN_LEAD_MIN = 60;
         private const float MAINTENANCE_THRESHOLD = 0.9f;
         private const int IDLE_TIMEOUT_MIN = 2;
-        private const double SIM_FRAMES_PER_MINUTE = 182.044;
+        internal const double SIM_FRAMES_PER_MINUTE = 182.044;
         private const float EARLY_STOP_DWELL_CLOSE_MAX_MINUTES = 3f;
         private const float AT_STOP_MAX_DIST = 300f;
         /// <summary>班次宽限分钟数：发车窗口和过期判断共用同一阈值。</summary>
-        private const int SLOT_GRACE_MIN = 4;
+        internal const int SLOT_GRACE_MIN = 4;
         /// <summary>BV 误写超时 6000 帧（约 33 秒现实时间），给足自愈窗口。</summary>
         private const uint BV_MISFIRE_TIMEOUT = 6000;
         /// <summary>暂时只观察 BV 误写，不再冻结车辆或回库；保留日志追踪后续是否能自愈。</summary>
@@ -705,17 +669,16 @@ namespace RapidTransitMod
         /// <summary>发车后冷却帧数：屏蔽 boarding 变化检测，防假进站</summary>
         private const uint LAUNCH_COOLDOWN_FRAMES = 600;
         private const uint FORCED_MIDSTOP_BV_GRACE_FRAMES = 180;
-        private const uint FORCED_MIDSTOP_HARD_CLOSE_FRAMES = 360;
-        private const uint OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES = 1800;
-        private const uint SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES = 1800;
-        private const uint SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES = 1800;
+        internal const uint OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES = 1800;
+        internal const uint SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES = 1800;
+        internal const uint SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_LOG_COOLDOWN_FRAMES = 1800;
         private const uint RETIREFIX_REPATH_COOLDOWN_FRAMES = 120;
-        private const uint RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES = 30;
-        private const uint RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES = 180;
+        internal const uint RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES = 30;
+        internal const uint RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES = 180;
         private const uint ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES = 1800;
-        private const byte RETIRE_HANDOFF_MAX_ATTEMPTS = 12;
-        private const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
+        internal const byte RETIRE_HANDOFF_MAX_ATTEMPTS = 12;
+        internal const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
         private const uint BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES = 60;
@@ -724,11 +687,11 @@ namespace RapidTransitMod
         private const uint BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES = 60;
         private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
         private const byte RETIREFIX_DELETE_THRESHOLD = 3;
-        private const float DISPATCH_ESTIMATE_MIN_MINUTES = 2f;
-        private const float DISPATCH_ESTIMATE_MAX_MINUTES = 20f;
+        internal const float DISPATCH_ESTIMATE_MIN_MINUTES = 2f;
+        internal const float DISPATCH_ESTIMATE_MAX_MINUTES = 20f;
         private const float DISPATCH_FALLBACK_SPEED_M_PER_MIN = 450f;
         private const float PROFILE_STOP_START_BUFFER_MINUTES = 3f;
-        private const float ORIGIN_CONGESTION_RADIUS_METERS = 450f;
+        internal const float ORIGIN_CONGESTION_RADIUS_METERS = 450f;
         private const float ORIGIN_FORCE_IDLE_RADIUS_METERS = 180f;
         private const float ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS = 0.92f;
         private const uint ORIGIN_FORCE_IDLE_SETTLE_FRAMES = 180;
@@ -746,22 +709,22 @@ namespace RapidTransitMod
         private static bool IsLineOrderedRuntimeProbeLoggingEnabled() => true;
         private static bool IsTrackModelTurnbackBuildLoggingEnabled() => true;
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
-        private const uint RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES = 30;
-        private const int RETIRE_SHADOW_HISTORY_LIMIT = 4;
-        private static readonly uint RETIRE_HANDOFF_MAX_AGE_FRAMES = (uint)math.round(
+        internal const uint RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES = 30;
+        internal const int RETIRE_SHADOW_HISTORY_LIMIT = 4;
+        internal static readonly uint RETIRE_HANDOFF_MAX_AGE_FRAMES = (uint)math.round(
             3f * (float)SIM_FRAMES_PER_MINUTE);
         private const float ORIGIN_ARRIVAL_HOLD_MINUTES = 2f;
         private static readonly uint FORCED_ORIGIN_MIN_DWELL_FRAMES = (uint)math.round(3f * (float)SIM_FRAMES_PER_MINUTE);
         private static readonly uint PREPARING_ORIGIN_SETTLE_FRAMES = (uint)math.max(1f, math.round(2f * (float)SIM_FRAMES_PER_MINUTE));
-        private const float SPAWN_TRIGGER_BUFFER_SHORT_MINUTES = 10f;
-        private const float SPAWN_TRIGGER_BUFFER_LONG_MINUTES = 15f;
-        private const float SPAWN_TRIGGER_BUFFER_THRESHOLD_MINUTES = 20f;
+        internal const float SPAWN_TRIGGER_BUFFER_SHORT_MINUTES = 10f;
+        internal const float SPAWN_TRIGGER_BUFFER_LONG_MINUTES = 15f;
+        internal const float SPAWN_TRIGGER_BUFFER_THRESHOLD_MINUTES = 20f;
         private const uint TRAVERSAL_SLICE_SAMPLE_INTERVAL_MEDIUM_FRAMES = 20;
         private const uint TRAVERSAL_SLICE_SAMPLE_INTERVAL_LOW_FRAMES = 60;
         private const float TRAVERSAL_SLICE_SAMPLE_HIGH_THRESHOLD = 0.03f;
         private const float TRAVERSAL_SLICE_SAMPLE_MEDIUM_THRESHOLD = 0.05f;
-        private const int YIELD_PROTECT_MINUTES = 5;
-        private const int LATE_DISPATCH_WINDOW_MINUTES = 8;
+        internal const int YIELD_PROTECT_MINUTES = 5;
+        internal const int LATE_DISPATCH_WINDOW_MINUTES = 8;
         private const float ETA_SCALE_MIN = 0.5f;
         private const float ETA_SCALE_MAX = 2.0f;
         private const uint NEW_LINE_STABLE_FRAMES = 300;
@@ -772,8 +735,6 @@ namespace RapidTransitMod
         private const float DISPATCH_SLOW_SAMPLE_MAX_STEP_MINUTES = 4f;
         private const uint BYPASS_YIELD_DECISION_COOLDOWN_FRAMES = 30;
         private const uint PREPARING_ROUTE_FIX_GRACE_FRAMES = 300;
-        private const uint BOARDING_TAIL_IGNORE_TTL_FRAMES = 900;
-        private const uint BOARDING_TAIL_IGNORE_CLEANUP_INTERVAL_FRAMES = 256;
         private const bool ENABLE_MIDSTOP_TIMEOUT_GATE_LOGS = false;
 
         // ============================================================
@@ -796,6 +757,21 @@ namespace RapidTransitMod
             m_VehicleRegistry = new VehicleRuntimeRegistry(m_VehicleRuntime);
             m_VehicleView = new VehicleRuntimeView(m_VehicleRuntime);
             m_RuntimeController = new DispatchRuntimeController(m_VehicleRegistry);
+            m_CommandApplier = new DispatchCommandApplier(this);
+            m_DispatchScheduler = new DispatchScheduler(
+                this,
+                m_CommandApplier,
+                IsDispatchRuntimeManagedLine,
+                GetAppliedWorkbenchDepartureMinutes,
+                GetWorkbenchOriginHoldLimitMinutes,
+                ReadDispatchCache,
+                ReadLineLapCache,
+                ResolveRuntimeControllerVehicle,
+                IsLineStable,
+                ShouldHoldSpawnForNearestRunningCandidate,
+                HasBorderlineOriginArrivalCandidate,
+                LogDispatchSlotHeld,
+                RecordLineSpawnTriggerSummary);
             m_LapObservations = new LapObservationStore();
             m_LapObservations.Init();
             m_StopDwell = new StopDwellStore();
@@ -815,7 +791,6 @@ namespace RapidTransitMod
             m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
             m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_ForcedMidStopBoardingHardCloseAfter = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
             m_LastRetireFixLogFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_RetireFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_PreparingFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
@@ -878,6 +853,8 @@ namespace RapidTransitMod
         protected override void OnDestroy()
         {
             if (ReferenceEquals(Instance, this)) Instance = null!;
+            m_CommandApplier = null!;
+            m_DispatchScheduler = null!;
             m_RuntimeController = null!;
             m_VehicleView = null!;
             m_VehicleRegistry = null!;
@@ -900,7 +877,6 @@ namespace RapidTransitMod
             if (m_BVMisfire.IsCreated) m_BVMisfire.Dispose();
             if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
             if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();
-            if (m_ForcedMidStopBoardingHardCloseAfter.IsCreated) m_ForcedMidStopBoardingHardCloseAfter.Dispose();
             if (m_LastRetireFixLogFrame.IsCreated) m_LastRetireFixLogFrame.Dispose();
             if (m_RetireFixCooldownUntil.IsCreated) m_RetireFixCooldownUntil.Dispose();
             if (m_PreparingFixCooldownUntil.IsCreated) m_PreparingFixCooldownUntil.Dispose();
@@ -944,9 +920,17 @@ namespace RapidTransitMod
 
         private string BuildOriginHoldRetireReason(Entity line, int nowMin, int targetMin)
         {
-            int waitMinutes = MinutesUntil(nowMin, targetMin);
+            int waitMinutes = m_DispatchScheduler.MinutesUntil(nowMin, targetMin);
             int holdLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line);
             return "下一班仍需等待" + waitMinutes + "分钟，超出候车窗口" + holdLimitMinutes + "分钟";
+        }
+
+        internal static string SlotStr(int min)
+        {
+            min = ((min % 1440) + 1440) % 1440;
+            int h = min / 60 % 24;
+            int m = min % 60;
+            return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
         }
 
         private float EstimateDepartureToWaypointFrames(
@@ -1061,155 +1045,6 @@ namespace RapidTransitMod
             }
 
             return guard <= count ? math.max(0f, remaining) : float.MaxValue;
-        }
-
-        private bool TryAssignCurrentOrLateSlotToWaitingVehicle(
-            Entity line,
-            Entity v,
-            int nowMin,
-            string lineTag,
-            string stateTag,
-            out int lateSlot)
-        {
-            lateSlot = -1;
-            int prevSlot = GetPreviousSlotMin(nowMin);
-            if (!IsCurrentOrRecentDispatchableSlot(nowMin, prevSlot)) return false;
-            if (IsDispatchTargetAlreadyOccupied(line, v, prevSlot)) return false;
-
-            var rvBuffers = GetBufferLookup<RouteVehicle>(true);
-            if (!rvBuffers.TryGetBuffer(line, out var rvs)) return false;
-
-            for (int i = 0; i < rvs.Length; i++)
-            {
-                Entity other = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
-                if (other == v) continue;
-                if (!EntityManager.Exists(other)) continue;
-                if (!m_VehicleTargetMin.TryGetValue(other, out int otherTarget) || otherTarget != prevSlot) continue;
-
-                if (m_VehicleState.TryGetValue(other, out var otherState)
-                    && (otherState == VehicleState.Preparing || otherState == VehicleState.Idle || otherState == VehicleState.Holding))
-                    return false;
-
-                m_RuntimeController.ReleaseTarget(other);
-                LogVehicleStateOnce(
-                    m_LateDispatchLogCache,
-                    v,
-                    "LateDispatchTakeover|" + prevSlot + "|" + other.Index,
-                    "[补发接管] " + lineTag + " 车辆" + v.Index
-                        + " 接管班次" + SlotStr(prevSlot)
-                        + " 释放车辆" + other.Index
-                        + " state=" + (m_VehicleState.TryGetValue(other, out var releasedState) ? releasedState.ToString() : "?"));
-            }
-
-            m_RuntimeController.Target(v, prevSlot);
-            lateSlot = prevSlot;
-            if (CanLateDispatchSlot(nowMin, prevSlot))
-            {
-                LogVehicleStateOnce(
-                    m_LateDispatchLogCache,
-                    v,
-                    "LateDispatchCandidate|" + prevSlot + "|" + stateTag,
-                    "[补发候选] " + lineTag + " 车辆" + v.Index
-                        + " state=" + stateTag
-                        + " 候选补发班次" + SlotStr(prevSlot)
-                        + " 已过期" + GetSlotOverdueMinutes(nowMin, prevSlot) + "分钟");
-            }
-            return true;
-        }
-
-        private bool TryAssignUpcomingScheduledTargetToWaitingVehicle(
-            Entity line,
-            Entity vehicle,
-            int nowMin,
-            string lineTag,
-            string stateTag,
-            EntityCommandBuffer ecb,
-            out int assignedTarget)
-        {
-            assignedTarget = -1;
-            if (line == Entity.Null || vehicle == Entity.Null || !IsDispatchRuntimeManagedLine(line))
-                return false;
-
-            int nextTarget = GetNextManagedDispatchTarget(line, nowMin);
-            if (nextTarget < 0 || IsCurrentOrRecentDispatchableSlot(nowMin, nextTarget))
-                return false;
-
-            int waitMinutes = MinutesUntil(nowMin, nextTarget);
-            if (waitMinutes > GetWorkbenchOriginHoldLimitMinutes(line))
-                return false;
-            if (IsDispatchTargetAlreadyOccupied(line, vehicle, nextTarget))
-                return false;
-
-            AssignSlot(vehicle, nextTarget, ecb);
-            assignedTarget = nextTarget;
-            LogVehicleStateOnce(
-                m_LateDispatchLogCache,
-                vehicle,
-                "UpcomingTarget|" + nextTarget + "|" + stateTag,
-                "[预分配] " + lineTag + " 车辆" + vehicle.Index
-                    + " state=" + stateTag
-                    + " 预分配未来班次" + SlotStr(nextTarget)
-                    + " 距今" + waitMinutes + "分钟");
-            return true;
-        }
-
-        private bool TryAssignCurrentOrLateScheduledTargetToWaitingVehicle(
-            Entity line,
-            Entity v,
-            int nowMin,
-            string lineTag,
-            string stateTag,
-            IReadOnlyList<int> targets,
-            out int lateTarget)
-        {
-            lateTarget = -1;
-            int prevTarget = GetPreviousScheduledTargetMin(nowMin, targets);
-            if (prevTarget < 0 || !IsCurrentOrRecentDispatchableSlot(nowMin, prevTarget))
-                return false;
-            if (IsDispatchTargetAlreadyOccupied(line, v, prevTarget))
-                return false;
-
-            var rvBuffers = GetBufferLookup<RouteVehicle>(true);
-            if (!rvBuffers.TryGetBuffer(line, out var rvs))
-                return false;
-
-            for (int i = 0; i < rvs.Length; i++)
-            {
-                Entity other = ResolveRuntimeControllerVehicle(rvs[i].m_Vehicle);
-                if (other == v) continue;
-                if (!EntityManager.Exists(other)) continue;
-                if (!m_VehicleTargetMin.TryGetValue(other, out int otherTarget) || otherTarget != prevTarget) continue;
-
-                if (m_VehicleState.TryGetValue(other, out var otherState)
-                    && (otherState == VehicleState.Preparing || otherState == VehicleState.Idle || otherState == VehicleState.Holding))
-                    return false;
-
-                m_RuntimeController.ReleaseTarget(other);
-                LogVehicleStateOnce(
-                    m_LateDispatchLogCache,
-                    v,
-                    "LateDispatchTakeover|" + prevTarget + "|" + other.Index,
-                    "[补发接管] " + lineTag + " 车辆" + v.Index
-                        + " 接管班次" + SlotStr(prevTarget)
-                        + " 释放车辆" + other.Index
-                        + " state=" + (m_VehicleState.TryGetValue(other, out var releasedState) ? releasedState.ToString() : "?"));
-            }
-
-            m_RuntimeController.Target(v, prevTarget);
-            lateTarget = prevTarget;
-            if (CanLateDispatchSlot(nowMin, prevTarget))
-            {
-                LogVehicleStateOnce(
-                    m_LateDispatchLogCache,
-                    v,
-                    "LateDispatchCandidate|" + prevTarget + "|" + stateTag,
-                    "[补发候选] " + lineTag + " 车辆" + v.Index
-                        + " state=" + stateTag
-                        + " 候选补发班次" + SlotStr(prevTarget)
-                        + " 已过期" + GetSlotOverdueMinutes(nowMin, prevTarget) + "分钟");
-            }
-
-            return true;
         }
 
         private VehicleState InferInitialVehicleState(
@@ -2163,14 +1998,14 @@ namespace RapidTransitMod
             return math.max(0f, remaining);
         }
 
-        private float EstimatePreparingArrivalFrames(
+        internal float EstimatePreparingArrivalFrames(
             Entity v,
             Entity line,
             DynamicBuffer<RouteWaypoint> wps,
             uint nowFrame,
             float lineDurationFrames)
         {
-            if (!m_VehiclePreparingStartFrame.ContainsKey(v))
+            if (!m_VehicleRuntime.PreparingStartFrame.ContainsKey(v))
                 return float.MaxValue;
             float cachedFrames = ReadDispatchCache(line);
             if (cachedFrames <= 0f)
@@ -2190,7 +2025,7 @@ namespace RapidTransitMod
             return cachedFrames;
         }
 
-        private float EstimateRunningArrivalFrames(
+        internal float EstimateRunningArrivalFrames(
             Entity v,
             Entity line,
             DynamicBuffer<RouteWaypoint> wps,

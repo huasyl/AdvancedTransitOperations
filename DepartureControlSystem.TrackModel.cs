@@ -14,6 +14,19 @@ namespace RapidTransitMod
 {
     public partial class DispatchRuntimeSystem
     {
+        private const int MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS = 3;
+        private const int MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN = 2;
+        private const float PROTECTED_INTERVAL_TAIL_CLEARANCE_ATOMS = 1.25f;
+        private const float SAME_DIRECTION_AHEAD_MARGIN_ATOMS = 0.75f;
+        private const float TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES = 1f;
+        private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 3f;
+        private const float LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS = 8f;
+        private const int MAX_CONFLICT_CORRIDOR_GAP_ATOMS = 6;
+        private const uint SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES = 60;
+        private const int SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS = 1;
+        private const int SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD = 12;
+        private const float SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS = 120f;
+
         private TrackModelStore m_TrackModels = null!;
         private TrackModelBuilder m_TrackModelBuilder = null!;
         private TrackModelQuery m_TrackModelQuery = null!;
@@ -139,35 +152,6 @@ namespace RapidTransitMod
         private static string FormatEntityRef(Entity entity)
         {
             return entity == Entity.Null ? "null" : entity.Index + ":" + entity.Version;
-        }
-
-        private readonly struct ConflictCorridor
-        {
-            public readonly int ProtectedIntervalIndex;
-            public readonly int StartAtomIndex;
-            public readonly int EndAtomIndexExclusive;
-            public readonly int AnchorSharedStartAtomIndex;
-            public readonly int AnchorSharedEndAtomIndexExclusive;
-            public readonly int SharedSliceCount;
-            public readonly int BridgedGapAtoms;
-
-            public ConflictCorridor(
-                int protectedIntervalIndex,
-                int startAtomIndex,
-                int endAtomIndexExclusive,
-                int anchorSharedStartAtomIndex,
-                int anchorSharedEndAtomIndexExclusive,
-                int sharedSliceCount,
-                int bridgedGapAtoms)
-            {
-                ProtectedIntervalIndex = protectedIntervalIndex;
-                StartAtomIndex = startAtomIndex;
-                EndAtomIndexExclusive = endAtomIndexExclusive;
-                AnchorSharedStartAtomIndex = anchorSharedStartAtomIndex;
-                AnchorSharedEndAtomIndexExclusive = anchorSharedEndAtomIndexExclusive;
-                SharedSliceCount = sharedSliceCount;
-                BridgedGapAtoms = bridgedGapAtoms;
-            }
         }
 
         private readonly struct SuspectProgressSample

@@ -734,7 +734,7 @@ namespace RapidTransitMod
             log.Info("[ProgressSuspect] 杞﹁締" + vehicle.Index + " reason=" + reason + " sinceFrame=" + nowFrame);
         }
 
-        private void ClearVehicleProgressSuspect(Entity vehicle, string reason = null)
+        internal void ClearVehicleProgressSuspect(Entity vehicle, string reason = null)
         {
             if (vehicle == Entity.Null)
                 return;

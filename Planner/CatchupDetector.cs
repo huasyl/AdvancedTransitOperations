@@ -163,6 +163,10 @@ namespace RapidTransitMod.Planner
                         catchupEvent.UsableBypassStations = corridorStations;
                         catchupEvent.SourceCorridorIds = new List<string>(trunk.SourceCorridorIds);
                         events.Add(catchupEvent);
+                        if (canUseBypass && resolvedHoldMinutes > 0f)
+                        {
+                            ApplyResolvedBypassHold(localTrip, selectedBypass, resolvedHoldMinutes);
+                        }
                     }
                 }
             }
@@ -188,8 +192,12 @@ namespace RapidTransitMod.Planner
                 trip.DepartureTime = PlannerMath.MinutesToTime(row.Minute);
                 trip.Source = row.Source;
                 trip.Note = row.Note;
-                trip.AtomBoundaryMinuteOffsets = runtimeModel.AtomBoundaryMinuteOffsets;
-                trip.AtomBoundaryVariabilityOffsets = runtimeModel.AtomBoundaryVariabilityOffsets;
+                trip.AtomBoundaryMinuteOffsets = runtimeModel.AtomBoundaryMinuteOffsets != null
+                    ? (float[])runtimeModel.AtomBoundaryMinuteOffsets.Clone()
+                    : Array.Empty<float>();
+                trip.AtomBoundaryVariabilityOffsets = runtimeModel.AtomBoundaryVariabilityOffsets != null
+                    ? (float[])runtimeModel.AtomBoundaryVariabilityOffsets.Clone()
+                    : Array.Empty<float>();
                 for (int index = 0; index < runtimeModel.StationOffsets.Count; index++)
                 {
                     PlannerStationOffset offset = runtimeModel.StationOffsets[index];
@@ -208,6 +216,35 @@ namespace RapidTransitMod.Planner
             }
 
             return trips;
+        }
+
+        private static void ApplyResolvedBypassHold(
+            PlannerTripModel localTrip,
+            PlannerBypassEvaluation selectedBypass,
+            float resolvedHoldMinutes)
+        {
+            if (localTrip == null
+                || selectedBypass == null
+                || !(resolvedHoldMinutes > 0f)
+                || string.IsNullOrEmpty(selectedBypass.StationId))
+            {
+                return;
+            }
+
+            PlannerTripHoldSegment segment = localTrip.HoldSegments.FirstOrDefault(item =>
+                item != null && string.Equals(item.StationId, selectedBypass.StationId, StringComparison.Ordinal));
+            if (segment == null)
+            {
+                segment = new PlannerTripHoldSegment
+                {
+                    StationId = selectedBypass.StationId,
+                    StationOrder = selectedBypass.Order,
+                    DepartureBoundaryAtomIndex = selectedBypass.DepartureBoundaryAtomIndex
+                };
+                localTrip.HoldSegments.Add(segment);
+            }
+
+            segment.DelayMinutes = PlannerMath.Round4(Math.Max(segment.DelayMinutes, resolvedHoldMinutes));
         }
 
         private static void EnrichTrunkOffsets(
@@ -241,8 +278,8 @@ namespace RapidTransitMod.Planner
                 return null;
             }
 
-            float entryOffsetMinutes = GetAtomBoundaryMinuteOffset(trip.AtomBoundaryMinuteOffsets, startAtomIndex);
-            float exitOffsetMinutes = GetAtomBoundaryMinuteOffset(trip.AtomBoundaryMinuteOffsets, endAtomIndexExclusive);
+            float entryOffsetMinutes = GetEffectiveAtomBoundaryMinuteOffset(trip, startAtomIndex);
+            float exitOffsetMinutes = GetEffectiveAtomBoundaryMinuteOffset(trip, endAtomIndexExclusive);
             PlannerCorridorWindow window = new PlannerCorridorWindow();
             window.EntryMinute = trip.DepartureMinute + entryOffsetMinutes;
             window.ExitMinute = trip.DepartureMinute + exitOffsetMinutes;
@@ -283,7 +320,7 @@ namespace RapidTransitMod.Planner
             for (int axisIndex = 0; axisIndex <= sampleCount; axisIndex++)
             {
                 int atomIndex = MapAxisToAtomIndex(trunk, local, axisIndex, sampleCount);
-                float minuteOffset = GetAtomBoundaryMinuteOffset(trip.AtomBoundaryMinuteOffsets, atomIndex);
+                float minuteOffset = GetEffectiveAtomBoundaryMinuteOffset(trip, atomIndex);
                 float variabilityMinutes = GetAtomBoundaryMinuteOffset(trip.AtomBoundaryVariabilityOffsets, atomIndex);
                 curve.Samples.Add(new PlannerCurveSample
                 {
@@ -728,10 +765,10 @@ namespace RapidTransitMod.Planner
             PlannerStationEvent localStationEvent = localTrip.StationEvents.FirstOrDefault(eventItem =>
                 string.Equals(eventItem.StationId, station.StationId, StringComparison.Ordinal));
             int localDepartureBoundaryAtomIndex = ResolveBypassStationDepartureBoundaryAtomIndex(localModel, station);
-            float stationDepartureMinute = localStationEvent != null
-                ? localStationEvent.DepartureMinute
-                : localDepartureBoundaryAtomIndex >= 0
-                    ? localTrip.DepartureMinute + GetAtomBoundaryMinuteOffset(localTrip.AtomBoundaryMinuteOffsets, localDepartureBoundaryAtomIndex)
+            float stationDepartureMinute = localDepartureBoundaryAtomIndex >= 0
+                ? localTrip.DepartureMinute + GetEffectiveAtomBoundaryMinuteOffset(localTrip, localDepartureBoundaryAtomIndex)
+                : localStationEvent != null
+                    ? localStationEvent.DepartureMinute + GetAppliedHoldMinutesBeforeStation(localTrip, localStationEvent.Order, includeCurrentStation: true)
                     : gapProfile.Samples[axisIndex].LocalMinute;
             float releaseHoldMinutes = ComputeReleaseHoldMinutes(
                 context,
@@ -757,6 +794,7 @@ namespace RapidTransitMod.Planner
             evaluation.LocalStationMinute = PlannerMath.Round2(gapProfile.Samples[axisIndex].LocalMinute);
             evaluation.ExpressStationMinute = PlannerMath.Round2(gapProfile.Samples[axisIndex].ExpressMinute);
             evaluation.StationDepartureMinute = PlannerMath.Round2(stationDepartureMinute);
+            evaluation.DepartureBoundaryAtomIndex = localDepartureBoundaryAtomIndex;
             return evaluation;
         }
 
@@ -820,7 +858,7 @@ namespace RapidTransitMod.Planner
             int localReleaseBoundaryAtomIndex = localDepartureBoundaryAtomIndex + releaseAtoms;
             int expressReleaseBoundaryAtomIndex = MapLocalBoundaryAtomIndexToExpressBoundaryAtomIndex(trunk, localReleaseBoundaryAtomIndex);
             float expressReleaseMinute = expressTrip.DepartureMinute
-                + GetAtomBoundaryMinuteOffset(expressTrip.AtomBoundaryMinuteOffsets, expressReleaseBoundaryAtomIndex);
+                + GetEffectiveAtomBoundaryMinuteOffset(expressTrip, expressReleaseBoundaryAtomIndex);
             return Math.Max(0f, expressReleaseMinute - stationDepartureMinute);
         }
 
@@ -935,6 +973,66 @@ namespace RapidTransitMod.Planner
 
             int clampedIndex = Math.Max(0, Math.Min(offsets.Length - 1, atomIndex));
             return offsets[clampedIndex];
+        }
+
+        private static float GetEffectiveAtomBoundaryMinuteOffset(PlannerTripModel trip, int atomIndex)
+        {
+            if (trip == null)
+            {
+                return 0f;
+            }
+
+            float offsetMinutes = GetAtomBoundaryMinuteOffset(trip.AtomBoundaryMinuteOffsets, atomIndex);
+            if (trip.HoldSegments == null || trip.HoldSegments.Count == 0)
+            {
+                return offsetMinutes;
+            }
+
+            float holdMinutes = 0f;
+            for (int index = 0; index < trip.HoldSegments.Count; index++)
+            {
+                PlannerTripHoldSegment segment = trip.HoldSegments[index];
+                if (segment == null
+                    || !(segment.DelayMinutes > 0f)
+                    || segment.DepartureBoundaryAtomIndex < 0
+                    || atomIndex < segment.DepartureBoundaryAtomIndex)
+                {
+                    continue;
+                }
+
+                holdMinutes += segment.DelayMinutes;
+            }
+
+            return PlannerMath.Round4(offsetMinutes + holdMinutes);
+        }
+
+        private static float GetAppliedHoldMinutesBeforeStation(
+            PlannerTripModel trip,
+            int stationOrder,
+            bool includeCurrentStation)
+        {
+            if (trip?.HoldSegments == null || trip.HoldSegments.Count == 0)
+            {
+                return 0f;
+            }
+
+            float holdMinutes = 0f;
+            for (int index = 0; index < trip.HoldSegments.Count; index++)
+            {
+                PlannerTripHoldSegment segment = trip.HoldSegments[index];
+                if (segment == null || !(segment.DelayMinutes > 0f))
+                {
+                    continue;
+                }
+
+                if (segment.StationOrder < stationOrder
+                    || (includeCurrentStation && segment.StationOrder == stationOrder))
+                {
+                    holdMinutes += segment.DelayMinutes;
+                }
+            }
+
+            return PlannerMath.Round4(holdMinutes);
         }
 
         private sealed class PlannerCorridorWindow

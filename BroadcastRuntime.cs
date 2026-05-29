@@ -1166,7 +1166,7 @@ namespace RapidTransitMod
             {
                 return false;
             }
-            if (m_VehicleState.TryGetValue(vehicle, out VehicleState state)
+            if (m_VehicleView.TryGetState(vehicle, out VehicleState state)
                 && state == VehicleState.Retiring)
             {
                 return false;
@@ -1455,7 +1455,7 @@ namespace RapidTransitMod
                 Entity vehicle = entry.Key;
                 if (vehicle == Entity.Null
                     || !EntityManager.Exists(vehicle)
-                    || !m_VehicleState.TryGetValue(vehicle, out VehicleState vehicleState)
+                    || !m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                     || (vehicleState != VehicleState.Running && vehicleState != VehicleState.Preparing)
                     || entry.Value.LastObservedFrame != nowFrame)
                 {
@@ -2086,7 +2086,7 @@ namespace RapidTransitMod
         {
             return vehicle != Entity.Null
                 && stationContext.NextStopWaypointIndex == 0
-                && m_NearingTerminus.Contains(vehicle);
+                && m_VehicleView.IsInbound(vehicle);
         }
 
         private static string BuildBroadcastPlatformIdleSequenceKey(string lineId, string stationId)
@@ -2414,7 +2414,7 @@ namespace RapidTransitMod
             m_BroadcastPlatformSequenceStateByKey.Remove(sequenceKey);
         }
 
-        private void ClearBroadcastRuntimeState(Entity vehicle)
+        internal void ClearBroadcastRuntimeState(Entity vehicle)
         {
             if (vehicle == Entity.Null)
             {

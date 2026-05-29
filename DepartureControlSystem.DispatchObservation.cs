@@ -13,7 +13,7 @@ namespace RapidTransitMod
     {
         private void RecordLapStart(Entity v, string reason = "")
         {
-            string lineTag = m_VehicleLine.TryGetValue(v, out Entity le) ? "line" + le.Index : "line?";
+            string lineTag = m_VehicleView.TryGetLine(v, out Entity le) ? "line" + le.Index : "line?";
             if (!EntityManager.HasComponent<Odometer>(v))
             {
                 log.Info("[LapStartSkip] " + lineTag + " vehicle" + v.Index
@@ -25,7 +25,7 @@ namespace RapidTransitMod
             float currentOdo = EntityManager.GetComponentData<Odometer>(v).m_Distance;
             uint nowFrame = m_SimulationSystem.frameIndex;
             m_LapObservations.Start(v, currentOdo, nowFrame);
-            string curSlot = m_VehicleCurrentSlot.TryGetValue(v, out int cs) ? SlotStr(cs) : "-";
+            string curSlot = m_VehicleView.TryGetSlot(v, out int cs) ? SlotStr(cs) : "-";
             int cachedWp = m_CachedWpIdx.TryGetValue(v, out int cw) ? cw : -1;
             log.Info("[LapStart] " + lineTag + " vehicle" + v.Index
                 + " reason=" + (reason.Length > 0 ? reason : "unspecified")
@@ -44,7 +44,7 @@ namespace RapidTransitMod
 
             float current = EntityManager.GetComponentData<Odometer>(v).m_Distance;
             float lapDist = current - startOdo;
-            string lineTag = m_VehicleLine.TryGetValue(v, out Entity le) ? "line" + le.Index : "line?";
+            string lineTag = m_VehicleView.TryGetLine(v, out Entity le) ? "line" + le.Index : "line?";
 
             if (m_LapObservations.ConsumeRestored(v))
             {
@@ -84,7 +84,7 @@ namespace RapidTransitMod
                 log.Info("[LapStats] " + lineTag + " vehicle" + v.Index
                     + " lap=" + realMin.ToString("F1") + "min/" + framesDelta + "frames");
 
-                if (m_VehicleLine.TryGetValue(v, out Entity timingLine)
+                if (m_VehicleView.TryGetLine(v, out Entity timingLine)
                     && timingLine != Entity.Null
                     && IsAppliedWorkbenchExpressLine(timingLine)
                     && EntityManager.HasBuffer<RouteWaypoint>(timingLine))
@@ -110,7 +110,7 @@ namespace RapidTransitMod
                     }
                 }
 
-                if (m_VehicleLine.TryGetValue(v, out Entity lapLine))
+                if (m_VehicleView.TryGetLine(v, out Entity lapLine))
                     FlushLineLapCache(lapLine);
 
                 ClearVehicleTraversalSliceLapDebug(v);
@@ -1224,26 +1224,26 @@ namespace RapidTransitMod
         {
             if (line == Entity.Null)
             {
-                m_VehiclePreparingStartFrame.Remove(v);
-                m_VehicleDispatchRequestStartFrame.Remove(v);
+                m_VehicleRegistry.ClearPreparing(v);
+                m_VehicleRegistry.ClearDispatch(v);
                 return;
             }
 
             uint frames = 0;
             bool hasSample = false;
-            if (m_VehicleDispatchRequestStartFrame.TryGetValue(v, out uint dispatchRequestStart))
+            if (m_VehicleView.TryGetDispatch(v, out uint dispatchRequestStart))
             {
                 frames = nowFrame - dispatchRequestStart;
                 hasSample = true;
             }
-            else if (m_VehiclePreparingStartFrame.TryGetValue(v, out uint prepStart))
+            else if (m_VehicleView.TryGetPreparing(v, out uint prepStart))
             {
                 frames = nowFrame - prepStart;
                 hasSample = true;
             }
 
-            m_VehiclePreparingStartFrame.Remove(v);
-            m_VehicleDispatchRequestStartFrame.Remove(v);
+            m_VehicleRegistry.ClearPreparing(v);
+            m_VehicleRegistry.ClearDispatch(v);
             if (!hasSample)
                 return;
             if (frames == 0)

@@ -39,7 +39,7 @@ namespace RapidTransitMod
                 || boarding
                 || lastBoarding
                 || targetMin >= 0
-                || m_OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
+                || m_VehicleRuntime.OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
             {
                 m_PerfProbeOriginSettleFastPathHits++;
                 return true;
@@ -89,8 +89,8 @@ namespace RapidTransitMod
                 && (boarding
                     || lastBoarding
                     || targetMin >= 0
-                    || m_NearingTerminus.Contains(v)
-                    || m_VehicleCurrentSlot.ContainsKey(v));
+                    || m_VehicleView.IsInbound(v)
+                    || m_VehicleRuntime.CurrentSlot.ContainsKey(v));
 
             if (!waitingAtOrigin)
             {
@@ -114,7 +114,7 @@ namespace RapidTransitMod
                 }
             }
 
-            if (!m_OriginArrivalCandidateSinceFrame.TryGetValue(v, out uint sinceFrame))
+            if (!m_VehicleView.TryGetOrigin(v, out uint sinceFrame))
             {
                 m_RuntimeController.SetOriginCandidate(v, nowFrame);
                 return false;
@@ -126,7 +126,7 @@ namespace RapidTransitMod
             return true;
         }
 
-        private bool IsBorderlineOriginArrivalCandidate(Entity v, DynamicBuffer<RouteWaypoint> wps)
+        internal bool IsBorderlineOriginArrivalCandidate(Entity v, DynamicBuffer<RouteWaypoint> wps)
         {
             if (GetDistanceToOriginMeters(v, wps) > ORIGIN_FORCE_IDLE_RADIUS_METERS)
                 return false;
@@ -155,9 +155,9 @@ namespace RapidTransitMod
             {
                 Entity v = rvs[i].m_Vehicle;
                 if (!EntityManager.Exists(v)) continue;
-                if (!m_VehicleState.TryGetValue(v, out var state) || state != VehicleState.Running) continue;
-                if (m_VehicleTargetMin.TryGetValue(v, out int target) && target >= 0) continue;
-                if (m_LaunchCooldownUntil.TryGetValue(v, out uint cooldownUntil) && nowFrame < cooldownUntil) continue;
+                if (!m_VehicleView.TryGetState(v, out var state) || state != VehicleState.Running) continue;
+                if (m_VehicleView.TryGetTarget(v, out int target) && target >= 0) continue;
+                if (m_VehicleView.TryGetCooldown(v, out uint cooldownUntil) && nowFrame < cooldownUntil) continue;
                 if (!IsBorderlineOriginArrivalCandidate(v, wps)) continue;
 
                 float eta = EstimateRunningArrivalFrames(v, line, wps, nowFrame, lineDurationFrames, lineHasHistory);
@@ -185,7 +185,7 @@ namespace RapidTransitMod
                 return false;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
-            if (m_LaunchCooldownUntil.TryGetValue(nearestVehicle, out uint cooldownUntil) && nowFrame < cooldownUntil)
+            if (m_VehicleView.TryGetCooldown(nearestVehicle, out uint cooldownUntil) && nowFrame < cooldownUntil)
                 return false;
 
             if (GetDistanceToOriginMeters(nearestVehicle, wps) <= ORIGIN_CONGESTION_RADIUS_METERS)
@@ -199,7 +199,7 @@ namespace RapidTransitMod
 
         private bool IsWaitingForcedOriginDwell(Entity v, uint nowFrame)
         {
-            return m_ForcedOriginReadyFrame.TryGetValue(v, out uint readyFrame) && nowFrame < readyFrame;
+            return m_VehicleView.TryGetReady(v, out uint readyFrame) && nowFrame < readyFrame;
         }
 
         private bool TryGetRouteProgress(Entity transportVehicle, out int nextWaypointIndex, out float segmentPosition)

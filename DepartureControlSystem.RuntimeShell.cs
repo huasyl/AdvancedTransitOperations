@@ -49,7 +49,7 @@ namespace RapidTransitMod
 
             if (Input.GetKeyDown(KeyCode.F7))
             {
-                ForceRetireOne(m_EndFrameBarrier.CreateCommandBuffer());
+                m_CommandApplier.ForceRetireOne(m_EndFrameBarrier.CreateCommandBuffer());
                 return;
             }
 
@@ -82,7 +82,6 @@ namespace RapidTransitMod
             }
 
             var ecb = m_EndFrameBarrier.CreateCommandBuffer();
-            CleanupDeferredBoardingTailIgnores(m_SimulationSystem.frameIndex);
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
 
             EnsureLapCacheBuffer();
@@ -137,7 +136,7 @@ namespace RapidTransitMod
             {
                 try
                 {
-                    SchedulerTick(ecb, nowMin);
+                    m_DispatchScheduler.Tick(ecb, nowMin);
                     m_LastSchedulerTickMinute = nowMin;
                 }
                 catch (Exception ex)
@@ -147,7 +146,7 @@ namespace RapidTransitMod
                 }
             }
 
-            TickRetireHandoffWatch(ecb, m_SimulationSystem.frameIndex);
+            m_CommandApplier.TickRetireHandoffWatch(ecb, m_SimulationSystem.frameIndex);
 
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
@@ -315,11 +314,7 @@ namespace RapidTransitMod
             m_BVMisfire.Clear();
             m_BVMisfireStartFrame.Clear();
             m_ForcedMidStopBoardingGraceUntil.Clear();
-            m_ForcedMidStopBoardingHardCloseAfter.Clear();
-            m_RetireHandoffWatch.Clear();
-            m_RetireShadowHistory.Clear();
-            m_RetireShadowLastSnapshot.Clear();
-            m_RetireShadowLastFrame.Clear();
+            m_CommandApplier.ClearRetireHandoffState();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
             m_PreparingFixCooldownUntil.Clear();
@@ -356,10 +351,6 @@ namespace RapidTransitMod
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_LastLaunchHeadSnapshots.Clear();
             m_LastBoardingHeadSnapshots.Clear();
-            m_DeferredBoardingTailIgnores.Clear();
-            m_DeferredBoardingHumanTailIgnores.Clear();
-            m_DeferredBoardingPetTailIgnores.Clear();
-            m_DeferredBoardingTailScratch.Clear();
             m_MidStopTimeoutLogCache.Clear();
             m_SystemReady = false;
             m_StartupRuntimeStateCleared = false;
@@ -384,11 +375,7 @@ namespace RapidTransitMod
             m_BVMisfire.Clear();
             m_BVMisfireStartFrame.Clear();
             m_ForcedMidStopBoardingGraceUntil.Clear();
-            m_ForcedMidStopBoardingHardCloseAfter.Clear();
-            m_RetireHandoffWatch.Clear();
-            m_RetireShadowHistory.Clear();
-            m_RetireShadowLastSnapshot.Clear();
-            m_RetireShadowLastFrame.Clear();
+            m_CommandApplier.ClearRetireHandoffState();
             m_LastRetireFixLogFrame.Clear();
             m_RetireFixCooldownUntil.Clear();
             m_PreparingFixCooldownUntil.Clear();
@@ -425,10 +412,6 @@ namespace RapidTransitMod
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_LastLaunchHeadSnapshots.Clear();
             m_LastBoardingHeadSnapshots.Clear();
-            m_DeferredBoardingTailIgnores.Clear();
-            m_DeferredBoardingHumanTailIgnores.Clear();
-            m_DeferredBoardingPetTailIgnores.Clear();
-            m_DeferredBoardingTailScratch.Clear();
             m_MidStopTimeoutLogCache.Clear();
             m_LastPuppetMasterMinute = -1;
             m_LastRegisterSweepMinute = -1;

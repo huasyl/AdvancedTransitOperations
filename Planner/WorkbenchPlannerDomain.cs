@@ -174,6 +174,15 @@ namespace RapidTransitMod.Planner
         public List<PlannerStationEvent> StationEvents = new List<PlannerStationEvent>();
         public float[] AtomBoundaryMinuteOffsets = new float[0];
         public float[] AtomBoundaryVariabilityOffsets = new float[0];
+        public List<PlannerTripHoldSegment> HoldSegments = new List<PlannerTripHoldSegment>();
+    }
+
+    internal sealed class PlannerTripHoldSegment
+    {
+        public string StationId = string.Empty;
+        public int StationOrder = 0;
+        public int DepartureBoundaryAtomIndex = -1;
+        public float DelayMinutes = 0f;
     }
 
     internal sealed class PlannerLineRuntimeModel
@@ -229,6 +238,7 @@ namespace RapidTransitMod.Planner
         public float LocalStationMinute = 0f;
         public float ExpressStationMinute = 0f;
         public float StationDepartureMinute = 0f;
+        public int DepartureBoundaryAtomIndex = -1;
     }
 
     internal sealed class PursuitTrunk
