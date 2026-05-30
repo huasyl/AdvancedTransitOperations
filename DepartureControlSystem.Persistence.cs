@@ -479,7 +479,7 @@ namespace RapidTransitMod
             m_DispatchCacheBufferReady = true;
         }
 
-        private void EnsureBypassStationBuffer()
+        internal void EnsureBypassStationBuffer()
         {
             if (m_BypassStationBufferReady) return;
             Entity city = m_CitySystem.City;
@@ -505,7 +505,7 @@ namespace RapidTransitMod
             m_LineMileageBufferReady = true;
         }
 
-        private float ReadDispatchCache(Entity line)
+        internal float ReadDispatchCache(Entity line)
         {
             if (!m_DispatchCacheBufferReady) return 0f;
             Entity city = m_CitySystem.City;
@@ -950,7 +950,7 @@ namespace RapidTransitMod
                 + " 圈时=" + (bestFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟");
         }
 
-        private float ReadLineLapCache(Entity line)
+        internal float ReadLineLapCache(Entity line)
         {
             if (!m_LapCacheBufferReady) return 0f;
             Entity city = m_CitySystem.City;
@@ -1023,7 +1023,7 @@ namespace RapidTransitMod
             keys.Dispose();
         }
 
-        private bool TryRestoreVehicleState(Entity v, Entity line, bool allowRunningRestore = true)
+        internal bool TryRestoreVehicleState(Entity v, Entity line, bool allowRunningRestore = true)
         {
             if (!m_VehicleCacheBufferReady) return false;
             Entity city = m_CitySystem.City;
@@ -1105,7 +1105,7 @@ namespace RapidTransitMod
             return false;
         }
 
-        private bool RestoreRunningContextFromProgress(Entity v, Entity line, DynamicBuffer<RouteWaypoint> wps, string initReason)
+        internal bool RestoreRunningContextFromProgress(Entity v, Entity line, DynamicBuffer<RouteWaypoint> wps, string initReason)
         {
             float cachedLapFrames = ReadLineLapCache(line);
             if (cachedLapFrames <= 0f) return false;

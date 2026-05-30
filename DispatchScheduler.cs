@@ -11,8 +11,37 @@ namespace RapidTransitMod
 {
     internal sealed class DispatchScheduler
     {
+        internal readonly struct SlotClaim
+        {
+            public readonly Entity Vehicle;
+            public readonly int Target;
+            public readonly Entity ReleasedVehicle;
+            public readonly bool CommitHold;
+            public readonly bool ClearIdle;
+
+            public SlotClaim(Entity vehicle, int target, Entity releasedVehicle, bool commitHold, bool clearIdle)
+            {
+                Vehicle = vehicle;
+                Target = target;
+                ReleasedVehicle = releasedVehicle;
+                CommitHold = commitHold;
+                ClearIdle = clearIdle;
+            }
+        }
+
+        internal readonly struct RetireDecision
+        {
+            public readonly Entity Vehicle;
+            public readonly string Reason;
+
+            public RetireDecision(Entity vehicle, string reason)
+            {
+                Vehicle = vehicle;
+                Reason = reason;
+            }
+        }
+
         private readonly DispatchRuntimeSystem m_Runtime;
-        private readonly DispatchCommandApplier m_CommandApplier;
         private readonly Func<Entity, bool> m_IsDispatchRuntimeManagedLine;
         private readonly Func<Entity, int[]> m_GetAppliedWorkbenchDepartureMinutes;
         private readonly Func<Entity, int> m_GetWorkbenchOriginHoldLimitMinutes;
@@ -24,10 +53,14 @@ namespace RapidTransitMod
         private readonly Func<Entity, DynamicBuffer<RouteWaypoint>, float, float, bool, bool> m_HasBorderlineOriginArrivalCandidate;
         private readonly Action<Entity, int, Entity, Entity, DynamicBuffer<RouteWaypoint>, int, uint, string> m_LogDispatchSlotHeld;
         private readonly Action<Entity, int, int, int> m_RecordLineSpawnTriggerSummary;
+        private readonly List<SlotClaim> m_SlotClaims = new List<SlotClaim>();
+        private readonly List<RetireDecision> m_RetireDecisions = new List<RetireDecision>();
+
+        internal IReadOnlyList<SlotClaim> SlotClaims => m_SlotClaims;
+        internal IReadOnlyList<RetireDecision> RetireDecisions => m_RetireDecisions;
 
         public DispatchScheduler(
             DispatchRuntimeSystem runtime,
-            DispatchCommandApplier commandApplier,
             Func<Entity, bool> isDispatchRuntimeManagedLine,
             Func<Entity, int[]> getAppliedWorkbenchDepartureMinutes,
             Func<Entity, int> getWorkbenchOriginHoldLimitMinutes,
@@ -41,7 +74,6 @@ namespace RapidTransitMod
             Action<Entity, int, int, int> recordLineSpawnTriggerSummary)
         {
             m_Runtime = runtime;
-            m_CommandApplier = commandApplier;
             m_IsDispatchRuntimeManagedLine = isDispatchRuntimeManagedLine;
             m_GetAppliedWorkbenchDepartureMinutes = getAppliedWorkbenchDepartureMinutes;
             m_GetWorkbenchOriginHoldLimitMinutes = getWorkbenchOriginHoldLimitMinutes;
@@ -55,8 +87,10 @@ namespace RapidTransitMod
             m_RecordLineSpawnTriggerSummary = recordLineSpawnTriggerSummary;
         }
 
-        public void Tick(EntityCommandBuffer ecb, int nowMin)
+        public void Tick(int nowMin)
         {
+            m_SlotClaims.Clear();
+            m_RetireDecisions.Clear();
             NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
@@ -127,10 +161,7 @@ namespace RapidTransitMod
                         if (!m_Runtime.NeedsMaintenance(vehicle) && m_Runtime.CanFinishNextLap(vehicle))
                             continue;
 
-                        Game.Vehicles.PublicTransport publicTransport =
-                            m_Runtime.EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
-                        Target target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
-                        m_CommandApplier.Retire(vehicle, publicTransport, target, ecb, "在站维护/里程不足");
+                        m_RetireDecisions.Add(new RetireDecision(vehicle, "在站维护/里程不足"));
                     }
 
                     int slot = useWorkbenchSchedule && appliedTargets.Length > 0 ? appliedTargets[0] : NextSlotMin(nowMin);
@@ -492,18 +523,11 @@ namespace RapidTransitMod
                                     }
                                 }
 
-                                if (currentHolder != Entity.Null)
-                                    m_Runtime.m_RuntimeController.ReleaseTarget(currentHolder);
-
-                                m_CommandApplier.AssignSlot(bestVehicle, slot, ecb);
-                                m_Runtime.m_VehicleRegistry.ClearIdle(bestVehicle);
+                                m_SlotClaims.Add(new SlotClaim(bestVehicle, slot, currentHolder, commitHold: true, clearIdle: true));
                             }
                             else
                             {
-                                if (currentHolder != Entity.Null)
-                                    m_Runtime.m_RuntimeController.ReleaseTarget(currentHolder);
-
-                                m_Runtime.m_RuntimeController.Target(bestVehicle, slot);
+                                m_SlotClaims.Add(new SlotClaim(bestVehicle, slot, currentHolder, commitHold: false, clearIdle: false));
                                 m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
                                     + " 选择车辆" + bestVehicle.Index
                                     + " state=" + bestState
@@ -893,8 +917,10 @@ namespace RapidTransitMod
             int nowMin,
             string lineTag,
             string stateTag,
+            out Entity releasedVehicle,
             out int lateSlot)
         {
+            releasedVehicle = Entity.Null;
             lateSlot = -1;
             int previousSlot = PreviousSlotMin(nowMin);
             if (!IsCurrentOrRecentSlot(nowMin, previousSlot))
@@ -920,7 +946,7 @@ namespace RapidTransitMod
                     return false;
                 }
 
-                m_Runtime.m_RuntimeController.ReleaseTarget(other);
+                releasedVehicle = other;
                 LogVehicleStateOnce(
                     m_Runtime.m_LateDispatchLogCache,
                     vehicle,
@@ -931,7 +957,6 @@ namespace RapidTransitMod
                         + " state=" + (m_Runtime.m_VehicleView.TryGetState(other, out VehicleState releasedState) ? releasedState.ToString() : "?"));
             }
 
-            m_Runtime.m_RuntimeController.Target(vehicle, previousSlot);
             lateSlot = previousSlot;
             if (CanLateDispatch(nowMin, previousSlot))
             {
@@ -954,7 +979,6 @@ namespace RapidTransitMod
             int nowMin,
             string lineTag,
             string stateTag,
-            EntityCommandBuffer ecb,
             out int assignedTarget)
         {
             assignedTarget = -1;
@@ -971,7 +995,6 @@ namespace RapidTransitMod
             if (IsTargetOccupied(line, vehicle, nextTarget))
                 return false;
 
-            m_CommandApplier.AssignSlot(vehicle, nextTarget, ecb);
             assignedTarget = nextTarget;
             LogVehicleStateOnce(
                 m_Runtime.m_LateDispatchLogCache,
@@ -991,8 +1014,10 @@ namespace RapidTransitMod
             string lineTag,
             string stateTag,
             IReadOnlyList<int> targets,
+            out Entity releasedVehicle,
             out int lateTarget)
         {
+            releasedVehicle = Entity.Null;
             lateTarget = -1;
             int previousTarget = PreviousScheduledTarget(nowMin, targets);
             if (previousTarget < 0 || !IsCurrentOrRecentSlot(nowMin, previousTarget))
@@ -1018,7 +1043,7 @@ namespace RapidTransitMod
                     return false;
                 }
 
-                m_Runtime.m_RuntimeController.ReleaseTarget(other);
+                releasedVehicle = other;
                 LogVehicleStateOnce(
                     m_Runtime.m_LateDispatchLogCache,
                     vehicle,
@@ -1029,7 +1054,6 @@ namespace RapidTransitMod
                         + " state=" + (m_Runtime.m_VehicleView.TryGetState(other, out VehicleState releasedState) ? releasedState.ToString() : "?"));
             }
 
-            m_Runtime.m_RuntimeController.Target(vehicle, previousTarget);
             lateTarget = previousTarget;
             if (CanLateDispatch(nowMin, previousTarget))
             {
@@ -1123,7 +1147,7 @@ namespace RapidTransitMod
             return ((ulong)(uint)line.Index << 32) | (uint)(slot & 0xFFFF);
         }
 
-        private void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message)
+        internal void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message)
         {
             if (cache.TryGetValue(vehicle, out string previousKey) && previousKey == key)
                 return;

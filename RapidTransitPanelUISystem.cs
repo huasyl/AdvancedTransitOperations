@@ -30,7 +30,7 @@ namespace RapidTransitMod
         private Entity m_LastRoute;
         private ulong m_LastSnapshotVersion;
         private int m_LastPushFrame = -1;
-        private DispatchRuntimeSystem.SelectedPanelSnapshot m_LastSnapshot;
+        private SelectionPanel.SelectedPanelSnapshot m_LastSnapshot;
 
         public override GameMode gameMode => GameMode.Game;
 
@@ -93,8 +93,9 @@ namespace RapidTransitMod
             int currentFrame = UnityEngine.Time.frameCount;
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
             Entity selectedRoute = m_SelectedInfoUISystem.selectedRoute;
-            bool isInspectableVehicle = selectedEntity != Entity.Null && control.ShouldDisplaySelectedVehicleInfo(selectedEntity);
-            bool isInspectableLine = selectedEntity != Entity.Null && control.ShouldDisplaySelectedLineInfo(selectedEntity, selectedRoute);
+            SelectionPanel panel = control.m_SelectionPanel;
+            bool isInspectableVehicle = selectedEntity != Entity.Null && panel.ShouldDisplaySelectedVehicleInfo(selectedEntity);
+            bool isInspectableLine = selectedEntity != Entity.Null && panel.ShouldDisplaySelectedLineInfo(selectedEntity, selectedRoute);
 
             if (!isInspectableVehicle && !isInspectableLine)
             {
@@ -117,24 +118,24 @@ namespace RapidTransitMod
                 return;
 
             bool needsSelectionPush = !m_LastVisible || selectedEntity != m_LastVehicle || selectedRoute != m_LastRoute;
-            if (!needsSelectionPush && control.PanelDataVersion != m_LastSnapshotVersion)
+            if (!needsSelectionPush && panel.PanelDataVersion != m_LastSnapshotVersion)
             {
                 needsSelectionPush = true;
             }
             if (needsSelectionPush)
             {
-                TryPushSnapshot(control, selectedEntity, selectedRoute, isInspectableVehicle, "refresh", currentFrame);
+                TryPushSnapshot(panel, selectedEntity, selectedRoute, isInspectableVehicle, "refresh", currentFrame);
                 return;
             }
 
             SetVisibleIfNeeded();
         }
 
-        private bool TryPushSnapshot(DispatchRuntimeSystem control, Entity entity, Entity selectedRoute, bool isVehicle, string dirtyReason, int currentFrame)
+        private bool TryPushSnapshot(SelectionPanel panel, Entity entity, Entity selectedRoute, bool isVehicle, string dirtyReason, int currentFrame)
         {
             bool built = isVehicle
-                ? control.TryBuildSelectedVehicleSnapshot(entity, out m_LastSnapshot)
-                : control.TryBuildSelectedLineSnapshot(entity, selectedRoute, out m_LastSnapshot);
+                ? panel.TryBuildSelectedVehicleSnapshot(entity, out m_LastSnapshot)
+                : panel.TryBuildSelectedLineSnapshot(entity, selectedRoute, out m_LastSnapshot);
 
             if (!built)
             {
@@ -146,7 +147,7 @@ namespace RapidTransitMod
             m_PanelDataJsonBinding.Update(SerializeSnapshot(m_LastSnapshot));
             m_LastVehicle = entity;
             m_LastRoute = selectedRoute;
-            m_LastSnapshotVersion = control.PanelDataVersion;
+            m_LastSnapshotVersion = panel.PanelDataVersion;
             m_LastPushFrame = currentFrame;
             SetVisibleIfNeeded();
             return true;
@@ -167,7 +168,7 @@ namespace RapidTransitMod
             return m_PendingSelectionFrame >= 0 && (currentFrame - m_PendingSelectionFrame) >= SelectionSettleFrames;
         }
 
-        private static string SerializeSnapshot(DispatchRuntimeSystem.SelectedPanelSnapshot snapshot)
+        private static string SerializeSnapshot(SelectionPanel.SelectedPanelSnapshot snapshot)
         {
             StringBuilder sb = new StringBuilder(512);
             sb.Append('{');
@@ -351,7 +352,7 @@ namespace RapidTransitMod
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
             if (selectedEntity != Entity.Null)
             {
-                DispatchRuntimeSystem.Instance.RequestVehicleRetire(selectedEntity);
+                DispatchRuntimeSystem.Instance.m_SelectionPanel.RequestVehicleRetire(selectedEntity);
                 m_LastVehicle = Entity.Null;
             }
         }
@@ -364,7 +365,7 @@ namespace RapidTransitMod
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
             if (selectedEntity != Entity.Null)
             {
-                DispatchRuntimeSystem.Instance.RequestVehicleForceDepart(selectedEntity);
+                DispatchRuntimeSystem.Instance.m_SelectionPanel.RequestVehicleForceDepart(selectedEntity);
                 m_LastVehicle = Entity.Null;
                 m_LastSnapshotVersion = 0;
             }
@@ -378,7 +379,7 @@ namespace RapidTransitMod
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
             if (selectedEntity != Entity.Null)
             {
-                DispatchRuntimeSystem.Instance.RequestVehicleReevaluate(selectedEntity);
+                DispatchRuntimeSystem.Instance.m_SelectionPanel.RequestVehicleReevaluate(selectedEntity);
                 m_LastVehicle = Entity.Null;
             }
         }
@@ -418,7 +419,7 @@ namespace RapidTransitMod
             if (DispatchRuntimeSystem.Instance == null)
                 return;
 
-            DispatchRuntimeSystem.Instance.RequestDumpStationAnchorObservationDiagnostics();
+            DispatchRuntimeSystem.Instance.m_StationAnchorDiagnostics.Dump();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
@@ -431,7 +432,7 @@ namespace RapidTransitMod
             Entity selectedEntity = m_SelectedInfoUISystem.selectedRoute != Entity.Null
                 ? m_SelectedInfoUISystem.selectedRoute
                 : m_SelectedInfoUISystem.selectedEntity;
-            if (selectedEntity != Entity.Null && DispatchRuntimeSystem.Instance.RequestSpawnForLine(selectedEntity))
+            if (selectedEntity != Entity.Null && DispatchRuntimeSystem.Instance.m_SelectionPanel.RequestSpawnForLine(selectedEntity))
             {
                 m_LastVehicle = Entity.Null;
                 m_LastRoute = Entity.Null;
@@ -445,7 +446,7 @@ namespace RapidTransitMod
                 return;
 
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
-            if (selectedEntity != Entity.Null && DispatchRuntimeSystem.Instance.RequestSetBypassStation(selectedEntity, enabled))
+            if (selectedEntity != Entity.Null && DispatchRuntimeSystem.Instance.m_SelectionPanel.RequestSetBypassStation(selectedEntity, enabled))
             {
                 m_LastVehicle = Entity.Null;
                 m_LastSnapshotVersion = 0;

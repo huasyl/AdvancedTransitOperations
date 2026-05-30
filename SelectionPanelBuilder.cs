@@ -86,9 +86,9 @@ namespace RapidTransitMod
             AddDebugItem(list, "可用控制", "Controls", "Retire and Re-evaluate are wired in backend");
         }
 
-        public DispatchRuntimeSystem.SelectedPanelSnapshot BuildLineSnapshot(SelectionPanelLineData data)
+        public SelectionPanel.SelectedPanelSnapshot BuildLineSnapshot(SelectionPanelLineData data)
         {
-            return new DispatchRuntimeSystem.SelectedPanelSnapshot
+            return new SelectionPanel.SelectedPanelSnapshot
             {
                 Mode = "line",
                 EntityId = data.Line.Index.ToString(),
@@ -120,9 +120,9 @@ namespace RapidTransitMod
             };
         }
 
-        public DispatchRuntimeSystem.SelectedPanelSnapshot BuildVehicleSnapshot(SelectionPanelVehicleData data)
+        public SelectionPanel.SelectedPanelSnapshot BuildVehicleSnapshot(SelectionPanelVehicleData data)
         {
-            return new DispatchRuntimeSystem.SelectedPanelSnapshot
+            return new SelectionPanel.SelectedPanelSnapshot
             {
                 Mode = "vehicle",
                 EntityId = data.Vehicle.Index.ToString(),
@@ -147,7 +147,8 @@ namespace RapidTransitMod
                 Detail8Value = data.EventValue,
                 AlertText = data.AlertText,
                 ShowRetireAction = data.IsManagedVehicle,
-                ShowForceDepartAction = data.IsManagedVehicle
+                ShowForceDepartAction = data.IsManagedVehicle,
+                ShowReevaluateAction = data.IsManagedVehicle
             };
         }
 

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Game.Common;
+using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using Unity.Entities;
@@ -8,15 +9,10 @@ namespace RapidTransitMod
 {
     public partial class DispatchRuntimeSystem
     {
-        private readonly Dictionary<Entity, string> m_YieldSkipLogCache = new Dictionary<Entity, string>();
+        internal readonly Dictionary<Entity, string> m_YieldSkipLogCache = new Dictionary<Entity, string>();
 
         private void ClearDispatchLogCaches()
         {
-            m_BypassDecisionLogCache.Clear();
-            m_BypassDepartureGateLogCache.Clear();
-            m_BypassHoldFrameLogCache.Clear();
-            m_BypassReleaseDiagLogCache.Clear();
-            m_BypassExitClearLogCache.Clear();
             m_PreparingSlotLogCache.Clear();
             m_PreparingTargetDriftLogCache.Clear();
             m_CrossLineCandidateLogCache.Clear();
@@ -30,7 +26,7 @@ namespace RapidTransitMod
             m_DispatchSlotHeldLastLogFrameCache.Clear();
         }
 
-        private void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message)
+        internal void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message)
         {
             if (vehicle == Entity.Null)
             {
@@ -45,7 +41,7 @@ namespace RapidTransitMod
             log.Info(message);
         }
 
-        private bool ShouldEmitVehicleLogWithCooldown(
+        internal bool ShouldEmitVehicleLogWithCooldown(
             Dictionary<Entity, string> keyCache,
             Dictionary<Entity, uint> lastLogFrameCache,
             Entity vehicle,
@@ -74,10 +70,169 @@ namespace RapidTransitMod
             return false;
         }
 
-        private static string FormatDispatchTraceSlot(int targetMin)
+        internal static string FormatDispatchTraceSlot(int targetMin)
             => targetMin >= 0 ? SlotStr(targetMin) : "-";
 
-        private void LogOriginDispatchTrace(
+        internal string BuildTrainHeadLaunchDiagnostic(
+            Entity vehicle,
+            bool hasCurrentLaunchSnapshot,
+            TrainHeadSnapshot currentLaunchSnapshot)
+        {
+            if (!m_LastLaunchHeadSnapshots.TryGetValue(vehicle, out TrainHeadSnapshot previousLaunchSnapshot))
+            {
+                return hasCurrentLaunchSnapshot
+                    ? " headCheck=no-prev-launch launchHead=" + FormatTrainHeadSnapshotEntity(currentLaunchSnapshot.HeadVehicle)
+                        + " launchRev=" + (currentLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchWp=" + currentLaunchSnapshot.WaypointIndex
+                    : " headCheck=no-prev-launch launchHead=capture-failed";
+            }
+
+            if (!m_LastBoardingHeadSnapshots.TryGetValue(vehicle, out TrainHeadSnapshot boardingSnapshot))
+            {
+                return hasCurrentLaunchSnapshot
+                    ? " headCheck=no-boarding prevHead=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.HeadVehicle)
+                        + " prevRev=" + (previousLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchHead=" + FormatTrainHeadSnapshotEntity(currentLaunchSnapshot.HeadVehicle)
+                        + " launchRev=" + (currentLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchWp=" + currentLaunchSnapshot.WaypointIndex
+                    : " headCheck=no-boarding prevHead=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.HeadVehicle)
+                        + " prevRev=" + (previousLaunchSnapshot.Reversed ? "1" : "0")
+                        + " launchHead=capture-failed";
+            }
+
+            if (boardingSnapshot.Frame <= previousLaunchSnapshot.Frame)
+            {
+                return " headCheck=stale"
+                    + " prevLaunchFrame=" + previousLaunchSnapshot.Frame
+                    + " boardFrame=" + boardingSnapshot.Frame
+                    + (hasCurrentLaunchSnapshot
+                        ? " launchFrame=" + currentLaunchSnapshot.Frame
+                        : string.Empty);
+            }
+
+            bool turned =
+                previousLaunchSnapshot.HeadVehicle != boardingSnapshot.HeadVehicle
+                || previousLaunchSnapshot.Reversed != boardingSnapshot.Reversed
+                || previousLaunchSnapshot.FrontLane != boardingSnapshot.FrontLane
+                || previousLaunchSnapshot.RearLane != boardingSnapshot.RearLane;
+
+            string diagnostic = " headCheck=" + (turned ? "turned" : "same")
+                + " prevHead=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.HeadVehicle)
+                + " boardHead=" + FormatTrainHeadSnapshotEntity(boardingSnapshot.HeadVehicle)
+                + " prevRev=" + (previousLaunchSnapshot.Reversed ? "1" : "0")
+                + " boardRev=" + (boardingSnapshot.Reversed ? "1" : "0")
+                + " prevFront=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.FrontLane)
+                + " prevRear=" + FormatTrainHeadSnapshotEntity(previousLaunchSnapshot.RearLane)
+                + " boardFront=" + FormatTrainHeadSnapshotEntity(boardingSnapshot.FrontLane)
+                + " boardRear=" + FormatTrainHeadSnapshotEntity(boardingSnapshot.RearLane)
+                + " boardWp=" + boardingSnapshot.WaypointIndex;
+
+            if (hasCurrentLaunchSnapshot)
+            {
+                diagnostic += " launchHead=" + FormatTrainHeadSnapshotEntity(currentLaunchSnapshot.HeadVehicle)
+                    + " launchRev=" + (currentLaunchSnapshot.Reversed ? "1" : "0")
+                    + " launchWp=" + currentLaunchSnapshot.WaypointIndex;
+            }
+            else
+            {
+                diagnostic += " launchHead=capture-failed";
+            }
+
+            return diagnostic;
+        }
+
+        internal void LogRouteVehicleOwnerMismatch(Entity observedLine, Entity vehicle, string phase)
+        {
+            if (observedLine == Entity.Null || vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                return;
+
+            Entity mappedLine = m_VehicleView.TryGetLine(vehicle, out Entity mapped)
+                ? mapped
+                : Entity.Null;
+            Entity currentRoute = EntityManager.HasComponent<CurrentRoute>(vehicle)
+                ? EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
+                : Entity.Null;
+            bool mappedMismatch = mappedLine != Entity.Null && mappedLine != observedLine;
+            bool routeMismatch = currentRoute != Entity.Null && currentRoute != observedLine;
+            if (!mappedMismatch && !routeMismatch)
+                return;
+
+            VehicleState state = m_VehicleView.TryGetState(vehicle, out VehicleState runtimeState)
+                ? runtimeState
+                : default;
+            int targetMin = m_VehicleView.TryGetTarget(vehicle, out int assignedTarget)
+                ? assignedTarget
+                : -1;
+            Entity targetEntity = EntityManager.HasComponent<Target>(vehicle)
+                ? EntityManager.GetComponentData<Target>(vehicle).m_Target
+                : Entity.Null;
+            string key = phase
+                + "|observed=" + observedLine.Index
+                + "|mapped=" + mappedLine.Index
+                + "|route=" + currentRoute.Index
+                + "|target=" + targetEntity.Index
+                + "|state=" + state;
+
+            LogVehicleStateOnce(
+                m_RouteVehicleOwnerMismatchLogCache,
+                vehicle,
+                key,
+                "[RouteVehicleOwnerMismatch] line=" + observedLine.Index
+                    + " vehicle=" + vehicle.Index
+                    + " phase=" + phase
+                    + " " + BuildVehicleOwnershipDiagnostic(observedLine, vehicle, state, targetMin, phase));
+        }
+
+        internal void LogCrossLineCandidate(
+            Entity observedLine,
+            Entity vehicle,
+            VehicleState state,
+            int slot,
+            float etaFrames,
+            int previousTarget)
+        {
+            if (observedLine == Entity.Null || vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                return;
+
+            Entity mappedLine = m_VehicleView.TryGetLine(vehicle, out Entity mapped)
+                ? mapped
+                : Entity.Null;
+            Entity currentRoute = EntityManager.HasComponent<CurrentRoute>(vehicle)
+                ? EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
+                : Entity.Null;
+            bool mappedMismatch = mappedLine != Entity.Null && mappedLine != observedLine;
+            bool routeMismatch = currentRoute != Entity.Null && currentRoute != observedLine;
+            if (!mappedMismatch && !routeMismatch)
+                return;
+
+            int targetMin = m_VehicleView.TryGetTarget(vehicle, out int assignedTarget)
+                ? assignedTarget
+                : -1;
+            Entity targetEntity = EntityManager.HasComponent<Target>(vehicle)
+                ? EntityManager.GetComponentData<Target>(vehicle).m_Target
+                : Entity.Null;
+            string key = "candidate"
+                + "|observed=" + observedLine.Index
+                + "|slot=" + slot
+                + "|mapped=" + mappedLine.Index
+                + "|route=" + currentRoute.Index
+                + "|target=" + targetEntity.Index
+                + "|state=" + state;
+
+            LogVehicleStateOnce(
+                m_CrossLineCandidateLogCache,
+                vehicle,
+                key,
+                "[CrossLineCandidate] line=" + observedLine.Index
+                    + " slot=" + SlotStr(slot)
+                    + " vehicle=" + vehicle.Index
+                    + " state=" + state
+                    + " eta=" + (etaFrames == float.MaxValue ? "?" : (etaFrames / (float)SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟")
+                    + " prevTarget=" + (previousTarget >= 0 ? SlotStr(previousTarget) : "-")
+                    + " " + BuildVehicleOwnershipDiagnostic(observedLine, vehicle, state, targetMin, "candidate"));
+        }
+
+        internal void LogOriginDispatchTrace(
             string reason,
             Entity vehicle,
             Entity line,
@@ -124,7 +279,7 @@ namespace RapidTransitMod
             }
 
             float distanceToOriginMeters = wps.Length > 0 ? GetDistanceToOriginMeters(vehicle, wps) : -1f;
-            bool hasAssistPending = TryGetAssistLaunchPending(vehicle, route, targetMin, out AssistLaunchPendingRecord assistPending);
+            bool hasAssistPending = m_RuntimeController.TryGetAssistLaunchPending(vehicle, route, targetMin, out AssistLaunchPendingRecord assistPending);
             int assistTargetMin = hasAssistPending ? assistPending.TargetMin : -1;
             uint forcedReadyRemainingFrames = hasForcedReady ? forcedReadyFrame - nowFrame : 0;
 
@@ -204,7 +359,7 @@ namespace RapidTransitMod
                 + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?"));
         }
 
-        private void ObserveBvMisfireCandidate(
+        internal void ObserveBvMisfireCandidate(
             Entity vehicle,
             string lineTag,
             string phase,
@@ -232,5 +387,102 @@ namespace RapidTransitMod
                 m_BVMisfireStartFrame.Remove(vehicle);
             }
         }
+        internal void LogPreparingTargetDrift(
+            Entity line,
+            Entity vehicle,
+            Entity route,
+            Entity originWaypoint,
+            Entity target,
+            int targetMin,
+            int curWpIdx,
+            bool boarding,
+            bool atOrigin)
+        {
+            if (line == Entity.Null || vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                return;
+            if (target != Entity.Null && target == originWaypoint)
+                return;
+
+            Entity targetDepot = CanonicalizeTransportDepotEntity(target);
+            string key = "target=" + target.Index
+                + "|route=" + route.Index
+                + "|targetDepot=" + targetDepot.Index
+                + "|wp=" + curWpIdx
+                + "|boarding=" + (boarding ? "1" : "0")
+                + "|atA=" + (atOrigin ? "1" : "0");
+
+            LogVehicleStateOnce(
+                m_PreparingTargetDriftLogCache,
+                vehicle,
+                key,
+                "[PreparingTargetDrift] line=" + line.Index
+                    + " vehicle=" + vehicle.Index
+                    + " originWp=" + DispatchCommandApplier.DescribeRetireShadowEntity(originWaypoint)
+                    + " curWp=" + curWpIdx
+                    + " boarding=" + (boarding ? "1" : "0")
+                    + " atA=" + (atOrigin ? "1" : "0")
+                    + " " + BuildVehicleOwnershipDiagnostic(line, vehicle, VehicleState.Preparing, targetMin, "preparing"));
+        }
+
+        internal string BuildVehicleOwnershipDiagnostic(
+            Entity observedLine,
+            Entity vehicle,
+            VehicleState state,
+            int targetMin,
+            string phase)
+        {
+            Entity mappedLine = m_VehicleView.TryGetLine(vehicle, out Entity mapped)
+                ? mapped
+                : Entity.Null;
+            Entity currentRoute = EntityManager.HasComponent<CurrentRoute>(vehicle)
+                ? EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
+                : Entity.Null;
+            Entity owner = EntityManager.HasComponent<Owner>(vehicle)
+                ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
+                : Entity.Null;
+            Entity ownerDepot = CanonicalizeTransportDepotEntity(owner);
+            Entity target = EntityManager.HasComponent<Target>(vehicle)
+                ? EntityManager.GetComponentData<Target>(vehicle).m_Target
+                : Entity.Null;
+            Entity targetDepot = CanonicalizeTransportDepotEntity(target);
+            Entity pathDestination = EntityManager.HasComponent<PathInformation>(vehicle)
+                ? EntityManager.GetComponentData<PathInformation>(vehicle).m_Destination
+                : Entity.Null;
+            Entity pathDestinationDepot = CanonicalizeTransportDepotEntity(pathDestination);
+            string publicState = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
+                ? EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State.ToString()
+                : "-";
+            string pathState = EntityManager.HasComponent<PathInformation>(vehicle)
+                ? EntityManager.GetComponentData<PathInformation>(vehicle).m_State.ToString()
+                : "-";
+            int cachedWp = m_CachedWpIdx.TryGetValue(vehicle, out int cached)
+                ? cached
+                : -1;
+            uint preparingAge = m_VehicleView.TryGetPreparing(vehicle, out uint prepStart)
+                ? m_SimulationSystem.frameIndex - prepStart
+                : 0;
+
+            return "phase=" + phase
+                + " observedLine=" + DispatchCommandApplier.DescribeRetireShadowEntity(observedLine)
+                + " mappedLine=" + DispatchCommandApplier.DescribeRetireShadowEntity(mappedLine)
+                + " currentRoute=" + DispatchCommandApplier.DescribeRetireShadowEntity(currentRoute)
+                + " state=" + state
+                + " targetMin=" + (targetMin >= 0 ? SlotStr(targetMin) : "-")
+                + " cachedWp=" + cachedWp
+                + " preparingAgeFrames=" + preparingAge
+                + " owner=" + DispatchCommandApplier.DescribeRetireShadowEntity(owner)
+                + " ownerDepot=" + DispatchCommandApplier.DescribeRetireShadowEntity(ownerDepot)
+                + " target=" + DispatchCommandApplier.DescribeRetireShadowEntity(target)
+                + " targetKind=" + m_CommandApplier.DescribeRetireShadowTargetKind(target)
+                + " targetExists=" + ((target != Entity.Null && EntityManager.Exists(target)) ? "1" : "0")
+                + " targetDepot=" + DispatchCommandApplier.DescribeRetireShadowEntity(targetDepot)
+                + " pathDest=" + DispatchCommandApplier.DescribeRetireShadowEntity(pathDestination)
+                + " pathDestDepot=" + DispatchCommandApplier.DescribeRetireShadowEntity(pathDestinationDepot)
+                + " pathState=" + pathState
+                + " ptState=" + publicState
+                + " deleted=" + (EntityManager.HasComponent<Deleted>(vehicle) ? "1" : "0")
+                + " parked=" + (EntityManager.HasComponent<ParkedTrain>(vehicle) ? "1" : "0");
+        }
+
     }
 }

@@ -16,6 +16,9 @@ using Unity.Entities;
 using UnityEngine;
 using UnityEngine.Audio;
 using UnityEngine.Networking;
+using BroadcastLineStationContextCache = RapidTransitMod.Broadcasting.Runtime.BroadcastLineStationContextCache;
+using BroadcastResolvedStation = RapidTransitMod.Broadcasting.Runtime.BroadcastResolvedStation;
+using BroadcastTriggerContext = RapidTransitMod.Broadcasting.Runtime.BroadcastTriggerContext;
 
 namespace RapidTransitMod
 {
@@ -26,7 +29,7 @@ namespace RapidTransitMod
         private const float BroadcastVolumeScalarMin = 5f;
         private const float BroadcastVolumeScalarMax = 20f;
         private static readonly string[] s_BroadcastAssetExtensions = { ".wav", ".mp3", ".ogg" };
-        private readonly List<BroadcastWorkbenchAssetDto> m_BroadcastAssetCatalog = new List<BroadcastWorkbenchAssetDto>();
+        internal readonly List<BroadcastWorkbenchAssetDto> m_BroadcastAssetCatalog = new List<BroadcastWorkbenchAssetDto>();
         private string m_BroadcastAssetDirectory = string.Empty;
         private string m_BroadcastExternalBrowseDirectory = string.Empty;
         private readonly Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> m_BroadcastDraftLineStationAssetBindings =
@@ -37,15 +40,15 @@ namespace RapidTransitMod
             new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> m_BroadcastLineStationAssetBindings =
             new Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>>(StringComparer.Ordinal);
-        private readonly Dictionary<string, List<BroadcastWorkbenchRuleDto>> m_BroadcastLineRules =
+        internal readonly Dictionary<string, List<BroadcastWorkbenchRuleDto>> m_BroadcastLineRules =
             new Dictionary<string, List<BroadcastWorkbenchRuleDto>>(StringComparer.Ordinal);
-        private readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastLinePlatformAnnouncements =
+        internal readonly Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> m_BroadcastLinePlatformAnnouncements =
             new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, DispatchWorkbenchStationConflictDto[]>> m_BroadcastPendingAutoBindConflicts =
             new Dictionary<string, Dictionary<string, DispatchWorkbenchStationConflictDto[]>>(StringComparer.Ordinal);
         private readonly HashSet<string> m_BroadcastAppliedLineIds = new HashSet<string>(StringComparer.Ordinal);
         private int m_BroadcastDraftVolumePercent = 80;
-        private int m_BroadcastAppliedVolumePercent = 80;
+        internal int m_BroadcastAppliedVolumePercent = 80;
         private AudioSource m_BroadcastPreviewAudioSource;
         private AudioClip m_BroadcastPreviewAudioClip;
         private string m_BroadcastPreviewAssetName = string.Empty;
@@ -57,7 +60,7 @@ namespace RapidTransitMod
         private static readonly FieldInfo s_AudioManagerUiGroupField =
             typeof(AudioManager).GetField("m_UIGroup", BindingFlags.Instance | BindingFlags.NonPublic);
 
-        private sealed class BroadcastWorkbenchStationGroup
+        internal sealed class BroadcastWorkbenchStationGroup
         {
             public string Key = string.Empty;
             public DispatchWorkbenchStationDto Representative;
@@ -706,7 +709,7 @@ namespace RapidTransitMod
                 m_BroadcastAppliedVolumePercent = ClampBroadcastVolumePercent(m_BroadcastDraftVolumePercent);
                 m_WorkbenchSnapshotVersion++;
                 SaveWorkbenchPersistence();
-                ApplyBroadcastAppliedVolumeToRuntime();
+                m_Announcements.ApplyVolume();
 
                 BroadcastWorkbenchSnapshot snapshot = BuildBroadcastWorkbenchSnapshot(lineId);
                 result.success = true;
@@ -1309,7 +1312,7 @@ namespace RapidTransitMod
             return NormalizeDirectoryBrowserPath(parent?.FullName);
         }
 
-        private static string NormalizeBroadcastAssetFilePath(string filePath)
+        internal static string NormalizeBroadcastAssetFilePath(string filePath)
         {
             if (string.IsNullOrWhiteSpace(filePath))
             {
@@ -1652,7 +1655,7 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                string assetName = ResolveBroadcastRuntimeAssetName(node, context);
+                string assetName = m_Announcements.AssetName(node, context);
                 if (string.IsNullOrWhiteSpace(assetName))
                 {
                     continue;
@@ -1708,7 +1711,7 @@ namespace RapidTransitMod
                 return null;
             }
 
-            return await RunBroadcastMainThreadTaskAsync(async () =>
+            return await m_Announcements.OnMainThreadAsync(async () =>
             {
                 using UnityWebRequest request = BuildBroadcastPreviewAudioRequest(assetPath, audioType);
                 DownloadHandlerAudioClip downloadHandler = request.downloadHandler as DownloadHandlerAudioClip;
@@ -1767,7 +1770,7 @@ namespace RapidTransitMod
         {
             StopBroadcastAssetPreviewOnMainThread(m_BroadcastPreviewAssetName, notify: true);
             StopBroadcastRulePreviewOnMainThread(m_BroadcastPreviewRuleId, notify: true);
-            ClearAllBroadcastRuntimeState();
+            m_Announcements.Clear();
         }
 
         private void EnsureBroadcastRulePreviewAudioSource()
@@ -1843,10 +1846,10 @@ namespace RapidTransitMod
                     : null;
             Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
                 GetBroadcastDraftLineStationBindingsOrNull(lineId);
-            List<BroadcastWorkbenchStationBindingDto> currentStationBindings = ResolveBroadcastBoundBindings(lineBindings, currentStation?.Representative?.id);
-            List<BroadcastWorkbenchStationBindingDto> nextStationBindings = ResolveBroadcastBoundBindings(lineBindings, nextStation?.Representative?.id);
-            List<BroadcastWorkbenchStationBindingDto> terminalStationBindings = ResolveBroadcastBoundBindings(lineBindings, terminalStation?.Representative?.id);
-            List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings = ResolveBroadcastBoundBindings(lineBindings, turnbackStation?.Representative?.id);
+            List<BroadcastWorkbenchStationBindingDto> currentStationBindings = Broadcasting.Runtime.ResolveBoundBindings(lineBindings, currentStation?.Representative?.id);
+            List<BroadcastWorkbenchStationBindingDto> nextStationBindings = Broadcasting.Runtime.ResolveBoundBindings(lineBindings, nextStation?.Representative?.id);
+            List<BroadcastWorkbenchStationBindingDto> terminalStationBindings = Broadcasting.Runtime.ResolveBoundBindings(lineBindings, terminalStation?.Representative?.id);
+            List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings = Broadcasting.Runtime.ResolveBoundBindings(lineBindings, turnbackStation?.Representative?.id);
             context = new BroadcastTriggerContext(
                 lineId,
                 Entity.Null,
@@ -1854,10 +1857,10 @@ namespace RapidTransitMod
                 nextStation?.Representative?.name ?? string.Empty,
                 terminalStation?.Representative?.name ?? string.Empty,
                 turnbackStation?.Representative?.name ?? string.Empty,
-                ResolveBroadcastBoundAssetName(currentStationBindings, 1),
-                ResolveBroadcastBoundAssetName(nextStationBindings, 1),
-                ResolveBroadcastBoundAssetName(terminalStationBindings, 1),
-                ResolveBroadcastBoundAssetName(turnbackStationBindings, 1),
+                Broadcasting.Runtime.ResolveBoundAssetName(currentStationBindings, 1),
+                Broadcasting.Runtime.ResolveBoundAssetName(nextStationBindings, 1),
+                Broadcasting.Runtime.ResolveBoundAssetName(terminalStationBindings, 1),
+                Broadcasting.Runtime.ResolveBoundAssetName(turnbackStationBindings, 1),
                 currentStationBindings,
                 nextStationBindings,
                 terminalStationBindings,
@@ -1881,7 +1884,7 @@ namespace RapidTransitMod
 
             DynamicBuffer<Game.Routes.RouteWaypoint> waypoints =
                 EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
-            if (!TryGetBroadcastLineStationContextCache(line, waypoints, out BroadcastLineStationContextCache cache)
+            if (!m_Announcements.TryLineCache(line, waypoints, out BroadcastLineStationContextCache cache)
                 || cache?.TurnbackStations == null
                 || cache.TurnbackStations.Length == 0)
             {
@@ -1914,7 +1917,7 @@ namespace RapidTransitMod
 
             DynamicBuffer<Game.Routes.RouteWaypoint> waypoints =
                 EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
-            if (!TryGetBroadcastLineStationContextCache(line, waypoints, out BroadcastLineStationContextCache cache)
+            if (!m_Announcements.TryLineCache(line, waypoints, out BroadcastLineStationContextCache cache)
                 || cache?.TurnbackStations == null)
             {
                 return Array.Empty<BroadcastWorkbenchTurnbackPointDto>();
@@ -2003,7 +2006,7 @@ namespace RapidTransitMod
             return Mathf.Lerp(BroadcastVolumeScalarMin, BroadcastVolumeScalarMax, progress);
         }
 
-        private static int ClampBroadcastVolumePercent(int volumePercent)
+        internal static int ClampBroadcastVolumePercent(int volumePercent)
         {
             return Mathf.Clamp(volumePercent, 0, 100);
         }
@@ -2028,7 +2031,7 @@ namespace RapidTransitMod
             });
         }
 
-        private static UnityWebRequest BuildBroadcastPreviewAudioRequest(string path, AudioType audioType)
+        internal static UnityWebRequest BuildBroadcastPreviewAudioRequest(string path, AudioType audioType)
         {
             if (path.StartsWith("//?/", StringComparison.Ordinal))
             {
@@ -2038,7 +2041,7 @@ namespace RapidTransitMod
             return UnityWebRequestMultimedia.GetAudioClip(new Uri("file://" + path), audioType);
         }
 
-        private static AudioType ResolveBroadcastAssetAudioType(string filePath)
+        internal static AudioType ResolveBroadcastAssetAudioType(string filePath)
         {
             switch ((Path.GetExtension(filePath) ?? string.Empty).ToLowerInvariant())
             {
@@ -2065,7 +2068,7 @@ namespace RapidTransitMod
             return lineBindings;
         }
 
-        private Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> GetBroadcastAppliedLineStationBindings(string lineId)
+        internal Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> GetBroadcastAppliedLineStationBindings(string lineId)
         {
             if (string.IsNullOrEmpty(lineId)
                 || !m_BroadcastLineStationAssetBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings)
@@ -2161,7 +2164,7 @@ namespace RapidTransitMod
                 runtime != null && string.Equals(runtime.Id, lineId, StringComparison.Ordinal));
         }
 
-        private bool EnsureBroadcastLineStateMigrated(
+        internal bool EnsureBroadcastLineStateMigrated(
             string lineId,
             Entity line,
             out List<BroadcastWorkbenchStationGroup> stationGroups)
@@ -2202,7 +2205,7 @@ namespace RapidTransitMod
             }
 
             DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            if (!TryGetBroadcastLineStationContextCache(line, waypoints, out BroadcastLineStationContextCache cache)
+            if (!m_Announcements.TryLineCache(line, waypoints, out BroadcastLineStationContextCache cache)
                 || cache?.Stations == null
                 || cache.Stations.Length == 0)
             {
@@ -2641,7 +2644,7 @@ namespace RapidTransitMod
             }
 
             RemoveBroadcastAssetReferences(normalizedAssetName);
-            MainThreadDispatcher.RunOnMainThread(() => RemoveBroadcastRuntimeAsset(normalizedAssetName));
+            MainThreadDispatcher.RunOnMainThread(() => m_Announcements.RemoveAsset(normalizedAssetName));
             return true;
         }
 
@@ -2669,7 +2672,7 @@ namespace RapidTransitMod
             m_BroadcastDraftLineStationAssetBindings.Clear();
             m_BroadcastLineStationAssetBindings.Clear();
             RemoveAllBroadcastAssetNodesFromRules();
-            MainThreadDispatcher.RunOnMainThread(RemoveAllBroadcastRuntimeAssets);
+            MainThreadDispatcher.RunOnMainThread(m_Announcements.RemoveAllAssets);
         }
 
         private void RemoveBroadcastAssetReferences(string assetName)
@@ -3649,7 +3652,7 @@ namespace RapidTransitMod
             m_BroadcastLineRules.Clear();
             m_BroadcastLinePlatformAnnouncements.Clear();
             m_BroadcastAppliedLineIds.Clear();
-            m_BroadcastRuntimeCheckedLineIds.Clear();
+            m_Announcements.ClearLineChecks();
             m_BroadcastDraftVolumePercent = ClampBroadcastVolumePercent(persistedDraftVolume);
             m_BroadcastAppliedVolumePercent = ClampBroadcastVolumePercent(persistedAppliedState?.volume ?? m_BroadcastDraftVolumePercent);
             m_BroadcastExternalBrowseDirectory = string.Empty;
@@ -3751,7 +3754,7 @@ namespace RapidTransitMod
             }
 
             ApplyBroadcastPreviewVolumeToActivePreviewSources();
-            ApplyBroadcastAppliedVolumeToRuntime();
+            m_Announcements.ApplyVolume();
         }
 
         private static BroadcastWorkbenchAssetDto CloneBroadcastWorkbenchAsset(BroadcastWorkbenchAssetDto asset)
@@ -3771,7 +3774,7 @@ namespace RapidTransitMod
             };
         }
 
-        private static BroadcastWorkbenchRuleDto CloneBroadcastWorkbenchRule(BroadcastWorkbenchRuleDto rule)
+        internal static BroadcastWorkbenchRuleDto CloneBroadcastWorkbenchRule(BroadcastWorkbenchRuleDto rule)
         {
             if (rule == null)
             {
@@ -3795,7 +3798,7 @@ namespace RapidTransitMod
             };
         }
 
-        private static BroadcastWorkbenchRuleNodeDto CloneBroadcastWorkbenchRuleNode(BroadcastWorkbenchRuleNodeDto node)
+        internal static BroadcastWorkbenchRuleNodeDto CloneBroadcastWorkbenchRuleNode(BroadcastWorkbenchRuleNodeDto node)
         {
             if (node == null)
             {

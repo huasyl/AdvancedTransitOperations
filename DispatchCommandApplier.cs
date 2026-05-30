@@ -44,21 +44,20 @@ namespace RapidTransitMod
 
         private EntityManager EntityManager => m_Runtime.EntityManager;
         private TimedLogger log => m_Runtime.log;
-        private SimulationSystem Simulation => m_Runtime.m_SimulationSystem;
+        internal SimulationSystem Simulation => m_Runtime.m_SimulationSystem;
 
         public DispatchCommandApplier(DispatchRuntimeSystem runtime)
         {
             m_Runtime = runtime;
         }
 
-        internal void AssignSlot(Entity vehicle, int slot, EntityCommandBuffer ecb)
+        internal void CommitAssignedSlotHold(Entity vehicle, int slot, EntityCommandBuffer ecb)
         {
-            m_Runtime.m_RuntimeController.Target(vehicle, slot);
             Game.Vehicles.PublicTransport publicTransport =
                 EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
             publicTransport.m_DepartureFrame = Simulation.frameIndex + 9999;
             CommitPublicTransport(vehicle, publicTransport, ecb);
-            m_Runtime.SetUILabel(vehicle, "候车 " + DispatchRuntimeSystem.SlotStr(slot));
+            m_Runtime.m_VehicleLabels.Set(vehicle, "候车 " + DispatchRuntimeSystem.SlotStr(slot));
         }
 
         internal void CommitPublicTransport(
@@ -89,17 +88,6 @@ namespace RapidTransitMod
             CommitPublicTransport(vehicle, publicTransport, ecb);
         }
 
-        internal void ApplyDepotRequestPath(Entity request, PathInformation forcedPath)
-        {
-            if (EntityManager.HasComponent<PathInformation>(request))
-                EntityManager.SetComponentData(request, forcedPath);
-            else
-                EntityManager.AddComponentData(request, forcedPath);
-
-            if (!EntityManager.HasBuffer<PathElement>(request))
-                EntityManager.AddBuffer<PathElement>(request);
-        }
-
         internal void Retire(
             Entity vehicle,
             Game.Vehicles.PublicTransport publicTransport,
@@ -117,12 +105,12 @@ namespace RapidTransitMod
             m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
             m_Runtime.ClearForcedMidStopClosingConsist(vehicle);
             m_Runtime.m_PreparingFixCooldownUntil.Remove(vehicle);
-            m_Runtime.ClearAssistLaunchPending(vehicle);
-            m_Runtime.ClearBroadcastRuntimeState(vehicle);
+            m_Runtime.m_RuntimeController.ClearAssistLaunchPending(vehicle);
+            m_Runtime.m_Announcements.RemoveVehicle(vehicle);
             m_Runtime.m_RetireFixCount[vehicle] = 0;
 
             string lineTag = m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line) ? "线路" + line.Index : "线路?";
-            m_Runtime.SetUILabel(vehicle, "回库中" + (reason.Length > 0 ? "(" + reason + ")" : ""));
+            m_Runtime.m_VehicleLabels.Set(vehicle, "回库中" + (reason.Length > 0 ? "(" + reason + ")" : ""));
             log.Info("[回库] " + lineTag + " 车辆" + vehicle.Index
                 + (reason.Length > 0 ? " 原因:" + reason : "") + " -> 车库");
             RecordRetireShadowSnapshot(vehicle, "retire-request");
@@ -154,7 +142,7 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> waypoints,
             EntityCommandBuffer ecb)
         {
-            m_Runtime.ClearAssistLaunchPending(vehicle);
+            m_Runtime.m_RuntimeController.ClearAssistLaunchPending(vehicle);
             m_Runtime.m_RuntimeController.ClearBoardingGrace(vehicle);
             publicTransport.m_State &= ~PublicTransportFlags.Boarding;
             publicTransport.m_DepartureFrame = Simulation.frameIndex - 1;
@@ -1036,12 +1024,12 @@ namespace RapidTransitMod
         internal void ReleaseRuntimeOwnershipAfterRetireHandoff(Entity vehicle, string reason)
         {
             m_RetireHandoffWatch.Remove(vehicle);
-            m_Runtime.ClearBroadcastRuntimeState(vehicle);
+            m_Runtime.m_Announcements.RemoveVehicle(vehicle);
             m_Runtime.m_VehicleRegistry.Remove(vehicle);
             m_Runtime.m_LapObservations.Remove(vehicle);
             m_Runtime.m_LastBoarding.Remove(vehicle);
             m_Runtime.m_CachedWpIdx.Remove(vehicle);
-            m_Runtime.m_TrackProjector.Remove(vehicle);
+            m_Runtime.TrackProjection.ClearVehicle(vehicle);
             m_Runtime.m_UICache.Remove(vehicle);
             m_Runtime.m_LastRetireFixLogFrame.Remove(vehicle);
             m_Runtime.m_RetireFixCooldownUntil.Remove(vehicle);
@@ -1050,8 +1038,8 @@ namespace RapidTransitMod
             m_Runtime.m_StopDwell.Remove(vehicle);
             m_Runtime.m_BVMisfire.Remove(vehicle);
             m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
-            m_Runtime.ClearBypassYieldState(vehicle, reason);
-            m_Runtime.ClearVehicleProgressSuspect(vehicle, reason);
+            m_Runtime.Bypass.ClearVehicle(vehicle, reason);
+            m_Runtime.TrackProjection.ClearVehicleProgressSuspect(vehicle, reason);
             FlushRetireShadowSnapshots(vehicle, reason);
             ResetRetireShadowSnapshots(vehicle);
         }
@@ -1831,5 +1819,6 @@ namespace RapidTransitMod
         {
             return !string.IsNullOrEmpty(text) && text.IndexOf(flag, StringComparison.Ordinal) >= 0;
         }
+
     }
 }

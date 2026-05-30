@@ -1142,30 +1142,10 @@ namespace RapidTransitMod
 
         private bool IsDepotCompatibleWithLine(Entity depot, Entity line)
         {
-            if (depot == Entity.Null
-                || line == Entity.Null
-                || !EntityManager.Exists(depot)
-                || !EntityManager.Exists(line)
-                || !EntityManager.HasComponent<Game.Buildings.TransportDepot>(depot)
-                || !EntityManager.HasComponent<PrefabRef>(depot)
-                || !EntityManager.HasComponent<PrefabRef>(line))
-            {
-                return false;
-            }
-
-            Entity depotPrefab = EntityManager.GetComponentData<PrefabRef>(depot).m_Prefab;
-            Entity linePrefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
-            if (depotPrefab == Entity.Null
-                || linePrefab == Entity.Null
-                || !EntityManager.HasComponent<TransportDepotData>(depotPrefab)
-                || !EntityManager.HasComponent<TransportLineData>(linePrefab))
-            {
-                return false;
-            }
-
-            TransportDepotData depotData = EntityManager.GetComponentData<TransportDepotData>(depotPrefab);
-            TransportLineData lineData = EntityManager.GetComponentData<TransportLineData>(linePrefab);
-            return depotData.m_TransportType == lineData.m_TransportType;
+            return depot != Entity.Null
+                && EntityManager.Exists(depot)
+                && EntityManager.HasComponent<Game.Buildings.TransportDepot>(depot)
+                && DepotCompatibilityService.Match(EntityManager, line, depot);
         }
 
         private void UpdateLineDepotAffinity()

@@ -14,6 +14,7 @@ using Game.Prefabs;
 using Game.Routes;
 using Game.Simulation;
 using Game.UI;
+using RapidTransitMod.TrackModel;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -47,7 +48,7 @@ namespace RapidTransitMod
         private readonly Dictionary<string, int> m_WorkbenchLineMaxStationDwellMinutes = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_WorkbenchLineAllowedDepots = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_WorkbenchLineServiceKinds = new Dictionary<string, string>(StringComparer.Ordinal);
-        private readonly Dictionary<string, AppliedWorkbenchLineState> m_AppliedWorkbenchLines = new Dictionary<string, AppliedWorkbenchLineState>(StringComparer.Ordinal);
+        internal readonly Dictionary<string, AppliedWorkbenchLineState> m_AppliedWorkbenchLines = new Dictionary<string, AppliedWorkbenchLineState>(StringComparer.Ordinal);
         private readonly Dictionary<Entity, WorkbenchLineFrameSnapshot> m_WorkbenchLineFrameSnapshots = new Dictionary<Entity, WorkbenchLineFrameSnapshot>();
         private readonly Dictionary<Entity, ConfiguredAllowedDepotCacheEntry> m_ConfiguredAllowedDepotCacheByLine = new Dictionary<Entity, ConfiguredAllowedDepotCacheEntry>();
         private readonly Dictionary<Entity, WorkbenchRealtimeVehicleRecord> m_WorkbenchRealtimeVehicles = new Dictionary<Entity, WorkbenchRealtimeVehicleRecord>();
@@ -583,7 +584,7 @@ namespace RapidTransitMod
             return lineIds;
         }
 
-        private List<WorkbenchLineRuntime> BuildWorkbenchLinesStable()
+        internal List<WorkbenchLineRuntime> BuildWorkbenchLinesStable()
         {
             EnsureWorkbenchPersistenceLoaded();
             EnsureAppliedWorkbenchPersistenceLoaded();
@@ -676,7 +677,7 @@ namespace RapidTransitMod
             return m_WorkbenchDrafts.ResolvePreferredLineId();
         }
 
-        private string GetDraftKey(string lineId)
+        internal static string GetDraftKey(string lineId)
         {
             return WorkbenchDraftStore.GetKey(lineId);
         }
@@ -709,7 +710,7 @@ namespace RapidTransitMod
             return GetWorkbenchRuntimeConfig().GetLineKey(line, fallbackLineId);
         }
 
-        private string GetWorkbenchLineId(Entity line)
+        internal string GetWorkbenchLineId(Entity line)
         {
             if (line == Entity.Null || !EntityManager.Exists(line))
                 return string.Empty;
@@ -1198,8 +1199,8 @@ namespace RapidTransitMod
 
         private void InvalidateAppliedWorkbenchTrackModelState()
         {
-            m_SharedTrackIndexDirty = true;
-            ClearBypassRuntimeState();
+            m_TrackModel.MarkSharedIndexDirty();
+            m_Bypass.ClearAll();
         }
 
         private void RefreshAppliedWorkbenchLineSettings()
@@ -1803,7 +1804,7 @@ namespace RapidTransitMod
             return GetWorkbenchPersistence().RestoreState(persisted);
         }
 
-        private bool IsWorkbenchTimetableApplied(Entity line)
+        internal bool IsWorkbenchTimetableApplied(Entity line)
         {
             if (!TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot))
                 return false;
@@ -1831,17 +1832,17 @@ namespace RapidTransitMod
             return m_RuntimeFeatureSettingsStore.DepotLockEnabled;
         }
 
-        private bool IsDispatchRuntimeManagedLine(Entity line)
+        internal bool IsDispatchRuntimeManagedLine(Entity line)
         {
             return IsDispatchFeatureEnabled() && IsWorkbenchTimetableApplied(line);
         }
 
         private bool IsBypassRuntimeFeatureEnabled()
         {
-            return m_BypassRuntimeEnabled && IsBypassFeatureEnabled();
+            return m_Bypass.RuntimeEnabled() && IsBypassFeatureEnabled();
         }
 
-        private int[] GetAppliedWorkbenchDepartureMinutes(Entity line)
+        internal int[] GetAppliedWorkbenchDepartureMinutes(Entity line)
         {
             if (!TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
                 || !snapshot.TimetableApplied)
@@ -1868,7 +1869,7 @@ namespace RapidTransitMod
             return state.DepartureMinutesCache;
         }
 
-        private void LogAppliedWorkbenchLineState(Entity line, int nowMin, int nextSlot)
+        internal void LogAppliedWorkbenchLineState(Entity line, int nowMin, int nextSlot)
         {
             EnsureAppliedWorkbenchPersistenceLoaded();
             if (line == Entity.Null || !IsWorkbenchTimetableApplied(line))
@@ -2001,14 +2002,14 @@ namespace RapidTransitMod
             return GetAppliedWorkbenchLineServiceKind(GetStoreLineKey(line), applied);
         }
 
-        private bool IsAppliedWorkbenchLocalLine(Entity line)
+        internal bool IsAppliedWorkbenchLocalLine(Entity line)
         {
             return TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
                 && snapshot.TimetableApplied
                 && string.Equals(snapshot.EffectiveServiceKind, "local", StringComparison.Ordinal);
         }
 
-        private bool IsAppliedWorkbenchExpressLine(Entity line)
+        internal bool IsAppliedWorkbenchExpressLine(Entity line)
         {
             return TryGetWorkbenchLineFrameSnapshot(line, out WorkbenchLineFrameSnapshot snapshot)
                 && snapshot.TimetableApplied
@@ -2347,12 +2348,12 @@ namespace RapidTransitMod
             return "station-building-" + building.Index.ToString();
         }
 
-        private static string CreateWorkbenchStationId(int order)
+        internal static string CreateWorkbenchStationId(int order)
         {
             return "station-" + order.ToString();
         }
 
-        private string ResolveWorkbenchEntityName(Entity entity)
+        internal string ResolveWorkbenchEntityName(Entity entity)
         {
             string translatedName = TryGetTranslatedWorkbenchEntityName(entity);
             if (!string.IsNullOrEmpty(translatedName))
@@ -2398,7 +2399,7 @@ namespace RapidTransitMod
             return entity != Entity.Null && EntityManager.Exists(entity);
         }
 
-        private Entity ResolveWorkbenchStopEntity(Entity waypoint)
+        internal Entity ResolveWorkbenchStopEntity(Entity waypoint)
         {
             if (!IsLiveWorkbenchEntity(waypoint))
             {
@@ -2457,7 +2458,7 @@ namespace RapidTransitMod
             return StationAnchorKeyPrefix + Guid.NewGuid().ToString("N");
         }
 
-        private Entity ResolveStationAnchor(Entity waypoint)
+        internal Entity ResolveStationAnchor(Entity waypoint)
         {
             Entity building = ResolveWorkbenchBuilding(waypoint);
             if (building != Entity.Null)
@@ -2468,7 +2469,7 @@ namespace RapidTransitMod
             return ResolveWorkbenchStopEntity(waypoint);
         }
 
-        private Entity ResolveStationAnchorFromStop(Entity stopEntity)
+        internal Entity ResolveStationAnchorFromStop(Entity stopEntity)
         {
             if (!IsLiveWorkbenchEntity(stopEntity))
             {
@@ -2484,7 +2485,7 @@ namespace RapidTransitMod
             return stopEntity;
         }
 
-        private string GetStationAnchorKey(Entity anchor)
+        internal string GetStationAnchorKey(Entity anchor)
         {
             if (!IsLiveWorkbenchEntity(anchor)
                 || !EntityManager.HasComponent<StationAnchorKey>(anchor))
@@ -2495,7 +2496,7 @@ namespace RapidTransitMod
             return EntityManager.GetComponentData<StationAnchorKey>(anchor).Value.ToString();
         }
 
-        private string EnsureStationAnchorKey(Entity anchor)
+        internal string EnsureStationAnchorKey(Entity anchor)
         {
             if (!IsLiveWorkbenchEntity(anchor))
             {
@@ -2526,7 +2527,7 @@ namespace RapidTransitMod
             return created;
         }
 
-        private StopRef ResolveStop(Entity waypoint)
+        internal StopRef ResolveStop(Entity waypoint)
         {
             Entity stopEntity = ResolveWorkbenchStopEntity(waypoint);
             if (stopEntity != Entity.Null)
@@ -2543,7 +2544,7 @@ namespace RapidTransitMod
             return new StopRef(Entity.Null, ResolvedStopKind.Stop);
         }
 
-        private StopRef ResolveStop(Entity waypoint, StopRef fallback)
+        internal StopRef ResolveStop(Entity waypoint, StopRef fallback)
         {
             StopRef resolved = ResolveStop(waypoint);
             if (resolved.Ent != Entity.Null)
@@ -2583,7 +2584,7 @@ namespace RapidTransitMod
                 : CreateWorkbenchOriginStationId(entity);
         }
 
-        private string ResolveWorkbenchStationName(Entity stopEntity)
+        internal string ResolveWorkbenchStationName(Entity stopEntity)
         {
             Entity buildingEntity = FindTransportStationFromStop(stopEntity);
             if (buildingEntity != Entity.Null)
@@ -2624,7 +2625,7 @@ namespace RapidTransitMod
             return Entity.Null;
         }
 
-        private Entity FindTransportStationFromStop(Entity stop)
+        internal Entity FindTransportStationFromStop(Entity stop)
         {
             Entity current = stop;
             for (int i = 0; i < 8 && current != Entity.Null; i++)
@@ -2683,7 +2684,7 @@ namespace RapidTransitMod
                 : new StopRef(Entity.Null, ResolvedStopKind.Stop);
         }
 
-        private StopRef GetLatestStop(Entity vehicle)
+        internal StopRef GetLatestStop(Entity vehicle)
         {
             if (vehicle == Entity.Null
                 || !m_WorkbenchRealtimeVehicles.TryGetValue(vehicle, out WorkbenchRealtimeVehicleRecord record))
@@ -2751,7 +2752,7 @@ namespace RapidTransitMod
             return FormatMinutes(nowMin);
         }
 
-        private void RecordWorkbenchRealtimeStopEvent(
+        internal void RecordWorkbenchRealtimeStopEvent(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
@@ -2887,7 +2888,7 @@ namespace RapidTransitMod
                 + (isOriginStop ? "1" : "0"));
         }
 
-        private void BeginWorkbenchRealtimeTripAtLaunch(
+        internal void BeginWorkbenchRealtimeTripAtLaunch(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints)
@@ -4502,7 +4503,7 @@ namespace RapidTransitMod
 
             if (previous.BypassEnabled && !next.BypassEnabled)
             {
-                ClearBypassRuntimeState();
+                m_Bypass.ClearAll();
             }
 
             if (previous.BroadcastEnabled && !next.BroadcastEnabled)

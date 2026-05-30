@@ -7,6 +7,8 @@ using Game.Common;
 using Game.Net;
 using Game.Objects;
 using Game.Routes;
+using RapidTransitMod.Bypass;
+using RapidTransitMod.TrackModel;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -219,8 +221,8 @@ namespace RapidTransitMod
                     positionX = (float)Math.Round(position.x, 1),
                     positionY = (float)Math.Round(position.y, 1),
                     positionZ = (float)Math.Round(position.z, 1),
-                    canConfigureBypass = building != Entity.Null && CanConfigureBypassStation(building),
-                    isConfiguredBypass = building != Entity.Null && IsBypassStation(building),
+                    canConfigureBypass = building != Entity.Null && m_SelectionPanel.CanConfigureBypassStation(building),
+                    isConfiguredBypass = building != Entity.Null && m_SelectionPanel.IsBypassStation(building),
                     profileDwellMinutes = profileDwellMinutes,
                     observedDwellMinutes = hasObservedDwell ? RoundPlannerMinutes(observedDwellFrames) : 0f,
                     observedDwellSampleCount = hasObservedDwell ? observedDwellSampleCount : 0,
@@ -340,7 +342,7 @@ namespace RapidTransitMod
                 DispatchPlannerLineTrackDto lineTrack = BuildPlannerLineTrack(runtime, waypoints, stationRecords);
                 lineTracks.Add(lineTrack);
                 if (lineTrack.available
-                    && m_TrackModelQuery.TryChain(runtime.Entity, out LineTrackChain chain)
+                    && m_TrackModel.TryChain(runtime.Entity, out LineTrackChain chain)
                     && chain != null)
                 {
                     chainByLineId[runtime.Id] = chain;
@@ -369,7 +371,7 @@ namespace RapidTransitMod
             DynamicBuffer<RouteWaypoint> waypoints,
             List<PlannerStationRecord> stationRecords)
         {
-            if (!TryGetLineTrackChain(runtime.Entity, waypoints, out LineTrackChain chain)
+            if (!m_TrackModel.TryGetChainForLine(runtime.Entity, waypoints, out LineTrackChain chain)
                 || chain == null)
             {
                 return new DispatchPlannerLineTrackDto
@@ -383,8 +385,7 @@ namespace RapidTransitMod
                 };
             }
 
-            EnsureTrackChainBypassPipelineReady(chain);
-            EnsureLineBypassExecutionModeReady(chain, waypoints);
+            m_TrackModel.EnsureTrackChainBypassPipelineReady(chain);
             PopulatePlannerStationTrackAtomIndices(chain, stationRecords);
 
             return new DispatchPlannerLineTrackDto
@@ -398,7 +399,7 @@ namespace RapidTransitMod
                 sharedRunCount = chain.SharedRuns.Count,
                 protectedIntervalCount = chain.BypassProtectedIntervals.Count,
                 protectedSharedIntervalCount = chain.ProtectedSharedIntervals.Count,
-                executionMode = chain.ExecutionMode.ToString(),
+                executionMode = "static-track-model",
                 protectedIntervals = BuildPlannerProtectedIntervals(runtime.Id, chain, stationRecords),
                 traversalSlices = BuildPlannerTraversalSlices(runtime.Id, runtime.Entity, chain),
                 trackAtoms = BuildPlannerTrackAtoms(chain)
@@ -739,7 +740,7 @@ namespace RapidTransitMod
                     if (leftEntry.Key == rightEntry.Key)
                         continue;
 
-                    GlobalSharedTrunkSnapshot snapshot = GetGlobalSharedTrunkSnapshotCurrent(leftEntry.Value, rightEntry.Value);
+                    GlobalSharedTrunkSnapshot snapshot = m_Bypass.GetGlobalSharedTrunkSnapshotCurrent(leftEntry.Value, rightEntry.Value);
                     if (snapshot == null || snapshot.Segments == null || snapshot.Segments.Count == 0)
                         continue;
 
@@ -950,11 +951,11 @@ namespace RapidTransitMod
                 simFramesPerMinute = SIM_FRAMES_PER_MINUTE,
                 defaultOriginHoldLimitMinutes = DEFAULT_ORIGIN_HOLD_LIMIT_MINUTES,
                 defaultMaxStationDwellMinutes = DEFAULT_MAX_STATION_DWELL_MINUTES,
-                trackModelEntryClearSafetyGapMinutes = TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES,
+                trackModelEntryClearSafetyGapMinutes = AdmissionService.TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES,
                 localBypassExitReleaseAtoms = LOCAL_BYPASS_EXIT_RELEASE_ATOMS,
-                localBypassTrainTailClearAtoms = LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS,
-                minStrongProtectedIntervalOverlapAtoms = MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS,
-                minStrongProtectedIntervalOrderedRun = MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN,
+                localBypassTrainTailClearAtoms = AdmissionService.LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS,
+                minStrongProtectedIntervalOverlapAtoms = AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS,
+                minStrongProtectedIntervalOrderedRun = AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN,
                 compatibilityMode = "read-only-planner-input"
             };
         }
@@ -1233,9 +1234,9 @@ namespace RapidTransitMod
             float confidence = segment.TraversalRelation == SharedTraversalRelation.SameDirection ? 0.75f : 0.45f;
             if (segment.HasMirroredContext)
                 confidence -= 0.2f;
-            if (segment.OrderedRun >= MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
+            if (segment.OrderedRun >= AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN)
                 confidence += 0.05f;
-            if (segment.PhysicalOverlap >= MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS)
+            if (segment.PhysicalOverlap >= AdmissionService.MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS)
                 confidence += 0.05f;
 
             return math.clamp(confidence, 0.2f, 0.9f);

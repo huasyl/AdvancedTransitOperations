@@ -1,0 +1,282 @@
+using System;
+using System.Collections.Generic;
+using Game.Routes;
+using RapidTransitMod.TrackModel;
+using Unity.Entities;
+
+namespace RapidTransitMod.Bypass
+{
+    internal sealed partial class RuntimeFacade : IDisposable
+    {
+        private readonly IRuntimeContext m_Runtime;
+        private readonly AdmissionService m_Admission;
+        private readonly ControlService m_Control;
+        private bool m_Enabled = true;
+        private bool m_ToggleKeyArmed = true;
+        private readonly Dictionary<Entity, string> m_DepartureGateLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_ReleaseDiagLogCache = new Dictionary<Entity, string>();
+
+        internal RuntimeFacade(IRuntimeContext runtime)
+        {
+            m_Runtime = runtime;
+            m_Admission = new AdmissionService(runtime);
+            m_Control = new ControlService(runtime, m_Admission);
+        }
+
+        internal bool Enabled => m_Enabled;
+        internal bool RuntimeEnabled() => m_Enabled;
+
+        public void Dispose()
+        {
+            m_Admission.Dispose();
+        }
+
+        internal void SetEnabled(bool enabled)
+        {
+            if (m_Enabled == enabled)
+                return;
+
+            m_Enabled = enabled;
+            ClearAll();
+            m_Runtime.Log.Info(enabled
+                ? "[F5] 已启用快慢车待避"
+                : "[F5] 已禁用快慢车待避（仅用于性能排查）");
+        }
+
+        internal bool ToggleKey(bool pressed)
+        {
+            if (!pressed)
+            {
+                m_ToggleKeyArmed = true;
+                return false;
+            }
+
+            if (!m_ToggleKeyArmed)
+                return false;
+
+            m_ToggleKeyArmed = false;
+            SetEnabled(!m_Enabled);
+            return true;
+        }
+
+        internal void ClearAll()
+        {
+            m_Admission.Clear();
+            m_Control.Clear();
+            m_DepartureGateLogCache.Clear();
+            m_ReleaseDiagLogCache.Clear();
+            m_Runtime.TrackModel.ClearAllStaticCaches();
+        }
+
+        internal void ClearLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            List<Entity> yieldVehiclesToRelease = m_Admission.ReleaseLine(line, m_Runtime.ResolveVehicleLine);
+            if (yieldVehiclesToRelease != null)
+            {
+                for (int i = 0; i < yieldVehiclesToRelease.Count; i++)
+                    ClearVehicle(yieldVehiclesToRelease[i], "线路运行态失效");
+            }
+
+            m_Runtime.TrackModel.ClearStaticCachesForLine(line);
+        }
+
+        internal void ExpireLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_Runtime.ClearLineTimeProfiles();
+
+            List<Entity> expiredVehicles = m_Admission.ExpireLine(line);
+            if (expiredVehicles == null)
+                return;
+
+            for (int i = 0; i < expiredVehicles.Count; i++)
+                RemoveVehicleLogs(expiredVehicles[i]);
+        }
+
+        internal void ForgetBlocker(Entity blocker)
+        {
+            m_Admission.ForgetBlocker(blocker);
+        }
+
+        internal void ClearVehicle(Entity vehicle, string releaseReason = null)
+        {
+            if (vehicle == Entity.Null || !m_Admission.TryGetLatchedBlocker(vehicle, out Entity blocker))
+                return;
+
+            m_Admission.ClearBlocker(vehicle);
+            m_Admission.RemoveCadence(vehicle);
+            m_Admission.RemoveEpisode(vehicle);
+            m_Runtime.RecordRelease(vehicle, blocker, releaseReason);
+            ((IControlContext)m_Runtime).LogVehicleStateOnce(
+                m_ReleaseDiagLogCache,
+                vehicle,
+                "release|blocker=" + blocker.Index + "|reason=" + (releaseReason ?? "-"),
+                "[待避释放诊断] vehicle=" + vehicle.Index
+                    + " blocker=" + blocker.Index
+                    + " reason=" + (releaseReason ?? "-")
+                    + " frame=" + ((IControlContext)m_Runtime).Frame);
+            if (m_Runtime.IsBypassRuntimeLoggingEnabled())
+            {
+                Entity line = m_Runtime.ResolveVehicleLine(vehicle);
+                string lineTag = line != Entity.Null ? "线路" + line.Index : "线路?";
+                m_Runtime.Log.Info("[待避解除] " + lineTag + " 车辆" + vehicle.Index
+                    + " 解除快车待避"
+                    + (!string.IsNullOrWhiteSpace(releaseReason) ? " reason=" + releaseReason : string.Empty)
+                    + (blocker != Entity.Null ? " blocker=" + blocker.Index : string.Empty));
+            }
+
+            RemoveVehicleLogs(vehicle);
+        }
+
+        internal bool TryGetBypassControlScope(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            out BypassControlScope scope,
+            out string failureReason)
+        {
+            return m_Admission.TryGetBypassControlScope(vehicle, line, waypoints, waypointIndex, out scope, out failureReason);
+        }
+
+        internal bool ShouldClearHoldAfterStationExit(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex)
+        {
+            return m_Admission.ShouldClearHoldAfterStationExit(vehicle, line, waypoints, waypointIndex);
+        }
+
+        internal bool IsExpressBlockerStillWithinBypassStation(Entity blocker, Entity station)
+        {
+            return m_Admission.IsExpressBlockerStillWithinBypassStation(blocker, station);
+        }
+
+        internal bool TryEvaluateLatchedBlockerBeforeRelease(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            BypassConflictEpisode episode,
+            Entity blocker,
+            out bool beforeRelease)
+        {
+            return m_Admission.TryEvaluateLatchedBlockerBeforeRelease(scope, waypoints, episode, blocker, out beforeRelease);
+        }
+
+        internal bool ShouldReleaseForQueuedLocalAhead(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            Entity blocker,
+            out float expressSceneCoordinate,
+            out float localSceneCoordinate,
+            out float queuedLocalMeters)
+        {
+            return m_Admission.ShouldReleaseForQueuedLocalAhead(
+                scope,
+                waypoints,
+                blocker,
+                out expressSceneCoordinate,
+                out localSceneCoordinate,
+                out queuedLocalMeters);
+        }
+
+        internal void LogQueuedLocalBypassOverrideOnce(
+            Entity vehicle,
+            Entity line,
+            Entity blocker,
+            string action,
+            string reason,
+            float expressSceneCoordinate,
+            float localSceneCoordinate,
+            float queuedLocalMeters)
+        {
+            m_Admission.LogQueuedLocalBypassOverrideOnce(
+                vehicle,
+                line,
+                blocker,
+                action,
+                reason,
+                expressSceneCoordinate,
+                localSceneCoordinate,
+                queuedLocalMeters);
+        }
+
+        internal BypassControlResult TickVehicle<TTransport, TCommandBuffer>(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            bool boarding,
+            ref TTransport publicTransport,
+            TCommandBuffer ecb,
+            string lineTag,
+            bool midStopDwellTimedOut,
+            uint nowFrame)
+        {
+            return m_Control.TickVehicle(
+                vehicle,
+                line,
+                waypoints,
+                waypointIndex,
+                boarding,
+                ref publicTransport,
+                ecb,
+                lineTag,
+                midStopDwellTimedOut,
+                nowFrame);
+        }
+
+        internal BypassDecisionResult EvaluateDepartureGate(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            uint nowFrame)
+        {
+            return m_Admission.EvaluateDepartureGate(vehicle, line, waypoints, waypointIndex, nowFrame);
+        }
+
+        internal Entity FindBlocker(BypassDecisionResult result)
+        {
+            return m_Admission.FindBlocker(result);
+        }
+
+        internal bool TryGetLatchedBlocker(Entity vehicle, out Entity blocker)
+        {
+            return m_Admission.TryGetLatchedBlocker(vehicle, out blocker);
+        }
+
+        internal void LogDepartureGate(Entity vehicle, string key, string message)
+        {
+            ((IControlContext)m_Runtime).LogVehicleStateOnce(m_DepartureGateLogCache, vehicle, key, message);
+        }
+
+        internal void FlushProbeLogs(uint nowFrame)
+        {
+            m_Admission.FlushPerfProbeIfDue(nowFrame);
+            m_Admission.FlushLineOrderedProbeIfDue(nowFrame);
+        }
+
+        internal void RequestLineOrderedRuntimeForceRefresh(Entity line, string reason)
+        {
+            m_Admission.RequestLineOrderedRuntimeForceRefresh(line, reason);
+        }
+
+
+        internal GlobalSharedTrunkSnapshot GetGlobalSharedTrunkSnapshotCurrent(LineTrackChain left, LineTrackChain right)
+        {
+            return m_Admission.GetGlobalSharedTrunkSnapshotCurrent(left, right);
+        }
+
+        private void RemoveVehicleLogs(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_DepartureGateLogCache.Remove(vehicle);
+            m_ReleaseDiagLogCache.Remove(vehicle);
+            m_Control.RemoveVehicleLogs(vehicle);
+        }
+    }
+}

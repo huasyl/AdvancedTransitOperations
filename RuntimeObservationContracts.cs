@@ -499,7 +499,7 @@ namespace RapidTransitMod
             }
         }
 
-        private void RecordRuntimeObservationTargetBound(Entity line, Entity vehicle, int targetMinute, uint nowFrame, string reasonCode)
+        internal void RecordRuntimeObservationTargetBound(Entity line, Entity vehicle, int targetMinute, uint nowFrame, string reasonCode)
         {
             if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservations.Session == null)
                 return;
@@ -523,7 +523,7 @@ namespace RapidTransitMod
             m_RuntimeObservations.Session.LastUpdatedFrame = nowFrame;
         }
 
-        private void RecordRuntimeObservationLaunch(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)
+        internal void RecordRuntimeObservationLaunch(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)
         {
             if (line == Entity.Null || vehicle == Entity.Null || targetMinute < 0 || m_RuntimeObservations.Session == null)
                 return;

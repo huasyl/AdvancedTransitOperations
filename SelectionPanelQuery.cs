@@ -313,7 +313,7 @@ namespace RapidTransitMod
             PublicTransportFlags nativeFlags = m_EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
                 ? m_EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State
                 : 0;
-            string nativeStateText = DispatchRuntimeSystem.DescribeNativeVehicleState(nativeFlags);
+            string nativeStateText = SelectionPanel.DescribeNativeVehicleState(nativeFlags);
             Entity line = m_ResolveVehicleLine(vehicle);
             int targetMin = m_VehicleView.TryGetTarget(vehicle, out int targetSlot) ? targetSlot : -1;
             int currentMin = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) ? currentSlot : -1;

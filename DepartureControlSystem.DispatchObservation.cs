@@ -4,6 +4,8 @@ using Game.Objects;
 using Game.Prefabs;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.TrackModel;
+using RapidTransitMod.TrackProjection;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -11,7 +13,7 @@ namespace RapidTransitMod
 {
     public partial class DispatchRuntimeSystem
     {
-        private void RecordLapStart(Entity v, string reason = "")
+        internal void RecordLapStart(Entity v, string reason = "")
         {
             string lineTag = m_VehicleView.TryGetLine(v, out Entity le) ? "line" + le.Index : "line?";
             if (!EntityManager.HasComponent<Odometer>(v))
@@ -35,7 +37,7 @@ namespace RapidTransitMod
                 + " cachedWp=" + cachedWp);
         }
 
-        private void UpdateLapStats(Entity v)
+        internal void UpdateLapStats(Entity v)
         {
             if (!EntityManager.HasComponent<Odometer>(v))
                 return;
@@ -132,12 +134,12 @@ namespace RapidTransitMod
 
             if (line == Entity.Null
                 || waypoints.Length == 0
-                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+                || !m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
             {
                 return false;
             }
 
-            EnsureTrackChainBypassPipelineReady(chain);
+            m_TrackModel.EnsureTrackChainBypassPipelineReady(chain);
             if (chain.TraversalProfile == null)
                 return false;
 
@@ -164,7 +166,7 @@ namespace RapidTransitMod
             return runFrames > 0f || stopFrames > 0f || stopCount > 0 || passCount > 0;
         }
 
-        private void UpdateVehicleTraversalSliceObservation(
+        internal void UpdateVehicleTraversalSliceObservation(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
@@ -178,10 +180,10 @@ namespace RapidTransitMod
                 && m_TraversalSlices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession existingSession)
                 && existingSession.Line == line
                 && existingSession.SliceIndex >= 0
-                && TryGetLineTrackChain(line, waypoints, out LineTrackChain existingChain)
+                && m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain existingChain)
                 && existingChain?.TraversalProfile != null
                 && existingSession.SliceIndex < existingChain.TraversalProfile.RunSlices.Count
-                && TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, existingChain, out VehicleTrackCursor existingCursor))
+                && m_TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, existingChain, out VehicleTrackCursor existingCursor))
             {
                 TraversalRunSlice existingSlice = existingChain.TraversalProfile.RunSlices[existingSession.SliceIndex];
                 int existingAtomIndex = math.clamp(existingCursor.AtomCursorIndex, 0, existingChain.TrackAtoms.Count - 1);
@@ -269,8 +271,8 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (!m_TrackModelQuery.TryProfile(line, out LineTraversalProfile profile)
-                || !m_TrackModelQuery.TryChain(line, out LineTrackChain chain)
+            if (!m_TrackModel.TryProfile(line, out LineTraversalProfile profile)
+                || !m_TrackModel.TryChain(line, out LineTrackChain chain)
                 || profile.SegmentSliceCutPointProgresses == null)
             {
                 m_TraversalSlices.Plans.Remove(vehicle);
@@ -377,7 +379,7 @@ namespace RapidTransitMod
             return true;
         }
 
-        private void FinalizeVehicleTraversalSliceObservation(
+        internal void FinalizeVehicleTraversalSliceObservation(
             Entity vehicle,
             uint nowFrame,
             int exitAtomIndex = -1,
@@ -514,10 +516,10 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypoints.Length == 0
-                || !TryGetLineTrackChain(line, waypoints, out chain)
+                || !m_TrackModel.TryGetChainForLine(line, waypoints, out chain)
                 || chain.TraversalProfile == null
                 || chain.TraversalProfile.RunSlices.Count == 0
-                || !TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor))
+                || !m_TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor))
             {
                 return false;
             }
@@ -588,7 +590,7 @@ namespace RapidTransitMod
             m_TraversalSlices.LapDebug[key] = aggregate;
         }
 
-        private void RecordTraversalSliceLapDebugDropped(Entity vehicle, int sliceIndex)
+        internal void RecordTraversalSliceLapDebugDropped(Entity vehicle, int sliceIndex)
         {
             if (vehicle == Entity.Null || sliceIndex < 0)
                 return;
@@ -614,7 +616,7 @@ namespace RapidTransitMod
             m_TraversalSlices.LapDebug[key] = aggregate;
         }
 
-        private void ClearVehicleTraversalSliceLapDebug(Entity vehicle)
+        internal void ClearVehicleTraversalSliceLapDebug(Entity vehicle)
         {
             if (vehicle == Entity.Null || m_TraversalSlices.LapDebug.Count == 0)
                 return;
@@ -645,12 +647,12 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypoints.Length == 0
-                || !TryGetLineTrackChain(line, waypoints, out LineTrackChain chain))
+                || !m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
             {
                 return;
             }
 
-            EnsureTrackChainBypassPipelineReady(chain);
+            m_TrackModel.EnsureTrackChainBypassPipelineReady(chain);
             if (chain.TraversalProfile == null || chain.TraversalProfile.RunSlices.Count == 0)
                 return;
 
@@ -740,7 +742,7 @@ namespace RapidTransitMod
                 if (eventMatchesBoundary)
                 {
                     string buildingLabel = traversalEvent.Building != Entity.Null
-                        ? FormatBypassNodeLabel(traversalEvent.Building)
+                        ? ResolveWorkbenchEntityName(traversalEvent.Building)
                         : "atom" + atomIndex;
                     switch (traversalEvent.Kind)
                     {
@@ -759,7 +761,7 @@ namespace RapidTransitMod
             return "atom" + atomIndex;
         }
 
-        private static ulong MakeLineWaypointStopObservationKey(Entity line, int waypointIndex)
+        internal static ulong MakeLineWaypointStopObservationKey(Entity line, int waypointIndex)
         {
             unchecked
             {
@@ -767,7 +769,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct StationStopDwellAnchor
+        internal readonly struct StationStopDwellAnchor
         {
             public readonly string StationAnchorId;
             public readonly Entity AnchorEntity;
@@ -783,7 +785,7 @@ namespace RapidTransitMod
             }
         }
 
-        private bool TryResolveStationStopDwellAnchor(Entity line, int waypointIndex, out StationStopDwellAnchor anchor)
+        internal bool TryResolveStationStopDwellAnchor(Entity line, int waypointIndex, out StationStopDwellAnchor anchor)
         {
             anchor = default;
             if (line == Entity.Null
@@ -821,7 +823,7 @@ namespace RapidTransitMod
             return true;
         }
 
-        private string MakeStationStopDwellObservationKey(Entity line, string stationAnchorId)
+        internal string MakeStationStopDwellObservationKey(Entity line, string stationAnchorId)
         {
             if (string.IsNullOrWhiteSpace(stationAnchorId) || !IsStationAnchorKeyId(stationAnchorId))
                 return string.Empty;
@@ -925,7 +927,7 @@ namespace RapidTransitMod
             return true;
         }
 
-        private void BeginObservedStopDwellSession(Entity vehicle, Entity line, int waypointIndex, uint nowFrame)
+        internal void BeginObservedStopDwellSession(Entity vehicle, Entity line, int waypointIndex, uint nowFrame)
         {
             if (vehicle == Entity.Null || line == Entity.Null || waypointIndex < 0)
                 return;
@@ -933,7 +935,7 @@ namespace RapidTransitMod
             m_StopDwell.Begin(vehicle, line, waypointIndex, nowFrame);
         }
 
-        private void TryRecordObservedStopDwellOnBoardingEnd(Entity vehicle, Entity line, int fallbackWaypointIndex, uint nowFrame)
+        internal void TryRecordObservedStopDwellOnBoardingEnd(Entity vehicle, Entity line, int fallbackWaypointIndex, uint nowFrame)
         {
             if (vehicle == Entity.Null || line == Entity.Null)
                 return;
@@ -954,7 +956,7 @@ namespace RapidTransitMod
                 return;
 
             RecordStationStopDwellObservation(line, waypointIndex, sampleFrames, nowFrame, sampleMinutes);
-            InvalidateTrackTimingForLine(line);
+            m_Bypass.ExpireLine(line);
         }
 
         private void RecordStationStopDwellObservation(
@@ -1058,7 +1060,7 @@ namespace RapidTransitMod
                 return;
             }
 
-            StationAnchorObservationSummaryDto coverage = BuildStationAnchorObservationDiagnostics().summary;
+            StationAnchorObservationSummaryDto coverage = m_StationAnchorDiagnostics.Build().summary;
             log.Info("[StationAnchorDiag] intervalFrames=" + STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
                 + " lines=" + coverage.lineCount
                 + " stopWaypoints=" + coverage.stopWaypointCount
@@ -1107,7 +1109,7 @@ namespace RapidTransitMod
             m_StationAnchorDiagTotalSuspiciousLongDwell = 0;
         }
 
-        private bool ShouldForceMidStopDwellTimeout(
+        internal bool ShouldForceMidStopDwellTimeout(
             Entity vehicle,
             Entity line,
             int currentWaypointIndex,
@@ -1180,7 +1182,7 @@ namespace RapidTransitMod
             return dwellSinceFrame + (uint)math.round(adjustedFrames);
         }
 
-        private bool TryCaptureTrainHeadSnapshot(Entity vehicle, int waypointIndex, out TrainHeadSnapshot snapshot)
+        internal bool TryCaptureTrainHeadSnapshot(Entity vehicle, int waypointIndex, out TrainHeadSnapshot snapshot)
         {
             snapshot = default;
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
@@ -1220,7 +1222,7 @@ namespace RapidTransitMod
             return entity == Entity.Null ? "null" : entity.Index.ToString();
         }
 
-        private void TryRecordPreparingArrivalSample(Entity v, Entity line, uint nowFrame)
+        internal void TryRecordPreparingArrivalSample(Entity v, Entity line, uint nowFrame)
         {
             if (line == Entity.Null)
             {
@@ -1258,7 +1260,7 @@ namespace RapidTransitMod
             }
 
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
-            RecordLineDispatchSampleSummary(line, nowMin, v, sampleMinutes);
+            m_SelectionPanel.RecordLineDispatchSampleSummary(line, nowMin, v, sampleMinutes);
             UpdateDispatchCache(line, v, frames);
         }
     }

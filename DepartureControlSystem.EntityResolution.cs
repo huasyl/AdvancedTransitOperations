@@ -11,7 +11,7 @@ namespace RapidTransitMod
 {
     public partial class DispatchRuntimeSystem
     {
-        private Entity ResolveVehicleLine(Entity vehicle)
+        internal Entity ResolveVehicleLine(Entity vehicle)
         {
             if (m_VehicleView.TryGetLine(vehicle, out Entity mappedLine) && mappedLine != Entity.Null)
                 return mappedLine;
@@ -26,7 +26,7 @@ namespace RapidTransitMod
             return Entity.Null;
         }
 
-        private Entity ResolvePassingStationBuilding(Entity entity)
+        internal Entity ResolvePassingStationBuilding(Entity entity)
         {
             if (entity == Entity.Null || !EntityManager.Exists(entity))
                 return Entity.Null;
@@ -59,12 +59,12 @@ namespace RapidTransitMod
         }
 
 
-        private Entity ResolveSelectedLineEntity(Entity entity)
+        internal Entity ResolveSelectedLineEntity(Entity entity)
         {
             return ResolveSelectedLineEntity(entity, Entity.Null);
         }
 
-        private Entity ResolveSelectedLineEntity(Entity entity, Entity preferredRoute)
+        internal Entity ResolveSelectedLineEntity(Entity entity, Entity preferredRoute)
         {
             if (entity == Entity.Null || !EntityManager.Exists(entity))
                 return Entity.Null;
@@ -162,7 +162,7 @@ namespace RapidTransitMod
             return TryGetStationRoutes(building, routes) && routes.Count > 0;
         }
 
-        private Entity ResolveSelectedVehicleEntity(Entity entity)
+        internal Entity ResolveSelectedVehicleEntity(Entity entity)
         {
             if (entity == Entity.Null || !EntityManager.Exists(entity))
                 return Entity.Null;
