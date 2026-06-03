@@ -12,26 +12,20 @@ namespace RapidTransitMod.Bypass
         EntityManager EntityManager { get; }
         TimedLogger Log { get; }
         uint Frame { get; }
-        IEnumerable<KeyValuePair<string, AppliedWorkbenchLineState>> AppliedWorkbenchLines { get; }
+        IEnumerable<KeyValuePair<string, AppliedLine>> AppliedLines { get; }
         TrackModelService TrackModel { get; }
         TrackProjectionService TrackProjection { get; }
         BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData;
 
         bool IsBypassRuntimeFeatureEnabled();
-        bool TryGetBypassControlScope(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex, out BypassControlScope scope, out string failureReason);
         bool IsDispatchRuntimeManagedLine(Entity line);
-        bool IsAppliedWorkbenchLocalLine(Entity line);
-        bool IsAppliedWorkbenchExpressLine(Entity line);
-        bool ShouldClearHoldAfterStationExit(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
-        bool IsExpressBlockerStillWithinBypassStation(Entity blocker, Entity station);
-        bool TryEvaluateLatchedBlockerBeforeRelease(BypassControlScope scope, DynamicBuffer<RouteWaypoint> waypoints, BypassConflictEpisode episode, Entity blocker, out bool beforeRelease);
-        bool ShouldReleaseForQueuedLocalAhead(BypassControlScope scope, DynamicBuffer<RouteWaypoint> waypoints, Entity blocker, out float expressSceneCoordinate, out float localSceneCoordinate, out float queuedLocalMeters);
-        void LogQueuedLocalBypassOverrideOnce(Entity vehicle, Entity line, Entity blocker, string action, string reason, float expressSceneCoordinate, float localSceneCoordinate, float queuedLocalMeters);
-        Entity ResolveVehicleLine(Entity vehicle);
+        bool IsAppliedLocal(Entity line);
+        bool IsAppliedExpress(Entity line);
+        Entity ResolveLine(Entity vehicle);
         bool IsLineOrderedRuntimeLoggingEnabled();
-        int ComputeWpIndex(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints);
+        int ComputeWaypointIndex(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints);
         Entity GetStationBuildingForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
-        Entity ResolvePassingStationBuilding(Entity entity);
+        Entity ResolvePassingStation(Entity entity);
         bool TryEstimateRemainingBoardingDwellFrames(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, Entity currentBypassBuilding, uint nowFrame, out float remainingFrames);
         bool TryGetEffectiveTraversalRunSliceFrames(Entity line, TraversalRunSlice slice, out float effectiveRunFrames);
         bool TryGetBypassWaypointContext(DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out Entity currentBypassBuilding, out int nextBypassWaypointIndex, out Entity nextBypassBuilding);

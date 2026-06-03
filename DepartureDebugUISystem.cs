@@ -68,7 +68,7 @@ namespace RapidTransitMod
                 Mod.log.Info("[DebugUI] UpdateInfo entity=" + entity.Index + " prefab=" + prefab.Index);
                 s_LoggedUpdateInfo = true;
             }
-            DispatchRuntimeSystem.Instance.m_SelectionPanel.FillDebugInfo(entity, list);
+            DispatchRuntimeSystem.Instance.m_SelectPanel.FillDebugInfo(entity, list);
         }
     }
 }

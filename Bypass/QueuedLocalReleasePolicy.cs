@@ -143,7 +143,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            if (m_Runtime.ResolveVehicleLine(vehicle) == scope.Line)
+            if (m_Runtime.ResolveLine(vehicle) == scope.Line)
             {
                 if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, scope.Line, localWaypoints, localProtectedInterval, out TrackModelRuntimePosition localPosition)
                     || localPosition.Confidence < 0.6f)
@@ -159,7 +159,7 @@ namespace RapidTransitMod.Bypass
                 return includeLocal;
             }
 
-            Entity expressLine = m_Runtime.ResolveVehicleLine(vehicle);
+            Entity expressLine = m_Runtime.ResolveLine(vehicle);
             if (expressLine == Entity.Null)
                 return false;
 
@@ -306,7 +306,7 @@ namespace RapidTransitMod.Bypass
                 || blockerVehicle == Entity.Null
                 || scope.Line == Entity.Null
                 || latchedProjection.SharedTrackVersion != m_Runtime.TrackModel.SharedIndexVersion
-                || m_Runtime.ResolveVehicleLine(blockerVehicle) != latchedProjection.ExpressLine)
+                || m_Runtime.ResolveLine(blockerVehicle) != latchedProjection.ExpressLine)
             {
                 return false;
             }
@@ -728,14 +728,6 @@ namespace RapidTransitMod.Bypass
                 reason = "local-left-bypass-station";
             }
 
-            if (shouldYield
-                && ShouldTrackModelVetoLiveBypassYield(localVehicle, out string trackModelReason))
-            {
-                shouldYield = false;
-                blockerVehicle = Entity.Null;
-                reason = "track-model-veto-" + trackModelReason;
-            }
-
             LogBypassDecisionOnce(localVehicle, currentBypassBuilding, nextBypassBuilding, shouldYield, reason, blockerVehicle);
             return shouldYield;
         }
@@ -765,7 +757,7 @@ namespace RapidTransitMod.Bypass
                 return;
 
             m_GateDecisionLogCache[localVehicle] = decisionKey;
-            Entity line = m_Runtime.ResolveVehicleLine(localVehicle);
+            Entity line = m_Runtime.ResolveLine(localVehicle);
             string lineTag = line != Entity.Null ? "线路" + line.Index : "线路?";
             m_Runtime.Log.Info("[待避判定] " + lineTag + " 车辆" + localVehicle.Index
                 + " result=" + (shouldYield ? "yield" : "pass")
@@ -922,7 +914,7 @@ namespace RapidTransitMod.Bypass
             if (blockerVehicle == Entity.Null || localCurrentBypassBuilding == Entity.Null)
                 return false;
 
-            Entity blockerLine = m_Runtime.ResolveVehicleLine(blockerVehicle);
+            Entity blockerLine = m_Runtime.ResolveLine(blockerVehicle);
             if (blockerLine == Entity.Null)
                 return false;
 

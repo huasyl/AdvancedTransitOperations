@@ -15,6 +15,18 @@ namespace RapidTransitMod.TrackModel
 {
     internal sealed partial class TrackModelService
     {
+        private readonly Dictionary<Entity, List<DevSightLaneOccurrence>> m_DevSightLaneIndex = new Dictionary<Entity, List<DevSightLaneOccurrence>>();
+        private readonly Dictionary<Entity, string> m_TrackModelSequenceLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_LineOrderedFallbackCaseLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, uint> m_LineOrderedFallbackCaseLastLogFrame = new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, string> m_TrackModelTurnbackBuildLogCache = new Dictionary<Entity, string>();
+        private readonly HashSet<Entity> m_ProtectedIntervalOverlapSourceKeys = new HashSet<Entity>();
+        private readonly HashSet<Entity> m_ProtectedIntervalOverlapMatchedKeys = new HashSet<Entity>();
+        private readonly List<Entity> m_ProtectedIntervalOrderedSourceKeys = new List<Entity>();
+        private readonly List<Entity> m_ProtectedIntervalOrderedCandidateKeys = new List<Entity>();
+        private readonly List<int> m_ProtectedIntervalOrderedSourceAtomIndices = new List<int>();
+        private readonly List<int> m_ProtectedIntervalOrderedCandidateAtomIndices = new List<int>();
+
         private string FormatTrackModelStationLabel(Entity building, int waypointIndex)
         {
             string label = "wp" + waypointIndex;

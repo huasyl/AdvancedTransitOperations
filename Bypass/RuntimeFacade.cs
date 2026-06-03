@@ -73,7 +73,7 @@ namespace RapidTransitMod.Bypass
             if (line == Entity.Null)
                 return;
 
-            List<Entity> yieldVehiclesToRelease = m_Admission.ReleaseLine(line, m_Runtime.ResolveVehicleLine);
+            List<Entity> yieldVehiclesToRelease = m_Admission.ReleaseLine(line, m_Runtime.ResolveLine);
             if (yieldVehiclesToRelease != null)
             {
                 for (int i = 0; i < yieldVehiclesToRelease.Count; i++)
@@ -122,7 +122,7 @@ namespace RapidTransitMod.Bypass
                     + " frame=" + ((IControlContext)m_Runtime).Frame);
             if (m_Runtime.IsBypassRuntimeLoggingEnabled())
             {
-                Entity line = m_Runtime.ResolveVehicleLine(vehicle);
+                Entity line = m_Runtime.ResolveLine(vehicle);
                 string lineTag = line != Entity.Null ? "线路" + line.Index : "线路?";
                 m_Runtime.Log.Info("[待避解除] " + lineTag + " 车辆" + vehicle.Index
                     + " 解除快车待避"
@@ -131,75 +131,6 @@ namespace RapidTransitMod.Bypass
             }
 
             RemoveVehicleLogs(vehicle);
-        }
-
-        internal bool TryGetBypassControlScope(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int waypointIndex,
-            out BypassControlScope scope,
-            out string failureReason)
-        {
-            return m_Admission.TryGetBypassControlScope(vehicle, line, waypoints, waypointIndex, out scope, out failureReason);
-        }
-
-        internal bool ShouldClearHoldAfterStationExit(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex)
-        {
-            return m_Admission.ShouldClearHoldAfterStationExit(vehicle, line, waypoints, waypointIndex);
-        }
-
-        internal bool IsExpressBlockerStillWithinBypassStation(Entity blocker, Entity station)
-        {
-            return m_Admission.IsExpressBlockerStillWithinBypassStation(blocker, station);
-        }
-
-        internal bool TryEvaluateLatchedBlockerBeforeRelease(
-            BypassControlScope scope,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            BypassConflictEpisode episode,
-            Entity blocker,
-            out bool beforeRelease)
-        {
-            return m_Admission.TryEvaluateLatchedBlockerBeforeRelease(scope, waypoints, episode, blocker, out beforeRelease);
-        }
-
-        internal bool ShouldReleaseForQueuedLocalAhead(
-            BypassControlScope scope,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            Entity blocker,
-            out float expressSceneCoordinate,
-            out float localSceneCoordinate,
-            out float queuedLocalMeters)
-        {
-            return m_Admission.ShouldReleaseForQueuedLocalAhead(
-                scope,
-                waypoints,
-                blocker,
-                out expressSceneCoordinate,
-                out localSceneCoordinate,
-                out queuedLocalMeters);
-        }
-
-        internal void LogQueuedLocalBypassOverrideOnce(
-            Entity vehicle,
-            Entity line,
-            Entity blocker,
-            string action,
-            string reason,
-            float expressSceneCoordinate,
-            float localSceneCoordinate,
-            float queuedLocalMeters)
-        {
-            m_Admission.LogQueuedLocalBypassOverrideOnce(
-                vehicle,
-                line,
-                blocker,
-                action,
-                reason,
-                expressSceneCoordinate,
-                localSceneCoordinate,
-                queuedLocalMeters);
         }
 
         internal BypassControlResult TickVehicle<TTransport, TCommandBuffer>(

@@ -10,6 +10,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Game;
 using Game.Buildings;
@@ -22,11 +23,19 @@ using Game.Routes;
 using Game.SceneFlow;
 using Game.Simulation;
 using Game.UI;
+using RapidTransitMod.Dispatch.Scheduling;
 using Game.UI.InGame;
 using Game.Vehicles;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Dispatch.Lines;
+using RapidTransitMod.Dispatch.Observation;
+using RapidTransitMod.Dispatch.Persistence;
+using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Dispatch.Workbench;
+using RapidTransitMod.Planner;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
+using WorkbenchTime = RapidTransitMod.Dispatch.Workbench.Time;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -54,6 +63,7 @@ namespace RapidTransitMod
     public partial class DispatchRuntimeSystem : GameSystemBase
     {
         internal CameraUpdateSystem m_CameraUpdateSystem;
+        internal Broadcasting.WorkbenchBackend.Workbench m_AnnouncementWorkbench;
         internal Broadcasting.Runtime m_Announcements;
 
         internal readonly struct AssistLaunchPendingRecord
@@ -67,6 +77,148 @@ namespace RapidTransitMod
                 TargetMin = targetMin;
             }
         }
+
+        internal sealed class TrackBuffers : TrackModelContext.IBuffers
+        {
+            private readonly DispatchRuntimeSystem m_Owner;
+
+            public TrackBuffers(DispatchRuntimeSystem owner)
+            {
+                m_Owner = owner;
+            }
+
+            public BufferLookup<T> Get<T>(bool readOnly) where T : unmanaged, IBufferElementData
+            {
+                return m_Owner.GetBufferLookup<T>(readOnly);
+            }
+        }
+
+        public string LoadBroadcastWorkbenchSnapshotJson(string preferredLineId)
+            => m_AnnouncementWorkbench?.LoadBroadcastWorkbenchSnapshotJson(preferredLineId) ?? string.Empty;
+
+        public string RefreshBroadcastWorkbenchSnapshotJson(string preferredLineId)
+            => m_AnnouncementWorkbench?.RefreshBroadcastWorkbenchSnapshotJson(preferredLineId) ?? string.Empty;
+
+        public string LoadBroadcastBindingSlotHintsJson(string lineId)
+            => m_AnnouncementWorkbench?.LoadBroadcastBindingSlotHintsJson(lineId) ?? string.Empty;
+
+        public string LoadBroadcastAssetBrowserJson(string requestedPath)
+            => m_AnnouncementWorkbench?.LoadBroadcastAssetBrowserJson(requestedPath) ?? string.Empty;
+
+        public string SaveBroadcastRulesJson(string requestJson)
+            => m_AnnouncementWorkbench?.SaveBroadcastRulesJson(requestJson) ?? string.Empty;
+
+        public string SaveBroadcastPlatformAnnouncementJson(string requestJson)
+            => m_AnnouncementWorkbench?.SaveBroadcastPlatformAnnouncementJson(requestJson) ?? string.Empty;
+
+        public string CopyBroadcastPlatformAnnouncementToAllStationsJson(string requestJson)
+            => m_AnnouncementWorkbench?.CopyBroadcastPlatformAnnouncementToAllStationsJson(requestJson) ?? string.Empty;
+
+        public string ImportBroadcastExternalAssetsJson(string requestJson)
+            => m_AnnouncementWorkbench?.ImportBroadcastExternalAssetsJson(requestJson) ?? string.Empty;
+
+        public string SaveBroadcastStationBindingJson(string requestJson)
+            => m_AnnouncementWorkbench?.SaveBroadcastStationBindingJson(requestJson) ?? string.Empty;
+
+        public string SaveBroadcastStationBindingsJson(string requestJson)
+            => m_AnnouncementWorkbench?.SaveBroadcastStationBindingsJson(requestJson) ?? string.Empty;
+
+        public string DeleteBroadcastAssetJson(string requestJson)
+            => m_AnnouncementWorkbench?.DeleteBroadcastAssetJson(requestJson) ?? string.Empty;
+
+        public string DeleteAllBroadcastAssetsJson()
+            => m_AnnouncementWorkbench?.DeleteAllBroadcastAssetsJson() ?? string.Empty;
+
+        public string AutoBindBroadcastStationMappingsJson(string requestJson)
+            => m_AnnouncementWorkbench?.AutoBindBroadcastStationMappingsJson(requestJson) ?? string.Empty;
+
+        public string ApplyBroadcastConfigJson(string requestJson)
+            => m_AnnouncementWorkbench?.ApplyBroadcastConfigJson(requestJson) ?? string.Empty;
+
+        public string OpenBroadcastAssetDirectoryPickerJson()
+            => m_AnnouncementWorkbench?.OpenBroadcastAssetDirectoryPickerJson() ?? string.Empty;
+
+        public string PlayBroadcastAssetPreviewJson(string assetName)
+            => m_AnnouncementWorkbench?.PlayBroadcastAssetPreviewJson(assetName) ?? string.Empty;
+
+        public string PlayBroadcastRulePreviewJson(string requestJson)
+            => m_AnnouncementWorkbench?.PlayBroadcastRulePreviewJson(requestJson) ?? string.Empty;
+
+        public string StopBroadcastAssetPreviewJson(string assetName)
+            => m_AnnouncementWorkbench?.StopBroadcastAssetPreviewJson(assetName) ?? string.Empty;
+
+        public string StopBroadcastRulePreviewJson(string ruleId)
+            => m_AnnouncementWorkbench?.StopBroadcastRulePreviewJson(ruleId) ?? string.Empty;
+
+        public string SetBroadcastPreviewVolumeJson(string volumeJson)
+            => m_AnnouncementWorkbench?.SetBroadcastPreviewVolumeJson(volumeJson) ?? string.Empty;
+
+        internal IReadOnlyDictionary<string, AppliedLine> AppliedLines => m_WorkbenchBridge.AppliedLines;
+
+        internal Dispatch.AppliedTimetable Applied()
+            => m_WorkbenchBridge.Applied();
+
+        internal Drafts DraftStore()
+            => m_WorkbenchBridge.Drafts();
+
+        internal float VehicleMaintenanceRange(Entity vehicle)
+        {
+            if (vehicle == Entity.Null
+                || !EntityManager.HasComponent<PrefabRef>(vehicle))
+            {
+                return 0f;
+            }
+
+            Entity prefab = EntityManager.GetComponentData<PrefabRef>(vehicle).m_Prefab;
+            return prefab != Entity.Null && EntityManager.HasComponent<PublicTransportVehicleData>(prefab)
+                ? EntityManager.GetComponentData<PublicTransportVehicleData>(prefab).m_MaintenanceRange
+                : 0f;
+        }
+
+        internal RapidTransitMod.Dispatch.Workbench.Trips Trips()
+            => m_WorkbenchBridge.Trips();
+
+        internal List<WorkbenchLineRuntime> Lines()
+            => m_WorkbenchBridge.Lines();
+
+        internal WorkbenchLineRuntime ActiveLine(List<WorkbenchLineRuntime> lines, string preferredLineId)
+            => m_WorkbenchBridge.ActiveLine(lines, preferredLineId);
+
+        internal void LoadWorkbench()
+            => m_WorkbenchBridge.LoadPersist();
+
+        internal void LoadApplied()
+            => m_WorkbenchBridge.LoadApplied();
+
+        internal void SaveWorkbench()
+            => m_WorkbenchBridge.Save();
+
+        internal string LineId(Entity line)
+            => m_WorkbenchBridge.Ids().Get(line);
+
+        internal string EntityName(Entity entity)
+            => m_WorkbenchBridge.Name(entity);
+
+        public Entity GetDepot(Entity line)
+            => m_WorkbenchBridge.GetDepot(line);
+
+        public Entity CanonDepot(Entity depot)
+            => m_WorkbenchBridge.CanonDepot(depot);
+
+        internal string DepotId(Entity depot)
+            => m_WorkbenchBridge.DepotId(depot);
+
+        internal string GetKind(string lineId) => m_LineView.Kind(lineId);
+        internal string GetKind(Entity line) => m_LineView.Kind(line);
+        internal int GetHold(string lineId) => m_LineView.Hold(lineId);
+        internal int GetHold(Entity line) => m_LineView.Hold(line);
+        internal int GetDwell(string lineId) => m_LineView.Dwell(lineId);
+        internal int GetDwell(Entity line) => m_LineView.Dwell(line);
+        internal string GetDepotId(string lineId) => m_LineView.DepotId(lineId);
+        internal string GetDepotId(Entity line) => m_LineView.DepotId(line);
+
+        internal static string DescribeError(Exception ex)
+            => RapidTransitMod.Dispatch.Workbench.Bridge.Describe(ex);
 
         private readonly struct VehiclePhysicalTrackPosition
         {
@@ -232,20 +384,48 @@ namespace RapidTransitMod
         internal EndFrameBarrier m_EndFrameBarrier = null!;
 
         // ── 车辆状态 ──
-        internal VehicleRuntimeStateStore m_VehicleRuntime = null!;
-        internal VehicleRuntimeRegistry m_VehicleRegistry = null!;
-        internal VehicleRuntimeView m_VehicleView = null!;
+        internal VehicleStateStore m_VehicleStateStore = null!;
+        internal VehicleRegistry m_VehicleRegistry = null!;
+        internal VehicleView m_VehicleView = null!;
+        internal LineView m_LineView = null!;
+        internal FeatureGate m_Features = null!;
         internal DispatchRuntimeController m_RuntimeController = null!;
-        private VehicleRuntimeRegistrar m_VehicleRegistrar = null!;
+        internal VehicleRegistrar m_VehicleRegistrar = null!;
         internal RuntimeVehicleLabels m_VehicleLabels = null!;
-        internal SelectionPanel m_SelectionPanel = null!;
+        internal RuntimeResolve m_Resolve = null!;
+        internal SelectPort m_SelectPort = null!;
+        internal SelectPanel m_SelectPanel = null!;
         internal StationAnchorDiagnostics m_StationAnchorDiagnostics = null!;
-        internal LapObservationStore m_LapObservations = null!;
+        internal RapidTransitMod.Dispatch.Workbench.Bridge m_WorkbenchBridge = null!;
+        internal PlannerApi m_PlannerApi = null!;
+        internal PlannerPort m_PlannerPort = null!;
+        internal PlannerExport m_PlannerExport = null!;
+        internal PlannerJobs m_PlannerJobs = null!;
+        internal DispatchCache m_DispatchCache = null!;
+        internal LapCache m_LapCache = null!;
+        internal VehicleCache m_VehicleCache = null!;
+        internal RuntimeCache m_RuntimeCache = null!;
+        internal MileageStore m_MileageStore = null!;
+        internal BypassStore m_BypassStore = null!;
+        internal LapStore m_Laps = null!;
         internal DispatchCommandApplier m_CommandApplier = null!;
         internal DispatchScheduler m_DispatchScheduler = null!;
-        internal StopDwellStore m_StopDwell = null!;
-        internal TraversalSliceStore m_TraversalSlices = null!;
-        private RuntimeObservationStore m_RuntimeObservations = null!;
+        internal DwellStore m_Dwell = null!;
+        internal SliceStore m_Slices = null!;
+        internal TraceStore m_Obs = null!;
+        internal Recorder m_ObsRecorder = null!;
+        internal Capture m_ObsCapture = null!;
+        internal RapidTransitMod.Dispatch.Observation.RuntimeObs m_RuntimeObs = null!;
+        internal ObservationPort m_Observation = null!;
+        internal Buffers m_ObsBuffers = null!;
+        internal LineRange m_LineRange = null!;
+        internal LineProfile m_LineProfile = null!;
+        internal LineTimes m_LineTimes = null!;
+        internal LineVehicles m_LineVehicles = null!;
+        internal RouteProgress m_RouteProgress = null!;
+        internal WaypointIndex m_WaypointIndex = null!;
+        internal RapidTransitMod.Dispatch.Observation.Query m_ObsQuery = null!;
+        internal RapidTransitMod.Dispatch.Observation.Persist m_ObsPersist = null!;
         internal NativeHashMap<Entity, FixedString64Bytes> m_UICache;
         internal NativeHashMap<Entity, bool> m_LastBoarding;
         internal NativeHashMap<Entity, int> m_CachedWpIdx;
@@ -285,21 +465,19 @@ namespace RapidTransitMod
         internal readonly Dictionary<Entity, TrainHeadSnapshot> m_LastLaunchHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
         internal readonly Dictionary<Entity, TrainHeadSnapshot> m_LastBoardingHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
         internal readonly Dictionary<Entity, string> m_MidStopTimeoutLogCache = new Dictionary<Entity, string>();
-        private static bool IsTraversalSliceObservationPersistenceEnabled() => true;
-        private static bool IsStopDwellObservationPersistenceEnabled() => false;
-        private static bool IsStationStopDwellObservationPersistenceEnabled() => true;
+        internal static bool IsTraversalSliceObservationPersistenceEnabled() => true;
+        internal static bool IsDwellObservationPersistenceEnabled() => false;
+        internal static bool IsStationDwellObservationPersistenceEnabled() => true;
         internal readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         
         internal readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_WaypointIndexFrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
         internal readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_RouteProgressFrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
         private bool m_CorridorModelFaulted = false;
-        private ulong m_PerfProbeWorkbenchLineFrameSnapshotHits;
-        private ulong m_PerfProbeWorkbenchLineFrameSnapshotMisses;
-        private ulong m_PerfProbeOriginSettleCalls;
-        private ulong m_PerfProbeOriginSettleFastPathHits;
-        private ulong m_PerfProbeOriginSettleSlowPathEntered;
-        private ulong m_PerfProbeOriginSettlePreSnapshotMisses;
-        private ulong m_PerfProbeOriginSettleWindowHits;
+        internal ulong m_PerfProbeOriginSettleCalls;
+        internal ulong m_PerfProbeOriginSettleFastPathHits;
+        internal ulong m_PerfProbeOriginSettleSlowPathEntered;
+        internal ulong m_PerfProbeOriginSettlePreSnapshotMisses;
+        internal ulong m_PerfProbeOriginSettleWindowHits;
         // ── 线路状态 ──
         internal NativeHashMap<Entity, int> m_SpawningLines;
         internal NativeHashMap<Entity, uint> m_LineSpawnRequestFrame;
@@ -308,40 +486,40 @@ namespace RapidTransitMod
         internal NativeHashMap<Entity, ulong> m_LineWaypointSignature;
         internal NativeHashMap<Entity, uint> m_LineStableSinceFrame;
         internal NativeHashSet<Entity> m_LineInitialAdopted;
-        private NativeHashMap<Entity, LineTimeProfileHeader> m_LineTimeProfiles;
-        private NativeList<float> m_LineTimeProfileSegmentFrames;
-        private NativeList<float> m_LineTimeProfileStopFrames;
+        internal NativeHashMap<Entity, LineTimeProfileHeader> m_LineTimeProfiles;
+        internal NativeList<float> m_LineTimeProfileSegmentFrames;
+        internal NativeList<float> m_LineTimeProfileStopFrames;
 
         // ── 圈时持久化缓存 ──
         internal CitySystem m_CitySystem = null!;
         /// <summary>Buffer 已挂到 City 实体，避免每帧重复调用 HasBuffer。</summary>
-        private bool m_LapCacheBufferReady = false;
-        private bool m_TraversalSliceObservationBufferReady = false;
-        private bool m_TraversalSliceObservationCacheLoaded = false;
-        internal bool m_StopDwellObservationBufferReady = false;
-        internal bool m_StopDwellObservationCacheLoaded = false;
-        private bool m_StationStopDwellObservationBufferReady = false;
-        private bool m_StationStopDwellObservationCacheLoaded = false;
-        private int m_LastStationStopDwellLegacyBufferCount = 0;
+        internal bool m_LapCacheBufferReady = false;
+        internal bool m_TraversalSliceObservationBufferReady = false;
+        internal bool m_TraversalSliceObservationCacheLoaded = false;
+        internal bool m_DwellObservationBufferReady = false;
+        internal bool m_DwellObservationCacheLoaded = false;
+        internal bool m_StationDwellObservationBufferReady = false;
+        internal bool m_StationDwellObservationCacheLoaded = false;
+        internal int m_LastStationStopDwellLegacyBufferCount = 0;
         internal int m_LastStationStopDwellLegacyRestoredCount = 0;
-        private int m_LastStationStopDwellAnchorBufferCount = 0;
+        internal int m_LastStationStopDwellAnchorBufferCount = 0;
         internal int m_LastStationStopDwellAnchorRestoredCount = 0;
-        private uint m_StationAnchorObservationDiagLastLogFrame = 0;
-        private ulong m_StationAnchorDiagAcceptedSamples = 0;
-        private ulong m_StationAnchorDiagLegacyWritten = 0;
-        private ulong m_StationAnchorDiagAnchorWritten = 0;
-        private ulong m_StationAnchorDiagAnchorMissing = 0;
-        private ulong m_StationAnchorDiagAnchorRejectedOriginOrTerminal = 0;
-        private ulong m_StationAnchorDiagSuspiciousOriginOrTerminal = 0;
-        private ulong m_StationAnchorDiagSuspiciousLongDwell = 0;
+        internal uint m_StationAnchorObservationDiagLastLogFrame = 0;
+        internal ulong m_StationAnchorDiagAcceptedSamples = 0;
+        internal ulong m_StationAnchorDiagLegacyWritten = 0;
+        internal ulong m_StationAnchorDiagAnchorWritten = 0;
+        internal ulong m_StationAnchorDiagAnchorMissing = 0;
+        internal ulong m_StationAnchorDiagAnchorRejectedOriginOrTerminal = 0;
+        internal ulong m_StationAnchorDiagSuspiciousOriginOrTerminal = 0;
+        internal ulong m_StationAnchorDiagSuspiciousLongDwell = 0;
         internal ulong m_StationAnchorDiagTotalAnchorMissing = 0;
         internal ulong m_StationAnchorDiagTotalAnchorRejectedOriginOrTerminal = 0;
         internal ulong m_StationAnchorDiagTotalSuspiciousOriginOrTerminal = 0;
         internal ulong m_StationAnchorDiagTotalSuspiciousLongDwell = 0;
-        private bool m_VehicleCacheBufferReady = false;
-        private bool m_DispatchCacheBufferReady = false;
-        private bool m_BypassStationBufferReady = false;
-        private bool m_LineMileageBufferReady = false;
+        internal bool m_VehicleCacheBufferReady = false;
+        internal bool m_DispatchCacheBufferReady = false;
+        internal bool m_BypassStationBufferReady = false;
+        internal bool m_LineMileageBufferReady = false;
 
         // ── 帧级保护 ──
         internal NativeHashSet<Entity> m_JustLaunched;
@@ -358,7 +536,7 @@ namespace RapidTransitMod
             return line != Entity.Null
                 && EntityManager.Exists(line)
                 && !EntityManager.HasComponent<Disabled>(line)
-                && IsDispatchRuntimeManagedLine(line);
+                && m_LineView.Managed(line, m_Features.Dispatch());
         }
 
         internal bool TryGetRtSpawnTarget(Entity line, out int targetCount)
@@ -376,7 +554,101 @@ namespace RapidTransitMod
                 return 0;
 
             BufferLookup<RouteVehicle> routeVehicles = GetBufferLookup<RouteVehicle>(true);
-            return CountActiveVehicles(line, routeVehicles);
+            return m_LineVehicles.Count(line, routeVehicles);
+        }
+
+        internal bool IsWaitingForcedOriginDwell(Entity vehicle, uint nowFrame)
+        {
+            return m_VehicleView.TryGetReady(vehicle, out uint readyFrame) && nowFrame < readyFrame;
+        }
+
+        internal void ClearForcedMidStopClosingConsist(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+            m_MidStopTimeoutLogCache.Remove(vehicle);
+        }
+
+        internal bool IsRuntimeReadyForOriginArrivingRepair()
+        {
+            return m_SystemReady;
+        }
+
+        internal bool TryGetRuntimeVehicleState(Entity vehicle, out VehicleState state)
+        {
+            state = default;
+            return m_VehicleStateStore.State.IsCreated && m_VehicleView.TryGetState(vehicle, out state);
+        }
+
+        internal bool IsFreshDispatchedPreparingVehicle(Entity vehicle, uint nowFrame)
+        {
+            if (vehicle == Entity.Null
+                || !m_VehicleView.TryGetDispatch(vehicle, out uint dispatchStartFrame))
+            {
+                return false;
+            }
+
+            return nowFrame >= dispatchStartFrame
+                && (nowFrame - dispatchStartFrame) <= PREPARING_ROUTE_FIX_GRACE_FRAMES;
+        }
+
+        internal bool IsSuppressedForcedMidStopBoardingGhost(
+            Entity vehicle,
+            Target target,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame,
+            out int targetWaypointIndex)
+        {
+            targetWaypointIndex = -1;
+            if (vehicle == Entity.Null
+                || !m_ForcedMidStopBoardingGraceUntil.TryGetValue(vehicle, out uint graceUntil))
+            {
+                return false;
+            }
+
+            if (nowFrame >= graceUntil)
+            {
+                m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+                return false;
+            }
+
+            if (!EntityManager.HasComponent<Waypoint>(target.m_Target))
+                return false;
+
+            targetWaypointIndex = EntityManager.GetComponentData<Waypoint>(target.m_Target).m_Index;
+            if (targetWaypointIndex < 0 || targetWaypointIndex >= waypoints.Length)
+                return false;
+
+            Entity targetStop = GetConnectedStopForWaypoint(waypoints[targetWaypointIndex].m_Waypoint);
+            if (targetStop == Entity.Null
+                || !EntityManager.HasComponent<BoardingVehicle>(targetStop)
+                || EntityManager.GetComponentData<BoardingVehicle>(targetStop).m_Vehicle != vehicle
+                || !EntityManager.HasComponent<Game.Objects.Transform>(targetStop)
+                || !EntityManager.HasComponent<Game.Objects.Transform>(vehicle))
+            {
+                return false;
+            }
+
+            float3 vehiclePosition = EntityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position;
+            float3 stopPosition = EntityManager.GetComponentData<Game.Objects.Transform>(targetStop).m_Position;
+            return math.distance(vehiclePosition, stopPosition) > AT_STOP_MAX_DIST;
+        }
+
+        private Entity GetConnectedStopForWaypoint(Entity waypoint)
+        {
+            if (waypoint == Entity.Null
+                || !EntityManager.Exists(waypoint)
+                || !EntityManager.HasComponent<Connected>(waypoint))
+            {
+                return Entity.Null;
+            }
+
+            Entity connected = EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            return connected != Entity.Null && EntityManager.Exists(connected)
+                ? connected
+                : Entity.Null;
         }
 
         internal bool IsRtParkedVehicleRequest(Entity request, Entity line)
@@ -409,7 +681,9 @@ namespace RapidTransitMod
 
         internal bool ShouldDestroyOfficialTransportVehicleRequest(Entity request, Entity line)
         {
-            if (line == Entity.Null || !EntityManager.Exists(line) || !IsDispatchRuntimeManagedLine(line))
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || !m_LineView.Managed(line, m_Features.Dispatch()))
                 return false;
 
             if (IsRtParkedVehicleRequest(request, line) || IsRtSpawnPermitRequest(request, line))
@@ -422,7 +696,7 @@ namespace RapidTransitMod
             uint nowFrame = GetCurrentSimulationFrameIndex();
             for (int i = 0; i < routeVehicles.Length; i++)
             {
-                Entity vehicle = ResolveRuntimeControllerVehicle(routeVehicles[i].m_Vehicle);
+                Entity vehicle = m_Resolve.RuntimeVehicle(routeVehicles[i].m_Vehicle);
                 if (IsFreshDispatchedPreparingVehicle(vehicle, nowFrame))
                     return false;
             }
@@ -455,10 +729,10 @@ namespace RapidTransitMod
         internal EntityQuery m_LineQuery;
         internal const int SLOT_INTERVAL = 30;
         internal const int SPAWN_LEAD_MIN = 60;
-        private const float MAINTENANCE_THRESHOLD = 0.9f;
+        internal const float MAINTENANCE_THRESHOLD = 0.9f;
         internal const int IDLE_TIMEOUT_MIN = 2;
         internal const double SIM_FRAMES_PER_MINUTE = 182.044;
-        private const float EARLY_STOP_DWELL_CLOSE_MAX_MINUTES = 3f;
+        internal const float EARLY_STOP_DWELL_CLOSE_MAX_MINUTES = 3f;
         private const float AT_STOP_MAX_DIST = 300f;
         /// <summary>班次宽限分钟数：发车窗口和过期判断共用同一阈值。</summary>
         internal const int SLOT_GRACE_MIN = 4;
@@ -493,10 +767,10 @@ namespace RapidTransitMod
         private const float PROFILE_STOP_START_BUFFER_MINUTES = 3f;
         internal const float ORIGIN_CONGESTION_RADIUS_METERS = 450f;
         internal const float ORIGIN_FORCE_IDLE_RADIUS_METERS = 180f;
-        private const float ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS = 0.92f;
+        internal const float ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS = 0.92f;
         private const uint ORIGIN_FORCE_IDLE_SETTLE_FRAMES = 180;
         private const uint DIRECTION_COMPARE_PROBE_LOG_INTERVAL_FRAMES = 3600;
-        private const uint STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES = 3600;
+        internal const uint STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES = 3600;
         private const uint DIRECTION_COMPARE_LOG_COOLDOWN_FRAMES = 1800;
         private const int TURNBACK_REPEAT_MIN_PRIMARY_ATOMS = 3;
         private const int TURNBACK_REPEAT_MIN_UNIQUE_LANES = 2;
@@ -548,62 +822,6 @@ namespace RapidTransitMod
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
             m_CameraUpdateSystem = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
 
-            m_VehicleRuntime = new VehicleRuntimeStateStore();
-            m_VehicleRuntime.Init();
-            m_VehicleRegistry = new VehicleRuntimeRegistry(m_VehicleRuntime);
-            m_VehicleView = new VehicleRuntimeView(m_VehicleRuntime);
-            m_RuntimeController = new DispatchRuntimeController(m_VehicleRegistry, this);
-            m_VehicleRegistrar = new VehicleRuntimeRegistrar(this);
-            m_VehicleLabels = new RuntimeVehicleLabels(this);
-            m_SelectionPanel = new SelectionPanel(this);
-            m_StationAnchorDiagnostics = new StationAnchorDiagnostics(this);
-            m_Announcements = new Broadcasting.Runtime(this);
-            m_CommandApplier = new DispatchCommandApplier(this);
-            m_DispatchScheduler = new DispatchScheduler(
-                this,
-                IsDispatchRuntimeManagedLine,
-                GetAppliedWorkbenchDepartureMinutes,
-                GetWorkbenchOriginHoldLimitMinutes,
-                ReadDispatchCache,
-                ReadLineLapCache,
-                ResolveRuntimeControllerVehicle,
-                IsLineStable,
-                ShouldHoldSpawnForNearestRunningCandidate,
-                HasBorderlineOriginArrivalCandidate,
-                LogDispatchSlotHeld,
-                (line, now, slot, count) => m_SelectionPanel.RecordLineSpawnTriggerSummary(line, now, slot, count));
-            m_LapObservations = new LapObservationStore();
-            m_LapObservations.Init();
-            m_StopDwell = new StopDwellStore();
-            m_StopDwell.Init();
-            m_TraversalSlices = new TraversalSliceStore();
-            m_RuntimeObservations = new RuntimeObservationStore();
-            m_TrackModel = new TrackModelService(this);
-            m_TrackProjection = new TrackProjectionService(this);
-            m_Bypass = new RuntimeFacade(this);
-            m_UICache = new NativeHashMap<Entity, FixedString64Bytes>(1024, Allocator.Persistent);
-            m_LastBoarding = new NativeHashMap<Entity, bool>(1024, Allocator.Persistent);
-            m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
-            m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_LastRetireFixLogFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            m_RetireFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            m_PreparingFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            m_RetireFixCount = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
-            m_SpawningLines = new NativeHashMap<Entity, int>(64, Allocator.Persistent);
-            m_LastSpawnBlockedLogFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
-            m_LastScheduleDiagnosticLogFrame = new NativeHashMap<ulong, uint>(256, Allocator.Persistent);
-            m_LineWaypointSignature = new NativeHashMap<Entity, ulong>(64, Allocator.Persistent);
-            m_LineStableSinceFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
-            m_LineInitialAdopted = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            m_LineTimeProfiles = new NativeHashMap<Entity, LineTimeProfileHeader>(64, Allocator.Persistent);
-            m_LineTimeProfileSegmentFrames = new NativeList<float>(256, Allocator.Persistent);
-            m_LineTimeProfileStopFrames = new NativeList<float>(256, Allocator.Persistent);
-            m_JustLaunched = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            m_DiagnosedLines = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            m_LineSpawnRequestFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
-
             m_VehicleQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = new ComponentType[] {
@@ -629,31 +847,137 @@ namespace RapidTransitMod
                 }
             });
 
+            RuntimeRoot.Build(this);
+
             log.Info("=== RapidTransit v41.1 [VehicleCache] 启动 ===");
         }
+
+        internal bool IsBypassStationSetting(Entity entity)
+        {
+            Entity building = m_Resolve.PassingStation(entity);
+            if (building == Entity.Null)
+                return false;
+
+            m_BypassStore.Ensure();
+            Entity city = m_CitySystem.City;
+            if (city == Entity.Null || !EntityManager.HasBuffer<BypassStationSettingElement>(city))
+                return false;
+
+            DynamicBuffer<BypassStationSettingElement> buf = EntityManager.GetBuffer<BypassStationSettingElement>(city, true);
+            for (int i = 0; i < buf.Length; i++)
+            {
+                if (buf[i].m_BuildingEntity == building)
+                    return buf[i].m_IsBypassStation != 0;
+            }
+
+            return false;
+        }
+
+        private bool TryGetTraversalProfileLapTiming(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out float runFrames,
+            out float stopFrames,
+            out int stopCount,
+            out int passCount)
+            => m_RuntimeObs.LapTiming(line, waypoints, out runFrames, out stopFrames, out stopCount, out passCount);
+
+        private bool ShouldSampleVehicleTraversalSliceObservation(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame)
+            => m_RuntimeObs.ShouldSample(vehicle, line, waypoints, nowFrame);
+
+        private bool TryBuildTraversalSliceSamplingPlan(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out TraversalSliceSamplingPlan plan)
+            => m_RuntimeObs.BuildPlan(vehicle, line, waypoints, out plan);
+
+        private bool TryBuildTraversalSliceSamplingPlanUncached(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            out TraversalSliceSamplingPlan plan)
+            => m_RuntimeObs.BuildPlanRaw(vehicle, waypoints, chain, out plan);
+
+        private void MaybeRecordTraversalPositionSample(
+            Entity vehicle,
+            Entity line,
+            LineTrackChain chain,
+            int sliceIndex,
+            VehicleTrackCursor cursor,
+            uint nowFrame)
+            => m_RuntimeObs.RecordSample(vehicle, line, chain, sliceIndex, cursor, nowFrame);
+
+        private static float ComputeFastTraversalBaselineFrames(float existingFastTraversalBaselineFrames, float observedFrames)
+            => Capture.ComputeFastTraversalBaselineFrames(existingFastTraversalBaselineFrames, observedFrames);
+
+        private bool TryGetCurrentTraversalRunSlice(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out LineTrackChain chain,
+            out int sliceIndex,
+            out VehicleTrackCursor cursor)
+            => m_RuntimeObs.CurrentSlice(vehicle, line, waypoints, out chain, out sliceIndex, out cursor);
+
+        internal bool TryGetEffectiveTraversalRunSliceFrames(
+            Entity line,
+            TraversalRunSlice slice,
+            out float effectiveRunFrames)
+            => m_RuntimeObs.EffectiveFrames(line, slice, out effectiveRunFrames);
+
+        private void RecordTraversalSliceLapDebugStart(Entity vehicle, TraversalRunSlice slice, int atomIndex, float atomPosition01)
+            => m_RuntimeObs.DebugStart(vehicle, slice, atomIndex, atomPosition01);
+
+        internal void RecordTraversalSliceLapDebugDropped(Entity vehicle, int sliceIndex)
+            => m_RuntimeObs.DebugDrop(vehicle, sliceIndex);
+
+        private void RecordTraversalSliceLapDebugFinalize(Entity vehicle, int sliceIndex, float observedFrames)
+            => m_RuntimeObs.DebugFinish(vehicle, sliceIndex, observedFrames);
+
+        internal void ClearVehicleTraversalSliceLapDebug(Entity vehicle)
+            => m_RuntimeObs.ClearDebug(vehicle);
+
+        private static bool IsStationDwellObservationKey(string value)
+            => Capture.IsStationDwellKey(value);
+
+        internal bool TryGetObservedWaypointStopFrames(Entity line, int waypointIndex, out float dwellFrames)
+            => m_Observation.TryGetObservedWaypointStopFrames(line, waypointIndex, out dwellFrames);
+
+        private bool TryEstimateRemainingBoardingDwellFrames(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentWaypointIndex,
+            Entity currentBypassBuilding,
+            uint nowFrame,
+            out float remainingFrames)
+            => m_Observation.TryEstimateRemainingBoardingDwellFrames(vehicle, line, waypoints, currentWaypointIndex, currentBypassBuilding, nowFrame, out remainingFrames);
+
+        internal void BeginObservedDwellSession(Entity vehicle, Entity line, int waypointIndex, uint nowFrame)
+            => m_Observation.BeginObservedDwellSession(vehicle, line, waypointIndex, nowFrame);
+
+        internal void TryRecordObservedStopDwellOnBoardingEnd(Entity vehicle, Entity line, int fallbackWaypointIndex, uint nowFrame)
+            => m_Observation.TryRecordObservedStopDwellOnBoardingEnd(vehicle, line, fallbackWaypointIndex, nowFrame);
+
+        private void ClearStationAnchorObservationDiagnosticsState()
+            => m_Observation.ClearStationAnchorObservationDiagnosticsState();
+
+        private uint ComputeAdjustedStopDwellDeadlineFrame(
+            Entity line,
+            int waypointIndex,
+            uint dwellSinceFrame,
+            int maxDwellMinutes)
+            => m_Observation.ComputeAdjustedStopDwellDeadlineFrame(line, waypointIndex, dwellSinceFrame, maxDwellMinutes);
 
         protected override void OnDestroy()
         {
             if (ReferenceEquals(Instance, this)) Instance = null!;
-            m_CommandApplier = null!;
-            m_DispatchScheduler = null!;
-            m_VehicleRegistrar = null!;
-            m_VehicleLabels = null!;
-            m_SelectionPanel = null!;
-            m_StationAnchorDiagnostics = null!;
-            m_Announcements = null!;
-            m_RuntimeController = null!;
-            m_VehicleView = null!;
-            m_VehicleRegistry = null!;
-            if (m_Bypass != null) m_Bypass.Dispose();
-            m_TrackModel = null!;
-            m_Bypass = null!;
-            m_TrackProjection = null!;
-            if (m_VehicleRuntime != null) m_VehicleRuntime.Dispose();
-            if (m_LapObservations != null) m_LapObservations.Dispose();
-            if (m_StopDwell != null) m_StopDwell.Dispose();
-            m_TraversalSlices = null!;
-            m_RuntimeObservations = null!;
+            RuntimeRoot.Clear(this);
             if (m_UICache.IsCreated) m_UICache.Dispose();
             if (m_LastBoarding.IsCreated) m_LastBoarding.Dispose();
             if (m_CachedWpIdx.IsCreated) m_CachedWpIdx.Dispose();
@@ -681,6 +1005,314 @@ namespace RapidTransitMod
             base.OnDestroy();
         }
 
+        public string ObservationJson()
+        {
+            return m_ObsRecorder?.SnapshotJson() ?? string.Empty;
+        }
+
+        public void DumpObservation()
+        {
+            try
+            {
+                string json = ObservationJson();
+                string logsDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "AppData",
+                    "LocalLow",
+                    "Colossal Order",
+                    "Cities Skylines II",
+                    "Logs");
+                Directory.CreateDirectory(logsDirectory);
+                string filePath = Path.Combine(logsDirectory, "RapidTransitMod-runtime-observation-latest.json");
+                File.WriteAllText(filePath, json);
+                Mod.log.Info("[ObservationDump] exported to " + filePath);
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("[ObservationDump] export failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        internal void SeedObservation(string selectedLineId)
+        {
+            m_ObsRecorder?.Seed(selectedLineId);
+        }
+
+        internal IReadOnlyDictionary<string, LinePlan> BuildObservationLines()
+        {
+            Dictionary<string, LinePlan> lines = new Dictionary<string, LinePlan>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, AppliedLine> entry in AppliedLines)
+            {
+                AppliedLine applied = entry.Value;
+                if (applied == null)
+                    continue;
+
+                LinePlan line = new LinePlan
+                {
+                    Line = applied.LineEntity
+                };
+
+                if (applied.StagedRows != null)
+                {
+                    foreach (DispatchWorkbenchStagedRowDto row in applied.StagedRows)
+                    {
+                        if (row == null)
+                            continue;
+
+                        line.Rows.Add(new RowPlan
+                        {
+                            Id = row.id ?? string.Empty,
+                            LineId = row.lineId ?? string.Empty,
+                            Time = row.time ?? string.Empty,
+                            Kind = row.kind ?? string.Empty,
+                            Source = row.source ?? string.Empty
+                        });
+                    }
+                }
+
+                lines[entry.Key] = line;
+            }
+
+            return lines;
+        }
+
+        internal ContractDto[] BuildObservationContracts()
+        {
+            List<ContractDto> contracts = new List<ContractDto>();
+            foreach (KeyValuePair<string, DispatchWorkbenchPlannerImportContractDto> entry in Applied().Refs.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                DispatchWorkbenchPlannerImportContractDto contract = entry.Value;
+                if (contract?.plan == null)
+                    continue;
+
+                ChangeDto[] changedRows = (contract.plan.changedWindows ?? Array.Empty<DispatchPlannerChangedWindowDto>())
+                    .SelectMany(window => window?.rowDiffs ?? Array.Empty<DispatchPlannerChangedRowDto>())
+                    .Select(CopyChange)
+                    .ToArray();
+                contracts.Add(new ContractDto
+                {
+                    draftKey = entry.Key,
+                    importedFrom = contract.importedFrom ?? string.Empty,
+                    importedPlanId = contract.importedPlanId ?? contract.plan.planId ?? string.Empty,
+                    importedObjectiveId = contract.importedObjectiveId ?? contract.plan.objectiveId ?? string.Empty,
+                    importedLineIds = contract.importedLineIds ?? Array.Empty<string>(),
+                    requestEcho = CopyEcho(contract.requestEcho),
+                    lineRoleSummary = CopyRoleSummary(contract.plan.lineRoleSummary),
+                    selectedBypassStationIds = contract.plan.selectedBypassStationIds ?? Array.Empty<string>(),
+                    changedRows = changedRows,
+                    structuredActions = (contract.plan.structuredScheduleActions ?? Array.Empty<DispatchPlannerScheduleActionDto>())
+                        .Select(CopyAction)
+                        .ToArray(),
+                    riskItems = (contract.plan.riskItems ?? Array.Empty<DispatchPlannerRiskItemDto>())
+                        .Select(CopyRisk)
+                        .ToArray()
+                });
+            }
+
+            return contracts.ToArray();
+        }
+
+        private static EchoDto CopyEcho(DispatchPlannerRequestEchoDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new EchoDto
+            {
+                draftKey = source.draftKey,
+                analysisWindowId = source.analysisWindowId,
+                windowStart = source.windowStart,
+                windowEnd = source.windowEnd,
+                localLineIds = source.localLineIds,
+                adjustableLineIds = source.adjustableLineIds,
+                expressSourceMode = source.expressSourceMode,
+                expressLineId = source.expressLineId,
+                virtualExpressBaseLineId = source.virtualExpressBaseLineId,
+                expressStopStationIds = source.expressStopStationIds,
+                departureMode = source.departureMode,
+                expressTripsPerHour = source.expressTripsPerHour,
+                intervalMinutes = source.intervalMinutes,
+                phaseTime = source.phaseTime,
+                expressOffsetMinutes = source.expressOffsetMinutes,
+                maxOffsetMinutes = source.maxOffsetMinutes,
+                offsetStepMinutes = source.offsetStepMinutes,
+                maxLocalRetimeMinutes = source.maxLocalRetimeMinutes,
+                maxLocalWaitMinutes = source.maxLocalWaitMinutes,
+                maxAdditionalBypassStations = source.maxAdditionalBypassStations,
+                forcedBypassStationIds = source.forcedBypassStationIds
+            };
+        }
+
+        private static RoleSummaryDto CopyRoleSummary(DispatchPlannerLineRoleSummaryDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new RoleSummaryDto
+            {
+                effectiveLineIds = source.effectiveLineIds,
+                adjustableLineIds = source.adjustableLineIds,
+                fixedLineIds = source.fixedLineIds,
+                targetLineIds = source.targetLineIds,
+                autoFixedConstraintLineIds = source.autoFixedConstraintLineIds,
+                suppressedFixedVsFixedClusterCount = source.suppressedFixedVsFixedClusterCount,
+                roles = (source.roles ?? Array.Empty<DispatchPlannerLineRoleDto>())
+                    .Select(CopyRole)
+                    .ToArray()
+            };
+        }
+
+        private static RoleDto CopyRole(DispatchPlannerLineRoleDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new RoleDto
+            {
+                lineId = source.lineId,
+                participates = source.participates,
+                adjustable = source.adjustable,
+                fixedLine = source.fixedLine,
+                target = source.target
+            };
+        }
+
+        private static ChangeDto CopyChange(DispatchPlannerChangedRowDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new ChangeDto
+            {
+                tripId = source.tripId,
+                lineId = source.lineId,
+                kind = source.kind,
+                beforeTime = source.beforeTime,
+                afterTime = source.afterTime,
+                scheduleShiftMinutes = source.scheduleShiftMinutes,
+                predictedDelayMinutes = source.predictedDelayMinutes,
+                totalDeltaMinutes = source.totalDeltaMinutes,
+                changeType = source.changeType,
+                statusCode = source.statusCode,
+                statusMinutes = source.statusMinutes
+            };
+        }
+
+        private static ActionDto CopyAction(DispatchPlannerScheduleActionDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new ActionDto
+            {
+                actionType = source.actionType,
+                type = source.type,
+                shape = source.shape,
+                reason = source.reason,
+                targetRegionIds = source.targetRegionIds,
+                reasonRegionIds = source.reasonRegionIds,
+                clusterIds = source.clusterIds,
+                reasonClusterIds = source.reasonClusterIds,
+                stationIds = source.stationIds,
+                affectedLineIds = source.affectedLineIds,
+                affectedLineId = source.affectedLineId,
+                affectedTripIds = source.affectedTripIds,
+                priorityTripIds = source.priorityTripIds,
+                tripIds = source.tripIds,
+                deltaPattern = source.deltaPattern,
+                deltaMinutes = source.deltaMinutes,
+                deltaOffsetMinutes = source.deltaOffsetMinutes,
+                riskScore = source.riskScore
+            };
+        }
+
+        private static RiskDto CopyRisk(DispatchPlannerRiskItemDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new RiskDto
+            {
+                riskId = source.riskId,
+                problemType = source.problemType,
+                resolutionState = source.resolutionState,
+                pairRole = source.pairRole,
+                treatmentType = source.treatmentType,
+                blockReasonCode = source.blockReasonCode,
+                suggestedOptionCodes = source.suggestedOptionCodes,
+                yieldingLineId = source.yieldingLineId,
+                priorityLineId = source.priorityLineId,
+                yieldingTripId = source.yieldingTripId,
+                priorityTripId = source.priorityTripId,
+                yieldingDepartTime = source.yieldingDepartTime,
+                priorityDepartTime = source.priorityDepartTime,
+                fromStationId = source.fromStationId,
+                toStationId = source.toStationId,
+                catchupFromStationId = source.catchupFromStationId,
+                catchupToStationId = source.catchupToStationId,
+                catchupTime = source.catchupTime,
+                selectedBypassStationId = source.selectedBypassStationId,
+                requiredHoldMinutes = source.requiredHoldMinutes,
+                plannedAdjustmentMinutes = source.plannedAdjustmentMinutes,
+                holdBudgetMinutes = source.holdBudgetMinutes,
+                unresolvedRiskMinutes = source.unresolvedRiskMinutes,
+                robustnessRiskMinutes = source.robustnessRiskMinutes,
+                requiredMarginMinutes = source.requiredMarginMinutes,
+                currentWorstCaseGapMinutes = source.currentWorstCaseGapMinutes
+            };
+        }
+
+        internal void BindObservationTarget(Entity line, Entity vehicle, int targetMinute, uint nowFrame, string reasonCode)
+        {
+            m_ObsRecorder?.TargetBound(line, vehicle, targetMinute, nowFrame, reasonCode);
+        }
+
+        internal void LaunchObservation(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)
+        {
+            m_ObsRecorder?.Launch(line, vehicle, targetMinute, actualMinute, launchFrame, lateDispatch);
+        }
+
+        internal void StopObservation(
+            Entity vehicle,
+            Entity line,
+            Entity station,
+            ResolvedStopKind kind,
+            int waypointIndex,
+            bool isOrigin,
+            bool arrival,
+            string clockTime,
+            uint frame)
+        {
+            m_ObsRecorder?.Stop(vehicle, line, station, kind, waypointIndex, isOrigin, arrival, clockTime, frame);
+        }
+
+        private void HoldObservation(
+            Entity vehicle,
+            Entity blocker,
+            Entity holdStation,
+            int waypointIndex,
+            uint nowFrame,
+            string reasonCode)
+        {
+            m_ObsRecorder?.Hold(vehicle, blocker, holdStation, waypointIndex, nowFrame, reasonCode);
+        }
+
+        private void ReleaseObservation(Entity vehicle, Entity blocker, uint nowFrame, string releaseReason)
+        {
+            m_ObsRecorder?.Release(vehicle, blocker, nowFrame, releaseReason);
+        }
+
+        internal int ObservationTargetMin(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return -1;
+            if (m_VehicleStateStore.CurrentSlot.IsCreated && m_VehicleView.TryGetSlot(vehicle, out int currentSlot))
+                return currentSlot;
+            if (m_VehicleStateStore.TargetMin.IsCreated && m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
+                return targetMinute;
+            return -1;
+        }
+
         public bool DisplayDebugFor(Entity entity, Entity prefab)
         {
             if (entity == Entity.Null) return false;
@@ -703,8 +1335,8 @@ namespace RapidTransitMod
 
         internal string BuildOriginHoldRetireReason(Entity line, int nowMin, int targetMin)
         {
-            int waitMinutes = m_DispatchScheduler.MinutesUntil(nowMin, targetMin);
-            int holdLimitMinutes = GetWorkbenchOriginHoldLimitMinutes(line);
+            int waitMinutes = ScheduleClock.MinutesUntil(nowMin, targetMin);
+            int holdLimitMinutes = m_LineView.Hold(line);
             return "下一班仍需等待" + waitMinutes + "分钟，超出候车窗口" + holdLimitMinutes + "分钟";
         }
 
@@ -736,7 +1368,7 @@ namespace RapidTransitMod
             if (TryGetLineTimeProfile(line, waypoints, out LineTimeProfileHeader profile))
                 return ComputeDepartureToWaypointFramesFromProfile(profile, fromWaypointIndex, targetWaypointIndex);
 
-            float lineDurationFrames = ReadLineLapCache(line);
+            float lineDurationFrames = m_LapCache.Read(line);
             if (lineDurationFrames <= 0f)
                 return float.MaxValue;
 
@@ -783,7 +1415,7 @@ namespace RapidTransitMod
             if (TryGetLineTimeProfile(line, waypoints, out LineTimeProfileHeader profile))
             {
                 float scale = ResolveProfileScale(vehicle, profile.m_BaseLoopFrames);
-                if (TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition))
+                if (m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
                 {
                     float profiledFrames = ComputeRemainingFramesToWaypointFromProfile(profile, nextWaypointIndex, segmentPosition, targetWaypointIndex);
                     if (profiledFrames != float.MaxValue)
@@ -848,10 +1480,10 @@ namespace RapidTransitMod
             }
             if (boarding0)
             {
-                float originDistAtBoarding = GetDistanceToOriginMeters(v, wps);
+                float originDistAtBoarding = m_LineProfile.DistanceToOrigin(v, wps);
                 if (originDistAtBoarding <= ORIGIN_FORCE_IDLE_RADIUS_METERS)
                 {
-                    if (!TryGetRouteProgress(v, out int nearOriginWp, out float nearOriginSeg)
+                    if (!m_RouteProgress.Try(v, out int nearOriginWp, out float nearOriginSeg)
                         || (nearOriginWp == 1 && nearOriginSeg <= 0.10f)
                         || nearOriginWp == 0)
                     {
@@ -877,9 +1509,9 @@ namespace RapidTransitMod
                 return VehicleState.Retiring;
             }
 
-            if (TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition))
+            if (m_RouteProgress.Try(v, out int nextWaypointIndex, out float segmentPosition))
             {
-                float nearOriginDist = GetDistanceToOriginMeters(v, wps);
+                float nearOriginDist = m_LineProfile.DistanceToOrigin(v, wps);
                 bool nearOriginProgress = nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.05f);
                 if (nearOriginProgress && nearOriginDist <= ORIGIN_FORCE_IDLE_RADIUS_METERS
                     && (boarding0 || arriving0))
@@ -891,7 +1523,7 @@ namespace RapidTransitMod
                 return (boarding0 && nextWaypointIndex == 0) ? VehicleState.Holding : VehicleState.Running;
             }
 
-            float originDist = GetDistanceToOriginMeters(v, wps);
+            float originDist = m_LineProfile.DistanceToOrigin(v, wps);
             if (originDist > ORIGIN_CONGESTION_RADIUS_METERS)
             {
                 reason = "far-from-origin " + originDist.ToString("F0") + "m";
@@ -914,7 +1546,7 @@ namespace RapidTransitMod
             return VehicleState.Running;
         }
 
-        private static ulong MixLineSignature(ulong hash, int value)
+        internal static ulong MixLineSignature(ulong hash, int value)
         {
             return (hash ^ (uint)value) * 1099511628211UL;
         }
@@ -946,14 +1578,14 @@ namespace RapidTransitMod
         {
             ulong hash = 1469598103934665603UL;
             List<Entity> localLines = new List<Entity>();
-            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            foreach (KeyValuePair<string, AppliedLine> entry in AppliedLines)
             {
                 Entity line = entry.Value.LineEntity;
                 if (line == Entity.Null
                     || !EntityManager.Exists(line)
                     || !EntityManager.HasBuffer<RouteWaypoint>(line)
                     || !EntityManager.HasBuffer<RouteSegment>(line)
-                    || !IsAppliedWorkbenchLocalLine(line))
+                    || !m_LineView.Local(line))
                 {
                     continue;
                 }
@@ -1001,14 +1633,14 @@ namespace RapidTransitMod
                 Signature = signature
             };
 
-            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            foreach (KeyValuePair<string, AppliedLine> entry in AppliedLines)
             {
                 Entity line = entry.Value.LineEntity;
                 if (line == Entity.Null
                     || !EntityManager.Exists(line)
                     || !EntityManager.HasBuffer<RouteWaypoint>(line)
                     || !EntityManager.HasBuffer<RouteSegment>(line)
-                    || !IsAppliedWorkbenchLocalLine(line))
+                    || !m_LineView.Local(line))
                 {
                     continue;
                 }
@@ -1396,7 +2028,7 @@ namespace RapidTransitMod
             for (int i = 0; i < corridorNodes.Count; i++)
             {
                 CorridorNode node = corridorNodes[i];
-                if (!node.IsStopNode || node.Building == Entity.Null || !m_SelectionPanel.IsBypassStation(node.Building))
+                if (!node.IsStopNode || node.Building == Entity.Null || !IsBypassStationSetting(node.Building))
                     continue;
 
                 distances.Add(node.DistanceMeters);
@@ -1496,7 +2128,7 @@ namespace RapidTransitMod
             log.Info(sb.ToString());
         }
 
-        private float ReadRouteSegmentDistanceMeters(Entity segmentEntity, DynamicBuffer<RouteWaypoint> waypoints, int segmentIndex)
+        internal float ReadRouteSegmentDistanceMeters(Entity segmentEntity, DynamicBuffer<RouteWaypoint> waypoints, int segmentIndex)
         {
             if (segmentEntity != Entity.Null
                 && EntityManager.HasComponent<PathInformation>(segmentEntity))
@@ -1541,7 +2173,7 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if (!TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition))
+            if (!m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
             {
                 if (!m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
                     || cachedWaypointIndex < 0
@@ -1726,9 +2358,9 @@ namespace RapidTransitMod
                 return 0f;
 
             float dwellFrames = 0f;
-            if (!TryGetObservedWaypointStopFrames(line, waypointIndex, out dwellFrames))
+            if (!m_Observation.TryGetObservedWaypointStopFrames(line, waypointIndex, out dwellFrames))
             {
-                int maxStationDwellMinutes = GetWorkbenchMaxStationDwellMinutes(line);
+                int maxStationDwellMinutes = m_LineView.Dwell(line);
                 if (maxStationDwellMinutes > 0)
                     dwellFrames = maxStationDwellMinutes * (float)SIM_FRAMES_PER_MINUTE;
                 else
@@ -1741,7 +2373,7 @@ namespace RapidTransitMod
         private float ResolveProfileScale(Entity v, float baseLoopFrames)
         {
             if (baseLoopFrames <= 0f) return 1f;
-            if (!m_LapObservations.TryFrames(v, out uint observedLoopFrames) || observedLoopFrames == 0)
+            if (!m_ObsQuery.TryLapFrames(v, out uint observedLoopFrames) || observedLoopFrames == 0)
                 return 1f;
 
             float rawScale = observedLoopFrames / baseLoopFrames;
@@ -1790,9 +2422,9 @@ namespace RapidTransitMod
             uint nowFrame,
             float lineDurationFrames)
         {
-            if (!m_VehicleRuntime.PreparingStartFrame.ContainsKey(v))
+            if (!m_VehicleStateStore.PreparingStartFrame.ContainsKey(v))
                 return float.MaxValue;
-            float cachedFrames = ReadDispatchCache(line);
+            float cachedFrames = m_DispatchCache.Read(line);
             if (cachedFrames <= 0f)
                 cachedFrames = EstimateDispatchFallbackFrames(v, line, lineDurationFrames);
             if (cachedFrames <= 0f)
@@ -1801,7 +2433,7 @@ namespace RapidTransitMod
             if (wps.Length > 0
                 && EntityManager.HasComponent<Target>(v)
                 && EntityManager.GetComponentData<Target>(v).m_Target == wps[0].m_Waypoint
-                && TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition)
+                && m_RouteProgress.Try(v, out int nextWaypointIndex, out float segmentPosition)
                 && nextWaypointIndex == 0)
             {
                 return math.max(0f, cachedFrames * (1f - math.saturate(segmentPosition)));
@@ -1822,7 +2454,7 @@ namespace RapidTransitMod
             {
                 float scale = ResolveProfileScale(v, profile.m_BaseLoopFrames);
 
-                if (TryGetRouteProgress(v, out int nextWaypointIndex, out float segmentPosition))
+                if (m_RouteProgress.Try(v, out int nextWaypointIndex, out float segmentPosition))
                     return ComputeRemainingFramesFromProfile(profile, nextWaypointIndex, segmentPosition) * scale;
 
                 int cachedWpIdx = m_CachedWpIdx.TryGetValue(v, out int ci) ? ci : -1;
@@ -1831,7 +2463,7 @@ namespace RapidTransitMod
                     return cachedWaypointEstimate * scale;
             }
 
-            float lapFrames = m_LapObservations.TryFrames(v, out uint vehicleLapFrames) && vehicleLapFrames > 0
+            float lapFrames = m_ObsQuery.TryLapFrames(v, out uint vehicleLapFrames) && vehicleLapFrames > 0
                 ? vehicleLapFrames
                 : 0f;
             if (lapFrames <= 0f && lineHasHistory && lineDurationFrames > 0f)
@@ -1840,7 +2472,7 @@ namespace RapidTransitMod
             if (lapFrames <= 0f)
                 return float.MaxValue;
 
-            if (m_LapObservations.TryStartFrame(v, out uint lapStartFrame))
+            if (m_ObsQuery.TryLapStartFrame(v, out uint lapStartFrame))
                 return math.max(0f, lapFrames - (float)(nowFrame - lapStartFrame));
 
             return float.MaxValue;

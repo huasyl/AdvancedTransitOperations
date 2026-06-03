@@ -73,6 +73,11 @@ namespace RapidTransitMod
         internal static string FormatDispatchTraceSlot(int targetMin)
             => targetMin >= 0 ? SlotStr(targetMin) : "-";
 
+        private static string FormatTrainHeadSnapshotEntity(Entity entity)
+        {
+            return entity == Entity.Null ? "null" : entity.Index.ToString();
+        }
+
         internal string BuildTrainHeadLaunchDiagnostic(
             Entity vehicle,
             bool hasCurrentLaunchSnapshot,
@@ -278,7 +283,7 @@ namespace RapidTransitMod
                 return;
             }
 
-            float distanceToOriginMeters = wps.Length > 0 ? GetDistanceToOriginMeters(vehicle, wps) : -1f;
+            float distanceToOriginMeters = wps.Length > 0 ? m_LineProfile.DistanceToOrigin(vehicle, wps) : -1f;
             bool hasAssistPending = m_RuntimeController.TryGetAssistLaunchPending(vehicle, route, targetMin, out AssistLaunchPendingRecord assistPending);
             int assistTargetMin = hasAssistPending ? assistPending.TargetMin : -1;
             uint forcedReadyRemainingFrames = hasForcedReady ? forcedReadyFrame - nowFrame : 0;
@@ -303,7 +308,7 @@ namespace RapidTransitMod
                 + (string.IsNullOrWhiteSpace(extra) ? string.Empty : " " + extra));
         }
 
-        private void LogDispatchSlotHeld(
+        internal void LogDispatchSlotHeld(
             Entity line,
             int slot,
             Entity holder,
@@ -344,7 +349,7 @@ namespace RapidTransitMod
 
             bool holderBoarding = EntityManager.HasComponent<PublicTransport>(holder)
                 && (EntityManager.GetComponentData<PublicTransport>(holder).m_State & PublicTransportFlags.Boarding) != 0;
-            float distanceToOriginMeters = wps.Length > 0 ? GetDistanceToOriginMeters(holder, wps) : -1f;
+            float distanceToOriginMeters = wps.Length > 0 ? m_LineProfile.DistanceToOrigin(holder, wps) : -1f;
             log.Info("[DispatchSlotHeld] reason=" + reason
                 + " line=" + line.Index
                 + " route=" + route.Index
@@ -403,7 +408,7 @@ namespace RapidTransitMod
             if (target != Entity.Null && target == originWaypoint)
                 return;
 
-            Entity targetDepot = CanonicalizeTransportDepotEntity(target);
+            Entity targetDepot = CanonDepot(target);
             string key = "target=" + target.Index
                 + "|route=" + route.Index
                 + "|targetDepot=" + targetDepot.Index
@@ -440,15 +445,15 @@ namespace RapidTransitMod
             Entity owner = EntityManager.HasComponent<Owner>(vehicle)
                 ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
                 : Entity.Null;
-            Entity ownerDepot = CanonicalizeTransportDepotEntity(owner);
+            Entity ownerDepot = CanonDepot(owner);
             Entity target = EntityManager.HasComponent<Target>(vehicle)
                 ? EntityManager.GetComponentData<Target>(vehicle).m_Target
                 : Entity.Null;
-            Entity targetDepot = CanonicalizeTransportDepotEntity(target);
+            Entity targetDepot = CanonDepot(target);
             Entity pathDestination = EntityManager.HasComponent<PathInformation>(vehicle)
                 ? EntityManager.GetComponentData<PathInformation>(vehicle).m_Destination
                 : Entity.Null;
-            Entity pathDestinationDepot = CanonicalizeTransportDepotEntity(pathDestination);
+            Entity pathDestinationDepot = CanonDepot(pathDestination);
             string publicState = EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
                 ? EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle).m_State.ToString()
                 : "-";

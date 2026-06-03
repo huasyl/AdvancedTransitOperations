@@ -36,7 +36,7 @@ namespace RapidTransitMod
         internal static string PrefixWithGameTime(string message)
         {
             string gameTime = DispatchRuntimeSystem.Instance != null
-                ? DispatchRuntimeSystem.Instance.m_SelectionPanel.CurrentGameTimeLabel()
+                ? DispatchRuntimeSystem.Instance.m_SelectPanel.CurrentGameTimeLabel()
                 : string.Empty;
             return gameTime.Length > 0 ? gameTime + " " + message : message;
         }
@@ -61,7 +61,6 @@ namespace RapidTransitMod
             updateSystem.UpdateAt<DevSightRaycastCollectorSystem>(SystemUpdatePhase.Raycast);
             updateSystem.UpdateAfter<DevSightRaycastCollectorSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
             updateSystem.UpdateBefore<RapidTransitPanelUISystem>(SystemUpdatePhase.Rendering);
-            updateSystem.UpdateBefore<DispatchWorkbenchUISystem>(SystemUpdatePhase.Rendering);
             updateSystem.UpdateAt<DevSightTooltipSystem>(SystemUpdatePhase.UITooltip);
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
@@ -69,7 +68,7 @@ namespace RapidTransitMod
                 log.Info("Module path: " + ((AssetData)asset).path);
                 string modRootPath = Path.GetDirectoryName(((AssetData)asset).path);
                 I18n.LoadAll(Path.Combine(modRootPath, "Locales"));
-                WorkbenchApi.Initialize(modRootPath);
+                Workbenches.ApiHost.Init(modRootPath);
             }
 
             World.DefaultGameObjectInjectionWorld

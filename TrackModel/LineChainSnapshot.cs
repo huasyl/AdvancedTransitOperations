@@ -3,6 +3,12 @@ using Unity.Entities;
 
 namespace RapidTransitMod.TrackModel
 {
+    internal sealed partial class TrackModelService
+    {
+        private readonly Dictionary<Entity, LineTrackChainFrameSnapshot> m_LineTrackChainFrameSnapshots = new Dictionary<Entity, LineTrackChainFrameSnapshot>();
+        private readonly Dictionary<Entity, LineWaypointIndexLookup> m_LineWaypointIndexLookups = new Dictionary<Entity, LineWaypointIndexLookup>();
+    }
+
     internal sealed class LineWaypointIndexLookup
     {
         public ulong Signature;

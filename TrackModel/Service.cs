@@ -31,22 +31,6 @@ namespace RapidTransitMod.TrackModel
         private readonly TrackModelBuilder m_Builder;
         private readonly TrackModelQuery m_Query;
         private readonly TrackModelCoordinator m_Coordinator;
-        private readonly Dictionary<Entity, List<DevSightLaneOccurrence>> m_DevSightLaneIndex = new Dictionary<Entity, List<DevSightLaneOccurrence>>();
-        private readonly Dictionary<LocalBypassSceneStaticKey, LocalBypassSceneStaticSnapshot> m_LocalBypassSceneStaticSnapshots = new Dictionary<LocalBypassSceneStaticKey, LocalBypassSceneStaticSnapshot>();
-        private readonly Dictionary<GlobalSharedTrunkCacheKey, GlobalSharedTrunkSnapshot> m_GlobalSharedTrunkSnapshots = new Dictionary<GlobalSharedTrunkCacheKey, GlobalSharedTrunkSnapshot>();
-        private readonly Dictionary<ProtectedIntervalPairMetricsCacheKey, ProtectedIntervalPairMetricsSnapshot> m_ProtectedIntervalPairMetricsSnapshots = new Dictionary<ProtectedIntervalPairMetricsCacheKey, ProtectedIntervalPairMetricsSnapshot>();
-        private readonly Dictionary<Entity, string> m_TrackModelSequenceLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, string> m_LineOrderedFallbackCaseLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, uint> m_LineOrderedFallbackCaseLastLogFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<Entity, string> m_TrackModelTurnbackBuildLogCache = new Dictionary<Entity, string>();
-        private readonly HashSet<Entity> m_ProtectedIntervalOverlapSourceKeys = new HashSet<Entity>();
-        private readonly HashSet<Entity> m_ProtectedIntervalOverlapMatchedKeys = new HashSet<Entity>();
-        private readonly List<Entity> m_ProtectedIntervalOrderedSourceKeys = new List<Entity>();
-        private readonly List<Entity> m_ProtectedIntervalOrderedCandidateKeys = new List<Entity>();
-        private readonly List<int> m_ProtectedIntervalOrderedSourceAtomIndices = new List<int>();
-        private readonly List<int> m_ProtectedIntervalOrderedCandidateAtomIndices = new List<int>();
-        private readonly Dictionary<Entity, LineTrackChainFrameSnapshot> m_LineTrackChainFrameSnapshots = new Dictionary<Entity, LineTrackChainFrameSnapshot>();
-        private readonly Dictionary<Entity, LineWaypointIndexLookup> m_LineWaypointIndexLookups = new Dictionary<Entity, LineWaypointIndexLookup>();
 
         internal TrackModelService(ITrackModelRuntimeContext runtime)
         {
@@ -114,11 +98,11 @@ namespace RapidTransitMod.TrackModel
         private float GetProfileWaypointStopFrames(Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex, Game.Prefabs.TransportLineData prefabLineData) => m_Runtime.GetProfileWaypointStopFrames(line, waypoints, waypointIndex, prefabLineData);
         private float GetLineLoopFramesEstimate(Entity line, DynamicBuffer<RouteWaypoint> waypoints) => m_Runtime.GetLineLoopFramesEstimate(line, waypoints);
         private float ComputeDepartureToWaypointFramesFromProfile(LineTimeProfileHeader profile, int fromWaypointIndex, int targetWaypointIndex) => m_Runtime.ComputeDepartureToWaypointFramesFromProfile(profile, fromWaypointIndex, targetWaypointIndex);
-        private Entity ResolveWorkbenchStopEntity(Entity waypoint) => m_Runtime.ResolveWorkbenchStopEntity(waypoint);
-        private Entity FindTransportStationFromStop(Entity stop) => m_Runtime.FindTransportStationFromStop(stop);
-        private Entity ResolvePassingStationBuilding(Entity entity) => m_Runtime.ResolvePassingStationBuilding(entity);
-        private bool IsAppliedWorkbenchLocalLine(Entity line) => m_Runtime.IsAppliedWorkbenchLocalLine(line);
-        private bool IsAppliedWorkbenchExpressLine(Entity line) => m_Runtime.IsAppliedWorkbenchExpressLine(line);
+        private Entity Stop(Entity waypoint) => m_Runtime.Stop(waypoint);
+        private Entity StationOf(Entity stop) => m_Runtime.StationOf(stop);
+        private Entity ResolvePassingStationBuilding(Entity entity) => m_Runtime.ResolvePassingStation(entity);
+        private bool IsAppliedLocal(Entity line) => m_Runtime.IsAppliedLocal(line);
+        private bool IsAppliedExpress(Entity line) => m_Runtime.IsAppliedExpress(line);
         private static bool IsLineOrderedRuntimeLoggingEnabled() => false;
         private static float GetProtectedIntervalDisplayLength(BypassProtectedInterval interval) => math.max(1f, interval.EndAtomIndexExclusive - interval.StartAtomIndex);
         private static float MapControlPointToProtectedIntervalCoordinate(LineTrackChain chain, BypassProtectedInterval interval, int controlPointIndex)
@@ -180,7 +164,7 @@ namespace RapidTransitMod.TrackModel
 
             return (frames / 182.044f).ToString("0.0") + "m";
         }
-        private IEnumerable<KeyValuePair<string, AppliedWorkbenchLineState>> m_AppliedWorkbenchLines => m_Runtime.AppliedWorkbenchLines;
+        private IEnumerable<KeyValuePair<string, AppliedLine>> m_AppliedLines => m_Runtime.AppliedLines;
         private BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData => m_Runtime.GetBufferLookup<T>(isReadOnly);
 
         private static ulong MixLineSignature(ulong hash, int value)

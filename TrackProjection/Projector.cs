@@ -5,7 +5,7 @@ namespace RapidTransitMod.TrackProjection
 {
     internal delegate bool TrackPositionProject(out VehicleTrackCursor cursor);
 
-    internal sealed class TrackProjector
+    internal sealed class VehicleTrackCursorCache
     {
         private readonly Dictionary<Entity, VehicleTrackCursor> m_Cursors = new Dictionary<Entity, VehicleTrackCursor>();
         private readonly Dictionary<Entity, VehicleTrackCursorFrameSnapshot> m_Snapshots = new Dictionary<Entity, VehicleTrackCursorFrameSnapshot>();

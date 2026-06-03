@@ -20,52 +20,19 @@ namespace RapidTransitMod.TrackProjection
         internal TrackProjectionService(ITrackProjectionRuntimeContext runtime)
         {
             m_Runtime = runtime;
-            m_TrackProjector = new TrackProjector();
+            m_Cursors = new VehicleTrackCursorCache();
         }
         private const uint SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES = 60;
         private const int SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS = 1;
         private const int SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD = 12;
         private const float SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS = 120f;
 
-        private readonly TrackProjector m_TrackProjector;
+        private readonly VehicleTrackCursorCache m_Cursors;
         internal readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
-
-        private readonly Dictionary<Entity, uint> m_SuspectProgressSinceFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<Entity, uint> m_SuspectProgressLastValidationFrame = new Dictionary<Entity, uint>();
-        private readonly Dictionary<Entity, bool> m_SuspectProgressProjectionInvalid = new Dictionary<Entity, bool>();
-        private readonly Dictionary<Entity, string> m_SuspectProgressReason = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, string> m_SuspectProgressLogCache = new Dictionary<Entity, string>();
-        private readonly Dictionary<Entity, int> m_SuspectProgressRecoveryWaypoint = new Dictionary<Entity, int>();
-        private readonly Dictionary<Entity, int> m_SuspectProgressValidationCount = new Dictionary<Entity, int>();
-        private readonly Dictionary<Entity, SuspectProgressSample> m_SuspectProgressFirstSample = new Dictionary<Entity, SuspectProgressSample>();
-
-        private readonly struct SuspectProgressSample
-        {
-            public readonly int ProjectedAtomIndex;
-            public readonly int BestAtomIndex;
-            public readonly float3 VehiclePosition;
-            public readonly float ProjectedDistanceMeters;
-            public readonly float BestDistanceMeters;
-
-            public SuspectProgressSample(
-                int projectedAtomIndex,
-                int bestAtomIndex,
-                float3 vehiclePosition,
-                float projectedDistanceMeters,
-                float bestDistanceMeters)
-            {
-                ProjectedAtomIndex = projectedAtomIndex;
-                BestAtomIndex = bestAtomIndex;
-                VehiclePosition = vehiclePosition;
-                ProjectedDistanceMeters = projectedDistanceMeters;
-                BestDistanceMeters = bestDistanceMeters;
-            }
-        }
-
 
         internal void Clear()
         {
-            m_TrackProjector.Clear();
+            m_Cursors.Clear();
             m_SuspectProgressSinceFrame.Clear();
             m_SuspectProgressLastValidationFrame.Clear();
             m_SuspectProgressProjectionInvalid.Clear();
@@ -124,7 +91,7 @@ namespace RapidTransitMod.TrackProjection
                     continue;
 
                 int nextWaypointIndex;
-                if (!TryGetRouteProgress(vehicle, out nextWaypointIndex, out _))
+                if (!TryRouteProgress(vehicle, out nextWaypointIndex, out _))
                 {
                     nextWaypointIndex = m_Runtime.CachedWaypointIndex.TryGetValue(vehicle, out int cachedWp) ? cachedWp : -1;
                 }
@@ -178,16 +145,16 @@ namespace RapidTransitMod.TrackProjection
 
         internal bool TrySnapshot(Entity vehicle, Entity line, ulong chainSignature, uint frame, out VehicleTrackCursor cursor)
         {
-            return m_TrackProjector.TrySnapshot(vehicle, line, chainSignature, frame, out cursor);
+            return m_Cursors.TrySnapshot(vehicle, line, chainSignature, frame, out cursor);
         }
 
         internal void ClearVehicle(Entity vehicle)
         {
             ClearVehicleProgressSuspect(vehicle);
-            m_TrackProjector.Remove(vehicle);
+            m_Cursors.Remove(vehicle);
         }
 
-        private bool TryGetRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition) => m_Runtime.TryGetRouteProgress(vehicle, out nextWaypointIndex, out segmentPosition);
+        private bool TryRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition) => m_Runtime.TryRouteProgress(vehicle, out nextWaypointIndex, out segmentPosition);
         private static bool TryResolveTraversalOrderingPhase(LineTrackChain chain, int atomIndex, out int traversalPhaseIndex, out int phaseStartAtomIndex, out int phaseEndAtomExclusive, out int nextTurnbackBoundaryAtomIndex)
         {
             traversalPhaseIndex = -1;
@@ -445,13 +412,13 @@ namespace RapidTransitMod.TrackProjection
             float frontCurvePosition = math.saturate(currentLane.m_Front.m_CurvePosition.x);
             float rearCurvePosition = math.saturate(currentLane.m_Rear.m_CurvePosition.x);
 
-            int referenceAtomIndex = m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
+            int referenceAtomIndex = m_Cursors.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature
                 ? hint.AtomCursorIndex
                 : -1;
 
-            int preferredSegmentIndex = m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor segmentHint)
+            int preferredSegmentIndex = m_Cursors.TryCursor(vehicle, out VehicleTrackCursor segmentHint)
                 && segmentHint.LineEntity == line
                 && segmentHint.ChainSignature == chain.Signature
                 ? segmentHint.SegmentIndex
@@ -570,7 +537,7 @@ namespace RapidTransitMod.TrackProjection
                 AddSegmentCandidate(waypointIndex == 0 ? segmentCount - 1 : waypointIndex - 1);
             }
 
-            if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
+            if (m_Cursors.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature)
             {
@@ -587,7 +554,7 @@ namespace RapidTransitMod.TrackProjection
                     AddWaypointAnchor(m_Runtime.EntityManager.GetComponentData<Waypoint>(targetWaypoint).m_Index);
             }
 
-            if (TryGetRouteProgress(vehicle, out int nextWaypointIndex, out _))
+            if (TryRouteProgress(vehicle, out int nextWaypointIndex, out _))
                 AddWaypointAnchor(nextWaypointIndex);
 
             if (semanticSegments.Count == 0)
@@ -669,7 +636,7 @@ namespace RapidTransitMod.TrackProjection
                     chain,
                     out cursor))
             {
-                if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor trainHint)
+                if (m_Cursors.TryCursor(vehicle, out VehicleTrackCursor trainHint)
                     && trainHint.LineEntity == line
                     && trainHint.ChainSignature == chain.Signature)
                 {
@@ -695,7 +662,7 @@ namespace RapidTransitMod.TrackProjection
                 return true;
             }
 
-            bool trustedRouteProgress = TryGetRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition);
+            bool trustedRouteProgress = TryRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition);
             if (!trustedRouteProgress)
             {
                 if (!m_Runtime.CachedWaypointIndex.TryGetValue(vehicle, out nextWaypointIndex))
@@ -762,7 +729,7 @@ namespace RapidTransitMod.TrackProjection
                 + math.min(segmentAtomLength - 1, (int)math.floor(segmentAtomLength * math.saturate(segmentPosition)));
 
             float confidence = trustedRouteProgress ? 1f : 0.7f;
-            if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
+            if (m_Cursors.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature)
             {
@@ -810,7 +777,7 @@ namespace RapidTransitMod.TrackProjection
                 return false;
 
             uint nowFrame = m_Runtime.Frame;
-            return m_TrackProjector.TryPosition(
+            return m_Cursors.TryPosition(
                 vehicle,
                 line,
                 chain.Signature,
@@ -891,7 +858,7 @@ namespace RapidTransitMod.TrackProjection
                 return true;
             }
 
-            if (m_TrackProjector.TryCursor(vehicle, out VehicleTrackCursor hint)
+            if (m_Cursors.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature)
             {
@@ -919,215 +886,6 @@ namespace RapidTransitMod.TrackProjection
             }
 
             return false;
-        }
-
-        internal void MarkVehicleProgressSuspect(Entity vehicle, string reason)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            uint nowFrame = m_Runtime.Frame;
-            m_SuspectProgressSinceFrame[vehicle] = nowFrame;
-            m_SuspectProgressReason[vehicle] = reason ?? "unknown";
-            m_SuspectProgressProjectionInvalid.Remove(vehicle);
-            m_TrackProjector.Remove(vehicle, keepCursor: true);
-            m_SuspectProgressRecoveryWaypoint.Remove(vehicle);
-            m_SuspectProgressValidationCount.Remove(vehicle);
-            m_SuspectProgressFirstSample.Remove(vehicle);
-
-            string summary = vehicle.Index + "|" + reason;
-            if (m_SuspectProgressLogCache.TryGetValue(vehicle, out string previous) && previous == summary)
-                return;
-
-            m_SuspectProgressLogCache[vehicle] = summary;
-            m_Runtime.Log.Info("[ProgressSuspect] 杞﹁締" + vehicle.Index + " reason=" + reason + " sinceFrame=" + nowFrame);
-        }
-
-        internal void ClearVehicleProgressSuspect(Entity vehicle, string reason = null)
-        {
-            if (vehicle == Entity.Null)
-                return;
-
-            bool hadState = m_SuspectProgressSinceFrame.Remove(vehicle);
-            m_SuspectProgressLastValidationFrame.Remove(vehicle);
-            m_SuspectProgressProjectionInvalid.Remove(vehicle);
-            m_TrackProjector.Remove(vehicle, keepCursor: true);
-            m_SuspectProgressReason.Remove(vehicle);
-            m_SuspectProgressLogCache.Remove(vehicle);
-            m_SuspectProgressRecoveryWaypoint.Remove(vehicle);
-            m_SuspectProgressValidationCount.Remove(vehicle);
-            m_SuspectProgressFirstSample.Remove(vehicle);
-
-            if (hadState)
-            {
-                m_Runtime.Log.Info("[ProgressSuspectClear] 杞﹁締" + vehicle.Index
-                    + (!string.IsNullOrWhiteSpace(reason) ? " reason=" + reason : string.Empty));
-            }
-        }
-
-        internal void NoteVehicleProgressSuspectRecoveryBoarding(Entity vehicle, int waypointIndex)
-        {
-            if (vehicle == Entity.Null
-                || waypointIndex < 0
-                || !m_SuspectProgressSinceFrame.ContainsKey(vehicle))
-            {
-                return;
-            }
-
-            m_SuspectProgressRecoveryWaypoint[vehicle] = waypointIndex;
-        }
-
-        internal void TryClearVehicleProgressSuspectOnStableDeparture(Entity vehicle, int departedWaypointIndex)
-        {
-            if (vehicle == Entity.Null
-                || departedWaypointIndex < 0
-                || !m_SuspectProgressSinceFrame.ContainsKey(vehicle)
-                || !m_SuspectProgressRecoveryWaypoint.TryGetValue(vehicle, out int recoveryWaypointIndex)
-                || recoveryWaypointIndex != departedWaypointIndex)
-            {
-                return;
-            }
-
-            ClearVehicleProgressSuspect(vehicle, "stable-stop-cycle wp=" + departedWaypointIndex);
-        }
-
-        private bool IsVehicleProgressProjectionInvalid(
-            Entity vehicle,
-            Entity line,
-            LineTrackChain chain,
-            int segmentIndex,
-            int projectedAtomIndex)
-        {
-            if (vehicle == Entity.Null
-                || !m_SuspectProgressSinceFrame.ContainsKey(vehicle))
-            {
-                return false;
-            }
-
-            if (m_SuspectProgressProjectionInvalid.TryGetValue(vehicle, out bool alreadyInvalid) && alreadyInvalid)
-                return true;
-
-            uint nowFrame = m_Runtime.Frame;
-            if (m_SuspectProgressLastValidationFrame.TryGetValue(vehicle, out uint lastValidationFrame)
-                && nowFrame - lastValidationFrame < SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES)
-            {
-                return false;
-            }
-
-            m_SuspectProgressLastValidationFrame[vehicle] = nowFrame;
-            if (!TryValidateSuspectVehicleProjection(vehicle, line, chain, segmentIndex, projectedAtomIndex, out SuspectProgressSample sample, out string validationSummary, out bool projectionInvalid))
-                return false;
-
-            int validationCount = m_SuspectProgressValidationCount.TryGetValue(vehicle, out int previousCount)
-                ? previousCount + 1
-                : 1;
-            m_SuspectProgressValidationCount[vehicle] = validationCount;
-            if (!m_SuspectProgressFirstSample.ContainsKey(vehicle))
-                m_SuspectProgressFirstSample[vehicle] = sample;
-
-            string logKey = vehicle.Index + "|" + validationSummary;
-            if (!m_SuspectProgressLogCache.TryGetValue(vehicle, out string previous) || previous != logKey)
-            {
-                m_SuspectProgressLogCache[vehicle] = logKey;
-                m_Runtime.Log.Info("[ProgressSuspectCheck] " + validationSummary);
-            }
-
-            if (validationCount % 36 == 0
-                && m_SuspectProgressFirstSample.TryGetValue(vehicle, out SuspectProgressSample firstSample))
-            {
-                m_Runtime.Log.Info("[ProgressSuspectWindow] vehicle=" + vehicle.Index
-                    + " scans=" + validationCount
-                    + " startAtom=" + firstSample.ProjectedAtomIndex
-                    + " startBestAtom=" + firstSample.BestAtomIndex
-                    + " startPos=(" + firstSample.VehiclePosition.x.ToString("F1")
-                    + "," + firstSample.VehiclePosition.y.ToString("F1")
-                    + "," + firstSample.VehiclePosition.z.ToString("F1") + ")"
-                    + " startDist=" + firstSample.ProjectedDistanceMeters.ToString("F1")
-                    + "/" + firstSample.BestDistanceMeters.ToString("F1")
-                    + " currentAtom=" + sample.ProjectedAtomIndex
-                    + " currentBestAtom=" + sample.BestAtomIndex
-                    + " currentPos=(" + sample.VehiclePosition.x.ToString("F1")
-                    + "," + sample.VehiclePosition.y.ToString("F1")
-                    + "," + sample.VehiclePosition.z.ToString("F1") + ")"
-                    + " currentDist=" + sample.ProjectedDistanceMeters.ToString("F1")
-                    + "/" + sample.BestDistanceMeters.ToString("F1")
-                    + (projectionInvalid ? " invalid=true" : " invalid=false"));
-            }
-
-            if (!projectionInvalid)
-                return false;
-
-            m_SuspectProgressProjectionInvalid[vehicle] = true;
-            return true;
-        }
-
-        private bool TryValidateSuspectVehicleProjection(
-            Entity vehicle,
-            Entity line,
-            LineTrackChain chain,
-            int projectedSegmentIndex,
-            int projectedAtomIndex,
-            out SuspectProgressSample sample,
-            out string validationSummary,
-            out bool projectionInvalid)
-        {
-            sample = default;
-            validationSummary = string.Empty;
-            projectionInvalid = false;
-
-            if (!TryGetVehicleWorldPosition(vehicle, out float3 vehiclePosition))
-                return false;
-
-            if (!TryGetTrackAtomWorldPosition(chain, projectedAtomIndex, out float3 projectedAtomPosition))
-                return false;
-
-            float projectedDistance = math.distance(vehiclePosition, projectedAtomPosition);
-            int candidateStartSegment = math.max(0, projectedSegmentIndex - SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS);
-            int candidateEndSegment = math.min(chain.SegmentRanges.Count - 1, projectedSegmentIndex + SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS);
-
-            int bestAtomIndex = -1;
-            float bestDistance = float.MaxValue;
-            for (int seg = candidateStartSegment; seg <= candidateEndSegment; seg++)
-            {
-                TrackSegmentRange candidateRange = chain.SegmentRanges[seg];
-                for (int atomIndex = candidateRange.StartAtomIndex; atomIndex < candidateRange.EndAtomIndexExclusive; atomIndex++)
-                {
-                    if (!TryGetTrackAtomWorldPosition(chain, atomIndex, out float3 atomPosition))
-                        continue;
-
-                    float distance = math.distance(vehiclePosition, atomPosition);
-                    if (distance < bestDistance)
-                    {
-                        bestDistance = distance;
-                        bestAtomIndex = atomIndex;
-                    }
-                }
-            }
-
-            if (bestAtomIndex < 0)
-                return false;
-
-            int atomDelta = math.abs(bestAtomIndex - projectedAtomIndex);
-            projectionInvalid =
-                atomDelta >= SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD
-                && projectedDistance - bestDistance >= SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS;
-
-            sample = new SuspectProgressSample(
-                projectedAtomIndex,
-                bestAtomIndex,
-                vehiclePosition,
-                projectedDistance,
-                bestDistance);
-
-            validationSummary = "vehicle=" + vehicle.Index
-                + " line=" + line.Index
-                + " projectedAtom=" + projectedAtomIndex
-                + " bestAtom=" + bestAtomIndex
-                + " projectedDist=" + projectedDistance.ToString("F1")
-                + "m bestDist=" + bestDistance.ToString("F1")
-                + "m delta=" + atomDelta
-                + (projectionInvalid ? " invalid=true" : " invalid=false");
-            return true;
         }
 
         internal bool TryProjectTrackModelRuntimePosition(

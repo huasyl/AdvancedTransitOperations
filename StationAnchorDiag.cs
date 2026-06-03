@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.Serialization;
 using Game.Routes;
 using Game.Simulation;
+using RapidTransitMod.Dispatch.Observation;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -91,7 +92,7 @@ namespace RapidTransitMod
     {
         private readonly EntityManager m_EntityManager;
         private readonly EntityQuery m_LineQuery;
-        private readonly StopDwellStore m_StopDwell;
+        private readonly Query m_ObsQuery;
         private readonly Game.Simulation.SimulationSystem m_SimulationSystem;
         private readonly CitySystem m_CitySystem;
         private readonly Action<string> m_LogInfo;
@@ -112,7 +113,7 @@ namespace RapidTransitMod
         public StationAnchorDiag(
             EntityManager entityManager,
             EntityQuery lineQuery,
-            StopDwellStore stopDwell,
+            Query obsQuery,
             SimulationSystem simulationSystem,
             CitySystem citySystem,
             Action<string> logInfo,
@@ -132,7 +133,7 @@ namespace RapidTransitMod
         {
             m_EntityManager = entityManager;
             m_LineQuery = lineQuery;
-            m_StopDwell = stopDwell;
+            m_ObsQuery = obsQuery;
             m_SimulationSystem = simulationSystem;
             m_CitySystem = citySystem;
             m_LogInfo = logInfo;
@@ -156,7 +157,7 @@ namespace RapidTransitMod
             try
             {
                 StationAnchorObservationDiagnosticsDto diagnostics = Build();
-                string json = DispatchWorkbenchJson.Serialize(diagnostics);
+                string json = Workbenches.Json.Write(diagnostics);
                 string logsDirectory = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     "AppData",
@@ -213,7 +214,7 @@ namespace RapidTransitMod
                         continue;
 
                     stopWaypointCount++;
-                    bool hasLegacy = m_StopDwell.TryWaypoint(m_MakeLegacyObservationKey(line, waypointIndex), out StopDwellObservation legacyObservation)
+                    bool hasLegacy = m_ObsQuery.TryWaypointDwell(m_MakeLegacyObservationKey(line, waypointIndex), out DwellObservation legacyObservation)
                         && legacyObservation.SampleCount > 0
                         && legacyObservation.AverageFrames > 0f;
 
@@ -233,7 +234,7 @@ namespace RapidTransitMod
                         mappingStatus = hasLegacy ? "mapped" : "mapped-no-legacy";
                         observationKey = m_MakeObservationKey(line, stationAnchorId);
 
-                        if (m_StopDwell.TryStation(observationKey, out StationStopDwellObservation anchorObservation)
+                        if (m_ObsQuery.TryStationDwell(observationKey, out StationDwellObservation anchorObservation)
                             && anchorObservation.SampleCount > 0
                             && anchorObservation.AverageFrames > 0f)
                         {
@@ -289,7 +290,7 @@ namespace RapidTransitMod
             StationAnchorGroupDto[] anchorGroups = groupObservationKeys
                 .Select((observationKey, index) =>
                 {
-                    m_StopDwell.TryStation(observationKey, out StationStopDwellObservation observation);
+                    m_ObsQuery.TryStationDwell(observationKey, out StationDwellObservation observation);
                     return new StationAnchorGroupDto
                     {
                         anchorObservationKey = observationKey,
@@ -321,8 +322,8 @@ namespace RapidTransitMod
                 },
                 stopDwell = new StationAnchorStopDwellSummaryDto
                 {
-                    legacyObservationCount = m_StopDwell.Waypoints.Count,
-                    anchorObservationCount = m_StopDwell.Stations.Count,
+                    legacyObservationCount = m_ObsQuery.WaypointDwellCount,
+                    anchorObservationCount = m_ObsQuery.StationDwellCount,
                     legacySampleCount = CountLegacySamples(),
                     anchorSampleCount = CountAnchorSamples(),
                     anchorMissingWriteCount = m_GetTotalAnchorMissing(),
@@ -332,9 +333,9 @@ namespace RapidTransitMod
                 },
                 persistence = new StationAnchorPersistenceSummaryDto
                 {
-                    legacyBufferCount = CountBuffer<StopDwellObservationElement>(),
+                    legacyBufferCount = CountBuffer<DwellObservationElement>(),
                     legacyRestoredCount = m_GetLegacyRestoredCount(),
-                    anchorBufferCount = CountBuffer<StationStopDwellObservationElement>(),
+                    anchorBufferCount = CountBuffer<StationDwellObservationElement>(),
                     anchorRestoredCount = m_GetAnchorRestoredCount(),
                     legacyPreserved = true
                 },
@@ -346,7 +347,7 @@ namespace RapidTransitMod
         private int CountLegacySamples()
         {
             int total = 0;
-            foreach (StopDwellObservation item in m_StopDwell.Waypoints.Values)
+            foreach (DwellObservation item in m_ObsQuery.WaypointDwells)
                 total += math.max(0, item.SampleCount);
             return total;
         }
@@ -354,7 +355,7 @@ namespace RapidTransitMod
         private int CountAnchorSamples()
         {
             int total = 0;
-            foreach (StationStopDwellObservation item in m_StopDwell.Stations.Values)
+            foreach (StationDwellObservation item in m_ObsQuery.StationDwells)
                 total += math.max(0, item.SampleCount);
             return total;
         }

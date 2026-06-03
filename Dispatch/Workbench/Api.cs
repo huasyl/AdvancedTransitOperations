@@ -1,0 +1,72 @@
+using System;
+using RapidTransitMod.Workbenches;
+
+namespace RapidTransitMod.Dispatch.Workbench
+{
+    internal static class Api
+    {
+        private const string LegacyReadonlyMessage = "Legacy EUIS workbench is now read-only. Use the Dispatch Workbench schedule panel to edit and apply timetables.";
+
+        internal static string Load()
+        {
+            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Load() ?? string.Empty;
+            UiEvents.PushJson(snapshotJson);
+            return snapshotJson;
+        }
+
+        internal static string Refresh()
+        {
+            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Refresh() ?? string.Empty;
+            UiEvents.PushJson(snapshotJson);
+            return snapshotJson;
+        }
+
+        internal static string Meta()
+        {
+            return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Meta() ?? string.Empty;
+        }
+
+        internal static string Save(string requestJson)
+        {
+            string resultJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Save(requestJson) ?? string.Empty;
+            return resultJson;
+        }
+
+        internal static string Start(string requestJson)
+        {
+            Mod.log.Info($"[WorkbenchSaveOperationBridge] startNativeSaveOperation length={requestJson?.Length ?? 0}");
+            return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Start(requestJson) ?? string.Empty;
+        }
+
+        internal static string Status(string operationId)
+        {
+            if (string.IsNullOrWhiteSpace(operationId))
+            {
+                Mod.log.Info("[WorkbenchSaveOperationBridge] getNativeSaveOperationStatus empty id");
+            }
+
+            return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Status(operationId) ?? string.Empty;
+        }
+
+        internal static string Legacy(string requestJson)
+        {
+            string resultJson = BuildLegacy();
+            return resultJson;
+        }
+
+        private static string BuildLegacy()
+        {
+            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Refresh() ?? string.Empty;
+            DispatchWorkbenchSnapshot snapshot = Json.Read<DispatchWorkbenchSnapshot>(snapshotJson);
+            DispatchWorkbenchSaveResult result = new DispatchWorkbenchSaveResult
+            {
+                success = false,
+                errors = new[] { LegacyReadonlyMessage },
+                warnings = Array.Empty<string>(),
+                version = snapshot?.version ?? string.Empty,
+                snapshot = snapshot
+            };
+            return Json.Write(result);
+        }
+    }
+}

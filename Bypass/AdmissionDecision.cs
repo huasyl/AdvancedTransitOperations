@@ -79,32 +79,6 @@ namespace RapidTransitMod.Bypass
         }
     }
 
-    internal readonly struct BypassTrackModelDecisionSnapshot
-    {
-        public readonly uint Frame;
-        public readonly Entity Line;
-        public readonly int CurrentWaypointIndex;
-        public readonly Entity CurrentBypassBuilding;
-        public readonly Entity NextBypassBuilding;
-        public readonly BypassTrackModelDecision Decision;
-
-        public BypassTrackModelDecisionSnapshot(
-            uint frame,
-            Entity line,
-            int currentWaypointIndex,
-            Entity currentBypassBuilding,
-            Entity nextBypassBuilding,
-            BypassTrackModelDecision decision)
-        {
-            Frame = frame;
-            Line = line;
-            CurrentWaypointIndex = currentWaypointIndex;
-            CurrentBypassBuilding = currentBypassBuilding;
-            NextBypassBuilding = nextBypassBuilding;
-            Decision = decision;
-        }
-    }
-
     internal readonly struct BypassLineExecutionModeSnapshot
     {
         public readonly uint LocalSceneVersion;

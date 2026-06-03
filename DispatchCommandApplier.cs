@@ -95,7 +95,7 @@ namespace RapidTransitMod
             EntityCommandBuffer ecb,
             string reason = "")
         {
-            vehicle = m_Runtime.ResolveRuntimeControllerVehicle(vehicle);
+            vehicle = m_Runtime.m_Resolve.RuntimeVehicle(vehicle);
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                 return;
 
@@ -236,7 +236,7 @@ namespace RapidTransitMod
                     HashSet<Entity> seenVehicles = new HashSet<Entity>();
                     for (int i = 0; i < routeVehicles.Length; i++)
                     {
-                        Entity vehicle = m_Runtime.ResolveRuntimeControllerVehicle(routeVehicles[i].m_Vehicle);
+                        Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(routeVehicles[i].m_Vehicle);
                         if (!EntityManager.Exists(vehicle) || !seenVehicles.Add(vehicle))
                             continue;
                         if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state) || state == VehicleState.Retiring)
@@ -860,7 +860,7 @@ namespace RapidTransitMod
         internal void ReleaseCompletedRetireHandoffs()
         {
             NativeList<Entity> handedOffKeys = new NativeList<Entity>(Allocator.Temp);
-            foreach (var kv in m_Runtime.m_VehicleRuntime.State)
+            foreach (var kv in m_Runtime.m_VehicleStateStore.State)
             {
                 Entity vehicle = kv.Key;
                 if (kv.Value != VehicleState.Retiring)
@@ -1026,7 +1026,7 @@ namespace RapidTransitMod
             m_RetireHandoffWatch.Remove(vehicle);
             m_Runtime.m_Announcements.RemoveVehicle(vehicle);
             m_Runtime.m_VehicleRegistry.Remove(vehicle);
-            m_Runtime.m_LapObservations.Remove(vehicle);
+            m_Runtime.m_ObsPersist.ClearLap(vehicle);
             m_Runtime.m_LastBoarding.Remove(vehicle);
             m_Runtime.m_CachedWpIdx.Remove(vehicle);
             m_Runtime.TrackProjection.ClearVehicle(vehicle);
@@ -1035,7 +1035,7 @@ namespace RapidTransitMod
             m_Runtime.m_RetireFixCooldownUntil.Remove(vehicle);
             m_Runtime.m_PreparingFixCooldownUntil.Remove(vehicle);
             m_Runtime.m_RetireFixCount.Remove(vehicle);
-            m_Runtime.m_StopDwell.Remove(vehicle);
+            m_Runtime.m_ObsPersist.ClearDwell(vehicle);
             m_Runtime.m_BVMisfire.Remove(vehicle);
             m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
             m_Runtime.Bypass.ClearVehicle(vehicle, reason);
@@ -1675,7 +1675,7 @@ namespace RapidTransitMod
                 return false;
             if (entity == ownerDepot)
                 return true;
-            return m_Runtime.CanonicalizeTransportDepotEntity(entity) == ownerDepot;
+            return m_Runtime.CanonDepot(entity) == ownerDepot;
         }
 
         private void MaybeLogRetireHandoffTrace(

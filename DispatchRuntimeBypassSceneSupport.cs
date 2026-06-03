@@ -241,14 +241,14 @@ namespace RapidTransitMod
             if (waypointIndex < 0 || waypointIndex >= waypoints.Length)
                 return Entity.Null;
 
-            Entity stopEntity = ResolveWorkbenchStopEntity(waypoints[waypointIndex].m_Waypoint);
+            Entity stopEntity = m_Resolve.Stop(waypoints[waypointIndex].m_Waypoint);
             if (stopEntity == Entity.Null)
                 return Entity.Null;
 
-            Entity building = FindTransportStationFromStop(stopEntity);
+            Entity building = m_Resolve.StationOf(stopEntity);
             if (building == Entity.Null)
-                building = ResolvePassingStationBuilding(stopEntity);
-            if (building == Entity.Null || !m_SelectionPanel.IsBypassStation(building))
+                building = m_Resolve.PassingStation(stopEntity);
+            if (building == Entity.Null || !IsBypassStationSetting(building))
                 return Entity.Null;
 
             return building;
@@ -259,12 +259,12 @@ namespace RapidTransitMod
             if (waypointIndex < 0 || waypointIndex >= waypoints.Length)
                 return Entity.Null;
 
-            Entity stopEntity = ResolveWorkbenchStopEntity(waypoints[waypointIndex].m_Waypoint);
+            Entity stopEntity = m_Resolve.Stop(waypoints[waypointIndex].m_Waypoint);
             if (stopEntity == Entity.Null)
                 return Entity.Null;
 
-            Entity building = FindTransportStationFromStop(stopEntity);
-            return building != Entity.Null ? building : ResolvePassingStationBuilding(stopEntity);
+            Entity building = m_Resolve.StationOf(stopEntity);
+            return building != Entity.Null ? building : m_Resolve.PassingStation(stopEntity);
         }
 
         internal bool TryFindWaypointIndexForBypassBuilding(

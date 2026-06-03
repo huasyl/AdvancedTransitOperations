@@ -56,7 +56,6 @@ namespace RapidTransitMod.Bypass
         private readonly Dictionary<Entity, string> m_SharedWindowAuditThrottleCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_SharedWindowAuditLastLogFrame = new Dictionary<Entity, uint>();
         private readonly Dictionary<SharedWindowPairStateKey, string> m_SharedWindowAuditPairStateCache = new Dictionary<SharedWindowPairStateKey, string>();
-        private readonly Dictionary<Entity, BypassTrackModelDecisionSnapshot> m_BypassTrackModelDecisionSnapshots = new Dictionary<Entity, BypassTrackModelDecisionSnapshot>();
         private uint m_BypassPerfProbeLastLogFrame;
         private ulong m_BypassPerfProbeCadenceCalls;
         private ulong m_BypassPerfProbeCadenceMisses;
@@ -118,7 +117,6 @@ namespace RapidTransitMod.Bypass
             m_SharedWindowAuditThrottleCache.Clear();
             m_SharedWindowAuditLastLogFrame.Clear();
             m_SharedWindowAuditPairStateCache.Clear();
-            m_BypassTrackModelDecisionSnapshots.Clear();
             m_LineOrderedRuntimeStates.Clear();
             m_LineOrderedRuntimeForceRefreshReasons.Clear();
             m_LineOrderedRuntimeLogCache.Clear();
@@ -393,11 +391,11 @@ namespace RapidTransitMod.Bypass
         internal Dictionary<Entity, BypassHoldCadenceSnapshot> Cadence => m_Decision.Cadence;
         internal Dictionary<Entity, BypassConflictEpisode> Conflict => m_Decision.Conflict;
 
-        private bool IsBypassRuntimeFeatureEnabled() => m_Runtime.IsBypassRuntimeFeatureEnabled();
-        private bool IsDispatchRuntimeManagedLine(Entity line) => m_Runtime.IsDispatchRuntimeManagedLine(line);
-        private bool IsAppliedWorkbenchLocalLine(Entity line) => m_Runtime.IsAppliedWorkbenchLocalLine(line);
-        private bool IsAppliedWorkbenchExpressLine(Entity line) => m_Runtime.IsAppliedWorkbenchExpressLine(line);
-        private Entity ResolveVehicleLine(Entity vehicle) => m_Runtime.ResolveVehicleLine(vehicle);
+        private bool BypassRun() => m_Runtime.IsBypassRuntimeFeatureEnabled();
+        private bool Managed(Entity line) => m_Runtime.IsDispatchRuntimeManagedLine(line);
+        private bool Local(Entity line) => m_Runtime.IsAppliedLocal(line);
+        private bool Express(Entity line) => m_Runtime.IsAppliedExpress(line);
+        private Entity ResolveLine(Entity vehicle) => m_Runtime.ResolveLine(vehicle);
         private bool IsLineOrderedRuntimeLoggingEnabled() => m_Runtime.IsLineOrderedRuntimeLoggingEnabled();
 
         internal void EnsureLineBypassExecutionModeReady(
@@ -529,9 +527,9 @@ namespace RapidTransitMod.Bypass
             return BypassExecutionMode.ComplexLineModel;
         }
 
-        bool IDecisionContext.FeatureEnabled() => IsBypassRuntimeFeatureEnabled();
+        bool IDecisionContext.FeatureEnabled() => BypassRun();
         bool IDecisionContext.TryScope(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex, out BypassControlScope scope, out string failureReason) => TryGetBypassControlScope(vehicle, line, waypoints, waypointIndex, out scope, out failureReason);
-        bool IDecisionContext.IsLocalLine(Entity line) => line != Entity.Null && IsDispatchRuntimeManagedLine(line) && IsAppliedWorkbenchLocalLine(line);
+        bool IDecisionContext.IsLocalLine(Entity line) => line != Entity.Null && Managed(line) && Local(line);
         bool IDecisionContext.Exists(Entity entity) => entity != Entity.Null && m_Runtime.EntityManager.Exists(entity);
         bool IDecisionContext.ShouldClearHoldAfterStationExit(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex) => ShouldClearHoldAfterStationExit(vehicle, line, waypoints, waypointIndex);
         bool IDecisionContext.BlockerAtStation(Entity blocker, Entity station) => IsExpressBlockerStillWithinBypassStation(blocker, station);
@@ -555,7 +553,7 @@ namespace RapidTransitMod.Bypass
             return ApplyDecisionVetoes(scope.Vehicle, scope.Line, waypoints, scope.WaypointIndex, scope.CurrentBypassBuilding, scope.NextBypassBuilding, shouldYield, reason, blocker);
         }
 
-        Entity IDecisionContext.ResolveLine(Entity vehicle) => ResolveVehicleLine(vehicle);
+        Entity IDecisionContext.ResolveLine(Entity vehicle) => ResolveLine(vehicle);
         uint IDecisionContext.HeldReevaluateFrames() => BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES;
         uint IDecisionContext.EpisodeRecheckFrames() => BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES;
         uint IDecisionContext.UnlatchedReevaluateFrames() => BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES;
@@ -1096,14 +1094,14 @@ namespace RapidTransitMod.Bypass
                 };
 
                 var routeWaypointBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
-                foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_Runtime.AppliedWorkbenchLines)
+                foreach (KeyValuePair<string, AppliedLine> entry in m_Runtime.AppliedLines)
                 {
                     Entity expressLine = entry.Value.LineEntity;
                     if (expressLine == Entity.Null
                         || expressLine == localChain.LineEntity
                         || !m_Runtime.EntityManager.Exists(expressLine)
                         || !m_Runtime.EntityManager.HasComponent<TransportLine>(expressLine)
-                        || !IsAppliedWorkbenchExpressLine(expressLine)
+                        || !Express(expressLine)
                         || !routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints))
                     {
                         continue;
@@ -2149,7 +2147,7 @@ namespace RapidTransitMod.Bypass
                 selectedTrunkSegment,
                 expressTrunkState,
                 effectiveRelevantSharedEntryAtomIndex);
-            int expressWaypointIndex = m_Runtime.ComputeWpIndex(expressVehicle, expressWaypoints);
+            int expressWaypointIndex = m_Runtime.ComputeWaypointIndex(expressVehicle, expressWaypoints);
             bool expressCurrentWaypointMatchesBypassBuilding = expressWaypointIndex >= 0
                 && expressWaypointIndex < expressWaypoints.Length
                 && m_Runtime.GetStationBuildingForWaypoint(expressWaypoints, expressWaypointIndex) == currentBypassBuilding;
@@ -2247,7 +2245,7 @@ namespace RapidTransitMod.Bypass
                     || expressLine == localLine
                     || !m_Runtime.EntityManager.Exists(expressLine)
                     || !m_Runtime.EntityManager.HasComponent<TransportLine>(expressLine)
-                    || !IsAppliedWorkbenchExpressLine(expressLine)
+                    || !Express(expressLine)
                     || !routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints))
                 {
                     continue;
@@ -2488,7 +2486,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            Entity atomBuilding = m_Runtime.ResolvePassingStationBuilding(chain.TrackAtoms[cursor.AtomCursorIndex].SourceTarget);
+            Entity atomBuilding = m_Runtime.ResolvePassingStation(chain.TrackAtoms[cursor.AtomCursorIndex].SourceTarget);
             return atomBuilding == bypassBuilding;
         }
 
@@ -2522,7 +2520,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            Entity atomBuilding = m_Runtime.ResolvePassingStationBuilding(chain.TrackAtoms[runtimePosition.CurrentAtomIndex].SourceTarget);
+            Entity atomBuilding = m_Runtime.ResolvePassingStation(chain.TrackAtoms[runtimePosition.CurrentAtomIndex].SourceTarget);
             return atomBuilding == bypassBuilding;
         }
 
@@ -5191,7 +5189,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            int liveWaypointIndex = m_Runtime.ComputeWpIndex(localVehicle, localWaypoints);
+            int liveWaypointIndex = m_Runtime.ComputeWaypointIndex(localVehicle, localWaypoints);
             if (liveWaypointIndex == currentWaypointIndex)
                 return true;
 
@@ -5241,7 +5239,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            Entity atomBuilding = m_Runtime.ResolvePassingStationBuilding(chain.TrackAtoms[runtimePosition.CurrentAtomIndex].SourceTarget);
+            Entity atomBuilding = m_Runtime.ResolvePassingStation(chain.TrackAtoms[runtimePosition.CurrentAtomIndex].SourceTarget);
             return atomBuilding == bypassBuilding;
         }
 
@@ -5625,70 +5623,6 @@ namespace RapidTransitMod.Bypass
             return true;
         }
 
-
-        private bool TryGetTrackModelLiveBypassDecision(
-            Entity localVehicle,
-            out bool shouldYield,
-            out string reason,
-            out Entity blockerVehicle)
-        {
-            shouldYield = false;
-            reason = "track-model-decision-unavailable";
-            blockerVehicle = Entity.Null;
-            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
-                || !snapshot.Decision.Available)
-            {
-                return false;
-            }
-
-            BypassTrackModelDecision decision = snapshot.Decision;
-            shouldYield = decision.ShouldYield;
-            reason = "track-model-" + decision.ReasonCode;
-            blockerVehicle = decision.BlockerVehicle;
-            return true;
-        }
-
-        private string GetTrackModelLiveDecisionLogSuffix(Entity localVehicle)
-        {
-            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
-                || !snapshot.Decision.Available)
-            {
-                return string.Empty;
-            }
-            return string.Empty;
-        }
-
-        internal bool ShouldTrackModelVetoLiveBypassYield(Entity localVehicle, out string trackModelReason)
-        {
-            trackModelReason = string.Empty;
-            if (!TryGetLatestBypassTrackModelDecisionSnapshot(localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
-                || !snapshot.Decision.Available
-                || snapshot.Decision.ShouldYield
-                || !snapshot.Decision.HasReliableLocalPosition)
-            {
-                return false;
-            }
-
-            BypassTrackModelDecision decision = snapshot.Decision;
-            switch (decision.ReasonCode)
-            {
-                case "no-shared-protected-interval":
-                case "local-cleared-protected-interval":
-                case "no-express-in-protected-interval":
-                case "no-express-in-shared-window":
-                    trackModelReason = decision.ReasonCode;
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
-        private bool TryGetLatestBypassTrackModelDecisionSnapshot(Entity localVehicle, out BypassTrackModelDecisionSnapshot snapshot)
-        {
-            snapshot = default;
-            return localVehicle != Entity.Null
-                && m_BypassTrackModelDecisionSnapshots.TryGetValue(localVehicle, out snapshot);
-        }
 
         private void LogSharedWindowFinalReject(
             Entity localVehicle,

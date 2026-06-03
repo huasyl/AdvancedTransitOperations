@@ -552,7 +552,7 @@ namespace RapidTransitMod.TrackModel
         private List<Entity> CollectReplayDumpTargetLines(NativeArray<Entity> allLines)
         {
             HashSet<Entity> lines = new HashSet<Entity>();
-            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            foreach (KeyValuePair<string, AppliedLine> entry in m_AppliedLines)
             {
                 Entity line = entry.Value.LineEntity;
                 if (line != Entity.Null && EntityManager.Exists(line))
@@ -601,8 +601,8 @@ namespace RapidTransitMod.TrackModel
             sb.AppendLine("--- line ---");
             sb.Append("line=").Append(line.Index)
               .Append(" label=").Append(FormatReadableLineLabel(line))
-              .Append(" local=").Append(IsAppliedWorkbenchLocalLine(line) ? "1" : "0")
-              .Append(" express=").Append(IsAppliedWorkbenchExpressLine(line) ? "1" : "0")
+              .Append(" local=").Append(IsAppliedLocal(line) ? "1" : "0")
+              .Append(" express=").Append(IsAppliedExpress(line) ? "1" : "0")
               .Append(" waypoints=").Append(waypoints.Length)
               .Append(" segments=").Append(chain.SegmentRanges.Count)
               .Append(" atoms=").Append(chain.TrackAtoms.Count)

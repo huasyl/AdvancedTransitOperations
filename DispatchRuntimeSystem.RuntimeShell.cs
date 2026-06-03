@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Colossal.Serialization.Entities;
 using Game;
 using Game.Common;
 using Game.Routes;
@@ -16,7 +17,7 @@ namespace RapidTransitMod
         protected override void OnUpdate()
         {
             if (GameManager.instance.gameMode != GameMode.Game) return;
-            m_SelectionPanel.UpdateVersionBucket();
+            m_SelectPanel.UpdateVersionBucket();
 
             if (Input.GetKey(KeyCode.LeftControl) &&
                 Input.GetKey(KeyCode.LeftAlt) &&
@@ -78,18 +79,18 @@ namespace RapidTransitMod
             var ecb = m_EndFrameBarrier.CreateCommandBuffer();
             int nowMin = (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
 
-            EnsureLapCacheBuffer();
-            EnsureVehicleCacheBuffer();
-            EnsureDispatchCacheBuffer();
-            if (IsStationStopDwellObservationPersistenceEnabled())
+            m_LapCache.Ensure();
+            m_VehicleCache.Ensure();
+            m_DispatchCache.Ensure();
+            if (IsStationDwellObservationPersistenceEnabled())
             {
-                EnsureStationStopDwellObservationBuffer();
-                RestoreStationStopDwellObservationsFromBuffer();
+                m_ObsBuffers.EnsureStationDwell();
+                m_RuntimeCache.LoadStationDwell();
             }
             if (IsTraversalSliceObservationPersistenceEnabled())
             {
-                EnsureTraversalSliceObservationBuffer();
-                RestoreTraversalSliceObservationsFromBuffer();
+                m_ObsBuffers.EnsureSlice();
+                m_RuntimeCache.LoadSlice();
             }
             bool runFullRegisterSweep = nowMin != m_LastRegisterSweepMinute;
             try
@@ -116,11 +117,27 @@ namespace RapidTransitMod
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
             {
-                FlushAllVehicleStates();
+                m_VehicleCache.Save();
                 m_LastVehicleCacheFlushFrame = nowFrame;
             }
 
             m_Bypass.FlushProbeLogs(nowFrame);
+        }
+
+        protected override void OnGameLoaded(Context serializationContext)
+        {
+            base.OnGameLoaded(serializationContext);
+            m_WorkbenchBridge.Reset();
+            m_WorkbenchBridge.Restore();
+            m_WorkbenchBridge.Applied().Load();
+            try
+            {
+                Workbenches.UiEvents.Push(m_WorkbenchBridge.Build(m_WorkbenchBridge.Drafts().Preferred()));
+            }
+            catch (Exception ex)
+            {
+                m_WorkbenchBridge.Ui().Fault("OnGameLoaded.NotifyWorkbenchSnapshotChanged", ex);
+            }
         }
 
         private void SafeClearAll()
@@ -134,7 +151,7 @@ namespace RapidTransitMod
             }
             ents.Dispose();
             m_VehicleRegistry.Clear();
-            m_LapObservations.Clear();
+            m_ObsPersist.ClearLaps();
             m_UICache.Clear();
             m_LastBoarding.Clear();
             m_CachedWpIdx.Clear();
@@ -151,14 +168,14 @@ namespace RapidTransitMod
             m_LastSpawnBlockedLogFrame.Clear();
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
-            m_StopDwell.Clear();
-            m_StopDwellObservationBufferReady = false;
-            m_StopDwellObservationCacheLoaded = false;
-            m_StationStopDwellObservationBufferReady = false;
-            m_StationStopDwellObservationCacheLoaded = false;
-            ClearStationAnchorObservationDiagnosticsState();
-            m_TraversalSlices.Clear();
-            m_RuntimeObservations.Clear();
+            m_ObsPersist.ClearDwell();
+            m_DwellObservationBufferReady = false;
+            m_DwellObservationCacheLoaded = false;
+            m_StationDwellObservationBufferReady = false;
+            m_StationDwellObservationCacheLoaded = false;
+            m_Observation.ClearStationAnchorObservationDiagnosticsState();
+            m_ObsPersist.ClearSlices();
+            m_Obs.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
             m_JustLaunched.Clear();
@@ -185,7 +202,7 @@ namespace RapidTransitMod
             m_LastPuppetMasterMinute = -1;
             m_LastRegisterSweepMinute = -1;
             m_LastSchedulerTickMinute = -1;
-            m_SelectionPanel.ClearDebugSummaries();
+            m_SelectPanel.ClearDebugSummaries();
             ClearDispatchLogCaches();
             log.Info("[清场] 已清除所有公共交通车辆");
         }
@@ -194,7 +211,7 @@ namespace RapidTransitMod
         {
             m_Announcements.Clear();
             m_VehicleRegistry.Clear();
-            m_LapObservations.Clear();
+            m_ObsPersist.ClearLaps();
             m_UICache.Clear();
             m_LastBoarding.Clear();
             m_CachedWpIdx.Clear();
@@ -211,14 +228,14 @@ namespace RapidTransitMod
             m_LastSpawnBlockedLogFrame.Clear();
             m_LastScheduleDiagnosticLogFrame.Clear();
             ClearLineTimeProfiles();
-            m_StopDwell.Clear();
-            m_StopDwellObservationBufferReady = false;
-            m_StopDwellObservationCacheLoaded = false;
-            m_StationStopDwellObservationBufferReady = false;
-            m_StationStopDwellObservationCacheLoaded = false;
-            ClearStationAnchorObservationDiagnosticsState();
-            m_TraversalSlices.Clear();
-            m_RuntimeObservations.Clear();
+            m_ObsPersist.ClearDwell();
+            m_DwellObservationBufferReady = false;
+            m_DwellObservationCacheLoaded = false;
+            m_StationDwellObservationBufferReady = false;
+            m_StationDwellObservationCacheLoaded = false;
+            m_Observation.ClearStationAnchorObservationDiagnosticsState();
+            m_ObsPersist.ClearSlices();
+            m_Obs.Clear();
             m_TraversalSliceObservationBufferReady = false;
             m_TraversalSliceObservationCacheLoaded = false;
             m_JustLaunched.Clear();
@@ -241,7 +258,7 @@ namespace RapidTransitMod
             m_LastPuppetMasterMinute = -1;
             m_LastRegisterSweepMinute = -1;
             m_LastSchedulerTickMinute = -1;
-            m_SelectionPanel.ClearDebugSummaries();
+            m_SelectPanel.ClearDebugSummaries();
             ClearDispatchLogCaches();
             log.Info("[启动] 已清空跨档运行态缓存");
         }
@@ -255,7 +272,7 @@ namespace RapidTransitMod
                 foreach (var line in lines)
                 {
                     if (!EntityManager.Exists(line)) continue;
-                    int actualCount = CountActiveVehicles(line, rvBuffers);
+                    int actualCount = m_LineVehicles.Count(line, rvBuffers);
                     if (!m_SpawningLines.ContainsKey(line))
                     {
                         m_SpawningLines[line] = actualCount + 1;

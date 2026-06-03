@@ -23,7 +23,7 @@ namespace RapidTransitMod.TrackModel
             m_Builder.Track.Clear();
             m_Builder.Physical.Clear();
 
-            foreach (KeyValuePair<string, AppliedWorkbenchLineState> entry in m_AppliedWorkbenchLines)
+            foreach (KeyValuePair<string, AppliedLine> entry in m_AppliedLines)
             {
                 Entity line = entry.Value.LineEntity;
                 if (line == Entity.Null

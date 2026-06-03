@@ -1,4 +1,5 @@
 using Unity.Entities;
+using RapidTransitMod.Dispatch.Observation;
 
 namespace RapidTransitMod
 {
@@ -29,17 +30,17 @@ namespace RapidTransitMod
                 m_StationAnchorDiag = new StationAnchorDiag(
                     m_Runtime.EntityManager,
                     m_Runtime.m_LineQuery,
-                    m_Runtime.m_StopDwell,
+                    m_Runtime.m_ObsQuery,
                     m_Runtime.m_SimulationSystem,
                     m_Runtime.m_CitySystem,
                     message => m_Runtime.log.Info(message),
-                    m_Runtime.GetWorkbenchLineId,
-                    m_Runtime.ResolveWorkbenchStopEntity,
-                    m_Runtime.ResolveWorkbenchStationName,
-                    DispatchRuntimeSystem.MakeLineWaypointStopObservationKey,
+                    m_Runtime.LineId,
+                    m_Runtime.m_Resolve.Stop,
+                    m_Runtime.m_Resolve.StationName,
+                    Keys.WaypointDwell,
                     (line, waypointIndex) =>
                     {
-                        if (!m_Runtime.TryResolveStationStopDwellAnchor(line, waypointIndex, out var anchor))
+                        if (!m_Runtime.m_Observation.DwellAnchor(line, waypointIndex, out var anchor))
                             return (false, string.Empty, -1);
 
                         return (
@@ -47,7 +48,7 @@ namespace RapidTransitMod
                             anchor.StationAnchorId,
                             anchor.BuildingEntity == Entity.Null ? -1 : anchor.BuildingEntity.Index);
                     },
-                    m_Runtime.MakeStationStopDwellObservationKey,
+                    m_Runtime.m_Observation.DwellKey,
                     () => m_Runtime.m_StationAnchorDiagTotalAnchorMissing,
                     () => m_Runtime.m_StationAnchorDiagTotalAnchorRejectedOriginOrTerminal,
                     () => m_Runtime.m_StationAnchorDiagTotalSuspiciousOriginOrTerminal,
