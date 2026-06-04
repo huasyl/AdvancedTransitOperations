@@ -171,7 +171,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     StopSvc().Name,
                     Ids().Get,
                     line => m_Runtime.m_LineView.Kind(line, null),
-                    m_Runtime.StopObservation,
+                    m_Runtime.m_Observation.Stop,
                     evt => TraceLog.Write(message => Mod.log.Info(message), evt)));
             return m_ObsStops;
         }
@@ -225,7 +225,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Rows.Times,
                     Save,
                     Sync().Sync,
-                    lineId => m_Runtime.SeedObservation(
+                    lineId => m_Runtime.m_Observation.Seed(
                         !string.IsNullOrEmpty(Drafts().Preferred())
                             ? Drafts().Preferred()
                             : lineId),
@@ -312,7 +312,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 () => Query().GetDepots(),
                 () => m_Version,
                 () => NextVersion(),
-                m_Runtime.SeedObservation,
+                m_Runtime.m_Observation.Seed,
                 () => Applied().Save(),
                 Clear,
                 Ui(),

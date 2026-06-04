@@ -389,7 +389,7 @@ namespace RapidTransitMod
             if (DispatchRuntimeSystem.Instance == null)
                 return;
 
-            DispatchRuntimeSystem.Instance.RequestDumpTrackModelSnapshot();
+            DispatchRuntimeSystem.Instance.m_TrackModel.DumpTrackModelSnapshot();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }
@@ -409,7 +409,7 @@ namespace RapidTransitMod
             if (DispatchRuntimeSystem.Instance == null)
                 return;
 
-            DispatchRuntimeSystem.Instance.DumpObservation();
+            DispatchRuntimeSystem.Instance.m_Observation.Dump();
             m_LastVehicle = Entity.Null;
             m_LastSnapshotVersion = 0;
         }

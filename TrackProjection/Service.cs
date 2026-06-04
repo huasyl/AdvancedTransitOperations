@@ -13,34 +13,32 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.TrackProjection
 {
-    internal sealed partial class TrackProjectionService
+    internal sealed class TrackProjectionService
     {
+        internal const uint SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES = 60;
+        internal const int SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS = 1;
+        internal const int SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD = 12;
+        internal const float SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS = 120f;
+
         private readonly ITrackProjectionRuntimeContext m_Runtime;
+        private readonly ProgressCheck m_ProgressCheck;
 
         internal TrackProjectionService(ITrackProjectionRuntimeContext runtime)
         {
             m_Runtime = runtime;
             m_Cursors = new VehicleTrackCursorCache();
+            m_ProgressCheck = new ProgressCheck(this);
         }
-        private const uint SUSPECT_PROGRESS_VALIDATE_INTERVAL_FRAMES = 60;
-        private const int SUSPECT_PROGRESS_CANDIDATE_SEGMENT_RADIUS = 1;
-        private const int SUSPECT_PROGRESS_ATOM_MISMATCH_THRESHOLD = 12;
-        private const float SUSPECT_PROGRESS_POSITION_IMPROVEMENT_METERS = 120f;
 
+        internal ITrackProjectionRuntimeContext Runtime => m_Runtime;
+        internal VehicleTrackCursorCache Cursors => m_Cursors;
         private readonly VehicleTrackCursorCache m_Cursors;
         internal readonly Dictionary<Entity, LineRunningVehicleFrameSnapshot> LineRunningVehicleFrameSnapshots = new Dictionary<Entity, LineRunningVehicleFrameSnapshot>();
 
         internal void Clear()
         {
             m_Cursors.Clear();
-            m_SuspectProgressSinceFrame.Clear();
-            m_SuspectProgressLastValidationFrame.Clear();
-            m_SuspectProgressProjectionInvalid.Clear();
-            m_SuspectProgressReason.Clear();
-            m_SuspectProgressLogCache.Clear();
-            m_SuspectProgressRecoveryWaypoint.Clear();
-            m_SuspectProgressValidationCount.Clear();
-            m_SuspectProgressFirstSample.Clear();
+            m_ProgressCheck.Clear();
         }
 
         internal void ClearLineRunningVehicleSnapshots()
@@ -153,6 +151,12 @@ namespace RapidTransitMod.TrackProjection
             ClearVehicleProgressSuspect(vehicle);
             m_Cursors.Remove(vehicle);
         }
+
+        internal void MarkVehicleProgressSuspect(Entity vehicle, string reason) => m_ProgressCheck.MarkVehicleProgressSuspect(vehicle, reason);
+        internal void ClearVehicleProgressSuspect(Entity vehicle, string reason = null) => m_ProgressCheck.ClearVehicleProgressSuspect(vehicle, reason);
+        internal void NoteVehicleProgressSuspectRecoveryBoarding(Entity vehicle, int waypointIndex) => m_ProgressCheck.NoteVehicleProgressSuspectRecoveryBoarding(vehicle, waypointIndex);
+        internal void TryClearVehicleProgressSuspectOnStableDeparture(Entity vehicle, int departedWaypointIndex) => m_ProgressCheck.TryClearVehicleProgressSuspectOnStableDeparture(vehicle, departedWaypointIndex);
+        internal bool IsVehicleProgressProjectionInvalid(Entity vehicle, Entity line, LineTrackChain chain, int segmentIndex, int projectedAtomIndex) => m_ProgressCheck.IsVehicleProgressProjectionInvalid(vehicle, line, chain, segmentIndex, projectedAtomIndex);
 
         private bool TryRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition) => m_Runtime.TryRouteProgress(vehicle, out nextWaypointIndex, out segmentPosition);
         private static bool TryResolveTraversalOrderingPhase(LineTrackChain chain, int atomIndex, out int traversalPhaseIndex, out int phaseStartAtomIndex, out int phaseEndAtomExclusive, out int nextTurnbackBoundaryAtomIndex)
@@ -349,7 +353,7 @@ namespace RapidTransitMod.TrackProjection
             return waypointDelta >= 1 && !wrappedNeighbor;
         }
 
-        private bool TryGetVehicleWorldPosition(Entity vehicle, out float3 position)
+        internal bool TryGetVehicleWorldPosition(Entity vehicle, out float3 position)
         {
             position = default;
             if (!m_Runtime.EntityManager.Exists(vehicle))

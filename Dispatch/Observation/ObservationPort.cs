@@ -1,6 +1,14 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using Game.Common;
 using Game.Objects;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.Dispatch.Workbench;
+using RapidTransitMod.TrackModel;
+using RapidTransitMod.TrackProjection;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -32,10 +40,128 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Capture.FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame, exitAtomIndex, exitAtomPosition01);
         }
 
+        public bool LapTiming(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out float runFrames,
+            out float stopFrames,
+            out int stopCount,
+            out int passCount)
+        {
+            return m_Capture.TryGetTraversalProfileLapTiming(line, waypoints, out runFrames, out stopFrames, out stopCount, out passCount);
+        }
+
+        public void UpdateSlice(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame)
+        {
+            m_Capture.UpdateVehicleTraversalSliceObservation(vehicle, line, waypoints, nowFrame);
+        }
+
+        public bool ShouldSample(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame)
+        {
+            return m_Capture.ShouldSampleVehicleTraversalSliceObservation(vehicle, line, waypoints, nowFrame);
+        }
+
+        public bool BuildPlan(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out TraversalSliceSamplingPlan plan)
+        {
+            return m_Capture.TryBuildTraversalSliceSamplingPlan(vehicle, line, waypoints, out plan);
+        }
+
+        public bool BuildPlanRaw(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            out TraversalSliceSamplingPlan plan)
+        {
+            return m_Capture.TryBuildTraversalSliceSamplingPlanUncached(vehicle, waypoints, chain, out plan);
+        }
+
+        public void RecordSample(
+            Entity vehicle,
+            Entity line,
+            LineTrackChain chain,
+            int sliceIndex,
+            VehicleTrackCursor cursor,
+            uint nowFrame)
+        {
+            m_Capture.MaybeRecordTraversalPositionSample(vehicle, line, chain, sliceIndex, cursor, nowFrame);
+        }
+
+        public bool CurrentSlice(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out LineTrackChain chain,
+            out int sliceIndex,
+            out VehicleTrackCursor cursor)
+        {
+            return m_Capture.TryGetCurrentTraversalRunSlice(vehicle, line, waypoints, out chain, out sliceIndex, out cursor);
+        }
+
+        public bool EffectiveFrames(Entity line, TraversalRunSlice slice, out float frames)
+        {
+            return m_Capture.TryGetEffectiveTraversalRunSliceFrames(line, slice, out frames);
+        }
+
+        public void DebugStart(Entity vehicle, TraversalRunSlice slice, int atomIndex, float atomPosition01)
+        {
+            m_Capture.RecordTraversalSliceLapDebugStart(vehicle, slice, atomIndex, atomPosition01);
+        }
+
+        public void DebugDrop(Entity vehicle, int sliceIndex)
+        {
+            m_Capture.RecordTraversalSliceLapDebugDropped(vehicle, sliceIndex);
+        }
+
+        public void DebugFinish(Entity vehicle, int sliceIndex, float observedFrames)
+        {
+            m_Capture.RecordTraversalSliceLapDebugFinalize(vehicle, sliceIndex, observedFrames);
+        }
+
+        public void ClearDebug(Entity vehicle)
+        {
+            m_Capture.ClearVehicleTraversalSliceLapDebug(vehicle);
+        }
+
         public bool DwellAnchor(Entity line, int waypointIndex, out StationDwellAnchor anchor)
         {
             return m_Capture.TryStationDwellAnchor(line, waypointIndex, out anchor);
         }
+
+        public bool TryStationDwell(string key, out StationDwellObservation observation)
+        {
+            return m_Runtime.m_ObsQuery.TryStationDwell(key, out observation);
+        }
+
+        public bool TrySlice(ulong key, out TraversalSliceObservation observation)
+        {
+            return m_Runtime.m_ObsQuery.TrySlice(key, out observation);
+        }
+
+        public bool TryLapFrames(Entity vehicle, out uint lapFrames)
+        {
+            return m_Runtime.m_ObsQuery.TryLapFrames(vehicle, out lapFrames);
+        }
+
+        public bool TryLapStartFrame(Entity vehicle, out uint lapStartFrame)
+        {
+            return m_Runtime.m_ObsQuery.TryLapStartFrame(vehicle, out lapStartFrame);
+        }
+
+        public IReadOnlyList<TraversalSliceActualSample> ActualSamples => m_Runtime.m_ObsQuery.ActualSamples;
+
+        public IReadOnlyList<TraversalPositionSample> PositionSamples => m_Runtime.m_ObsQuery.PositionSamples;
 
         public string DwellKey(Entity line, string stationAnchorId)
         {
@@ -60,7 +186,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 if (m_Runtime.m_ObsPersist.RemoveDwellStart(vehicle))
                 {
-                    m_Runtime.ClearForcedMidStopClosingConsist(vehicle);
+                    ClearForcedMidStop(vehicle);
                     m_Runtime.log.Info("[StopDwellEnd] line" + line.Index
                         + " vehicle" + vehicle.Index
                         + " boarding=" + boarding
@@ -103,7 +229,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             if (line != Entity.Null
                 && waypointIndex >= 0
-                && m_Runtime.TryGetObservedWaypointStopFrames(line, waypointIndex, out float observationFrames)
+                && TryGetObservedWaypointStopFrames(line, waypointIndex, out float observationFrames)
                 && observationFrames > configuredFrames)
             {
                 earlyCloseFrames = math.min(
@@ -142,7 +268,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 || currentWaypointIndex <= 0
                 || currentWaypointIndex >= waypoints.Length
                 || currentBypassBuilding == Entity.Null
-                || m_Runtime.GetBypassBuildingForWaypoint(waypoints, currentWaypointIndex) != currentBypassBuilding
+                || m_Runtime.m_SharedCorridor.GetBypassBuildingForWaypoint(waypoints, currentWaypointIndex) != currentBypassBuilding
                 || !m_Runtime.EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
             {
                 return false;
@@ -184,7 +310,7 @@ namespace RapidTransitMod.Dispatch.Observation
             return true;
         }
 
-        public bool Head(Entity vehicle, int waypointIndex, out DispatchRuntimeSystem.TrainHeadSnapshot snapshot)
+        public bool Head(Entity vehicle, int waypointIndex, out TrainHeadSnapshot snapshot)
         {
             snapshot = default;
             if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
@@ -209,7 +335,7 @@ namespace RapidTransitMod.Dispatch.Observation
             bool reversed = m_Runtime.EntityManager.HasComponent<Train>(headVehicle)
                 && (m_Runtime.EntityManager.GetComponentData<Train>(headVehicle).m_Flags & TrainFlags.Reversed) != 0;
 
-            snapshot = new DispatchRuntimeSystem.TrainHeadSnapshot(
+            snapshot = new TrainHeadSnapshot(
                 m_Runtime.m_SimulationSystem.frameIndex,
                 headVehicle,
                 currentLane.m_Front.m_Lane,
@@ -274,6 +400,220 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_DispatchCache.Update(line, vehicle, frames);
         }
 
+        public string Json()
+        {
+            return m_Runtime.m_ObsRecorder?.SnapshotJson() ?? string.Empty;
+        }
+
+        public void Dump()
+        {
+            try
+            {
+                string json = Json();
+                string logsDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "AppData",
+                    "LocalLow",
+                    "Colossal Order",
+                    "Cities Skylines II",
+                    "Logs");
+                Directory.CreateDirectory(logsDirectory);
+                string filePath = Path.Combine(logsDirectory, "RapidTransitMod-runtime-observation-latest.json");
+                File.WriteAllText(filePath, json);
+                Mod.log.Info("[ObservationDump] exported to " + filePath);
+            }
+            catch (Exception ex)
+            {
+                Mod.log.Info("[ObservationDump] export failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        public void Seed(string selectedLineId)
+        {
+            m_Runtime.m_ObsRecorder?.Seed(selectedLineId);
+        }
+
+        public IReadOnlyDictionary<string, LinePlan> Lines()
+        {
+            Dictionary<string, LinePlan> lines = new Dictionary<string, LinePlan>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, AppliedLine> entry in m_Runtime.AppliedLines)
+            {
+                AppliedLine applied = entry.Value;
+                if (applied == null)
+                    continue;
+
+                LinePlan line = new LinePlan
+                {
+                    Line = applied.LineEntity
+                };
+
+                if (applied.StagedRows != null)
+                {
+                    foreach (DispatchWorkbenchStagedRowDto row in applied.StagedRows)
+                    {
+                        if (row == null)
+                            continue;
+
+                        line.Rows.Add(new RowPlan
+                        {
+                            Id = row.id ?? string.Empty,
+                            LineId = row.lineId ?? string.Empty,
+                            Time = row.time ?? string.Empty,
+                            Kind = row.kind ?? string.Empty,
+                            Source = row.source ?? string.Empty
+                        });
+                    }
+                }
+
+                lines[entry.Key] = line;
+            }
+
+            return lines;
+        }
+
+        public ContractDto[] Contracts()
+        {
+            List<ContractDto> contracts = new List<ContractDto>();
+            foreach (KeyValuePair<string, DispatchWorkbenchPlannerImportContractDto> entry in m_Runtime.Applied().Refs.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                DispatchWorkbenchPlannerImportContractDto contract = entry.Value;
+                if (contract?.plan == null)
+                    continue;
+
+                ChangeDto[] changedRows = (contract.plan.changedWindows ?? Array.Empty<DispatchPlannerChangedWindowDto>())
+                    .SelectMany(window => window?.rowDiffs ?? Array.Empty<DispatchPlannerChangedRowDto>())
+                    .Select(CopyChange)
+                    .ToArray();
+                contracts.Add(new ContractDto
+                {
+                    draftKey = entry.Key,
+                    importedFrom = contract.importedFrom ?? string.Empty,
+                    importedPlanId = contract.importedPlanId ?? contract.plan.planId ?? string.Empty,
+                    importedObjectiveId = contract.importedObjectiveId ?? contract.plan.objectiveId ?? string.Empty,
+                    importedLineIds = contract.importedLineIds ?? Array.Empty<string>(),
+                    requestEcho = CopyEcho(contract.requestEcho),
+                    lineRoleSummary = CopyRoleSummary(contract.plan.lineRoleSummary),
+                    selectedBypassStationIds = contract.plan.selectedBypassStationIds ?? Array.Empty<string>(),
+                    changedRows = changedRows,
+                    structuredActions = (contract.plan.structuredScheduleActions ?? Array.Empty<DispatchPlannerScheduleActionDto>())
+                        .Select(CopyAction)
+                        .ToArray(),
+                    riskItems = (contract.plan.riskItems ?? Array.Empty<DispatchPlannerRiskItemDto>())
+                        .Select(CopyRisk)
+                        .ToArray()
+                });
+            }
+
+            return contracts.ToArray();
+        }
+
+        public void BindTarget(Entity line, Entity vehicle, int targetMinute, uint nowFrame, string reasonCode)
+        {
+            m_Runtime.m_ObsRecorder?.TargetBound(line, vehicle, targetMinute, nowFrame, reasonCode);
+        }
+
+        public void Launch(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)
+        {
+            m_Runtime.m_ObsRecorder?.Launch(line, vehicle, targetMinute, actualMinute, launchFrame, lateDispatch);
+        }
+
+        public void Stop(
+            Entity vehicle,
+            Entity line,
+            Entity station,
+            ResolvedStopKind kind,
+            int waypointIndex,
+            bool isOrigin,
+            bool arrival,
+            string clockTime,
+            uint frame)
+        {
+            m_Runtime.m_ObsRecorder?.Stop(vehicle, line, station, kind, waypointIndex, isOrigin, arrival, clockTime, frame);
+        }
+
+        public void Hold(
+            Entity vehicle,
+            Entity blocker,
+            Entity holdStation,
+            int waypointIndex,
+            uint nowFrame,
+            string reasonCode)
+        {
+            m_Runtime.m_ObsRecorder?.Hold(vehicle, blocker, holdStation, waypointIndex, nowFrame, reasonCode);
+        }
+
+        public void Release(Entity vehicle, Entity blocker, uint nowFrame, string releaseReason)
+        {
+            m_Runtime.m_ObsRecorder?.Release(vehicle, blocker, nowFrame, releaseReason);
+        }
+
+        public int TargetMin(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return -1;
+            if (m_Runtime.m_VehicleStateStore.CurrentSlot.IsCreated && m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlot))
+                return currentSlot;
+            if (m_Runtime.m_VehicleStateStore.TargetMin.IsCreated && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
+                return targetMinute;
+            return -1;
+        }
+
+        public bool IsWaitingOriginDwell(Entity vehicle, uint nowFrame)
+        {
+            return m_Runtime.m_VehicleView.TryGetReady(vehicle, out uint readyFrame) && nowFrame < readyFrame;
+        }
+
+        public void ClearForcedMidStop(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+            m_Runtime.m_RuntimeLog.m_MidStopTimeoutLogCache.Remove(vehicle);
+        }
+
+        public bool IsSuppressedMidStopGhost(
+            Entity vehicle,
+            Target target,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame,
+            out int targetWaypointIndex)
+        {
+            targetWaypointIndex = -1;
+            if (vehicle == Entity.Null
+                || !m_Runtime.m_ForcedMidStopBoardingGraceUntil.TryGetValue(vehicle, out uint graceUntil))
+            {
+                return false;
+            }
+
+            if (nowFrame >= graceUntil)
+            {
+                m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+                return false;
+            }
+
+            if (!m_Runtime.EntityManager.HasComponent<Waypoint>(target.m_Target))
+                return false;
+
+            targetWaypointIndex = m_Runtime.EntityManager.GetComponentData<Waypoint>(target.m_Target).m_Index;
+            if (targetWaypointIndex < 0 || targetWaypointIndex >= waypoints.Length)
+                return false;
+
+            Entity targetStop = GetConnectedStopForWaypoint(waypoints[targetWaypointIndex].m_Waypoint);
+            if (targetStop == Entity.Null
+                || !m_Runtime.EntityManager.HasComponent<BoardingVehicle>(targetStop)
+                || m_Runtime.EntityManager.GetComponentData<BoardingVehicle>(targetStop).m_Vehicle != vehicle
+                || !m_Runtime.EntityManager.HasComponent<Game.Objects.Transform>(targetStop)
+                || !m_Runtime.EntityManager.HasComponent<Game.Objects.Transform>(vehicle))
+            {
+                return false;
+            }
+
+            float3 vehiclePosition = m_Runtime.EntityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position;
+            float3 stopPosition = m_Runtime.EntityManager.GetComponentData<Game.Objects.Transform>(targetStop).m_Position;
+            return math.distance(vehiclePosition, stopPosition) > DispatchRuntimeSystem.AT_STOP_MAX_DIST;
+        }
+
         private uint ComputeDeadline(Entity line, int waypointIndex, uint dwellSinceFrame, int maxDwellMinutes)
         {
             float configuredFrames = math.max(0f, maxDwellMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
@@ -281,7 +621,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             if (line != Entity.Null
                 && waypointIndex >= 0
-                && m_Runtime.TryGetObservedWaypointStopFrames(line, waypointIndex, out float observationFrames)
+                && TryGetObservedWaypointStopFrames(line, waypointIndex, out float observationFrames)
                 && observationFrames > configuredFrames)
             {
                 earlyCloseFrames = math.min(
@@ -301,6 +641,21 @@ namespace RapidTransitMod.Dispatch.Observation
 
             float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);
             return dwellSinceFrame + (uint)math.round(adjustedFrames);
+        }
+
+        private Entity GetConnectedStopForWaypoint(Entity waypoint)
+        {
+            if (waypoint == Entity.Null
+                || !m_Runtime.EntityManager.Exists(waypoint)
+                || !m_Runtime.EntityManager.HasComponent<Connected>(waypoint))
+            {
+                return Entity.Null;
+            }
+
+            Entity connected = m_Runtime.EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            return connected != Entity.Null && m_Runtime.EntityManager.Exists(connected)
+                ? connected
+                : Entity.Null;
         }
 
         public void ClearStationAnchorObservationDiagnosticsState()
@@ -425,6 +780,156 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_StationAnchorDiagAnchorRejectedOriginOrTerminal = 0;
             m_Runtime.m_StationAnchorDiagSuspiciousOriginOrTerminal = 0;
             m_Runtime.m_StationAnchorDiagSuspiciousLongDwell = 0;
+        }
+
+        private static EchoDto CopyEcho(DispatchPlannerRequestEchoDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new EchoDto
+            {
+                draftKey = source.draftKey,
+                analysisWindowId = source.analysisWindowId,
+                windowStart = source.windowStart,
+                windowEnd = source.windowEnd,
+                localLineIds = source.localLineIds,
+                adjustableLineIds = source.adjustableLineIds,
+                expressSourceMode = source.expressSourceMode,
+                expressLineId = source.expressLineId,
+                virtualExpressBaseLineId = source.virtualExpressBaseLineId,
+                expressStopStationIds = source.expressStopStationIds,
+                departureMode = source.departureMode,
+                expressTripsPerHour = source.expressTripsPerHour,
+                intervalMinutes = source.intervalMinutes,
+                phaseTime = source.phaseTime,
+                expressOffsetMinutes = source.expressOffsetMinutes,
+                maxOffsetMinutes = source.maxOffsetMinutes,
+                offsetStepMinutes = source.offsetStepMinutes,
+                maxLocalRetimeMinutes = source.maxLocalRetimeMinutes,
+                maxLocalWaitMinutes = source.maxLocalWaitMinutes,
+                maxAdditionalBypassStations = source.maxAdditionalBypassStations,
+                forcedBypassStationIds = source.forcedBypassStationIds
+            };
+        }
+
+        private static RoleSummaryDto CopyRoleSummary(DispatchPlannerLineRoleSummaryDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new RoleSummaryDto
+            {
+                effectiveLineIds = source.effectiveLineIds,
+                adjustableLineIds = source.adjustableLineIds,
+                fixedLineIds = source.fixedLineIds,
+                targetLineIds = source.targetLineIds,
+                autoFixedConstraintLineIds = source.autoFixedConstraintLineIds,
+                suppressedFixedVsFixedClusterCount = source.suppressedFixedVsFixedClusterCount,
+                roles = (source.roles ?? Array.Empty<DispatchPlannerLineRoleDto>())
+                    .Select(CopyRole)
+                    .ToArray()
+            };
+        }
+
+        private static RoleDto CopyRole(DispatchPlannerLineRoleDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new RoleDto
+            {
+                lineId = source.lineId,
+                participates = source.participates,
+                adjustable = source.adjustable,
+                fixedLine = source.fixedLine,
+                target = source.target
+            };
+        }
+
+        private static ChangeDto CopyChange(DispatchPlannerChangedRowDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new ChangeDto
+            {
+                tripId = source.tripId,
+                lineId = source.lineId,
+                kind = source.kind,
+                beforeTime = source.beforeTime,
+                afterTime = source.afterTime,
+                scheduleShiftMinutes = source.scheduleShiftMinutes,
+                predictedDelayMinutes = source.predictedDelayMinutes,
+                totalDeltaMinutes = source.totalDeltaMinutes,
+                changeType = source.changeType,
+                statusCode = source.statusCode,
+                statusMinutes = source.statusMinutes
+            };
+        }
+
+        private static ActionDto CopyAction(DispatchPlannerScheduleActionDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new ActionDto
+            {
+                actionType = source.actionType,
+                type = source.type,
+                shape = source.shape,
+                reason = source.reason,
+                targetRegionIds = source.targetRegionIds,
+                reasonRegionIds = source.reasonRegionIds,
+                clusterIds = source.clusterIds,
+                reasonClusterIds = source.reasonClusterIds,
+                stationIds = source.stationIds,
+                affectedLineIds = source.affectedLineIds,
+                affectedLineId = source.affectedLineId,
+                affectedTripIds = source.affectedTripIds,
+                priorityTripIds = source.priorityTripIds,
+                tripIds = source.tripIds,
+                deltaPattern = source.deltaPattern,
+                deltaMinutes = source.deltaMinutes,
+                deltaOffsetMinutes = source.deltaOffsetMinutes,
+                riskScore = source.riskScore
+            };
+        }
+
+        private static RiskDto CopyRisk(DispatchPlannerRiskItemDto source)
+        {
+            if (source == null)
+                return null;
+
+            return new RiskDto
+            {
+                riskId = source.riskId,
+                problemType = source.problemType,
+                resolutionState = source.resolutionState,
+                pairRole = source.pairRole,
+                treatmentType = source.treatmentType,
+                blockReasonCode = source.blockReasonCode,
+                suggestedOptionCodes = source.suggestedOptionCodes,
+                yieldingLineId = source.yieldingLineId,
+                priorityLineId = source.priorityLineId,
+                yieldingTripId = source.yieldingTripId,
+                priorityTripId = source.priorityTripId,
+                yieldingDepartTime = source.yieldingDepartTime,
+                priorityDepartTime = source.priorityDepartTime,
+                fromStationId = source.fromStationId,
+                toStationId = source.toStationId,
+                catchupFromStationId = source.catchupFromStationId,
+                catchupToStationId = source.catchupToStationId,
+                catchupTime = source.catchupTime,
+                selectedBypassStationId = source.selectedBypassStationId,
+                requiredHoldMinutes = source.requiredHoldMinutes,
+                plannedAdjustmentMinutes = source.plannedAdjustmentMinutes,
+                holdBudgetMinutes = source.holdBudgetMinutes,
+                unresolvedRiskMinutes = source.unresolvedRiskMinutes,
+                robustnessRiskMinutes = source.robustnessRiskMinutes,
+                requiredMarginMinutes = source.requiredMarginMinutes,
+                currentWorstCaseGapMinutes = source.currentWorstCaseGapMinutes
+            };
         }
     }
 }

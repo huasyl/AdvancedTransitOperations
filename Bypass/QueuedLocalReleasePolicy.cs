@@ -9,10 +9,23 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.Bypass
 {
-    internal sealed partial class AdmissionService
+    internal sealed class BypassQueue
     {
+        private readonly AdmissionService m_Service;
+        private IBypassAdmissionRuntimeContext m_Runtime => m_Service.Runtime;
         private readonly Dictionary<Entity, string> m_GateDecisionLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_QueuedLocalOverrideLogCache = new Dictionary<Entity, string>();
+
+        internal BypassQueue(AdmissionService service)
+        {
+            m_Service = service;
+        }
+
+        internal void Clear()
+        {
+            m_GateDecisionLogCache.Clear();
+            m_QueuedLocalOverrideLogCache.Clear();
+        }
 
         private static bool IsBypassAdmissionLoggingEnabled() => false;
 
@@ -31,6 +44,21 @@ namespace RapidTransitMod.Bypass
         {
             return m_Runtime.TryGetLineTimeProfile(line, waypoints, out profile);
         }
+
+        private bool Get(Entity vehicle, out BypassControlScopeCacheEntry scope) => m_Service.Get(vehicle, out scope);
+        private void Put(Entity vehicle, BypassControlScopeCacheEntry scope) => m_Service.Put(vehicle, scope);
+        private void Remove(Entity vehicle, BypassEntryKind kind) => m_Service.Remove(vehicle, kind);
+        private void EnsureLineBypassExecutionModeReady(LineTrackChain chain, DynamicBuffer<RouteWaypoint> waypoints) => m_Service.EnsureLineBypassExecutionModeReady(chain, waypoints);
+        private BypassExecutionMode ResolveLineBypassExecutionMode(LineTrackChain chain) => m_Service.ResolveLineBypassExecutionMode(chain);
+        private bool TryGetLineOrderedRuntimeState(Entity line, DynamicBuffer<RouteWaypoint> waypoints, uint nowFrame, out LineOrderedRuntimeState state) => m_Service.TryGetLineOrderedRuntimeState(line, waypoints, nowFrame, out state);
+        private bool TryGetLineRunningVehicleFrameSnapshot(Entity line, DynamicBuffer<RouteWaypoint> waypoints, uint nowFrame, out LineRunningVehicleFrameSnapshot snapshot) => m_Service.TryGetLineRunningVehicleFrameSnapshot(line, waypoints, nowFrame, out snapshot);
+        private PhysicalSharedWindowMatch GetPhysicalSharedWindowMatchCurrentFrame(LineTrackChain localChain, BypassProtectedInterval localProtectedInterval, Entity currentBypassBuilding, LineTrackChain expressChain) => m_Service.GetPhysicalSharedWindowMatchCurrentFrame(localChain, localProtectedInterval, currentBypassBuilding, expressChain);
+        private bool TryResolveExpressConflictWindowForLocalConflict(Entity expressVehicle, Entity expressLine, DynamicBuffer<RouteWaypoint> expressWaypoints, LineTrackChain expressChain, LineTrackChain localChain, int localProtectedIntervalIndex, BypassProtectedInterval localProtectedInterval, PhysicalSharedWindowMatch sharedWindowMatch, out int expressProtectedIntervalIndex, out BypassProtectedInterval expressProtectedInterval, out int overlapCount, out int orderedRun, out string intervalResolutionSource) => m_Service.TryResolveExpressConflictWindowForLocalConflict(expressVehicle, expressLine, expressWaypoints, expressChain, localChain, localProtectedIntervalIndex, localProtectedInterval, sharedWindowMatch, out expressProtectedIntervalIndex, out expressProtectedInterval, out overlapCount, out orderedRun, out intervalResolutionSource);
+        private bool TryResolveStaticTraversalPhaseWindow(LineTrackChain chain, int startAtomIndex, int endAtomIndexExclusive, out int traversalPhaseIndex, out int phaseStartAtomIndex, out int phaseEndAtomExclusive) => m_Service.TryResolveStaticTraversalPhaseWindow(chain, startAtomIndex, endAtomIndexExclusive, out traversalPhaseIndex, out phaseStartAtomIndex, out phaseEndAtomExclusive);
+        private bool TryFindBestCurrentForwardSceneSameDirectionTrunkSegment(LineTrackChain localChain, BypassProtectedInterval localProtectedInterval, Entity currentBypassBuilding, LineTrackChain expressChain, BypassProtectedInterval expressProtectedInterval, int localTraversalPhaseIndex, int expressCurrentAtomIndex, int expressTraversalPhaseIndex, out GlobalSharedTrunkSegment selectedTrunkSegment) => m_Service.TryFindBestCurrentForwardSceneSameDirectionTrunkSegment(localChain, localProtectedInterval, currentBypassBuilding, expressChain, expressProtectedInterval, localTraversalPhaseIndex, expressCurrentAtomIndex, expressTraversalPhaseIndex, out selectedTrunkSegment);
+        private RelativeToTrunkState ResolveVehicleTrunkTravelState(TrackModelRuntimePosition runtimePosition, GlobalSharedTrunkSegment segment, bool useLocalSide) => m_Service.ResolveVehicleTrunkTravelState(runtimePosition, segment, useLocalSide);
+        private bool ShouldClearHoldAfterStationExit(Entity localVehicle, Entity localLine, DynamicBuffer<RouteWaypoint> localWaypoints, int currentWaypointIndex) => m_Service.ShouldClearHoldAfterStationExit(localVehicle, localLine, localWaypoints, currentWaypointIndex);
+        private bool IsVehicleWithinBypassStationPhysicalContext(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, Entity currentBypassBuilding) => m_Service.IsVehicleWithinBypassStationPhysicalContext(vehicle, line, waypoints, currentBypassBuilding);
 
         private readonly struct QueuedLocalReleaseScope
         {
@@ -77,7 +105,7 @@ namespace RapidTransitMod.Bypass
                 return true;
             }
 
-            if (!m_Runtime.TrackModel.TryGetLocalSceneDefinition(
+            if (!m_Runtime.TrackModel.TryGetLocalScene(
                     localLine,
                     localWaypoints,
                     currentWaypointIndex,
@@ -170,7 +198,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(expressChain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(expressChain);
             PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(
                 localChain,
                 localProtectedInterval,
@@ -258,7 +286,7 @@ namespace RapidTransitMod.Bypass
             if (!m_Runtime.TrackModel.TryGetChainForLine(scope.Line, waypoints, out LineTrackChain localChain))
                 return false;
 
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(localChain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(localChain);
             BypassProtectedInterval localProtectedInterval = scope.Scene.ProtectedInterval;
             int currentControlPointIndex = localProtectedInterval.StartControlPointIndex;
             if (currentControlPointIndex < 0 || currentControlPointIndex >= localChain.ControlPoints.Count)

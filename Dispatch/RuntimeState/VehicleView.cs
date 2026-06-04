@@ -45,5 +45,14 @@ namespace RapidTransitMod
         public bool TryGetBoardingGrace(Entity vehicle, out uint frame) => m_Store.ForcedOriginBoardingGraceUntil.TryGetValue(vehicle, out frame);
 
         public bool IsInbound(Entity vehicle) => m_Store.NearingTerminus.Contains(vehicle);
+
+        public bool IsFreshPreparing(Entity vehicle, uint nowFrame, uint graceFrames)
+        {
+            if (vehicle == Entity.Null || !TryGetDispatch(vehicle, out uint dispatchStartFrame))
+                return false;
+
+            return nowFrame >= dispatchStartFrame
+                && (nowFrame - dispatchStartFrame) <= graceFrames;
+        }
     }
 }

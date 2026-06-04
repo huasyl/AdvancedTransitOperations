@@ -15,15 +15,17 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.Bypass
 {
-    internal sealed partial class AdmissionService : IDecisionContext
+    internal sealed class AdmissionService : IDecisionContext
     {
         private readonly IBypassAdmissionRuntimeContext m_Runtime;
         private readonly DecisionEngine m_Decision;
+        private readonly BypassQueue m_Queue;
 
         internal AdmissionService(IBypassAdmissionRuntimeContext runtime)
         {
             m_Runtime = runtime;
             m_Decision = new DecisionEngine(this);
+            m_Queue = new BypassQueue(this);
         }
         internal const int MIN_STRONG_PROTECTED_INTERVAL_OVERLAP_ATOMS = 3;
         internal const int MIN_STRONG_PROTECTED_INTERVAL_ORDERED_RUN = 2;
@@ -102,6 +104,7 @@ namespace RapidTransitMod.Bypass
         internal void Clear()
         {
             m_Decision.Clear();
+            m_Queue.Clear();
             m_BypassTrackModelDecisionLogCache.Clear();
             m_BypassTrackModelDecisionThrottleCache.Clear();
             m_BypassTrackModelDecisionLastLogFrame.Clear();
@@ -386,6 +389,7 @@ namespace RapidTransitMod.Bypass
         internal void Put(Entity vehicle, BypassHoldCadenceSnapshot cadence) => m_Decision.Put(vehicle, cadence);
         internal void Put(Entity vehicle, BypassConflictEpisode episode) => m_Decision.Put(vehicle, episode);
         internal void Remove(Entity vehicle, BypassEntryKind kind) => m_Decision.Remove(vehicle, kind);
+        internal IBypassAdmissionRuntimeContext Runtime => m_Runtime;
         internal NativeHashMap<Entity, Entity> Blockers => m_Decision.Blockers;
         internal Dictionary<Entity, BypassControlScopeCacheEntry> Scope => m_Decision.Scope;
         internal Dictionary<Entity, BypassHoldCadenceSnapshot> Cadence => m_Decision.Cadence;
@@ -405,12 +409,12 @@ namespace RapidTransitMod.Bypass
             if (chain == null || waypoints.Length == 0)
                 return;
 
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(chain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(chain);
             if (chain.LocalBypassWaypointScenes == null
                 || chain.LocalBypassWaypointScenes.Length != waypoints.Length
                 || chain.LocalBypassWaypointScenesVersion == 0)
             {
-                m_Runtime.TrackModel.TryGetLocalBypassSceneStaticSnapshot(
+                m_Runtime.TrackModel.TryGetLocalSceneSnapshot(
                     chain.LineEntity,
                     waypoints,
                     0,
@@ -514,7 +518,7 @@ namespace RapidTransitMod.Bypass
             }
         }
 
-        private BypassExecutionMode ResolveLineBypassExecutionMode(LineTrackChain chain)
+        internal BypassExecutionMode ResolveLineBypassExecutionMode(LineTrackChain chain)
         {
             if (chain != null
                 && m_LineBypassExecutionModeSnapshots.TryGetValue(chain.LineEntity, out BypassLineExecutionModeSnapshot snapshot)
@@ -599,7 +603,7 @@ namespace RapidTransitMod.Bypass
             return true;
         }
 
-        private bool TryGetLineOrderedRuntimeState(
+        internal bool TryGetLineOrderedRuntimeState(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             uint nowFrame,
@@ -626,13 +630,77 @@ namespace RapidTransitMod.Bypass
             return state.Entries.Count > 0;
         }
 
-        private bool TryGetLineRunningVehicleFrameSnapshot(
+        internal bool TryGetLineRunningVehicleFrameSnapshot(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             uint nowFrame,
             out LineRunningVehicleFrameSnapshot snapshot)
         {
             return m_Runtime.TrackProjection.TryGetLineRunningVehicleFrameSnapshot(line, waypoints, nowFrame, out snapshot);
+        }
+
+        internal bool TryGetBypassControlScope(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            out BypassControlScope scope,
+            out string failureReason)
+        {
+            return m_Queue.TryGetBypassControlScope(localVehicle, localLine, localWaypoints, currentWaypointIndex, out scope, out failureReason);
+        }
+
+        internal bool TryEvaluateLatchedBlockerBeforeRelease(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            BypassConflictEpisode episode,
+            Entity blockerVehicle,
+            out bool blockerStillBeforeRelease)
+        {
+            return m_Queue.TryEvaluateLatchedBlockerBeforeRelease(scope, localWaypoints, episode, blockerVehicle, out blockerStillBeforeRelease);
+        }
+
+        internal void LogQueuedLocalBypassOverrideOnce(
+            Entity localVehicle,
+            Entity localLine,
+            Entity blockerVehicle,
+            string result,
+            string reason,
+            float expressMeters = float.NaN,
+            float currentLocalMeters = float.NaN,
+            float queuedLocalMeters = float.NaN)
+        {
+            m_Queue.LogQueuedLocalBypassOverrideOnce(localVehicle, localLine, blockerVehicle, result, reason, expressMeters, currentLocalMeters, queuedLocalMeters);
+        }
+
+        internal bool ShouldReleaseForQueuedLocalAhead(
+            BypassControlScope scope,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            Entity blockerVehicle,
+            out float expressSceneCoordinate,
+            out float localSceneCoordinate,
+            out float queuedLocalMeters)
+        {
+            return m_Queue.ShouldReleaseForQueuedLocalAhead(scope, localWaypoints, blockerVehicle, out expressSceneCoordinate, out localSceneCoordinate, out queuedLocalMeters);
+        }
+
+        internal bool IsExpressBlockerStillWithinBypassStation(Entity blockerVehicle, Entity localCurrentBypassBuilding)
+        {
+            return m_Queue.IsExpressBlockerStillWithinBypassStation(blockerVehicle, localCurrentBypassBuilding);
+        }
+
+        internal bool ApplyDecisionVetoes(
+            Entity localVehicle,
+            Entity localLine,
+            DynamicBuffer<RouteWaypoint> localWaypoints,
+            int currentWaypointIndex,
+            Entity currentBypassBuilding,
+            Entity nextBypassBuilding,
+            bool shouldYield,
+            string reason,
+            Entity blockerVehicle)
+        {
+            return m_Queue.ApplyDecisionVetoes(localVehicle, localLine, localWaypoints, currentWaypointIndex, currentBypassBuilding, nextBypassBuilding, shouldYield, reason, blockerVehicle);
         }
 
         private void RefreshLineOrderedRuntimeState(
@@ -869,7 +937,7 @@ namespace RapidTransitMod.Bypass
             if (localChain == null
                 || localChain == null
                 || expressChain == null
-                || !m_Runtime.TrackModel.TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int localStationExitAtomIndex))
+                || !m_Runtime.TrackModel.TryGetStationExitAtom(localChain, localProtectedInterval, currentBypassBuilding, out int localStationExitAtomIndex))
             {
                 return false;
             }
@@ -940,7 +1008,7 @@ namespace RapidTransitMod.Bypass
             bool ambiguous = false;
             BypassProtectedInterval bestLocalWindow = default;
             BypassProtectedInterval bestExpressWindow = default;
-            bool hasAnchor = m_Runtime.TrackModel.TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
+            bool hasAnchor = m_Runtime.TrackModel.TryGetStationExitAtom(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
             int localAnchorMaxStartAtomIndex = hasAnchor
                 ? stationExitAtomIndex + MAX_CONFLICT_CORRIDOR_GAP_ATOMS
                 : int.MaxValue;
@@ -1000,11 +1068,11 @@ namespace RapidTransitMod.Bypass
                     if (expressWindow.EndAtomIndexExclusive <= expressWindow.StartAtomIndex)
                         continue;
 
-                    int overlapCount = m_Runtime.TrackModel.CountProtectedIntervalPhysicalOverlap(localChain, localWindow, expressChain, expressWindow);
+                    int overlapCount = m_Runtime.TrackModel.CountIntervalPhysicalOverlap(localChain, localWindow, expressChain, expressWindow);
                     if (overlapCount <= 0)
                         continue;
 
-                    int orderedRun = m_Runtime.TrackModel.ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localWindow, expressChain, expressWindow);
+                    int orderedRun = m_Runtime.TrackModel.ComputeIntervalOrderedRun(localChain, localWindow, expressChain, expressWindow);
                     if (orderedRun <= 0)
                         continue;
 
@@ -1110,7 +1178,7 @@ namespace RapidTransitMod.Bypass
                     if (!m_Runtime.TrackModel.TryGetChainForLine(expressLine, expressWaypoints, out LineTrackChain expressChain))
                         continue;
 
-                    m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(expressChain);
+                    m_Runtime.TrackModel.EnsureBypassPipelineReady(expressChain);
                     PhysicalSharedWindowMatch sharedWindowMatch = GetPhysicalSharedWindowMatchCurrentFrame(
                         localChain,
                         localProtectedInterval,
@@ -1148,7 +1216,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(expressChain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(expressChain);
             var key = new LocalSceneExpressStaticMatchCacheKey(
                 localChain.LineEntity,
                 expressLine,
@@ -3107,7 +3175,7 @@ namespace RapidTransitMod.Bypass
             localSharedInterval = default;
             expressSharedInterval = default;
 
-            bool hasAnchor = m_Runtime.TrackModel.TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
+            bool hasAnchor = m_Runtime.TrackModel.TryGetStationExitAtom(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
             int localAnchorMaxStartAtomIndex = hasAnchor
                 ? stationExitAtomIndex + MAX_CONFLICT_CORRIDOR_GAP_ATOMS
                 : int.MaxValue;
@@ -3735,11 +3803,11 @@ namespace RapidTransitMod.Bypass
                             if (expressWindow.EndAtomIndexExclusive <= expressWindow.StartAtomIndex)
                                 continue;
 
-                            int overlapCount = m_Runtime.TrackModel.CountProtectedIntervalPhysicalOverlap(localChain, localWindow, expressChain, expressWindow);
+                            int overlapCount = m_Runtime.TrackModel.CountIntervalPhysicalOverlap(localChain, localWindow, expressChain, expressWindow);
                             if (overlapCount <= 0)
                                 continue;
 
-                            int orderedRun = m_Runtime.TrackModel.ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localWindow, expressChain, expressWindow);
+                            int orderedRun = m_Runtime.TrackModel.ComputeIntervalOrderedRun(localChain, localWindow, expressChain, expressWindow);
                             if (orderedRun <= 0)
                                 continue;
 
@@ -3747,7 +3815,7 @@ namespace RapidTransitMod.Bypass
                             int pairLocalEndAtomIndexExclusive = localSlice.EndAtomIndexExclusive;
                             int pairExpressStartAtomIndex = expressSlice.StartAtomIndex;
                             int pairExpressEndAtomIndexExclusive = expressSlice.EndAtomIndexExclusive;
-                            if (m_Runtime.TrackModel.TryFindProtectedIntervalOrderedRunSpan(
+                            if (m_Runtime.TrackModel.TryFindOrderedRunSpan(
                                     localChain,
                                     localWindow,
                                     expressChain,
@@ -3995,8 +4063,8 @@ namespace RapidTransitMod.Bypass
                 for (int expressIndex = 0; expressIndex < snapshot.ExpressIntervalCount; expressIndex++)
                 {
                     BypassProtectedInterval expressInterval = expressChain.BypassProtectedIntervals[expressIndex];
-                    int overlapCount = m_Runtime.TrackModel.CountProtectedIntervalPhysicalOverlap(localChain, localInterval, expressChain, expressInterval);
-                    int orderedRun = m_Runtime.TrackModel.ComputeProtectedIntervalLongestPhysicalOrderedRun(localChain, localInterval, expressChain, expressInterval);
+                    int overlapCount = m_Runtime.TrackModel.CountIntervalPhysicalOverlap(localChain, localInterval, expressChain, expressInterval);
+                    int orderedRun = m_Runtime.TrackModel.ComputeIntervalOrderedRun(localChain, localInterval, expressChain, expressInterval);
                     snapshot.Metrics[(localIndex * snapshot.ExpressIntervalCount) + expressIndex] = new ProtectedIntervalPairMetrics(overlapCount, orderedRun);
                 }
             }
@@ -4012,8 +4080,8 @@ namespace RapidTransitMod.Bypass
             m_Runtime.TrackModel.EnsureSharedTrackIndexCurrent();
             m_Runtime.TrackModel.RefreshSharedRuns(localChain);
             m_Runtime.TrackModel.RefreshSharedRuns(expressChain);
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(localChain);
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(expressChain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(localChain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(expressChain);
 
             var key = new ProtectedIntervalPairMetricsCacheKey(localChain.LineEntity, expressChain.LineEntity);
             if (m_Runtime.TrackModel.ProtectedIntervalPairMetricsSnapshots.TryGetValue(key, out ProtectedIntervalPairMetricsSnapshot snapshot)
@@ -4105,7 +4173,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             TryGetExpressCurrentForwardPhaseWindow(expressChain, expressCurrentAtomIndex, out int expressPhaseEndAtomExclusive);
 
-            bool hasAnchor = m_Runtime.TrackModel.TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
+            bool hasAnchor = m_Runtime.TrackModel.TryGetStationExitAtom(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
             int localAnchorMaxStartAtomIndex = hasAnchor
                 ? stationExitAtomIndex + MAX_CONFLICT_CORRIDOR_GAP_ATOMS
                 : int.MaxValue;
@@ -4340,7 +4408,7 @@ namespace RapidTransitMod.Bypass
             if (snapshot == null || snapshot.Segments.Count == 0)
                 return false;
 
-            bool hasAnchor = m_Runtime.TrackModel.TryGetForwardStationExitAtomIndex(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
+            bool hasAnchor = m_Runtime.TrackModel.TryGetStationExitAtom(localChain, localProtectedInterval, currentBypassBuilding, out int stationExitAtomIndex);
             int localAnchorMaxStartAtomIndex = hasAnchor
                 ? stationExitAtomIndex + MAX_CONFLICT_CORRIDOR_GAP_ATOMS
                 : int.MaxValue;
@@ -5001,7 +5069,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            if (!m_Runtime.TrackModel.TryGetForwardStationExitCoordinate(localChain, localProtectedInterval, currentBypassBuilding, out float stationExitCoordinate))
+            if (!m_Runtime.TrackModel.TryGetStationExitCoordinate(localChain, localProtectedInterval, currentBypassBuilding, out float stationExitCoordinate))
                 return false;
 
             return expressCoordinate <= stationExitCoordinate;
@@ -5110,7 +5178,7 @@ namespace RapidTransitMod.Bypass
             if (!m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
                 return false;
 
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(chain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(chain);
 
             if (!m_Runtime.TrackModel.TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out protectedIntervalIndex, out protectedInterval))
                 return false;
@@ -5135,7 +5203,7 @@ namespace RapidTransitMod.Bypass
             if (!m_Runtime.TrackModel.TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain))
                 return false;
 
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(localChain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(localChain);
 
             if (!m_Runtime.TrackModel.TryResolveBypassProtectedInterval(localChain, localWaypoints, currentWaypointIndex, out _, out BypassProtectedInterval protectedInterval))
                 return false;
@@ -5146,7 +5214,7 @@ namespace RapidTransitMod.Bypass
             if (localPosition.Confidence < 0.6f)
                 return false;
 
-            if (!m_Runtime.TrackModel.TryGetForwardStationExitCoordinate(localChain, protectedInterval, currentBypassBuilding, out float stationExitCoordinate))
+            if (!m_Runtime.TrackModel.TryGetStationExitCoordinate(localChain, protectedInterval, currentBypassBuilding, out float stationExitCoordinate))
                 return false;
 
             float localCoordinate = TrackProjectionService.MapRuntimePositionToOwnProtectedIntervalCoordinate(localPosition, protectedInterval, includeApproachers: true, out bool includeLocal);
@@ -5208,7 +5276,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            if (!m_Runtime.TrackModel.TryGetForwardStationExitCoordinate(localChain, protectedInterval, currentBypassBuilding, out float stationExitCoordinate))
+            if (!m_Runtime.TrackModel.TryGetStationExitCoordinate(localChain, protectedInterval, currentBypassBuilding, out float stationExitCoordinate))
                 return false;
 
             float localCoordinate = TrackProjectionService.MapRuntimePositionToOwnProtectedIntervalCoordinate(localPosition, protectedInterval, includeApproachers: true, out bool includeLocal);
@@ -5257,7 +5325,7 @@ namespace RapidTransitMod.Bypass
             if (!m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
                 return false;
 
-            m_Runtime.TrackModel.EnsureTrackChainBypassPipelineReady(chain);
+            m_Runtime.TrackModel.EnsureBypassPipelineReady(chain);
 
             if (!m_Runtime.TrackModel.TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out protectedIntervalIndex, out BypassProtectedInterval protectedInterval))
                 return false;
@@ -5281,7 +5349,7 @@ namespace RapidTransitMod.Bypass
         {
             m_BypassPerfProbeTrackDecisionCalls++;
             trackModelDecision = default;
-            if (!m_Runtime.TrackModel.TryGetLocalBypassSceneStaticSnapshot(
+            if (!m_Runtime.TrackModel.TryGetLocalSceneSnapshot(
                     localLine,
                     localWaypoints,
                     currentWaypointIndex,

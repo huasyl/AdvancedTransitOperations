@@ -127,7 +127,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 }
                 else if (state == VehicleState.Running)
                 {
-                    float etaFrames = m_Runtime.EstimateRunningArrivalFrames(vehicle, tick.Line, tick.Ways, tick.Frame, tick.Lap, tick.Run);
+                    float etaFrames = m_Runtime.m_LineTimes.Run(vehicle, tick.Line, tick.Ways, tick.Frame, tick.Lap, tick.Run);
                     if (etaFrames == float.MaxValue)
                     {
                         if (nearestVehicle == Entity.Null)
@@ -145,7 +145,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 }
                 else if (state == VehicleState.Preparing)
                 {
-                    float etaFrames = m_Runtime.EstimatePreparingArrivalFrames(vehicle, tick.Line, tick.Ways, tick.Frame, tick.Lap);
+                    float etaFrames = m_Runtime.m_LineTimes.Prep(vehicle, tick.Line, tick.Ways, tick.Lap);
                     if (etaFrames == float.MaxValue)
                     {
                         if (nearestVehicle == Entity.Null)

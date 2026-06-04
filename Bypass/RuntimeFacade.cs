@@ -6,7 +6,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Bypass
 {
-    internal sealed partial class RuntimeFacade : IDisposable
+    internal sealed class RuntimeFacade : IDisposable
     {
         private readonly IRuntimeContext m_Runtime;
         private readonly AdmissionService m_Admission;
@@ -208,6 +208,11 @@ namespace RapidTransitMod.Bypass
             m_DepartureGateLogCache.Remove(vehicle);
             m_ReleaseDiagLogCache.Remove(vehicle);
             m_Control.RemoveVehicleLogs(vehicle);
+        }
+
+        internal void RemoveDiagnostics(Entity vehicle)
+        {
+            RemoveVehicleLogs(vehicle);
         }
     }
 }

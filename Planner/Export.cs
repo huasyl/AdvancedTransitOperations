@@ -30,10 +30,7 @@ namespace RapidTransitMod.Planner
         private TrackModelService m_TrackModel => R.TrackModel;
         private RuntimeFacade m_Bypass => R.Bypass;
         private Game.Simulation.SimulationSystem m_SimulationSystem => R.m_SimulationSystem;
-        private RapidTransitMod.Dispatch.Observation.Query m_ObsQuery => R.m_ObsQuery;
         private RapidTransitMod.Dispatch.Workbench.Bridge m_WorkbenchBridge => R.m_WorkbenchBridge;
-        private Unity.Collections.NativeList<float> m_LineTimeProfileSegmentFrames => R.m_LineTimeProfileSegmentFrames;
-        private Unity.Collections.NativeList<float> m_LineTimeProfileStopFrames => R.m_LineTimeProfileStopFrames;
         private const double SIM_FRAMES_PER_MINUTE = DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
         private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = DispatchRuntimeSystem.LOCAL_BYPASS_EXIT_RELEASE_ATOMS;
 
@@ -42,7 +39,7 @@ namespace RapidTransitMod.Planner
         private Drafts DraftStore() => R.DraftStore();
         private WorkbenchLineRuntime ActiveLine(List<WorkbenchLineRuntime> lines, string preferredLineId) => R.ActiveLine(lines, preferredLineId);
         private List<DispatchWorkbenchStationDto> Stations(Entity line) => R.m_Resolve.Stations(line);
-        private bool TryGetLineTimeProfile(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTimeProfileHeader profile) => R.TryGetLineTimeProfile(line, waypoints, out profile);
+        private bool TryGetLineTimeProfile(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTimeProfileHeader profile) => R.m_LineTimes.Get(line, waypoints, out profile);
         private string GetKind(Entity line) => R.GetKind(line);
         private int GetHold(Entity line) => R.GetHold(line);
         private int GetDwell(Entity line) => R.GetDwell(line);
@@ -277,7 +274,7 @@ namespace RapidTransitMod.Planner
             {
                 string observationKey = MakeStationDwellObservationKey(line, anchor.StationAnchorId);
                 if (!string.IsNullOrWhiteSpace(observationKey)
-                    && m_ObsQuery.TryStationDwell(observationKey, out StationDwellObservation anchorObservation)
+                    && R.m_Observation.TryStationDwell(observationKey, out StationDwellObservation anchorObservation)
                     && anchorObservation.SampleCount > 0
                     && anchorObservation.AverageFrames > 0f)
                 {
@@ -402,7 +399,7 @@ namespace RapidTransitMod.Planner
                 };
             }
 
-            m_TrackModel.EnsureTrackChainBypassPipelineReady(chain);
+            m_TrackModel.EnsureBypassPipelineReady(chain);
             PopulatePlannerStationTrackAtomIndices(chain, stationRecords);
 
             return new DispatchPlannerLineTrackDto
@@ -620,7 +617,7 @@ namespace RapidTransitMod.Planner
             for (int i = 0; i < chain.TraversalProfile.RunSlices.Count; i++)
             {
                 TraversalRunSlice slice = chain.TraversalProfile.RunSlices[i];
-                bool hasObservation = m_ObsQuery.TrySlice(
+                bool hasObservation = R.m_Observation.TrySlice(
                     Keys.Slice(line, slice.SliceIndex),
                     out TraversalSliceObservation observation)
                     && observation.SampleCount > 0
@@ -865,7 +862,7 @@ namespace RapidTransitMod.Planner
         {
             List<DispatchPlannerTraversalSliceActualSampleDto> samples =
                 new List<DispatchPlannerTraversalSliceActualSampleDto>();
-            foreach (TraversalSliceActualSample sample in m_ObsQuery.ActualSamples)
+            foreach (TraversalSliceActualSample sample in R.m_Observation.ActualSamples)
             {
                 float durationFrames = sample.ExitFrame > sample.EnterFrame
                     ? sample.ExitFrame - sample.EnterFrame
@@ -893,7 +890,7 @@ namespace RapidTransitMod.Planner
         {
             List<DispatchPlannerTraversalPositionSampleDto> samples =
                 new List<DispatchPlannerTraversalPositionSampleDto>();
-            foreach (TraversalPositionSample sample in m_ObsQuery.PositionSamples)
+            foreach (TraversalPositionSample sample in R.m_Observation.PositionSamples)
             {
                 samples.Add(new DispatchPlannerTraversalPositionSampleDto
                 {
@@ -1114,7 +1111,7 @@ namespace RapidTransitMod.Planner
             if (segmentIndex < 0 || segmentIndex >= profile.m_Count)
                 return 0f;
 
-            return m_LineTimeProfileSegmentFrames[profile.m_Offset + segmentIndex];
+            return R.m_LineTimes.Segment(profile, segmentIndex);
         }
 
         private float ProfileStopFrames(LineTimeProfileHeader profile, int stopIndex)
@@ -1122,7 +1119,7 @@ namespace RapidTransitMod.Planner
             if (stopIndex < 0 || stopIndex >= profile.m_Count)
                 return 0f;
 
-            return m_LineTimeProfileStopFrames[profile.m_Offset + stopIndex];
+            return R.m_LineTimes.StopValue(profile, stopIndex);
         }
 
         private static string CreatePlannerStationId(string lineId, int order)

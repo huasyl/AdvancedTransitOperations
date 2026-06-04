@@ -77,8 +77,9 @@ namespace RapidTransitMod
             if (GameManager.instance.gameMode != GameMode.Game)
                 return;
 
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
-            if (control == null || !control.IsRuntimeReadyForOriginArrivingRepair())
+            LifecyclePort lifecycle = LifecyclePort.Current;
+            OriginRepairPort originRepair = lifecycle != null ? lifecycle.OriginRepair : null;
+            if (originRepair == null || !originRepair.IsReady())
                 return;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
@@ -95,7 +96,7 @@ namespace RapidTransitMod
                     if (TryProcessRepairAck(vehicle, nowFrame))
                         continue;
 
-                    if (!TryBuildCandidate(control, vehicle, out Candidate candidate, out RejectDiagnostic reject))
+                    if (!TryBuildCandidate(originRepair, vehicle, out Candidate candidate, out RejectDiagnostic reject))
                     {
                         LogRejectOnce(vehicle, reject, nowFrame);
                         m_Records.Remove(vehicle);
@@ -182,7 +183,7 @@ namespace RapidTransitMod
         }
 
         private bool TryBuildCandidate(
-            DispatchRuntimeSystem control,
+            OriginRepairPort originRepair,
             Entity vehicle,
             out Candidate candidate,
             out RejectDiagnostic reject)
@@ -197,7 +198,7 @@ namespace RapidTransitMod
                 Speed = -1f
             };
 
-            if (!control.TryGetRuntimeVehicleState(vehicle, out VehicleState state)
+            if (!originRepair.TryVehicleState(vehicle, out VehicleState state)
                 || state != VehicleState.Preparing)
             {
                 return false;
@@ -332,9 +333,9 @@ namespace RapidTransitMod
                 return false;
             }
 
-            int waypointIndex = control.m_WaypointIndex.ComputeForOriginArrivingRepair(vehicle, waypoints);
+            int waypointIndex = originRepair.ComputeWaypointIndex(vehicle, waypoints);
             reject.WaypointIndex = waypointIndex;
-            bool routeProgressAtOrigin = control.m_RouteProgress.TryOriginArrivalRepair(
+            bool routeProgressAtOrigin = originRepair.TryOriginProgress(
                 vehicle,
                 out int routeProgressWaypointIndex,
                 out float routeProgressSegmentPosition);

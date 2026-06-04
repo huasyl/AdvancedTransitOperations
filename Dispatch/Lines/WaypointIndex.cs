@@ -25,6 +25,23 @@ namespace RapidTransitMod.Dispatch.Lines
         private const bool TrackAnchor = true;
 
         private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_FrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
+
+        private readonly struct WaypointIndexFrameSnapshot
+        {
+            public readonly uint Frame;
+            public readonly Entity Route;
+            public readonly bool Boarding;
+            public readonly int WaypointIndex;
+
+            public WaypointIndexFrameSnapshot(uint frame, Entity route, bool boarding, int waypointIndex)
+            {
+                Frame = frame;
+                Route = route;
+                Boarding = boarding;
+                WaypointIndex = waypointIndex;
+            }
+        }
 
         public WaypointIndex(DispatchRuntimeSystem runtime)
         {
@@ -40,7 +57,7 @@ namespace RapidTransitMod.Dispatch.Lines
             int computedWaypointIndex = ComputeUncached(vehicle, ways);
             Entity route = m_Runtime.m_Resolve.Line(vehicle);
             bool boarding = Boarding(vehicle);
-            m_Runtime.m_WaypointIndexFrameSnapshots[vehicle] = new DispatchRuntimeSystem.WaypointIndexFrameSnapshot(
+            m_FrameSnapshots[vehicle] = new WaypointIndexFrameSnapshot(
                 m_Runtime.m_SimulationSystem.frameIndex,
                 route,
                 boarding,
@@ -153,7 +170,7 @@ namespace RapidTransitMod.Dispatch.Lines
         {
             waypointIndex = -1;
             if (vehicle == Entity.Null
-                || !m_Runtime.m_WaypointIndexFrameSnapshots.TryGetValue(vehicle, out DispatchRuntimeSystem.WaypointIndexFrameSnapshot snapshot))
+                || !m_FrameSnapshots.TryGetValue(vehicle, out WaypointIndexFrameSnapshot snapshot))
             {
                 return false;
             }
@@ -237,8 +254,8 @@ namespace RapidTransitMod.Dispatch.Lines
             if (allowTrackWaypointAnchoring
                 && TryTrack(vehicle, ways, targetWaypointIndex, boardingWaypointIndex, -1, out int anchoredWaypointIndex, out string anchorDetail, out string anchorStableKey))
             {
-                m_Runtime.LogVehicleStateOnce(
-                    m_Runtime.m_BvTrackAnchorRecoveryLogCache,
+                m_Runtime.m_RuntimeLog.Once(
+                    m_Runtime.m_RuntimeLog.m_BvTrackAnchorRecoveryLogCache,
                     vehicle,
                     "track-anchor|" + anchorStableKey,
                     "[定位接管] 车辆" + vehicle.Index + " 按track锚定 wp[" + anchoredWaypointIndex + "] " + anchorDetail);
@@ -344,6 +361,17 @@ namespace RapidTransitMod.Dispatch.Lines
         {
             return m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle)
                 && (m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle).m_State & PublicTransportFlags.Boarding) != 0;
+        }
+
+        public void Remove(Entity vehicle)
+        {
+            if (vehicle != Entity.Null)
+                m_FrameSnapshots.Remove(vehicle);
+        }
+
+        public void Clear()
+        {
+            m_FrameSnapshots.Clear();
         }
     }
 }

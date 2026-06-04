@@ -2,6 +2,7 @@ using System;
 using Game.Common;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.Bypass;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Planner;
 using Unity.Entities;
@@ -9,8 +10,28 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.Dispatch.Runtime
 {
+    internal sealed class TrackBuffers : TrackModelContext.IBuffers
+    {
+        private readonly DispatchRuntimeSystem m_Runtime;
+
+        public TrackBuffers(DispatchRuntimeSystem runtime)
+        {
+            m_Runtime = runtime;
+        }
+
+        public BufferLookup<T> Get<T>(bool readOnly) where T : unmanaged, IBufferElementData
+        {
+            return m_Runtime.GetBufferLookup<T>(readOnly);
+        }
+    }
+
     internal static class RuntimePorts
     {
+        public static TrackModelContext.IBuffers Buffers(DispatchRuntimeSystem runtime)
+        {
+            return new TrackBuffers(runtime);
+        }
+
         public static void Build(DispatchRuntimeSystem runtime)
         {
             runtime.m_SelectPort = BuildSelect(runtime);
@@ -54,8 +75,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 RouteWaypoints = runtime.GetBufferLookup<RouteWaypoint>,
                 CountVehicles = runtime.m_LineVehicles.Count,
                 ComputeWp = runtime.m_WaypointIndex.Compute,
-                PrepEta = runtime.EstimatePreparingArrivalFrames,
-                RunEta = runtime.EstimateRunningArrivalFrames,
+                PrepEta = (vehicle, line, waypoints, nowFrame, lineDurationFrames) => runtime.m_LineTimes.Prep(vehicle, line, waypoints, lineDurationFrames),
+                RunEta = runtime.m_LineTimes.Run,
                 TryProgress = runtime.m_RouteProgress.Try,
                 TryBlocker = (Entity vehicle, out Entity blocker) => runtime.m_Bypass.TryGetLatchedBlocker(vehicle, out blocker),
                 ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
@@ -65,6 +86,123 @@ namespace RapidTransitMod.Dispatch.Runtime
                 },
                 EventText = runtime.m_Announcements.EventText
             };
+        }
+
+        public static LineHost BuildLineHost(DispatchRuntimeSystem runtime)
+        {
+            return new LineHost
+            {
+                Times = new LineTimesPort
+                {
+                    EntityManager = runtime.EntityManager,
+                    MixSignature = runtime.m_LineProfile.MixSignature,
+                    FramesPerMinute = (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE,
+                    ProfileStopStartBufferMinutes = DispatchRuntimeSystem.PROFILE_STOP_START_BUFFER_MINUTES,
+                    EtaScaleMin = DispatchRuntimeSystem.ETA_SCALE_MIN,
+                    EtaScaleMax = DispatchRuntimeSystem.ETA_SCALE_MAX,
+                    DispatchFallbackSpeedMetersPerMinute = DispatchRuntimeSystem.DISPATCH_FALLBACK_SPEED_M_PER_MIN,
+                    DispatchEstimateMinMinutes = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES,
+                    DispatchEstimateMaxMinutes = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_MINUTES,
+                    ReadLapFrames = runtime.m_LapCache.Read,
+                    ReadDispatchFrames = runtime.m_DispatchCache.Read,
+                    DwellMinutes = line => runtime.m_LineView.Dwell(line),
+                    TryObservedWaypointStopFrames = (Entity line, int waypointIndex, out float dwellFrames) =>
+                        runtime.m_Observation.TryGetObservedWaypointStopFrames(line, waypointIndex, out dwellFrames),
+                    TryRouteProgress = runtime.m_RouteProgress.Try,
+                    CachedWaypointIndex = entity => runtime.m_CachedWpIdx.TryGetValue(entity, out int waypointIndex) ? waypointIndex : -1,
+                    IsPreparingKnown = entity => runtime.m_VehicleStateStore.PreparingStartFrame.ContainsKey(entity),
+                    TryLapFrames = (Entity vehicle, out uint lapFrames) => runtime.m_Observation.TryLapFrames(vehicle, out lapFrames),
+                    TryLapStartFrame = (Entity vehicle, out uint lapStartFrame) => runtime.m_Observation.TryLapStartFrame(vehicle, out lapStartFrame)
+                },
+                Mileage = new LineMileagePort
+                {
+                    EntityManager = runtime.EntityManager,
+                    MixSignature = runtime.m_LineProfile.MixSignature,
+                    Log = message => runtime.log.Info(message),
+                    Name = entity => runtime.m_NameSystem.GetRenderedLabelName(entity),
+                    WaypointSignature = runtime.m_LineProfile.ComputeWaypointSignature,
+                    StationBuildingForWaypoint = runtime.m_SharedCorridor.GetStationBuildingForWaypoint,
+                    BypassBuildingForWaypoint = runtime.m_SharedCorridor.GetBypassBuildingForWaypoint,
+                    IsBypassStation = runtime.IsBypassStationSetting,
+                    AppliedLines = () => runtime.AppliedLines,
+                    IsLocalLine = line => runtime.m_LineView.Local(line),
+                    TryRouteProgress = runtime.m_RouteProgress.Try,
+                    CachedWaypointIndex = entity => runtime.m_CachedWpIdx.TryGetValue(entity, out int waypointIndex) ? waypointIndex : -1
+                }
+            };
+        }
+
+        public static TrackProjectionPort BuildTrackProjection(DispatchRuntimeSystem runtime)
+        {
+            return new TrackProjectionPort(
+                runtime.EntityManager,
+                runtime.log,
+                () => runtime.m_SimulationSystem.frameIndex,
+                () => runtime.m_CachedWpIdx,
+                runtime.m_TrackModel,
+                Buffers(runtime),
+                runtime.m_RouteProgress,
+                runtime.m_VehicleView,
+                runtime.m_LineMileage,
+                runtime.IsVehicleBoarding);
+        }
+
+        public static BypassAdmissionPort BuildBypassAdmission(DispatchRuntimeSystem runtime)
+        {
+            return new BypassAdmissionPort(
+                runtime.EntityManager,
+                runtime.log,
+                () => runtime.m_SimulationSystem.frameIndex,
+                () => runtime.AppliedLines,
+                runtime.m_TrackModel,
+                () => runtime.m_TrackProjection,
+                Buffers(runtime),
+                () => runtime.m_Features.BypassRun(),
+                line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
+                line => runtime.m_LineView.Local(line),
+                line => runtime.m_LineView.Express(line),
+                runtime.m_Resolve,
+                DispatchRuntimeSystem.IsLineOrderedRuntimeLoggingEnabled,
+                runtime.m_WaypointIndex,
+                runtime.m_Observation,
+                runtime.m_SharedCorridor,
+                runtime.m_RuntimeLog.Once,
+                runtime.m_VehicleView,
+                runtime.m_LineMileage,
+                runtime.m_LineTimes,
+                runtime.EntityName);
+        }
+
+        public static BypassRuntimePort BuildBypassRuntime(DispatchRuntimeSystem runtime)
+        {
+            return new BypassRuntimePort(
+                runtime.EntityManager,
+                runtime.log,
+                () => runtime.m_SimulationSystem.frameIndex,
+                () => runtime.AppliedLines,
+                runtime.m_TrackModel,
+                () => runtime.m_TrackProjection,
+                Buffers(runtime),
+                () => runtime.m_Features.BypassRun(),
+                line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
+                line => runtime.m_LineView.Local(line),
+                line => runtime.m_LineView.Express(line),
+                runtime.m_Resolve,
+                DispatchRuntimeSystem.IsLineOrderedRuntimeLoggingEnabled,
+                runtime.m_WaypointIndex,
+                runtime.m_Observation,
+                runtime.m_SharedCorridor,
+                runtime.m_RuntimeLog.Once,
+                runtime.m_VehicleView,
+                runtime.m_LineMileage,
+                runtime.m_LineTimes,
+                runtime.EntityName,
+                DispatchRuntimeSystem.IsBypassRuntimeLoggingEnabled,
+                runtime.m_Observation.Hold,
+                runtime.m_Observation.Release,
+                runtime.m_Announcements.BypassWaiting,
+                () => runtime.m_Features.BypassRun(),
+                runtime.m_LineTimes.Clear);
         }
 
         public static CapturePort BuildCapture(DispatchRuntimeSystem runtime)
@@ -109,8 +247,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Frame = () => runtime.m_SimulationSystem != null ? runtime.m_SimulationSystem.frameIndex : 0,
                 Date = () => runtime.m_TimeSystem != null ? runtime.m_TimeSystem.GetCurrentDateTime().Date : DateTime.MinValue.Date,
                 LoadApplied = runtime.LoadApplied,
-                Lines = runtime.BuildObservationLines,
-                Contracts = runtime.BuildObservationContracts,
+                Lines = runtime.m_Observation.Lines,
+                Contracts = runtime.m_Observation.Contracts,
                 Preferred = () => runtime.DraftStore().Preferred(),
                 LineId = runtime.LineId,
                 StationName = runtime.m_Resolve.StationName,
@@ -125,7 +263,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Stop = runtime.m_Resolve.Stop,
                 HasWaypoints = line => line != Entity.Null && runtime.EntityManager.HasBuffer<RouteWaypoint>(line),
                 Waypoints = line => runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true),
-                TargetMin = runtime.ObservationTargetMin,
+                TargetMin = runtime.m_Observation.TargetMin,
                 LineOf = runtime.m_Resolve.Line,
                 Parse = RapidTransitMod.Dispatch.Workbench.Time.Parse,
                 Slot = RapidTransitMod.Dispatch.Workbench.Time.Slot,

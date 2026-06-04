@@ -27,8 +27,8 @@ namespace RapidTransitMod
                 {
                     if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs)) continue;
                     if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2) continue;
-                    if (!m_Runtime.IsLineStable(line, wps)) continue;
-                    if (!m_Runtime.IsRtManagedLine(line)) continue;
+                    if (!m_Runtime.m_LineProfile.IsStable(line, wps)) continue;
+                    if (!m_Runtime.m_LineView.Managed(line, m_Runtime.m_Features.Dispatch())) continue;
                     bool adoptExistingVehicles = !m_Runtime.m_LineInitialAdopted.Contains(line);
                     bool isHotLine = adoptExistingVehicles || m_Runtime.m_SpawningLines.ContainsKey(line);
                     if (!fullSweep && !isHotLine) continue;
@@ -36,10 +36,10 @@ namespace RapidTransitMod
                     string lineTag = "线路" + line.Index;
                     HashSet<Entity> seenVehicles = new HashSet<Entity>();
 
-                    if (!adoptExistingVehicles && !m_Runtime.m_DiagnosedLines.Contains(line))
+                    if (!adoptExistingVehicles && !m_Runtime.m_LineProfile.IsDiagnosed(line))
                     {
-                        m_Runtime.m_DiagnosedLines.Add(line);
-                        m_Runtime.LogLineTrackChainDiagnostics(line);
+                        m_Runtime.m_LineProfile.MarkDiagnosed(line);
+                        m_Runtime.m_TrackModel.LogLineTrackChainDiagnostics(line);
                         string lineName = m_Runtime.EntityName(line);
                         m_Runtime.log.Info("[诊断] " + lineTag + " (" + lineName + ") waypoint数=" + wps.Length);
                     }
@@ -60,7 +60,7 @@ namespace RapidTransitMod
                         int initWpIdx = boarding0 ? m_Runtime.m_WaypointIndex.Compute(v, wps) : -1;
                         bool atA0 = initWpIdx == 0;
 
-                        VehicleState initState = m_Runtime.InferInitialVehicleState(
+                        VehicleState initState = InferInitialState(
                             v,
                             wps,
                             pt0,
@@ -87,7 +87,7 @@ namespace RapidTransitMod
 
                         if (boarding0 && initWpIdx < 0)
                         {
-                            m_Runtime.ObserveBvMisfireCandidate(
+                            m_Runtime.m_RuntimeLog.BvMisfireCandidate(
                                 v,
                                 "线路" + line.Index,
                                 "register",
@@ -120,15 +120,15 @@ namespace RapidTransitMod
                             + " targetMin=" + finalTarget
                             + " initReason=" + initReason
                             + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v));
-                        m_Runtime.LogVehicleStateOnce(
-                            m_Runtime.m_RouteVehicleOwnerMismatchLogCache,
+                        m_Runtime.m_RuntimeLog.Once(
+                            m_Runtime.m_RuntimeLog.m_RouteVehicleOwnerMismatchLogCache,
                             v,
                             "register-detail|line=" + line.Index
                                 + "|state=" + finalState
                                 + "|target=" + (m_Runtime.EntityManager.HasComponent<Target>(v) ? m_Runtime.EntityManager.GetComponentData<Target>(v).m_Target.Index : -1)
                                 + "|route=" + (m_Runtime.EntityManager.HasComponent<CurrentRoute>(v) ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(v).m_Route.Index : -1),
                             "[RegisterDetail] " + lineTag + " 车辆" + v.Index
-                                + " " + m_Runtime.BuildVehicleOwnershipDiagnostic(line, v, finalState, finalTarget, "register")
+                                + " " + m_Runtime.m_RuntimeLog.VehicleOwnership(line, v, finalState, finalTarget, "register")
                                 + " initReason=" + initReason
                                 + " restored=" + (restored ? "1" : "0")
                                 + " atA0=" + (atA0 ? "1" : "0")
@@ -143,8 +143,8 @@ namespace RapidTransitMod
                                 + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v));
                         }
                         if (!adoptExistingVehicles)
-                            m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.CurrentGameMinute(), v, finalState);
-                    }
+                            m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.m_RuntimeShell.Minute(), v, finalState);
+                }
                     if (adoptExistingVehicles)
                         m_Runtime.m_LineInitialAdopted.Add(line);
                 }
@@ -153,6 +153,90 @@ namespace RapidTransitMod
             {
                 if (lines.IsCreated) lines.Dispose();
             }
+        }
+
+        internal VehicleState InferInitialState(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            Game.Vehicles.PublicTransport publicTransport,
+            bool boarding,
+            int initialWaypointIndex,
+            bool adoptExistingVehicles,
+            out string reason)
+        {
+            bool arriving = (publicTransport.m_State & PublicTransportFlags.Arriving) != 0;
+
+            if (initialWaypointIndex == 0)
+            {
+                reason = "at-origin";
+                return VehicleState.Holding;
+            }
+            if (boarding)
+            {
+                float originDistanceAtBoarding = m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints);
+                if (originDistanceAtBoarding <= DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
+                {
+                    if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nearOriginWaypointIndex, out float nearOriginSegmentPosition)
+                        || (nearOriginWaypointIndex == 1 && nearOriginSegmentPosition <= 0.10f)
+                        || nearOriginWaypointIndex == 0)
+                    {
+                        reason = "boarding-origin-fallback";
+                        return VehicleState.Holding;
+                    }
+                }
+            }
+            if (boarding && initialWaypointIndex > 0)
+            {
+                reason = "boarding-midway";
+                return VehicleState.Running;
+            }
+            if (!adoptExistingVehicles)
+            {
+                reason = "new-vehicle-default";
+                return VehicleState.Preparing;
+            }
+
+            if ((publicTransport.m_State & PublicTransportFlags.Returning) != 0)
+            {
+                reason = "returning";
+                return VehicleState.Retiring;
+            }
+
+            if (m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
+            {
+                float nearOriginDistance = m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints);
+                bool nearOriginProgress = nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.05f);
+                if (nearOriginProgress && nearOriginDistance <= DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS
+                    && (boarding || arriving))
+                {
+                    reason = "route-progress-origin-fallback wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
+                    return VehicleState.Holding;
+                }
+                reason = "route-progress wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
+                return (boarding && nextWaypointIndex == 0) ? VehicleState.Holding : VehicleState.Running;
+            }
+
+            float originDistance = m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints);
+            if (originDistance > DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS)
+            {
+                reason = "far-from-origin " + originDistance.ToString("F0") + "m";
+                return VehicleState.Running;
+            }
+
+            if (!m_Runtime.EntityManager.HasComponent<Target>(vehicle))
+            {
+                reason = "no-target";
+                return VehicleState.Preparing;
+            }
+
+            Entity target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle).m_Target;
+            if (target == Entity.Null || target == waypoints[0].m_Waypoint)
+            {
+                reason = "target-origin";
+                return VehicleState.Preparing;
+            }
+            reason = "non-origin-target";
+            return VehicleState.Running;
         }
     }
 }

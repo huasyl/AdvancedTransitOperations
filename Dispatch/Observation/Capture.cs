@@ -193,7 +193,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 return false;
             }
 
-            m_TrackModel.EnsureTrackChainBypassPipelineReady(chain);
+            m_TrackModel.EnsureBypassPipelineReady(chain);
             if (chain.TraversalProfile == null)
                 return false;
 
@@ -785,7 +785,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             }
 
-            m_TrackModel.EnsureTrackChainBypassPipelineReady(chain);
+            m_TrackModel.EnsureBypassPipelineReady(chain);
             if (chain.TraversalProfile == null || chain.TraversalProfile.RunSlices.Count == 0)
                 return;
 

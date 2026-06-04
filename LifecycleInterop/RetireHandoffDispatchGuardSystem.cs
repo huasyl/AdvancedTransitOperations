@@ -20,7 +20,12 @@ namespace RapidTransitMod
             if (GameManager.instance.gameMode != GameMode.Game)
                 return;
 
-            DispatchRuntimeSystem.Instance?.GuardRetireHandoffDispatchInputs(m_SimulationSystem.frameIndex);
+            LifecyclePort lifecycle = LifecyclePort.Current;
+            RetireGuardPort retireGuard = lifecycle != null ? lifecycle.RetireGuard : null;
+            if (retireGuard == null)
+                return;
+
+            retireGuard.Guard(m_SimulationSystem.frameIndex);
         }
     }
 }

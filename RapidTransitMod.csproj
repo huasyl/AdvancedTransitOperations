@@ -22,25 +22,17 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>UI\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
-    <None Include="dispatch-workbench-app\dist\**\*">
+    <None Include="workbench-app\dist\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>UI\dispatch-workbench-app\dist\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+      <TargetPath>UI\workbench-app\dist\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
-    <None Include="dispatch-workbench-app\euis-dist\**\*">
+    <None Include="workbench-app\workbench-dist\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>UI\dispatch-workbench-euis\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
-    </None>
-    <None Include="dispatch-workbench-app\native-dist\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>UI\dispatch-workbench-native\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+      <TargetPath>UI\workbench\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
     <None Include="Locales\**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>Locales\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
-    </None>
-    <None Include="lang\**\*.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>lang\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
     <None Include="RapidTransitMod.l10n.*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -151,40 +143,38 @@
     <ItemGroup>
       <RapidTransitDeployUiFiles Include="$(OutputPath)UI\**\*" />
       <RapidTransitDeployLocaleFiles Include="$(OutputPath)Locales\**\*.json" />
-      <RapidTransitDeployLangFiles Include="$(OutputPath)lang\**\*.json" />
-      <RapidTransitNativeHtmlDeployFiles Include="dispatch-workbench-app\native-dist\native-schedule.html" />
-      <RapidTransitNativeAssetDeployFiles Include="dispatch-workbench-app\native-dist\assets\**\*.*" />
-      <RapidTransitNativeLocaleDeployFiles Include="dispatch-workbench-app\native-dist\locales\**\*.*" />
-      <RapidTransitNativeFontDeployFiles Include="dispatch-workbench-app\src\assets\fonts\simhei.ttf" />
+      <RapidTransitNativeHtmlDeployFiles Include="workbench-app\workbench-dist\workbench.html" />
+      <RapidTransitNativeAssetDeployFiles Include="workbench-app\workbench-dist\assets\**\*.*" />
+      <RapidTransitNativeLocaleDeployFiles Include="workbench-app\workbench-dist\locales\**\*.*" />
+      <RapidTransitNativeFontDeployFiles Include="workbench-app\src\assets\fonts\simhei.ttf" />
     </ItemGroup>
     <MakeDir Directories="$(RapidTransitDeployDir)" />
     <Copy SourceFiles="@(RapidTransitDeployFiles)" DestinationFolder="$(RapidTransitDeployDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(RapidTransitDeployUiFiles)" DestinationFiles="@(RapidTransitDeployUiFiles->'$(RapidTransitDeployDir)\UI\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(RapidTransitDeployLocaleFiles)" DestinationFiles="@(RapidTransitDeployLocaleFiles->'$(RapidTransitDeployDir)\Locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitDeployLangFiles)" DestinationFiles="@(RapidTransitDeployLangFiles->'$(RapidTransitDeployDir)\lang\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <MakeDir Directories="$(RapidTransitDeployDir)\UI\dispatch-workbench-native" />
-    <MakeDir Directories="$(RapidTransitDeployDir)\UI\dispatch-workbench-native\assets" />
-    <MakeDir Directories="$(RapidTransitDeployDir)\UI\dispatch-workbench-native\locales" />
-    <Copy SourceFiles="@(RapidTransitNativeHtmlDeployFiles)" DestinationFiles="@(RapidTransitNativeHtmlDeployFiles->'$(RapidTransitDeployDir)\UI\dispatch-workbench-native\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitNativeAssetDeployFiles)" DestinationFiles="@(RapidTransitNativeAssetDeployFiles->'$(RapidTransitDeployDir)\UI\dispatch-workbench-native\assets\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitNativeLocaleDeployFiles)" DestinationFiles="@(RapidTransitNativeLocaleDeployFiles->'$(RapidTransitDeployDir)\UI\dispatch-workbench-native\locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitNativeFontDeployFiles)" DestinationFiles="@(RapidTransitNativeFontDeployFiles->'$(RapidTransitDeployDir)\UI\dispatch-workbench-native\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <MakeDir Directories="$(RapidTransitDeployDir)\UI\workbench" />
+    <MakeDir Directories="$(RapidTransitDeployDir)\UI\workbench\assets" />
+    <MakeDir Directories="$(RapidTransitDeployDir)\UI\workbench\locales" />
+    <Copy SourceFiles="@(RapidTransitNativeHtmlDeployFiles)" DestinationFiles="@(RapidTransitNativeHtmlDeployFiles->'$(RapidTransitDeployDir)\UI\workbench\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitNativeAssetDeployFiles)" DestinationFiles="@(RapidTransitNativeAssetDeployFiles->'$(RapidTransitDeployDir)\UI\workbench\assets\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitNativeLocaleDeployFiles)" DestinationFiles="@(RapidTransitNativeLocaleDeployFiles->'$(RapidTransitDeployDir)\UI\workbench\locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitNativeFontDeployFiles)" DestinationFiles="@(RapidTransitNativeFontDeployFiles->'$(RapidTransitDeployDir)\UI\workbench\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="PrepareNativeScheduleUi" BeforeTargets="DeployRapidTransitMod">
     <ItemGroup>
-      <RapidTransitNativeHtmlFiles Include="dispatch-workbench-app\native-dist\native-schedule.html" />
-      <RapidTransitNativeAssetFiles Include="dispatch-workbench-app\native-dist\assets\**\*.*" />
-      <RapidTransitNativeLocaleFiles Include="dispatch-workbench-app\native-dist\locales\**\*.*" />
-      <RapidTransitNativeFontFiles Include="dispatch-workbench-app\src\assets\fonts\simhei.ttf" />
+      <RapidTransitNativeHtmlFiles Include="workbench-app\workbench-dist\workbench.html" />
+      <RapidTransitNativeAssetFiles Include="workbench-app\workbench-dist\assets\**\*.*" />
+      <RapidTransitNativeLocaleFiles Include="workbench-app\workbench-dist\locales\**\*.*" />
+      <RapidTransitNativeFontFiles Include="workbench-app\src\assets\fonts\simhei.ttf" />
     </ItemGroup>
-    <MakeDir Directories="$(OutputPath)UI\dispatch-workbench-native" />
-    <MakeDir Directories="$(OutputPath)UI\dispatch-workbench-native\assets" />
-    <MakeDir Directories="$(OutputPath)UI\dispatch-workbench-native\locales" />
-    <Copy SourceFiles="@(RapidTransitNativeHtmlFiles)" DestinationFiles="@(RapidTransitNativeHtmlFiles->'$(OutputPath)UI\dispatch-workbench-native\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitNativeAssetFiles)" DestinationFiles="@(RapidTransitNativeAssetFiles->'$(OutputPath)UI\dispatch-workbench-native\assets\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitNativeLocaleFiles)" DestinationFiles="@(RapidTransitNativeLocaleFiles->'$(OutputPath)UI\dispatch-workbench-native\locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitNativeFontFiles)" DestinationFiles="@(RapidTransitNativeFontFiles->'$(OutputPath)UI\dispatch-workbench-native\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <MakeDir Directories="$(OutputPath)UI\workbench" />
+    <MakeDir Directories="$(OutputPath)UI\workbench\assets" />
+    <MakeDir Directories="$(OutputPath)UI\workbench\locales" />
+    <Copy SourceFiles="@(RapidTransitNativeHtmlFiles)" DestinationFiles="@(RapidTransitNativeHtmlFiles->'$(OutputPath)UI\workbench\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitNativeAssetFiles)" DestinationFiles="@(RapidTransitNativeAssetFiles->'$(OutputPath)UI\workbench\assets\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitNativeLocaleFiles)" DestinationFiles="@(RapidTransitNativeLocaleFiles->'$(OutputPath)UI\workbench\locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RapidTransitNativeFontFiles)" DestinationFiles="@(RapidTransitNativeFontFiles->'$(OutputPath)UI\workbench\%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

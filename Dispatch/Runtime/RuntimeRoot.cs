@@ -2,6 +2,7 @@ using System;
 using Game.Common;
 using Game.Routes;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Dispatch.Diagnostics;
 using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
@@ -25,6 +26,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
             runtime.m_Resolve = new RuntimeResolve(runtime);
+            runtime.m_SharedCorridor = new SharedCorridorSupport(runtime.m_Resolve, runtime.IsBypassStationSetting);
             runtime.m_StationAnchorDiagnostics = new StationAnchorDiagnostics(runtime);
             runtime.m_WorkbenchBridge = new RapidTransitMod.Dispatch.Workbench.Bridge(runtime);
             runtime.m_DispatchCache = new DispatchCache(runtime, runtime.LineId, runtime.GetDepot, runtime.DepotId);
@@ -46,6 +48,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_AnnouncementWorkbench.StopPreview());
             runtime.m_CommandApplier = new DispatchCommandApplier(runtime);
             runtime.m_LineProfile = new LineProfile(runtime);
+            runtime.m_RuntimeLog = new RuntimeLog(runtime);
+            runtime.m_RuntimeShell = new RuntimeShell(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
                 runtime,
                 line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
@@ -54,10 +58,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_DispatchCache.Read,
                 runtime.m_LapCache.Read,
                 runtime.m_Resolve.RuntimeVehicle,
-                runtime.IsLineStable,
+                runtime.m_LineProfile.IsStable,
                 runtime.m_LineProfile.ShouldHoldSpawnForNearestRunningCandidate,
                 runtime.m_LineProfile.HasBorderlineOriginArrivalCandidate,
-                runtime.LogDispatchSlotHeld,
+                runtime.m_RuntimeLog.DispatchSlotHeld,
                 (line, now, slot, count) => runtime.m_SelectPanel.RecordLineSpawnTriggerSummary(line, now, slot, count));
             runtime.m_Laps = new LapStore();
             runtime.m_Laps.Init();
@@ -68,7 +72,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_ObsPersist = new RapidTransitMod.Dispatch.Observation.Persist(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices);
             runtime.m_WaypointIndex = new WaypointIndex(runtime);
             runtime.m_LineRange = new LineRange(runtime.EntityManager, runtime.m_ObsQuery, DispatchRuntimeSystem.MAINTENANCE_THRESHOLD);
-            runtime.m_LineTimes = new LineTimes(runtime);
+            LineHost lineHost = RuntimePorts.BuildLineHost(runtime);
+            runtime.m_LineTimes = new LineTimes(lineHost.Times);
+            runtime.m_LineTimes.Init();
+            runtime.m_LineMileage = new LineMileage(lineHost.Mileage);
             runtime.m_LineVehicles = new LineVehicles(runtime);
             runtime.m_Obs = new TraceStore();
             runtime.m_ObsRecorder = new Recorder(RuntimePorts.BuildObservation(runtime));
@@ -80,27 +87,27 @@ namespace RapidTransitMod.Dispatch.Runtime
                 VehicleCount = () => runtime.m_VehicleView.Count,
                 AppliedLines = () => runtime.m_WorkbenchBridge.AppliedLines,
                 LineQuery = runtime.m_LineQuery,
-                Buffers = new DispatchRuntimeSystem.TrackBuffers(runtime),
+                Buffers = RuntimePorts.Buffers(runtime),
                 Name = runtime.m_NameSystem,
                 IsBypassStation = runtime.IsBypassStationSetting,
-                GetProfile = runtime.TryGetLineTimeProfile,
-                GetStopFrames = runtime.GetProfileWaypointStopFrames,
-                GetDepartFrames = runtime.ComputeDepartureToWaypointFramesFromProfile,
+                GetProfile = runtime.m_LineTimes.Get,
+                GetStopFrames = runtime.m_LineTimes.Stop,
+                GetDepartFrames = runtime.m_LineTimes.Depart,
                 ResolveStop = runtime.m_Resolve.Stop,
                 FindStation = runtime.m_Resolve.StationOf,
                 ResolveStation = runtime.m_Resolve.PassingStation,
                 IsLocal = line => runtime.m_LineView.Local(line),
                 IsExpress = line => runtime.m_LineView.Express(line),
-                GetBypassContext = runtime.TryGetBypassWaypointContext,
-                GetBypassBuilding = runtime.GetBypassBuildingForWaypoint,
-                GetStationBuilding = runtime.GetStationBuildingForWaypoint,
-                FindBypassWaypoint = runtime.TryFindWaypointIndexForBypassBuilding,
-                FindSharedWaypoint = runtime.TryFindFutureSharedCorridorWaypoint,
-                BuildCorridorMap = runtime.BuildLocalBypassCorridorWaypointMap,
-                CollectTurnback = runtime.TryCollectTurnbackStationBoundaries,
-                ResolveTurnback = runtime.TryResolveTurnbackStationBoundary
+                GetBypassContext = runtime.m_SharedCorridor.TryGetBypassWaypointContext,
+                GetBypassBuilding = runtime.m_SharedCorridor.GetBypassBuildingForWaypoint,
+                GetStationBuilding = runtime.m_SharedCorridor.GetStationBuildingForWaypoint,
+                FindBypassWaypoint = runtime.m_SharedCorridor.TryFindWaypointIndexForBypassBuilding,
+                FindSharedWaypoint = runtime.m_SharedCorridor.TryFindFutureSharedCorridorWaypoint,
+                BuildCorridorMap = runtime.m_SharedCorridor.BuildLocalBypassCorridorWaypointMap,
+                CollectTurnback = Turnbacks.TryCollectTurnbackStationBoundaries,
+                ResolveTurnback = Turnbacks.TryResolveTurnbackStationBoundary
             }));
-            runtime.m_TrackProjection = new TrackProjectionService(runtime);
+            runtime.m_TrackProjection = new TrackProjectionService(RuntimePorts.BuildTrackProjection(runtime));
             runtime.m_ObsCapture = new Capture(
                 runtime.m_Laps,
                 runtime.m_Dwell,
@@ -109,8 +116,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_TrackProjection,
                 RuntimePorts.BuildCapture(runtime));
             runtime.m_Observation = new ObservationPort(runtime, runtime.m_ObsCapture);
-            runtime.m_RuntimeObs = new RuntimeObs(runtime.m_ObsCapture);
-            runtime.m_Bypass = new RuntimeFacade(runtime);
+            runtime.m_Bypass = new RuntimeFacade(RuntimePorts.BuildBypassRuntime(runtime));
             runtime.m_LineView = new LineView(
                 entity => entity != Entity.Null && runtime.EntityManager.Exists(entity),
                 () => runtime.m_SimulationSystem.frameIndex,
@@ -142,21 +148,25 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SpawningLines = new NativeHashMap<Entity, int>(64, Allocator.Persistent);
             runtime.m_LastSpawnBlockedLogFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             runtime.m_LastScheduleDiagnosticLogFrame = new NativeHashMap<ulong, uint>(256, Allocator.Persistent);
-            runtime.m_LineWaypointSignature = new NativeHashMap<Entity, ulong>(64, Allocator.Persistent);
-            runtime.m_LineStableSinceFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             runtime.m_LineInitialAdopted = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            runtime.m_LineTimeProfiles = new NativeHashMap<Entity, LineTimeProfileHeader>(64, Allocator.Persistent);
-            runtime.m_LineTimeProfileSegmentFrames = new NativeList<float>(256, Allocator.Persistent);
-            runtime.m_LineTimeProfileStopFrames = new NativeList<float>(256, Allocator.Persistent);
             runtime.m_JustLaunched = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            runtime.m_DiagnosedLines = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_LineSpawnRequestFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
+
+            LifecyclePort.Bind(new LifecyclePort(
+                new ManagedRequestPort(runtime),
+                new RetireGuardPort(runtime.m_CommandApplier.GuardRetireHandoffInputs),
+                new OriginRepairPort(
+                    runtime.IsRuntimeReadyForOriginArrivingRepair,
+                    runtime.TryGetRuntimeVehicleState,
+                    runtime.m_WaypointIndex.ComputeForOriginArrivingRepair,
+                    runtime.m_RouteProgress.TryOriginArrivalRepair)));
 
             RuntimePorts.Build(runtime);
         }
 
         public static void Clear(DispatchRuntimeSystem runtime)
         {
+            LifecyclePort.Clear();
             runtime.m_CommandApplier = null!;
             runtime.m_DispatchScheduler = null!;
             runtime.m_VehicleRegistrar = null!;
@@ -185,6 +195,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_BypassStore = null!;
             runtime.m_RuntimeCache = null!;
             runtime.m_Observation = null!;
+            runtime.m_SharedCorridor = null!;
+            runtime.m_RuntimeLog = null!;
+            runtime.m_RuntimeShell = null!;
             if (runtime.m_Bypass != null) runtime.m_Bypass.Dispose();
             runtime.m_TrackModel = null!;
             runtime.m_Bypass = null!;
@@ -196,10 +209,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Obs = null!;
             runtime.m_ObsRecorder = null!;
             runtime.m_ObsCapture = null!;
-            runtime.m_RuntimeObs = null!;
             runtime.m_LineRange = null!;
+            runtime.m_LineProfile?.Dispose();
             runtime.m_LineProfile = null!;
+            if (runtime.m_LineTimes != null) runtime.m_LineTimes.Dispose();
             runtime.m_LineTimes = null!;
+            runtime.m_LineMileage = null!;
             runtime.m_LineVehicles = null!;
             runtime.m_RouteProgress = null!;
             runtime.m_WaypointIndex = null!;

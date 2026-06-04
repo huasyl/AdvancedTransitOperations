@@ -32,8 +32,9 @@ namespace RapidTransitMod
 
         protected override void OnUpdate()
         {
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
-            if (control == null || m_LineQuery.IsEmptyIgnoreFilter)
+            LifecyclePort lifecycle = LifecyclePort.Current;
+            ManagedRequestPort managedRequests = lifecycle != null ? lifecycle.ManagedRequests : null;
+            if (managedRequests == null || m_LineQuery.IsEmptyIgnoreFilter)
                 return;
 
             using (NativeArray<Entity> lines = m_LineQuery.ToEntityArray(Allocator.Temp))
@@ -46,7 +47,7 @@ namespace RapidTransitMod
                         continue;
 
                     TransportLine transportLine = EntityManager.GetComponentData<TransportLine>(line);
-                    bool managed = control.IsRtManagedLine(line);
+                    bool managed = managedRequests.IsManagedLine(line);
                     if (!managed)
                     {
                         RemoveRtRequestFromUnmanagedLine(line, ref transportLine);
@@ -60,7 +61,7 @@ namespace RapidTransitMod
                         {
                             if (!IsParkedSentinelNormalized(request, line))
                                 NormalizeParkedSentinel(request, line);
-                            if (ShouldPromoteSentinel(control, line, spawnPermitLines))
+                            if (ShouldPromoteSentinel(managedRequests, line, spawnPermitLines))
                                 PromoteSentinelToSpawnPermit(request, line);
                             continue;
                         }
@@ -80,7 +81,7 @@ namespace RapidTransitMod
                     }
 
                     Entity sentinel = InstallParkedSentinel(line);
-                    if (ShouldPromoteSentinel(control, line, spawnPermitLines))
+                    if (ShouldPromoteSentinel(managedRequests, line, spawnPermitLines))
                         PromoteSentinelToSpawnPermit(sentinel, line);
                 }
             }
@@ -213,17 +214,17 @@ namespace RapidTransitMod
         }
 
         private bool ShouldPromoteSentinel(
-            DispatchRuntimeSystem control,
+            ManagedRequestPort managedRequests,
             Entity line,
             NativeHashSet<Entity> spawnPermitLines)
         {
             if (spawnPermitLines.Contains(line))
                 return false;
 
-            if (!control.TryGetRtSpawnTarget(line, out int targetCount))
+            if (!managedRequests.TryGetSpawnTarget(line, out int targetCount))
                 return false;
 
-            int actualCount = control.CountRtActiveVehicles(line);
+            int actualCount = managedRequests.CountActiveVehicles(line);
             return targetCount > actualCount;
         }
 

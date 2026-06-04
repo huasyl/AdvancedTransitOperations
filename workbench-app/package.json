@@ -1,0 +1,21 @@
+{
+  "name": "rt-dispatch-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:planner-lab": "vite --config vite.planner-lab.config.js",
+    "build:workbench": "vite build --config vite.workbench.config.js",
+    "dev:transit-diagram": "vite --config vite.transit-diagram.config.js",
+    "build:transit-diagram": "vite build --config vite.transit-diagram.config.js",
+    "build": "npm run build:workbench"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

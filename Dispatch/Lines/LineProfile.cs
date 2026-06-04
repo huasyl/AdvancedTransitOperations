@@ -3,6 +3,7 @@ using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
+using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -11,10 +12,16 @@ namespace RapidTransitMod.Dispatch.Lines
     internal sealed class LineProfile
     {
         private readonly DispatchRuntimeSystem m_Runtime;
+        private NativeHashMap<Entity, ulong> m_LineWaypointSignature;
+        private NativeHashMap<Entity, uint> m_LineStableSinceFrame;
+        private NativeHashSet<Entity> m_DiagnosedLines;
 
         public LineProfile(DispatchRuntimeSystem runtime)
         {
             m_Runtime = runtime;
+            m_LineWaypointSignature = new NativeHashMap<Entity, ulong>(64, Allocator.Persistent);
+            m_LineStableSinceFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
+            m_DiagnosedLines = new NativeHashSet<Entity>(64, Allocator.Persistent);
         }
 
         public float DistanceToOrigin(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints)
@@ -172,7 +179,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 if (!IsBorderlineOriginArrivalCandidate(vehicle, waypoints))
                     continue;
 
-                float eta = m_Runtime.EstimateRunningArrivalFrames(vehicle, line, waypoints, nowFrame, lineDurationFrames, lineHasHistory);
+                float eta = m_Runtime.m_LineTimes.Run(vehicle, line, waypoints, nowFrame, lineDurationFrames, lineHasHistory);
                 if (eta != float.MaxValue && eta <= slotFramesAway + waitFrames)
                     return true;
             }
@@ -250,6 +257,98 @@ namespace RapidTransitMod.Dispatch.Lines
             }
 
             return false;
+        }
+
+        public bool HasPreparingReachedOrigin(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            bool boarding,
+            int currentWaypointIndex)
+        {
+            if (vehicle == Entity.Null || waypoints.Length == 0 || currentWaypointIndex != 0)
+                return false;
+
+            return boarding;
+        }
+
+        public ulong MixSignature(ulong hash, int value)
+        {
+            return (hash ^ (uint)value) * 1099511628211UL;
+        }
+
+        public ulong ComputeWaypointSignature(DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            ulong hash = 1469598103934665603UL;
+            hash = MixSignature(hash, waypoints.Length);
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                hash = MixSignature(hash, waypoints[i].m_Waypoint.Index);
+            }
+
+            return hash;
+        }
+
+        public bool IsStable(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            ulong signature = ComputeWaypointSignature(waypoints);
+            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
+
+            if (!m_LineWaypointSignature.TryGetValue(line, out ulong oldSignature) || oldSignature != signature)
+            {
+                m_Runtime.m_LineTimes.Clear();
+                m_LineWaypointSignature[line] = signature;
+                m_LineStableSinceFrame[line] = nowFrame;
+                m_DiagnosedLines.Remove(line);
+                return false;
+            }
+
+            if (!m_LineStableSinceFrame.TryGetValue(line, out uint stableSince))
+            {
+                m_LineStableSinceFrame[line] = nowFrame;
+                return false;
+            }
+
+            return nowFrame - stableSince >= DispatchRuntimeSystem.NEW_LINE_STABLE_FRAMES;
+        }
+
+        public bool IsDiagnosed(Entity line)
+        {
+            return line != Entity.Null && m_DiagnosedLines.Contains(line);
+        }
+
+        public void MarkDiagnosed(Entity line)
+        {
+            if (line != Entity.Null)
+                m_DiagnosedLines.Add(line);
+        }
+
+        public NativeArray<Entity> StabilityKeys(Allocator allocator)
+        {
+            return m_LineWaypointSignature.GetKeyArray(allocator);
+        }
+
+        public void RemoveStability(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_LineWaypointSignature.Remove(line);
+            m_LineStableSinceFrame.Remove(line);
+            m_DiagnosedLines.Remove(line);
+        }
+
+        public void ClearStability()
+        {
+            if (m_LineWaypointSignature.IsCreated) m_LineWaypointSignature.Clear();
+            if (m_LineStableSinceFrame.IsCreated) m_LineStableSinceFrame.Clear();
+            if (m_DiagnosedLines.IsCreated) m_DiagnosedLines.Clear();
+        }
+
+        public void Dispose()
+        {
+            if (m_LineWaypointSignature.IsCreated) m_LineWaypointSignature.Dispose();
+            if (m_LineStableSinceFrame.IsCreated) m_LineStableSinceFrame.Dispose();
+            if (m_DiagnosedLines.IsCreated) m_DiagnosedLines.Dispose();
         }
     }
 }

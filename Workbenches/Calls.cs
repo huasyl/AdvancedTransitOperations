@@ -36,7 +36,7 @@ namespace RapidTransitMod.Workbenches
 
         internal static string Observe()
         {
-            return DispatchRuntimeSystem.Instance?.ObservationJson() ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_Observation.Json() ?? string.Empty;
         }
 
         internal static string Locale()

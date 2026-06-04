@@ -22,6 +22,7 @@ namespace RapidTransitMod
         private EntityQuery m_DepotQuery;
         private EntityQuery m_LineQuery;
         private NameSystem m_NameSystem = null!;
+        private SimulationSystem m_SimulationSystem = null!;
         private PathfindSetupSystem m_PathfindSetupSystem = null!;
 
         private readonly struct PendingRequestRouteSetupCacheEntry
@@ -250,6 +251,7 @@ namespace RapidTransitMod
         {
             base.OnCreate();
             m_NameSystem = World.GetOrCreateSystemManaged<NameSystem>();
+            m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
             m_PathfindSetupSystem = World.GetOrCreateSystemManaged<PathfindSetupSystem>();
             m_PendingRequestQuery = GetEntityQuery(
                 ComponentType.ReadOnly<ServiceRequest>(),
@@ -413,7 +415,7 @@ namespace RapidTransitMod
 
         private uint GetCurrentFrame()
         {
-            return DispatchRuntimeSystem.Instance?.GetCurrentSimulationFrameIndex() ?? 0u;
+            return m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0u;
         }
 
         private void RememberConfiguredDepotBlockedRequest(
@@ -515,8 +517,8 @@ namespace RapidTransitMod
                     if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
                         continue;
 
-                    DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
-                    if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(request, line))
+                    ManagedRequestPort managedRequests = LifecyclePort.Current?.ManagedRequests;
+                    if (managedRequests != null && managedRequests.ShouldDestroyOfficial(request, line))
                     {
                         DestroySuppressedManagedLineRequest(request, line);
                         continue;
@@ -879,8 +881,8 @@ namespace RapidTransitMod
                     if (line == Entity.Null || !EntityManager.Exists(line))
                         continue;
 
-                    DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
-                    if (control != null && control.ShouldDestroyOfficialTransportVehicleRequest(requestEntity, line))
+                    ManagedRequestPort managedRequests = LifecyclePort.Current?.ManagedRequests;
+                    if (managedRequests != null && managedRequests.ShouldDestroyOfficial(requestEntity, line))
                     {
                         DestroySuppressedManagedLineRequest(requestEntity, line);
                         continue;

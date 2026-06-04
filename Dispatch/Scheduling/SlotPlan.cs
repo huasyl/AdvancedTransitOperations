@@ -53,7 +53,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 return Status.None;
 
             VehicleState bestState = m_Runtime.m_VehicleView.GetState(pick.Vehicle);
-            m_Runtime.LogCrossLineCandidate(tick.Line, pick.Vehicle, bestState, slot, pick.Eta, pick.PrevTarget);
+            m_Runtime.m_RuntimeLog.CrossLineCandidate(tick.Line, pick.Vehicle, bestState, slot, pick.Eta, pick.PrevTarget);
             if (bestState == VehicleState.Idle || bestState == VehicleState.Holding)
             {
                 if (pick.PrevTarget < 0 && HoldingFull(tick, cycleMinutes))
@@ -96,7 +96,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
             if (ScheduleClock.CanLate(nowMin, previousSlot))
             {
                 Once(
-                    m_Runtime.m_LateDispatchLogCache,
+                    m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                     vehicle,
                     "LateDispatchCandidate|" + previousSlot + "|" + stateTag,
                     "[补发候选] " + lineTag + " 车辆" + vehicle.Index
@@ -133,7 +133,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
             assignedTarget = nextTarget;
             Once(
-                m_Runtime.m_LateDispatchLogCache,
+                m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                 vehicle,
                 "UpcomingTarget|" + nextTarget + "|" + stateTag,
                 "[预分配] " + lineTag + " 车辆" + vehicle.Index
@@ -168,7 +168,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
             if (ScheduleClock.CanLate(nowMin, previousTarget))
             {
                 Once(
-                    m_Runtime.m_LateDispatchLogCache,
+                    m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                     vehicle,
                     "LateDispatchCandidate|" + previousTarget + "|" + stateTag,
                     "[补发候选] " + lineTag + " 车辆" + vehicle.Index
@@ -233,7 +233,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
                 releasedVehicle = other;
                 Once(
-                    m_Runtime.m_LateDispatchLogCache,
+                    m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                     vehicle,
                     "LateDispatchTakeover|" + target + "|" + other.Index,
                     "[补发接管] " + lineTag + " 车辆" + vehicle.Index

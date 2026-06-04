@@ -423,36 +423,36 @@ namespace RapidTransitMod.Dispatch.Observation
         private ulong ComputeSignature(DynamicBuffer<RouteWaypoint> waypoints, DynamicBuffer<RouteSegment> segments)
         {
             ulong hash = 1469598103934665603UL;
-            hash = DispatchRuntimeSystem.MixLineSignature(hash, waypoints.Length);
-            hash = DispatchRuntimeSystem.MixLineSignature(hash, segments.Length);
+            hash = m_Runtime.m_LineProfile.MixSignature(hash, waypoints.Length);
+            hash = m_Runtime.m_LineProfile.MixSignature(hash, segments.Length);
             int count = math.min(waypoints.Length, segments.Length);
             for (int i = 0; i < count; i++)
             {
-                hash = DispatchRuntimeSystem.MixLineSignature(hash, i);
+                hash = m_Runtime.m_LineProfile.MixSignature(hash, i);
 
                 Entity waypointEntity = waypoints[i].m_Waypoint;
                 if (waypointEntity != Entity.Null
                     && m_Runtime.EntityManager.Exists(waypointEntity)
                     && m_Runtime.EntityManager.HasComponent<Waypoint>(waypointEntity))
                 {
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, m_Runtime.EntityManager.GetComponentData<Waypoint>(waypointEntity).m_Index);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, m_Runtime.EntityManager.GetComponentData<Waypoint>(waypointEntity).m_Index);
                 }
                 else
                 {
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, -1);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, -1);
                 }
 
                 if (TryWaypointPosition(waypointEntity, out float3 waypointPosition))
                 {
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, Quantize(waypointPosition.x));
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, Quantize(waypointPosition.y));
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, Quantize(waypointPosition.z));
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, Quantize(waypointPosition.x));
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, Quantize(waypointPosition.y));
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, Quantize(waypointPosition.z));
                 }
                 else
                 {
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, 0);
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, 0);
-                    hash = DispatchRuntimeSystem.MixLineSignature(hash, 0);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, 0);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, 0);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, 0);
                 }
 
                 Entity segmentEntity = segments[i].m_Segment;
@@ -464,8 +464,8 @@ namespace RapidTransitMod.Dispatch.Observation
                     durationSeconds = math.max(0f, m_Runtime.EntityManager.GetComponentData<PathInformation>(segmentEntity).m_Duration);
                 }
 
-                hash = DispatchRuntimeSystem.MixLineSignature(hash, Quantize(durationSeconds));
-                hash = DispatchRuntimeSystem.MixLineSignature(hash, Quantize(m_Runtime.ReadRouteSegmentDistanceMeters(segmentEntity, waypoints, i)));
+                hash = m_Runtime.m_LineProfile.MixSignature(hash, Quantize(durationSeconds));
+                hash = m_Runtime.m_LineProfile.MixSignature(hash, Quantize(m_Runtime.m_LineMileage.ReadSegment(segmentEntity, waypoints, i)));
             }
 
             return hash;

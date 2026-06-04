@@ -11,6 +11,30 @@ namespace RapidTransitMod.Dispatch.Lines
     internal sealed class RouteProgress
     {
         private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_FrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
+
+        private readonly struct RouteProgressFrameSnapshot
+        {
+            public readonly uint Frame;
+            public readonly Entity Route;
+            public readonly Entity Target;
+            public readonly int NextWaypointIndex;
+            public readonly float SegmentPosition;
+
+            public RouteProgressFrameSnapshot(
+                uint frame,
+                Entity route,
+                Entity target,
+                int nextWaypointIndex,
+                float segmentPosition)
+            {
+                Frame = frame;
+                Route = route;
+                Target = target;
+                NextWaypointIndex = nextWaypointIndex;
+                SegmentPosition = segmentPosition;
+            }
+        }
 
         public RouteProgress(DispatchRuntimeSystem runtime)
         {
@@ -144,9 +168,8 @@ namespace RapidTransitMod.Dispatch.Lines
         {
             nextWaypointIndex = 0;
             segmentPosition = 0f;
-            Dictionary<Entity, DispatchRuntimeSystem.RouteProgressFrameSnapshot> snapshots = m_Runtime.m_RouteProgressFrameSnapshots;
             if (vehicle == Entity.Null
-                || !snapshots.TryGetValue(vehicle, out DispatchRuntimeSystem.RouteProgressFrameSnapshot snapshot))
+                || !m_FrameSnapshots.TryGetValue(vehicle, out RouteProgressFrameSnapshot snapshot))
             {
                 return false;
             }
@@ -176,12 +199,23 @@ namespace RapidTransitMod.Dispatch.Lines
             if (vehicle == Entity.Null || route == Entity.Null || nextWaypointIndex < 0)
                 return;
 
-            m_Runtime.m_RouteProgressFrameSnapshots[vehicle] = new DispatchRuntimeSystem.RouteProgressFrameSnapshot(
+            m_FrameSnapshots[vehicle] = new RouteProgressFrameSnapshot(
                 m_Runtime.m_SimulationSystem.frameIndex,
                 route,
                 target,
                 nextWaypointIndex,
                 segmentPosition);
+        }
+
+        public void Remove(Entity vehicle)
+        {
+            if (vehicle != Entity.Null)
+                m_FrameSnapshots.Remove(vehicle);
+        }
+
+        public void Clear()
+        {
+            m_FrameSnapshots.Clear();
         }
     }
 }

@@ -39,10 +39,6 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Buffers.LoadSlice();
         }
 
-        public void Save()
-        {
-        }
-
         public void Clear()
         {
             m_Runtime.m_DwellObservationBufferReady = false;

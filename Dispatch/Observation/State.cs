@@ -120,4 +120,30 @@ namespace RapidTransitMod.Dispatch.Observation
         public string Departure = string.Empty;
         public uint Frame;
     }
+
+    internal readonly struct TrainHeadSnapshot
+    {
+        public readonly uint Frame;
+        public readonly Entity HeadVehicle;
+        public readonly Entity FrontLane;
+        public readonly Entity RearLane;
+        public readonly bool Reversed;
+        public readonly int WaypointIndex;
+
+        public TrainHeadSnapshot(
+            uint frame,
+            Entity headVehicle,
+            Entity frontLane,
+            Entity rearLane,
+            bool reversed,
+            int waypointIndex)
+        {
+            Frame = frame;
+            HeadVehicle = headVehicle;
+            FrontLane = frontLane;
+            RearLane = rearLane;
+            Reversed = reversed;
+            WaypointIndex = waypointIndex;
+        }
+    }
 }
