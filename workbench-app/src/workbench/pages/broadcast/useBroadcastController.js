@@ -28,10 +28,14 @@ import { animateElementScrollTop } from "./components/BroadcastAnimatedPanels";
 import useBroadcastPlatformRules from "./useBroadcastPlatformRules";
 import useBroadcastStationBindings from "./useBroadcastStationBindings";
 import useBroadcastAssets from "./useBroadcastAssets";
+import useBroadcastApplyOperation from "./useBroadcastApplyOperation";
+import useBroadcastDraftStore from "./useBroadcastDraftStore";
 
 export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   const { locale, t } = useNativeScheduleI18n();
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
+  const broadcastApplyOperation = useBroadcastApplyOperation(workbenchApi);
+  const draftStore = useBroadcastDraftStore();
   const delayLibrary = useMemo(() => DELAY_LIBRARY.map((delay) => ({ ...delay, name: t(delay.nameKey), desc: t(delay.descKey) })), [t]);
   const triggerOptions = useMemo(() => TRIGGER_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) })), [t]);
   const platformTriggerOptions = useMemo(() => PLATFORM_TRIGGER_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) })), [t]);
@@ -56,10 +60,12 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   const [previewingAssetName, setPreviewingAssetName] = useState("");
   const [previewingRuleId, setPreviewingRuleId] = useState("");
   const [broadcastPreviewVolume, setBroadcastPreviewVolume] = useState(80);
-  const [broadcastLineApplied, setBroadcastLineApplied] = useState(false);
+  const [broadcastAppliedVolume, setBroadcastAppliedVolume] = useState(80);
   const [broadcastLineDraftDirty, setBroadcastLineDraftDirty] = useState(false);
   const [broadcastVolumeDirty, setBroadcastVolumeDirty] = useState(false);
+  const [broadcastLocalDraftDirty, setBroadcastLocalDraftDirty] = useState(false);
   const [isApplyingBroadcastConfig, setIsApplyingBroadcastConfig] = useState(false);
+  const [broadcastApplyPhase, setBroadcastApplyPhase] = useState("");
   const [broadcastApplyError, setBroadcastApplyError] = useState("");
   const [isAssetExplorerOpen, setIsAssetExplorerOpen] = useState(false);
   const [shouldRenderAssetExplorer, setShouldRenderAssetExplorer] = useState(false);
@@ -69,6 +75,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   const [currentExternalPath, setCurrentExternalPath] = useState("");
   const [lineOptions, setLineOptions] = useState(fallbackLineOptions);
   const [selectedLineId, setSelectedLineId] = useState(fallbackLineOptions[0]?.id ?? LINE_OPTIONS[0].id);
+  const [broadcastContentLineId, setBroadcastContentLineId] = useState(fallbackLineOptions[0]?.id ?? LINE_OPTIONS[0].id);
   const [platformCreateStationIds, setPlatformCreateStationIds] = useState([]);
   const [bindingSlotHints, setBindingSlotHints] = useState([]);
   const [lineDropdownOpen, setLineDropdownOpen] = useState(false);
@@ -97,9 +104,9 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   const lastHydratedRulesLineIdRef = useRef("");
   const lineOptionsRef = useRef(lineOptions);
   const selectedLineIdRef = useRef(selectedLineId);
+  const broadcastContentLineIdRef = useRef(selectedLineId);
   const platformRuleTitleMemoryRef = useRef({});
   const platformRuleIdMemoryRef = useRef({});
-  const skipNextPlatformAnnouncementsSaveRef = useRef(false);
   const dirtyPlatformStationIdsRef = useRef([]);
   const skipNextRulesSaveRef = useRef(false);
   const availableAssetLibrary = catalogAssetLibrary;
@@ -127,6 +134,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   const defaultBindingLanguageLabel = useMemo(() => resolveBroadcastLanguageLabel(fallbackLanguageKey, { t }), [fallbackLanguageKey, t]);
   lineOptionsRef.current = lineOptions;
   selectedLineIdRef.current = selectedLineId;
+  broadcastContentLineIdRef.current = broadcastContentLineId;
   const broadcastLabels = {
     t,
     sidebarTitle: t("broadcast.sidebar.title"),
@@ -136,6 +144,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     importAsset: t("broadcast.sidebar.import"),
     deleteAsset: t("broadcast.sidebar.deleteAsset"),
     deleteAllAssets: t("broadcast.sidebar.deleteAllAssets"),
+    assetInUseCannotDelete: t("broadcast.sidebar.assetInUseCannotDelete"),
     sequenceTab: t("broadcast.tabs.sequence"),
     mappingTab: t("broadcast.tabs.mapping"),
     platformTab: t("broadcast.tabs.platform"),
@@ -213,10 +222,117 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     return selectedLineIdRef.current || selectedLineId || "";
   }
 
+  function cloneBroadcastStationsForDraft(source) {
+    return (Array.isArray(source) ? source : []).map((station) => ({
+      ...station,
+      audios: Array.isArray(station?.audios) ? station.audios.map((audio) => ({ ...audio })) : [],
+      conflictAssets: Array.isArray(station?.conflictAssets) ? station.conflictAssets.map((entry) => ({ ...entry })) : [],
+    }));
+  }
+
+  function cloneBroadcastPlatformAnnouncementsForDraft(source) {
+    return (Array.isArray(source) ? source : []).map((announcement) => ({
+      ...announcement,
+      nodes: Array.isArray(announcement?.nodes) ? announcement.nodes.map((node) => ({ ...node })) : [],
+    }));
+  }
+
+  function buildCurrentBroadcastLineDraft(overrides = {}) {
+    const stationsForUi = cloneBroadcastStationsForDraft(overrides.stationsForUi ?? overrides.stations ?? stations);
+    return {
+      rules: cloneBroadcastRules(overrides.rules ?? rules),
+      stationBindings: stationsForUi.flatMap((station) =>
+        (Array.isArray(station?.audios) ? station.audios : [])
+          .filter((audio) => audio && audio.assetName)
+          .map((audio, index) => ({
+            stationId: station.id,
+            lang: typeof audio.lang === "string" ? audio.lang : "",
+            langIndex: normalizeLangIndex(audio.langIndex ?? index + 1),
+            assetName: audio.assetName,
+          })),
+      ),
+      platformAnnouncements: cloneBroadcastPlatformAnnouncementsForDraft(overrides.platformAnnouncements ?? platformAnnouncements),
+      stationsForUi,
+    };
+  }
+
+  function storeBroadcastLocalDraft(lineId, draft = null) {
+    if (!lineId) {
+      return;
+    }
+
+    draftStore.setLineDraft(lineId, draft || buildCurrentBroadcastLineDraft());
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+  }
+
+  function getBroadcastLineDraftGeneration(lineId) {
+    return draftStore.getLineDraftGeneration(lineId);
+  }
+
+  function isBroadcastLineLocalDraftDirty(lineId) {
+    return Boolean(lineId && draftStore.getDirtyLineIds().includes(lineId));
+  }
+
+  function setSelectedLineLocalDraftDirty(lineId) {
+    const isDirty = isBroadcastLineLocalDraftDirty(lineId);
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+    setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+    return isDirty;
+  }
+
+  function markBroadcastDraftDirty(lineId = getActiveBroadcastLineId(), draft = null) {
+    if (!lineId) {
+      return;
+    }
+
+    draftStore.setLineDraft(lineId, draft || buildCurrentBroadcastLineDraft());
+    if (lineId === selectedLineIdRef.current) {
+      setBroadcastContentLineId(lineId);
+    }
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+    setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+    setBroadcastApplyError("");
+    broadcastApplyOperation.resetApplyState();
+  }
+
+  function clearBroadcastLocalDraft(lineId) {
+    if (!lineId) {
+      return;
+    }
+
+    draftStore.clearLineDrafts([lineId]);
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+  }
+
+  function applyBroadcastLocalDraft(lineId) {
+    const draft = draftStore.getLineDraft(lineId);
+    if (!draft) {
+      return false;
+    }
+
+    skipNextRulesSaveRef.current = true;
+    setRules(cloneBroadcastRules(draft.rules));
+    setPlatformAnnouncements(cloneBroadcastPlatformAnnouncementsForDraft(draft.platformAnnouncements));
+    setStations(cloneBroadcastStationsForDraft(draft.stationsForUi));
+    setBroadcastPreviewVolume(draftStore.getVolumeDraft(broadcastAppliedVolume));
+    setBroadcastContentLineId(lineId);
+    setSelectedLineLocalDraftDirty(lineId);
+    return true;
+  }
+
+  function handleBroadcastLineSelect(lineId) {
+    setSelectedLineId(lineId);
+    if (!applyBroadcastLocalDraft(lineId)) {
+      setBroadcastContentLineId("");
+      skipNextRulesSaveRef.current = true;
+      setRules([]);
+      setPlatformAnnouncements([]);
+      setStations([]);
+      setSelectedLineLocalDraftDirty(lineId);
+    }
+  }
+
   function applyBroadcastSnapshot(snapshot) {
-    const nextVolumeDirty = typeof snapshot?.volumeDirty === "boolean" ? snapshot.volumeDirty : false;
-    const nextLineApplied = typeof snapshot?.lineApplied === "boolean" ? snapshot.lineApplied : Boolean(snapshot?.draftApplied);
-    const nextLineDraftDirty = typeof snapshot?.lineDraftDirty === "boolean" ? snapshot.lineDraftDirty : Boolean(snapshot?.draftDirty) && !nextVolumeDirty;
     const backendLines = extractBackendLineOptions(snapshot);
     const hasBackendLines = backendLines.length > 0;
     const nextLineOptions = hasBackendLines ? backendLines : hasBackendLineHydratedRef.current ? lineOptionsRef.current : fallbackLineOptions;
@@ -226,6 +342,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       typeof snapshot?.selectedLineId === "string" && nextLineOptions.some((line) => line.id === snapshot.selectedLineId)
         ? snapshot.selectedLineId
         : preservedSelectedLineId || fallbackSelectedLineId;
+    const preserveLocalDraft = isBroadcastLineLocalDraftDirty(nextSelectedLineId);
 
     if (hasBackendLines) {
       hasBackendLineHydratedRef.current = true;
@@ -236,14 +353,23 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     }
 
     setSelectedLineId(nextSelectedLineId);
-    setBroadcastLineApplied(nextLineApplied);
-    setBroadcastLineDraftDirty(nextLineDraftDirty);
-    setBroadcastVolumeDirty(nextVolumeDirty);
+    setBroadcastLineDraftDirty(false);
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+    setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+    if (!preserveLocalDraft) {
+      setSelectedLineLocalDraftDirty(nextSelectedLineId);
+    }
     const snapshotVolume = Number.isFinite(snapshot?.volume) ? snapshot.volume : 80;
-    setBroadcastPreviewVolume(snapshotVolume);
+    setBroadcastAppliedVolume(snapshotVolume);
+    if (!draftStore.hasVolumeDirty()) {
+      setBroadcastPreviewVolume(draftStore.getVolumeDraft(snapshotVolume));
+    }
     setBroadcastWarnings(Array.isArray(snapshot?.warnings) ? snapshot.warnings.filter((warning) => typeof warning === "string" && warning) : []);
-    setIsApplyingBroadcastConfig(false);
-    setBroadcastApplyError("");
+    if (!preserveLocalDraft) {
+      setIsApplyingBroadcastConfig(false);
+      setBroadcastApplyPhase("");
+      setBroadcastApplyError("");
+    }
     setTurnbackPoints(
       Array.isArray(snapshot?.turnbackPoints)
         ? snapshot.turnbackPoints.map((point) => ({
@@ -257,28 +383,29 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
 
     const hasBackendRules = Array.isArray(snapshot?.rules);
     const nextRules = cloneBroadcastRules(hasBackendRules ? snapshot.rules : []);
-    skipNextRulesSaveRef.current = hasBackendRules;
-    hasBroadcastRulesHydratedRef.current = true;
-    lastHydratedRulesLineIdRef.current = nextSelectedLineId;
-    setRules(nextRules);
-    skipNextPlatformAnnouncementsSaveRef.current = true;
-    setPlatformAnnouncements(
-      Array.isArray(snapshot?.platformAnnouncements)
-        ? snapshot.platformAnnouncements
-            .map((entry) => ({
-              lineId: typeof entry?.lineId === "string" ? entry.lineId : nextSelectedLineId,
-              stationId: typeof entry?.stationId === "string" ? entry.stationId : "",
-              stationName: typeof entry?.stationName === "string" ? entry.stationName : "",
-              title: typeof entry?.title === "string" ? entry.title : "",
-              uiTriggerId: resolvePlatformUiTriggerId(entry?.uiTriggerId || entry?.triggerId),
-              enabled: Boolean(entry?.enabled),
-              triggerId: typeof entry?.triggerId === "string" ? entry.triggerId : "platform_idle_clear",
-              cooldownGameMinutes: Number.isFinite(Number(entry?.cooldownGameMinutes)) ? Number(entry.cooldownGameMinutes) : 20,
-              nodes: Array.isArray(entry?.nodes) ? entry.nodes.map(normalizeRuleNode).filter((node) => node && node.id) : [],
-            }))
-            .filter((entry) => entry.stationId)
-        : [],
-    );
+    if (!preserveLocalDraft) {
+      skipNextRulesSaveRef.current = hasBackendRules;
+      hasBroadcastRulesHydratedRef.current = true;
+      lastHydratedRulesLineIdRef.current = nextSelectedLineId;
+      setRules(nextRules);
+      setPlatformAnnouncements(
+        Array.isArray(snapshot?.platformAnnouncements)
+          ? snapshot.platformAnnouncements
+              .map((entry) => ({
+                lineId: typeof entry?.lineId === "string" ? entry.lineId : nextSelectedLineId,
+                stationId: typeof entry?.stationId === "string" ? entry.stationId : "",
+                stationName: typeof entry?.stationName === "string" ? entry.stationName : "",
+                title: typeof entry?.title === "string" ? entry.title : "",
+                uiTriggerId: resolvePlatformUiTriggerId(entry?.uiTriggerId || entry?.triggerId),
+                enabled: Boolean(entry?.enabled),
+                triggerId: typeof entry?.triggerId === "string" ? entry.triggerId : "platform_idle_clear",
+                cooldownGameMinutes: Number.isFinite(Number(entry?.cooldownGameMinutes)) ? Number(entry.cooldownGameMinutes) : 20,
+                nodes: Array.isArray(entry?.nodes) ? entry.nodes.map(normalizeRuleNode).filter((node) => node && node.id) : [],
+              }))
+              .filter((entry) => entry.stationId)
+          : [],
+      );
+    }
 
     const nextCatalogAssetLibrary = Array.isArray(snapshot?.assets)
       ? snapshot.assets
@@ -291,7 +418,14 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       : [];
     setCatalogAssetLibrary(nextCatalogAssetLibrary);
 
+    if (preserveLocalDraft) {
+      applyBroadcastLocalDraft(nextSelectedLineId);
+      return;
+    }
+
     if (!Array.isArray(snapshot?.stations)) {
+      setStations([]);
+      setBroadcastContentLineId(nextSelectedLineId);
       return;
     }
 
@@ -327,8 +461,6 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
         stationBindingsByStationId.set(binding.stationId, currentBindings);
       });
 
-    const lineDrafts = stationBindingDraftsByLine[nextSelectedLineId] || {};
-
     const nextStations = snapshot.stations.map((station) => {
       const backendAudios = Array.isArray(stationBindingsByStationId.get(station.id)) ? stationBindingsByStationId.get(station.id) : [];
       const snapshotConflicts = Array.isArray(station?.conflictAssets)
@@ -342,10 +474,9 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
                   : extractBroadcastLanguageHint(entry.assetName, station.name, fallbackLanguageKey, broadcastLabels),
             }))
         : [];
-      const override = lineDrafts[station.id];
-      const audios = Array.isArray(override?.audios) ? override.audios : backendAudios;
+      const audios = backendAudios;
       const conflictAssets = sortBroadcastConflictAssets(
-        Array.isArray(override?.conflictAssets) ? override.conflictAssets : snapshotConflicts,
+        snapshotConflicts,
         station.name,
         fallbackLanguageKey,
         broadcastLabels,
@@ -360,6 +491,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       };
     });
     setStations(nextStations);
+    setBroadcastContentLineId(nextSelectedLineId);
     setPlatformCreateStationIds((current) => {
       const kept = current.filter((stationId) => nextStations.some((station) => station.id === stationId));
       return kept.length > 0 ? kept : nextStations[0]?.id ? [nextStations[0].id] : [];
@@ -388,12 +520,11 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     trayContext,
     removeTimersRef,
     removingNodeIds,
-    workbenchApi,
-    hasBroadcastHydratedRef,
-    skipNextPlatformAnnouncementsSaveRef,
     dirtyPlatformStationIdsRef,
     platformRuleTitleMemoryRef,
     platformRuleIdMemoryRef,
+    markBroadcastDraftDirty,
+    buildCurrentBroadcastLineDraft,
     setPlatformAnnouncements,
     setPlatformCreateStationIds,
     setIsCreatingRule,
@@ -402,7 +533,6 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     setTrayContext,
     setMappingTray,
     setRemovingNodeIds,
-    applyBroadcastSnapshot,
   });
 
   const {
@@ -415,9 +545,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     handleDiscardConflict,
     handleResolveStationConflicts,
   } = useBroadcastStationBindings({
-    workbenchApi,
     stations,
-    stationBindingDraftsByLine,
     bindingLangDraftsByLine,
     disambiguationNamesByLine,
     mappingBindFeedback,
@@ -432,7 +560,8 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     mappingBindScrollFrameRef,
     mappingBindTransformCleanupRef,
     removeTimersRef,
-    setStationBindingDraftsByLine,
+    buildCurrentBroadcastLineDraft,
+    markBroadcastDraftDirty,
     setBindingLangDraftsByLine,
     setDisambiguationNamesByLine,
     setMappingBindFeedback,
@@ -454,6 +583,8 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     handleToggleExternalFile,
     handleToggleAllExternalFiles,
     handleImportSelectedExternalFiles,
+    assetDeleteBlockedNames,
+    deleteAllAssetsKey,
   } = useBroadcastAssets({
     workbenchApi,
     isAssetExplorerOpen,
@@ -465,7 +596,15 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     selectedExternalFiles,
     previewingAssetName,
     previewingRuleId,
+    availableAssetLibrary,
     selectedLineIdRef,
+    rules,
+    stations,
+    platformAnnouncements,
+    defaultBindingLanguageLabel,
+    draftStore,
+    buildCurrentBroadcastLineDraft,
+    markBroadcastDraftDirty,
     setShouldRenderAssetExplorer,
     setAssetExplorerStage,
     setSelectedExternalFiles,
@@ -475,13 +614,11 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     setPreviewingAssetName,
     setPreviewingRuleId,
     setCatalogAssetLibrary,
-    setStationBindingDraftsByLine,
     setBindingLangDraftsByLine,
     setDisambiguationNamesByLine,
     setStations,
     setRules,
     setPlatformAnnouncements,
-    applyBroadcastSnapshot,
     closeInlineMenus,
   });
 
@@ -506,23 +643,16 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   );
 
   async function commitBroadcastPreviewVolume(nextVolume) {
-    try {
-      const result = await workbenchApi.setBroadcastPreviewVolume?.(nextVolume);
-      if (!result) {
-        return null;
-      }
-
-      if (Number.isFinite(result.volume)) {
-        setBroadcastPreviewVolume(result.volume);
-      }
-      if (typeof result.volumeDirty === "boolean") {
-        setBroadcastVolumeDirty(result.volumeDirty);
-      }
-      return result;
-    } catch (error) {
-      console.error("[RT Broadcast Workbench] save preview volume failed", error);
-      return null;
-    }
+    const normalizedVolume = Number.isFinite(Number(nextVolume))
+      ? Math.max(0, Math.min(100, Math.round(Number(nextVolume))))
+      : 80;
+    setBroadcastPreviewVolume(normalizedVolume);
+    draftStore.setVolumeDraft(normalizedVolume);
+    setBroadcastVolumeDirty(true);
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+    setBroadcastApplyError("");
+    broadcastApplyOperation.resetApplyState();
+    return { success: true, volume: normalizedVolume, volumeDirty: true };
   }
 
   useEffect(() => {
@@ -669,21 +799,9 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       return undefined;
     }
 
-    const timer = window.setTimeout(async () => {
-      try {
-        await workbenchApi.saveBroadcastRules?.({
-          lineId: selectedLineId,
-          rules: cloneBroadcastRules(rules),
-        });
-      } catch (error) {
-        console.error("[RT Broadcast Workbench] save rules failed", error);
-      }
-    }, 180);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [rules, selectedLineId, workbenchApi]);
+    markBroadcastDraftDirty();
+    return undefined;
+  }, [rules, selectedLineId]);
 
   useEffect(() => {
     if (pageEnterSequence <= 0) {
@@ -862,27 +980,31 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
 
   function handleAddNodeToRule(ruleId, nodeTemplate) {
     const actionId = trayContext?.ruleId === ruleId && trayContext?.action && trayContext.action !== "add" ? trayContext.action : "";
+    const lineId = getActiveBroadcastLineId();
+    const nextNode = { ...nodeTemplate, id: actionId || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}` };
+    const nextRules = rules.map((rule) => {
+      if (rule.id !== ruleId) {
+        return rule;
+      }
+
+      if (actionId) {
+        return {
+          ...rule,
+          nodes: rule.nodes.map((node) => (node.id === actionId ? nextNode : node)),
+        };
+      }
+
+      return {
+        ...rule,
+        nodes: [...rule.nodes, nextNode],
+      };
+    });
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ rules: nextRules }));
     setTrayContext(null);
     const timer = window.setTimeout(() => {
-      setRules((current) =>
-        current.map((rule) => {
-          if (rule.id !== ruleId) {
-            return rule;
-          }
-
-          if (actionId) {
-            return {
-              ...rule,
-              nodes: rule.nodes.map((node) => (node.id === actionId ? { ...nodeTemplate, id: node.id } : node)),
-            };
-          }
-
-          return {
-            ...rule,
-            nodes: [...rule.nodes, { ...nodeTemplate, id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }],
-          };
-        }),
-      );
+      if (selectedLineIdRef.current === lineId) {
+        setRules(nextRules);
+      }
     }, 140);
     removeTimersRef.current.push(timer);
   }
@@ -893,13 +1015,18 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       return;
     }
 
+    const lineId = getActiveBroadcastLineId();
+    const nextRules = rules.map((rule) => (rule.id === ruleId ? { ...rule, nodes: rule.nodes.filter((node) => node.id !== nodeId) } : rule));
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ rules: nextRules }));
     setRemovingNodeIds((current) => ({ ...current, [removalKey]: true }));
     if (trayContext?.action === nodeId) {
       setTrayContext(null);
     }
 
     const timer = window.setTimeout(() => {
-      setRules((current) => current.map((rule) => (rule.id === ruleId ? { ...rule, nodes: rule.nodes.filter((node) => node.id !== nodeId) } : rule)));
+      if (selectedLineIdRef.current === lineId) {
+        setRules(nextRules);
+      }
       setRemovingNodeIds((current) => {
         const next = { ...current };
         delete next[removalKey];
@@ -915,13 +1042,18 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       return;
     }
 
+    const lineId = getActiveBroadcastLineId();
+    const nextRules = rules.filter((rule) => rule.id !== ruleId);
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ rules: nextRules }));
     setRemovingRuleIds((current) => ({ ...current, [ruleId]: true }));
     if (trayContext?.ruleId === ruleId) {
       setTrayContext(null);
     }
 
     const timer = window.setTimeout(() => {
-      setRules((current) => current.filter((rule) => rule.id !== ruleId));
+      if (selectedLineIdRef.current === lineId) {
+        setRules(nextRules);
+      }
       setRemovingRuleIds((current) => {
         const next = { ...current };
         delete next[ruleId];
@@ -937,8 +1069,9 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       return;
     }
 
-    setRules((current) => [
-      ...current,
+    const lineId = getActiveBroadcastLineId();
+    const nextRules = [
+      ...rules,
       {
         id: Date.now().toString(),
         title: newRuleTitle.trim(),
@@ -946,41 +1079,72 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
         trigger: newRuleTrigger.label,
         nodes: [],
       },
-    ]);
+    ];
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ rules: nextRules }));
+    setRules(nextRules);
     setIsCreatingRule(false);
     setNewRuleTitle("");
     setNewRuleTriggerId(TRIGGER_OPTIONS[0].id);
     setTriggerDropdownOpen(false);
   }
 
+  function buildBroadcastApplyOperationRequest() {
+    return draftStore.buildApplyRequest();
+  }
+
   async function handleApplyBroadcastConfig() {
-    if (isApplyingBroadcastConfig || (broadcastDraftApplied && !broadcastDraftDirty) || broadcastVariableMappingIssue) {
+    if (
+      isApplyingBroadcastConfig ||
+      !draftStore.hasDirty() ||
+      broadcastVariableMappingIssue
+    ) {
       return;
     }
 
+    const appliedLineIds = draftStore.getDirtyLineIds();
+    const appliedGenerationsByLine = appliedLineIds.reduce((result, lineId) => {
+      result[lineId] = getBroadcastLineDraftGeneration(lineId);
+      return result;
+    }, {});
+    const appliedVolumeGeneration = draftStore.getVolumeDraftGeneration();
+    const applyRequest = buildBroadcastApplyOperationRequest();
     setIsApplyingBroadcastConfig(true);
+    setBroadcastApplyPhase("applying");
     setBroadcastApplyError("");
 
     try {
-      const result = await workbenchApi.applyBroadcastConfig?.({
-        lineId: selectedLineIdRef.current || "",
-      });
+      const outcome = await broadcastApplyOperation.apply(applyRequest);
+      const result = outcome?.result;
 
       if (result?.success) {
-        if (result.snapshot) {
-          applyBroadcastSnapshot(result.snapshot);
-          return;
+        const committedLineIds = Array.isArray(result.appliedLineIds) ? result.appliedLineIds : [];
+        const clearableLineIds = committedLineIds.filter((lineId) => getBroadcastLineDraftGeneration(lineId) === appliedGenerationsByLine[lineId]);
+        if (clearableLineIds.length > 0) {
+          dirtyPlatformStationIdsRef.current = [];
+          draftStore.clearLineDrafts(clearableLineIds);
+        }
+        if (result.volumeApplied) {
+          draftStore.clearVolumeDraft(appliedVolumeGeneration);
+          if (!draftStore.hasVolumeDirty()) {
+            setBroadcastAppliedVolume(applyRequest.volume);
+          }
         }
 
-        const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
-        applyBroadcastSnapshot(refreshedSnapshot);
+        setBroadcastLineDraftDirty(false);
+        setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+        setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+        setBroadcastWarnings(Array.isArray(result.warnings) ? result.warnings : []);
+        setIsApplyingBroadcastConfig(false);
+        setBroadcastApplyPhase("");
         return;
       }
 
       setIsApplyingBroadcastConfig(false);
+      setBroadcastApplyPhase("");
       setBroadcastApplyError(result?.error || "Apply failed");
     } catch (error) {
       setIsApplyingBroadcastConfig(false);
+      setBroadcastApplyPhase("");
       setBroadcastApplyError(error instanceof Error ? error.message : "Apply failed");
     }
   }
@@ -995,34 +1159,33 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     setMappingTray(broadcastVariableMappingIssue.stationId);
   }
 
-  const broadcastDraftDirty = broadcastLineDraftDirty || broadcastVolumeDirty;
-  const broadcastDraftApplied = broadcastLineApplied && !broadcastLineDraftDirty && !broadcastVolumeDirty;
-  const isBroadcastConfigApplied = broadcastDraftApplied && !broadcastDraftDirty;
-  const broadcastFooterTone = broadcastApplyError
+  const broadcastOperationError = broadcastApplyOperation.applyState.phase === "error" ? broadcastApplyOperation.applyState.error : "";
+  const broadcastDraftDirty = draftStore.hasDirty();
+  const isBroadcastLineContentReady = Boolean(selectedLineId && broadcastContentLineId === selectedLineId);
+  const isBroadcastConfigApplied = !broadcastDraftDirty;
+  const broadcastFooterTone = broadcastApplyError || broadcastOperationError
     ? "error"
     : broadcastVariableMappingIssue
       ? "warning"
-      : isBroadcastConfigApplied
-        ? "applied"
+      : isApplyingBroadcastConfig
+        ? "pending"
         : broadcastDraftDirty
           ? "warning"
-          : "neutral";
-  const broadcastFooterText = broadcastApplyError
-    ? broadcastApplyError
+          : "applied";
+  const broadcastFooterText = broadcastApplyError || broadcastOperationError
+    ? broadcastApplyError || broadcastOperationError
     : broadcastVariableMappingIssue
       ? broadcastLabels.footerStatusMappingRequired.replace("{station}", broadcastVariableMappingIssue.stationName || "-")
       : isApplyingBroadcastConfig
         ? broadcastLabels.footerStatusApplying
-        : isBroadcastConfigApplied
-          ? broadcastLabels.footerStatusApplied
-          : broadcastDraftDirty
-            ? broadcastLabels.footerStatusDirty
-            : broadcastLabels.footerStatusClean;
+        : broadcastDraftDirty
+          ? broadcastLabels.footerStatusDirty
+          : broadcastLabels.footerStatusApplied;
   const broadcastApplyButtonLabel = isApplyingBroadcastConfig
     ? broadcastLabels.footerStatusApplying
     : broadcastVariableMappingIssue
       ? broadcastLabels.footerLocateMapping
-      : isBroadcastConfigApplied
+      : !broadcastDraftDirty
         ? broadcastLabels.appliedConfig
         : broadcastLabels.applyConfig;
 
@@ -1079,12 +1242,16 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       currentExternalFolders,
       currentExternalFiles,
       currentExternalAllowedExtensions,
+      assetDeleteBlockedNames,
+      deleteAllAssetsKey,
     },
     preview: {
       previewingAssetName,
       previewingRuleId,
       broadcastPreviewVolume,
       isApplyingBroadcastConfig,
+      isBroadcastLineContentReady,
+      broadcastDraftDirty,
       isBroadcastConfigApplied,
       broadcastVariableMappingIssue,
       broadcastFooterTone,
@@ -1125,7 +1292,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       setTrayContext,
       setLineDropdownOpen,
       setTriggerDropdownOpen,
-      setSelectedLineId,
+      setSelectedLineId: handleBroadcastLineSelect,
       setIsCreatingRule,
       setNewRuleTriggerId,
       setNewRuleTitle,

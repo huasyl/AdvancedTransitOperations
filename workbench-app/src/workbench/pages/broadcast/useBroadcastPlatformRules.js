@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { resolvePlatformRuntimeTriggerId, resolvePlatformUiTriggerId } from "./broadcast-constants";
 import { normalizeRuleNode } from "./broadcast-normalize";
 
@@ -6,7 +6,6 @@ export default function useBroadcastPlatformRules(context) {
   const {
     platformAnnouncements,
     stations,
-    selectedLineId,
     t,
     platformTriggerOptions,
     getActiveBroadcastLineId,
@@ -16,12 +15,11 @@ export default function useBroadcastPlatformRules(context) {
     trayContext,
     removeTimersRef,
     removingNodeIds,
-    workbenchApi,
-    hasBroadcastHydratedRef,
-    skipNextPlatformAnnouncementsSaveRef,
     dirtyPlatformStationIdsRef,
     platformRuleTitleMemoryRef,
     platformRuleIdMemoryRef,
+    markBroadcastDraftDirty,
+    buildCurrentBroadcastLineDraft,
     setPlatformAnnouncements,
     setPlatformCreateStationIds,
     setIsCreatingRule,
@@ -30,7 +28,6 @@ export default function useBroadcastPlatformRules(context) {
     setTrayContext,
     setMappingTray,
     setRemovingNodeIds,
-    applyBroadcastSnapshot,
   } = context;
 
   const platformRules = useMemo(() => {
@@ -114,7 +111,7 @@ export default function useBroadcastPlatformRules(context) {
     return next;
   }, [platformRules]);
 
-  function markDirtyPlatformStations(stationIds) {
+  function markDirtyPlatformStations(stationIds, nextPlatformAnnouncements = platformAnnouncements) {
     const current = new Set(dirtyPlatformStationIdsRef.current);
     (Array.isArray(stationIds) ? stationIds : []).forEach((stationId) => {
       if (typeof stationId === "string" && stationId) {
@@ -122,6 +119,7 @@ export default function useBroadcastPlatformRules(context) {
       }
     });
     dirtyPlatformStationIdsRef.current = Array.from(current);
+    markBroadcastDraftDirty(getActiveBroadcastLineId(), buildCurrentBroadcastLineDraft({ platformAnnouncements: nextPlatformAnnouncements }));
   }
 
   function isPlatformStationOccupiedByTrigger(stationId, triggerId, exceptRuleId = "") {
@@ -179,20 +177,19 @@ export default function useBroadcastPlatformRules(context) {
     const base = getPlatformAnnouncement(station, triggerId);
     const nextAnnouncement = typeof updater === "function" ? updater(base) : base;
     const nextKey = buildPlatformAnnouncementKey(station.id, nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId || triggerId);
-    markDirtyPlatformStations([station?.id]);
-    setPlatformAnnouncements((current) => {
-      const nextByKey = new Map(current.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
-      nextByKey.set(nextKey, {
-        ...nextAnnouncement,
-        lineId: getActiveBroadcastLineId(),
-        stationId: station.id,
-        stationName: station.name,
-        uiTriggerId: resolvePlatformUiTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
-        triggerId: resolvePlatformRuntimeTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
-        cooldownGameMinutes: 20,
-      });
-      return Array.from(nextByKey.values());
+    const nextByKey = new Map(platformAnnouncements.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
+    nextByKey.set(nextKey, {
+      ...nextAnnouncement,
+      lineId: getActiveBroadcastLineId(),
+      stationId: station.id,
+      stationName: station.name,
+      uiTriggerId: resolvePlatformUiTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
+      triggerId: resolvePlatformRuntimeTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
+      cooldownGameMinutes: 20,
     });
+    const nextPlatformAnnouncements = Array.from(nextByKey.values());
+    markDirtyPlatformStations([station?.id], nextPlatformAnnouncements);
+    setPlatformAnnouncements(nextPlatformAnnouncements);
   }
 
   function buildPlatformAnnouncementForStation(station, source) {
@@ -217,102 +214,22 @@ export default function useBroadcastPlatformRules(context) {
     }
 
     const nextRule = typeof updater === "function" ? updater(targetRule) : targetRule;
-    markDirtyPlatformStations(targetRule.stationIds);
-    setPlatformAnnouncements((current) => {
-      const nextByKey = new Map(current.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
-      targetRule.stationIds.forEach((stationId) => {
-        const station = stations.find((entry) => entry.id === stationId);
-        if (station) {
-          const announcement = buildPlatformAnnouncementForStation(station, nextRule);
-          nextByKey.set(buildPlatformAnnouncementKey(stationId, announcement.uiTriggerId), announcement);
-        }
-      });
+    const nextPlatformAnnouncements = buildPlatformAnnouncementsForRuleUpdate(platformAnnouncements, targetRule, nextRule);
+    markDirtyPlatformStations(targetRule.stationIds, nextPlatformAnnouncements);
+    setPlatformAnnouncements(nextPlatformAnnouncements);
+  }
 
-      return Array.from(nextByKey.values());
+  function buildPlatformAnnouncementsForRuleUpdate(source, targetRule, nextRule) {
+    const nextByKey = new Map((Array.isArray(source) ? source : []).map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
+    targetRule.stationIds.forEach((stationId) => {
+      const station = stations.find((entry) => entry.id === stationId);
+      if (station) {
+        const announcement = buildPlatformAnnouncementForStation(station, nextRule);
+        nextByKey.set(buildPlatformAnnouncementKey(stationId, announcement.uiTriggerId), announcement);
+      }
     });
-  }
 
-  async function savePlatformAnnouncement(station, triggerId = "platform_idle_clear", copyToAll = false) {
-    const announcement = getPlatformAnnouncement(station, triggerId);
-    const request = {
-      lineId: getActiveBroadcastLineId(),
-      stationId: station.id,
-      stationName: station.name,
-      title: typeof announcement.title === "string" ? announcement.title : "",
-      uiTriggerId: resolvePlatformUiTriggerId(announcement?.uiTriggerId || announcement?.triggerId),
-      enabled: Boolean(announcement.enabled),
-      nodes: Array.isArray(announcement.nodes) ? announcement.nodes : [],
-    };
-
-    try {
-      const result = copyToAll ? await workbenchApi.copyBroadcastPlatformAnnouncementToAllStations?.(request) : await workbenchApi.saveBroadcastPlatformAnnouncement?.(request);
-      if (result?.snapshot) {
-        applyBroadcastSnapshot(result.snapshot);
-      }
-    } catch (error) {
-      console.error("[RT Broadcast Workbench] save platform announcement failed", error);
-    }
-  }
-
-  async function persistPlatformAnnouncementForStation(station, source) {
-    if (!station) {
-      return null;
-    }
-
-    const result = await workbenchApi.saveBroadcastPlatformAnnouncement?.({
-      lineId: getActiveBroadcastLineId(),
-      stationId: station.id,
-      stationName: station.name,
-      title: typeof source?.title === "string" ? source.title : "",
-      uiTriggerId: resolvePlatformUiTriggerId(source?.uiTriggerId || source?.triggerId),
-      enabled: Boolean(source?.enabled),
-      nodes: Array.isArray(source?.nodes) ? source.nodes : [],
-    });
-    return result?.snapshot || null;
-  }
-
-  async function savePlatformRule(rule, copyToAll = false) {
-    const targetStations = copyToAll ? stations : stations.filter((station) => rule.stationIds.includes(station.id));
-    if (!rule || targetStations.length === 0) {
-      return;
-    }
-
-    try {
-      let latestSnapshot = null;
-      if (copyToAll) {
-        const firstStation = targetStations[0];
-        const result = await workbenchApi.copyBroadcastPlatformAnnouncementToAllStations?.({
-          lineId: getActiveBroadcastLineId(),
-          stationId: firstStation.id,
-          stationName: firstStation.name,
-          title: typeof rule.title === "string" ? rule.title : "",
-          uiTriggerId: resolvePlatformUiTriggerId(rule?.uiTriggerId || rule?.triggerId),
-          enabled: Boolean(rule.enabled),
-          nodes: Array.isArray(rule.nodes) ? rule.nodes : [],
-        });
-        latestSnapshot = result?.snapshot || null;
-      } else {
-        for (let index = 0; index < targetStations.length; index += 1) {
-          const station = targetStations[index];
-          const result = await workbenchApi.saveBroadcastPlatformAnnouncement?.({
-            lineId: getActiveBroadcastLineId(),
-            stationId: station.id,
-            stationName: station.name,
-            title: typeof rule.title === "string" ? rule.title : "",
-            uiTriggerId: resolvePlatformUiTriggerId(rule?.uiTriggerId || rule?.triggerId),
-            enabled: Boolean(rule.enabled),
-            nodes: Array.isArray(rule.nodes) ? rule.nodes : [],
-          });
-          latestSnapshot = result?.snapshot || latestSnapshot;
-        }
-      }
-
-      if (latestSnapshot) {
-        applyBroadcastSnapshot(latestSnapshot);
-      }
-    } catch (error) {
-      console.error("[RT Broadcast Workbench] save platform rule failed", error);
-    }
+    return Array.from(nextByKey.values());
   }
 
   function handleCreatePlatformRule() {
@@ -321,24 +238,22 @@ export default function useBroadcastPlatformRules(context) {
       return;
     }
 
-    setPlatformAnnouncements((current) => {
-      const nextByKey = new Map(current.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
-      const nodes = [];
-      const signatureKey = `1:${newRuleTriggerId}:${JSON.stringify(nodes)}`;
-      platformRuleTitleMemoryRef.current[signatureKey] = newRuleTitle.trim();
-      targetStations.forEach((station) => {
-        const announcement = buildPlatformAnnouncementForStation(station, {
-          title: newRuleTitle.trim(),
-          triggerId: newRuleTriggerId,
-          enabled: true,
-          nodes,
-        });
-        nextByKey.set(buildPlatformAnnouncementKey(station.id, announcement.uiTriggerId), announcement);
+    const nextByKey = new Map(platformAnnouncements.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
+    const nodes = [];
+    const signatureKey = `1:${newRuleTriggerId}:${JSON.stringify(nodes)}`;
+    platformRuleTitleMemoryRef.current[signatureKey] = newRuleTitle.trim();
+    targetStations.forEach((station) => {
+      const announcement = buildPlatformAnnouncementForStation(station, {
+        title: newRuleTitle.trim(),
+        triggerId: newRuleTriggerId,
+        enabled: true,
+        nodes,
       });
-
-      return Array.from(nextByKey.values());
+      nextByKey.set(buildPlatformAnnouncementKey(station.id, announcement.uiTriggerId), announcement);
     });
-    markDirtyPlatformStations(targetStations.map((station) => station.id));
+    const nextPlatformAnnouncements = Array.from(nextByKey.values());
+    setPlatformAnnouncements(nextPlatformAnnouncements);
+    markDirtyPlatformStations(targetStations.map((station) => station.id), nextPlatformAnnouncements);
     setIsCreatingRule(false);
     setNewRuleTitle("");
     setNewRuleTriggerId("platform_idle_clear");
@@ -348,21 +263,27 @@ export default function useBroadcastPlatformRules(context) {
 
   function handleAddNodeToPlatformRule(ruleId, nodeTemplate) {
     const actionId = trayContext?.ruleId === ruleId && trayContext?.action && trayContext.action !== "add" ? trayContext.action : "";
+    const lineId = getActiveBroadcastLineId();
+    const targetRule = platformRules.find((rule) => rule.id === ruleId);
+    const nextNode = { ...nodeTemplate, id: actionId || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}` };
+    const nextRule = targetRule
+      ? {
+          ...targetRule,
+          nodes: actionId
+            ? (Array.isArray(targetRule.nodes) ? targetRule.nodes : []).map((node) => (node.id === actionId ? nextNode : node))
+            : [...(Array.isArray(targetRule.nodes) ? targetRule.nodes : []), nextNode],
+        }
+      : null;
+    const nextPlatformAnnouncements =
+      targetRule && nextRule ? buildPlatformAnnouncementsForRuleUpdate(platformAnnouncements, targetRule, nextRule) : platformAnnouncements;
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ platformAnnouncements: nextPlatformAnnouncements }));
     setTrayContext(null);
     const timer = window.setTimeout(() => {
-      updatePlatformRule(ruleId, (current) => {
-        if (actionId) {
-          return {
-            ...current,
-            nodes: (Array.isArray(current.nodes) ? current.nodes : []).map((node) => (node.id === actionId ? { ...nodeTemplate, id: node.id } : node)),
-          };
-        }
+      if (getActiveBroadcastLineId() !== lineId) {
+        return;
+      }
 
-        return {
-          ...current,
-          nodes: [...(Array.isArray(current.nodes) ? current.nodes : []), { ...nodeTemplate, id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }],
-        };
-      });
+      setPlatformAnnouncements(nextPlatformAnnouncements);
     }, 140);
     removeTimersRef.current.push(timer);
   }
@@ -373,16 +294,33 @@ export default function useBroadcastPlatformRules(context) {
       return;
     }
 
+    const lineId = getActiveBroadcastLineId();
+    const targetRule = platformRules.find((rule) => rule.id === ruleId);
+    const nextRule = targetRule
+      ? {
+          ...targetRule,
+          nodes: (Array.isArray(targetRule.nodes) ? targetRule.nodes : []).filter((node) => node.id !== nodeId),
+        }
+      : null;
+    const nextPlatformAnnouncements =
+      targetRule && nextRule ? buildPlatformAnnouncementsForRuleUpdate(platformAnnouncements, targetRule, nextRule) : platformAnnouncements;
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ platformAnnouncements: nextPlatformAnnouncements }));
     setRemovingNodeIds((current) => ({ ...current, [removalKey]: true }));
     if (trayContext?.action === nodeId) {
       setTrayContext(null);
     }
 
     const timer = window.setTimeout(() => {
-      updatePlatformRule(ruleId, (current) => ({
-        ...current,
-        nodes: (Array.isArray(current.nodes) ? current.nodes : []).filter((node) => node.id !== nodeId),
-      }));
+      if (getActiveBroadcastLineId() !== lineId) {
+        setRemovingNodeIds((current) => {
+          const next = { ...current };
+          delete next[removalKey];
+          return next;
+        });
+        return;
+      }
+
+      setPlatformAnnouncements(nextPlatformAnnouncements);
       setRemovingNodeIds((current) => {
         const next = { ...current };
         delete next[removalKey];
@@ -399,18 +337,16 @@ export default function useBroadcastPlatformRules(context) {
       return;
     }
 
-    setPlatformAnnouncements((current) => {
-      const nextByKey = new Map(current.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
-      targetRule.stationIds.forEach((stationId) => {
-        const station = stations.find((entry) => entry.id === stationId);
-        if (station) {
-          nextByKey.set(buildPlatformAnnouncementKey(stationId, targetRule.triggerId), createEmptyPlatformAnnouncement(station, targetRule.triggerId));
-        }
-      });
-
-      return Array.from(nextByKey.values());
+    const nextByKey = new Map(platformAnnouncements.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
+    targetRule.stationIds.forEach((stationId) => {
+      const station = stations.find((entry) => entry.id === stationId);
+      if (station) {
+        nextByKey.set(buildPlatformAnnouncementKey(stationId, targetRule.triggerId), createEmptyPlatformAnnouncement(station, targetRule.triggerId));
+      }
     });
-    markDirtyPlatformStations(targetRule.stationIds);
+    const nextPlatformAnnouncements = Array.from(nextByKey.values());
+    setPlatformAnnouncements(nextPlatformAnnouncements);
+    markDirtyPlatformStations(targetRule.stationIds, nextPlatformAnnouncements);
     if (trayContext?.ruleId === ruleId) {
       setTrayContext(null);
     }
@@ -434,62 +370,13 @@ export default function useBroadcastPlatformRules(context) {
       const signatureKey = `${targetRule.enabled ? "1" : "0"}:${targetRule.triggerId || "platform_idle_clear"}:${JSON.stringify(nodes)}`;
       platformRuleTitleMemoryRef.current[signatureKey] = rememberedTitle;
     }
-    setPlatformAnnouncements((current) => {
-      const nextByKey = new Map(current.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
-      const nextAnnouncement = isAssigned ? createEmptyPlatformAnnouncement(station, stableRule.triggerId) : buildPlatformAnnouncementForStation(station, stableRule);
-      nextByKey.set(buildPlatformAnnouncementKey(stationId, stableRule.triggerId), nextAnnouncement);
-      return Array.from(nextByKey.values());
-    });
-    markDirtyPlatformStations([stationId]);
+    const nextByKey = new Map(platformAnnouncements.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
+    const nextAnnouncement = isAssigned ? createEmptyPlatformAnnouncement(station, stableRule.triggerId) : buildPlatformAnnouncementForStation(station, stableRule);
+    nextByKey.set(buildPlatformAnnouncementKey(stationId, stableRule.triggerId), nextAnnouncement);
+    const nextPlatformAnnouncements = Array.from(nextByKey.values());
+    setPlatformAnnouncements(nextPlatformAnnouncements);
+    markDirtyPlatformStations([stationId], nextPlatformAnnouncements);
   }
-
-  useEffect(() => {
-    if (!hasBroadcastHydratedRef.current || !selectedLineId) {
-      return undefined;
-    }
-
-    if (skipNextPlatformAnnouncementsSaveRef.current) {
-      skipNextPlatformAnnouncementsSaveRef.current = false;
-      return undefined;
-    }
-
-    const dirtyStationIds = dirtyPlatformStationIdsRef.current.filter(Boolean);
-    if (dirtyStationIds.length === 0) {
-      return undefined;
-    }
-
-    const timer = window.setTimeout(async () => {
-      const stationMap = new Map(stations.map((station) => [station.id, station]));
-      const announcementMap = new Map(platformAnnouncements.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));
-      dirtyPlatformStationIdsRef.current = [];
-
-      try {
-        let latestSnapshot = null;
-        for (let index = 0; index < dirtyStationIds.length; index += 1) {
-          const stationId = dirtyStationIds[index];
-          const station = stationMap.get(stationId);
-          if (!station) {
-            continue;
-          }
-
-          for (const triggerId of ["platform_idle_clear", "approach_station"]) {
-            const source = announcementMap.get(buildPlatformAnnouncementKey(stationId, triggerId)) || createEmptyPlatformAnnouncement(station, triggerId);
-            latestSnapshot = (await persistPlatformAnnouncementForStation(station, source)) || latestSnapshot;
-          }
-        }
-
-        if (latestSnapshot) {
-          applyBroadcastSnapshot(latestSnapshot);
-        }
-      } catch (error) {
-        console.error("[RT Broadcast Workbench] save platform announcements failed", error);
-      }
-    }, 180);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [platformAnnouncements, selectedLineId, stations, workbenchApi]);
 
   return {
     platformRules,

@@ -136,14 +136,18 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> Draft(string lineId)
                 {
-                    if (string.IsNullOrEmpty(lineId)
-                        || !DraftPlatforms.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements)
-                        || announcements == null)
+                    if (string.IsNullOrEmpty(lineId))
                     {
                         return null;
                     }
 
-                    return announcements;
+                    if (DraftPlatforms.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements)
+                        && announcements != null)
+                    {
+                        return announcements;
+                    }
+
+                    return Applied(lineId);
                 }
 
                 internal BroadcastWorkbenchPlatformAnnouncementDto[] DraftRows(
@@ -186,61 +190,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     return result.ToArray();
-                }
-
-                internal static void RemoveRefs(
-                    Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> allAnnouncements,
-                    string assetName)
-                {
-                    foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in allAnnouncements)
-                    {
-                        Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements = lineEntry.Value;
-                        if (announcements == null)
-                        {
-                            continue;
-                        }
-
-                        foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> stationEntry in announcements)
-                        {
-                            BroadcastWorkbenchPlatformAnnouncementDto announcement = stationEntry.Value;
-                            if (announcement?.nodes == null || announcement.nodes.Length == 0)
-                            {
-                                continue;
-                            }
-
-                            announcement.nodes = announcement.nodes
-                                .Where(node => node != null
-                                    && !(string.Equals(node.type, "asset", StringComparison.Ordinal)
-                                        && string.Equals(node.name, assetName, StringComparison.OrdinalIgnoreCase)))
-                                .ToArray();
-                        }
-                    }
-                }
-
-                internal static void RemoveAllRefs(
-                    Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> allAnnouncements)
-                {
-                    foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in allAnnouncements)
-                    {
-                        Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements = lineEntry.Value;
-                        if (announcements == null)
-                        {
-                            continue;
-                        }
-
-                        foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> stationEntry in announcements)
-                        {
-                            BroadcastWorkbenchPlatformAnnouncementDto announcement = stationEntry.Value;
-                            if (announcement?.nodes == null || announcement.nodes.Length == 0)
-                            {
-                                continue;
-                            }
-
-                            announcement.nodes = announcement.nodes
-                                .Where(node => node != null && !string.Equals(node.type, "asset", StringComparison.Ordinal))
-                                .ToArray();
-                        }
-                    }
                 }
 
                 internal static void RestoreInto(

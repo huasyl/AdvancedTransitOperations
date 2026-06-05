@@ -16,6 +16,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal abstract void Next();
         internal abstract void Load();
         internal abstract void Save();
+        internal abstract void Run(Action action);
         internal abstract List<WorkbenchLineRuntime> Lines();
         internal abstract string Error(Exception ex);
     }

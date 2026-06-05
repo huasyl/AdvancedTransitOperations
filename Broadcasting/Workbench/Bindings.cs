@@ -226,14 +226,18 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> Draft(string lineId)
                 {
-                    if (string.IsNullOrEmpty(lineId)
-                        || !DraftBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings)
-                        || lineBindings == null)
+                    if (string.IsNullOrEmpty(lineId))
                     {
                         return null;
                     }
 
-                    return lineBindings;
+                    if (DraftBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings)
+                        && lineBindings != null)
+                    {
+                        return lineBindings;
+                    }
+
+                    return Applied(lineId);
                 }
 
                 internal static List<BroadcastWorkbenchStationBindingDto> Normalize(
@@ -394,8 +398,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     string lineId,
                     List<StationGroup> stationGroups)
                 {
+                    Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
+                        Draft(lineId);
                     if (string.IsNullOrEmpty(lineId)
-                        || !DraftBindings.TryGetValue(lineId, out Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings)
                         || lineBindings == null
                         || lineBindings.Count == 0)
                     {
@@ -420,72 +425,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         .OrderBy(entry => entry.Key, StringComparer.Ordinal)
                         .SelectMany(entry => Clone(entry.Key, entry.Value))
                         .ToArray();
-                }
-
-                internal static void RemoveRefs(
-                    Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> allBindings,
-                    string assetName)
-                {
-                    List<string> emptyBindingLineIds = null;
-                    foreach (KeyValuePair<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> lineEntry in allBindings)
-                    {
-                        Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> bindings = lineEntry.Value;
-                        if (bindings == null || bindings.Count == 0)
-                        {
-                            continue;
-                        }
-
-                        Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> updatedBindings = null;
-                        List<string> emptyStationIds = null;
-                        foreach (KeyValuePair<string, List<BroadcastWorkbenchStationBindingDto>> binding in bindings)
-                        {
-                            List<BroadcastWorkbenchStationBindingDto> stationBindings = binding.Value?
-                                .Where(entry => entry != null
-                                    && !string.Equals(entry.assetName, assetName, StringComparison.OrdinalIgnoreCase))
-                                .ToList();
-                            if (stationBindings == null || stationBindings.Count == 0)
-                            {
-                                emptyStationIds ??= new List<string>();
-                                emptyStationIds.Add(binding.Key);
-                                continue;
-                            }
-
-                            updatedBindings ??= new Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>(StringComparer.Ordinal);
-                            updatedBindings[binding.Key] = Normalize(binding.Key, stationBindings);
-                        }
-
-                        if (updatedBindings != null)
-                        {
-                            foreach (KeyValuePair<string, List<BroadcastWorkbenchStationBindingDto>> updatedBinding in updatedBindings)
-                            {
-                                bindings[updatedBinding.Key] = updatedBinding.Value;
-                            }
-                        }
-
-                        if (emptyStationIds != null)
-                        {
-                            for (int i = 0; i < emptyStationIds.Count; i++)
-                            {
-                                bindings.Remove(emptyStationIds[i]);
-                            }
-                        }
-
-                        if (bindings.Count == 0)
-                        {
-                            emptyBindingLineIds ??= new List<string>();
-                            emptyBindingLineIds.Add(lineEntry.Key);
-                        }
-                    }
-
-                    if (emptyBindingLineIds == null)
-                    {
-                        return;
-                    }
-
-                    for (int i = 0; i < emptyBindingLineIds.Count; i++)
-                    {
-                        allBindings.Remove(emptyBindingLineIds[i]);
-                    }
                 }
 
                 internal static void RestoreInto(

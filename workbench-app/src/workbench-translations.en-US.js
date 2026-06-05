@@ -364,6 +364,7 @@ export const nativeScheduleTranslationsEnUs = {
   "broadcast.sidebar.import": "Import External Asset",
   "broadcast.sidebar.deleteAsset": "Delete Asset",
   "broadcast.sidebar.deleteAllAssets": "Delete All Assets",
+  "broadcast.sidebar.assetInUseCannotDelete": "Asset in use",
   "broadcast.tabs.sequence": "Broadcast Sequence",
   "broadcast.tabs.mapping": "Station Variable Mapping",
   "broadcast.tabs.platform": "Platform Broadcast",

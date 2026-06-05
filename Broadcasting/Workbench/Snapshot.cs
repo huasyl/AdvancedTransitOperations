@@ -66,15 +66,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         ? m_Ctx.Platforms.DraftRows(activeRuntime.Id, stationGroups)
                         : Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>();
                     string activeLineId = activeRuntime?.Id ?? string.Empty;
-                    bool lineDraftDirty = !string.IsNullOrEmpty(activeLineId) && m_Ctx.Drafts.Dirty(activeLineId);
+                    bool lineDraftDirty = false;
                     bool lineApplied = !string.IsNullOrEmpty(activeLineId)
                         && AppliedLines.Contains(activeLineId);
-                    bool volumeDirty = DraftVol != AppliedVol;
-                    bool draftDirty = lineDraftDirty;
-                    if (volumeDirty)
-                    {
-                        draftDirty = true;
-                    }
+                    bool volumeDirty = false;
+                    bool draftDirty = false;
                     bool draftApplied = lineApplied
                         && !draftDirty;
 
@@ -101,7 +97,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         volumeDirty = volumeDirty,
                         draftApplied = draftApplied,
                         draftDirty = draftDirty,
-                        volume = Preview.Clamp(DraftVol),
+                        volume = Preview.Clamp(AppliedVol),
                         warnings = activeRuntime != null
                             ? m_Ctx.Snapshot.Warnings(activeRuntime.Id)
                             : Array.Empty<string>()

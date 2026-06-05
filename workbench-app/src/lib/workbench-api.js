@@ -27,6 +27,8 @@ const CALLS = {
   playBroadcastRulePreview: "suhua::rt.workbench.playBroadcastRulePreview",
   stopBroadcastRulePreview: "suhua::rt.workbench.stopBroadcastRulePreview",
   setBroadcastPreviewVolume: "suhua::rt.workbench.setBroadcastPreviewVolume",
+  startBroadcastApplyOperation: "suhua::rt.workbench.startBroadcastApplyOperation",
+  getBroadcastApplyOperationStatus: "suhua::rt.workbench.getBroadcastApplyOperationStatus",
   refreshMetadata: "suhua::rt.workbench.refreshMetadata",
   loadPlannerContext: "suhua::rt.workbench.loadPlannerContext",
   startPlannerJob: "suhua::rt.workbench.startPlannerJob",
@@ -264,6 +266,23 @@ function createBroadcastVolumeResult() {
   };
 }
 
+function createBroadcastApplyOperationStatus() {
+  return {
+    success: false,
+    operationId: "",
+    state: "missing",
+    error: "",
+    result: {
+      success: false,
+      error: "",
+      version: "",
+      appliedLineIds: [],
+      volumeApplied: false,
+      warnings: []
+    }
+  };
+}
+
 function createLiveApi() {
   return {
     async loadSnapshot() {
@@ -375,6 +394,16 @@ function createLiveApi() {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.setBroadcastPreviewVolume, String(volume ?? 80));
       return parsePayload(payload, createBroadcastVolumeResult());
+    },
+    async startBroadcastApplyOperation(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.startBroadcastApplyOperation, JSON.stringify(request ?? {}));
+      return parsePayload(payload, createBroadcastApplyOperationStatus());
+    },
+    async getBroadcastApplyOperationStatus(operationId = "") {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.getBroadcastApplyOperationStatus, operationId || "");
+      return parsePayload(payload, createBroadcastApplyOperationStatus());
     },
     async refreshMetadata() {
       const engineCall = getEngineCall();

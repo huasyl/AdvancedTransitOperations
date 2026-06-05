@@ -149,6 +149,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
+                        if (HasAppliedRefs(normalizedAssetName))
+                        {
+                            result.error = "broadcast-asset-in-use";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
+
                         if (!Remove(normalizedAssetName))
                         {
                             result.error = "Selected asset was not found.";
@@ -183,6 +189,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
+                        if (HasAnyAppliedRefs())
+                        {
+                            result.error = "broadcast-asset-in-use";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
+
                         RemoveAll();
                         PendingConflicts.Clear();
                         IncrementWorkbenchSnapshotVersion();
@@ -676,7 +688,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         return false;
                     }
 
-                    RemoveRefs(normalizedAssetName);
                     MainThreadDispatcher.RunOnMainThread(() => m_Announcements.RemoveAsset(normalizedAssetName));
                     return true;
                 }
@@ -698,33 +709,141 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     Catalog.Clear();
-                    DraftBindings.Clear();
-                    AppliedBindings.Clear();
-                    RemoveAllRefs();
                     MainThreadDispatcher.RunOnMainThread(m_Announcements.RemoveAllAssets);
                 }
 
-                internal void RemoveRefs(string assetName)
+                private bool HasAnyAppliedRefs()
+                {
+                    HashSet<string> assetNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < Catalog.Count; i++)
+                    {
+                        string assetName = Catalog[i]?.name?.Trim() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(assetName))
+                        {
+                            assetNames.Add(assetName);
+                        }
+                    }
+
+                    if (assetNames.Count == 0)
+                    {
+                        return false;
+                    }
+
+                    foreach (string assetName in assetNames)
+                    {
+                        if (HasAppliedRefs(assetName))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+
+                private bool HasAppliedRefs(string assetName)
                 {
                     if (string.IsNullOrWhiteSpace(assetName))
                     {
-                        return;
+                        return false;
                     }
 
-                    Bindings.RemoveRefs(DraftBindings, assetName);
-                    Bindings.RemoveRefs(AppliedBindings, assetName);
-                    Rules.RemoveRefs(DraftRules, assetName);
-                    Rules.RemoveRefs(AppliedRules, assetName);
-                    Platforms.RemoveRefs(DraftPlatforms, assetName);
-                    Platforms.RemoveRefs(AppliedPlatforms, assetName);
+                    return HasBindingRefs(AppliedBindings, assetName)
+                        || HasRuleRefs(AppliedRules, assetName)
+                        || HasPlatformRefs(AppliedPlatforms, assetName);
                 }
 
-                internal void RemoveAllRefs()
+                private static bool HasBindingRefs(
+                    Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> allBindings,
+                    string assetName)
                 {
-                    Rules.RemoveAllRefs(DraftRules);
-                    Rules.RemoveAllRefs(AppliedRules);
-                    Platforms.RemoveAllRefs(DraftPlatforms);
-                    Platforms.RemoveAllRefs(AppliedPlatforms);
+                    foreach (KeyValuePair<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> lineEntry in allBindings)
+                    {
+                        Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> bindings = lineEntry.Value;
+                        if (bindings == null)
+                        {
+                            continue;
+                        }
+
+                        foreach (KeyValuePair<string, List<BroadcastWorkbenchStationBindingDto>> stationEntry in bindings)
+                        {
+                            if ((stationEntry.Value ?? new List<BroadcastWorkbenchStationBindingDto>())
+                                .Any(binding => string.Equals(binding?.assetName, assetName, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+
+                    return false;
+                }
+
+                private static bool HasRuleRefs(
+                    Dictionary<string, List<BroadcastWorkbenchRuleDto>> allRules,
+                    string assetName)
+                {
+                    foreach (KeyValuePair<string, List<BroadcastWorkbenchRuleDto>> lineEntry in allRules)
+                    {
+                        List<BroadcastWorkbenchRuleDto> rules = lineEntry.Value;
+                        if (rules == null)
+                        {
+                            continue;
+                        }
+
+                        for (int i = 0; i < rules.Count; i++)
+                        {
+                            if (HasAssetNode(rules[i]?.nodes, assetName))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+
+                    return false;
+                }
+
+                private static bool HasPlatformRefs(
+                    Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> allAnnouncements,
+                    string assetName)
+                {
+                    foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in allAnnouncements)
+                    {
+                        Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements = lineEntry.Value;
+                        if (announcements == null)
+                        {
+                            continue;
+                        }
+
+                        foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> stationEntry in announcements)
+                        {
+                            if (HasAssetNode(stationEntry.Value?.nodes, assetName))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+
+                    return false;
+                }
+
+                private static bool HasAssetNode(BroadcastWorkbenchRuleNodeDto[] nodes, string assetName)
+                {
+                    if (nodes == null || nodes.Length == 0)
+                    {
+                        return false;
+                    }
+
+                    for (int i = 0; i < nodes.Length; i++)
+                    {
+                        BroadcastWorkbenchRuleNodeDto node = nodes[i];
+                        if (node != null
+                            && string.Equals(node.type, "asset", StringComparison.Ordinal)
+                            && string.Equals(node.name, assetName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
                 }
 
                 internal static BroadcastWorkbenchAssetDto CloneAsset(BroadcastWorkbenchAssetDto asset)

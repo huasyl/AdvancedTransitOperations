@@ -20,6 +20,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             Preview = new Preview(m_Context);
             Persistence = new Persistence(m_Context);
             Conflicts = new Conflicts(m_Context);
+            Apply = new Apply(m_Context);
+            SaveOperations = new SaveOperations(m_Context);
             m_Context.Workbench = this;
             m_Context.Snapshot = Snapshot;
             m_Context.Drafts = Drafts;
@@ -30,6 +32,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             m_Context.Preview = Preview;
             m_Context.Persistence = Persistence;
             m_Context.Conflicts = Conflicts;
+            m_Context.Apply = Apply;
+            m_Context.SaveOperations = SaveOperations;
         }
 
         internal State State => m_Context.State;
@@ -43,8 +47,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal Preview Preview { get; }
         internal Persistence Persistence { get; }
         internal Conflicts Conflicts { get; }
+        internal Apply Apply { get; }
+        internal SaveOperations SaveOperations { get; }
 
         internal void Attach(Runtime runtime) => m_Context.Attach(runtime);
+
+        internal void Reset() => SaveOperations.Reset();
 
         internal void StopPreview() => Preview.Stop();
 
@@ -61,22 +69,22 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             => Assets.LoadBroadcastAssetBrowserJson(requestedPath);
 
         public string SaveBroadcastRulesJson(string requestJson)
-            => Rules.SaveBroadcastRulesJson(requestJson);
+            => DisabledSaveRulesResult();
 
         public string SaveBroadcastPlatformAnnouncementJson(string requestJson)
-            => Platforms.SaveBroadcastPlatformAnnouncementJson(requestJson);
+            => DisabledSavePlatformResult();
 
         public string CopyBroadcastPlatformAnnouncementToAllStationsJson(string requestJson)
-            => Platforms.CopyBroadcastPlatformAnnouncementToAllStationsJson(requestJson);
+            => DisabledSavePlatformResult();
 
         public string ImportBroadcastExternalAssetsJson(string requestJson)
             => Assets.ImportBroadcastExternalAssetsJson(requestJson);
 
         public string SaveBroadcastStationBindingJson(string requestJson)
-            => Bindings.SaveBroadcastStationBindingJson(requestJson);
+            => DisabledSaveBindingResult();
 
         public string SaveBroadcastStationBindingsJson(string requestJson)
-            => Bindings.SaveBroadcastStationBindingsJson(requestJson);
+            => DisabledSaveBindingResult();
 
         public string DeleteBroadcastAssetJson(string requestJson)
             => Assets.DeleteBroadcastAssetJson(requestJson);
@@ -85,10 +93,20 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             => Assets.DeleteAllBroadcastAssetsJson();
 
         public string AutoBindBroadcastStationMappingsJson(string requestJson)
-            => Conflicts.AutoBindBroadcastStationMappingsJson(requestJson);
+            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchAutoBindStationMappingsResult
+            {
+                success = false,
+                boundCount = 0,
+                error = "broadcast-backend-draft-disabled"
+            });
 
         public string ApplyBroadcastConfigJson(string requestJson)
-            => Drafts.ApplyBroadcastConfigJson(requestJson);
+            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchApplyResult
+            {
+                success = false,
+                error = "broadcast-backend-draft-disabled",
+                snapshot = null
+            });
 
         public string OpenBroadcastAssetDirectoryPickerJson()
             => Assets.OpenBroadcastAssetDirectoryPickerJson();
@@ -106,6 +124,41 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             => Preview.StopBroadcastRulePreviewJson(ruleId);
 
         public string SetBroadcastPreviewVolumeJson(string volumeJson)
-            => Preview.SetBroadcastPreviewVolumeJson(volumeJson);
+            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchVolumeResult
+            {
+                success = false,
+                error = "broadcast-backend-draft-disabled",
+                volume = State.DraftVolume,
+                volumeDirty = State.DraftVolume != State.AppliedVolume,
+                snapshot = null
+            });
+
+        public string StartBroadcastApplyOperationJson(string requestJson)
+            => SaveOperations.Start(requestJson);
+
+        public string GetBroadcastApplyOperationStatusJson(string operationId)
+            => SaveOperations.Status(operationId);
+
+        private static string DisabledSaveBindingResult()
+            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchSaveStationBindingResult
+            {
+                success = false,
+                error = "broadcast-backend-draft-disabled"
+            });
+
+        private static string DisabledSaveRulesResult()
+            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchSaveRulesResult
+            {
+                success = false,
+                error = "broadcast-backend-draft-disabled"
+            });
+
+        private static string DisabledSavePlatformResult()
+            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchSavePlatformAnnouncementResult
+            {
+                success = false,
+                error = "broadcast-backend-draft-disabled",
+                snapshot = null
+            });
     }
 }

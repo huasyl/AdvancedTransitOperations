@@ -27,10 +27,10 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
         <div className="dw-bc-sidebar-icons">
           <button
             type="button"
-            className="dw-bc-sidebar-clear-button"
+            className={`dw-bc-sidebar-clear-button ${assets.assetDeleteBlockedNames?.[assets.deleteAllAssetsKey] ? "is-blocked" : ""}`}
             onClick={actions.handleDeleteAllAssets}
           >
-            {labels.deleteAllAssets}
+            {assets.assetDeleteBlockedNames?.[assets.deleteAllAssetsKey] ? labels.assetInUseCannotDelete : labels.deleteAllAssets}
           </button>
         </div>
       </div>
@@ -48,9 +48,12 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
         metricsKey={assets.availableAssetLibrary.length}
       >
         {assets.availableAssetLibrary.map((asset, index) => (
+          (() => {
+            const deleteBlocked = Boolean(assets.assetDeleteBlockedNames?.[asset.name]);
+            return (
           <div
             key={asset.name}
-            className="dw-bc-asset-row dw-bc-page-enter-slide"
+            className={`dw-bc-asset-row dw-bc-page-enter-slide ${deleteBlocked ? "is-delete-blocked" : ""}`}
             style={{ animationDelay: `${index * 0.05}s` }}
           >
             <button
@@ -84,14 +87,16 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
               <div className="dw-bc-asset-time">{asset.length}</div>
               <button
                 type="button"
-                className="dw-bc-asset-delete"
+                className={`dw-bc-asset-delete ${deleteBlocked ? "is-blocked" : ""}`}
                 onClick={() => actions.handleDeleteAsset(asset.name)}
                 aria-label={`${labels.deleteAsset} ${asset.name}`}
               >
-                <TrashIcon />
+                {deleteBlocked ? labels.assetInUseCannotDelete : <TrashIcon />}
               </button>
             </div>
           </div>
+            );
+          })()
         ))}
       </WorkbenchScrollArea>
 

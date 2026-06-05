@@ -23,6 +23,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal void Next() => m_Host.Next();
         internal void Load() => m_Host.Load();
         internal void Save() => m_Host.Save();
+        internal void Run(Action action) => m_Host.Run(action);
         internal List<WorkbenchLineRuntime> Lines() => m_Host.Lines();
         internal string Error(Exception ex) => m_Host.Error(ex);
     }

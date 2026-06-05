@@ -93,6 +93,8 @@ export default function BroadcastLayout({ controller }) {
                 }
                 disabled={
                   preview.isApplyingBroadcastConfig ||
+                  (!preview.broadcastDraftDirty &&
+                    !preview.broadcastVariableMappingIssue) ||
                   (preview.isBroadcastConfigApplied &&
                     !preview.broadcastVariableMappingIssue)
                 }

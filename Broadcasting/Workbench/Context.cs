@@ -30,6 +30,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal Preview Preview;
         internal Persistence Persistence;
         internal Conflicts Conflicts;
+        internal Apply Apply;
+        internal SaveOperations SaveOperations;
 
         internal Context(WorkbenchAccess access)
         {
@@ -80,6 +82,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         protected void IncrementWorkbenchSnapshotVersion() => m_Access.Next();
         protected void LoadWorkbench() => m_Access.Load();
         protected void SaveWorkbench() => m_Access.Save();
+        protected void RunOnMainThread(Action action) => m_Access.Run(action);
         protected bool FeatureEnabled() => m_Access.Enabled;
         protected List<WorkbenchLineRuntime> Lines() => m_Access.Lines();
         protected static WorkbenchLineRuntime FindLine(List<WorkbenchLineRuntime> lines, string lineId)

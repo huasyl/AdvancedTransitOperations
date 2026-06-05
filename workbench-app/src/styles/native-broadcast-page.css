@@ -89,7 +89,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 28px 48px 24px;
+  padding: 21rem 36rem 18rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
 }
 
@@ -97,9 +97,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
-  margin-right: 24px;
+  width: 42rem;
+  height: 42rem;
+  margin-right: 18rem;
   border: 1px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -107,8 +107,8 @@
 }
 
 .dw-bc-import-back-icon {
-  width: 32px;
-  height: 32px;
+  width: 24rem;
+  height: 24rem;
   color: #81d4d4;
   stroke: #81d4d4;
   stroke-width: 1.9;
@@ -123,28 +123,28 @@
 
 .dw-bc-import-head-title {
   color: #ffffff;
-  font-size: 24px;
-  line-height: 32px;
+  font-size: 18rem;
+  line-height: 24rem;
   font-weight: 300;
 }
 
 .dw-bc-import-toolbar {
   display: flex;
   align-items: center;
-  padding: 16px 48px;
+  padding: 12rem 36rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
 }
 
 .dw-bc-import-parent-button {
   display: flex;
   align-items: center;
-  margin-right: 24px;
+  margin-right: 18rem;
   border: 1px solid rgba(255, 255, 255, 0.20);
-  padding: 10px 20px;
+  padding: 8rem 15rem;
   background: rgba(255, 255, 255, 0.05);
   color: #ffffff;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   cursor: pointer;
   transition: background-color 180ms ease, border-color 180ms ease, opacity 180ms ease;
 }
@@ -158,12 +158,12 @@
 .dw-bc-import-parent-icon-shell {
   display: flex;
   align-items: center;
-  margin-right: 8px;
+  margin-right: 6rem;
 }
 
 .dw-bc-import-parent-icon {
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   color: #81d4d4;
   stroke: #81d4d4;
 }
@@ -173,19 +173,19 @@
   align-items: center;
   min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.10);
-  padding: 10px 20px;
+  padding: 8rem 15rem;
   background: rgba(0, 0, 0, 0.20);
 }
 
 .dw-bc-import-breadcrumb-icon-shell {
   display: flex;
   align-items: center;
-  margin-right: 10px;
+  margin-right: 8rem;
 }
 
 .dw-bc-import-breadcrumb-icon {
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   color: #e0c3f8;
   stroke: #e0c3f8;
 }
@@ -207,8 +207,8 @@
   padding: 0;
   background: transparent;
   color: rgba(255, 255, 255, 0.40);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   cursor: pointer;
   transition: color 180ms ease;
 }
@@ -219,10 +219,10 @@
 }
 
 .dw-bc-import-breadcrumb-sep {
-  margin: 0 10px;
+  margin: 0 8rem;
   color: rgba(255, 255, 255, 0.20);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
 }
 
 .dw-bc-import-toolbar-spacer {
@@ -235,8 +235,8 @@
   border: 0;
   background: transparent;
   color: #ffffff;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   cursor: pointer;
   transition: opacity 180ms ease;
 }
@@ -244,13 +244,13 @@
 .dw-bc-import-select-all-icon-shell {
   display: flex;
   align-items: center;
-  margin-right: 10px;
+  margin-right: 8rem;
 }
 
 .dw-bc-import-select-all-icon,
 .dw-bc-import-card-check-icon {
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   color: rgba(255, 255, 255, 0.30);
   stroke: rgba(255, 255, 255, 0.30);
 }
@@ -264,7 +264,7 @@
 .dw-bc-import-body {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 32px 48px;
+  padding: 24rem 36rem;
 }
 
 .dw-bc-import-grid-scene {
@@ -282,12 +282,12 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 220px;
-  height: 120px;
-  margin-right: 20px;
-  margin-bottom: 20px;
+  width: 165rem;
+  height: 90rem;
+  margin-right: 15rem;
+  margin-bottom: 15rem;
   border: 1px solid transparent;
-  padding: 18px 16px 14px;
+  padding: 14rem 12rem 11rem;
   background: rgba(0, 0, 0, 0.20);
   cursor: pointer;
   transition: background-color 180ms ease, border-color 180ms ease;
@@ -305,8 +305,8 @@
 
 .dw-bc-import-card-check-shell {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: 6rem;
+  left: 6rem;
   display: flex;
   align-items: center;
 }
@@ -315,20 +315,20 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 8px;
+  margin-bottom: 6rem;
 }
 
 .dw-bc-import-card-folder-icon {
-  width: 34px;
-  height: 34px;
+  width: 26rem;
+  height: 26rem;
   color: #81b581;
   stroke: #81b581;
   stroke-width: 1.9;
 }
 
 .dw-bc-import-card-file-icon {
-  width: 34px;
-  height: 34px;
+  width: 26rem;
+  height: 26rem;
   color: #e0c3f8;
   stroke: #e0c3f8;
   stroke-width: 1.9;
@@ -337,11 +337,11 @@
 .dw-bc-import-card-name {
   display: block;
   max-width: 100%;
-  min-height: 48px;
-  max-height: 48px;
+  min-height: 36rem;
+  max-height: 36rem;
   color: rgba(255, 255, 255, 0.90);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
   text-align: center;
   white-space: normal;
@@ -353,16 +353,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 80px;
-  padding: 0 48px;
+  height: 60rem;
+  padding: 0 36rem;
   border-top: 1px solid rgba(255, 255, 255, 0.10);
   background: rgba(0, 0, 0, 0.20);
 }
 
 .dw-bc-import-foot-note {
   color: rgba(255, 255, 255, 0.40);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
 }
 
 .dw-bc-import-foot-actions {
@@ -371,13 +371,13 @@
 }
 
 .dw-bc-import-text-button {
-  margin-right: 16px;
+  margin-right: 12rem;
   border: 1px solid transparent;
-  padding: 10px 32px;
+  padding: 8rem 24rem;
   background: transparent;
   color: rgba(255, 255, 255, 0.60);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   cursor: pointer;
   transition: color 180ms ease;
 }
@@ -385,8 +385,8 @@
 .dw-bc-sidebar {
   display: flex;
   flex-direction: column;
-  width: 442px;
-  flex: 0 0 442px;
+  width: 332rem;
+  flex: 0 0 332rem;
   border-right: 1px solid rgba(255, 255, 255, 0.10);
   background: transparent;
   position: relative;
@@ -411,16 +411,16 @@
 }
 
 .dw-bc-sidebar-head {
-  padding: 56px 24px 54px;
+  padding: 42rem 18rem 41rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background: transparent;
 }
 
 .dw-bc-sidebar-head h1 {
-  margin: 0 0 6px;
+  margin: 0 0 5rem;
   color: #ffffff;
-  font-size: 24px;
-  line-height: 48px;
+  font-size: 18rem;
+  line-height: 36rem;
   font-weight: 700;
   letter-spacing: 0.01em;
 }
@@ -428,8 +428,8 @@
 .dw-bc-sidebar-head p {
   margin: 0;
   color: rgba(116, 193, 193, 0.84);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 10rem;
+  line-height: 14rem;
   font-weight: 400;
 }
 
@@ -437,14 +437,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 32px 32px 0;
-  margin-bottom: 16px;
+  padding: 24rem 24rem 0;
+  margin-bottom: 12rem;
 }
 
 .dw-bc-sidebar-tools span {
   color: rgba(255, 255, 255, 0.90);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -455,7 +455,7 @@
 }
 
 .dw-bc-sidebar-icons > .dw-bc-icon-button + .dw-bc-icon-button {
-  margin-left: 16px;
+  margin-left: 12rem;
 }
 
 .dw-bc-sidebar-clear-button {
@@ -463,16 +463,20 @@
   padding: 0;
   background: transparent;
   color: rgba(255, 255, 255, 0.42);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 500;
   cursor: pointer;
   transition: color 180ms ease, opacity 180ms ease;
 }
 
+.dw-bc-sidebar-clear-button.is-blocked {
+  color: #f08f8f;
+}
+
 .dw-bc-icon {
-  width: 17px;
-  height: 17px;
+  width: 13rem;
+  height: 13rem;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.55;
@@ -505,8 +509,8 @@
 }
 
 .dw-bc-icon-button {
-  width: 28px;
-  height: 28px;
+  width: 21rem;
+  height: 21rem;
   border: 0;
   background: transparent;
   color: #9ebac3;
@@ -516,17 +520,17 @@
 
 .dw-bc-icon-button.is-corner {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 11rem;
+  right: 11rem;
 }
 
 .dw-bc-asset-head {
   display: flex;
-  padding: 0 32px 16px;
+  padding: 0 24rem 12rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.44);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   letter-spacing: 0.03em;
 }
 
@@ -538,18 +542,18 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  width: 86px;
+  width: 65rem;
 }
 
 .dw-bc-asset-time-head {
-  width: 52px;
+  width: 39rem;
   text-align: right;
 }
 
 .dw-bc-asset-delete-spacer {
-  width: 24px;
+  width: 18rem;
   height: 1px;
-  margin-left: 10px;
+  margin-left: 8rem;
   flex: 0 0 auto;
 }
 
@@ -557,14 +561,14 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding-top: 8px;
+  padding-top: 6rem;
   background: transparent;
 }
 
 .dw-bc-asset-row {
   display: flex;
   align-items: center;
-  padding: 16px 32px;
+  padding: 12rem 24rem;
   border-left: 2px solid transparent;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   cursor: pointer;
@@ -575,7 +579,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  width: 18rem;
   border: 0;
   padding: 0;
   background: transparent;
@@ -625,8 +629,8 @@
 
 .dw-bc-asset-name {
   color: rgba(255, 255, 255, 0.82);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -634,18 +638,18 @@
 }
 
 .dw-bc-asset-desc {
-  margin-top: 4px;
+  margin-top: 3rem;
   color: rgba(129, 181, 129, 0.80);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 500;
 }
 
 .dw-bc-asset-time {
-  width: 52px;
+  width: 39rem;
   color: rgba(255, 255, 255, 0.34);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   text-align: right;
   font-family: Consolas, Menlo, monospace;
 }
@@ -654,8 +658,13 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  width: 86px;
-  min-width: 86px;
+  width: 65rem;
+  min-width: 65rem;
+}
+
+.dw-bc-asset-row.is-delete-blocked .dw-bc-asset-meta {
+  width: 150rem;
+  min-width: 150rem;
 }
 
 .dw-bc-asset-delete {
@@ -663,9 +672,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-left: 10px;
+  width: 18rem;
+  height: 18rem;
+  margin-left: 8rem;
   border: 0;
   padding: 0;
   background: transparent;
@@ -676,9 +685,20 @@
   transition: color 180ms ease, opacity 180ms ease, transform 180ms ease;
 }
 
+.dw-bc-asset-delete.is-blocked {
+  width: 122rem;
+  color: #f08f8f;
+  font-size: 12rem;
+  line-height: 15rem;
+  font-weight: 700;
+  opacity: 1;
+  transform: none;
+  text-align: right;
+}
+
 .dw-bc-asset-delete .dw-bc-action-icon {
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   color: rgba(255, 255, 255, 0.40);
   stroke: rgba(255, 255, 255, 0.40);
   stroke-width: 2.1;
@@ -692,15 +712,15 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  height: 96px;
-  padding: 0 32px;
+  height: 72rem;
+  padding: 0 24rem;
   border-top: 1px solid rgba(255, 255, 255, 0.10);
 }
 
 .dw-bc-foot-note {
   color: rgba(255, 255, 255, 0.30);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 500;
   text-align: center;
 }
@@ -712,12 +732,12 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 52px;
+  height: 39rem;
   border: 1px solid rgba(255, 255, 255, 0.20);
   background: rgba(255, 255, 255, 0.01);
   color: #ffffff;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease;
@@ -727,8 +747,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 14rem;
+  height: 14rem;
   flex: 0 0 auto;
   color: rgba(255, 255, 255, 0.42);
   line-height: 0;
@@ -736,8 +756,8 @@
 
 .dw-bc-inline-icon-shell .dw-bc-action-icon,
 .dw-bc-inline-icon-shell .dw-bc-close-icon {
-  width: 16px;
-  height: 16px;
+  width: 12rem;
+  height: 12rem;
   display: block;
   color: #74c1c1;
   stroke: #74c1c1;
@@ -746,9 +766,9 @@
 }
 
 .dw-bc-outline-button-icon-shell {
-  width: 24px;
-  height: 24px;
-  margin-right: 14px;
+  width: 18rem;
+  height: 18rem;
+  margin-right: 11rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.14);
   color: #f0fbff;
@@ -764,8 +784,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 24px;
-  line-height: 24px;
+  min-height: 18rem;
+  line-height: 18rem;
 }
 
 .dw-bc-main {
@@ -803,7 +823,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 32px 0;
+  padding: 9rem 24rem 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background: transparent;
   -webkit-backdrop-filter: none;
@@ -811,44 +831,44 @@
 }
 
 .dw-bc-warning-box {
-  margin: 16px 32px 0;
-  padding: 12px 16px;
+  margin: 12rem 24rem 0;
+  padding: 9rem 12rem;
   border: 1px solid rgba(255, 197, 92, 0.32);
-  border-radius: 8px;
+  border-radius: 6rem;
   background: rgba(72, 46, 12, 0.74);
 }
 
 .dw-bc-warning-title {
   color: #ffd98a;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 700;
 }
 
 .dw-bc-warning-list {
-  margin-top: 8px;
+  margin-top: 6rem;
 }
 
 .dw-bc-warning-item {
   color: rgba(255, 232, 191, 0.96);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 9rem;
+  line-height: 14rem;
 }
 
 .dw-bc-warning-item + .dw-bc-warning-item {
-  margin-top: 8px;
+  margin-top: 6rem;
 }
 
 .dw-bc-main-tools {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding-bottom: 4px;
+  padding-bottom: 3rem;
 }
 
 .dw-bc-line-picker.dw-demo-field {
-  width: 320px;
-  flex: 0 0 320px;
+  width: 240rem;
+  flex: 0 0 240rem;
 }
 
 .dw-bc-form-dropdown.dw-demo-field {
@@ -857,16 +877,16 @@
 
 .dw-bc-line-picker .dw-demo-label,
 .dw-bc-form-dropdown .dw-demo-label {
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
 }
 
 .dw-bc-line-picker .dw-demo-input,
 .dw-bc-form-dropdown .dw-demo-input,
 .dw-bc-line-picker .dw-demo-dropdown-option,
 .dw-bc-form-dropdown .dw-demo-dropdown-option {
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
 }
 
 .dw-bc-tabs {
@@ -875,17 +895,17 @@
 }
 
 .dw-bc-tab + .dw-bc-tab {
-  margin-left: 40px;
+  margin-left: 30rem;
 }
 
 .dw-bc-tab {
   position: relative;
   border: 0;
-  padding: 0 0 10px;
+  padding: 0 0 8rem;
   background: transparent;
   color: rgba(255, 255, 255, 0.56);
-  font-size: 20px;
-  line-height: 24px;
+  font-size: 15rem;
+  line-height: 18rem;
   font-weight: 600;
   cursor: pointer;
   transition: color 300ms ease, text-shadow 300ms ease;
@@ -901,7 +921,7 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 3px;
+  bottom: 2rem;
   height: 2px;
   background: #74c1c1;
   box-shadow: 0 0 7px rgba(116, 193, 193, 0.34);
@@ -911,12 +931,12 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px 32px 40px;
+  padding: 18rem 24rem 30rem;
   box-sizing: border-box;
 }
 
 .dw-bc-body-pad {
-  padding-bottom: 160px;
+  padding-bottom: 120rem;
 }
 
 .dw-bc-shell-entry {
@@ -1020,7 +1040,7 @@
 }
 
 .dw-bc-create-block {
-  margin-top: 56px;
+  margin-top: 42rem;
   margin-bottom: 0;
 }
 
@@ -1031,7 +1051,7 @@
 }
 
 .dw-bc-create-button-shell.is-visible {
-  max-height: 120px;
+  max-height: 90rem;
   opacity: 1;
   transform: translateY(0);
 }
@@ -1050,13 +1070,13 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  min-height: 96px;
-  padding: 0 24px;
+  min-height: 72rem;
+  padding: 0 18rem;
   border: 0;
   background: rgba(116, 193, 193, 0.14);
   color: #74c1c1;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   text-align: center;
@@ -1068,9 +1088,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-right: 14px;
+  width: 18rem;
+  height: 18rem;
+  margin-right: 11rem;
   border-radius: 999px;
   background: rgba(116, 193, 193, 0.10);
   color: #74c1c1;
@@ -1078,8 +1098,8 @@
 }
 
 .dw-bc-create-button-icon-shell .dw-bc-action-icon {
-  width: 16px;
-  height: 16px;
+  width: 12rem;
+  height: 12rem;
   color: #74c1c1;
   stroke: #74c1c1;
   stroke-width: 2.2;
@@ -1089,10 +1109,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 24px;
+  min-height: 18rem;
   color: #74c1c1;
   flex: 0 0 auto;
-  line-height: 24px;
+  line-height: 18rem;
 }
 
 .dw-bc-create-form,
@@ -1100,7 +1120,7 @@
   position: relative;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-left: 3px solid rgba(116, 193, 193, 0.68);
-  padding: 32px;
+  padding: 24rem;
 }
 
 .dw-bc-create-form {
@@ -1114,13 +1134,13 @@
 }
 
 .dw-bc-create-form > .dw-bc-icon-button.is-corner {
-  width: 36px;
-  height: 36px;
+  width: 27rem;
+  height: 27rem;
 }
 
 .dw-bc-create-form > .dw-bc-icon-button.is-corner .dw-bc-close-icon {
-  width: 22px;
-  height: 22px;
+  width: 17rem;
+  height: 17rem;
   color: #f0fbff;
   stroke: #f0fbff;
   stroke-width: 2.8;
@@ -1148,8 +1168,8 @@
 .dw-bc-mapping-head h2 {
   margin: 0;
   color: #ffffff;
-  font-size: 24px;
-  line-height: 32px;
+  font-size: 18rem;
+  line-height: 24rem;
   font-weight: 700;
   letter-spacing: 0.01em;
 }
@@ -1157,53 +1177,53 @@
 .dw-bc-rule-head h2 {
   margin: 0;
   color: #ffffff;
-  font-size: 32px;
-  line-height: 40px;
+  font-size: 24rem;
+  line-height: 30rem;
   font-weight: 600;
   letter-spacing: 0.01em;
 }
 
 .dw-bc-create-form h3 {
-  margin-bottom: 24px;
-  font-size: 24px;
-  line-height: 32px;
+  margin-bottom: 18rem;
+  font-size: 18rem;
+  line-height: 24rem;
 }
 
 .dw-bc-form-field {
   width: 100%;
-  max-width: 520px;
-  margin-bottom: 24px;
+  max-width: 390rem;
+  margin-bottom: 18rem;
 }
 
 .dw-bc-form-field label {
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 6rem;
   color: #74c1c1;
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 500;
 }
 
 .dw-bc-form-field input {
   width: 100%;
-  height: 52px;
+  height: 39rem;
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.20);
-  padding: 14px 0 2px;
+  padding: 11rem 0 2px;
   box-sizing: border-box;
   background: transparent;
   color: #ffffff;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
 }
 
 .dw-bc-primary-button,
 .dw-bc-secondary-button {
-  height: 52px;
+  height: 39rem;
   border: 0;
-  padding: 0 28px;
-  font-size: 18px;
-  line-height: 24px;
+  padding: 0 21rem;
+  font-size: 14rem;
+  line-height: 18rem;
   cursor: pointer;
 }
 
@@ -1224,7 +1244,7 @@
 }
 
 .dw-bc-secondary-button {
-  min-width: 168px;
+  min-width: 126rem;
   border: 1px solid rgba(116, 193, 193, 0.36);
   background: transparent;
   color: #74c1c1;
@@ -1233,27 +1253,27 @@
 }
 
 .dw-bc-secondary-button.is-compact {
-  height: 42px;
-  min-width: 112px;
-  padding: 0 16px;
-  font-size: 14px;
-  line-height: 18px;
+  height: 32rem;
+  min-width: 84rem;
+  padding: 0 12rem;
+  font-size: 11rem;
+  line-height: 14rem;
 }
 
 .dw-bc-primary-button.is-footer {
-  min-width: 176px;
+  min-width: 132rem;
 }
 
 .dw-bc-primary-button.is-compact {
-  min-width: 132px;
-  height: 42px;
-  padding: 0 18px;
-  font-size: 16px;
-  line-height: 22px;
+  min-width: 99rem;
+  height: 32rem;
+  padding: 0 14rem;
+  font-size: 12rem;
+  line-height: 17rem;
 }
 
 .dw-bc-rule {
-  margin-bottom: 64px;
+  margin-bottom: 48rem;
   transition: opacity 220ms ease, transform 220ms ease;
 }
 
@@ -1269,16 +1289,16 @@
   align-items: flex-end;
   justify-content: space-between;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
-  padding-bottom: 20px;
-  margin-bottom: 32px;
+  padding-bottom: 15rem;
+  margin-bottom: 24rem;
 }
 
 .dw-bc-rule-head p,
 .dw-bc-mapping-head p {
-  margin: 10px 0 0;
+  margin: 8rem 0 0;
   color: rgba(255, 255, 255, 0.56);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   font-weight: 500;
 }
 
@@ -1286,8 +1306,8 @@
   border: 0;
   background: transparent;
   color: rgba(255, 255, 255, 0.34);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   font-weight: 500;
   cursor: pointer;
   transition: color 180ms ease;
@@ -1302,13 +1322,13 @@
 .dw-bc-node-flow-item {
   display: flex;
   align-items: flex-end;
-  margin-bottom: 12px;
+  margin-bottom: 9rem;
   transition: opacity 220ms ease, transform 220ms ease;
 }
 
 .dw-bc-node-flow-item.is-add-action {
   margin-left: 0;
-  padding-top: 28px;
+  padding-top: 21rem;
 }
 
 .dw-bc-node-flow-item.is-removing {
@@ -1325,10 +1345,10 @@
 .dw-bc-node-kind {
   display: flex;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 6rem;
   color: rgba(255, 255, 255, 0.50);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 500;
 }
 
@@ -1337,9 +1357,9 @@
 }
 
 .dw-bc-node-kind-icon {
-  margin-right: 6px;
-  width: 16px;
-  height: 16px;
+  margin-right: 5rem;
+  width: 12rem;
+  height: 12rem;
   display: block;
   flex: 0 0 auto;
   align-self: center;
@@ -1366,17 +1386,17 @@
 
 .dw-bc-node-value-wrap {
   position: relative;
-  padding-right: 30px;
+  padding-right: 23rem;
 }
 
 .dw-bc-node-value {
   border: 0;
   border-bottom: 1px solid rgba(116, 193, 193, 0.36);
-  padding: 0 0 6px;
+  padding: 0 0 5rem;
   background: transparent;
   color: #74c1c1;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   text-align: left;
   cursor: pointer;
@@ -1410,8 +1430,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 21rem;
+  height: 21rem;
   border: 0;
   background: transparent;
   color: #f0fbff;
@@ -1422,8 +1442,8 @@
 }
 
 .dw-bc-node-remove .dw-bc-close-icon {
-  width: 16px;
-  height: 16px;
+  width: 12rem;
+  height: 12rem;
   display: block;
   color: #f0fbff;
   stroke: #f0fbff;
@@ -1431,10 +1451,10 @@
 }
 
 .dw-bc-node-sep {
-  padding: 0 28px 7px;
+  padding: 0 21rem 5rem;
   color: rgba(255, 255, 255, 0.18);
-  font-size: 20px;
-  line-height: 24px;
+  font-size: 15rem;
+  line-height: 18rem;
   font-weight: 700;
 }
 
@@ -1445,11 +1465,11 @@
   align-items: center;
   border: 0;
   border-bottom: 1px solid transparent;
-  padding: 0 0 6px;
+  padding: 0 0 5rem;
   background: transparent;
   color: rgba(255, 255, 255, 0.42);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 180ms ease, color 180ms ease;
@@ -1469,11 +1489,11 @@
 }
 
 .dw-bc-animated-panel.is-tray .dw-bc-animated-panel-inner {
-  padding-top: 32px;
+  padding-top: 24rem;
 }
 
 .dw-bc-create-panel .dw-bc-animated-panel-inner {
-  padding-top: 32px;
+  padding-top: 24rem;
 }
 
 .dw-bc-tray {
@@ -1481,7 +1501,7 @@
 }
 
 .dw-bc-tab-scene-sequence > .dw-bc-rule:first-child {
-  margin-top: 48px;
+  margin-top: 36rem;
 }
 
 .dw-bc-animated-panel.is-tray {
@@ -1499,22 +1519,22 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 24px;
+  margin-bottom: 18rem;
   color: rgba(255, 255, 255, 0.82);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
 }
 
 .dw-bc-tray-head .dw-bc-icon-button {
-  width: 36px;
-  height: 36px;
+  width: 27rem;
+  height: 27rem;
   color: #f0fbff;
 }
 
 .dw-bc-tray-head .dw-bc-icon-button .dw-bc-close-icon {
-  width: 22px;
-  height: 22px;
+  width: 17rem;
+  height: 17rem;
   display: block;
   color: #f0fbff;
   stroke: #f0fbff;
@@ -1528,12 +1548,12 @@
 .dw-bc-tray-tabs {
   display: flex;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
-  padding-bottom: 12px;
-  margin-bottom: 24px;
+  padding-bottom: 9rem;
+  margin-bottom: 18rem;
 }
 
 .dw-bc-tray-tab + .dw-bc-tray-tab {
-  margin-left: 40px;
+  margin-left: 30rem;
 }
 
 .dw-bc-tray-tab {
@@ -1542,17 +1562,17 @@
   border: 0;
   background: transparent;
   color: rgba(255, 255, 255, 0.56);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   cursor: pointer;
   transition: color 180ms ease;
 }
 
 .dw-bc-tray-tab-icon {
-  margin-right: 14px;
-  width: 18px;
-  height: 18px;
+  margin-right: 11rem;
+  width: 14rem;
+  height: 14rem;
   display: block;
   flex: 0 0 auto;
   align-self: center;
@@ -1601,9 +1621,9 @@
   align-items: center;
   justify-content: center;
   border: 1px solid currentColor;
-  padding: 0 6px;
-  font-size: 15px;
-  line-height: 20px;
+  padding: 0 5rem;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 500;
 }
 
@@ -1623,15 +1643,15 @@
 }
 
 .dw-bc-tray-column > * + * {
-  margin-top: 18px;
+  margin-top: 14rem;
 }
 
 .dw-bc-tray-column:first-child {
-  padding-right: 16px;
+  padding-right: 12rem;
 }
 
 .dw-bc-tray-column:last-child {
-  padding-left: 16px;
+  padding-left: 12rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-column {
@@ -1641,11 +1661,11 @@
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-column:first-child {
-  padding-right: 8px;
+  padding-right: 6rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-column:last-child {
-  padding-left: 8px;
+  padding-left: 6rem;
 }
 
 .dw-bc-tray-list {
@@ -1654,7 +1674,7 @@
 }
 
 .dw-bc-tray-list > * + * {
-  margin-top: 18px;
+  margin-top: 14rem;
 }
 
 .dw-bc-tray-item {
@@ -1663,14 +1683,14 @@
   justify-content: flex-start;
   width: 100%;
   min-width: 0;
-  min-height: 52px;
+  min-height: 39rem;
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding: 0 0 10px;
+  padding: 0 0 8rem;
   background: transparent;
   color: rgba(255, 255, 255, 0.68);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   text-align: left;
   cursor: pointer;
@@ -1681,7 +1701,7 @@
   display: block;
   flex: 1 1 auto;
   min-width: 0;
-  padding-right: 12px;
+  padding-right: 9rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1689,19 +1709,19 @@
 
 .dw-bc-tray-item.is-variable > span:first-child {
   color: rgba(255, 255, 255, 0.68);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
 }
 
 .dw-bc-tray-item > span:last-child {
   color: rgba(255, 255, 255, 0.30);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   font-weight: 500;
   flex: 0 0 auto;
   min-width: 0;
-  max-width: 84px;
+  max-width: 63rem;
   margin-left: auto;
   text-align: right;
   white-space: nowrap;
@@ -1781,11 +1801,11 @@
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-item > span:first-child {
-  padding-right: 6px;
+  padding-right: 5rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-item > span:last-child {
-  max-width: 120px;
+  max-width: 90rem;
 }
 
 .dw-bc-tray-item.is-variable > span:first-child {
@@ -1794,22 +1814,22 @@
 }
 
 .dw-bc-tray-item.is-variable > span:last-child {
-  max-width: 220px;
+  max-width: 165rem;
   color: rgba(255, 255, 255, 0.42);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-item.is-variable > span:first-child {
-  padding-right: 6px;
+  padding-right: 5rem;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-tray-item.is-variable > span:last-child {
-  max-width: 240px;
+  max-width: 180rem;
 }
 
 .dw-bc-mono {
@@ -1825,11 +1845,11 @@
 }
 
 .dw-bc-map-table-head {
-  min-height: 48px;
+  min-height: 36rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   color: rgba(255, 255, 255, 0.58);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
@@ -1839,8 +1859,8 @@
 }
 
 .dw-bc-map-col.is-id {
-  flex: 0 0 232px;
-  padding-left: 14px;
+  flex: 0 0 174rem;
+  padding-left: 11rem;
   text-align: left;
 }
 
@@ -1851,18 +1871,18 @@
 
 .dw-bc-map-col.is-audio {
   flex: 0 0 23%;
-  padding-right: 12px;
+  padding-right: 9rem;
   text-align: left;
 }
 
 .dw-bc-map-col.is-status {
-  flex: 0 0 124px;
+  flex: 0 0 93rem;
   padding-right: 0;
   text-align: left;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-col.is-id {
-  flex: 0 0 248px;
+  flex: 0 0 186rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-col.is-name {
@@ -1871,24 +1891,24 @@
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-col.is-audio {
   flex: 1 1 auto;
-  padding-right: 12px;
+  padding-right: 9rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-col.is-status {
-  flex: 0 0 236px;
+  flex: 0 0 177rem;
   padding-right: 0;
 }
 
 .dw-bc-map-row {
-  min-height: 76px;
+  min-height: 57rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   transition: background-color 180ms ease;
 }
 
 .dw-bc-map-id {
   color: #ffffff;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -1901,8 +1921,8 @@
 
 .dw-bc-map-name {
   color: #ffffff;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
 }
 
@@ -1922,20 +1942,20 @@
   padding: 0 0 2px;
   background: transparent;
   color: #74c1c1;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   cursor: pointer;
   transition: color 180ms ease, border-color 180ms ease;
 }
 
 .dw-bc-node-add .dw-bc-inline-icon-shell {
-  margin-right: 8px;
+  margin-right: 6rem;
 }
 
 .dw-bc-audio-link .dw-bc-node-icon {
-  margin-right: 8px;
-  width: 16px;
-  height: 16px;
+  margin-right: 6rem;
+  width: 12rem;
+  height: 12rem;
   display: block;
   flex: 0 0 auto;
   align-self: center;
@@ -1956,7 +1976,7 @@
 }
 
 .dw-bc-map-audio-stack > * + * {
-  margin-top: 8px;
+  margin-top: 6rem;
 }
 
 .dw-bc-map-audio-binding {
@@ -1974,13 +1994,13 @@
 .dw-bc-map-audio-lang {
   flex: 0 0 auto;
   border: 1px solid rgba(116, 193, 193, 0.30);
-  padding: 2px 6px;
+  padding: 2px 5rem;
   background: #74c1c1;
   color: #11191c;
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 600;
-  margin-right: 10px;
+  margin-right: 8rem;
 }
 
 .dw-bc-map-audio-link-core {
@@ -1990,14 +2010,14 @@
   border-bottom: 1px solid rgba(116, 193, 193, 0.28);
   padding-bottom: 2px;
   color: #74c1c1;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   transition: color 180ms ease, border-color 180ms ease;
 }
 
 .dw-bc-map-audio-link-core .dw-bc-node-icon {
-  width: 14px;
-  height: 14px;
+  width: 11rem;
+  height: 11rem;
   flex: 0 0 auto;
 }
 
@@ -2010,15 +2030,15 @@
 
 .dw-bc-map-conflict-note {
   color: rgba(227, 179, 65, 0.82);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
 }
 
 .dw-bc-map-missing {
   color: rgba(255, 255, 255, 0.30);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
   font-style: normal;
   text-align: left;
@@ -2026,22 +2046,22 @@
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-missing {
   display: block;
-  max-width: 260px;
+  max-width: 195rem;
   white-space: normal;
-  line-height: 20px;
+  line-height: 15rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-button {
   white-space: normal;
   width: 100%;
   max-width: 100%;
-  min-height: 52px;
+  min-height: 39rem;
 }
 
 .dw-bc-ready {
   color: #81b581;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
   text-align: left;
 }
@@ -2051,12 +2071,12 @@
   align-items: center;
   justify-content: flex-start;
   border: 1px solid rgba(212, 129, 129, 0.40);
-  min-height: 42px;
-  padding: 0 14px;
+  min-height: 32rem;
+  padding: 0 11rem;
   background: rgba(212, 129, 129, 0.04);
   color: #d48181;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
@@ -2092,15 +2112,15 @@
 }
 
 .dw-bc-map-binding-list {
-  margin-bottom: 20px;
+  margin-bottom: 15rem;
 }
 
 .dw-bc-map-binding-list-title {
   display: block;
-  margin-bottom: 12px;
+  margin-bottom: 9rem;
   color: rgba(255, 255, 255, 0.60);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   font-weight: 500;
 }
 
@@ -2108,7 +2128,7 @@
   display: flex;
   flex-wrap: wrap;
   border: 1px solid rgba(255, 255, 255, 0.05);
-  padding: 16px;
+  padding: 12rem;
   background: rgba(0, 0, 0, 0.20);
 }
 
@@ -2121,9 +2141,9 @@
   align-items: center;
   min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.10);
-  margin-right: 14px;
-  margin-bottom: 14px;
-  padding: 8px 14px;
+  margin-right: 11rem;
+  margin-bottom: 11rem;
+  padding: 6rem 11rem;
   background: rgba(255, 255, 255, 0.05);
   transition: border-color 180ms ease, background-color 180ms ease;
 }
@@ -2134,25 +2154,25 @@
 
 .dw-bc-map-binding-tag-lang {
   color: rgba(255, 255, 255, 0.50);
-  font-size: 15px;
-  line-height: 20px;
-  margin-right: 12px;
+  font-size: 11rem;
+  line-height: 15rem;
+  margin-right: 9rem;
 }
 
 .dw-bc-map-binding-tag-name {
   color: rgba(255, 255, 255, 0.80);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
 }
 
 .dw-bc-map-binding-tag-remove {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 14rem;
+  height: 14rem;
   border: 0;
-  margin-left: 12px;
+  margin-left: 9rem;
   padding: 0;
   background: transparent;
   color: rgba(255, 255, 255, 0.30);
@@ -2161,8 +2181,8 @@
 }
 
 .dw-bc-map-binding-tag-remove .dw-bc-close-icon {
-  width: 12px;
-  height: 12px;
+  width: 9rem;
+  height: 9rem;
   color: rgba(255, 255, 255, 0.30);
   stroke: rgba(255, 255, 255, 0.30);
 }
@@ -2174,49 +2194,49 @@
 .dw-bc-map-binding-toolbar {
   display: flex;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 12rem;
 }
 
 .dw-bc-map-binding-toolbar label {
   flex: 0 0 auto;
   margin: 0;
   color: rgba(255, 255, 255, 0.60);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   white-space: nowrap;
 }
 
 .dw-bc-map-binding-toolbar input,
 .dw-bc-map-disambiguation-controls input {
-  width: 128px;
-  height: 42px;
+  width: 96rem;
+  height: 32rem;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 10px 12px;
+  padding: 8rem 9rem;
   box-sizing: border-box;
   background: rgba(0, 0, 0, 0.40);
   color: #ffffff;
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   font-family: var(--dw-native-font-family);
 }
 
 .dw-bc-map-binding-toolbar input {
   flex: 0 0 auto;
-  margin-left: 12px;
-  margin-right: 32px;
+  margin-left: 9rem;
+  margin-right: 24rem;
 }
 
 .dw-bc-map-binding-toolbar span {
   flex: 0 0 auto;
   color: rgba(255, 255, 255, 0.30);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
 }
 
 .dw-bc-rule-meta {
   display: flex;
   align-items: center;
-  margin-top: 10px;
+  margin-top: 8rem;
 }
 
 .dw-bc-rule-meta p {
@@ -2226,13 +2246,13 @@
 .dw-bc-rule-preview {
   display: flex;
   align-items: center;
-  margin-left: 24px;
+  margin-left: 18rem;
   border: 0;
   padding: 0;
   background: transparent;
   color: rgba(255, 255, 255, 0.30);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   cursor: pointer;
   transition: color 180ms ease;
 }
@@ -2241,17 +2261,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
+  width: 12rem;
+  height: 12rem;
+  flex: 0 0 12rem;
   align-self: center;
-  margin-right: 6px;
+  margin-right: 5rem;
   color: rgba(129, 181, 129, 0.82);
 }
 
 .dw-bc-rule-preview-icon-shell .dw-bc-play-icon {
-  width: 16px;
-  height: 16px;
+  width: 12rem;
+  height: 12rem;
   display: block;
   color: rgba(129, 181, 129, 0.82);
   fill: rgba(129, 181, 129, 0.82);
@@ -2268,7 +2288,7 @@
   display: flex;
   align-items: center;
   align-self: center;
-  min-height: 20px;
+  min-height: 15rem;
 }
 
 .dw-bc-footer-left {
@@ -2279,25 +2299,25 @@
 }
 
 .dw-bc-footer-left > * + * {
-  margin-left: 40px;
+  margin-left: 30rem;
 }
 
 .dw-bc-preview-volume {
   display: flex;
   align-items: center;
   min-width: 0;
-  padding-left: 32px;
+  padding-left: 24rem;
   border-left: 1px solid rgba(255, 255, 255, 0.10);
 }
 
 .dw-bc-preview-volume > * + * {
-  margin-left: 16px;
+  margin-left: 12rem;
 }
 
 .dw-bc-preview-volume-label {
   color: rgba(255, 255, 255, 0.50);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   white-space: nowrap;
 }
 
@@ -2305,14 +2325,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   color: rgba(255, 255, 255, 0.40);
 }
 
 .dw-bc-preview-volume-icon {
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   color: rgba(255, 255, 255, 0.40);
   stroke: rgba(255, 255, 255, 0.40);
 }
@@ -2324,15 +2344,15 @@
 .dw-bc-preview-volume-hitbox {
   display: flex;
   align-items: center;
-  width: 160px;
-  height: 24px;
+  width: 120rem;
+  height: 18rem;
   cursor: pointer;
 }
 
 .dw-bc-preview-volume-track {
   position: relative;
   width: 100%;
-  height: 8px;
+  height: 6rem;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: rgba(0, 0, 0, 0.40);
 }
@@ -2348,10 +2368,10 @@
 .dw-bc-preview-volume-thumb {
   position: absolute;
   top: 50%;
-  width: 12px;
-  height: 16px;
-  margin-left: -6px;
-  margin-top: -8px;
+  width: 9rem;
+  height: 12rem;
+  margin-left: -5rem;
+  margin-top: -6rem;
   background: #ffffff;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
   pointer-events: none;
@@ -2361,10 +2381,10 @@
 }
 
 .dw-bc-preview-volume-value {
-  width: 48px;
+  width: 36rem;
   color: rgba(255, 255, 255, 0.40);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-family: Consolas, Menlo, monospace;
 }
 
@@ -2374,7 +2394,7 @@
 }
 
 .dw-bc-map-disambiguation-list > * + * {
-  margin-top: 12px;
+  margin-top: 9rem;
 }
 
 .dw-bc-map-disambiguation-item {
@@ -2382,24 +2402,24 @@
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding-bottom: 12px;
+  padding-bottom: 9rem;
 }
 
 .dw-bc-map-disambiguation-asset {
   display: flex;
   align-items: center;
-  margin-right: 16px;
+  margin-right: 12rem;
   min-width: 0;
   color: rgba(255, 255, 255, 0.80);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 500;
 }
 
 .dw-bc-map-disambiguation-asset .dw-bc-node-icon {
-  margin-right: 8px;
-  width: 14px;
-  height: 14px;
+  margin-right: 6rem;
+  width: 11rem;
+  height: 11rem;
   flex: 0 0 auto;
   color: #e3b341;
   stroke: #e3b341;
@@ -2412,13 +2432,13 @@
 }
 
 .dw-bc-map-disambiguation-controls > * + * {
-  margin-left: 12px;
+  margin-left: 9rem;
 }
 
 .dw-bc-map-disambiguation-controls > span {
   color: rgba(255, 255, 255, 0.40);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
 }
 
 .dw-bc-map-disambiguation-controls input {
@@ -2429,8 +2449,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 21rem;
+  height: 21rem;
   border: 0;
   padding: 0;
   background: transparent;
@@ -2440,8 +2460,8 @@
 }
 
 .dw-bc-map-disambiguation-remove .dw-bc-close-icon {
-  width: 14px;
-  height: 14px;
+  width: 11rem;
+  height: 11rem;
   color: rgba(255, 255, 255, 0.30);
   stroke: rgba(255, 255, 255, 0.30);
 }
@@ -2453,11 +2473,11 @@
 .dw-bc-map-disambiguation-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 8px;
+  margin-top: 6rem;
 }
 
 .dw-bc-map-disambiguation-actions > button + button {
-  margin-left: 8px;
+  margin-left: 6rem;
 }
 
 .dw-bc-platform-head-tools {
@@ -2466,13 +2486,13 @@
 }
 
 .dw-bc-platform-head-tools > * + * {
-  margin-left: 12px;
+  margin-left: 9rem;
 }
 
 .dw-bc-platform-targets {
   position: relative;
-  margin-top: 24px;
-  padding-top: 16px;
+  margin-top: 18rem;
+  padding-top: 12rem;
 }
 
 .dw-bc-platform-targets::before {
@@ -2480,7 +2500,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  width: 176px;
+  width: 132rem;
   height: 1px;
   background: rgba(255, 255, 255, 0.08);
 }
@@ -2489,13 +2509,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 6rem;
 }
 
 .dw-bc-platform-target-head > span {
   color: rgba(255, 255, 255, 0.66);
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
 }
 
@@ -2509,18 +2529,18 @@
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  height: 46px;
+  height: 35rem;
   min-width: 0;
-  padding: 0 12px;
-  margin-right: 8px;
-  margin-bottom: 8px;
+  padding: 0 9rem;
+  margin-right: 6rem;
+  margin-bottom: 6rem;
   border: 0;
   border-radius: 0;
   background-color: rgba(255, 255, 255, 0.04);
   color: #c6d2da;
   cursor: pointer;
-  font-size: 20px;
-  line-height: 20px;
+  font-size: 15rem;
+  line-height: 15rem;
   font-weight: 600;
   font-family: var(--dw-native-font-family);
   text-align: center;
@@ -2537,8 +2557,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 96px;
-  padding: 0 32px;
+  height: 72rem;
+  padding: 0 24rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.006) 0%, rgba(255, 255, 255, 0.014) 100%);
 }
@@ -2549,8 +2569,8 @@
   flex: 1 1 auto;
   min-width: 0;
   color: rgba(255, 255, 255, 0.50);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -2571,9 +2591,9 @@
 }
 
 .dw-bc-footer-dot {
-  margin-right: 12px;
-  width: 6px;
-  height: 6px;
+  margin-right: 9rem;
+  width: 5rem;
+  height: 5rem;
   border-radius: 999px;
   background: #9ebac3;
   box-shadow: 0 0 8px #9ebac3;
@@ -2602,6 +2622,11 @@
 .dw-bc-sidebar-clear-button:hover,
 .dw-bc-sidebar-clear-button:focus {
   color: rgba(255, 255, 255, 0.76);
+}
+
+.dw-bc-sidebar-clear-button.is-blocked:hover,
+.dw-bc-sidebar-clear-button.is-blocked:focus {
+  color: #f08f8f;
 }
 
 .dw-bc-tray-head .dw-bc-icon-button:hover {
@@ -2692,15 +2717,15 @@
 
 .dw-bc-import-card-icon-shell .dw-bc-icon.dw-bc-import-card-folder-icon,
 .dw-bc-import-card-icon-shell .dw-bc-icon.dw-bc-import-card-file-icon {
-  width: 34px;
-  height: 34px;
+  width: 26rem;
+  height: 26rem;
   flex: 0 0 auto;
 }
 
 .dw-bc-import-card-check-shell .dw-bc-icon.dw-bc-import-card-check-icon,
 .dw-bc-import-select-all-icon-shell .dw-bc-icon.dw-bc-import-select-all-icon {
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   flex: 0 0 auto;
 }
 

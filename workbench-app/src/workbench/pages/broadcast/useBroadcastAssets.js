@@ -1,7 +1,50 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IMPORT_OVERLAY_TRANSITION_MS } from "./broadcast-constants";
 import { createEmptyExternalAssetBrowserState } from "./broadcast-assets";
 import { deriveBroadcastStationStatus } from "./broadcast-bindings";
+
+const ASSET_DELETE_BLOCKED_MS = 5000;
+const DELETE_ALL_ASSETS_KEY = "__all__";
+
+function getBroadcastMatchKey(value) {
+  const source = String(value || "")
+    .trim()
+    .replace(/\.[^.\\/:]+$/, "")
+    .toLowerCase();
+  let result = "";
+  let lastWasSeparator = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const ch = source[index];
+    if (/[\p{L}\p{N}]/u.test(ch)) {
+      result += ch;
+      lastWasSeparator = false;
+    } else if ((ch === " " || ch === "_" || ch === "-") && !lastWasSeparator && result) {
+      result += " ";
+      lastWasSeparator = true;
+    }
+  }
+  return result.trim();
+}
+
+function compactBroadcastMatchKey(value) {
+  return String(value || "").replace(/\s+/g, "");
+}
+
+function isBroadcastStationAssetMatch(assetName, stationName) {
+  const stationKey = getBroadcastMatchKey(stationName);
+  const assetKey = getBroadcastMatchKey(assetName);
+  if (!stationKey || !assetKey) {
+    return false;
+  }
+
+  if (assetKey.includes(stationKey)) {
+    return true;
+  }
+
+  const compactStationKey = compactBroadcastMatchKey(stationKey);
+  const compactAssetKey = compactBroadcastMatchKey(assetKey);
+  return Boolean(compactStationKey && compactAssetKey && compactAssetKey.includes(compactStationKey));
+}
 
 export default function useBroadcastAssets(context) {
   const {
@@ -15,7 +58,15 @@ export default function useBroadcastAssets(context) {
     selectedExternalFiles,
     previewingAssetName,
     previewingRuleId,
+    availableAssetLibrary,
+    rules,
+    stations,
+    platformAnnouncements,
+    defaultBindingLanguageLabel,
     selectedLineIdRef,
+    draftStore,
+    buildCurrentBroadcastLineDraft,
+    markBroadcastDraftDirty,
     setShouldRenderAssetExplorer,
     setAssetExplorerStage,
     setSelectedExternalFiles,
@@ -25,15 +76,15 @@ export default function useBroadcastAssets(context) {
     setPreviewingAssetName,
     setPreviewingRuleId,
     setCatalogAssetLibrary,
-    setStationBindingDraftsByLine,
     setBindingLangDraftsByLine,
     setDisambiguationNamesByLine,
     setStations,
     setRules,
     setPlatformAnnouncements,
-    applyBroadcastSnapshot,
     closeInlineMenus,
   } = context;
+  const [assetDeleteBlockedNames, setAssetDeleteBlockedNames] = useState({});
+  const assetDeleteBlockedTimersRef = useRef({});
 
   useEffect(() => {
     let timer = null;
@@ -65,6 +116,30 @@ export default function useBroadcastAssets(context) {
       }
     };
   }, [isAssetExplorerOpen, shouldRenderAssetExplorer]);
+
+  useEffect(() => () => {
+    Object.values(assetDeleteBlockedTimersRef.current).forEach((timer) => {
+      window.clearTimeout(timer);
+    });
+    assetDeleteBlockedTimersRef.current = {};
+  }, []);
+
+  function showAssetDeleteBlocked(assetName) {
+    const key = assetName || DELETE_ALL_ASSETS_KEY;
+    if (assetDeleteBlockedTimersRef.current[key]) {
+      window.clearTimeout(assetDeleteBlockedTimersRef.current[key]);
+    }
+
+    setAssetDeleteBlockedNames((current) => ({ ...current, [key]: true }));
+    assetDeleteBlockedTimersRef.current[key] = window.setTimeout(() => {
+      setAssetDeleteBlockedNames((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      delete assetDeleteBlockedTimersRef.current[key];
+    }, ASSET_DELETE_BLOCKED_MS);
+  }
 
   async function loadExternalAssetBrowser(path = "") {
     try {
@@ -133,6 +208,7 @@ export default function useBroadcastAssets(context) {
       await workbenchApi.playBroadcastRulePreview?.({
         lineId: selectedLineIdRef.current || "",
         ruleId,
+        rule: (Array.isArray(rules) ? rules : []).find((rule) => rule?.id === ruleId) || null,
       });
     } catch (error) {
       console.error("[RT Broadcast Workbench] play rule preview failed", error);
@@ -146,55 +222,59 @@ export default function useBroadcastAssets(context) {
       return;
     }
 
+    const activeLineId = selectedLineIdRef.current || "";
+    const nextStations = (Array.isArray(stations) ? stations : []).map((station) => ({
+      ...station,
+      audios: station.audios.filter((entry) => entry.assetName !== assetName),
+      conflictAssets: station.conflictAssets.filter((entry) => entry.assetName !== assetName),
+      status: deriveBroadcastStationStatus(
+        station.audios.filter((entry) => entry.assetName !== assetName),
+        station.conflictAssets.filter((entry) => entry.assetName !== assetName),
+      ),
+    }));
+    const nextRules = (Array.isArray(rules) ? rules : []).map((rule) => ({
+      ...rule,
+      nodes: rule.nodes.filter((node) => !(node.type === "asset" && node.name === assetName)),
+    }));
+    const nextPlatformAnnouncements = (Array.isArray(platformAnnouncements) ? platformAnnouncements : []).map((announcement) => ({
+      ...announcement,
+      nodes: (Array.isArray(announcement.nodes) ? announcement.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
+    }));
     setCatalogAssetLibrary((current) => current.filter((asset) => asset.name !== assetName));
-    setStations((current) =>
-      current.map((station) => ({
-        ...station,
-        audios: station.audios.filter((entry) => entry.assetName !== assetName),
-        conflictAssets: station.conflictAssets.filter((entry) => entry.assetName !== assetName),
-        status: deriveBroadcastStationStatus(
-          station.audios.filter((entry) => entry.assetName !== assetName),
-          station.conflictAssets.filter((entry) => entry.assetName !== assetName),
-        ),
-      })),
-    );
-    setStationBindingDraftsByLine((current) => {
-      const next = { ...current };
-      Object.keys(next).forEach((lineId) => {
-        const lineDrafts = next[lineId];
-        if (!lineDrafts) {
-          return;
-        }
+    setStations(nextStations);
+    setRules(nextRules);
+    setPlatformAnnouncements(nextPlatformAnnouncements);
+    draftStore.getDirtyLineIds().forEach((lineId) => {
+      const draft = draftStore.getLineDraft(lineId);
+      if (!draft) {
+        return;
+      }
 
-        const nextLineDrafts = { ...lineDrafts };
-        Object.keys(nextLineDrafts).forEach((stationId) => {
-          const stationDraft = nextLineDrafts[stationId];
-          if (!stationDraft) {
-            return;
-          }
-
-          nextLineDrafts[stationId] = {
-            audios: Array.isArray(stationDraft.audios) ? stationDraft.audios.filter((entry) => entry.assetName !== assetName) : [],
-            conflictAssets: Array.isArray(stationDraft.conflictAssets) ? stationDraft.conflictAssets.filter((entry) => entry.assetName !== assetName) : [],
-          };
-        });
-        next[lineId] = nextLineDrafts;
+      draftStore.setLineDraft(lineId, {
+        ...draft,
+        stationsForUi: (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
+          ...station,
+          audios: (Array.isArray(station?.audios) ? station.audios : []).filter((entry) => entry.assetName !== assetName),
+          conflictAssets: (Array.isArray(station?.conflictAssets) ? station.conflictAssets : []).filter((entry) => entry.assetName !== assetName),
+        })),
+        rules: (Array.isArray(draft.rules) ? draft.rules : []).map((rule) => ({
+          ...rule,
+          nodes: (Array.isArray(rule?.nodes) ? rule.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
+        })),
+        platformAnnouncements: (Array.isArray(draft.platformAnnouncements) ? draft.platformAnnouncements : []).map((announcement) => ({
+          ...announcement,
+          nodes: (Array.isArray(announcement?.nodes) ? announcement.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
+        })),
       });
-      return next;
     });
-    setRules((current) =>
-      current.map((rule) => ({
-        ...rule,
-        nodes: rule.nodes.filter((node) => !(node.type === "asset" && node.name === assetName)),
-      })),
-    );
-    setPlatformAnnouncements((current) =>
-      current.map((announcement) => ({
-        ...announcement,
-        nodes: (Array.isArray(announcement.nodes) ? announcement.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
-      })),
-    );
     resetAssetPreviewState(assetName);
+    if (activeLineId) {
+      markBroadcastDraftDirty(activeLineId, buildCurrentBroadcastLineDraft({
+        stationsForUi: nextStations,
+        rules: nextRules,
+        platformAnnouncements: nextPlatformAnnouncements,
+      }));
+    }
   }
 
   async function handleDeleteAsset(assetName) {
@@ -208,6 +288,9 @@ export default function useBroadcastAssets(context) {
       }
       const result = await workbenchApi.deleteBroadcastAsset?.(assetName);
       if (!result?.success) {
+        if (result?.error === "broadcast-asset-in-use") {
+          showAssetDeleteBlocked(assetName);
+        }
         return;
       }
     } catch (error) {
@@ -225,6 +308,9 @@ export default function useBroadcastAssets(context) {
       }
       const result = await workbenchApi.deleteAllBroadcastAssets?.();
       if (!result?.success) {
+        if (result?.error === "broadcast-asset-in-use") {
+          showAssetDeleteBlocked(DELETE_ALL_ASSETS_KEY);
+        }
         return;
       }
     } catch (error) {
@@ -233,28 +319,55 @@ export default function useBroadcastAssets(context) {
     }
 
     setCatalogAssetLibrary([]);
-    setStationBindingDraftsByLine({});
-    setStations((current) =>
-      current.map((station) => ({
-        ...station,
-        audios: [],
-        conflictAssets: [],
-        status: "missing",
-      })),
-    );
-    setRules((current) =>
-      current.map((rule) => ({
-        ...rule,
-        nodes: rule.nodes.filter((node) => node.type !== "asset"),
-      })),
-    );
-    setPlatformAnnouncements((current) =>
-      current.map((announcement) => ({
-        ...announcement,
-        nodes: (Array.isArray(announcement.nodes) ? announcement.nodes : []).filter((node) => node.type !== "asset"),
-      })),
-    );
+    const activeLineId = selectedLineIdRef.current || "";
+    const nextStations = (Array.isArray(stations) ? stations : []).map((station) => ({
+      ...station,
+      audios: [],
+      conflictAssets: [],
+      status: "missing",
+    }));
+    const nextRules = (Array.isArray(rules) ? rules : []).map((rule) => ({
+      ...rule,
+      nodes: rule.nodes.filter((node) => node.type !== "asset"),
+    }));
+    const nextPlatformAnnouncements = (Array.isArray(platformAnnouncements) ? platformAnnouncements : []).map((announcement) => ({
+      ...announcement,
+      nodes: (Array.isArray(announcement.nodes) ? announcement.nodes : []).filter((node) => node.type !== "asset"),
+    }));
+    setStations(nextStations);
+    setRules(nextRules);
+    setPlatformAnnouncements(nextPlatformAnnouncements);
+    draftStore.getDirtyLineIds().forEach((lineId) => {
+      const draft = draftStore.getLineDraft(lineId);
+      if (!draft) {
+        return;
+      }
+
+      draftStore.setLineDraft(lineId, {
+        ...draft,
+        stationsForUi: (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
+          ...station,
+          audios: [],
+          conflictAssets: [],
+        })),
+        rules: (Array.isArray(draft.rules) ? draft.rules : []).map((rule) => ({
+          ...rule,
+          nodes: (Array.isArray(rule?.nodes) ? rule.nodes : []).filter((node) => node.type !== "asset"),
+        })),
+        platformAnnouncements: (Array.isArray(draft.platformAnnouncements) ? draft.platformAnnouncements : []).map((announcement) => ({
+          ...announcement,
+          nodes: (Array.isArray(announcement?.nodes) ? announcement.nodes : []).filter((node) => node.type !== "asset"),
+        })),
+      });
+    });
     resetAssetPreviewState();
+    if (activeLineId) {
+      markBroadcastDraftDirty(activeLineId, buildCurrentBroadcastLineDraft({
+        stationsForUi: nextStations,
+        rules: nextRules,
+        platformAnnouncements: nextPlatformAnnouncements,
+      }));
+    }
   }
 
   async function handleAutoBindStations() {
@@ -262,30 +375,50 @@ export default function useBroadcastAssets(context) {
       return;
     }
 
-    try {
-      await workbenchApi.autoBindBroadcastStationMappings?.(selectedLineIdRef.current);
-      setStationBindingDraftsByLine((current) => {
-        const next = { ...current };
-        delete next[selectedLineIdRef.current];
-        return next;
-      });
-      setBindingLangDraftsByLine((current) => {
-        const next = { ...current };
-        delete next[selectedLineIdRef.current];
-        return next;
-      });
-      setDisambiguationNamesByLine((current) => {
-        const next = { ...current };
-        delete next[selectedLineIdRef.current];
-        return next;
-      });
-      const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current);
-      if (refreshedSnapshot) {
-        applyBroadcastSnapshot(refreshedSnapshot);
+    let boundCount = 0;
+    const nextStations = (Array.isArray(stations) ? stations : []).map((station) => {
+      if (!station?.id || (Array.isArray(station.audios) && station.audios.length > 0)) {
+        return station;
       }
-    } catch (error) {
-      console.error("[RT Broadcast Workbench] auto bind station mappings failed", error);
+
+      const matches = (Array.isArray(availableAssetLibrary) ? availableAssetLibrary : []).filter((asset) =>
+        asset?.name && isBroadcastStationAssetMatch(asset.name, station.name),
+      );
+      if (matches.length !== 1) {
+        return station;
+      }
+
+      boundCount += 1;
+      const audios = [
+        {
+          lang: defaultBindingLanguageLabel || "",
+          langIndex: 1,
+          assetName: matches[0].name,
+        },
+      ];
+      return {
+        ...station,
+        audios,
+        status: deriveBroadcastStationStatus(audios, station.conflictAssets),
+      };
+    });
+
+    if (boundCount <= 0) {
+      return;
     }
+
+    setStations(nextStations);
+    setBindingLangDraftsByLine((current) => {
+      const next = { ...current };
+      delete next[selectedLineIdRef.current];
+      return next;
+    });
+    setDisambiguationNamesByLine((current) => {
+      const next = { ...current };
+      delete next[selectedLineIdRef.current];
+      return next;
+    });
+    markBroadcastDraftDirty(selectedLineIdRef.current, buildCurrentBroadcastLineDraft({ stationsForUi: nextStations }));
   }
 
   function handleCloseAssetExplorer() {
@@ -356,6 +489,8 @@ export default function useBroadcastAssets(context) {
     removeAssetFromUi,
     handleDeleteAsset,
     handleDeleteAllAssets,
+    assetDeleteBlockedNames,
+    deleteAllAssetsKey: DELETE_ALL_ASSETS_KEY,
     handleAutoBindStations,
     handleCloseAssetExplorer,
     handleExternalPathChange,

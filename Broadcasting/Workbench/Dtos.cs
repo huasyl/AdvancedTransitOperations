@@ -240,6 +240,8 @@ namespace RapidTransitMod
         [DataMember]
         public string ruleId;
         [DataMember]
+        public BroadcastWorkbenchRuleDto rule;
+        [DataMember]
         public int volume;
     }
 
@@ -408,6 +410,62 @@ namespace RapidTransitMod
         public string error;
         [DataMember]
         public BroadcastWorkbenchSnapshot snapshot;
+    }
+
+    [DataContract]
+    public class ApplyRequest
+    {
+        [DataMember]
+        public ApplyLineConfig[] lines;
+        [DataMember]
+        public int? volume;
+        [DataMember]
+        public bool volumeDirty;
+    }
+
+    [DataContract]
+    public class ApplyLineConfig
+    {
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public BroadcastWorkbenchStationBindingDto[] stationBindings;
+        [DataMember]
+        public BroadcastWorkbenchRuleDto[] rules;
+        [DataMember]
+        public BroadcastWorkbenchPlatformAnnouncementDto[] platformAnnouncements;
+    }
+
+    [DataContract]
+    public class ApplyResult
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public string version;
+        [DataMember]
+        public string[] appliedLineIds;
+        [DataMember]
+        public bool volumeApplied;
+        [DataMember]
+        public string[] warnings;
+    }
+
+    [DataContract]
+    public class ApplyOperationStatusDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string operationId;
+        [DataMember]
+        public string state;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public ApplyResult result;
     }
 
     [DataContract]

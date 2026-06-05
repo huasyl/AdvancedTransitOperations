@@ -122,11 +122,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.success = true;
                         result.state = "pending";
                         result.ruleId = ruleId;
+                        BroadcastWorkbenchRuleDto previewRule = request?.rule;
                         MainThreadDispatcher.RunOnMainThread(async () =>
                         {
                             try
                             {
-                                await PlayRule(lineId, ruleId);
+                                await PlayRule(lineId, ruleId, previewRule);
                             }
                             catch (Exception ex)
                             {
@@ -406,14 +407,16 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     m_Clip = null;
                 }
 
-                internal async Task PlayRule(string lineId, string ruleId)
+                internal async Task PlayRule(string lineId, string ruleId, BroadcastWorkbenchRuleDto previewRule = null)
                 {
                     StopAsset(m_AssetName, notify: true);
                     StopRule(ruleId, notify: false);
 
-                    List<BroadcastWorkbenchRuleDto> rules = m_Ctx.Rules.DraftRows(lineId).ToList();
-                    BroadcastWorkbenchRuleDto rule = rules.FirstOrDefault(candidate =>
-                        candidate != null && string.Equals(candidate.id, ruleId, StringComparison.Ordinal));
+                    BroadcastWorkbenchRuleDto rule = previewRule != null
+                        && string.Equals(previewRule.id, ruleId, StringComparison.Ordinal)
+                            ? Rules.Clone(previewRule)
+                            : m_Ctx.Rules.DraftRows(lineId).FirstOrDefault(candidate =>
+                                candidate != null && string.Equals(candidate.id, ruleId, StringComparison.Ordinal));
                     if (rule?.nodes == null || rule.nodes.Length == 0)
                     {
                         NotifyRule(ruleId, "error", "Selected rule has no previewable nodes.");

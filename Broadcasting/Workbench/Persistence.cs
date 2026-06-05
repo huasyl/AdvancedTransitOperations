@@ -35,14 +35,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
             persisted.broadcastAssetDirectory = m_State.AssetDir;
             persisted.broadcastAssets = Assets();
-            persisted.broadcastDraftLineBindings = DraftBindingStates();
-            persisted.broadcastDraftRules = DraftRuleStates();
-            persisted.broadcastDraftPlatformAnnouncements = DraftPlatformStates();
+            persisted.broadcastDraftLineBindings = Array.Empty<BroadcastWorkbenchPersistedLineBindingState>();
+            persisted.broadcastDraftRules = Array.Empty<BroadcastWorkbenchPersistedRuleState>();
+            persisted.broadcastDraftPlatformAnnouncements = Array.Empty<BroadcastWorkbenchPersistedPlatformAnnouncementState>();
             persisted.broadcastLineBindings = Bindings();
             persisted.broadcastRules = Rules();
             persisted.broadcastPlatformAnnouncements = Platforms();
             persisted.broadcastAppliedState = Applied();
-            persisted.broadcastDraftVolume = m_State.DraftVolume;
+            persisted.broadcastDraftVolume = AppliedVol;
         }
 
         internal void Restore(DispatchWorkbenchPersistentState persisted)
@@ -137,8 +137,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             m_State.AppliedPlatforms.Clear();
             m_State.AppliedLines.Clear();
             m_Announcements.ClearLineChecks();
-            DraftVol = Preview.Clamp(persistedDraftVolume);
-            AppliedVol = Preview.Clamp(persistedAppliedState?.volume ?? DraftVol);
+            AppliedVol = Preview.Clamp(persistedAppliedState?.volume ?? persistedDraftVolume);
+            DraftVol = AppliedVol;
             BrowseFolder = string.Empty;
             AssetFolder = m_Ctx.Assets.EnsureDir();
 
@@ -186,18 +186,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
 
             RapidTransitMod.Broadcasting.WorkbenchBackend.Bindings.RestoreInto(
-                m_State.DraftBindings,
-                persistedDraftLineBindings);
-
-            RapidTransitMod.Broadcasting.WorkbenchBackend.Rules.RestoreInto(
-                m_State.DraftRules,
-                persistedDraftRules);
-
-            RapidTransitMod.Broadcasting.WorkbenchBackend.Platforms.RestoreInto(
-                m_State.DraftPlatforms,
-                persistedDraftPlatformAnnouncements);
-
-            RapidTransitMod.Broadcasting.WorkbenchBackend.Bindings.RestoreInto(
                 m_State.AppliedBindings,
                 persistedLineBindings);
 
@@ -221,21 +209,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     m_State.AppliedLines.Add(lineId);
                 }
-            }
-
-            if (m_State.DraftBindings.Count == 0 && persistedLineBindings != null)
-            {
-                RapidTransitMod.Broadcasting.WorkbenchBackend.Bindings.Copy(m_State.AppliedBindings, m_State.DraftBindings);
-            }
-
-            if (m_State.DraftRules.Count == 0 && persistedRules != null)
-            {
-                RapidTransitMod.Broadcasting.WorkbenchBackend.Rules.Copy(m_State.AppliedRules, m_State.DraftRules);
-            }
-
-            if (m_State.DraftPlatforms.Count == 0 && persistedPlatformAnnouncements != null)
-            {
-                RapidTransitMod.Broadcasting.WorkbenchBackend.Platforms.Copy(m_State.AppliedPlatforms, m_State.DraftPlatforms);
             }
 
             m_Ctx.Preview.ApplyVolume();

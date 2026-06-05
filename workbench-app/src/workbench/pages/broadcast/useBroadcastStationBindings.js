@@ -1,13 +1,10 @@
-import { normalizeLangIndex } from "./broadcast-normalize";
 import { extractBroadcastLanguageHint } from "./broadcast-assets";
 import { deriveBroadcastStationStatus, sortBroadcastConflictAssets } from "./broadcast-bindings";
 import { animateScrollTopWithTransform } from "./components/BroadcastAnimatedPanels";
 
 export default function useBroadcastStationBindings(context) {
   const {
-    workbenchApi,
     stations,
-    stationBindingDraftsByLine,
     bindingLangDraftsByLine,
     disambiguationNamesByLine,
     mappingBindFeedback,
@@ -22,7 +19,8 @@ export default function useBroadcastStationBindings(context) {
     mappingBindScrollFrameRef,
     mappingBindTransformCleanupRef,
     removeTimersRef,
-    setStationBindingDraftsByLine,
+    buildCurrentBroadcastLineDraft,
+    markBroadcastDraftDirty,
     setBindingLangDraftsByLine,
     setDisambiguationNamesByLine,
     setMappingBindFeedback,
@@ -49,16 +47,16 @@ export default function useBroadcastStationBindings(context) {
       return;
     }
 
-    setStationBindingDraftsByLine((current) => ({
-      ...current,
-      [lineId]: {
-        ...(current[lineId] || {}),
-        [stationId]: {
-          audios: Array.isArray(nextAudios) ? nextAudios : [],
-          conflictAssets: Array.isArray(nextConflictAssets) ? nextConflictAssets : [],
-        },
-      },
-    }));
+    const nextStations = stations.map((station) =>
+      station.id === stationId
+        ? {
+            ...station,
+            audios: Array.isArray(nextAudios) ? nextAudios : [],
+            conflictAssets: Array.isArray(nextConflictAssets) ? nextConflictAssets : [],
+          }
+        : station,
+    );
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ stationsForUi: nextStations }));
   }
 
   function updateBindingLanguageDraft(stationId, value) {
@@ -109,49 +107,6 @@ export default function useBroadcastStationBindings(context) {
       return lineDrafts[draftKey];
     }
     return fallbackValue;
-  }
-
-  async function syncStationBindings(stationId, audios) {
-    const lineId = getActiveBroadcastLineId();
-    if (!lineId || !stationId) {
-      return;
-    }
-
-    try {
-      await workbenchApi.saveBroadcastStationBindings?.({
-        lineId,
-        stationId,
-        bindings: (Array.isArray(audios) ? audios : [])
-          .filter((entry) => entry && typeof entry.assetName === "string" && entry.assetName)
-          .map((entry, index) => ({
-            lang: typeof entry.lang === "string" ? entry.lang : "",
-            langIndex: normalizeLangIndex(entry?.langIndex ?? index + 1),
-            assetName: entry.assetName,
-          })),
-      });
-      setStationBindingDraftsByLine((current) => {
-        const lineDrafts = current[lineId];
-        if (!lineDrafts || !Object.prototype.hasOwnProperty.call(lineDrafts, stationId)) {
-          return current;
-        }
-
-        const nextLineDrafts = { ...lineDrafts };
-        delete nextLineDrafts[stationId];
-
-        if (Object.keys(nextLineDrafts).length === 0) {
-          const next = { ...current };
-          delete next[lineId];
-          return next;
-        }
-
-        return {
-          ...current,
-          [lineId]: nextLineDrafts,
-        };
-      });
-    } catch (error) {
-      console.error("[RT Broadcast Workbench] sync station binding failed", error);
-    }
   }
 
   function scheduleMappingBindFeedback(stationId, assetName, lang) {
@@ -218,7 +173,6 @@ export default function useBroadcastStationBindings(context) {
     persistStationBindingDraft(stationId, nextStation.audios, nextStation.conflictAssets);
     updateBindingLanguageDraft(stationId, nextLang);
     scheduleMappingBindFeedback(stationId, assetName, nextLang);
-    await syncStationBindings(stationId, nextStation.audios);
     setMappingTray(stationId);
   }
 
@@ -238,7 +192,6 @@ export default function useBroadcastStationBindings(context) {
 
     setStations((current) => current.map((station) => (station.id === stationId ? nextStation : station)));
     persistStationBindingDraft(stationId, nextStation.audios, nextStation.conflictAssets);
-    await syncStationBindings(stationId, nextStation.audios);
     setMappingTray(null);
   }
 
@@ -287,7 +240,6 @@ export default function useBroadcastStationBindings(context) {
     setStations((current) => current.map((station) => (station.id === stationId ? nextStation : station)));
     persistStationBindingDraft(stationId, nextStation.audios, nextStation.conflictAssets);
     setMappingTray(null);
-    await syncStationBindings(stationId, nextStation.audios);
   }
 
   return {
@@ -296,7 +248,6 @@ export default function useBroadcastStationBindings(context) {
     updateDisambiguationNameDraft,
     getBindingLanguageDraft,
     getDisambiguationNameDraft,
-    syncStationBindings,
     scheduleMappingBindFeedback,
     handleBindStation,
     handleRemoveStationAudio,

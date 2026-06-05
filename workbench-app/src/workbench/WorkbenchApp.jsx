@@ -3,6 +3,7 @@ import PlannerPage from "./pages/planner/PlannerPage";
 import BroadcastPage from "./pages/broadcast/BroadcastPage";
 import { useNativeScheduleI18n } from "./shared/workbench-i18n";
 import OverviewPage from "./pages/overview/OverviewPage";
+import PassengerFlowPage from "./pages/passenger/PassengerFlowPage";
 import SchedulePage from "./pages/schedule/SchedulePage";
 
 const DEFAULT_NATIVE_WORKBENCH_PAGE = "schedule";
@@ -31,16 +32,9 @@ export default function WorkbenchApp({ registerHostActions }) {
       { key: "schedule", label: t("nativeWorkbench.tab.schedule") },
       { key: "planner", label: t("nativeWorkbench.tab.planner") },
       { key: "broadcast", label: t("nativeWorkbench.tab.broadcast") },
-      { key: "overview", label: t("nativeWorkbench.tab.overview") }
+      { key: "overview", label: t("nativeWorkbench.tab.overview") },
+      { key: "passenger", label: t("nativeWorkbench.tab.passenger") }
     ]),
-    [t]
-  );
-  const overviewLabels = useMemo(
-    () => ({
-      overviewKicker: t("nativeWorkbench.overview.kicker"),
-      overviewTitle: t("nativeWorkbench.overview.title"),
-      overviewCopy: t("nativeWorkbench.overview.copy")
-    }),
     [t]
   );
 
@@ -128,7 +122,13 @@ export default function WorkbenchApp({ registerHostActions }) {
           className={`dw-native-workbench-page ${renderedPage === "overview" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="overview"
         >
-          <OverviewPage labels={overviewLabels} />
+          <OverviewPage />
+        </div>
+        <div
+          className={`dw-native-workbench-page ${renderedPage === "passenger" ? "is-active" : "is-inactive"} is-${pageStage}`}
+          data-workbench-page="passenger"
+        >
+          <PassengerFlowPage />
         </div>
       </div>
     </div>

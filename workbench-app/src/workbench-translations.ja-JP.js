@@ -364,6 +364,7 @@ export const nativeScheduleTranslationsJaJp = {
   "broadcast.sidebar.import": "外部アセットを追加",
   "broadcast.sidebar.deleteAsset": "アセットを削除",
   "broadcast.sidebar.deleteAllAssets": "すべてのアセットを削除",
+  "broadcast.sidebar.assetInUseCannotDelete": "使用中のため削除不可",
   "broadcast.tabs.sequence": "放送シーケンス",
   "broadcast.tabs.mapping": "駅名変数マッピング",
   "broadcast.tabs.platform": "ホーム放送",

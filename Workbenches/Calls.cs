@@ -90,6 +90,8 @@ namespace RapidTransitMod.Workbenches
             view.BindCall(ApiHost.Prefix + "playBroadcastRulePreview", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.PlayRule));
             view.BindCall(ApiHost.Prefix + "stopBroadcastRulePreview", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.StopRule));
             view.BindCall(ApiHost.Prefix + "setBroadcastPreviewVolume", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Volume));
+            view.BindCall(ApiHost.Prefix + "startBroadcastApplyOperation", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.StartApply));
+            view.BindCall(ApiHost.Prefix + "getBroadcastApplyOperationStatus", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.ApplyStatus));
             return true;
         }
 

@@ -139,6 +139,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void Loaded(Context serializationContext)
         {
+            m_Runtime.m_AnnouncementWorkbench.Reset();
             m_Runtime.m_WorkbenchBridge.Reset();
             m_Runtime.m_WorkbenchBridge.Restore();
             m_Runtime.m_WorkbenchBridge.Applied().Load();

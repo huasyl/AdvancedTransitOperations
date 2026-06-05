@@ -101,5 +101,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         {
             return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.SetBroadcastPreviewVolumeJson(volumeJson) ?? string.Empty;
         }
+
+        internal static string StartApply(string requestJson)
+        {
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.StartBroadcastApplyOperationJson(requestJson) ?? string.Empty;
+        }
+
+        internal static string ApplyStatus(string operationId)
+        {
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.GetBroadcastApplyOperationStatusJson(operationId) ?? string.Empty;
+        }
     }
 }

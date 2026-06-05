@@ -85,20 +85,24 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal List<BroadcastWorkbenchRuleDto> Draft(string lineId)
                 {
-                    if (string.IsNullOrEmpty(lineId)
-                        || !DraftRules.TryGetValue(lineId, out List<BroadcastWorkbenchRuleDto> rules)
-                        || rules == null)
+                    if (string.IsNullOrEmpty(lineId))
                     {
                         return null;
                     }
 
-                    return rules;
+                    if (DraftRules.TryGetValue(lineId, out List<BroadcastWorkbenchRuleDto> rules)
+                        && rules != null)
+                    {
+                        return rules;
+                    }
+
+                    return Applied(lineId);
                 }
 
                 internal BroadcastWorkbenchRuleDto[] DraftRows(string lineId)
                 {
+                    List<BroadcastWorkbenchRuleDto> rules = Draft(lineId);
                     if (string.IsNullOrEmpty(lineId)
-                        || !DraftRules.TryGetValue(lineId, out List<BroadcastWorkbenchRuleDto> rules)
                         || rules == null
                         || rules.Count == 0)
                     {
@@ -109,61 +113,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         .Select(Clone)
                         .Where(rule => rule != null)
                         .ToArray();
-                }
-
-                internal static void RemoveRefs(
-                    Dictionary<string, List<BroadcastWorkbenchRuleDto>> allRules,
-                    string assetName)
-                {
-                    foreach (KeyValuePair<string, List<BroadcastWorkbenchRuleDto>> lineEntry in allRules)
-                    {
-                        List<BroadcastWorkbenchRuleDto> rules = lineEntry.Value;
-                        if (rules == null)
-                        {
-                            continue;
-                        }
-
-                        for (int i = 0; i < rules.Count; i++)
-                        {
-                            BroadcastWorkbenchRuleDto rule = rules[i];
-                            if (rule?.nodes == null || rule.nodes.Length == 0)
-                            {
-                                continue;
-                            }
-
-                            rule.nodes = rule.nodes
-                                .Where(node => node != null
-                                    && !(string.Equals(node.type, "asset", StringComparison.Ordinal)
-                                        && string.Equals(node.name, assetName, StringComparison.OrdinalIgnoreCase)))
-                                .ToArray();
-                        }
-                    }
-                }
-
-                internal static void RemoveAllRefs(
-                    Dictionary<string, List<BroadcastWorkbenchRuleDto>> allRules)
-                {
-                    foreach (KeyValuePair<string, List<BroadcastWorkbenchRuleDto>> lineEntry in allRules)
-                    {
-                        List<BroadcastWorkbenchRuleDto> rules = lineEntry.Value;
-                        if (rules == null)
-                        {
-                            continue;
-                        }
-
-                        for (int i = 0; i < rules.Count; i++)
-                        {
-                            BroadcastWorkbenchRuleDto rule = rules[i];
-                            if (rule?.nodes == null || rule.nodes.Length == 0)
-                            {
-                                continue;
-                            }
-
-                            rule.nodes = rule.nodes
-                                .Where(node => node != null && !string.Equals(node.type, "asset", StringComparison.Ordinal))
-                                .ToArray();
-                        }
-                    }
                 }
 
                 internal static void RestoreInto(
