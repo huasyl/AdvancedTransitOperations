@@ -457,26 +457,32 @@ namespace RapidTransitMod
 
         protected override void OnDestroy()
         {
-            if (ReferenceEquals(Instance, this)) Instance = null!;
-            RuntimeRoot.Clear(this);
-            if (m_UICache.IsCreated) m_UICache.Dispose();
-            if (m_LastBoarding.IsCreated) m_LastBoarding.Dispose();
-            if (m_CachedWpIdx.IsCreated) m_CachedWpIdx.Dispose();
-            if (m_BVMisfire.IsCreated) m_BVMisfire.Dispose();
-            if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
-            if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();
-            if (m_LastRetireFixLogFrame.IsCreated) m_LastRetireFixLogFrame.Dispose();
-            if (m_RetireFixCooldownUntil.IsCreated) m_RetireFixCooldownUntil.Dispose();
-            if (m_PreparingFixCooldownUntil.IsCreated) m_PreparingFixCooldownUntil.Dispose();
-            if (m_RetireFixCount.IsCreated) m_RetireFixCount.Dispose();
-            if (m_SpawningLines.IsCreated) m_SpawningLines.Dispose();
-            if (m_LastSpawnBlockedLogFrame.IsCreated) m_LastSpawnBlockedLogFrame.Dispose();
-            if (m_LastScheduleDiagnosticLogFrame.IsCreated) m_LastScheduleDiagnosticLogFrame.Dispose();
-            if (m_LineInitialAdopted.IsCreated) m_LineInitialAdopted.Dispose();
-            if (m_JustLaunched.IsCreated) m_JustLaunched.Dispose();
-            if (m_LineSpawnRequestFrame.IsCreated) m_LineSpawnRequestFrame.Dispose();
-            m_LineMileage?.Clear();
-            base.OnDestroy();
+            try
+            {
+                if (ReferenceEquals(Instance, this)) Instance = null!;
+                RuntimeRoot.Clear(this);
+                if (m_UICache.IsCreated) m_UICache.Dispose();
+                if (m_LastBoarding.IsCreated) m_LastBoarding.Dispose();
+                if (m_CachedWpIdx.IsCreated) m_CachedWpIdx.Dispose();
+                if (m_BVMisfire.IsCreated) m_BVMisfire.Dispose();
+                if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
+                if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();
+                if (m_LastRetireFixLogFrame.IsCreated) m_LastRetireFixLogFrame.Dispose();
+                if (m_RetireFixCooldownUntil.IsCreated) m_RetireFixCooldownUntil.Dispose();
+                if (m_PreparingFixCooldownUntil.IsCreated) m_PreparingFixCooldownUntil.Dispose();
+                if (m_RetireFixCount.IsCreated) m_RetireFixCount.Dispose();
+                if (m_SpawningLines.IsCreated) m_SpawningLines.Dispose();
+                if (m_LastSpawnBlockedLogFrame.IsCreated) m_LastSpawnBlockedLogFrame.Dispose();
+                if (m_LastScheduleDiagnosticLogFrame.IsCreated) m_LastScheduleDiagnosticLogFrame.Dispose();
+                if (m_LineInitialAdopted.IsCreated) m_LineInitialAdopted.Dispose();
+                if (m_JustLaunched.IsCreated) m_JustLaunched.Dispose();
+                if (m_LineSpawnRequestFrame.IsCreated) m_LineSpawnRequestFrame.Dispose();
+                m_LineMileage?.Clear();
+            }
+            finally
+            {
+                base.OnDestroy();
+            }
         }
 
         internal static string SlotStr(int min)

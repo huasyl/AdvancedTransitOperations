@@ -83,6 +83,8 @@ export default function WorkbenchApp({ registerHostActions }) {
       data-native-workbench-page={activePage}
       lang={locale}
     >
+      <div className="dw-native-workbench-base" />
+
       <div className="dw-native-workbench-tabs-shell">
         <div className="dw-native-workbench-tabs-row">
           <div className="dw-native-workbench-tabs">

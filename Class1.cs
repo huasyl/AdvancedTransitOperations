@@ -35,9 +35,17 @@ namespace RapidTransitMod
 
         internal static string PrefixWithGameTime(string message)
         {
-            string gameTime = DispatchRuntimeSystem.Instance != null
-                ? DispatchRuntimeSystem.Instance.m_SelectPanel.CurrentGameTimeLabel()
-                : string.Empty;
+            string gameTime = string.Empty;
+            try
+            {
+                DispatchRuntimeSystem runtime = DispatchRuntimeSystem.Instance;
+                if (runtime != null && runtime.m_SelectPanel != null)
+                    gameTime = runtime.m_SelectPanel.CurrentGameTimeLabel();
+            }
+            catch
+            {
+                gameTime = string.Empty;
+            }
             return gameTime.Length > 0 ? gameTime + " " + message : message;
         }
 

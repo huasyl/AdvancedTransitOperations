@@ -7,6 +7,15 @@ export default function useBroadcastPlatformRules(context) {
     platformAnnouncements,
     stations,
     selectedLineId,
+    t,
+    platformTriggerOptions,
+    getActiveBroadcastLineId,
+    platformCreateStationIds,
+    newRuleTriggerId,
+    newRuleTitle,
+    trayContext,
+    removeTimersRef,
+    removingNodeIds,
     workbenchApi,
     hasBroadcastHydratedRef,
     skipNextPlatformAnnouncementsSaveRef,
@@ -20,6 +29,7 @@ export default function useBroadcastPlatformRules(context) {
     setNewRuleTriggerId,
     setTrayContext,
     setMappingTray,
+    setRemovingNodeIds,
     applyBroadcastSnapshot,
   } = context;
 

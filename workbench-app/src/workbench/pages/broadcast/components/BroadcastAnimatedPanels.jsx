@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   INLINE_PANEL_EASING,
   INLINE_PANEL_TRANSITION_MS,
+  TAB_TRANSITION_MS,
 } from "../broadcast-constants";
 
 function animateElementScrollTop(

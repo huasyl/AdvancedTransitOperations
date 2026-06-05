@@ -46,7 +46,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_Bypass.RuntimeEnabled(),
                 () => runtime.m_Bypass.ClearAll(),
                 () => runtime.m_AnnouncementWorkbench.StopPreview());
-            runtime.m_CommandApplier = new DispatchCommandApplier(runtime);
             runtime.m_LineProfile = new LineProfile(runtime);
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
             runtime.m_RuntimeShell = new RuntimeShell(runtime);
@@ -151,6 +150,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineInitialAdopted = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_JustLaunched = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_LineSpawnRequestFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
+
+            runtime.m_CommandApplier = new DispatchCommandApplier(runtime);
 
             LifecyclePort.Bind(new LifecyclePort(
                 new ManagedRequestPort(runtime),

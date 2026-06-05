@@ -29,7 +29,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(11, 16, 18, 0.15);
+  background: transparent;
   pointer-events: none;
   opacity: 1;
   transition: opacity 300ms ease;
@@ -42,8 +42,8 @@
   height: 100%;
   border: 0;
   background: transparent;
-  -webkit-backdrop-filter: saturate(160%) blur(12px);
-  backdrop-filter: saturate(160%) blur(12px);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: none;
   overflow: hidden;
 }
@@ -400,7 +400,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(11, 16, 18, 0.14);
+  background: rgba(11, 16, 18, 0.10);
   pointer-events: none;
   z-index: 0;
 }
@@ -787,7 +787,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(11, 16, 18, 0.52);
+  background: rgba(11, 16, 18, 0.42);
   pointer-events: none;
   z-index: 0;
 }
