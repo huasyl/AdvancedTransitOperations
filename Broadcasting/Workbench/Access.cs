@@ -25,6 +25,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal void Save() => m_Host.Save();
         internal void Run(Action action) => m_Host.Run(action);
         internal List<WorkbenchLineRuntime> Lines() => m_Host.Lines();
+        internal string StationName(Entity stopEntity) => m_Host.StationName(stopEntity);
+        internal string Name(Entity entity) => m_Host.Name(entity);
         internal string Error(Exception ex) => m_Host.Error(ex);
     }
 }

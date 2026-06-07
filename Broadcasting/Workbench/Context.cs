@@ -11,6 +11,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         public string Key = string.Empty;
         public DispatchWorkbenchStationDto Representative;
         public List<string> StationIds = new List<string>();
+        public Entity StopEntity;
         public Entity AnchorEntity;
     }
 
@@ -19,6 +20,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal readonly State State = new State();
         internal readonly WorkbenchAccess WorkbenchAccess;
         internal Runtime Announcements;
+        internal ModeScope CurrentScope = ModeScope.DefaultWorkbench;
 
         internal Workbench Workbench;
         internal Snapshot Snapshot;
@@ -65,9 +67,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         protected EntityManager EntityManager => m_Access.EntityManager;
         protected TimedLogger log => m_Access.Log;
         protected ulong m_WorkbenchSnapshotVersion => m_Access.Version;
-        protected List<BroadcastWorkbenchAssetDto> Catalog => m_State.Catalog;
-        protected string AssetFolder { get => m_State.AssetDir; set => m_State.AssetDir = value; }
-        protected string BrowseFolder { get => m_State.BrowseDir; set => m_State.BrowseDir = value; }
+        protected ModeScope CurrentScope => m_Ctx.CurrentScope;
+        protected BroadcastWorkbenchAssetState AssetState => m_State.AssetState(CurrentScope);
+        protected List<BroadcastWorkbenchAssetDto> Catalog => AssetState.Catalog;
+        protected string AssetFolder { get => AssetState.AssetDir; set => AssetState.AssetDir = value; }
+        protected string BrowseFolder { get => AssetState.BrowseDir; set => AssetState.BrowseDir = value; }
         protected Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> DraftBindings => m_State.DraftBindings;
         protected Dictionary<string, List<BroadcastWorkbenchRuleDto>> DraftRules => m_State.DraftRules;
         protected Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> DraftPlatforms => m_State.DraftPlatforms;
@@ -76,8 +80,13 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         protected Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> AppliedPlatforms => m_State.AppliedPlatforms;
         protected Dictionary<string, Dictionary<string, DispatchWorkbenchStationConflictDto[]>> PendingConflicts => m_State.PendingConflicts;
         protected HashSet<string> AppliedLines => m_State.AppliedLines;
-        protected int DraftVol { get => m_State.DraftVolume; set => m_State.DraftVolume = value; }
-        protected int AppliedVol { get => m_State.AppliedVolume; set => m_State.AppliedVolume = value; }
+        protected int DraftVol { get => m_State.GetDraftVolume(CurrentScope); set => m_State.SetDraftVolume(CurrentScope, value); }
+        protected int AppliedVol { get => m_State.GetAppliedVolume(CurrentScope); set => m_State.SetAppliedVolume(CurrentScope, value); }
+
+        protected IDisposable UseScope(ModeScope scope)
+        {
+            return new ScopeLease(m_Ctx, scope);
+        }
 
         protected void IncrementWorkbenchSnapshotVersion() => m_Access.Next();
         protected void LoadWorkbench() => m_Access.Load();
@@ -120,6 +129,24 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         {
             log.Info("[BroadcastWorkbenchException] " + scope + " -> "
                 + m_Access.Error(ex));
+        }
+
+        private sealed class ScopeLease : IDisposable
+        {
+            private readonly Context m_Context;
+            private readonly ModeScope m_Previous;
+
+            internal ScopeLease(Context context, ModeScope scope)
+            {
+                m_Context = context;
+                m_Previous = context.CurrentScope;
+                context.CurrentScope = scope;
+            }
+
+            public void Dispose()
+            {
+                m_Context.CurrentScope = m_Previous;
+            }
         }
     }
 }

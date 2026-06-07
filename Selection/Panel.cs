@@ -228,6 +228,7 @@ namespace RapidTransitMod
                     m_BuildingEntity = building,
                     m_IsBypassStation = enabled ? (byte)1 : (byte)0
                 };
+                m_Port.InvalidateBypassModel?.Invoke();
                 Invalidate();
                 return true;
             }
@@ -237,6 +238,7 @@ namespace RapidTransitMod
                 m_BuildingEntity = building,
                 m_IsBypassStation = enabled ? (byte)1 : (byte)0
             });
+            m_Port.InvalidateBypassModel?.Invoke();
             Invalidate();
             return true;
         }

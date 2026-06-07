@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -20,22 +21,24 @@ namespace RapidTransitMod.Planner
             m_Service = service;
         }
 
-        internal DispatchPlannerResult Run(DispatchPlannerRequest request)
+        internal DispatchPlannerResult Run(ModeScope scope, DispatchPlannerRequest request)
         {
-            DispatchPlannerExportSnapshot snapshot = m_Export.Build();
-            return m_Service.Execute(snapshot, request ?? new DispatchPlannerRequest());
+            DispatchPlannerRequest scopedRequest = ScopeRequest(scope, request);
+            DispatchPlannerExportSnapshot snapshot = m_Export.Build(scope);
+            return m_Service.Execute(snapshot, scopedRequest);
         }
 
-        internal DispatchPlannerJobStatusDto Start(DispatchPlannerRequest request)
+        internal DispatchPlannerJobStatusDto Start(ModeScope scope, DispatchPlannerRequest request)
         {
             CleanupPlannerJobs();
 
-            DispatchPlannerExportSnapshot snapshot = m_Export.Build();
+            DispatchPlannerRequest scopedRequest = ScopeRequest(scope, request);
+            DispatchPlannerExportSnapshot snapshot = m_Export.Build(scope);
             string jobId = "planner-job-" + Guid.NewGuid().ToString("N");
-            PlannerJobState jobState = new PlannerJobState(jobId);
+            PlannerJobState jobState = new PlannerJobState(jobId, scope);
             m_PlannerJobs[jobId] = jobState;
 
-            Task.Run(() => ExecutePlannerJob(jobState, snapshot, request ?? new DispatchPlannerRequest()));
+            Task.Run(() => ExecutePlannerJob(jobState, snapshot, scopedRequest));
 
             return jobState.CreateStatusCopy();
         }
@@ -49,6 +52,7 @@ namespace RapidTransitMod.Planner
             {
                 return new DispatchPlannerJobStatusDto
                 {
+                    mode = ModeScope.DefaultWorkbench.Token,
                     success = false,
                     jobId = jobId ?? string.Empty,
                     state = "missing",
@@ -121,17 +125,74 @@ namespace RapidTransitMod.Planner
             }
         }
 
+        private static DispatchPlannerRequest ScopeRequest(ModeScope scope, DispatchPlannerRequest request)
+        {
+            DispatchPlannerRequest scoped = request ?? new DispatchPlannerRequest();
+            ValidateRequestLineId(scope, scoped.draftKey, "draftKey");
+            scoped.draftKey = NormalizeRequestLineId(scope, scoped.draftKey);
+            scoped.localLineIds = NormalizeRequestLineIds(scope, scoped.localLineIds, "localLineIds");
+            scoped.adjustableLineIds = NormalizeRequestLineIds(scope, scoped.adjustableLineIds, "adjustableLineIds");
+            ValidateRequestLineId(scope, scoped.expressLineId, "expressLineId");
+            scoped.expressLineId = NormalizeRequestLineId(scope, scoped.expressLineId);
+            ValidateRequestLineId(scope, scoped.virtualExpressBaseLineId, "virtualExpressBaseLineId");
+            scoped.virtualExpressBaseLineId = NormalizeRequestLineId(scope, scoped.virtualExpressBaseLineId);
+            scoped.mode = scope.Token;
+            return scoped;
+        }
+
+        private static string[] NormalizeRequestLineIds(
+            ModeScope scope,
+            string[] lineIds,
+            string fieldName)
+        {
+            if (lineIds == null)
+                return Array.Empty<string>();
+
+            string[] normalized = new string[lineIds.Length];
+            for (int i = 0; i < lineIds.Length; i++)
+            {
+                string itemFieldName = fieldName + "[" + i.ToString() + "]";
+                ValidateRequestLineId(scope, lineIds[i], itemFieldName);
+                normalized[i] = NormalizeRequestLineId(scope, lineIds[i]);
+            }
+
+            return normalized;
+        }
+
+        private static string NormalizeRequestLineId(ModeScope scope, string lineId)
+        {
+            return string.IsNullOrWhiteSpace(lineId)
+                ? string.Empty
+                : scope.NormalizeLineId(lineId);
+        }
+
+        private static void ValidateRequestLineId(
+            ModeScope scope,
+            string lineId,
+            string fieldName)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+                return;
+
+            List<string> errors = new List<string>();
+            scope.ValidateLineId(lineId, fieldName, errors);
+            if (errors.Count > 0)
+                throw new InvalidOperationException(string.Join("; ", errors));
+        }
+
         private sealed class PlannerJobState
         {
             private readonly object m_Sync = new object();
             private DispatchPlannerJobStatusDto m_Status;
 
-            public PlannerJobState(string jobId)
+            public PlannerJobState(string jobId, ModeScope scope)
             {
                 JobId = jobId ?? string.Empty;
+                Mode = scope.Token;
                 LastUpdatedUtc = DateTime.UtcNow;
                 m_Status = new DispatchPlannerJobStatusDto
                 {
+                    mode = Mode,
                     success = true,
                     jobId = JobId,
                     state = "queued",
@@ -141,6 +202,7 @@ namespace RapidTransitMod.Planner
             }
 
             public string JobId { get; }
+            public string Mode { get; }
 
             public DateTime LastUpdatedUtc { get; private set; }
 
@@ -161,6 +223,7 @@ namespace RapidTransitMod.Planner
                 {
                     return new DispatchPlannerJobStatusDto
                     {
+                        mode = m_Status?.mode ?? Mode,
                         success = m_Status?.success ?? false,
                         jobId = m_Status?.jobId ?? string.Empty,
                         state = m_Status?.state ?? string.Empty,
@@ -180,6 +243,7 @@ namespace RapidTransitMod.Planner
                 {
                     m_Status = new DispatchPlannerJobStatusDto
                     {
+                        mode = Mode,
                         success = success,
                         jobId = JobId,
                         state = state ?? string.Empty,

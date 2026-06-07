@@ -40,6 +40,7 @@ namespace RapidTransitMod
         internal Func<Entity, Entity> ResolveVehicleLine;
         internal Func<Entity, Entity> ResolveBypassBuilding;
         internal Action EnsureBypassBuffer;
+        internal Action InvalidateBypassModel;
         internal Func<Entity, float> ReadLap;
         internal Func<Entity, float> ReadDispatch;
         internal Func<bool, BufferLookup<RouteVehicle>> RouteVehicles;

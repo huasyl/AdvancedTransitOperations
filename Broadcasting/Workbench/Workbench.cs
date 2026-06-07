@@ -56,17 +56,17 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         internal void StopPreview() => Preview.Stop();
 
-        public string LoadBroadcastWorkbenchSnapshotJson(string preferredLineId)
-            => Snapshot.LoadBroadcastWorkbenchSnapshotJson(preferredLineId);
+        public string LoadBroadcastWorkbenchSnapshotJson(string requestJson)
+            => Snapshot.LoadBroadcastWorkbenchSnapshotJson(requestJson);
 
-        public string RefreshBroadcastWorkbenchSnapshotJson(string preferredLineId)
-            => Snapshot.RefreshBroadcastWorkbenchSnapshotJson(preferredLineId);
+        public string RefreshBroadcastWorkbenchSnapshotJson(string requestJson)
+            => Snapshot.RefreshBroadcastWorkbenchSnapshotJson(requestJson);
 
-        public string LoadBroadcastBindingSlotHintsJson(string lineId)
-            => Bindings.LoadBroadcastBindingSlotHintsJson(lineId);
+        public string LoadBroadcastBindingSlotHintsJson(string requestJson)
+            => Bindings.LoadBroadcastBindingSlotHintsJson(requestJson);
 
-        public string LoadBroadcastAssetBrowserJson(string requestedPath)
-            => Assets.LoadBroadcastAssetBrowserJson(requestedPath);
+        public string LoadBroadcastAssetBrowserJson(string requestJson)
+            => Assets.LoadBroadcastAssetBrowserJson(requestJson);
 
         public string SaveBroadcastRulesJson(string requestJson)
             => DisabledSaveRulesResult();
@@ -89,8 +89,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         public string DeleteBroadcastAssetJson(string requestJson)
             => Assets.DeleteBroadcastAssetJson(requestJson);
 
-        public string DeleteAllBroadcastAssetsJson()
-            => Assets.DeleteAllBroadcastAssetsJson();
+        public string DeleteAllBroadcastAssetsJson(string requestJson)
+            => Assets.DeleteAllBroadcastAssetsJson(requestJson);
 
         public string AutoBindBroadcastStationMappingsJson(string requestJson)
             => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchAutoBindStationMappingsResult
@@ -101,37 +101,46 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             });
 
         public string ApplyBroadcastConfigJson(string requestJson)
-            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchApplyResult
+        {
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "applyBroadcastConfig", allowLegacyDefault: true);
+            return global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchApplyResult
             {
+                mode = scope.Token,
                 success = false,
                 error = "broadcast-backend-draft-disabled",
                 snapshot = null
             });
+        }
 
-        public string OpenBroadcastAssetDirectoryPickerJson()
-            => Assets.OpenBroadcastAssetDirectoryPickerJson();
+        public string OpenBroadcastAssetDirectoryPickerJson(string requestJson)
+            => Assets.OpenBroadcastAssetDirectoryPickerJson(requestJson);
 
-        public string PlayBroadcastAssetPreviewJson(string assetName)
-            => Preview.PlayBroadcastAssetPreviewJson(assetName);
+        public string PlayBroadcastAssetPreviewJson(string requestJson)
+            => Preview.PlayBroadcastAssetPreviewJson(requestJson);
 
         public string PlayBroadcastRulePreviewJson(string requestJson)
             => Preview.PlayBroadcastRulePreviewJson(requestJson);
 
-        public string StopBroadcastAssetPreviewJson(string assetName)
-            => Preview.StopBroadcastAssetPreviewJson(assetName);
+        public string StopBroadcastAssetPreviewJson(string requestJson)
+            => Preview.StopBroadcastAssetPreviewJson(requestJson);
 
-        public string StopBroadcastRulePreviewJson(string ruleId)
-            => Preview.StopBroadcastRulePreviewJson(ruleId);
+        public string StopBroadcastRulePreviewJson(string requestJson)
+            => Preview.StopBroadcastRulePreviewJson(requestJson);
 
         public string SetBroadcastPreviewVolumeJson(string volumeJson)
-            => global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchVolumeResult
+        {
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(volumeJson, "setBroadcastPreviewVolume", allowLegacyDefault: true);
+            int draftVolume = State.GetDraftVolume(scope);
+            int appliedVolume = State.GetAppliedVolume(scope);
+            return global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchVolumeResult
             {
                 success = false,
                 error = "broadcast-backend-draft-disabled",
-                volume = State.DraftVolume,
-                volumeDirty = State.DraftVolume != State.AppliedVolume,
+                volume = draftVolume,
+                volumeDirty = draftVolume != appliedVolume,
                 snapshot = null
             });
+        }
 
         public string StartBroadcastApplyOperationJson(string requestJson)
             => SaveOperations.Start(requestJson);

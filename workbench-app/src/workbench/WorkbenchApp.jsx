@@ -5,15 +5,19 @@ import { useNativeScheduleI18n } from "./shared/workbench-i18n";
 import OverviewPage from "./pages/overview/OverviewPage";
 import PassengerFlowPage from "./pages/passenger/PassengerFlowPage";
 import SchedulePage from "./pages/schedule/SchedulePage";
+import { setWorkbenchApiTransportMode } from "../lib/workbench-api";
+import { traceWorkbench } from "./shared/workbench-trace";
 
 const DEFAULT_NATIVE_WORKBENCH_PAGE = "schedule";
 const WORKBENCH_PAGE_TRANSITION_MS = 220;
+const DEFAULT_TRANSPORT_MODE = "train";
 
 function requestWorkbenchClose() {
   if (typeof window === "undefined") {
     return;
   }
 
+  traceWorkbench("app.close.click");
   const closeHandler = window.__RT_NATIVE_WORKBENCH_CLOSE__;
   if (typeof closeHandler === "function") {
     closeHandler();
@@ -24,9 +28,21 @@ export default function WorkbenchApp({ registerHostActions }) {
   const { locale, script, t } = useNativeScheduleI18n();
   const [activePage, setActivePage] = useState(DEFAULT_NATIVE_WORKBENCH_PAGE);
   const [renderedPage, setRenderedPage] = useState(DEFAULT_NATIVE_WORKBENCH_PAGE);
+  const [activeTransportMode, setActiveTransportMode] = useState(DEFAULT_TRANSPORT_MODE);
+  const [pageTransportModes, setPageTransportModes] = useState({
+    schedule: DEFAULT_TRANSPORT_MODE,
+    planner: DEFAULT_TRANSPORT_MODE,
+    broadcast: DEFAULT_TRANSPORT_MODE,
+    overview: DEFAULT_TRANSPORT_MODE,
+    passenger: DEFAULT_TRANSPORT_MODE
+  });
   const [pageStage, setPageStage] = useState("entered");
   const [plannerEnterSequence, setPlannerEnterSequence] = useState(0);
   const [broadcastEnterSequence, setBroadcastEnterSequence] = useState(0);
+  const [stickyPages, setStickyPages] = useState({
+    overview: false,
+    passenger: false
+  });
   const pageTabs = useMemo(
     () => ([
       { key: "schedule", label: t("nativeWorkbench.tab.schedule") },
@@ -39,19 +55,42 @@ export default function WorkbenchApp({ registerHostActions }) {
   );
 
   useLayoutEffect(() => {
+    traceWorkbench("app.page.state", { activePage, renderedPage, pageStage });
+  }, [activePage, pageStage, renderedPage]);
+
+  useLayoutEffect(() => {
+    setWorkbenchApiTransportMode(activeTransportMode);
+    traceWorkbench("app.transportMode.state", { mode: activeTransportMode });
+  }, [activeTransportMode]);
+
+  useLayoutEffect(() => {
+    setPageTransportModes((current) => (
+      current[renderedPage] === activeTransportMode
+        ? current
+        : {
+            ...current,
+            [renderedPage]: activeTransportMode
+          }
+    ));
+  }, [activeTransportMode, renderedPage]);
+
+  useLayoutEffect(() => {
     if (activePage === renderedPage) {
       return undefined;
     }
 
+    traceWorkbench("app.page.transition.begin", { activePage, renderedPage });
     if (activePage === "broadcast") {
       setRenderedPage(activePage);
       setBroadcastEnterSequence((current) => current + 1);
       setPageStage("entered");
+      traceWorkbench("app.page.transition.direct", { activePage });
       return undefined;
     }
 
     setPageStage("exiting");
     const timer = window.setTimeout(() => {
+      traceWorkbench("app.page.transition.swap", { next: activePage, from: renderedPage });
       setRenderedPage(activePage);
       if (activePage === "planner") {
         setPlannerEnterSequence((current) => current + 1);
@@ -61,6 +100,7 @@ export default function WorkbenchApp({ registerHostActions }) {
       }
       setPageStage("entering");
       const raf = window.requestAnimationFrame(() => {
+        traceWorkbench("app.page.transition.entered", { page: activePage });
         setPageStage("entered");
       });
       return () => window.cancelAnimationFrame(raf);
@@ -68,6 +108,34 @@ export default function WorkbenchApp({ registerHostActions }) {
 
     return () => window.clearTimeout(timer);
   }, [activePage, renderedPage]);
+
+  useLayoutEffect(() => {
+    if (renderedPage !== "overview" && renderedPage !== "passenger") {
+      return;
+    }
+
+    setStickyPages((current) => (
+      current[renderedPage]
+        ? current
+        : {
+            ...current,
+            [renderedPage]: true
+          }
+    ));
+  }, [renderedPage]);
+
+  const shouldMountOverview = stickyPages.overview || renderedPage === "overview";
+  const shouldMountPassenger = stickyPages.passenger || renderedPage === "passenger";
+  const modeForPage = (pageKey) => (
+    activePage === pageKey || renderedPage === pageKey
+      ? activeTransportMode
+      : pageTransportModes[pageKey] || DEFAULT_TRANSPORT_MODE
+  );
+
+  function handleTabClick(tabKey) {
+    traceWorkbench("app.tab.click", { tab: tabKey, from: activePage });
+    setActivePage(tabKey);
+  }
 
   return (
     <div
@@ -87,7 +155,7 @@ export default function WorkbenchApp({ registerHostActions }) {
                 key={tab.key}
                 type="button"
                 className={`dw-native-workbench-tab ${activePage === tab.key ? "is-active" : ""}`}
-                onClick={() => setActivePage(tab.key)}
+                onClick={() => handleTabClick(tab.key)}
               >
                 {tab.label}
               </button>
@@ -104,31 +172,35 @@ export default function WorkbenchApp({ registerHostActions }) {
           className={`dw-native-workbench-page ${renderedPage === "schedule" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="schedule"
         >
-          <SchedulePage registerHostActions={registerHostActions} />
+          <SchedulePage registerHostActions={registerHostActions} activeTransportMode={modeForPage("schedule")} />
         </div>
         <div
           className={`dw-native-workbench-page ${renderedPage === "planner" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="planner"
         >
-          <PlannerPage pageEnterSequence={plannerEnterSequence} />
+          <PlannerPage pageEnterSequence={plannerEnterSequence} activeTransportMode={modeForPage("planner")} />
         </div>
         <div
           className={`dw-native-workbench-page ${renderedPage === "broadcast" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="broadcast"
         >
-          <BroadcastPage pageEnterSequence={broadcastEnterSequence} />
+          <BroadcastPage pageEnterSequence={broadcastEnterSequence} activeTransportMode={modeForPage("broadcast")} />
         </div>
         <div
           className={`dw-native-workbench-page ${renderedPage === "overview" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="overview"
         >
-          <OverviewPage />
+          {shouldMountOverview ? (
+            <OverviewPage activeTransportMode={modeForPage("overview")} onTransportModeChange={setActiveTransportMode} />
+          ) : null}
         </div>
         <div
           className={`dw-native-workbench-page ${renderedPage === "passenger" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="passenger"
         >
-          <PassengerFlowPage />
+          {shouldMountPassenger ? (
+            <PassengerFlowPage activeTransportMode={modeForPage("passenger")} isActive={renderedPage === "passenger"} />
+          ) : null}
         </div>
       </div>
     </div>

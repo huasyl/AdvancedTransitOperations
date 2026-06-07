@@ -10,7 +10,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static readonly TimeSpan WorkbenchSaveOperationRetention = TimeSpan.FromMinutes(5);
         private readonly Commands m_CommandHandler;
         private readonly Persist m_Persistence;
-        private readonly Func<string, DispatchWorkbenchSnapshot> m_BuildSnapshot;
+        private readonly Func<ModeScope, string, DispatchWorkbenchSnapshot> m_BuildSnapshot;
         private readonly Func<ulong> m_GetSnapshotVersion;
         private readonly Func<Exception, string> m_DescribeException;
         private readonly Action<string, Exception> m_LogException;
@@ -23,7 +23,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal Saves(
             Commands commandHandler,
             Persist persistence,
-            Func<string, DispatchWorkbenchSnapshot> buildSnapshot,
+            Func<ModeScope, string, DispatchWorkbenchSnapshot> buildSnapshot,
             Func<ulong> getSnapshotVersion,
             Func<Exception, string> describeException,
             Action<string, Exception> logException,
@@ -63,10 +63,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             catch (Exception ex)
             {
                 m_LogException("Save", ex);
+                ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveNativeWorkbenchDraft", allowLegacyDefault: true);
                 DispatchWorkbenchSaveResult result = CreateWorkbenchSaveFailureResult(
+                    scope,
                     m_GetSnapshotVersion(),
                     m_DescribeException(ex));
-                result.snapshot = m_BuildSnapshot(null);
+                result.snapshot = m_BuildSnapshot(scope, null);
                 return Workbenches.Json.Write(result);
             }
         }
@@ -125,6 +127,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Mod.log.Info($"[WorkbenchSaveOperation] status missing id={operationId ?? string.Empty}");
                     return Workbenches.Json.Write(new DispatchWorkbenchSaveOperationStatusDto
                     {
+                        mode = ModeScope.DefaultWorkbench.Token,
                         success = false,
                         operationId = operationId ?? string.Empty,
                         state = "missing",
@@ -157,6 +160,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (prepared == null)
                 {
                     DispatchWorkbenchSaveResult result = CreateWorkbenchSaveFailureResult(
+                        context?.Scope ?? ModeScope.DefaultWorkbench,
                         context?.SnapshotVersion ?? m_GetSnapshotVersion(),
                         "save-operation-prepare-failed");
                     operation.UpdateStatus("completed", result?.success == true, string.Empty, result);
@@ -319,11 +323,13 @@ namespace RapidTransitMod.Dispatch.Workbench
         }
 
         private static DispatchWorkbenchSaveResult CreateWorkbenchSaveFailureResult(
+            ModeScope scope,
             ulong version,
             string error)
         {
             return new DispatchWorkbenchSaveResult
             {
+                mode = scope.Token,
                 success = false,
                 errors = new[] { error ?? string.Empty },
                 warnings = Array.Empty<string>(),

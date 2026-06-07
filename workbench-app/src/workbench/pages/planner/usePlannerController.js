@@ -7,11 +7,14 @@ import { formatDiagnosticMessage } from "./planner-format.js";
 import { isTerminalPlannerJobState, timeToMinutes, waitForDelay, waitForMinimumDuration, waitForUiPaint } from "./planner-time.js";
 import { buildForcedBypassOptions, buildLineCollections, buildRelatedLineOptionsForTarget, buildStationOptionsForLine, mapPlannerResultToDisplay } from "./planner-view-models.js";
 
-export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
+export default function usePlannerController({ pageEnterSequence = 0, activeTransportMode = "train" } = {}) {
   const { t } = useNativeScheduleI18n();
+  const plannerMode = String(activeTransportMode || "train").trim().toLowerCase() || "train";
   const dropdownPortalHostRef = useRef(null);
   const generateRunIdRef = useRef(0);
   const pageAliveRef = useRef(true);
+  const activeModeRef = useRef(plannerMode);
+  activeModeRef.current = plannerMode;
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [analysisStart, setAnalysisStart] = useState("05:00");
   const [analysisEnd, setAnalysisEnd] = useState("09:00");
@@ -41,19 +44,21 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
   const [plannerLoadError, setPlannerLoadError] = useState("");
   const [plannerInitialized, setPlannerInitialized] = useState(false);
 
-  const lineCollections = useMemo(() => buildLineCollections(plannerInput), [plannerInput]);
+  const plannerInputMode = String(plannerInput?.mode || "").trim().toLowerCase();
+  const scopedPlannerInput = !plannerInputMode || plannerInputMode === plannerMode ? plannerInput : null;
+  const lineCollections = useMemo(() => buildLineCollections(scopedPlannerInput), [scopedPlannerInput]);
   const lineOptions = lineCollections.allLineOptions;
   const localLineOptions = lineCollections.localLineOptions;
   const expressLineOptions = lineCollections.expressLineOptions;
   const stationOptions = useMemo(
-    () => buildStationOptionsForLine(plannerInput, virtualBaseLine),
-    [plannerInput, virtualBaseLine]
+    () => buildStationOptionsForLine(scopedPlannerInput, virtualBaseLine),
+    [scopedPlannerInput, virtualBaseLine]
   );
   const targetScopeLineId = expressSource === "virtual" ? virtualBaseLine : existingExpressLine;
   const adjustableLineOptions = useMemo(
-    () => buildRelatedLineOptionsForTarget(plannerInput, targetScopeLineId, lineOptions)
+    () => buildRelatedLineOptionsForTarget(scopedPlannerInput, targetScopeLineId, lineOptions)
       .filter((option) => expressSource === "virtual" || option.value !== targetScopeLineId),
-    [expressSource, lineOptions, plannerInput, targetScopeLineId]
+    [expressSource, lineOptions, scopedPlannerInput, targetScopeLineId]
   );
   const readonlyConstraintLineOptions = useMemo(() => {
     const adjustableSet = new Set(adjustableLines);
@@ -61,12 +66,12 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
   }, [adjustableLineOptions, adjustableLines]);
   const forcedBypassOptions = useMemo(
     () => buildForcedBypassOptions(
-      plannerInput,
+      scopedPlannerInput,
       expressSource,
       virtualBaseLine,
       adjustableLines
     ),
-    [adjustableLines, expressSource, plannerInput, virtualBaseLine]
+    [adjustableLines, expressSource, scopedPlannerInput, virtualBaseLine]
   );
 
   const expressSourceOptions = useMemo(
@@ -138,7 +143,10 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
     [t]
   );
 
-  const liveDisplay = useMemo(() => mapPlannerResultToDisplay(plannerResult, plannerInput, t), [plannerInput, plannerResult, t]);
+  const plannerResultMode = String(plannerResult?.mode || plannerResult?.requestEcho?.mode || "").trim().toLowerCase();
+  const plannerResultMatchesMode = !plannerResultMode || plannerResultMode === plannerMode;
+  const scopedPlannerResult = plannerResultMatchesMode ? plannerResult : null;
+  const liveDisplay = useMemo(() => mapPlannerResultToDisplay(scopedPlannerResult, scopedPlannerInput, t), [scopedPlannerInput, scopedPlannerResult, t]);
   const plans = liveDisplay.plans.length > 0 ? liveDisplay.plans : mockPlans;
   const activePlan = plans.find((plan) => plan.id === activePlanId) || plans[0];
   const timetableRows = Array.isArray(activePlan?.timetableRows) ? activePlan.timetableRows : [];
@@ -153,17 +161,23 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
       ? t("nativeSchedule.message.auto.invalidWindow")
       : "";
   const generateDisabled = isGenerating
-    || !plannerInput
+    || !scopedPlannerInput
     || lineOptions.length === 0
     || !!analysisTimeError;
-  const importReferenceOnly = expressSource === "virtual" && !!plannerResult && !!activePlan?.rawPlan;
+  const importReferenceOnly = expressSource === "virtual" && !!scopedPlannerResult && !!activePlan?.rawPlan;
   const importDisabled = isGenerating
     || isImportingDraft
-    || !plannerResult
+    || !scopedPlannerResult
     || !activePlan?.rawPlan
     || showGenericPlanError
     || importReferenceOnly
     || !!importedPlanId;
+
+  function isCurrentPlannerRun(runId, mode) {
+    return pageAliveRef.current
+      && generateRunIdRef.current === runId
+      && activeModeRef.current === mode;
+  }
 
   useEffect(() => {
     return () => {
@@ -174,16 +188,29 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
 
   useEffect(() => {
     let cancelled = false;
+    const requestMode = plannerMode;
+    const runId = generateRunIdRef.current + 1;
+    generateRunIdRef.current = runId;
+    setIsGenerating(false);
+    setIsImportingDraft(false);
+    setImportedPlanId("");
+    setPlannerInput(null);
+    setPlannerResult(null);
+    setPlannerInitialized(false);
+
     async function loadPlannerInput() {
       try {
-        const nextPlannerInput = await workbenchApi.loadPlannerContext?.();
-        if (cancelled) {
+        const nextPlannerInput = await workbenchApi.loadPlannerContext?.({ mode: requestMode });
+        if (cancelled || !isCurrentPlannerRun(runId, requestMode)) {
+          return;
+        }
+        if (nextPlannerInput?.mode && nextPlannerInput.mode !== requestMode) {
           return;
         }
         setPlannerInput(nextPlannerInput || null);
         setPlannerLoadError("");
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && isCurrentPlannerRun(runId, requestMode)) {
           setPlannerLoadError(error?.message || "planner-load-failed");
         }
       }
@@ -191,20 +218,62 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
     loadPlannerInput();
     return () => {
       cancelled = true;
+      generateRunIdRef.current += 1;
     };
-  }, [pageEnterSequence, workbenchApi]);
+  }, [pageEnterSequence, plannerMode, workbenchApi]);
+
+  useEffect(() => {
+    const unsubscribe = workbenchApi.onCatalogChanged?.((event) => {
+      const requestMode = String(event?.mode || "").trim().toLowerCase();
+      if (!requestMode || requestMode !== plannerMode) {
+        return;
+      }
+
+      const runId = generateRunIdRef.current + 1;
+      generateRunIdRef.current = runId;
+      setIsGenerating(false);
+      setIsImportingDraft(false);
+
+      async function reloadPlannerInput() {
+        try {
+          const nextPlannerInput = await workbenchApi.loadPlannerContext?.({ mode: requestMode });
+          if (!isCurrentPlannerRun(runId, requestMode)) {
+            return;
+          }
+          if (nextPlannerInput?.mode && nextPlannerInput.mode !== requestMode) {
+            return;
+          }
+          setPlannerInput(nextPlannerInput || null);
+          setPlannerResult(null);
+          setImportedPlanId("");
+          setPlannerInitialized(false);
+          setPlannerLoadError("");
+        } catch (error) {
+          if (isCurrentPlannerRun(runId, requestMode)) {
+            setPlannerLoadError(error?.message || "planner-load-failed");
+          }
+        }
+      }
+
+      reloadPlannerInput();
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [plannerMode, workbenchApi]);
 
   useEffect(() => {
     setPlannerInitialized(false);
-  }, [plannerInput?.generatedAtFrame, plannerInput?.version]);
+  }, [scopedPlannerInput?.generatedAtFrame, scopedPlannerInput?.version]);
 
   useEffect(() => {
-    if (!plannerInput || plannerInitialized) {
+    if (!scopedPlannerInput || plannerInitialized) {
       return;
     }
 
     const canonicalizeLineId = lineCollections.canonicalizeLineId || ((lineId) => lineId || "");
-    const draft = pickPlannerDraft(plannerInput);
+    const draft = pickPlannerDraft(scopedPlannerInput);
     const mergedLocal = Array.isArray(draft?.mergedView?.localLineIds)
       ? draft.mergedView.localLineIds.map(canonicalizeLineId).filter(Boolean)
       : [];
@@ -215,7 +284,7 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
     const nextVirtualBaseLine = mergedLocal[0] || localLineOptions[0]?.value || "";
     const nextExistingExpressLine = mergedExpress[0] || expressLineOptions[0]?.value || "";
     const nextTargetScopeLineId = nextExpressSource === "virtual" ? nextVirtualBaseLine : nextExistingExpressLine;
-    const nextAdjustableOptions = buildRelatedLineOptionsForTarget(plannerInput, nextTargetScopeLineId, lineOptions)
+    const nextAdjustableOptions = buildRelatedLineOptionsForTarget(scopedPlannerInput, nextTargetScopeLineId, lineOptions)
       .filter((option) => nextExpressSource === "virtual" || option.value !== nextTargetScopeLineId);
     const nextAdjustableOptionIds = new Set(nextAdjustableOptions.map((option) => option.value));
     const nextAdjustableSeeds = [...new Set([...mergedLocal, ...mergedExpress])]
@@ -223,7 +292,7 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
     const nextAdjustable = nextAdjustableSeeds.length > 0
       ? nextAdjustableSeeds
       : nextAdjustableOptions.map((option) => option.value);
-    const nextStationOptions = buildStationOptionsForLine(plannerInput, nextVirtualBaseLine);
+    const nextStationOptions = buildStationOptionsForLine(scopedPlannerInput, nextVirtualBaseLine);
 
     setAdjustableLines(nextAdjustable);
     setExpressSource(nextExpressSource);
@@ -231,7 +300,7 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
     setExistingExpressLine(nextExistingExpressLine);
     setExpressStops(nextStationOptions.map((option) => option.value));
     setPlannerInitialized(true);
-  }, [expressLineOptions, lineCollections.canonicalizeLineId, lineOptions, localLineOptions, plannerInitialized, plannerInput]);
+  }, [expressLineOptions, lineCollections.canonicalizeLineId, lineOptions, localLineOptions, plannerInitialized, scopedPlannerInput]);
 
   useEffect(() => {
     const canonicalizeLineId = lineCollections.canonicalizeLineId || ((lineId) => lineId || "");
@@ -315,6 +384,7 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
   async function handleGenerate() {
     const runId = generateRunIdRef.current + 1;
     generateRunIdRef.current = runId;
+    const requestMode = plannerMode;
     const loadingStartedAt = Date.now();
     setIsGenerating(true);
     setPlannerLoadError("");
@@ -322,7 +392,8 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
     await waitForUiPaint();
     try {
       const request = buildPlannerRequest({
-        plannerInput,
+        mode: requestMode,
+        plannerInput: scopedPlannerInput,
         analysisStart,
         analysisEnd,
         adjustableLines,
@@ -346,22 +417,34 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
       let result = null;
       if (isPlannerLab) {
         result = await workbenchApi.runPlanner?.(request);
+        if (!isCurrentPlannerRun(runId, requestMode)) {
+          return;
+        }
         if (!result) {
           throw new Error("planner-run-failed");
         }
       } else {
         const startedJob = await workbenchApi.startPlannerJob?.(request);
+        if (!isCurrentPlannerRun(runId, requestMode)) {
+          return;
+        }
         if (!startedJob?.jobId) {
           throw new Error(startedJob?.error || "planner-job-start-failed");
         }
-
-        let latestStatus = startedJob;
-        while (pageAliveRef.current && generateRunIdRef.current === runId && !isTerminalPlannerJobState(latestStatus?.state)) {
-          await waitForDelay(120);
-          latestStatus = await workbenchApi.getPlannerJobStatus?.(startedJob.jobId);
+        if (startedJob.mode && startedJob.mode !== requestMode) {
+          return;
         }
 
-        if (!pageAliveRef.current || generateRunIdRef.current !== runId) {
+        let latestStatus = startedJob;
+        while (isCurrentPlannerRun(runId, requestMode) && !isTerminalPlannerJobState(latestStatus?.state)) {
+          await waitForDelay(120);
+          latestStatus = await workbenchApi.getPlannerJobStatus?.(startedJob.jobId);
+          if (latestStatus?.state !== "missing" && latestStatus?.mode && latestStatus.mode !== requestMode) {
+            return;
+          }
+        }
+
+        if (!isCurrentPlannerRun(runId, requestMode)) {
           return;
         }
 
@@ -376,6 +459,10 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
         result = latestStatus.result || null;
       }
 
+      const resultMode = result?.mode || result?.requestEcho?.mode || "";
+      if (resultMode && resultMode !== requestMode) {
+        return;
+      }
       setPlannerResult(result || null);
       if (!result?.success) {
         const diagnosticMessage = (result?.diagnostics || [])
@@ -385,12 +472,12 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
         setPlannerLoadError(diagnosticMessage);
       }
     } catch (error) {
-      if (pageAliveRef.current && generateRunIdRef.current === runId) {
+      if (isCurrentPlannerRun(runId, requestMode)) {
         setPlannerResult(null);
         setPlannerLoadError(error?.message || "planner-run-failed");
       }
     } finally {
-      if (pageAliveRef.current && generateRunIdRef.current === runId) {
+      if (isCurrentPlannerRun(runId, requestMode)) {
         await waitForMinimumDuration(loadingStartedAt, 300);
         setIsGenerating(false);
       }
@@ -402,11 +489,24 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
       return;
     }
 
+    const requestMode = scopedPlannerResult?.requestEcho?.mode || plannerMode;
+    const runId = generateRunIdRef.current;
     setIsImportingDraft(true);
     setPlannerLoadError("");
     await waitForUiPaint();
     try {
-      const snapshot = await (workbenchApi.refreshSnapshot?.() || workbenchApi.loadSnapshot?.());
+      if (!isCurrentPlannerRun(runId, requestMode)) {
+        return;
+      }
+
+      const snapshot = await (workbenchApi.refreshSnapshot?.({ mode: requestMode }) || workbenchApi.loadSnapshot?.({ mode: requestMode }));
+      if (!isCurrentPlannerRun(runId, requestMode)) {
+        return;
+      }
+      const snapshotMode = String(snapshot?.mode || "").trim().toLowerCase();
+      if (snapshotMode && snapshotMode !== requestMode) {
+        return;
+      }
       if (!snapshot || !Array.isArray(snapshot.lines) || snapshot.lines.length === 0) {
         setPlannerLoadError(t("planner.import.error.snapshot"));
         return;
@@ -432,7 +532,7 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
         snapshot,
         baselineRows,
         replacementRows,
-        plannerResult?.requestEcho
+        scopedPlannerResult?.requestEcho
       );
       if (!lineDraftRowsByLineId || lineDraftRowsByLineId.length === 0) {
         setPlannerLoadError(t("planner.import.error.save"));
@@ -460,6 +560,7 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
         ...(mergedViewForSave.expressLineIds || [])
       ].filter(Boolean));
       const request = {
+        mode: requestMode,
         selectedLineId: fallbackSelectedLineId,
         selectedEditLine: snapshot.selectedEditLine || fallbackSelectedLineId,
         mergedView: mergedViewForSave,
@@ -473,10 +574,17 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
         lineSettings: buildPlannerLineSettingsForSave(snapshot.lines),
         applyDraft: false,
         nativeScheduleWriter: true,
-        planRefs: buildPlannerPlanRefs(plannerResult, activePlan, replacementRows)
+        planRefs: buildPlannerPlanRefs(scopedPlannerResult, activePlan, replacementRows)
       };
 
       const result = await workbenchApi.saveNativeDraft?.(request);
+      if (!isCurrentPlannerRun(runId, requestMode)) {
+        return;
+      }
+      const resultMode = String(result?.mode || result?.snapshot?.mode || "").trim().toLowerCase();
+      if (resultMode && resultMode !== requestMode) {
+        return;
+      }
       if (!result?.success) {
         setPlannerLoadError(t("planner.import.error.save"));
         return;
@@ -484,9 +592,13 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
 
       setImportedPlanId(activePlan?.id || activePlan?.rawPlan?.planId || "imported");
     } catch {
-      setPlannerLoadError(t("planner.import.error.save"));
+      if (isCurrentPlannerRun(runId, requestMode)) {
+        setPlannerLoadError(t("planner.import.error.save"));
+      }
     } finally {
-      setIsImportingDraft(false);
+      if (isCurrentPlannerRun(runId, requestMode)) {
+        setIsImportingDraft(false);
+      }
     }
   }
 
@@ -496,12 +608,12 @@ export default function usePlannerController({ pageEnterSequence = 0 } = {}) {
       dispatchMode, dispatchOptions, dispatchPhaseStart, dispatchTripsPerHour, existingExpressLine,
       expressLineOptions, expressSource, expressSourceOptions, expressStops, forcedBypassOptions, forcedOvertakes,
       generateDisabled, isGenerating, leftTab, lineOptions, localLineOptions, maxLocalShift, maxLocalWait,
-      maxOvertakes, overtakesOptions, phaseAdjustmentRange, plannerInput, plannerLoadError,
+      maxOvertakes, overtakesOptions, phaseAdjustmentRange, plannerInput: scopedPlannerInput, plannerLoadError,
       readonlyConstraintLineOptions, stationOptions, virtualBaseLine
     },
     result: {
       activePlan, activePlanId, displayResult: liveDisplay, importDisabled, importedPlanId, importReferenceOnly,
-      isGenerating, isImportingDraft, planLabels, plannerResult, plans, showGenericPlanError
+      isGenerating, isImportingDraft, planLabels, plannerResult: scopedPlannerResult, plans, showGenericPlanError
     },
     preview: {
       changedWindows: activePlan?.changedWindows || [],

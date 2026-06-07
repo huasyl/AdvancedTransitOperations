@@ -7,6 +7,7 @@ namespace RapidTransitMod.Workbenches
     internal static class UiEvents
     {
         private const string Snap = "suhua::rt.workbench.onSnapshotChanged";
+        private const string Catalog = "suhua::rt.workbench.onCatalog";
         private const string Broadcast = "suhua::rt.workbench.onBroadcastSnapshotChanged";
         private const string Asset = "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged";
         private const string Rule = "suhua::rt.workbench.onBroadcastRulePreviewStateChanged";
@@ -20,6 +21,12 @@ namespace RapidTransitMod.Workbenches
         {
             string payload = snapshotJson ?? string.Empty;
             Push(Snap, payload, "Workbench snapshot event push failed: ");
+        }
+
+        internal static void Push(DispatchWorkbenchCatalogEvent payload)
+        {
+            string json = payload != null ? Json.Write(payload) : string.Empty;
+            Push(Catalog, json, "Workbench catalog event push failed: ");
         }
 
         internal static void Push(BroadcastWorkbenchSnapshot snapshot)

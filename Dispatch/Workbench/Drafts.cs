@@ -34,9 +34,19 @@ namespace RapidTransitMod.Dispatch.Workbench
             return Store.ResolvePreferredLineId();
         }
 
+        internal string Preferred(TransitMode mode)
+        {
+            return Store.ResolvePreferredLineId(mode);
+        }
+
         internal void SetPreferred(string lineId)
         {
             Store.SetPreferredLineId(lineId);
+        }
+
+        internal void SetPreferred(string lineId, TransitMode mode)
+        {
+            Store.SetPreferredLineId(lineId, mode);
         }
 
         internal DispatchWorkbenchDraftState Get(string lineKey)
@@ -159,7 +169,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     .Where(row => row != null
                         && !string.IsNullOrEmpty(row.lineId)
                         && string.Equals(Key(row.lineId), draftKey, StringComparison.Ordinal)
-                        && (validLineIds == null || validLineIds.Count == 0 || validLineIds.Contains(row.lineId)))
+                        && (validLineIds == null || validLineIds.Contains(row.lineId)))
                     .Select(Rows.CopyRow)
                     .OrderBy(row => Time.Parse(row.time))
                     .ThenBy(row => row.id, StringComparer.Ordinal)

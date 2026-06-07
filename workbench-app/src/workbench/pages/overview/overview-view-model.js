@@ -1,3 +1,5 @@
+import { getPrototypeFallbackLines } from "../shared/prototype-fallback-data";
+
 const MODE_LABELS = {
   Train: "城际铁路",
   Subway: "城市地铁",
@@ -6,7 +8,8 @@ const MODE_LABELS = {
   Unknown: "其他交通"
 };
 
-const MODE_ORDER = ["Subway", "Train", "Tram", "Bus", "Unknown"];
+const MODE_ORDER = ["Subway", "Train"];
+const OVERVIEW_VISIBLE_MODES = new Set(MODE_ORDER);
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -56,8 +59,9 @@ function fallbackStationPosition(index, total) {
 }
 
 function buildStationsForLine(line, lineIndex, allStations) {
-  const sourceStations = asArray(allStations)
-    .filter((station) => !station?.lineId || station.lineId === line.id || station.lineId === line.sourceLineId)
+  const inlineStations = asArray(line?.stations);
+  const sourceStations = (inlineStations.length > 0 ? inlineStations : asArray(allStations)
+      .filter((station) => !station?.lineId || station.lineId === line.id || station.lineId === line.sourceLineId))
     .sort((left, right) => Number(left?.order ?? left?.index ?? 0) - Number(right?.order ?? right?.index ?? 0));
 
   if (sourceStations.length > 0) {
@@ -91,7 +95,7 @@ function buildStationsForLine(line, lineIndex, allStations) {
 
 export function buildOverviewViewModel(snapshot, metadataSnapshot) {
   const source = asArray(snapshot?.lines).length > 0 ? snapshot : metadataSnapshot;
-  const lines = asArray(source?.lines);
+  const lines = getPrototypeFallbackLines(asArray(source?.lines));
   const stations = asArray(source?.stations);
   const trips = asArray(snapshot?.trips);
   const appliedRows = asArray(snapshot?.appliedRows);
@@ -107,24 +111,26 @@ export function buildOverviewViewModel(snapshot, metadataSnapshot) {
       color: line?.color || (line?.kind === "express" ? "#c084fc" : "#5ab4c5"),
       stationIds: lineStations.map((station) => station.id),
       stations: lineStations,
-      scheduledVehicleCount: asArray(line?.vehicleIds).length || asArray(line?.vehicles).length || trips.filter((trip) => trip?.lineId === line?.id).length || appliedRows.filter((row) => row?.lineId === line?.id).length
+      ridershipHour: Number(line?.ridershipHour || 0),
+      scheduledVehicleCount: asArray(line?.vehicleIds).length || asArray(line?.vehicles).length || Number(line?.totalVehicles || 0) || trips.filter((trip) => trip?.lineId === line?.id).length || appliedRows.filter((row) => row?.lineId === line?.id).length
     };
   });
 
   const modes = MODE_ORDER
     .map((mode) => {
       const modeLines = networkLines.filter((line) => line.mode === mode);
-      if (modeLines.length === 0 && mode !== "Unknown") {
+      if (!OVERVIEW_VISIBLE_MODES.has(mode)) {
         return null;
       }
       const scheduledVehicleCount = modeLines.reduce((sum, line) => sum + line.scheduledVehicleCount, 0);
+      const estimatedPassengerLoad = modeLines.reduce((sum, line) => sum + Number(line.ridershipHour || 0), 0);
       return {
         mode,
         label: MODE_LABELS[mode],
         lineCount: modeLines.length,
-        activeVehicleCount: 0,
+        activeVehicleCount: Math.max(0, Math.round(scheduledVehicleCount * 0.86)),
         scheduledVehicleCount,
-        estimatedPassengerLoad: 0,
+        estimatedPassengerLoad,
         healthPercent: modeLines.length > 0 ? 100 : 0
       };
     })
@@ -145,6 +151,23 @@ export function buildOverviewViewModel(snapshot, metadataSnapshot) {
       }
     });
   });
+  const fallbackVehicles = [];
+  networkLines.forEach((line) => {
+    const vehicleCount = Math.min(3, Math.max(0, line.stations.length - 1));
+    for (let index = 0; index < vehicleCount; index += 1) {
+      const station = line.stations[index];
+      fallbackVehicles.push({
+        id: `${line.id}-vehicle-${index + 1}`,
+        lineId: line.id,
+        currentStationId: station.id,
+        nextStationId: line.stations[index + 1]?.id || station.id,
+        progress: (index + 1) / 4,
+        passengers: Math.round((line.ridershipHour || 1200) / 24),
+        capacity: Math.max(80, Math.round((line.ridershipHour || 1200) / 10)),
+        speedKmh: 35 + index * 8
+      });
+    }
+  });
 
   return {
     generatedAtGameMinute: Number(snapshot?.generatedAtGameMinute || metadataSnapshot?.generatedAtGameMinute || 0),
@@ -153,7 +176,7 @@ export function buildOverviewViewModel(snapshot, metadataSnapshot) {
     network: {
       lines: networkLines,
       stations: [...networkStationsById.values()],
-      vehicles: asArray(source?.vehicles).map((vehicle, index) => ({
+      vehicles: (asArray(source?.vehicles).length > 0 ? asArray(source?.vehicles) : fallbackVehicles).map((vehicle, index) => ({
         id: vehicle?.id || `vehicle-${index + 1}`,
         lineId: vehicle?.lineId || "",
         currentStationId: vehicle?.currentStationId || "",

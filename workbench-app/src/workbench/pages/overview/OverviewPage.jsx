@@ -1,54 +1,124 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import { buildOverviewViewModel } from "./overview-view-model";
 import OverviewHeaderStats from "./components/OverviewHeaderStats";
 import OverviewModeRail from "./components/OverviewModeRail";
 import OverviewNetworkDiagram from "./components/OverviewNetworkDiagram";
 import OverviewSystemSwitches from "./components/OverviewSystemSwitches";
+import { traceWorkbench } from "../../shared/workbench-trace";
 
-export default function OverviewPage() {
+function toOverviewMode(mode) {
+  const token = String(mode || "").toLowerCase();
+  if (token === "subway") {
+    return "Subway";
+  }
+  return "Train";
+}
+
+function toTransportMode(mode) {
+  const token = String(mode || "").toLowerCase();
+  return token === "subway" ? "subway" : "train";
+}
+
+function hasScopedLines(snapshot) {
+  return Array.isArray(snapshot?.lines) && snapshot.lines.length > 0;
+}
+
+function buildEmptyOverviewViewModel() {
+  return {
+    generatedAtGameMinute: 0,
+    modes: [
+      { mode: "Subway", label: "城市地铁", lineCount: 0, activeVehicleCount: 0, scheduledVehicleCount: 0, estimatedPassengerLoad: 0, healthPercent: 0 },
+      { mode: "Train", label: "城际铁路", lineCount: 0, activeVehicleCount: 0, scheduledVehicleCount: 0, estimatedPassengerLoad: 0, healthPercent: 0 }
+    ],
+    activeMode: "Train",
+    network: {
+      lines: [],
+      stations: [],
+      vehicles: []
+    },
+    systems: [
+      { key: "dispatchEnabled", title: "发车控制", enabled: false },
+      { key: "bypassEnabled", title: "智能待避", enabled: false },
+      { key: "broadcastEnabled", title: "自动广播", enabled: false },
+      { key: "depotLockEnabled", title: "车库锁定", enabled: false }
+    ],
+    warnings: []
+  };
+}
+
+export default function OverviewPage({ activeTransportMode = "train", onTransportModeChange }) {
   const [snapshot, setSnapshot] = useState(null);
   const [metadataSnapshot, setMetadataSnapshot] = useState(null);
-  const [activeMode, setActiveMode] = useState("");
+  const [systemOverrides, setSystemOverrides] = useState({});
   const [error, setError] = useState("");
+  const modeCacheRef = useRef({});
+  const loadGenerationRef = useRef(0);
+  const activeModeRef = useRef(toTransportMode(activeTransportMode));
+  activeModeRef.current = toTransportMode(activeTransportMode);
 
   useEffect(() => {
+    const mode = toTransportMode(activeTransportMode);
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    traceWorkbench("overview.mount", { mode });
     let cancelled = false;
     const api = getWorkbenchApi();
+    const cached = modeCacheRef.current[mode] || null;
 
-    Promise.all([api.loadSnapshot(), api.refreshMetadata()])
+    setSnapshot(cached?.snapshot || null);
+    setMetadataSnapshot(cached?.metadataSnapshot || null);
+    setError("");
+
+    if (cached) {
+      traceWorkbench("overview.load.cache", { mode });
+      return () => {
+        cancelled = true;
+        traceWorkbench("overview.unmount");
+      };
+    }
+
+    Promise.all([api.loadSnapshot({ mode }), api.refreshMetadata({ mode })])
       .then(([nextSnapshot, nextMetadata]) => {
-        if (cancelled) {
+        if (cancelled || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
           return;
         }
+        modeCacheRef.current[mode] = {
+          snapshot: nextSnapshot,
+          metadataSnapshot: nextMetadata
+        };
         setSnapshot(nextSnapshot);
         setMetadataSnapshot(nextMetadata);
         setError("");
+        traceWorkbench("overview.load.done", {
+          mode,
+          lines: Array.isArray(nextMetadata?.lines) ? nextMetadata.lines.length : 0
+        });
       })
       .catch((loadError) => {
-        if (cancelled) {
+        if (cancelled || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
           return;
         }
         setError(loadError?.message || "Unable to load overview data.");
+        traceWorkbench("overview.load.error", { mode, message: loadError?.message || loadError });
       });
 
     return () => {
       cancelled = true;
+      traceWorkbench("overview.unmount");
     };
-  }, []);
+  }, [activeTransportMode]);
 
   const viewModel = useMemo(
-    () => buildOverviewViewModel(snapshot || {}, metadataSnapshot || {}),
+    () => (
+      hasScopedLines(snapshot) || hasScopedLines(metadataSnapshot)
+        ? buildOverviewViewModel(snapshot || {}, metadataSnapshot || {})
+        : buildEmptyOverviewViewModel()
+    ),
     [metadataSnapshot, snapshot]
   );
 
-  useEffect(() => {
-    if (!activeMode && viewModel.activeMode) {
-      setActiveMode(viewModel.activeMode);
-    }
-  }, [activeMode, viewModel.activeMode]);
-
-  const selectedMode = activeMode || viewModel.activeMode;
+  const selectedMode = toOverviewMode(activeTransportMode || viewModel.activeMode);
   const modeSummary = viewModel.modes.find((mode) => mode.mode === selectedMode) || viewModel.modes[0] || {
     estimatedPassengerLoad: 0,
     activeVehicleCount: 0,
@@ -60,6 +130,32 @@ export default function OverviewPage() {
     ...modeSummary,
     peakStationName: firstStation?.name || ""
   };
+  const systems = viewModel.systems.map((system) => ({
+    ...system,
+    enabled: Object.prototype.hasOwnProperty.call(systemOverrides, system.key) ? systemOverrides[system.key] : system.enabled
+  }));
+
+  function handleSystemToggle(key) {
+    traceWorkbench("overview.system.toggle", { key });
+    setSystemOverrides((current) => {
+      const source = systems.find((system) => system.key === key);
+      if (!source) {
+        return current;
+      }
+      return {
+        ...current,
+        [key]: !source.enabled
+      };
+    });
+  }
+
+  function handleModeChange(mode) {
+    const nextTransportMode = toTransportMode(mode);
+    traceWorkbench("overview.mode.change", { mode: nextTransportMode, from: activeTransportMode });
+    if (typeof onTransportModeChange === "function") {
+      onTransportModeChange(nextTransportMode);
+    }
+  }
 
   if (error) {
     return (
@@ -73,8 +169,8 @@ export default function OverviewPage() {
     <div className="rtw-overview-root">
       <div className="rtw-overview-body">
         <aside className="rtw-overview-sidebar">
-          <OverviewModeRail modes={viewModel.modes} activeMode={selectedMode} onModeChange={setActiveMode} />
-          <OverviewSystemSwitches systems={viewModel.systems} />
+          <OverviewModeRail modes={viewModel.modes} activeMode={selectedMode} onModeChange={handleModeChange} />
+          <OverviewSystemSwitches systems={systems} onSystemToggle={handleSystemToggle} />
           <div className="rtw-overview-footer-tag">CS2-BUS-SUB-V0.90 / ONLINE</div>
         </aside>
         <main className="rtw-overview-main">

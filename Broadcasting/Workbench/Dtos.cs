@@ -21,6 +21,8 @@ namespace RapidTransitMod
     public class BroadcastWorkbenchSnapshot
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public string selectedLineId;
         [DataMember]
         public DispatchWorkbenchLineDto[] lines;
@@ -192,6 +194,8 @@ namespace RapidTransitMod
     public class BroadcastWorkbenchImportExternalAssetsRequest
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public string currentPath;
         [DataMember]
         public string[] selectedPaths;
@@ -225,6 +229,8 @@ namespace RapidTransitMod
     public class BroadcastWorkbenchAssetPreviewStateDto
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public string assetName;
         [DataMember]
         public string state;
@@ -235,6 +241,8 @@ namespace RapidTransitMod
     [DataContract]
     public class BroadcastWorkbenchRulePreviewRequest
     {
+        [DataMember]
+        public string mode;
         [DataMember]
         public string lineId;
         [DataMember]
@@ -261,6 +269,8 @@ namespace RapidTransitMod
     [DataContract]
     public class BroadcastWorkbenchRulePreviewStateDto
     {
+        [DataMember]
+        public string mode;
         [DataMember]
         public string ruleId;
         [DataMember]
@@ -416,6 +426,8 @@ namespace RapidTransitMod
     public class ApplyRequest
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public ApplyLineConfig[] lines;
         [DataMember]
         public int? volume;
@@ -440,6 +452,8 @@ namespace RapidTransitMod
     public class ApplyResult
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public bool success;
         [DataMember]
         public string error;
@@ -457,6 +471,8 @@ namespace RapidTransitMod
     public class ApplyOperationStatusDto
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public bool success;
         [DataMember]
         public string operationId;
@@ -472,12 +488,16 @@ namespace RapidTransitMod
     public class BroadcastWorkbenchApplyRequest
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public string lineId;
     }
 
     [DataContract]
     public class BroadcastWorkbenchApplyResult
     {
+        [DataMember]
+        public string mode;
         [DataMember]
         public bool success;
         [DataMember]
@@ -497,6 +517,17 @@ namespace RapidTransitMod
         public string length;
         [DataMember]
         public string extension;
+    }
+
+    [DataContract]
+    public class BroadcastWorkbenchPersistedAssetCatalogState
+    {
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public string assetDirectory;
+        [DataMember]
+        public BroadcastWorkbenchPersistedAssetState[] assets;
     }
 
     [DataContract]
@@ -533,5 +564,16 @@ namespace RapidTransitMod
         public string[] lineIds;
         [DataMember]
         public int? volume;
+    }
+
+    [DataContract]
+    public class BroadcastWorkbenchPersistedVolumeState
+    {
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public int? draftVolume;
+        [DataMember]
+        public int? appliedVolume;
     }
 }

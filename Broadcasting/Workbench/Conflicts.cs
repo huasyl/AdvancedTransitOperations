@@ -26,7 +26,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
     {
         internal Conflicts(Context context) : base(context) { }
 
-                public string AutoBindBroadcastStationMappingsJson(string lineId)
+                public string AutoBindBroadcastStationMappingsJson(string requestJson)
                 {
                     BroadcastWorkbenchAutoBindStationMappingsResult result = new BroadcastWorkbenchAutoBindStationMappingsResult
                     {
@@ -38,11 +38,19 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "autoBindBroadcastStationMappings");
+                        using (UseScope(scope))
+                        {
 
-                        string resolvedLineId = lineId?.Trim() ?? string.Empty;
+                        string resolvedLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadLine(requestJson));
                         if (string.IsNullOrEmpty(resolvedLineId))
                         {
                             result.error = "Line is missing.";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
+                        if (!scope.MatchesLineId(resolvedLineId))
+                        {
+                            result.error = "Line does not belong to mode " + scope.Token + ".";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
@@ -70,7 +78,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         for (int i = 0; i < stationGroups.Count; i++)
                         {
                             StationGroup group = stationGroups[i];
-                            string stationName = group?.Representative?.name ?? string.Empty;
+                            string stationName = m_Ctx.Snapshot.StationName(group);
                             string targetStationId = group?.Representative?.id ?? string.Empty;
                             if (group == null || string.IsNullOrWhiteSpace(targetStationId))
                             {
@@ -137,7 +145,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         SaveWorkbench();
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(resolvedLineId));
+                            m_Ctx.Snapshot.Build(scope, resolvedLineId));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -247,7 +256,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         }
 
                         List<DispatchWorkbenchStationConflictDto> conflicts =
-                            Candidates(MatchKey(group.Representative.name), conflictLookup);
+                            Candidates(MatchKey(m_Ctx.Snapshot.StationName(group)), conflictLookup);
                         if (string.IsNullOrEmpty(group.Key)
                             || conflicts == null
                             || conflicts.Count <= 1)

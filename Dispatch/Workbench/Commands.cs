@@ -39,11 +39,13 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal WorkbenchSavePrepareContext Capture(string requestJson)
         {
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveNativeWorkbenchDraft");
             return new WorkbenchSavePrepareContext
             {
                 RequestJson = requestJson ?? string.Empty,
+                Scope = scope,
                 SnapshotVersion = m_Host.Version(),
-                RuntimeLines = m_Host.Lines(),
+                RuntimeLines = m_Query.GetLines(scope.Mode),
                 Depots = m_Host.Depots(),
                 ServiceKinds = m_Run.Keys()
                     .ToDictionary(
@@ -59,6 +61,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             PreparedWorkbenchSave prepared = new PreparedWorkbenchSave
             {
                 SnapshotVersion = baseVersion,
+                Scope = context?.Scope ?? ModeScope.DefaultWorkbench,
                 RuntimeLines = context?.RuntimeLines ?? new List<WorkbenchLineRuntime>()
             };
 
@@ -66,6 +69,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 DispatchWorkbenchSaveRequest request =
                     Workbenches.Json.Read<DispatchWorkbenchSaveRequest>(context?.RequestJson);
+                if (request != null)
+                {
+                    request.mode = prepared.Scope.Token;
+                }
+                List<string> errors = NormalizeRequestForScope(request, prepared.Scope);
                 List<WorkbenchLineRuntime> runtimeLines = (context?.RuntimeLines ?? new List<WorkbenchLineRuntime>())
                     .Select(CloneWorkbenchLineRuntime)
                     .ToList();
@@ -80,16 +88,17 @@ namespace RapidTransitMod.Dispatch.Workbench
                     RuntimeConfigStoreDefaults.NormalizeConfiguredServiceKind,
                     lineId => m_Run.Kind(lineId),
                     context?.ServiceKinds);
-                List<string> errors = ValidateRequest(
+                errors.AddRange(ValidateRequest(
                     request,
                     runtimeLines,
                     request?.applyDraft == true,
-                    depots);
+                    depots));
                 prepared.Request = request;
                 prepared.RuntimeLines = runtimeLines;
                 prepared.Errors = errors;
                 prepared.ShouldReturnSnapshot = ReturnSnapshot(request);
-                prepared.LineSettingsChanged = request?.lineSettings != null;
+                prepared.LineSettingsChanged = request?.lineSettings != null
+                    && !m_Run.SameLineCfg(prepared.Scope, request.lineSettings);
                 return prepared;
             }
             catch (Exception ex)
@@ -109,7 +118,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 if (prepared?.Request != null)
                 {
-                    result.snapshot = BuildSnapshot(prepared.Request.selectedLineId);
+                    result.snapshot = BuildSnapshot(prepared.Scope, prepared.Request.selectedLineId);
                 }
                 return result;
             }
@@ -138,12 +147,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                 List<string> appliedErrors = ValidateApplied(
                     lineKey,
                     nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
-                    runtimeLines);
+                    runtimeLines,
+                    prepared.Scope.Mode);
                 if (appliedErrors.Count > 0)
                 {
                     result.success = false;
                     result.errors = appliedErrors.ToArray();
-                    result.snapshot = BuildSnapshot(request.selectedLineId);
+                    result.snapshot = BuildSnapshot(prepared.Scope, request.selectedLineId);
                     return result;
                 }
             }
@@ -176,7 +186,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 && Rows.SameRules(state.AutoRules, nextAutoRules)
                 && Rows.SameRows(state.StagedRows, nextStagedRows)
                 && Rows.SamePlan(state.PlannerImportContract, nextPlanRef)
-                && m_Run.SameLineCfg(request.lineSettings)
+                && m_Run.SameLineCfg(prepared.Scope, request.lineSettings)
                 && m_Run.SameFeatures(request.featureSettings))
             {
                 result.success = true;
@@ -191,7 +201,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
             if (request.lineSettings != null)
             {
-                m_Run.LineCfg(request.lineSettings);
+                m_Run.LineCfg(prepared.Scope, request.lineSettings);
             }
 
             state.SelectedLineId = requestedSelectedLineId;
@@ -244,14 +254,14 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 result.success = false;
                 result.errors = new[] { "Add rows into the line draft timetable before applying the draft." };
-                m_Drafts.SetPreferred(state.SelectedLineId);
+                m_Drafts.SetPreferred(state.SelectedLineId, prepared.Scope.Mode);
                 m_Run.RefreshApplied();
                 if (persistImmediately)
                 {
                     m_Persist.Save();
                     m_Host.SaveApplied();
                 }
-                result.snapshot = BuildSnapshot(state.SelectedLineId);
+                result.snapshot = BuildSnapshot(prepared.Scope, state.SelectedLineId);
                 return result;
             }
 
@@ -262,7 +272,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             m_Host.Dirty();
             ulong nextVersion = m_Host.Version();
-            m_Drafts.SetPreferred(state.SelectedLineId);
+            m_Drafts.SetPreferred(state.SelectedLineId, prepared.Scope.Mode);
             if (request.applyDraft)
             {
                 m_Run.ApplyDraft(nextLineDraftRowsByKey.Keys, runtimeLines);
@@ -293,7 +303,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 : Array.Empty<string>();
             if (prepared.ShouldReturnSnapshot)
             {
-                result.snapshot = BuildSnapshot(state.SelectedLineId);
+                result.snapshot = BuildSnapshot(prepared.Scope, state.SelectedLineId);
                 m_Host.Ui.Push(result.snapshot);
             }
             else
@@ -303,9 +313,240 @@ namespace RapidTransitMod.Dispatch.Workbench
             return result;
         }
 
-        private DispatchWorkbenchSnapshot BuildSnapshot(string lineId)
+        private DispatchWorkbenchSnapshot BuildSnapshot(ModeScope scope, string lineId)
         {
-            return m_Snap.Build(lineId, m_Host.Version(), "game-backend");
+            return m_Snap.Build(lineId, scope.Mode, m_Host.Version(), "game-backend");
+        }
+
+        private static List<string> NormalizeRequestForScope(
+            DispatchWorkbenchSaveRequest request,
+            ModeScope scope)
+        {
+            List<string> errors = new List<string>();
+            if (request == null)
+                return errors;
+
+            request.selectedLineId = NormalizeLineId(scope, request.selectedLineId, "selectedLineId", errors);
+            request.selectedEditLine = NormalizeSelectedEditLine(scope, request.selectedEditLine, errors);
+            NormalizeMergedView(scope, request.mergedView, errors);
+            NormalizeManualRows(scope, request.manualRows, errors);
+            NormalizeAutoRules(scope, request.autoRules, errors);
+            NormalizeStagedRows(scope, request.lineDraftRows, "lineDraftRows", errors);
+            NormalizeLineDraftRowBlocks(scope, request.lineDraftRowsByLineId, errors);
+            NormalizeLineSettings(scope, request.lineSettings, errors);
+            NormalizePlanRefs(scope, request.planRefs, errors);
+            NormalizePlanContract(scope, request.plannerImportContract, "plannerImportContract", errors);
+            return errors;
+        }
+
+        private static void NormalizeMergedView(
+            ModeScope scope,
+            DispatchWorkbenchMergedView view,
+            List<string> errors)
+        {
+            if (view == null)
+                return;
+
+            view.localLineId = NormalizeLineId(scope, view.localLineId, "mergedView.localLineId", errors);
+            view.expressLineId = NormalizeLineId(scope, view.expressLineId, "mergedView.expressLineId", errors);
+            view.localLineIds = NormalizeLineIds(scope, view.localLineIds, "mergedView.localLineIds", errors);
+            view.expressLineIds = NormalizeLineIds(scope, view.expressLineIds, "mergedView.expressLineIds", errors);
+        }
+
+        private static void NormalizeManualRows(
+            ModeScope scope,
+            DispatchWorkbenchManualRowDto[] rows,
+            List<string> errors)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                if (rows[i] == null)
+                    continue;
+
+                rows[i].lineId = NormalizeLineId(scope, rows[i].lineId, "manualRows[" + i + "].lineId", errors);
+            }
+        }
+
+        private static void NormalizeAutoRules(
+            ModeScope scope,
+            DispatchWorkbenchAutoRuleDto[] rules,
+            List<string> errors)
+        {
+            if (rules == null)
+                return;
+
+            for (int i = 0; i < rules.Length; i++)
+            {
+                if (rules[i] == null)
+                    continue;
+
+                rules[i].lineId = NormalizeLineId(scope, rules[i].lineId, "autoRules[" + i + "].lineId", errors);
+            }
+        }
+
+        private static void NormalizeStagedRows(
+            ModeScope scope,
+            DispatchWorkbenchStagedRowDto[] rows,
+            string fieldName,
+            List<string> errors)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                if (rows[i] == null)
+                    continue;
+
+                rows[i].lineId = NormalizeLineId(scope, rows[i].lineId, fieldName + "[" + i + "].lineId", errors);
+            }
+        }
+
+        private static void NormalizeLineDraftRowBlocks(
+            ModeScope scope,
+            DispatchWorkbenchLineDraftRowsDto[] blocks,
+            List<string> errors)
+        {
+            if (blocks == null)
+                return;
+
+            for (int i = 0; i < blocks.Length; i++)
+            {
+                DispatchWorkbenchLineDraftRowsDto block = blocks[i];
+                if (block == null)
+                    continue;
+
+                block.lineId = NormalizeLineId(scope, block.lineId, "lineDraftRowsByLineId[" + i + "].lineId", errors);
+                NormalizeStagedRows(
+                    scope,
+                    block.lineDraftRows,
+                    "lineDraftRowsByLineId[" + i + "].lineDraftRows",
+                    errors);
+            }
+        }
+
+        private static void NormalizeLineSettings(
+            ModeScope scope,
+            DispatchWorkbenchLineSettingDto[] settings,
+            List<string> errors)
+        {
+            if (settings == null)
+                return;
+
+            for (int i = 0; i < settings.Length; i++)
+            {
+                if (settings[i] == null)
+                    continue;
+
+                settings[i].lineId = NormalizeLineId(scope, settings[i].lineId, "lineSettings[" + i + "].lineId", errors);
+            }
+        }
+
+        private static void NormalizePlanRefs(
+            ModeScope scope,
+            DispatchWorkbenchPlanRefDto[] planRefs,
+            List<string> errors)
+        {
+            if (planRefs == null)
+                return;
+
+            for (int i = 0; i < planRefs.Length; i++)
+            {
+                DispatchWorkbenchPlanRefDto planRef = planRefs[i];
+                if (planRef == null)
+                    continue;
+
+                planRef.lineId = NormalizeLineId(scope, planRef.lineId, "planRefs[" + i + "].lineId", errors);
+                NormalizePlanContract(scope, planRef.contract, "planRefs[" + i + "].contract", errors);
+            }
+        }
+
+        private static void NormalizePlanContract(
+            ModeScope scope,
+            DispatchWorkbenchPlannerImportContractDto contract,
+            string fieldName,
+            List<string> errors)
+        {
+            if (contract == null)
+                return;
+
+            contract.draftKey = NormalizeLineId(scope, contract.draftKey, fieldName + ".draftKey", errors);
+            contract.importedLineIds = NormalizeLineIds(scope, contract.importedLineIds, fieldName + ".importedLineIds", errors);
+            NormalizePlannerRequestEcho(scope, contract.requestEcho, fieldName + ".requestEcho", errors);
+        }
+
+        private static void NormalizePlannerRequestEcho(
+            ModeScope scope,
+            DispatchPlannerRequestEchoDto requestEcho,
+            string fieldName,
+            List<string> errors)
+        {
+            if (requestEcho == null)
+                return;
+
+            if (!string.IsNullOrEmpty(requestEcho.mode)
+                && (!ModeScope.TryParseWorkbench(requestEcho.mode, out ModeScope echoScope)
+                    || echoScope.Mode != scope.Mode))
+            {
+                errors.Add(fieldName + ".mode does not belong to mode " + scope.Token + ": " + requestEcho.mode);
+            }
+
+            requestEcho.mode = scope.Token;
+            requestEcho.draftKey = NormalizeLineId(scope, requestEcho.draftKey, fieldName + ".draftKey", errors);
+            requestEcho.localLineIds = NormalizeLineIds(scope, requestEcho.localLineIds, fieldName + ".localLineIds", errors);
+            requestEcho.adjustableLineIds = NormalizeLineIds(scope, requestEcho.adjustableLineIds, fieldName + ".adjustableLineIds", errors);
+            requestEcho.expressLineId = NormalizeLineId(scope, requestEcho.expressLineId, fieldName + ".expressLineId", errors);
+            requestEcho.virtualExpressBaseLineId = NormalizeLineId(scope, requestEcho.virtualExpressBaseLineId, fieldName + ".virtualExpressBaseLineId", errors);
+        }
+
+        private static string NormalizeSelectedEditLine(
+            ModeScope scope,
+            string lineId,
+            List<string> errors)
+        {
+            if (string.Equals(lineId, "local", StringComparison.Ordinal)
+                || string.Equals(lineId, "express", StringComparison.Ordinal))
+            {
+                return lineId;
+            }
+
+            return NormalizeLineId(scope, lineId, "selectedEditLine", errors);
+        }
+
+        private static string[] NormalizeLineIds(
+            ModeScope scope,
+            string[] lineIds,
+            string fieldName,
+            List<string> errors)
+        {
+            if (lineIds == null)
+                return Array.Empty<string>();
+
+            string[] normalized = new string[lineIds.Length];
+            for (int i = 0; i < lineIds.Length; i++)
+            {
+                normalized[i] = NormalizeLineId(scope, lineIds[i], fieldName + "[" + i + "]", errors);
+            }
+
+            return normalized;
+        }
+
+        private static string NormalizeLineId(
+            ModeScope scope,
+            string lineId,
+            string fieldName,
+            List<string> errors)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+                return string.Empty;
+
+            scope.ValidateLineId(lineId, fieldName, errors);
+            return scope.MatchesLineId(lineId)
+                ? scope.NormalizeLineId(lineId)
+                : lineId;
         }
 
         private List<string> ValidateRequest(
@@ -334,20 +575,21 @@ namespace RapidTransitMod.Dispatch.Workbench
         private List<string> ValidateApplied(
             string lineKey,
             List<DispatchWorkbenchStagedRowDto> rows,
-            List<WorkbenchLineRuntime> runtimeLines)
+            List<WorkbenchLineRuntime> runtimeLines,
+            TransitMode mode)
         {
             return Check.AppliedRows(
                 lineKey,
                 rows,
                 runtimeLines,
-                BuildAppliedState(),
+                BuildAppliedState(mode),
                 Time.Parse,
                 Time.Slot);
         }
 
-        private Dictionary<string, AppliedLine> BuildAppliedState()
+        private Dictionary<string, AppliedLine> BuildAppliedState(TransitMode mode)
         {
-            return m_Query.BuildAppliedRows()
+            return m_Query.BuildAppliedRows(mode)
                 .Where(row => row != null && !string.IsNullOrEmpty(row.lineId))
                 .GroupBy(row => row.lineId, StringComparer.Ordinal)
                 .ToDictionary(

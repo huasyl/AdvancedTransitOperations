@@ -54,9 +54,9 @@ namespace RapidTransitMod.Planner
         private string MakeStationDwellObservationKey(Entity line, string stationAnchorId) => R.m_Observation.DwellKey(line, stationAnchorId);
         private string LineId(Entity line) => R.LineId(line);
 
-        internal DispatchPlannerExportSnapshot Load()
+        internal DispatchPlannerExportSnapshot Load(ModeScope scope)
         {
-            return Build();
+            return Build(scope);
         }
 
         internal void Dump()
@@ -75,11 +75,14 @@ namespace RapidTransitMod.Planner
             public float3 Position;
         }
 
-        internal DispatchPlannerExportSnapshot Build()
+        internal DispatchPlannerExportSnapshot Build(ModeScope scope)
         {
+            scope.EnsureSupportedWorkbenchMode();
             R.LoadWorkbench();
             R.LoadApplied();
-            List<WorkbenchLineRuntime> runtimeLines = Lines();
+            List<WorkbenchLineRuntime> runtimeLines = Lines()
+                .Where(line => MatchesScope(line, scope))
+                .ToList();
             List<DispatchPlannerLineDto> lines = new List<DispatchPlannerLineDto>();
             List<DispatchPlannerStationDto> stations = new List<DispatchPlannerStationDto>();
             List<DispatchPlannerSegmentDto> segments = new List<DispatchPlannerSegmentDto>();
@@ -132,11 +135,13 @@ namespace RapidTransitMod.Planner
 
             List<DispatchPlannerTraversalSliceDto> traversalSlices;
             DispatchPlannerTrackScenarioDto currentTrackScenario = BuildPlannerTrackScenario(
+                scope,
                 runtimeLines,
                 stationRecordsByLine,
                 out traversalSlices);
 
             DispatchPlannerObservationSummaryDto observations = BuildPlannerObservationSummary(
+                scope,
                 allStationRecords,
                 traversalSlices);
             DispatchPlannerBypassStationDto[] configuredBypassStations = BuildPlannerBypassStations(
@@ -150,6 +155,7 @@ namespace RapidTransitMod.Planner
 
             return new DispatchPlannerExportSnapshot
             {
+                mode = scope.Token,
                 version = "planner-input-v2",
                 generatedAtFrame = m_SimulationSystem.frameIndex,
                 lines = lines.ToArray(),
@@ -160,7 +166,7 @@ namespace RapidTransitMod.Planner
                 currentTrackScenario = currentTrackScenario,
                 observations = observations,
                 runtimeParams = BuildPlannerRuntimeParams(),
-                drafts = BuildPlannerDrafts(runtimeLines)
+                drafts = BuildPlannerDrafts(scope, runtimeLines)
             };
         }
 
@@ -330,6 +336,7 @@ namespace RapidTransitMod.Planner
         }
 
         private DispatchPlannerTrackScenarioDto BuildPlannerTrackScenario(
+            ModeScope scope,
             List<WorkbenchLineRuntime> runtimeLines,
             Dictionary<string, List<PlannerStationRecord>> stationRecordsByLine,
             out List<DispatchPlannerTraversalSliceDto> traversalSlices)
@@ -353,7 +360,7 @@ namespace RapidTransitMod.Planner
                 List<PlannerStationRecord> stationRecords = stationRecordsByLine.TryGetValue(runtime.Id, out List<PlannerStationRecord> records)
                     ? records
                     : new List<PlannerStationRecord>();
-                DispatchPlannerLineTrackDto lineTrack = BuildPlannerLineTrack(runtime, waypoints, stationRecords);
+                DispatchPlannerLineTrackDto lineTrack = BuildPlannerLineTrack(scope, runtime, waypoints, stationRecords);
                 lineTracks.Add(lineTrack);
                 if (lineTrack.available
                     && m_TrackModel.TryChain(runtime.Entity, out LineTrackChain chain)
@@ -368,6 +375,10 @@ namespace RapidTransitMod.Planner
             }
 
             sharedCorridors.AddRange(BuildPlannerSharedCorridors(chainByLineId, stationRecordsByLine));
+            foreach (LineTrackChain chain in chainByLineId.Values)
+            {
+                m_TrackModel.ResetBypassPipeline(chain);
+            }
 
             return new DispatchPlannerTrackScenarioDto
             {
@@ -381,6 +392,7 @@ namespace RapidTransitMod.Planner
         }
 
         private DispatchPlannerLineTrackDto BuildPlannerLineTrack(
+            ModeScope scope,
             WorkbenchLineRuntime runtime,
             DynamicBuffer<RouteWaypoint> waypoints,
             List<PlannerStationRecord> stationRecords)
@@ -399,7 +411,7 @@ namespace RapidTransitMod.Planner
                 };
             }
 
-            m_TrackModel.EnsureBypassPipelineReady(chain);
+            m_TrackModel.EnsureBypassPipelineReady(chain, scope);
             PopulatePlannerStationTrackAtomIndices(chain, stationRecords);
 
             return new DispatchPlannerLineTrackDto
@@ -803,6 +815,7 @@ namespace RapidTransitMod.Planner
         }
 
         private DispatchPlannerObservationSummaryDto BuildPlannerObservationSummary(
+            ModeScope scope,
             List<PlannerStationRecord> stationRecords,
             List<DispatchPlannerTraversalSliceDto> traversalSlices)
         {
@@ -853,23 +866,27 @@ namespace RapidTransitMod.Planner
                 traversalSliceSampleCount = traversalSampleCount,
                 stopDwell = stopDwell.ToArray(),
                 traversalSlices = traversalSlices.ToArray(),
-                traversalSliceActualSamples = BuildPlannerTraversalSliceActualSamples(),
-                traversalPositionSamples = BuildPlannerTraversalPositionSamples()
+                traversalSliceActualSamples = BuildPlannerTraversalSliceActualSamples(scope),
+                traversalPositionSamples = BuildPlannerTraversalPositionSamples(scope)
             };
         }
 
-        private DispatchPlannerTraversalSliceActualSampleDto[] BuildPlannerTraversalSliceActualSamples()
+        private DispatchPlannerTraversalSliceActualSampleDto[] BuildPlannerTraversalSliceActualSamples(ModeScope scope)
         {
             List<DispatchPlannerTraversalSliceActualSampleDto> samples =
                 new List<DispatchPlannerTraversalSliceActualSampleDto>();
             foreach (TraversalSliceActualSample sample in R.m_Observation.ActualSamples)
             {
+                string sampleLineId = ResolvePlannerSampleLineId(scope, sample.Line);
+                if (string.IsNullOrEmpty(sampleLineId))
+                    continue;
+
                 float durationFrames = sample.ExitFrame > sample.EnterFrame
                     ? sample.ExitFrame - sample.EnterFrame
                     : 0f;
                 samples.Add(new DispatchPlannerTraversalSliceActualSampleDto
                 {
-                    lineId = ResolvePlannerSampleLineId(sample.Line),
+                    lineId = sampleLineId,
                     lineEntityIndex = sample.Line == Entity.Null ? -1 : sample.Line.Index,
                     vehicleEntityIndex = sample.Vehicle == Entity.Null ? -1 : sample.Vehicle.Index,
                     sliceIndex = sample.SliceIndex,
@@ -886,15 +903,19 @@ namespace RapidTransitMod.Planner
             return samples.ToArray();
         }
 
-        private DispatchPlannerTraversalPositionSampleDto[] BuildPlannerTraversalPositionSamples()
+        private DispatchPlannerTraversalPositionSampleDto[] BuildPlannerTraversalPositionSamples(ModeScope scope)
         {
             List<DispatchPlannerTraversalPositionSampleDto> samples =
                 new List<DispatchPlannerTraversalPositionSampleDto>();
             foreach (TraversalPositionSample sample in R.m_Observation.PositionSamples)
             {
+                string sampleLineId = ResolvePlannerSampleLineId(scope, sample.Line);
+                if (string.IsNullOrEmpty(sampleLineId))
+                    continue;
+
                 samples.Add(new DispatchPlannerTraversalPositionSampleDto
                 {
-                    lineId = ResolvePlannerSampleLineId(sample.Line),
+                    lineId = sampleLineId,
                     lineEntityIndex = sample.Line == Entity.Null ? -1 : sample.Line.Index,
                     vehicleEntityIndex = sample.Vehicle == Entity.Null ? -1 : sample.Vehicle.Index,
                     frame = sample.Frame,
@@ -912,13 +933,34 @@ namespace RapidTransitMod.Planner
             return samples.ToArray();
         }
 
-        private string ResolvePlannerSampleLineId(Entity line)
+        private string ResolvePlannerSampleLineId(ModeScope scope, Entity line)
         {
             if (line == Entity.Null)
                 return string.Empty;
 
             string lineId = LineId(line);
-            return string.IsNullOrWhiteSpace(lineId) ? "entity:" + line.Index.ToString() : lineId;
+            if (LineKey.TryParse(lineId, out LineKey key))
+                return key.Mode == scope.Mode ? lineId : string.Empty;
+
+            TransitMode resolvedMode = TransportModeResolver.Resolve(EntityManager, line);
+            if (resolvedMode != scope.Mode)
+                return string.Empty;
+
+            return string.IsNullOrWhiteSpace(lineId)
+                ? LineIdentityService.GetId(LineIdentityService.GetKey(scope.Mode, int.MaxValue, line))
+                : scope.NormalizeLineId(lineId);
+        }
+
+        private static bool MatchesScope(WorkbenchLineRuntime line, ModeScope scope)
+        {
+            if (line == null || string.IsNullOrWhiteSpace(line.Id))
+                return false;
+
+            if (LineKey.TryParse(line.Id, out LineKey key))
+                return key.Mode == scope.Mode;
+
+            TransitMode resolvedMode = TransportModeResolver.Resolve(line.TransportType);
+            return resolvedMode == scope.Mode;
         }
 
         private DispatchPlannerBypassStationDto[] BuildPlannerBypassStations(
@@ -974,22 +1016,41 @@ namespace RapidTransitMod.Planner
             };
         }
 
-        private DispatchPlannerDraftDto[] BuildPlannerDrafts(List<WorkbenchLineRuntime> runtimeLines)
+        private DispatchPlannerDraftDto[] BuildPlannerDrafts(ModeScope scope, List<WorkbenchLineRuntime> runtimeLines)
         {
             List<DispatchPlannerDraftDto> drafts = new List<DispatchPlannerDraftDto>();
-            HashSet<string> draftKeys = new HashSet<string>(m_WorkbenchBridge.DraftStore.Keys, StringComparer.Ordinal);
+            HashSet<string> runtimeLineIds = new HashSet<string>(
+                (runtimeLines ?? new List<WorkbenchLineRuntime>())
+                    .Where(line => !string.IsNullOrEmpty(line?.Id))
+                    .Select(line => line.Id),
+                StringComparer.Ordinal);
+            Dictionary<string, string> sourceKeyByDraftKey = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string sourceKey in m_WorkbenchBridge.DraftStore.Keys)
+            {
+                if (TryNormalizePlannerExportDraftKey(scope, sourceKey, runtimeLineIds, out string normalizedDraftKey)
+                    && !sourceKeyByDraftKey.ContainsKey(normalizedDraftKey))
+                {
+                    sourceKeyByDraftKey[normalizedDraftKey] = sourceKey;
+                }
+            }
             for (int i = 0; i < (runtimeLines?.Count ?? 0); i++)
             {
-                if (!string.IsNullOrEmpty(runtimeLines[i]?.Id))
+                string runtimeLineId = runtimeLines[i]?.Id;
+                if (!string.IsNullOrEmpty(runtimeLineId) && !sourceKeyByDraftKey.ContainsKey(runtimeLineId))
                 {
-                    draftKeys.Add(runtimeLines[i].Id);
+                    sourceKeyByDraftKey[runtimeLineId] = string.Empty;
                 }
             }
 
-            foreach (string draftKey in draftKeys)
+            foreach (string draftKey in sourceKeyByDraftKey.Keys.OrderBy(key => key, StringComparer.Ordinal))
             {
-                m_WorkbenchBridge.DraftStore.TryGetValue(draftKey, out DispatchWorkbenchDraftState sourceDraft);
-                DispatchWorkbenchDraftState draft = ClonePlannerExportDraftState(draftKey, sourceDraft, runtimeLines);
+                string sourceKey = sourceKeyByDraftKey[draftKey];
+                DispatchWorkbenchDraftState sourceDraft = null;
+                if (!string.IsNullOrEmpty(sourceKey))
+                {
+                    m_WorkbenchBridge.DraftStore.TryGetValue(sourceKey, out sourceDraft);
+                }
+                DispatchWorkbenchDraftState draft = ClonePlannerExportDraftState(scope, draftKey, sourceDraft, runtimeLines, runtimeLineIds);
                 string preferredLineId = !string.IsNullOrEmpty(draft?.SelectedLineId)
                     ? draft.SelectedLineId
                     : !string.IsNullOrEmpty(draft?.MergedView?.localLineId)
@@ -1021,9 +1082,11 @@ namespace RapidTransitMod.Planner
         }
 
         private DispatchWorkbenchDraftState ClonePlannerExportDraftState(
+            ModeScope scope,
             string draftKey,
             DispatchWorkbenchDraftState sourceDraft,
-            List<WorkbenchLineRuntime> runtimeLines)
+            List<WorkbenchLineRuntime> runtimeLines,
+            HashSet<string> runtimeLineIds)
         {
             DispatchWorkbenchDraftState draft = sourceDraft != null
                 ? new DispatchWorkbenchDraftState
@@ -1052,6 +1115,7 @@ namespace RapidTransitMod.Planner
                 }
                 : DraftStore().New(draftKey);
 
+            NormalizePlannerExportDraft(scope, draftKey, draft, runtimeLineIds);
             WorkbenchLineRuntime activeRuntime = runtimeLines != null && runtimeLines.Count > 0
                 ? ActiveLine(runtimeLines, draft.SelectedLineId ?? draftKey)
                 : null;
@@ -1074,6 +1138,137 @@ namespace RapidTransitMod.Planner
             }
 
             return draft;
+        }
+
+        private static bool TryNormalizePlannerExportDraftKey(
+            ModeScope scope,
+            string sourceKey,
+            HashSet<string> runtimeLineIds,
+            out string normalizedDraftKey)
+        {
+            normalizedDraftKey = string.Empty;
+            if (string.IsNullOrWhiteSpace(sourceKey)
+                || string.Equals(sourceKey, "__default__", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (LineKey.TryParse(sourceKey, out LineKey key))
+            {
+                if (key.Mode != scope.Mode)
+                    return false;
+                normalizedDraftKey = sourceKey;
+            }
+            else
+            {
+                if (scope.Mode != ModeScope.DefaultWorkbench.Mode)
+                    return false;
+                normalizedDraftKey = scope.NormalizeLineId(sourceKey);
+            }
+
+            return !string.IsNullOrEmpty(normalizedDraftKey)
+                && (runtimeLineIds == null || runtimeLineIds.Contains(normalizedDraftKey));
+        }
+
+        private static void NormalizePlannerExportDraft(
+            ModeScope scope,
+            string draftKey,
+            DispatchWorkbenchDraftState draft,
+            HashSet<string> runtimeLineIds)
+        {
+            if (draft == null)
+                return;
+
+            draft.SelectedLineId = NormalizePlannerExportLineId(scope, draft.SelectedLineId, runtimeLineIds);
+            if (string.IsNullOrEmpty(draft.SelectedLineId))
+                draft.SelectedLineId = draftKey ?? string.Empty;
+
+            draft.SelectedEditLine = NormalizePlannerExportLineId(scope, draft.SelectedEditLine, runtimeLineIds);
+            if (string.IsNullOrEmpty(draft.SelectedEditLine))
+                draft.SelectedEditLine = draft.SelectedLineId;
+
+            if (draft.MergedView != null)
+            {
+                draft.MergedView.localLineId = NormalizePlannerExportLineId(scope, draft.MergedView.localLineId, runtimeLineIds);
+                draft.MergedView.expressLineId = NormalizePlannerExportLineId(scope, draft.MergedView.expressLineId, runtimeLineIds);
+                draft.MergedView.localLineIds = NormalizePlannerExportLineIds(scope, draft.MergedView.localLineIds, runtimeLineIds);
+                draft.MergedView.expressLineIds = NormalizePlannerExportLineIds(scope, draft.MergedView.expressLineIds, runtimeLineIds);
+            }
+
+            draft.ManualRows = (draft.ManualRows ?? new List<DispatchWorkbenchManualRowDto>())
+                .Select(row => NormalizePlannerExportManualRow(scope, row, runtimeLineIds))
+                .Where(row => row != null)
+                .ToList();
+            draft.StagedRows = (draft.StagedRows ?? new List<DispatchWorkbenchStagedRowDto>())
+                .Select(row => NormalizePlannerExportStagedRow(scope, row, runtimeLineIds))
+                .Where(row => row != null)
+                .ToList();
+            draft.AutoRules = (draft.AutoRules ?? new List<DispatchWorkbenchAutoRuleDto>())
+                .Select(rule => NormalizePlannerExportAutoRule(scope, rule, runtimeLineIds))
+                .Where(rule => rule != null)
+                .ToList();
+        }
+
+        private static string[] NormalizePlannerExportLineIds(
+            ModeScope scope,
+            string[] lineIds,
+            HashSet<string> runtimeLineIds)
+        {
+            return (lineIds ?? Array.Empty<string>())
+                .Select(lineId => NormalizePlannerExportLineId(scope, lineId, runtimeLineIds))
+                .Where(lineId => !string.IsNullOrEmpty(lineId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        private static string NormalizePlannerExportLineId(
+            ModeScope scope,
+            string lineId,
+            HashSet<string> runtimeLineIds)
+        {
+            if (string.IsNullOrWhiteSpace(lineId) || !scope.MatchesLineId(lineId))
+                return string.Empty;
+
+            string normalized = scope.NormalizeLineId(lineId);
+            return runtimeLineIds == null || runtimeLineIds.Contains(normalized)
+                ? normalized
+                : string.Empty;
+        }
+
+        private static DispatchWorkbenchManualRowDto NormalizePlannerExportManualRow(
+            ModeScope scope,
+            DispatchWorkbenchManualRowDto row,
+            HashSet<string> runtimeLineIds)
+        {
+            if (row == null)
+                return null;
+
+            row.lineId = NormalizePlannerExportLineId(scope, row.lineId, runtimeLineIds);
+            return string.IsNullOrEmpty(row.lineId) ? null : row;
+        }
+
+        private static DispatchWorkbenchStagedRowDto NormalizePlannerExportStagedRow(
+            ModeScope scope,
+            DispatchWorkbenchStagedRowDto row,
+            HashSet<string> runtimeLineIds)
+        {
+            if (row == null)
+                return null;
+
+            row.lineId = NormalizePlannerExportLineId(scope, row.lineId, runtimeLineIds);
+            return string.IsNullOrEmpty(row.lineId) ? null : row;
+        }
+
+        private static DispatchWorkbenchAutoRuleDto NormalizePlannerExportAutoRule(
+            ModeScope scope,
+            DispatchWorkbenchAutoRuleDto rule,
+            HashSet<string> runtimeLineIds)
+        {
+            if (rule == null)
+                return null;
+
+            rule.lineId = NormalizePlannerExportLineId(scope, rule.lineId, runtimeLineIds);
+            return string.IsNullOrEmpty(rule.lineId) ? null : rule;
         }
 
         private bool TryResolvePlannerWaypointPosition(Entity waypoint, out float3 position) => R.m_MileageStore.TryWaypointPosition(waypoint, out position);

@@ -10,8 +10,13 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         internal PreparedApply Prepare(string requestJson)
         {
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "applyBroadcastConfig");
             ApplyRequest request =
                 global::RapidTransitMod.Workbenches.Json.Read<ApplyRequest>(requestJson ?? string.Empty);
+            if (request != null)
+            {
+                request.mode = scope.Token;
+            }
             ApplyLineConfig[] requestLines = request?.lines ?? Array.Empty<ApplyLineConfig>();
             List<PreparedLine> preparedLines = new List<PreparedLine>();
             HashSet<string> seenLineIds = new HashSet<string>(StringComparer.Ordinal);
@@ -19,10 +24,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             for (int i = 0; i < requestLines.Length; i++)
             {
                 ApplyLineConfig line = requestLines[i];
-                string lineId = line?.lineId?.Trim() ?? string.Empty;
+                string lineId = scope.NormalizeLineId(line?.lineId);
                 if (string.IsNullOrWhiteSpace(lineId))
                 {
                     throw new InvalidOperationException("Line is missing.");
+                }
+                if (!scope.MatchesLineId(lineId))
+                {
+                    throw new InvalidOperationException("Line does not belong to mode " + scope.Token + ".");
                 }
 
                 if (!seenLineIds.Add(lineId))
@@ -40,7 +49,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
 
             bool volumeDirty = request?.volumeDirty == true;
-            int volume = Preview.Clamp(request?.volume ?? AppliedVol);
+            int volume = Preview.Clamp(request?.volume ?? m_State.GetAppliedVolume(scope));
             if (volumeDirty && request?.volume == null)
             {
                 throw new InvalidOperationException("Broadcast volume is missing.");
@@ -51,7 +60,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 throw new InvalidOperationException("No broadcast changes were provided.");
             }
 
-            return new PreparedApply(preparedLines, volumeDirty, volume);
+            return new PreparedApply(scope, preparedLines, volumeDirty, volume);
         }
 
         internal ApplyResult Commit(PreparedApply prepared)
@@ -66,6 +75,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
             try
             {
+                using (UseScope(prepared.Scope))
+                {
                 List<WorkbenchLineRuntime> runtimeLines = Lines();
                 Dictionary<string, PreparedLineCommit> preparedCommits =
                     new Dictionary<string, PreparedLineCommit>(StringComparer.Ordinal);
@@ -107,6 +118,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 return new ApplyResult
                 {
+                    mode = prepared.Scope.Token,
                     success = true,
                     error = string.Empty,
                     version = m_WorkbenchSnapshotVersion.ToString(),
@@ -117,6 +129,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         .Distinct(StringComparer.Ordinal)
                         .ToArray()
                 };
+                }
             }
             catch
             {
@@ -268,8 +281,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 CloneRules(DraftRules),
                 ClonePlatforms(DraftPlatforms),
                 new HashSet<string>(AppliedLines, StringComparer.Ordinal),
-                DraftVol,
-                AppliedVol);
+                CloneVolumes(m_State.DraftVolumesByMode),
+                CloneVolumes(m_State.AppliedVolumesByMode));
         }
 
         private void RestoreState(ApplyStateSnapshot snapshot)
@@ -292,8 +305,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 AppliedLines.Add(lineId);
             }
 
-            DraftVol = snapshot.DraftVolume;
-            AppliedVol = snapshot.AppliedVolume;
+            RestoreVolumes(m_State.DraftVolumesByMode, snapshot.DraftVolumesByMode);
+            RestoreVolumes(m_State.AppliedVolumesByMode, snapshot.AppliedVolumesByMode);
             m_Ctx.Preview.ApplyVolume();
             m_Announcements.ApplyVolume();
         }
@@ -376,15 +389,31 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
         }
 
+        private static Dictionary<string, int> CloneVolumes(Dictionary<string, int> source)
+        {
+            return new Dictionary<string, int>(source ?? new Dictionary<string, int>(), StringComparer.Ordinal);
+        }
+
+        private static void RestoreVolumes(Dictionary<string, int> target, Dictionary<string, int> source)
+        {
+            target.Clear();
+            foreach (KeyValuePair<string, int> entry in source ?? new Dictionary<string, int>())
+            {
+                target[entry.Key] = entry.Value;
+            }
+        }
+
         internal sealed class PreparedApply
         {
-            internal PreparedApply(List<PreparedLine> lines, bool volumeDirty, int volume)
+            internal PreparedApply(ModeScope scope, List<PreparedLine> lines, bool volumeDirty, int volume)
             {
+                Scope = scope;
                 Lines = lines ?? new List<PreparedLine>();
                 VolumeDirty = volumeDirty;
                 Volume = volume;
             }
 
+            internal ModeScope Scope { get; }
             internal List<PreparedLine> Lines { get; }
             internal bool VolumeDirty { get; }
             internal int Volume { get; }
@@ -425,8 +454,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 Dictionary<string, List<BroadcastWorkbenchRuleDto>> draftRules,
                 Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> draftPlatforms,
                 HashSet<string> appliedLines,
-                int draftVolume,
-                int appliedVolume)
+                Dictionary<string, int> draftVolumesByMode,
+                Dictionary<string, int> appliedVolumesByMode)
             {
                 AppliedBindings = appliedBindings;
                 AppliedRules = appliedRules;
@@ -435,8 +464,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 DraftRules = draftRules;
                 DraftPlatforms = draftPlatforms;
                 AppliedLines = appliedLines;
-                DraftVolume = draftVolume;
-                AppliedVolume = appliedVolume;
+                DraftVolumesByMode = draftVolumesByMode;
+                AppliedVolumesByMode = appliedVolumesByMode;
             }
 
             internal Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> AppliedBindings { get; }
@@ -446,8 +475,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             internal Dictionary<string, List<BroadcastWorkbenchRuleDto>> DraftRules { get; }
             internal Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> DraftPlatforms { get; }
             internal HashSet<string> AppliedLines { get; }
-            internal int DraftVolume { get; }
-            internal int AppliedVolume { get; }
+            internal Dictionary<string, int> DraftVolumesByMode { get; }
+            internal Dictionary<string, int> AppliedVolumesByMode { get; }
         }
     }
 }

@@ -174,6 +174,18 @@ export function buildRuntimeCatalog(snapshot, metadataSnapshot, persistedState, 
     originOptions
   };
 }
+
+export function buildCatalog(metadataSnapshot, t) {
+  const lineOptions = buildNativeLineOptions(metadataSnapshot?.lines, t);
+  const depotOptions = buildNativeDepotOptions(metadataSnapshot?.depots);
+  const originOptions = buildNativeOriginOptions(lineOptions);
+
+  return {
+    lineOptions,
+    depotOptions,
+    originOptions
+  };
+}
 export function normalizeRuntimeFeatureSettings(featureSettings) {
   if (!featureSettings || typeof featureSettings !== "object") {
     return { ...DEFAULT_RUNTIME_FEATURE_SETTINGS };

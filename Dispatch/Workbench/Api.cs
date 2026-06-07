@@ -7,23 +7,21 @@ namespace RapidTransitMod.Dispatch.Workbench
     {
         private const string LegacyReadonlyMessage = "Legacy EUIS workbench is now read-only. Use the Dispatch Workbench schedule panel to edit and apply timetables.";
 
-        internal static string Load()
+        internal static string Load(string requestJson)
         {
-            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Load() ?? string.Empty;
-            UiEvents.PushJson(snapshotJson);
+            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Load(requestJson) ?? string.Empty;
             return snapshotJson;
         }
 
-        internal static string Refresh()
+        internal static string Refresh(string requestJson)
         {
-            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Refresh() ?? string.Empty;
-            UiEvents.PushJson(snapshotJson);
+            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Refresh(requestJson) ?? string.Empty;
             return snapshotJson;
         }
 
-        internal static string Meta()
+        internal static string Meta(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Meta() ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Meta(requestJson) ?? string.Empty;
         }
 
         internal static string Save(string requestJson)
@@ -56,7 +54,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         private static string BuildLegacy()
         {
-            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Refresh() ?? string.Empty;
+            string snapshotJson = DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Refresh("{}") ?? string.Empty;
             DispatchWorkbenchSnapshot snapshot = Json.Read<DispatchWorkbenchSnapshot>(snapshotJson);
             DispatchWorkbenchSaveResult result = new DispatchWorkbenchSaveResult
             {

@@ -33,25 +33,33 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal Saves Saves { get; }
         internal Persist Persist { get; }
 
-        internal string Load()
+        internal string Load(ModeScope scope)
         {
             Ready();
             return Workbenches.Json.Write(
-                Snapshot.Build(null, Host.Version(), "game-backend"));
+                Snapshot.Build(null, scope.Mode, Host.Version(), "game-backend"));
         }
 
-        internal string Refresh()
+        internal string Refresh(ModeScope scope, string preferredLineId)
         {
             Ready();
             return Workbenches.Json.Write(
-                Snapshot.Build(Drafts.Preferred(), Host.Version(), "game-backend"));
+                Snapshot.Build(
+                    !string.IsNullOrEmpty(preferredLineId) ? preferredLineId : Drafts.Preferred(scope.Mode),
+                    scope.Mode,
+                    Host.Version(),
+                    "game-backend"));
         }
 
-        internal string Meta()
+        internal string Meta(ModeScope scope, string preferredLineId)
         {
             Ready();
             return Workbenches.Json.Write(
-                Snapshot.Meta(Drafts.Preferred(), Host.Version(), "game-backend"));
+                Snapshot.Meta(
+                    !string.IsNullOrEmpty(preferredLineId) ? preferredLineId : Drafts.Preferred(scope.Mode),
+                    scope.Mode,
+                    Host.Version(),
+                    "game-backend"));
         }
 
         internal string Save(string requestJson)

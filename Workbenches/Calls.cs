@@ -14,9 +14,9 @@ namespace RapidTransitMod.Workbenches
                 && BindLocale();
         }
 
-        internal static string Load()
+        internal static string Load(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_PlannerApi?.Load() ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_PlannerApi?.Load(requestJson) ?? string.Empty;
         }
 
         internal static string Start(string requestJson)
@@ -52,9 +52,9 @@ namespace RapidTransitMod.Workbenches
                 return false;
             }
 
-            view.BindCall(ApiHost.Prefix + "loadSnapshot", new Func<string>(global::RapidTransitMod.Dispatch.Workbench.Api.Load));
-            view.BindCall(ApiHost.Prefix + "refreshSnapshot", new Func<string>(global::RapidTransitMod.Dispatch.Workbench.Api.Refresh));
-            view.BindCall(ApiHost.Prefix + "refreshMetadata", new Func<string>(global::RapidTransitMod.Dispatch.Workbench.Api.Meta));
+            view.BindCall(ApiHost.Prefix + "loadSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Load));
+            view.BindCall(ApiHost.Prefix + "refreshSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Refresh));
+            view.BindCall(ApiHost.Prefix + "refreshMetadata", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Meta));
             view.BindCall(ApiHost.Prefix + "saveWorkbenchDraft", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Legacy));
             view.BindCall(ApiHost.Prefix + "saveNativeWorkbenchDraft", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Save));
             view.BindCall(ApiHost.Prefix + "startNativeSaveOperation", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Start));
@@ -76,7 +76,7 @@ namespace RapidTransitMod.Workbenches
             view.BindCall(ApiHost.Prefix + "loadBroadcastAssetBrowser", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Browse));
             view.BindCall(ApiHost.Prefix + "importBroadcastExternalAssets", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Import));
             view.BindCall(ApiHost.Prefix + "deleteBroadcastAsset", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Delete));
-            view.BindCall(ApiHost.Prefix + "deleteAllBroadcastAssets", new Func<string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.DeleteAll));
+            view.BindCall(ApiHost.Prefix + "deleteAllBroadcastAssets", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.DeleteAll));
             view.BindCall(ApiHost.Prefix + "saveBroadcastStationBinding", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.SaveMap));
             view.BindCall(ApiHost.Prefix + "saveBroadcastStationBindings", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.SaveMaps));
             view.BindCall(ApiHost.Prefix + "autoBindBroadcastStationMappings", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.AutoMap));
@@ -84,7 +84,7 @@ namespace RapidTransitMod.Workbenches
             view.BindCall(ApiHost.Prefix + "saveBroadcastPlatformAnnouncement", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.SavePlatform));
             view.BindCall(ApiHost.Prefix + "copyBroadcastPlatformAnnouncementToAllStations", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.CopyPlatform));
             view.BindCall(ApiHost.Prefix + "applyBroadcastConfig", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Apply));
-            view.BindCall(ApiHost.Prefix + "openBroadcastAssetDirectoryPicker", new Func<string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Pick));
+            view.BindCall(ApiHost.Prefix + "openBroadcastAssetDirectoryPicker", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Pick));
             view.BindCall(ApiHost.Prefix + "playBroadcastAssetPreview", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Play));
             view.BindCall(ApiHost.Prefix + "stopBroadcastAssetPreview", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.Stop));
             view.BindCall(ApiHost.Prefix + "playBroadcastRulePreview", new Func<string, string>(global::RapidTransitMod.Broadcasting.WorkbenchBackend.Api.PlayRule));
@@ -103,8 +103,8 @@ namespace RapidTransitMod.Workbenches
                 return false;
             }
 
-            view.BindCall(ApiHost.Prefix + "loadPlannerContext", new Func<string>(Load));
-            view.BindCall(ApiHost.Prefix + "exportPlannerInput", new Func<string>(Load));
+            view.BindCall(ApiHost.Prefix + "loadPlannerContext", new Func<string, string>(Load));
+            view.BindCall(ApiHost.Prefix + "exportPlannerInput", new Func<string, string>(Load));
             view.BindCall(ApiHost.Prefix + "startPlannerJob", new Func<string, string>(Start));
             view.BindCall(ApiHost.Prefix + "getPlannerJobStatus", new Func<string, string>(Status));
             view.BindCall(ApiHost.Prefix + "runPlanner", new Func<string, string>(Run));

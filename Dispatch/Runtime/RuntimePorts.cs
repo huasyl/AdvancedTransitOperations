@@ -69,6 +69,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 ResolveVehicleLine = runtime.m_Resolve.Line,
                 ResolveBypassBuilding = runtime.m_Resolve.PassingStation,
                 EnsureBypassBuffer = runtime.m_BypassStore.Ensure,
+                InvalidateBypassModel = () =>
+                {
+                    runtime.m_Bypass.ClearAll();
+                    runtime.m_TrackModel.InvalidateAll();
+                },
                 ReadLap = runtime.m_LapCache.Read,
                 ReadDispatch = runtime.m_DispatchCache.Read,
                 RouteVehicles = runtime.GetBufferLookup<RouteVehicle>,

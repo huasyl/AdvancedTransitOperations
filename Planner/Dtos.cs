@@ -6,6 +6,8 @@ namespace RapidTransitMod
     public class DispatchPlannerRequest
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public string draftKey;
         [DataMember]
         public string analysisWindowId;
@@ -52,6 +54,8 @@ namespace RapidTransitMod
     [DataContract]
     public class DispatchPlannerRequestEchoDto
     {
+        [DataMember]
+        public string mode;
         [DataMember]
         public string draftKey;
         [DataMember]
@@ -729,6 +733,8 @@ namespace RapidTransitMod
     public class DispatchPlannerResult
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public bool success;
         [DataMember]
         public string engineVersion;
@@ -758,6 +764,8 @@ namespace RapidTransitMod
     public class DispatchPlannerJobStatusDto
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public bool success;
         [DataMember]
         public string jobId;
@@ -772,6 +780,8 @@ namespace RapidTransitMod
     [DataContract]
     public class DispatchPlannerExportSnapshot
     {
+        [DataMember]
+        public string mode;
         [DataMember]
         public string version;
         [DataMember]

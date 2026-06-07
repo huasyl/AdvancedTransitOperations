@@ -1063,6 +1063,40 @@ namespace RapidTransitMod.Broadcasting
             m_Diagnostics.ClearPlatformApproach();
         }
 
+        internal void ClearAssetState(ModeScope scope)
+        {
+            foreach (string key in m_AnnouncementCooldownUntilFrame.Keys
+                .Where(key => ScopeMatchesStateKey(scope, key))
+                .ToArray())
+            {
+                m_AnnouncementCooldownUntilFrame.Remove(key);
+            }
+
+            foreach (string key in m_StationBusyUntilFrame.Keys
+                .Where(key => ScopeMatchesStateKey(scope, key))
+                .ToArray())
+            {
+                m_StationBusyUntilFrame.Remove(key);
+            }
+
+            foreach (string key in m_StationQuietSinceFrame.Keys
+                .Where(key => ScopeMatchesStateKey(scope, key))
+                .ToArray())
+            {
+                m_StationQuietSinceFrame.Remove(key);
+            }
+
+            foreach (Entity vehicle in m_ApproachStateByVehicle
+                .Where(entry => MatchesRuntimeScope(scope, entry.Value.LineId))
+                .Select(entry => entry.Key)
+                .ToArray())
+            {
+                m_ApproachStateByVehicle.Remove(vehicle);
+            }
+
+            m_Diagnostics.ClearPlatformApproach();
+        }
+
         internal void Preparing(
             Entity vehicle,
             Entity line,
@@ -1817,6 +1851,33 @@ namespace RapidTransitMod.Broadcasting
         private static string StationStateKey(string lineId, string stationId)
         {
             return (lineId ?? string.Empty) + "|" + (stationId ?? string.Empty);
+        }
+
+        private static bool ScopeMatchesStateKey(ModeScope scope, string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return false;
+            }
+
+            int separator = key.IndexOf('|');
+            string lineId = separator >= 0 ? key.Substring(0, separator) : key;
+            return MatchesRuntimeScope(scope, lineId);
+        }
+
+        private static bool MatchesRuntimeScope(ModeScope scope, string lineId)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+            {
+                return false;
+            }
+
+            if (LineIdentityService.TryGetMode(lineId, out TransitMode mode) && mode != TransitMode.Unknown)
+            {
+                return mode == scope.Mode;
+            }
+
+            return lineId.IndexOf(':') < 0 && scope.Mode == ModeScope.DefaultWorkbench.Mode;
         }
 
 

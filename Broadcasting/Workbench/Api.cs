@@ -2,24 +2,24 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 {
     internal static class Api
     {
-        internal static string Load(string preferredLineId)
+        internal static string Load(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.LoadBroadcastWorkbenchSnapshotJson(preferredLineId) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.LoadBroadcastWorkbenchSnapshotJson(requestJson) ?? string.Empty;
         }
 
-        internal static string Refresh(string preferredLineId)
+        internal static string Refresh(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.RefreshBroadcastWorkbenchSnapshotJson(preferredLineId) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.RefreshBroadcastWorkbenchSnapshotJson(requestJson) ?? string.Empty;
         }
 
-        internal static string Hints(string lineId)
+        internal static string Hints(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.LoadBroadcastBindingSlotHintsJson(lineId) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.LoadBroadcastBindingSlotHintsJson(requestJson) ?? string.Empty;
         }
 
-        internal static string Browse(string requestedPath)
+        internal static string Browse(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.LoadBroadcastAssetBrowserJson(requestedPath) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.LoadBroadcastAssetBrowserJson(requestJson) ?? string.Empty;
         }
 
         internal static string Import(string requestJson)
@@ -27,14 +27,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.ImportBroadcastExternalAssetsJson(requestJson) ?? string.Empty;
         }
 
-        internal static string Delete(string assetName)
+        internal static string Delete(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.DeleteBroadcastAssetJson(assetName) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.DeleteBroadcastAssetJson(requestJson) ?? string.Empty;
         }
 
-        internal static string DeleteAll()
+        internal static string DeleteAll(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.DeleteAllBroadcastAssetsJson() ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.DeleteAllBroadcastAssetsJson(requestJson) ?? string.Empty;
         }
 
         internal static string SaveMap(string requestJson)
@@ -47,9 +47,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.SaveBroadcastStationBindingsJson(requestJson) ?? string.Empty;
         }
 
-        internal static string AutoMap(string lineId)
+        internal static string AutoMap(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.AutoBindBroadcastStationMappingsJson(lineId) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.AutoBindBroadcastStationMappingsJson(requestJson) ?? string.Empty;
         }
 
         internal static string SaveRules(string requestJson)
@@ -72,19 +72,19 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.ApplyBroadcastConfigJson(requestJson) ?? string.Empty;
         }
 
-        internal static string Pick()
+        internal static string Pick(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.OpenBroadcastAssetDirectoryPickerJson() ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.OpenBroadcastAssetDirectoryPickerJson(requestJson) ?? string.Empty;
         }
 
-        internal static string Play(string assetName)
+        internal static string Play(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.PlayBroadcastAssetPreviewJson(assetName) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.PlayBroadcastAssetPreviewJson(requestJson) ?? string.Empty;
         }
 
-        internal static string Stop(string assetName)
+        internal static string Stop(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.StopBroadcastAssetPreviewJson(assetName) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.StopBroadcastAssetPreviewJson(requestJson) ?? string.Empty;
         }
 
         internal static string PlayRule(string requestJson)
@@ -92,9 +92,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.PlayBroadcastRulePreviewJson(requestJson) ?? string.Empty;
         }
 
-        internal static string StopRule(string ruleId)
+        internal static string StopRule(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.StopBroadcastRulePreviewJson(ruleId) ?? string.Empty;
+            return DispatchRuntimeSystem.Instance?.m_AnnouncementWorkbench?.StopBroadcastRulePreviewJson(requestJson) ?? string.Empty;
         }
 
         internal static string Volume(string volumeJson)

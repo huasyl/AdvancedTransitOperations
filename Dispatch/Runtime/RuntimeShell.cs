@@ -134,6 +134,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_LastVehicleCacheFlushFrame = nowFrame;
             }
 
+            if ((nowFrame & 63u) == 0u)
+            {
+                m_Runtime.m_WorkbenchBridge.CatalogMonitor().Check();
+            }
+
             m_Runtime.m_Bypass.FlushProbeLogs(nowFrame);
         }
 

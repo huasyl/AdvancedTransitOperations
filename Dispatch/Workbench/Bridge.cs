@@ -45,6 +45,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private Trips m_Trips;
         private Workbench m_Workbench;
         private AppliedTimetable m_Applied;
+        private CatalogMonitor m_CatalogMonitor;
         private ulong m_Version = 1;
         private string m_LastSnapshotLogKey = string.Empty;
         private static readonly bool EnableIntegrity = true;
@@ -422,7 +423,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Saves = new Saves(
                 Commands(),
                 Persist(),
-                lineId => Snapshot().Build(lineId, host.Version(), "game-backend"),
+                (scope, lineId) => Snapshot().Build(lineId, scope.Mode, host.Version(), "game-backend"),
                 host.Version,
                 host.Ui.Error,
                 host.Ui.Fault,
@@ -460,22 +461,28 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Runtime.m_Features.Reset();
             m_Runtime.m_LineView.Clear();
             Depots().Clear();
+            CatalogMonitor().Reset();
             m_LastSnapshotLogKey = string.Empty;
         }
 
-        internal string Load()
+        internal string Load(string requestJson)
         {
-            return Root().Load();
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadSnapshot");
+            return Root().Load(scope);
         }
 
-        internal string Refresh()
+        internal string Refresh(string requestJson)
         {
-            return Root().Refresh();
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "refreshSnapshot");
+            string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
+            return Root().Refresh(scope, preferredLineId);
         }
 
-        internal string Meta()
+        internal string Meta(string requestJson)
         {
-            return Root().Meta();
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "refreshMetadata");
+            string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
+            return Root().Meta(scope, preferredLineId);
         }
 
         internal string Save(string requestJson)
@@ -499,9 +506,23 @@ namespace RapidTransitMod.Dispatch.Workbench
             return m_Version;
         }
 
+        internal CatalogMonitor CatalogMonitor()
+        {
+            if (m_CatalogMonitor != null)
+                return m_CatalogMonitor;
+
+            m_CatalogMonitor = new CatalogMonitor(
+                mode => Snapshot().Meta(string.Empty, mode, m_Version, "game-backend"),
+                mode => Query().GetLines(mode),
+                line => Query().GetStations(line),
+                Workbenches.UiEvents.Push,
+                () => m_Version);
+            return m_CatalogMonitor;
+        }
+
         internal DispatchWorkbenchSnapshot Build(string preferredLineId)
         {
-            return Snapshot().Build(preferredLineId, m_Version, "game-backend");
+            return Snapshot().Build(preferredLineId, ModeScope.DefaultWorkbench.Mode, m_Version, "game-backend");
         }
 
         internal bool Restore()

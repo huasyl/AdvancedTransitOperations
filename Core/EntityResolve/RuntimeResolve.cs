@@ -70,13 +70,6 @@ namespace RapidTransitMod
             if (entity == Entity.Null || !m_Runtime.EntityManager.Exists(entity))
                 return Entity.Null;
 
-            if (preferredRoute != Entity.Null
-                && m_Runtime.EntityManager.Exists(preferredRoute)
-                && m_Runtime.EntityManager.HasComponent<TransportLine>(preferredRoute))
-            {
-                return preferredRoute;
-            }
-
             if (m_Runtime.EntityManager.HasComponent<TransportLine>(entity))
                 return entity;
 
@@ -88,9 +81,10 @@ namespace RapidTransitMod
             }
 
             var routes = new List<Entity>(4);
-            TryStationRoutes(entity, routes);
-            if (routes.Count == 0)
-                TryStopRoutes(entity, routes);
+            CollectSelectionRoutes(entity, routes);
+
+            if (IsTransportLine(preferredRoute) && PreferredRouteMatchesSelection(entity, preferredRoute, routes))
+                return preferredRoute;
 
             Entity bestRoute = Entity.Null;
             for (int i = 0; i < routes.Count; i++)
@@ -285,6 +279,74 @@ namespace RapidTransitMod
             return found;
         }
 
+        private void CollectSelectionRoutes(Entity entity, List<Entity> routes)
+        {
+            TryStationRoutes(entity, routes);
+            if (routes.Count != 0)
+                return;
+
+            TryStopRoutes(entity, routes);
+            if (routes.Count != 0)
+                return;
+
+            Entity stop = Stop(entity);
+            if (stop != Entity.Null && stop != entity)
+            {
+                TryStopRoutes(stop, routes);
+                if (routes.Count != 0)
+                    return;
+
+                Entity station = StationOf(stop);
+                if (station != Entity.Null && station != entity)
+                {
+                    TryStationRoutes(station, routes);
+                    if (routes.Count != 0)
+                        return;
+                }
+            }
+
+            Entity passingStation = PassingStation(entity);
+            if (passingStation != Entity.Null && passingStation != entity)
+                TryStationRoutes(passingStation, routes);
+        }
+
+        private bool PreferredRouteMatchesSelection(Entity entity, Entity preferredRoute, List<Entity> routes)
+        {
+            if (routes.Contains(preferredRoute))
+                return true;
+
+            if (!m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(preferredRoute))
+                return false;
+
+            Entity selectedStop = Stop(entity);
+            Entity selectedStation = selectedStop != Entity.Null ? StationOf(selectedStop) : Entity.Null;
+            if (selectedStation == Entity.Null && m_Runtime.EntityManager.HasComponent<Building>(entity))
+                selectedStation = entity;
+            if (selectedStation == Entity.Null)
+                selectedStation = PassingStation(entity);
+
+            DynamicBuffer<RouteWaypoint> waypoints = m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(preferredRoute, true);
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                if (waypoint == entity)
+                    return true;
+
+                Entity routeStop = Stop(waypoint);
+                if (routeStop != Entity.Null && routeStop == selectedStop)
+                    return true;
+
+                if (selectedStation == Entity.Null)
+                    continue;
+
+                Entity routeStation = routeStop != Entity.Null ? StationOf(routeStop) : PassingStation(waypoint);
+                if (routeStation != Entity.Null && routeStation == selectedStation)
+                    return true;
+            }
+
+            return false;
+        }
+
         private bool TryStopRoutes(Entity entity, List<Entity> routes)
         {
             if (entity == Entity.Null || !m_Runtime.EntityManager.Exists(entity))
@@ -312,6 +374,13 @@ namespace RapidTransitMod
             }
 
             return found;
+        }
+
+        private bool IsTransportLine(Entity entity)
+        {
+            return entity != Entity.Null
+                && m_Runtime.EntityManager.Exists(entity)
+                && m_Runtime.EntityManager.HasComponent<TransportLine>(entity);
         }
 
         private bool SelectableStation(Entity building)

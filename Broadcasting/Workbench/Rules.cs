@@ -36,16 +36,25 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveBroadcastRules");
+                        using (UseScope(scope))
+                        {
                         BroadcastWorkbenchSaveRulesRequest request =
                             global::RapidTransitMod.Workbenches.Json.Read<BroadcastWorkbenchSaveRulesRequest>(requestJson);
-                        string lineId = request?.lineId ?? string.Empty;
+                        string lineId = scope.NormalizeLineId(request?.lineId);
                         if (string.IsNullOrWhiteSpace(lineId))
                         {
                             result.error = "Line is missing.";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
+                        if (!scope.MatchesLineId(lineId))
+                        {
+                            result.error = "Line does not belong to mode " + scope.Token + ".";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
 
                         List<BroadcastWorkbenchRuleDto> normalizedRules = Normalize(request?.rules);
+                        ValidateCatalog(normalizedRules);
                         if (normalizedRules.Count == 0)
                         {
                             DraftRules.Remove(lineId);
@@ -60,7 +69,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.success = true;
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(lineId));
+                            m_Ctx.Snapshot.Build(scope, lineId));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -169,6 +179,46 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         right?.Select(Clone).Where(rule => rule != null).ToArray()
                         ?? Array.Empty<BroadcastWorkbenchRuleDto>());
                     return string.Equals(leftJson, rightJson, StringComparison.Ordinal);
+                }
+
+                internal void ValidateCatalog(IEnumerable<BroadcastWorkbenchRuleDto> rules)
+                {
+                    if (rules == null)
+                    {
+                        return;
+                    }
+
+                    foreach (BroadcastWorkbenchRuleDto rule in rules)
+                    {
+                        ValidateNodeCatalog(rule?.nodes);
+                    }
+                }
+
+                internal void ValidateNodeCatalog(IEnumerable<BroadcastWorkbenchRuleNodeDto> nodes)
+                {
+                    if (nodes == null)
+                    {
+                        return;
+                    }
+
+                    foreach (BroadcastWorkbenchRuleNodeDto node in nodes)
+                    {
+                        if (node == null || !string.Equals(node.type, "asset", StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        string assetName = node.name ?? string.Empty;
+                        if (string.IsNullOrEmpty(assetName))
+                        {
+                            continue;
+                        }
+
+                        if (!Catalog.Any(asset => string.Equals(asset?.name, assetName, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            throw new InvalidOperationException("Selected asset was not found.");
+                        }
+                    }
                 }
 
                 internal static BroadcastWorkbenchRuleDto Clone(BroadcastWorkbenchRuleDto rule)

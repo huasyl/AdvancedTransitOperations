@@ -100,7 +100,7 @@ namespace RapidTransitMod
             if (!isInspectableVehicle && !isInspectableLine)
             {
                 TrackPendingSelection(selectedEntity, selectedRoute, currentFrame);
-                if (m_LastVisible && HasSelectionSettled(currentFrame))
+                if (HasSelectionSettled(currentFrame))
                 {
                     ResetState(clearSnapshot: true);
                     SetHidden();

@@ -55,6 +55,49 @@ namespace RapidTransitMod.TrackModel
                     : 0;
         }
 
+        internal void EnsureBypassPipelineReady(LineTrackChain chain, ModeScope scope)
+        {
+            if (chain == null)
+                return;
+
+            TrackModelBuilder scopedIndex = new TrackModelBuilder();
+            uint scopedVersion = m_Shared.BuildScopedSharedTrackIndex(scope, scopedIndex);
+            ResetBypassPipeline(chain);
+            m_Shared.RefreshSharedRuns(chain, scopedIndex, scopedVersion);
+            RefreshControlEdgeSharedSpans(chain);
+            RefreshBypassProtectedIntervals(chain);
+            RefreshProtectedSharedIntervals(chain);
+            RefreshProtectedIntervalSummaries(chain);
+
+            chain.BypassPipelineReadyVersion =
+                chain.SharedRunsVersion == scopedVersion
+                && chain.ControlEdgeSharedSpansReady
+                && chain.BypassProtectedIntervalsReady
+                && chain.ProtectedSharedIntervalsReady
+                && chain.ProtectedIntervalSummariesReady
+                    ? scopedVersion
+                    : 0;
+        }
+
+        internal static void ResetBypassPipeline(LineTrackChain chain)
+        {
+            if (chain == null)
+                return;
+
+            chain.SharedRuns.Clear();
+            chain.SharedRunsByOtherLine.Clear();
+            chain.ControlEdgeSharedSpans.Clear();
+            chain.BypassProtectedIntervals.Clear();
+            chain.ProtectedSharedIntervals.Clear();
+            chain.ProtectedIntervalSummaries.Clear();
+            chain.SharedRunsVersion = 0;
+            chain.BypassPipelineReadyVersion = 0;
+            chain.ControlEdgeSharedSpansReady = false;
+            chain.BypassProtectedIntervalsReady = false;
+            chain.ProtectedSharedIntervalsReady = false;
+            chain.ProtectedIntervalSummariesReady = false;
+        }
+
         private void EnsureLocalBypassWaypointScenesReady(
             LineTrackChain chain,
             DynamicBuffer<RouteWaypoint> waypoints)

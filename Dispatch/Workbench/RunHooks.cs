@@ -36,6 +36,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_LineView.Clear();
                 },
                 settings => m_LineCfg().Same(settings),
+                (mode, settings) =>
+                {
+                    m_LineCfg().Apply(mode, settings);
+                    m_Depots().Clear();
+                    m_LineView.Clear();
+                },
+                (mode, settings) => m_LineCfg().Same(mode, settings),
                 () =>
                 {
                     m_LineCfg().Clear();

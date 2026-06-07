@@ -72,6 +72,8 @@ namespace RapidTransitMod.TrackModel
         internal void EnsureSharedTrackIndexCurrent() => m_Shared.EnsureSharedTrackIndexCurrent();
         internal void RefreshSharedRuns(LineTrackChain chain) => m_Shared.RefreshSharedRuns(chain);
         internal void EnsureBypassPipelineReady(LineTrackChain chain) => m_Intervals.EnsureBypassPipelineReady(chain);
+        internal void EnsureBypassPipelineReady(LineTrackChain chain, ModeScope scope) => m_Intervals.EnsureBypassPipelineReady(chain, scope);
+        internal void ResetBypassPipeline(LineTrackChain chain) => TrackIntervals.ResetBypassPipeline(chain);
         internal bool TryResolveBypassProtectedInterval(LineTrackChain chain, DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out int protectedIntervalIndex, out BypassProtectedInterval protectedInterval) => m_Intervals.TryResolveBypassProtectedInterval(chain, waypoints, currentWaypointIndex, out protectedIntervalIndex, out protectedInterval);
         internal bool TryGetLocalSceneSnapshot(Entity line, DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out LineTrackChain chain, out LocalBypassSceneStaticSnapshot snapshot) => m_Intervals.TryGetLocalSceneSnapshot(line, waypoints, currentWaypointIndex, out chain, out snapshot);
         internal bool TryGetLocalScene(Entity line, DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out LineTrackChain chain, out SceneDefinition scene) => m_Intervals.TryGetLocalScene(line, waypoints, currentWaypointIndex, out chain, out scene);

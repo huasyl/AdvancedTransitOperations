@@ -25,23 +25,42 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
     {
         internal Snapshot(Context context) : base(context) { }
 
-                public string LoadBroadcastWorkbenchSnapshotJson(string preferredLineId)
+                public string LoadBroadcastWorkbenchSnapshotJson(string requestJson)
                 {
+                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadBroadcastSnapshot");
+                    string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
                     LoadWorkbench();
-                    return global::RapidTransitMod.Workbenches.Json.Write(Build(preferredLineId));
+                    using (UseScope(scope))
+                    {
+                        return global::RapidTransitMod.Workbenches.Json.Write(Build(scope, preferredLineId));
+                    }
                 }
 
-                public string RefreshBroadcastWorkbenchSnapshotJson(string preferredLineId)
+                public string RefreshBroadcastWorkbenchSnapshotJson(string requestJson)
                 {
+                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "refreshBroadcastSnapshot");
+                    string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
                     LoadWorkbench();
-                    return global::RapidTransitMod.Workbenches.Json.Write(Build(preferredLineId));
+                    using (UseScope(scope))
+                    {
+                        return global::RapidTransitMod.Workbenches.Json.Write(Build(scope, preferredLineId));
+                    }
                 }
 
                 internal BroadcastWorkbenchSnapshot Build(string lineId)
                 {
+                    return Build(CurrentScope, lineId);
+                }
+
+                internal BroadcastWorkbenchSnapshot Build(ModeScope scope, string lineId)
+                {
                     LoadWorkbench();
 
-                    List<WorkbenchLineRuntime> runtimeLines = Lines();
+                    using (UseScope(scope))
+                    {
+                    List<WorkbenchLineRuntime> runtimeLines = Lines()
+                        .Where(line => line != null && scope.MatchesLineId(line.Id))
+                        .ToList();
                     WorkbenchLineRuntime activeRuntime = FindLine(runtimeLines, lineId);
                     List<StationGroup> stationGroups = new List<StationGroup>();
                     if (activeRuntime != null
@@ -76,11 +95,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     return new BroadcastWorkbenchSnapshot
                     {
+                        mode = scope.Token,
                         selectedLineId = activeLineId,
                         lines = runtimeLines.Select(Line).ToArray(),
                         stations = stationGroups
                             .Where(group => group?.Representative != null)
-                            .Select(group => CloneDispatchWorkbenchStationDto(group.Representative))
+                            .Select(group => CloneDispatchWorkbenchStationDto(
+                                group.Representative,
+                                group.StopEntity,
+                                group.AnchorEntity))
                             .ToArray(),
                         turnbackPoints = activeRuntime != null
                             ? Turnbacks(activeRuntime.Entity, stationGroups)
@@ -102,6 +125,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             ? m_Ctx.Snapshot.Warnings(activeRuntime.Id)
                             : Array.Empty<string>()
                     };
+                    }
                 }
 
                 internal WorkbenchLineRuntime LineRuntime(string lineId)
@@ -116,7 +140,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         runtime != null && string.Equals(runtime.Id, lineId, StringComparison.Ordinal));
                 }
 
-                internal static Dictionary<string, string> StationNames(
+                internal Dictionary<string, string> StationNames(
                     List<StationGroup> stationGroups)
                 {
                     Dictionary<string, string> stationNameBySak =
@@ -132,11 +156,43 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         string sak = group?.Representative?.id ?? string.Empty;
                         if (!string.IsNullOrWhiteSpace(sak))
                         {
-                            stationNameBySak[sak] = group?.Representative?.name ?? string.Empty;
+                            stationNameBySak[sak] = StationName(group);
                         }
                     }
 
                     return stationNameBySak;
+                }
+
+                internal string StationName(StationGroup group)
+                {
+                    if (group == null)
+                    {
+                        return string.Empty;
+                    }
+
+                    return StationName(
+                        group.StopEntity,
+                        group.AnchorEntity,
+                        group.Representative?.name ?? string.Empty);
+                }
+
+                internal string StationName(
+                    Entity stopEntity,
+                    Entity anchorEntity,
+                    string fallbackName)
+                {
+                    string name = string.Empty;
+                    if (stopEntity != Entity.Null)
+                    {
+                        name = m_Access.StationName(stopEntity);
+                    }
+                    if (string.IsNullOrWhiteSpace(name) && anchorEntity != Entity.Null)
+                    {
+                        name = m_Access.Name(anchorEntity);
+                    }
+                    return string.IsNullOrWhiteSpace(name)
+                        ? fallbackName ?? string.Empty
+                        : name;
                 }
 
                 internal List<StationGroup> Groups(Entity line)
@@ -173,6 +229,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             group = new StationGroup
                             {
                                 Key = key,
+                                StopEntity = station.StopEntity,
                                 AnchorEntity = station.AnchorEntity,
                                 Representative = new DispatchWorkbenchStationDto
                                 {
@@ -197,17 +254,27 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return groups;
                 }
 
-                internal static DispatchWorkbenchStationDto CloneDispatchWorkbenchStationDto(DispatchWorkbenchStationDto station)
+                internal DispatchWorkbenchStationDto CloneDispatchWorkbenchStationDto(DispatchWorkbenchStationDto station)
+                {
+                    return CloneDispatchWorkbenchStationDto(station, Entity.Null, Entity.Null);
+                }
+
+                internal DispatchWorkbenchStationDto CloneDispatchWorkbenchStationDto(
+                    DispatchWorkbenchStationDto station,
+                    Entity stopEntity,
+                    Entity anchorEntity)
                 {
                     if (station == null)
                     {
                         return null;
                     }
 
+                    string name = StationName(stopEntity, anchorEntity, station.name);
+
                     return new DispatchWorkbenchStationDto
                     {
                         id = station.id ?? string.Empty,
-                        name = station.name ?? string.Empty,
+                        name = name,
                         order = station.order,
                         distance = station.distance,
                         hasSiding = station.hasSiding,
@@ -319,7 +386,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         {
                             index = points.Count + 1,
                             stationId = terminalStationGroup.Representative.id ?? string.Empty,
-                            stationName = terminalStationGroup.Representative.name ?? string.Empty,
+                            stationName = StationName(terminalStationGroup),
                             resolved = true
                         });
                     }

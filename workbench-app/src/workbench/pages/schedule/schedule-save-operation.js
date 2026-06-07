@@ -19,7 +19,21 @@ export function isTerminalSaveOperationState(state) {
   return state === "completed" || state === "failed" || state === "missing" || state === "superseded";
 }
 
-export async function runNativeSaveOperation(workbenchApi, request, { applyDraft = false, shouldContinue = () => true } = {}) {
+function normalizeOperationMode(mode) {
+  return String(mode || "").trim().toLowerCase();
+}
+
+function statusMatchesExpectedMode(status, expectedMode) {
+  const expected = normalizeOperationMode(expectedMode);
+  if (!expected) {
+    return true;
+  }
+
+  const statusMode = normalizeOperationMode(status?.mode || status?.result?.mode);
+  return !statusMode || statusMode === expected;
+}
+
+export async function runNativeSaveOperation(workbenchApi, request, { applyDraft = false, expectedMode = "", shouldContinue = () => true } = {}) {
   const operationDeadline = Date.now() + SAVE_OPERATION_TOTAL_TIMEOUT_MS;
   const startedOperation = await withTimeout(
     workbenchApi.startNativeSaveOperation?.(request),
@@ -28,6 +42,9 @@ export async function runNativeSaveOperation(workbenchApi, request, { applyDraft
   );
   if (!startedOperation?.operationId) {
     throw new Error(startedOperation?.error || "save-operation-start-failed");
+  }
+  if (!statusMatchesExpectedMode(startedOperation, expectedMode)) {
+    return { interrupted: true, superseded: false, result: null, latestStatus: startedOperation };
   }
 
   let latestStatus = startedOperation;
@@ -42,6 +59,9 @@ export async function runNativeSaveOperation(workbenchApi, request, { applyDraft
       SAVE_OPERATION_STATUS_TIMEOUT_MS,
       "save-operation-status-timeout"
     );
+    if (!statusMatchesExpectedMode(latestStatus, expectedMode)) {
+      return { interrupted: true, superseded: false, result: null, latestStatus };
+    }
   }
 
   if (!shouldContinue()) {

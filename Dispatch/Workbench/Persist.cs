@@ -181,6 +181,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             DispatchWorkbenchPersistentState state = new DispatchWorkbenchPersistentState
             {
                 preferredLineId = m_Drafts.GetPreferredLineId(),
+                preferredLineIdsByMode = m_Drafts.GetPreferredLineIdsByMode()
+                    .Select(entry => new DispatchWorkbenchModePreferredLineDto
+                    {
+                        mode = TransitModeCodec.Format(entry.Key),
+                        lineId = entry.Value
+                    })
+                    .ToArray(),
                 lineSettings = lineSettings,
                 drafts = drafts.ToArray(),
                 featureSettings = m_Run.FeatureDto()
@@ -195,12 +202,30 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Run.ClearLineCfg();
             m_Run.DropDepotCache();
             m_Run.Features(persisted?.featureSettings);
-            m_Drafts.SetPreferredLineId(persisted?.preferredLineId ?? string.Empty);
+            bool normalizedLegacy = HasLegacyRestoredState(persisted);
+            m_Drafts.SetPreferredLineId(
+                NormalizeLegacyRestoredLineId(persisted?.preferredLineId ?? string.Empty));
+            if (persisted?.preferredLineIdsByMode != null)
+            {
+                for (int i = 0; i < persisted.preferredLineIdsByMode.Length; i++)
+                {
+                    DispatchWorkbenchModePreferredLineDto preferred = persisted.preferredLineIdsByMode[i];
+                    if (preferred == null
+                        || string.IsNullOrEmpty(preferred.lineId)
+                        || !ModeScope.TryParseWorkbench(preferred.mode, out ModeScope scope)
+                        || !scope.IsSupportedWorkbenchMode)
+                    {
+                        continue;
+                    }
+
+                    m_Drafts.SetPreferredLineId(scope.Mode, preferred.lineId);
+                }
+            }
             m_RestoreCompatState(persisted);
 
             if (persisted?.lineSettings != null)
             {
-                m_Run.LineCfg(persisted.lineSettings);
+                m_Run.LineCfg(NormalizeLegacyLineSettings(persisted.lineSettings));
             }
 
             if (persisted?.drafts == null)
@@ -219,11 +244,14 @@ namespace RapidTransitMod.Dispatch.Workbench
                 string lineKey = !string.IsNullOrEmpty(dto.lineKey)
                     ? dto.lineKey
                     : DraftStore.GetKey(dto.selectedLineId);
-                m_Drafts[lineKey] = CreateDraftStateFromPersisted(lineKey, dto);
+                lineKey = NormalizeLegacyRestoredLineId(lineKey);
+                DispatchWorkbenchDraftState draft = CreateDraftStateFromPersisted(lineKey, dto);
+                NormalizeLegacyRestoredDraftState(draft);
+                m_Drafts[lineKey] = draft;
             }
 
             bool migrated = Migrate();
-            return persisted?.featureSettings == null || migrated;
+            return persisted?.featureSettings == null || migrated || normalizedLegacy;
         }
 
         internal WorkbenchSavePersistencePayload Capture()
@@ -685,6 +713,259 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             return draft;
+        }
+
+        private static DispatchWorkbenchLineSettingDto[] NormalizeLegacyLineSettings(
+            DispatchWorkbenchLineSettingDto[] settings)
+        {
+            if (settings == null)
+                return null;
+
+            return settings.Select(setting => setting == null
+                ? null
+                : new DispatchWorkbenchLineSettingDto
+                {
+                    lineId = NormalizeLegacyRestoredLineId(setting.lineId),
+                    originHoldLimitMinutes = setting.originHoldLimitMinutes,
+                    maxStationDwellMinutes = setting.maxStationDwellMinutes,
+                    allowedDepotId = setting.allowedDepotId,
+                    serviceKind = setting.serviceKind
+                }).ToArray();
+        }
+
+        private static bool HasLegacyRestoredState(DispatchWorkbenchPersistentState persisted)
+        {
+            if (persisted == null)
+                return false;
+
+            if (IsLegacyRestoredLineId(persisted.preferredLineId))
+                return true;
+
+            if (persisted.lineSettings != null
+                && persisted.lineSettings.Any(setting => IsLegacyRestoredLineId(setting?.lineId)))
+            {
+                return true;
+            }
+
+            if (persisted.drafts == null)
+                return false;
+
+            return persisted.drafts.Any(HasLegacyRestoredDraftState);
+        }
+
+        private static bool HasLegacyRestoredDraftState(
+            DispatchWorkbenchPersistedDraftState draft)
+        {
+            return draft != null
+                && (IsLegacyRestoredLineId(draft.lineKey)
+                    || IsLegacyRestoredLineId(draft.selectedLineId)
+                    || IsLegacyRestoredLineId(draft.selectedEditLine)
+                    || HasLegacyRestoredMergedView(draft.mergedView)
+                    || HasLegacyRestoredRows(draft.manualRows)
+                    || HasLegacyRestoredRules(draft.autoRules)
+                    || HasLegacyRestoredRows(draft.lineDraftRows)
+                    || HasLegacyRestoredPlanContract(draft.plannerImportContract));
+        }
+
+        private static bool HasLegacyRestoredMergedView(DispatchWorkbenchMergedView view)
+        {
+            return view != null
+                && (IsLegacyRestoredLineId(view.localLineId)
+                    || IsLegacyRestoredLineId(view.expressLineId)
+                    || HasLegacyRestoredLineIds(view.localLineIds)
+                    || HasLegacyRestoredLineIds(view.expressLineIds));
+        }
+
+        private static bool HasLegacyRestoredRows(
+            DispatchWorkbenchManualRowDto[] rows)
+        {
+            return rows != null && rows.Any(row => IsLegacyRestoredLineId(row?.lineId));
+        }
+
+        private static bool HasLegacyRestoredRules(
+            DispatchWorkbenchAutoRuleDto[] rules)
+        {
+            return rules != null && rules.Any(rule => IsLegacyRestoredLineId(rule?.lineId));
+        }
+
+        private static bool HasLegacyRestoredRows(
+            DispatchWorkbenchStagedRowDto[] rows)
+        {
+            return rows != null && rows.Any(row => IsLegacyRestoredLineId(row?.lineId));
+        }
+
+        private static bool HasLegacyRestoredPlanContract(
+            DispatchWorkbenchPlannerImportContractDto contract)
+        {
+            if (contract == null)
+                return false;
+
+            return IsLegacyRestoredLineId(contract.draftKey)
+                || HasLegacyRestoredLineIds(contract.importedLineIds)
+                || IsLegacyRestoredLineId(contract.requestEcho?.draftKey)
+                || HasLegacyRestoredLineIds(contract.requestEcho?.localLineIds)
+                || HasLegacyRestoredLineIds(contract.requestEcho?.adjustableLineIds)
+                || IsLegacyRestoredLineId(contract.requestEcho?.expressLineId)
+                || IsLegacyRestoredLineId(contract.requestEcho?.virtualExpressBaseLineId);
+        }
+
+        private static bool HasLegacyRestoredLineIds(string[] lineIds)
+        {
+            return lineIds != null && lineIds.Any(IsLegacyRestoredLineId);
+        }
+
+        private static void NormalizeLegacyRestoredDraftState(DispatchWorkbenchDraftState draft)
+        {
+            if (draft == null)
+                return;
+
+            draft.SelectedLineId = NormalizeLegacyRestoredLineId(draft.SelectedLineId);
+            draft.SelectedEditLine = NormalizeLegacyRestoredLineReference(draft.SelectedEditLine);
+            NormalizeLegacyRestoredMergedView(draft.MergedView);
+            NormalizeLegacyRestoredManualRows(draft.ManualRows);
+            NormalizeLegacyRestoredAutoRules(draft.AutoRules);
+            NormalizeLegacyRestoredStagedRows(draft.StagedRows);
+            NormalizeLegacyRestoredPlanContract(draft.PlannerImportContract);
+        }
+
+        private static void NormalizeLegacyRestoredMergedView(DispatchWorkbenchMergedView view)
+        {
+            if (view == null)
+                return;
+
+            view.localLineId = NormalizeLegacyRestoredLineId(view.localLineId);
+            view.expressLineId = NormalizeLegacyRestoredLineId(view.expressLineId);
+            view.localLineIds = NormalizeLegacyRestoredLineIds(view.localLineIds);
+            view.expressLineIds = NormalizeLegacyRestoredLineIds(view.expressLineIds);
+        }
+
+        private static void NormalizeLegacyRestoredManualRows(
+            List<DispatchWorkbenchManualRowDto> rows)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (rows[i] != null)
+                {
+                    rows[i].lineId = NormalizeLegacyRestoredLineId(rows[i].lineId);
+                }
+            }
+        }
+
+        private static void NormalizeLegacyRestoredAutoRules(
+            List<DispatchWorkbenchAutoRuleDto> rules)
+        {
+            if (rules == null)
+                return;
+
+            for (int i = 0; i < rules.Count; i++)
+            {
+                if (rules[i] != null)
+                {
+                    rules[i].lineId = NormalizeLegacyRestoredLineId(rules[i].lineId);
+                }
+            }
+        }
+
+        private static void NormalizeLegacyRestoredStagedRows(
+            List<DispatchWorkbenchStagedRowDto> rows)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (rows[i] != null)
+                {
+                    rows[i].lineId = NormalizeLegacyRestoredLineId(rows[i].lineId);
+                }
+            }
+        }
+
+        private static void NormalizeLegacyRestoredPlanContract(
+            DispatchWorkbenchPlannerImportContractDto contract)
+        {
+            if (contract == null)
+                return;
+
+            contract.draftKey = NormalizeLegacyRestoredLineId(contract.draftKey);
+            contract.importedLineIds = NormalizeLegacyRestoredLineIds(contract.importedLineIds);
+            if (contract.requestEcho == null)
+                return;
+
+            if (string.IsNullOrWhiteSpace(contract.requestEcho.mode))
+            {
+                contract.requestEcho.mode = ModeScope.DefaultWorkbench.Token;
+            }
+
+            contract.requestEcho.draftKey =
+                NormalizeLegacyRestoredLineId(contract.requestEcho.draftKey);
+            contract.requestEcho.localLineIds =
+                NormalizeLegacyRestoredLineIds(contract.requestEcho.localLineIds);
+            contract.requestEcho.adjustableLineIds =
+                NormalizeLegacyRestoredLineIds(contract.requestEcho.adjustableLineIds);
+            contract.requestEcho.expressLineId =
+                NormalizeLegacyRestoredLineId(contract.requestEcho.expressLineId);
+            contract.requestEcho.virtualExpressBaseLineId =
+                NormalizeLegacyRestoredLineId(contract.requestEcho.virtualExpressBaseLineId);
+        }
+
+        private static string[] NormalizeLegacyRestoredLineIds(string[] lineIds)
+        {
+            if (lineIds == null)
+                return Array.Empty<string>();
+
+            string[] normalized = new string[lineIds.Length];
+            for (int i = 0; i < lineIds.Length; i++)
+            {
+                normalized[i] = NormalizeLegacyRestoredLineId(lineIds[i]);
+            }
+
+            return normalized;
+        }
+
+        private static string NormalizeLegacyRestoredLineReference(string lineId)
+        {
+            if (string.Equals(lineId, "local", StringComparison.Ordinal)
+                || string.Equals(lineId, "express", StringComparison.Ordinal))
+            {
+                return lineId;
+            }
+
+            return NormalizeLegacyRestoredLineId(lineId);
+        }
+
+        private static string NormalizeLegacyRestoredLineId(string lineId)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+                return string.Empty;
+
+            string trimmed = lineId.Trim();
+            if (string.Equals(trimmed, "__default__", StringComparison.Ordinal)
+                || string.Equals(trimmed, "local", StringComparison.Ordinal)
+                || string.Equals(trimmed, "express", StringComparison.Ordinal)
+                || trimmed.IndexOf(':') >= 0)
+            {
+                return trimmed;
+            }
+
+            return LineIdentityService.NormalizeForMode(
+                trimmed,
+                ModeScope.DefaultWorkbench.Mode);
+        }
+
+        private static bool IsLegacyRestoredLineId(string lineId)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+                return false;
+
+            string trimmed = lineId.Trim();
+            return !string.Equals(trimmed, "__default__", StringComparison.Ordinal)
+                && !string.Equals(trimmed, "local", StringComparison.Ordinal)
+                && !string.Equals(trimmed, "express", StringComparison.Ordinal)
+                && trimmed.IndexOf(':') < 0;
         }
 
         private static DispatchWorkbenchMergedView CloneMergedView(DispatchWorkbenchMergedView view)

@@ -31,6 +31,7 @@ const CALLS = {
   getBroadcastApplyOperationStatus: "suhua::rt.workbench.getBroadcastApplyOperationStatus",
   refreshMetadata: "suhua::rt.workbench.refreshMetadata",
   loadPlannerContext: "suhua::rt.workbench.loadPlannerContext",
+  exportPlannerInput: "suhua::rt.workbench.exportPlannerInput",
   startPlannerJob: "suhua::rt.workbench.startPlannerJob",
   getPlannerJobStatus: "suhua::rt.workbench.getPlannerJobStatus",
   runPlanner: "suhua::rt.workbench.runPlanner",
@@ -43,10 +44,49 @@ const CALLS = {
 
 const EVENTS = {
   snapshotChanged: "suhua::rt.workbench.onSnapshotChanged",
+  catalog: "suhua::rt.workbench.onCatalog",
   broadcastSnapshotChanged: "suhua::rt.workbench.onBroadcastSnapshotChanged",
   broadcastAssetPreviewStateChanged: "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged",
   broadcastRulePreviewStateChanged: "suhua::rt.workbench.onBroadcastRulePreviewStateChanged"
 };
+
+const DEFAULT_TRANSPORT_MODE = "train";
+
+function normalizeTransportMode(mode) {
+  const token = String(mode || "").trim().toLowerCase();
+  return token || DEFAULT_TRANSPORT_MODE;
+}
+
+export function setWorkbenchApiTransportMode(mode) {
+  if (typeof window !== "undefined") {
+    window.__RT_WORKBENCH_ACTIVE_TRANSPORT_MODE__ = normalizeTransportMode(mode);
+  }
+}
+
+function getWorkbenchApiTransportMode() {
+  if (typeof window === "undefined") {
+    return DEFAULT_TRANSPORT_MODE;
+  }
+
+  return normalizeTransportMode(window.__RT_WORKBENCH_ACTIVE_TRANSPORT_MODE__);
+}
+
+function withMode(request = {}) {
+  if (request && typeof request === "object" && !Array.isArray(request)) {
+    return {
+      ...request,
+      mode: normalizeTransportMode(request.mode || getWorkbenchApiTransportMode())
+    };
+  }
+
+  return {
+    mode: getWorkbenchApiTransportMode()
+  };
+}
+
+function requestJson(request = {}) {
+  return JSON.stringify(withMode(request));
+}
 
 function parsePayload(payload, fallbackValue) {
   if (!payload) {
@@ -285,119 +325,119 @@ function createBroadcastApplyOperationStatus() {
 
 function createLiveApi() {
   return {
-    async loadSnapshot() {
+    async loadSnapshot(request = {}) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadSnapshot);
+      const payload = await engineCall(CALLS.loadSnapshot, requestJson(request));
       return parsePayload(payload, createEmptySnapshot());
     },
-    async refreshSnapshot() {
+    async refreshSnapshot(request = {}) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.refreshSnapshot);
+      const payload = await engineCall(CALLS.refreshSnapshot, requestJson(request));
       return parsePayload(payload, createEmptySnapshot());
     },
     async loadBroadcastSnapshot(selectedLineId = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadBroadcastSnapshot, selectedLineId || "");
+      const payload = await engineCall(CALLS.loadBroadcastSnapshot, requestJson({ preferredLineId: selectedLineId || "" }));
       return parsePayload(payload, createEmptyBroadcastSnapshot());
     },
     async refreshBroadcastSnapshot(selectedLineId = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.refreshBroadcastSnapshot, selectedLineId || "");
+      const payload = await engineCall(CALLS.refreshBroadcastSnapshot, requestJson({ preferredLineId: selectedLineId || "" }));
       return parsePayload(payload, createEmptyBroadcastSnapshot());
     },
     async loadBroadcastBindingSlotHints(lineId = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadBroadcastBindingSlotHints, lineId || "");
+      const payload = await engineCall(CALLS.loadBroadcastBindingSlotHints, requestJson({ lineId: lineId || "" }));
       return parsePayload(payload, createEmptyBroadcastBindingSlotHints());
     },
     async loadBroadcastAssetBrowser(path = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadBroadcastAssetBrowser, path || "");
+      const payload = await engineCall(CALLS.loadBroadcastAssetBrowser, requestJson({ path: path || "" }));
       return parsePayload(payload, createEmptyBroadcastAssetBrowser());
     },
     async importBroadcastExternalAssets(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.importBroadcastExternalAssets, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.importBroadcastExternalAssets, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastImportResult());
     },
     async deleteBroadcastAsset(assetName = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.deleteBroadcastAsset, assetName || "");
+      const payload = await engineCall(CALLS.deleteBroadcastAsset, requestJson({ assetName: assetName || "" }));
       return parsePayload(payload, createBroadcastDeleteAssetResult());
     },
     async deleteAllBroadcastAssets() {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.deleteAllBroadcastAssets);
+      const payload = await engineCall(CALLS.deleteAllBroadcastAssets, requestJson());
       return parsePayload(payload, createBroadcastDeleteAllAssetsResult());
     },
     async saveBroadcastStationBinding(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.saveBroadcastStationBinding, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.saveBroadcastStationBinding, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastStationBindingSaveResult());
     },
     async saveBroadcastStationBindings(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.saveBroadcastStationBindings, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.saveBroadcastStationBindings, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastStationBindingSaveResult());
     },
     async autoBindBroadcastStationMappings(lineId = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.autoBindBroadcastStationMappings, lineId || "");
+      const payload = await engineCall(CALLS.autoBindBroadcastStationMappings, requestJson({ lineId: lineId || "" }));
       return parsePayload(payload, createBroadcastAutoBindStationMappingsResult());
     },
     async saveBroadcastRules(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.saveBroadcastRules, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.saveBroadcastRules, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastRulesSaveResult());
     },
     async saveBroadcastPlatformAnnouncement(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.saveBroadcastPlatformAnnouncement, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.saveBroadcastPlatformAnnouncement, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastPlatformAnnouncementSaveResult());
     },
     async copyBroadcastPlatformAnnouncementToAllStations(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.copyBroadcastPlatformAnnouncementToAllStations, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.copyBroadcastPlatformAnnouncementToAllStations, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastPlatformAnnouncementSaveResult());
     },
     async applyBroadcastConfig(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.applyBroadcastConfig, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.applyBroadcastConfig, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastApplyResult());
     },
     async openBroadcastAssetDirectoryPicker() {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.openBroadcastAssetDirectoryPicker);
+      const payload = await engineCall(CALLS.openBroadcastAssetDirectoryPicker, requestJson());
       return parsePayload(payload, createBroadcastDirectoryPickerResult());
     },
     async playBroadcastAssetPreview(assetName = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.playBroadcastAssetPreview, assetName || "");
+      const payload = await engineCall(CALLS.playBroadcastAssetPreview, requestJson({ assetName: assetName || "" }));
       return parsePayload(payload, createBroadcastAssetPreviewResult());
     },
     async stopBroadcastAssetPreview(assetName = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.stopBroadcastAssetPreview, assetName || "");
+      const payload = await engineCall(CALLS.stopBroadcastAssetPreview, requestJson({ assetName: assetName || "" }));
       return parsePayload(payload, createBroadcastAssetPreviewResult());
     },
     async playBroadcastRulePreview(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.playBroadcastRulePreview, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.playBroadcastRulePreview, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastRulePreviewResult());
     },
     async stopBroadcastRulePreview(ruleId = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.stopBroadcastRulePreview, ruleId || "");
+      const payload = await engineCall(CALLS.stopBroadcastRulePreview, requestJson({ ruleId: ruleId || "" }));
       return parsePayload(payload, createBroadcastRulePreviewResult());
     },
     async setBroadcastPreviewVolume(volume = 80) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.setBroadcastPreviewVolume, String(volume ?? 80));
+      const payload = await engineCall(CALLS.setBroadcastPreviewVolume, requestJson({ volume: volume ?? 80 }));
       return parsePayload(payload, createBroadcastVolumeResult());
     },
     async startBroadcastApplyOperation(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.startBroadcastApplyOperation, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.startBroadcastApplyOperation, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastApplyOperationStatus());
     },
     async getBroadcastApplyOperationStatus(operationId = "") {
@@ -405,19 +445,24 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.getBroadcastApplyOperationStatus, operationId || "");
       return parsePayload(payload, createBroadcastApplyOperationStatus());
     },
-    async refreshMetadata() {
+    async refreshMetadata(request = {}) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.refreshMetadata);
+      const payload = await engineCall(CALLS.refreshMetadata, requestJson(request));
       return parsePayload(payload, createEmptySnapshot());
     },
-    async loadPlannerContext() {
+    async loadPlannerContext(request = {}) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadPlannerContext);
+      const payload = await engineCall(CALLS.loadPlannerContext, requestJson(request));
+      return parsePayload(payload, createEmptyPlannerInput());
+    },
+    async exportPlannerInput(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.exportPlannerInput, requestJson(request));
       return parsePayload(payload, createEmptyPlannerInput());
     },
     async startPlannerJob(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.startPlannerJob, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.startPlannerJob, requestJson(request ?? {}));
       return parsePayload(payload, createEmptyPlannerJobStatus());
     },
     async getPlannerJobStatus(jobId = "") {
@@ -427,12 +472,12 @@ function createLiveApi() {
     },
     async runPlanner(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.runPlanner, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.runPlanner, requestJson(request ?? {}));
       return parsePayload(payload, createEmptyPlannerResult());
     },
     async saveDraft(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.saveWorkbenchDraft, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.saveWorkbenchDraft, requestJson(request ?? {}));
       return parsePayload(payload, {
         success: false,
         errors: [],
@@ -443,7 +488,7 @@ function createLiveApi() {
     },
     async saveNativeDraft(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.saveNativeWorkbenchDraft, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.saveNativeWorkbenchDraft, requestJson(request ?? {}));
       return parsePayload(payload, {
         success: false,
         errors: [],
@@ -454,7 +499,7 @@ function createLiveApi() {
     },
     async startNativeSaveOperation(request) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.startNativeSaveOperation, JSON.stringify(request ?? {}));
+      const payload = await engineCall(CALLS.startNativeSaveOperation, requestJson(request ?? {}));
       return parsePayload(payload, createEmptySaveOperationStatus());
     },
     async getNativeSaveOperationStatus(operationId = "") {
@@ -487,6 +532,25 @@ function createLiveApi() {
       return () => {
         if (typeof window.engine.off === "function") {
           window.engine.off(EVENTS.snapshotChanged, handler);
+        }
+      };
+    },
+    onCatalogChanged(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const event = parsePayload(payload, null);
+        if (event) {
+          callback(event);
+        }
+      };
+
+      window.engine.on(EVENTS.catalog, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.catalog, handler);
         }
       };
     },

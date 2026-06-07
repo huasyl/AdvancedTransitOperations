@@ -1,5 +1,6 @@
 using System.IO;
 using Colossal.IO.AssetDatabase;
+using Colossal.UI;
 using Colossal;
 using Colossal.Logging;
 using Game;
@@ -30,6 +31,7 @@ namespace RapidTransitMod
     public class Mod : IMod
     {
         public const string Id = "RapidTransitMod";
+        private const int CohtmlDebuggerPort = 9444;
         private static readonly ILog s_RawLog = LogManager.GetLogger(nameof(RapidTransitMod)).SetShowsErrorsInUI(false);
         public static TimedLogger log = new TimedLogger(s_RawLog);
 
@@ -52,6 +54,7 @@ namespace RapidTransitMod
         public void OnLoad(UpdateSystem updateSystem)
         {
             log.Info(nameof(OnLoad));
+            TryEnableCohtmlDebugger();
             updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportLineSystem>(SystemUpdatePhase.GameSimulation);
@@ -85,6 +88,33 @@ namespace RapidTransitMod
             log.Info("Registered dispatch workbench panel: " + typeof(DispatchWorkbenchNativePanel).FullName);
 
             log.Info("RapidTransitMod initialized.");
+        }
+
+        private static void TryEnableCohtmlDebugger()
+        {
+            try
+            {
+                UIManager manager = UIManager.instance;
+                if (manager == null || manager.settings == null)
+                {
+                    log.Info("[CohtmlDebugger] UIManager settings unavailable.");
+                    return;
+                }
+
+                bool previousEnabled = manager.settings.enableDebugger;
+                int previousPort = manager.settings.debuggerPort;
+                manager.settings.enableDebugger = true;
+                manager.settings.debuggerPort = CohtmlDebuggerPort;
+                log.Info("[CohtmlDebugger] requested enableDebugger=true debuggerPort=" + CohtmlDebuggerPort
+                    + " previousEnabled=" + previousEnabled
+                    + " previousPort=" + previousPort
+                    + " currentEnabled=" + manager.settings.enableDebugger
+                    + " currentPort=" + manager.settings.debuggerPort);
+            }
+            catch (System.Exception ex)
+            {
+                log.Info("[CohtmlDebugger] configure failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         public void OnDispose()

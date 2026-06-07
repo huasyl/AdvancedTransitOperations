@@ -31,7 +31,7 @@ import useBroadcastAssets from "./useBroadcastAssets";
 import useBroadcastApplyOperation from "./useBroadcastApplyOperation";
 import useBroadcastDraftStore from "./useBroadcastDraftStore";
 
-export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
+export default function useBroadcastController({ pageEnterSequence = 0, activeTransportMode = "train" } = {}) {
   const { locale, t } = useNativeScheduleI18n();
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const broadcastApplyOperation = useBroadcastApplyOperation(workbenchApi);
@@ -105,6 +105,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   const lineOptionsRef = useRef(lineOptions);
   const selectedLineIdRef = useRef(selectedLineId);
   const broadcastContentLineIdRef = useRef(selectedLineId);
+  const activeTransportModeRef = useRef(activeTransportMode);
   const platformRuleTitleMemoryRef = useRef({});
   const platformRuleIdMemoryRef = useRef({});
   const dirtyPlatformStationIdsRef = useRef([]);
@@ -135,6 +136,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   lineOptionsRef.current = lineOptions;
   selectedLineIdRef.current = selectedLineId;
   broadcastContentLineIdRef.current = broadcastContentLineId;
+  activeTransportModeRef.current = activeTransportMode;
   const broadcastLabels = {
     t,
     sidebarTitle: t("broadcast.sidebar.title"),
@@ -222,6 +224,19 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     return selectedLineIdRef.current || selectedLineId || "";
   }
 
+  function normalizeBroadcastMode(mode = "train") {
+    return String(mode || "train").trim().toLowerCase() || "train";
+  }
+
+  function matchesBroadcastMode(payload, mode = activeTransportMode) {
+    const payloadMode = String(payload?.mode || "").trim().toLowerCase();
+    return payloadMode.length > 0 && payloadMode === normalizeBroadcastMode(mode);
+  }
+
+  function isCurrentBroadcastMode(mode) {
+    return normalizeBroadcastMode(activeTransportModeRef.current) === normalizeBroadcastMode(mode);
+  }
+
   function cloneBroadcastStationsForDraft(source) {
     return (Array.isArray(source) ? source : []).map((station) => ({
       ...station,
@@ -262,7 +277,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     }
 
     draftStore.setLineDraft(lineId, draft || buildCurrentBroadcastLineDraft());
-    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds(activeTransportMode).length > 0);
   }
 
   function getBroadcastLineDraftGeneration(lineId) {
@@ -270,13 +285,13 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   }
 
   function isBroadcastLineLocalDraftDirty(lineId) {
-    return Boolean(lineId && draftStore.getDirtyLineIds().includes(lineId));
+    return Boolean(lineId && draftStore.getDirtyLineIds(activeTransportMode).includes(lineId));
   }
 
   function setSelectedLineLocalDraftDirty(lineId) {
     const isDirty = isBroadcastLineLocalDraftDirty(lineId);
-    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
-    setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds(activeTransportMode).length > 0);
+    setBroadcastVolumeDirty(draftStore.hasVolumeDirty(activeTransportMode));
     return isDirty;
   }
 
@@ -289,8 +304,8 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     if (lineId === selectedLineIdRef.current) {
       setBroadcastContentLineId(lineId);
     }
-    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
-    setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds(activeTransportMode).length > 0);
+    setBroadcastVolumeDirty(draftStore.hasVolumeDirty(activeTransportMode));
     setBroadcastApplyError("");
     broadcastApplyOperation.resetApplyState();
   }
@@ -301,7 +316,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     }
 
     draftStore.clearLineDrafts([lineId]);
-    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds(activeTransportMode).length > 0);
   }
 
   function applyBroadcastLocalDraft(lineId) {
@@ -314,7 +329,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     setRules(cloneBroadcastRules(draft.rules));
     setPlatformAnnouncements(cloneBroadcastPlatformAnnouncementsForDraft(draft.platformAnnouncements));
     setStations(cloneBroadcastStationsForDraft(draft.stationsForUi));
-    setBroadcastPreviewVolume(draftStore.getVolumeDraft(broadcastAppliedVolume));
+    setBroadcastPreviewVolume(draftStore.getVolumeDraft(broadcastAppliedVolume, activeTransportMode));
     setBroadcastContentLineId(lineId);
     setSelectedLineLocalDraftDirty(lineId);
     return true;
@@ -333,6 +348,10 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   }
 
   function applyBroadcastSnapshot(snapshot) {
+    if (snapshot && !matchesBroadcastMode(snapshot)) {
+      return;
+    }
+
     const backendLines = extractBackendLineOptions(snapshot);
     const hasBackendLines = backendLines.length > 0;
     const nextLineOptions = hasBackendLines ? backendLines : hasBackendLineHydratedRef.current ? lineOptionsRef.current : fallbackLineOptions;
@@ -354,15 +373,15 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
 
     setSelectedLineId(nextSelectedLineId);
     setBroadcastLineDraftDirty(false);
-    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
-    setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds(activeTransportMode).length > 0);
+    setBroadcastVolumeDirty(draftStore.hasVolumeDirty(activeTransportMode));
     if (!preserveLocalDraft) {
       setSelectedLineLocalDraftDirty(nextSelectedLineId);
     }
     const snapshotVolume = Number.isFinite(snapshot?.volume) ? snapshot.volume : 80;
     setBroadcastAppliedVolume(snapshotVolume);
-    if (!draftStore.hasVolumeDirty()) {
-      setBroadcastPreviewVolume(draftStore.getVolumeDraft(snapshotVolume));
+    if (!draftStore.hasVolumeDirty(activeTransportMode)) {
+      setBroadcastPreviewVolume(draftStore.getVolumeDraft(snapshotVolume, activeTransportMode));
     }
     setBroadcastWarnings(Array.isArray(snapshot?.warnings) ? snapshot.warnings.filter((warning) => typeof warning === "string" && warning) : []);
     if (!preserveLocalDraft) {
@@ -647,9 +666,9 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       ? Math.max(0, Math.min(100, Math.round(Number(nextVolume))))
       : 80;
     setBroadcastPreviewVolume(normalizedVolume);
-    draftStore.setVolumeDraft(normalizedVolume);
+    draftStore.setVolumeDraft(normalizedVolume, activeTransportMode);
     setBroadcastVolumeDirty(true);
-    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
+    setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds(activeTransportMode).length > 0);
     setBroadcastApplyError("");
     broadcastApplyOperation.resetApplyState();
     return { success: true, volume: normalizedVolume, volumeDirty: true };
@@ -685,11 +704,31 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
 
   useEffect(() => {
     let disposed = false;
+    hasBroadcastHydratedRef.current = false;
+    hasBackendLineHydratedRef.current = false;
+    hasBroadcastRulesHydratedRef.current = false;
+    lastHydratedLineIdRef.current = "";
+    lastHydratedRulesLineIdRef.current = "";
+    skipNextRulesSaveRef.current = true;
+    setPreviewingAssetName("");
+    setPreviewingRuleId("");
+    setSelectedExternalFiles([]);
+    setExternalAssetBrowser(createEmptyExternalAssetBrowserState());
+    setCatalogAssetLibrary([]);
+    setIsApplyingBroadcastConfig(false);
+    setBroadcastApplyPhase("");
+    setBroadcastApplyError("");
+    broadcastApplyOperation.resetApplyState();
 
     async function hydrateBroadcastSnapshot() {
       try {
+        const requestMode = activeTransportMode;
         const snapshot = await workbenchApi.loadBroadcastSnapshot?.(selectedLineIdRef.current);
         if (disposed) {
+          return;
+        }
+
+        if (!matchesBroadcastMode(snapshot, requestMode)) {
           return;
         }
 
@@ -698,7 +737,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
         if (extractBackendLineOptions(snapshot).length === 0) {
           try {
             const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current);
-            if (!disposed && extractBackendLineOptions(refreshedSnapshot).length > 0) {
+            if (!disposed && matchesBroadcastMode(refreshedSnapshot, requestMode) && extractBackendLineOptions(refreshedSnapshot).length > 0) {
               applyBroadcastSnapshot(refreshedSnapshot);
             }
           } catch (refreshError) {
@@ -727,7 +766,37 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       disposed = true;
       unsubscribe?.();
     };
-  }, [workbenchApi]);
+  }, [activeTransportMode, workbenchApi]);
+
+  useEffect(() => {
+    let disposed = false;
+    const unsubscribe = workbenchApi.onCatalogChanged?.((event) => {
+      const requestMode = String(event?.mode || "").trim().toLowerCase();
+      if (!requestMode || requestMode !== normalizeBroadcastMode(activeTransportMode)) {
+        return;
+      }
+
+      async function refreshLines() {
+        try {
+          const snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
+          if (!disposed && isCurrentBroadcastMode(requestMode) && matchesBroadcastMode(snapshot, requestMode)) {
+            applyBroadcastSnapshot(snapshot);
+          }
+        } catch (error) {
+          if (!disposed) {
+            console.error("[RT Broadcast Workbench] catalog refresh failed", error);
+          }
+        }
+      }
+
+      refreshLines();
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [activeTransportMode, workbenchApi]);
 
   useEffect(() => {
     if (!hasBroadcastHydratedRef.current) {
@@ -743,7 +812,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     async function refreshBroadcastSnapshot() {
       try {
         const snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineId);
-        if (!disposed) {
+        if (!disposed && matchesBroadcastMode(snapshot)) {
           applyBroadcastSnapshot(snapshot);
         }
       } catch (error) {
@@ -758,7 +827,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     return () => {
       disposed = true;
     };
-  }, [selectedLineId, workbenchApi]);
+  }, [activeTransportMode, selectedLineId, workbenchApi]);
 
   useEffect(() => {
     const lineId = selectedLineId || selectedLineIdRef.current || "";
@@ -787,7 +856,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     return () => {
       disposed = true;
     };
-  }, [selectedLineId, workbenchApi]);
+  }, [activeTransportMode, selectedLineId, workbenchApi]);
 
   useEffect(() => {
     if (!hasBroadcastRulesHydratedRef.current || !selectedLineId || selectedLineId !== lastHydratedRulesLineIdRef.current) {
@@ -830,6 +899,10 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
             return;
           }
 
+          if (!matchesBroadcastMode(snapshot)) {
+            return;
+          }
+
           applyBroadcastSnapshot(snapshot);
           if (extractBackendLineOptions(snapshot).length > 0) {
             return;
@@ -847,7 +920,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     return () => {
       disposed = true;
     };
-  }, [pageEnterSequence, workbenchApi]);
+  }, [activeTransportMode, pageEnterSequence, workbenchApi]);
 
   useLayoutEffect(() => {
     if (pageEnterSequence <= 0) {
@@ -1088,35 +1161,39 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
     setTriggerDropdownOpen(false);
   }
 
-  function buildBroadcastApplyOperationRequest() {
-    return draftStore.buildApplyRequest();
+  function buildBroadcastApplyOperationRequest(mode = activeTransportMode) {
+    return draftStore.buildApplyRequest(mode);
   }
 
   async function handleApplyBroadcastConfig() {
     if (
       isApplyingBroadcastConfig ||
-      !draftStore.hasDirty() ||
+      !draftStore.hasDirty(activeTransportMode) ||
       broadcastVariableMappingIssue
     ) {
       return;
     }
 
-    const appliedLineIds = draftStore.getDirtyLineIds();
+    const requestMode = activeTransportMode;
+    const appliedLineIds = draftStore.getDirtyLineIds(requestMode);
     const appliedGenerationsByLine = appliedLineIds.reduce((result, lineId) => {
       result[lineId] = getBroadcastLineDraftGeneration(lineId);
       return result;
     }, {});
-    const appliedVolumeGeneration = draftStore.getVolumeDraftGeneration();
-    const applyRequest = buildBroadcastApplyOperationRequest();
+    const appliedVolumeGeneration = draftStore.getVolumeDraftGeneration(requestMode);
+    const applyRequest = buildBroadcastApplyOperationRequest(requestMode);
     setIsApplyingBroadcastConfig(true);
     setBroadcastApplyPhase("applying");
     setBroadcastApplyError("");
 
     try {
-      const outcome = await broadcastApplyOperation.apply(applyRequest);
+      const outcome = await broadcastApplyOperation.apply(applyRequest, requestMode, isCurrentBroadcastMode);
       const result = outcome?.result;
+      if (outcome?.interrupted && !result?.success) {
+        return;
+      }
 
-      if (result?.success) {
+      if (result?.success && matchesBroadcastMode(result, requestMode)) {
         const committedLineIds = Array.isArray(result.appliedLineIds) ? result.appliedLineIds : [];
         const clearableLineIds = committedLineIds.filter((lineId) => getBroadcastLineDraftGeneration(lineId) === appliedGenerationsByLine[lineId]);
         if (clearableLineIds.length > 0) {
@@ -1124,18 +1201,29 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
           draftStore.clearLineDrafts(clearableLineIds);
         }
         if (result.volumeApplied) {
-          draftStore.clearVolumeDraft(appliedVolumeGeneration);
-          if (!draftStore.hasVolumeDirty()) {
+          draftStore.clearVolumeDraft(appliedVolumeGeneration, requestMode);
+        }
+
+        if (!isCurrentBroadcastMode(requestMode)) {
+          return;
+        }
+
+        if (result.volumeApplied) {
+          if (!draftStore.hasVolumeDirty(requestMode)) {
             setBroadcastAppliedVolume(applyRequest.volume);
           }
         }
 
         setBroadcastLineDraftDirty(false);
-        setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds().length > 0);
-        setBroadcastVolumeDirty(draftStore.hasVolumeDirty());
+        setBroadcastLocalDraftDirty(draftStore.getDirtyLineIds(requestMode).length > 0);
+        setBroadcastVolumeDirty(draftStore.hasVolumeDirty(requestMode));
         setBroadcastWarnings(Array.isArray(result.warnings) ? result.warnings : []);
         setIsApplyingBroadcastConfig(false);
         setBroadcastApplyPhase("");
+        return;
+      }
+
+      if (!isCurrentBroadcastMode(requestMode)) {
         return;
       }
 
@@ -1143,6 +1231,10 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
       setBroadcastApplyPhase("");
       setBroadcastApplyError(result?.error || "Apply failed");
     } catch (error) {
+      if (!isCurrentBroadcastMode(requestMode)) {
+        return;
+      }
+
       setIsApplyingBroadcastConfig(false);
       setBroadcastApplyPhase("");
       setBroadcastApplyError(error instanceof Error ? error.message : "Apply failed");
@@ -1160,7 +1252,7 @@ export default function useBroadcastController({ pageEnterSequence = 0 } = {}) {
   }
 
   const broadcastOperationError = broadcastApplyOperation.applyState.phase === "error" ? broadcastApplyOperation.applyState.error : "";
-  const broadcastDraftDirty = draftStore.hasDirty();
+  const broadcastDraftDirty = draftStore.hasDirty(activeTransportMode);
   const isBroadcastLineContentReady = Boolean(selectedLineId && broadcastContentLineId === selectedLineId);
   const isBroadcastConfigApplied = !broadcastDraftDirty;
   const broadcastFooterTone = broadcastApplyError || broadcastOperationError

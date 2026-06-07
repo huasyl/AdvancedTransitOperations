@@ -68,6 +68,34 @@ namespace RapidTransitMod.Dispatch
             }
         }
 
+        internal void Apply(TransitMode mode, IEnumerable<DispatchWorkbenchLineSettingDto> settings)
+        {
+            if (mode == TransitMode.Unknown)
+            {
+                Apply(settings);
+                return;
+            }
+
+            m_Store.Clear(mode);
+            foreach (DispatchWorkbenchLineSettingDto setting in settings ?? Array.Empty<DispatchWorkbenchLineSettingDto>())
+            {
+                if (setting == null || string.IsNullOrEmpty(setting.lineId))
+                    continue;
+
+                LineKey key = LineIdentityService.GetKey(setting.lineId, mode);
+                if (key.IsEmpty || key.Mode != mode)
+                    continue;
+
+                m_Store.Set(key, new LineConfigState
+                {
+                    OriginHoldLimitMinutes = m_NormHold(setting.originHoldLimitMinutes),
+                    MaxStationDwellMinutes = m_NormDwell(setting.maxStationDwellMinutes),
+                    AllowedDepotId = m_NormDepot(setting.allowedDepotId),
+                    ConfiguredServiceKind = m_NormKind(setting.serviceKind)
+                });
+            }
+        }
+
         internal bool Same(IEnumerable<DispatchWorkbenchLineSettingDto> settings)
         {
             Dictionary<string, DispatchWorkbenchLineSettingDto> requested =
@@ -94,7 +122,47 @@ namespace RapidTransitMod.Dispatch
 
                 if (m_NormHold(setting.originHoldLimitMinutes) != GetHold(lineId)
                     || m_NormDwell(setting.maxStationDwellMinutes) != GetDwell(lineId)
-                    || !string.Equals(m_NormDepot(setting.allowedDepotId), GetDepotId(lineId), StringComparison.Ordinal)
+                    || !string.Equals(CompareDepotId(setting.allowedDepotId), CompareDepotId(GetDepotId(lineId)), StringComparison.Ordinal)
+                    || !string.Equals(m_NormKind(setting.serviceKind), GetKind(lineId), StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        internal bool Same(TransitMode mode, IEnumerable<DispatchWorkbenchLineSettingDto> settings)
+        {
+            if (mode == TransitMode.Unknown)
+                return Same(settings);
+
+            Dictionary<string, DispatchWorkbenchLineSettingDto> requested =
+                new Dictionary<string, DispatchWorkbenchLineSettingDto>(StringComparer.Ordinal);
+            if (settings != null)
+            {
+                foreach (DispatchWorkbenchLineSettingDto setting in settings)
+                {
+                    if (setting == null || string.IsNullOrEmpty(setting.lineId))
+                        continue;
+
+                    string lineId = LineIdentityService.NormalizeForMode(setting.lineId, mode);
+                    requested[lineId] = setting;
+                }
+            }
+
+            string[] lineIds = Keys(mode).ToArray();
+            if (requested.Count != lineIds.Length)
+                return false;
+
+            foreach (string lineId in lineIds)
+            {
+                if (!requested.TryGetValue(lineId, out DispatchWorkbenchLineSettingDto setting))
+                    return false;
+
+                if (m_NormHold(setting.originHoldLimitMinutes) != GetHold(lineId)
+                    || m_NormDwell(setting.maxStationDwellMinutes) != GetDwell(lineId)
+                    || !string.Equals(CompareDepotId(setting.allowedDepotId), CompareDepotId(GetDepotId(lineId)), StringComparison.Ordinal)
                     || !string.Equals(m_NormKind(setting.serviceKind), GetKind(lineId), StringComparison.Ordinal))
                 {
                     return false;
@@ -107,6 +175,14 @@ namespace RapidTransitMod.Dispatch
         internal IEnumerable<string> Keys()
         {
             return m_Store.GetAll()
+                .Select(entry => m_IdByKey(entry.Key))
+                .Where(lineId => !string.IsNullOrEmpty(lineId))
+                .Distinct(StringComparer.Ordinal);
+        }
+
+        internal IEnumerable<string> Keys(TransitMode mode)
+        {
+            return m_Store.GetAll(mode)
                 .Select(entry => m_IdByKey(entry.Key))
                 .Where(lineId => !string.IsNullOrEmpty(lineId))
                 .Distinct(StringComparer.Ordinal);
@@ -172,6 +248,11 @@ namespace RapidTransitMod.Dispatch
             return !key.IsEmpty && m_Store.TryGet(key, out LineConfigState state)
                 ? state
                 : LineConfigState.Default(m_Store.Version);
+        }
+
+        private static string CompareDepotId(string depotId)
+        {
+            return string.IsNullOrWhiteSpace(depotId) ? string.Empty : depotId;
         }
     }
 }

@@ -58,7 +58,9 @@ namespace RapidTransitMod.Broadcasting
         internal void RemoveVehicle(Entity vehicle) => m_Sequences.RemoveVehicle(vehicle);
         internal void Clear() => m_Sequences.Clear();
         internal void RemoveAsset(string assetName) => m_Sequences.RemoveAsset(assetName);
+        internal void RemoveAsset(ModeScope scope, string assetName) => m_Sequences.RemoveAsset(scope, assetName);
         internal void RemoveAllAssets() => m_Sequences.RemoveAllAssets();
+        internal void RemoveAllAssets(ModeScope scope) => m_Sequences.RemoveAllAssets(scope);
         internal void ApplyVolume() => m_Sequences.ApplyVolume();
         internal string Text(Entity vehicle) => m_Sequences.Text(vehicle);
 
@@ -317,11 +319,12 @@ namespace RapidTransitMod.Broadcasting
                 string pendingAssetName = state.PendingAssetName ?? string.Empty;
                 state.PendingClipLoadTask = null;
                 state.PendingAssetName = string.Empty;
-                if (!string.IsNullOrWhiteSpace(pendingAssetName)
-                    && m_Clips.TryLiveTask(pendingAssetName, out Task<AudioClip> liveTask)
+                string pendingCacheKey = m_Config.AssetCacheKey(state.LineId, pendingAssetName);
+                if (!string.IsNullOrWhiteSpace(pendingCacheKey)
+                    && m_Clips.TryLiveTask(pendingCacheKey, out Task<AudioClip> liveTask)
                     && ReferenceEquals(liveTask, completedTask))
                 {
-                    m_Clips.RemoveTask(pendingAssetName);
+                    m_Clips.RemoveTask(pendingCacheKey);
                 }
 
                 AudioClip loadedClip = null;
@@ -336,7 +339,7 @@ namespace RapidTransitMod.Broadcasting
                     return Advance(state, nowFrame);
                 }
 
-                m_Clips.Cache(pendingAssetName, loadedClip, nowFrame);
+                m_Clips.Cache(pendingCacheKey, loadedClip, nowFrame);
                 if (m_Audio.Play(state, pendingAssetName, loadedClip))
                 {
                     return true;
@@ -390,7 +393,8 @@ namespace RapidTransitMod.Broadcasting
                     continue;
                 }
 
-                if (m_Clips.Get(assetName, nowFrame, out AudioClip cachedClip))
+                string assetCacheKey = m_Config.AssetCacheKey(state.LineId, assetName);
+                if (m_Clips.Get(assetCacheKey, nowFrame, out AudioClip cachedClip))
                 {
                     if (m_Audio.Play(state, assetName, cachedClip))
                     {
@@ -401,7 +405,7 @@ namespace RapidTransitMod.Broadcasting
                     continue;
                 }
 
-                Task<AudioClip> loadTask = m_Clips.BeginLoad(assetName);
+                Task<AudioClip> loadTask = m_Clips.BeginLoad(state.LineId, assetName);
                 if (loadTask == null)
                 {
                     state.NodeIndex++;
@@ -474,6 +478,11 @@ namespace RapidTransitMod.Broadcasting
 
         internal void RemoveAsset(string assetName)
         {
+            RemoveAsset(ModeScope.DefaultWorkbench, assetName);
+        }
+
+        internal void RemoveAsset(ModeScope scope, string assetName)
+        {
             if (string.IsNullOrWhiteSpace(assetName))
             {
                 return;
@@ -483,7 +492,7 @@ namespace RapidTransitMod.Broadcasting
             foreach (KeyValuePair<Entity, Sequence> entry in m_ByVehicle)
             {
                 Sequence state = entry.Value;
-                if (state == null)
+                if (state == null || !MatchesRuntimeScope(scope, state.LineId))
                 {
                     continue;
                 }
@@ -500,7 +509,7 @@ namespace RapidTransitMod.Broadcasting
             foreach (KeyValuePair<string, Sequence> entry in m_ByPlatformKey)
             {
                 Sequence state = entry.Value;
-                if (state == null)
+                if (state == null || !MatchesRuntimeScope(scope, state.LineId))
                 {
                     continue;
                 }
@@ -529,27 +538,51 @@ namespace RapidTransitMod.Broadcasting
                 }
             }
 
-            m_Clips.RemoveAsset(assetName);
+            m_Clips.RemoveAsset(scope.Token + ":" + assetName);
         }
 
         internal void RemoveAllAssets()
         {
-            foreach (KeyValuePair<Entity, Sequence> entry in m_ByVehicle)
+            RemoveAllAssets(ModeScope.DefaultWorkbench);
+        }
+
+        internal void RemoveAllAssets(ModeScope scope)
+        {
+            foreach (Entity vehicle in m_ByVehicle
+                .Where(entry => entry.Value != null && MatchesRuntimeScope(scope, entry.Value.LineId))
+                .Select(entry => entry.Key)
+                .ToArray())
             {
-                m_Audio.Release(entry.Value);
+                StopVehicle(vehicle);
             }
 
-            foreach (KeyValuePair<string, Sequence> entry in m_ByPlatformKey)
+            foreach (string platformKey in m_ByPlatformKey
+                .Where(entry => entry.Value != null && MatchesRuntimeScope(scope, entry.Value.LineId))
+                .Select(entry => entry.Key)
+                .ToArray())
             {
-                m_Audio.Release(entry.Value);
+                StopPlatform(platformKey);
             }
 
-            m_ByVehicle.Clear();
-            m_ByPlatformKey.Clear();
-            m_Clips.Clear();
+            m_Clips.RemoveMode(scope);
         }
 
         internal void ApplyVolume() => m_Audio.ApplyVolume(m_ByVehicle.Values, m_ByPlatformKey.Values);
+
+        private static bool MatchesRuntimeScope(ModeScope scope, string lineId)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+            {
+                return false;
+            }
+
+            if (LineIdentityService.TryGetMode(lineId, out TransitMode mode) && mode != TransitMode.Unknown)
+            {
+                return mode == scope.Mode;
+            }
+
+            return lineId.IndexOf(':') < 0 && scope.Mode == ModeScope.DefaultWorkbench.Mode;
+        }
 
         internal string Text(Entity vehicle)
         {
@@ -664,7 +697,7 @@ namespace RapidTransitMod.Broadcasting
             audioSource.outputAudioMixerGroup = m_Access.WorldMixerGroup(s_WorldGroupField);
             audioSource.transform.position = position;
             audioSource.pitch = 1f;
-            audioSource.volume = Volume();
+            audioSource.volume = Volume(state.LineId);
             audioSource.loop = false;
             audioSource.playOnAwake = false;
             audioSource.spatialBlend = 1f;
@@ -711,12 +744,11 @@ namespace RapidTransitMod.Broadcasting
 
         internal void ApplyVolume(IEnumerable<Sequence> vehicleSequences, IEnumerable<Sequence> platformSequences)
         {
-            float volume = Volume();
             foreach (Sequence state in vehicleSequences)
             {
                 if (state?.ActiveAudioSource != null)
                 {
-                    state.ActiveAudioSource.volume = volume;
+                    state.ActiveAudioSource.volume = Volume(state.LineId);
                 }
             }
 
@@ -724,17 +756,17 @@ namespace RapidTransitMod.Broadcasting
             {
                 if (state?.ActiveAudioSource != null)
                 {
-                    state.ActiveAudioSource.volume = volume;
+                    state.ActiveAudioSource.volume = Volume(state.LineId);
                 }
             }
         }
 
-        private float Volume()
+        private float Volume(string lineId)
         {
             return Mathf.Lerp(
                 VolumeScalarMin,
                 VolumeScalarMax,
-                m_Config.ClampVolume(m_Config.Volume) / 100f);
+                m_Config.ClampVolume(m_Config.VolumeForLine(lineId)) / 100f);
         }
 
         private bool TryPosition(Entity vehicle, out Vector3 position)
@@ -812,19 +844,20 @@ namespace RapidTransitMod.Broadcasting
             };
         }
 
-        internal Task<AudioClip> BeginLoad(string assetName)
+        internal Task<AudioClip> BeginLoad(string lineId, string assetName)
         {
             if (string.IsNullOrWhiteSpace(assetName))
             {
                 return null;
             }
 
-            if (m_LoadTasks.TryGetValue(assetName, out Task<AudioClip> existingTask))
+            string cacheKey = m_Config.AssetCacheKey(lineId, assetName);
+            if (m_LoadTasks.TryGetValue(cacheKey, out Task<AudioClip> existingTask))
             {
                 return existingTask;
             }
 
-            BroadcastWorkbenchAssetDto asset = m_Config.Assets.FirstOrDefault(candidate =>
+            BroadcastWorkbenchAssetDto asset = m_Config.AssetsForLine(lineId).FirstOrDefault(candidate =>
                 string.Equals(candidate?.name, assetName, StringComparison.OrdinalIgnoreCase));
             string assetPath = m_Config.AssetPath(asset?.path);
             if (string.IsNullOrEmpty(assetPath) || !File.Exists(assetPath))
@@ -839,7 +872,7 @@ namespace RapidTransitMod.Broadcasting
             }
 
             Task<AudioClip> loadTask = LoadAsync(assetName, assetPath, audioType);
-            m_LoadTasks[assetName] = loadTask;
+            m_LoadTasks[cacheKey] = loadTask;
             return loadTask;
         }
 
@@ -1019,6 +1052,25 @@ namespace RapidTransitMod.Broadcasting
             }
 
             m_Cache.Remove(assetName);
+        }
+
+        internal void RemoveMode(ModeScope scope)
+        {
+            string prefix = scope.Token + ":";
+            foreach (string key in m_LoadTasks.Keys.Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray())
+            {
+                m_LoadTasks.Remove(key);
+            }
+
+            foreach (string key in m_Cache.Keys.Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray())
+            {
+                if (m_Cache.TryGetValue(key, out ClipEntry cacheEntry) && !InUse(cacheEntry?.Clip))
+                {
+                    Destroy(cacheEntry?.Clip);
+                }
+
+                m_Cache.Remove(key);
+            }
         }
 
         internal void Clear()

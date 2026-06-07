@@ -6,6 +6,8 @@ namespace RapidTransitMod
     public class DispatchWorkbenchSnapshot
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public string selectedLineId;
         [DataMember]
         public string selectedEditLine;
@@ -43,6 +45,15 @@ namespace RapidTransitMod
         public bool draftApplied;
         [DataMember]
         public RuntimeFeatureSettingsDto featureSettings;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchCatalogEvent
+    {
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public string version;
     }
 
     [DataContract]
@@ -87,6 +98,8 @@ namespace RapidTransitMod
     [DataContract]
     public class DispatchWorkbenchSaveRequest
     {
+        [DataMember]
+        public string mode;
         [DataMember]
         public string selectedLineId;
         [DataMember]
@@ -141,6 +154,8 @@ namespace RapidTransitMod
     public class DispatchWorkbenchSaveResult
     {
         [DataMember]
+        public string mode;
+        [DataMember]
         public bool success;
         [DataMember]
         public string[] errors;
@@ -157,6 +172,8 @@ namespace RapidTransitMod
     [DataContract]
     public class DispatchWorkbenchSaveOperationStatusDto
     {
+        [DataMember]
+        public string mode;
         [DataMember]
         public bool success;
         [DataMember]
@@ -175,6 +192,8 @@ namespace RapidTransitMod
         [DataMember]
         public string preferredLineId;
         [DataMember]
+        public DispatchWorkbenchModePreferredLineDto[] preferredLineIdsByMode;
+        [DataMember]
         public DispatchWorkbenchLineSettingDto[] lineSettings;
         [DataMember]
         public DispatchWorkbenchPersistedDraftState[] drafts;
@@ -182,6 +201,8 @@ namespace RapidTransitMod
         public string broadcastAssetDirectory;
         [DataMember]
         public BroadcastWorkbenchPersistedAssetState[] broadcastAssets;
+        [DataMember]
+        public BroadcastWorkbenchPersistedAssetCatalogState[] broadcastAssetStates;
         [DataMember]
         public BroadcastWorkbenchPersistedLineBindingState[] broadcastDraftLineBindings;
         [DataMember]
@@ -199,7 +220,18 @@ namespace RapidTransitMod
         [DataMember]
         public int? broadcastDraftVolume;
         [DataMember]
+        public BroadcastWorkbenchPersistedVolumeState[] broadcastVolumeStates;
+        [DataMember]
         public RuntimeFeatureSettingsDto featureSettings;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchModePreferredLineDto
+    {
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public string lineId;
     }
 
     [DataContract]

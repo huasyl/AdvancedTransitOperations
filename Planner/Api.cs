@@ -13,9 +13,10 @@ namespace RapidTransitMod.Planner
             m_Jobs = jobs;
         }
 
-        internal string Load()
+        internal string Load(string requestJson)
         {
-            return Workbenches.Json.Write(m_Export.Load());
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadPlannerContext");
+            return Workbenches.Json.Write(m_Export.Load(scope));
         }
 
         internal void Dump()
@@ -25,21 +26,33 @@ namespace RapidTransitMod.Planner
 
         internal string Run(string requestJson)
         {
+            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "runPlanner");
             DispatchPlannerRequest request = Workbenches.Json.Read<DispatchPlannerRequest>(requestJson);
-            return Workbenches.Json.Write(m_Jobs.Run(request));
+            return Workbenches.Json.Write(m_Jobs.Run(scope, request));
         }
 
         internal string Start(string requestJson)
         {
             try
             {
+                ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "startPlannerJob");
                 DispatchPlannerRequest request = Workbenches.Json.Read<DispatchPlannerRequest>(requestJson);
-                return Workbenches.Json.Write(m_Jobs.Start(request));
+                return Workbenches.Json.Write(m_Jobs.Start(scope, request));
             }
             catch (Exception ex)
             {
+                ModeScope scope = ModeScope.DefaultWorkbench;
+                try
+                {
+                    scope = Workbenches.ModeRequest.ReadScope(requestJson, "startPlannerJob", allowLegacyDefault: true);
+                }
+                catch
+                {
+                }
+
                 return Workbenches.Json.Write(new DispatchPlannerJobStatusDto
                 {
+                    mode = scope.Token,
                     success = false,
                     jobId = string.Empty,
                     state = "failed",

@@ -42,6 +42,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 {
                     return global::RapidTransitMod.Workbenches.Json.Write(new ApplyOperationStatusDto
                     {
+                        mode = ModeScope.DefaultWorkbench.Token,
                         success = false,
                         operationId = string.Empty,
                         state = "busy",
@@ -71,6 +72,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 {
                     return global::RapidTransitMod.Workbenches.Json.Write(new ApplyOperationStatusDto
                     {
+                        mode = ModeScope.DefaultWorkbench.Token,
                         success = false,
                         operationId = operationId ?? string.Empty,
                         state = "missing",
@@ -202,9 +204,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 OperationId = operationId ?? string.Empty;
                 RequestJson = requestJson ?? string.Empty;
                 Generation = generation;
+                Mode = ResolveModeToken(RequestJson);
                 UpdatedAtUtc = DateTime.UtcNow;
                 m_Status = new ApplyOperationStatusDto
                 {
+                    mode = Mode,
                     success = true,
                     operationId = OperationId,
                     state = "queued",
@@ -215,6 +219,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
             internal string OperationId { get; }
             internal string RequestJson { get; }
+            internal string Mode { get; }
             internal int Generation { get; }
             internal DateTime UpdatedAtUtc { get; private set; }
 
@@ -244,6 +249,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     UpdatedAtUtc = DateTime.UtcNow;
                     m_Status = new ApplyOperationStatusDto
                     {
+                        mode = Mode,
                         success = success,
                         operationId = OperationId,
                         state = state ?? string.Empty,
@@ -259,12 +265,27 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 {
                     return new ApplyOperationStatusDto
                     {
+                        mode = m_Status?.mode ?? Mode,
                         success = m_Status?.success == true,
                         operationId = OperationId,
                         state = m_Status?.state ?? string.Empty,
                         error = m_Status?.error ?? string.Empty,
                         result = m_Status?.result
                     };
+                }
+            }
+
+            private static string ResolveModeToken(string requestJson)
+            {
+                try
+                {
+                    return Workbenches.ModeRequest
+                        .ReadScope(requestJson, "startBroadcastApplyOperation", allowLegacyDefault: true)
+                        .Token;
+                }
+                catch
+                {
+                    return ModeScope.DefaultWorkbench.Token;
                 }
             }
         }

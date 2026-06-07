@@ -86,6 +86,7 @@ namespace RapidTransitMod.Dispatch.Workbench
     internal sealed class WorkbenchSavePrepareContext
     {
         public string RequestJson = string.Empty;
+        public ModeScope Scope = ModeScope.DefaultWorkbench;
         public ulong SnapshotVersion;
         public List<WorkbenchLineRuntime> RuntimeLines = new List<WorkbenchLineRuntime>();
         public List<DispatchWorkbenchDepotDto> Depots = new List<DispatchWorkbenchDepotDto>();
@@ -97,6 +98,7 @@ namespace RapidTransitMod.Dispatch.Workbench
     {
         public ulong SnapshotVersion;
         public DispatchWorkbenchSaveRequest Request;
+        public ModeScope Scope = ModeScope.DefaultWorkbench;
         public List<WorkbenchLineRuntime> RuntimeLines = new List<WorkbenchLineRuntime>();
         public List<string> Errors = new List<string>();
         public bool ShouldReturnSnapshot;
@@ -108,6 +110,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             return new DispatchWorkbenchSaveResult
             {
+                mode = Scope.Token,
                 success = !HasErrors,
                 errors = Errors?.ToArray() ?? Array.Empty<string>(),
                 warnings = Array.Empty<string>(),
@@ -146,10 +149,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             OperationId = operationId ?? string.Empty;
             RequestJson = requestJson ?? string.Empty;
             Generation = generation;
+            Mode = ResolveModeToken(RequestJson);
             IsApplyDraft = LooksLikeApplyDraftRequest(RequestJson);
             LastUpdatedUtc = DateTime.UtcNow;
             m_Status = new DispatchWorkbenchSaveOperationStatusDto
             {
+                mode = Mode,
                 success = true,
                 operationId = OperationId,
                 state = "queued",
@@ -161,6 +166,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         public string OperationId { get; }
 
         public string RequestJson { get; }
+        public string Mode { get; }
 
         public int Generation { get; }
 
@@ -185,6 +191,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 return new DispatchWorkbenchSaveOperationStatusDto
                 {
+                    mode = m_Status?.mode ?? Mode,
                     success = m_Status?.success ?? false,
                     operationId = m_Status?.operationId ?? string.Empty,
                     state = m_Status?.state ?? string.Empty,
@@ -204,6 +211,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 m_Status = new DispatchWorkbenchSaveOperationStatusDto
                 {
+                    mode = Mode,
                     success = success,
                     operationId = OperationId,
                     state = state ?? string.Empty,
@@ -243,6 +251,20 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             return valueIndex + 4 <= requestJson.Length
                 && string.Compare(requestJson, valueIndex, "true", 0, 4, StringComparison.OrdinalIgnoreCase) == 0;
+        }
+
+        private static string ResolveModeToken(string requestJson)
+        {
+            try
+            {
+                return global::RapidTransitMod.Workbenches.ModeRequest
+                    .ReadScope(requestJson, "startNativeSaveOperation", allowLegacyDefault: true)
+                    .Token;
+            }
+            catch
+            {
+                return ModeScope.DefaultWorkbench.Token;
+            }
         }
     }
 }

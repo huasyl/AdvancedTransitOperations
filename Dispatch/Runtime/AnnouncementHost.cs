@@ -208,6 +208,8 @@ namespace RapidTransitMod
             internal override void Save() => m_Host.SaveWorkbench();
             internal override void Run(System.Action action) => MainThreadDispatcher.RunOnMainThread(action);
             internal override List<WorkbenchLineRuntime> Lines() => m_Host.Lines();
+            internal override string StationName(Entity stopEntity) => m_Host.m_Resolve.StationName(stopEntity);
+            internal override string Name(Entity entity) => m_Host.EntityName(entity);
             internal override string Error(System.Exception ex) => DispatchRuntimeSystem.DescribeError(ex);
         }
     }

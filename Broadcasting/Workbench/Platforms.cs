@@ -46,13 +46,25 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(
+                            requestJson,
+                            copyToAllStations
+                                ? "copyBroadcastPlatformAnnouncementToAllStations"
+                                : "saveBroadcastPlatformAnnouncement");
+                        using (UseScope(scope))
+                        {
                         BroadcastWorkbenchSavePlatformAnnouncementRequest request =
                             global::RapidTransitMod.Workbenches.Json.Read<BroadcastWorkbenchSavePlatformAnnouncementRequest>(requestJson);
-                        string lineId = request?.lineId ?? string.Empty;
+                        string lineId = scope.NormalizeLineId(request?.lineId);
                         string stationId = request?.stationId ?? string.Empty;
                         if (string.IsNullOrWhiteSpace(lineId) || string.IsNullOrWhiteSpace(stationId))
                         {
                             result.error = "Line or station is missing.";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
+                        if (!scope.MatchesLineId(lineId))
+                        {
+                            result.error = "Line does not belong to mode " + scope.Token + ".";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
@@ -65,6 +77,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         }
                         BroadcastWorkbenchPlatformAnnouncementDto announcement =
                             Normalize(lineId, stationId, request?.stationName, request?.title, request?.uiTriggerId, request?.enabled == true, request?.nodes);
+                        m_Ctx.Rules.ValidateNodeCatalog(announcement.nodes);
                         Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements =
                             EnsureDraft(lineId);
 
@@ -82,7 +95,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                     announcement,
                                     lineId,
                                     targetStationId,
-                                    group.Representative.name);
+                                    m_Ctx.Snapshot.StationName(group));
                                 lineAnnouncements[Key(
                                     targetStationId,
                                     clonedAnnouncement.uiTriggerId)] = clonedAnnouncement;
@@ -98,8 +111,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         IncrementWorkbenchSnapshotVersion();
                         SaveWorkbench();
                         result.success = true;
-                        result.snapshot = m_Ctx.Snapshot.Build(lineId);
+                        result.snapshot = m_Ctx.Snapshot.Build(scope, lineId);
                         global::RapidTransitMod.Workbenches.UiEvents.Push(result.snapshot);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -166,7 +180,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     Dictionary<string, string> stationNameBySak =
-                        Snapshot.StationNames(stationGroups);
+                        m_Ctx.Snapshot.StationNames(stationGroups);
 
                     List<BroadcastWorkbenchPlatformAnnouncementDto> result = new List<BroadcastWorkbenchPlatformAnnouncementDto>();
                     foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in announcements)

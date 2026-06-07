@@ -24,6 +24,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 {
     internal sealed class Persistence : ModuleBase
     {
+        private static readonly ModeScope[] s_PersistedAssetScopes =
+        {
+            new ModeScope(TransitMode.Train),
+            new ModeScope(TransitMode.Subway)
+        };
+
         internal Persistence(Context context) : base(context) { }
 
         internal void Build(DispatchWorkbenchPersistentState persisted)
@@ -33,8 +39,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 return;
             }
 
-            persisted.broadcastAssetDirectory = m_State.AssetDir;
+            persisted.broadcastAssetDirectory = m_State.AssetState(ModeScope.DefaultWorkbench).AssetDir;
             persisted.broadcastAssets = Assets();
+            persisted.broadcastAssetStates = AssetStates();
             persisted.broadcastDraftLineBindings = Array.Empty<BroadcastWorkbenchPersistedLineBindingState>();
             persisted.broadcastDraftRules = Array.Empty<BroadcastWorkbenchPersistedRuleState>();
             persisted.broadcastDraftPlatformAnnouncements = Array.Empty<BroadcastWorkbenchPersistedPlatformAnnouncementState>();
@@ -42,7 +49,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             persisted.broadcastRules = Rules();
             persisted.broadcastPlatformAnnouncements = Platforms();
             persisted.broadcastAppliedState = Applied();
-            persisted.broadcastDraftVolume = AppliedVol;
+            persisted.broadcastDraftVolume = m_State.GetDraftVolume(ModeScope.DefaultWorkbench);
+            persisted.broadcastVolumeStates = VolumeStates();
         }
 
         internal void Restore(DispatchWorkbenchPersistentState persisted)
@@ -50,6 +58,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             Restore(
                 persisted?.broadcastAssetDirectory,
                 persisted?.broadcastAssets,
+                persisted?.broadcastAssetStates,
                 persisted?.broadcastDraftLineBindings,
                 persisted?.broadcastDraftRules,
                 persisted?.broadcastDraftPlatformAnnouncements,
@@ -57,12 +66,18 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 persisted?.broadcastRules,
                 persisted?.broadcastPlatformAnnouncements,
                 persisted?.broadcastAppliedState,
-                persisted?.broadcastDraftVolume ?? 80);
+                persisted?.broadcastDraftVolume ?? 80,
+                persisted?.broadcastVolumeStates);
         }
 
         internal BroadcastWorkbenchPersistedAssetState[] Assets()
         {
-            return m_State.Catalog
+            return Assets(ModeScope.DefaultWorkbench);
+        }
+
+        internal BroadcastWorkbenchPersistedAssetState[] Assets(ModeScope scope)
+        {
+            return m_State.AssetState(scope).Catalog
                 .OrderBy(asset => asset?.name, StringComparer.OrdinalIgnoreCase)
                 .Select(asset => asset == null
                     ? null
@@ -74,6 +89,18 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         extension = asset.extension ?? string.Empty
                     })
                 .Where(asset => asset != null && !string.IsNullOrEmpty(asset.name))
+                .ToArray();
+        }
+
+        internal BroadcastWorkbenchPersistedAssetCatalogState[] AssetStates()
+        {
+            return s_PersistedAssetScopes
+                .Select(scope => new BroadcastWorkbenchPersistedAssetCatalogState
+                {
+                    mode = scope.Token,
+                    assetDirectory = m_State.AssetState(scope).AssetDir ?? string.Empty,
+                    assets = Assets(scope)
+                })
                 .ToArray();
         }
 
@@ -112,13 +139,26 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             return new BroadcastWorkbenchPersistedAppliedState
             {
                 lineIds = m_State.AppliedLines.OrderBy(lineId => lineId, StringComparer.Ordinal).ToArray(),
-                volume = Preview.Clamp(AppliedVol)
+                volume = Preview.Clamp(m_State.GetAppliedVolume(ModeScope.DefaultWorkbench))
             };
+        }
+
+        internal BroadcastWorkbenchPersistedVolumeState[] VolumeStates()
+        {
+            return s_PersistedAssetScopes
+                .Select(scope => new BroadcastWorkbenchPersistedVolumeState
+                {
+                    mode = scope.Token,
+                    draftVolume = Preview.Clamp(m_State.GetDraftVolume(scope)),
+                    appliedVolume = Preview.Clamp(m_State.GetAppliedVolume(scope))
+                })
+                .ToArray();
         }
 
         internal void Restore(
             string broadcastAssetDirectory,
             BroadcastWorkbenchPersistedAssetState[] persistedAssets,
+            BroadcastWorkbenchPersistedAssetCatalogState[] persistedAssetStates,
             BroadcastWorkbenchPersistedLineBindingState[] persistedDraftLineBindings,
             BroadcastWorkbenchPersistedRuleState[] persistedDraftRules,
             BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedDraftPlatformAnnouncements,
@@ -126,9 +166,20 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             BroadcastWorkbenchPersistedRuleState[] persistedRules,
             BroadcastWorkbenchPersistedPlatformAnnouncementState[] persistedPlatformAnnouncements,
             BroadcastWorkbenchPersistedAppliedState persistedAppliedState,
-            int persistedDraftVolume)
+            int persistedDraftVolume,
+            BroadcastWorkbenchPersistedVolumeState[] persistedVolumeStates)
         {
-            m_State.Catalog.Clear();
+            foreach (BroadcastWorkbenchAssetState assetState in m_State.AssetsByMode.Values)
+            {
+                if (assetState == null)
+                {
+                    continue;
+                }
+
+                assetState.Catalog.Clear();
+                assetState.AssetDir = string.Empty;
+                assetState.BrowseDir = string.Empty;
+            }
             m_State.DraftBindings.Clear();
             m_State.DraftRules.Clear();
             m_State.DraftPlatforms.Clear();
@@ -136,53 +187,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             m_State.AppliedRules.Clear();
             m_State.AppliedPlatforms.Clear();
             m_State.AppliedLines.Clear();
+            m_State.DraftVolumesByMode.Clear();
+            m_State.AppliedVolumesByMode.Clear();
             m_Announcements.ClearLineChecks();
-            AppliedVol = Preview.Clamp(persistedAppliedState?.volume ?? persistedDraftVolume);
-            DraftVol = AppliedVol;
-            BrowseFolder = string.Empty;
-            AssetFolder = m_Ctx.Assets.EnsureDir();
-
-            string managedAssetDirectory = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Dir(AssetFolder);
-            if (!string.IsNullOrEmpty(broadcastAssetDirectory))
+            RestoreVolumes(persistedAppliedState, persistedDraftVolume, persistedVolumeStates);
+            bool restoredTrainFromScopedState = RestoreAssetStates(persistedAssetStates);
+            if (!restoredTrainFromScopedState)
             {
-                string persistedDirectory = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Dir(broadcastAssetDirectory);
-                if (!string.IsNullOrEmpty(persistedDirectory))
-                {
-                    managedAssetDirectory = persistedDirectory;
-                }
-            }
-
-            AssetFolder = managedAssetDirectory;
-
-            if (persistedAssets != null)
-            {
-                for (int i = 0; i < persistedAssets.Length; i++)
-                {
-                    BroadcastWorkbenchPersistedAssetState asset = persistedAssets[i];
-                    if (asset == null || string.IsNullOrWhiteSpace(asset.name) || string.IsNullOrEmpty(managedAssetDirectory))
-                    {
-                        continue;
-                    }
-
-                    string candidatePath = IoPath.Combine(managedAssetDirectory, asset.name);
-                    if (!File.Exists(candidatePath))
-                    {
-                        continue;
-                    }
-
-                    m_State.Catalog.Add(new BroadcastWorkbenchAssetDto
-                    {
-                        name = asset.name ?? string.Empty,
-                        desc = !string.IsNullOrEmpty(asset.desc)
-                            ? asset.desc
-                            : (asset.extension ?? string.Empty).TrimStart('.').ToUpperInvariant(),
-                        length = asset.length ?? string.Empty,
-                        path = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Path(candidatePath),
-                        extension = !string.IsNullOrEmpty(asset.extension)
-                            ? asset.extension
-                            : (IoPath.GetExtension(candidatePath) ?? string.Empty)
-                    });
-                }
+                RestoreAssetState(ModeScope.DefaultWorkbench, broadcastAssetDirectory, persistedAssets);
             }
 
             RapidTransitMod.Broadcasting.WorkbenchBackend.Bindings.RestoreInto(
@@ -213,6 +225,127 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
             m_Ctx.Preview.ApplyVolume();
             m_Announcements.ApplyVolume();
+        }
+
+        private void RestoreVolumes(
+            BroadcastWorkbenchPersistedAppliedState persistedAppliedState,
+            int persistedDraftVolume,
+            BroadcastWorkbenchPersistedVolumeState[] persistedVolumeStates)
+        {
+            int legacyAppliedVolume = Preview.Clamp(persistedAppliedState?.volume ?? persistedDraftVolume);
+            int legacyDraftVolume = Preview.Clamp(persistedDraftVolume);
+            m_State.SetAppliedVolume(ModeScope.DefaultWorkbench, legacyAppliedVolume);
+            m_State.SetDraftVolume(ModeScope.DefaultWorkbench, legacyDraftVolume);
+
+            if (persistedVolumeStates == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < persistedVolumeStates.Length; i++)
+            {
+                BroadcastWorkbenchPersistedVolumeState state = persistedVolumeStates[i];
+                if (state == null
+                    || !ModeScope.TryParseWorkbench(state.mode, out ModeScope scope)
+                    || !scope.IsSupportedWorkbenchMode)
+                {
+                    continue;
+                }
+
+                int appliedVolume = Preview.Clamp(state.appliedVolume ?? state.draftVolume ?? 80);
+                int draftVolume = Preview.Clamp(state.draftVolume ?? appliedVolume);
+                m_State.SetAppliedVolume(scope, appliedVolume);
+                m_State.SetDraftVolume(scope, draftVolume);
+            }
+        }
+
+        private bool RestoreAssetStates(BroadcastWorkbenchPersistedAssetCatalogState[] persistedAssetStates)
+        {
+            bool restoredTrain = false;
+            if (persistedAssetStates == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < persistedAssetStates.Length; i++)
+            {
+                BroadcastWorkbenchPersistedAssetCatalogState state = persistedAssetStates[i];
+                if (state == null
+                    || !ModeScope.TryParseWorkbench(state.mode, out ModeScope scope)
+                    || !scope.IsSupportedWorkbenchMode)
+                {
+                    continue;
+                }
+
+                RestoreAssetState(scope, state.assetDirectory, state.assets);
+                if (scope.Mode == ModeScope.DefaultWorkbench.Mode)
+                {
+                    restoredTrain = true;
+                }
+            }
+
+            return restoredTrain;
+        }
+
+        private void RestoreAssetState(
+            ModeScope scope,
+            string broadcastAssetDirectory,
+            BroadcastWorkbenchPersistedAssetState[] persistedAssets)
+        {
+            using (UseScope(scope))
+            {
+                BrowseFolder = string.Empty;
+                Catalog.Clear();
+                AssetFolder = m_Ctx.Assets.EnsureDir();
+
+                string managedAssetDirectory = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Dir(AssetFolder);
+                if (!string.IsNullOrEmpty(broadcastAssetDirectory))
+                {
+                    string persistedDirectory = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Dir(broadcastAssetDirectory);
+                    string legacyRootDirectory = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.NormalizeDirectoryBrowserPath(
+                        AssetScope.RootDir());
+                    if (!string.IsNullOrEmpty(persistedDirectory)
+                        && !string.Equals(persistedDirectory, legacyRootDirectory, StringComparison.OrdinalIgnoreCase))
+                    {
+                        managedAssetDirectory = persistedDirectory;
+                    }
+                }
+
+                AssetFolder = managedAssetDirectory;
+
+                if (persistedAssets == null)
+                {
+                    return;
+                }
+
+                for (int i = 0; i < persistedAssets.Length; i++)
+                {
+                    BroadcastWorkbenchPersistedAssetState asset = persistedAssets[i];
+                    if (asset == null || string.IsNullOrWhiteSpace(asset.name) || string.IsNullOrEmpty(managedAssetDirectory))
+                    {
+                        continue;
+                    }
+
+                    string candidatePath = IoPath.Combine(managedAssetDirectory, asset.name);
+                    if (!File.Exists(candidatePath))
+                    {
+                        continue;
+                    }
+
+                    Catalog.Add(new BroadcastWorkbenchAssetDto
+                    {
+                        name = asset.name ?? string.Empty,
+                        desc = !string.IsNullOrEmpty(asset.desc)
+                            ? asset.desc
+                            : (asset.extension ?? string.Empty).TrimStart('.').ToUpperInvariant(),
+                        length = asset.length ?? string.Empty,
+                        path = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Path(candidatePath),
+                        extension = !string.IsNullOrEmpty(asset.extension)
+                            ? asset.extension
+                            : (IoPath.GetExtension(candidatePath) ?? string.Empty)
+                    });
+                }
+            }
         }
 
         internal BroadcastWorkbenchPersistedLineBindingState[] BindingStates(

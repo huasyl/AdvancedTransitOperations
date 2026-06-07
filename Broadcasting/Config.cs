@@ -17,7 +17,7 @@ namespace RapidTransitMod.Broadcasting
         }
 
         internal bool Enabled => m_Source.Enabled;
-        internal int Volume => m_Source.Volume;
+        internal int VolumeForLine(string lineId) => m_Source.VolumeForLine(lineId);
         internal List<BroadcastWorkbenchAssetDto> Assets => m_Source.Assets;
         internal Dictionary<string, List<BroadcastWorkbenchRuleDto>> RulesByLine => m_Source.RulesByLine;
         internal Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> PlatformsByLine => m_Source.PlatformsByLine;
@@ -27,6 +27,9 @@ namespace RapidTransitMod.Broadcasting
 
         internal Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> Bindings(string lineId)
             => m_Source.Bindings(lineId);
+
+        internal List<BroadcastWorkbenchAssetDto> AssetsForLine(string lineId)
+            => m_Source.AssetsForLine(lineId);
 
         internal BroadcastWorkbenchRuleDto CloneRule(BroadcastWorkbenchRuleDto rule)
             => m_Source.CloneRule(rule);
@@ -42,5 +45,8 @@ namespace RapidTransitMod.Broadcasting
             => m_Source.AudioRequest(path, audioType);
 
         internal int ClampVolume(int volumePercent) => m_Source.Clamp(volumePercent);
+
+        internal string AssetCacheKey(string lineId, string assetName)
+            => m_Source.AssetCacheKey(lineId, assetName);
     }
 }

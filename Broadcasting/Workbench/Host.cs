@@ -18,6 +18,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal abstract void Save();
         internal abstract void Run(Action action);
         internal abstract List<WorkbenchLineRuntime> Lines();
+        internal abstract string StationName(Entity stopEntity);
+        internal abstract string Name(Entity entity);
         internal abstract string Error(Exception ex);
     }
 }

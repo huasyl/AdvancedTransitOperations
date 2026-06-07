@@ -69,7 +69,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             List<WorkbenchLineRuntime> runtimeLines = m_Query.GetLines(mode);
             WorkbenchLineRuntime activeRuntime =
-                m_Query.ResolveActiveLine(runtimeLines, preferredLineId, m_GetPreferredLineId(), mode);
+                m_Query.ResolveActiveLine(runtimeLines, preferredLineId, m_Drafts.ResolvePreferredLineId(mode), mode);
             string draftKey = DraftStore.GetKey(activeRuntime?.Id);
             DispatchWorkbenchDraftState draft = m_GetOrCreateDraft(draftKey);
             List<DispatchWorkbenchManualRowDto> mergedManualRows =
@@ -88,7 +88,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             if (activeRuntime != null)
             {
-                m_SetPreferredLineId(activeRuntime.Id);
+                m_Drafts.SetPreferredLineId(activeRuntime.Id, mode);
             }
 
             m_EnsureView(draft, runtimeLines, activeRuntime);
@@ -116,7 +116,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             List<DispatchWorkbenchTripDto> trips =
                 m_Query.GetTrips(activeRuntime, stations, draft);
-            List<DispatchWorkbenchDepotDto> depots = m_Query.GetDepots();
+            List<DispatchWorkbenchDepotDto> depots = GetDepotsForLines(runtimeLines);
             DispatchWorkbenchLineDraftRowsDto[] lineDraftRowsByLineId =
                 m_Query.GetDraftRows(validRuntimeLineIds);
             DispatchWorkbenchStagedRowDto[] canonicalCombinedDraftRows =
@@ -154,6 +154,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             DispatchWorkbenchSnapshot snapshot = new DispatchWorkbenchSnapshot
             {
+                mode = TransitModeCodec.Format(mode),
                 selectedLineId = draft.SelectedLineId,
                 selectedEditLine = draft.SelectedEditLine,
                 mergedView = draft.MergedView,
@@ -196,10 +197,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             string sourceMode)
         {
             List<WorkbenchLineRuntime> runtimeLines = m_Query.GetLines(mode);
-            List<DispatchWorkbenchDepotDto> depots = m_Query.GetDepots();
+            List<DispatchWorkbenchDepotDto> depots = GetDepotsForLines(runtimeLines);
 
             DispatchWorkbenchSnapshot snapshot = new DispatchWorkbenchSnapshot
             {
+                mode = TransitModeCodec.Format(mode),
                 selectedLineId = preferredLineId ?? string.Empty,
                 selectedEditLine = preferredLineId ?? string.Empty,
                 mergedView = new DispatchWorkbenchMergedView(),
@@ -225,6 +227,26 @@ namespace RapidTransitMod.Dispatch.Workbench
                 featureSettings = m_Features()
             };
             return snapshot;
+        }
+
+        private List<DispatchWorkbenchDepotDto> GetDepotsForLines(List<WorkbenchLineRuntime> runtimeLines)
+        {
+            if (runtimeLines == null || runtimeLines.Count == 0)
+                return new List<DispatchWorkbenchDepotDto>();
+
+            HashSet<string> transportTypes = new HashSet<string>(
+                runtimeLines
+                    .Where(line => line != null && !string.IsNullOrEmpty(line.TransportType))
+                    .Select(line => line.TransportType),
+                StringComparer.Ordinal);
+            if (transportTypes.Count == 0)
+                return new List<DispatchWorkbenchDepotDto>();
+
+            return m_Query.GetDepots()
+                .Where(depot => depot != null
+                    && !string.IsNullOrEmpty(depot.transportType)
+                    && transportTypes.Contains(depot.transportType))
+                .ToList();
         }
     }
 }

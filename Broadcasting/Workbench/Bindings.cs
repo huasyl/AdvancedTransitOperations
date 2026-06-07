@@ -25,7 +25,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
     {
         internal Bindings(Context context) : base(context) { }
 
-                public string LoadBroadcastBindingSlotHintsJson(string lineId)
+                public string LoadBroadcastBindingSlotHintsJson(string requestJson)
                 {
                     BroadcastWorkbenchBindingSlotHintsResult result = new BroadcastWorkbenchBindingSlotHintsResult
                     {
@@ -37,10 +37,16 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        string resolvedLineId = lineId?.Trim() ?? string.Empty;
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadBroadcastBindingSlotHints");
+                        string resolvedLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadLine(requestJson));
                         if (string.IsNullOrEmpty(resolvedLineId))
                         {
                             result.error = "Line is missing.";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
+                        if (!scope.MatchesLineId(resolvedLineId))
+                        {
+                            result.error = "Line does not belong to mode " + scope.Token + ".";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
@@ -67,14 +73,22 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveBroadcastStationBinding");
+                        using (UseScope(scope))
+                        {
                         BroadcastWorkbenchSaveStationBindingRequest request =
                             global::RapidTransitMod.Workbenches.Json.Read<BroadcastWorkbenchSaveStationBindingRequest>(requestJson);
-                        string lineId = request?.lineId ?? string.Empty;
+                        string lineId = scope.NormalizeLineId(request?.lineId);
                         string stationId = request?.stationId ?? string.Empty;
                         string assetName = request?.assetName ?? string.Empty;
                         if (string.IsNullOrEmpty(lineId) || string.IsNullOrEmpty(stationId))
                         {
                             result.error = "Line or station is missing.";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
+                        if (!scope.MatchesLineId(lineId))
+                        {
+                            result.error = "Line does not belong to mode " + scope.Token + ".";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
@@ -103,7 +117,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.success = true;
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(lineId));
+                            m_Ctx.Snapshot.Build(scope, lineId));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -125,13 +140,21 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveBroadcastStationBindings");
+                        using (UseScope(scope))
+                        {
                         BroadcastWorkbenchSaveStationBindingsRequest request =
                             global::RapidTransitMod.Workbenches.Json.Read<BroadcastWorkbenchSaveStationBindingsRequest>(requestJson);
-                        string lineId = request?.lineId ?? string.Empty;
+                        string lineId = scope.NormalizeLineId(request?.lineId);
                         string stationId = request?.stationId ?? string.Empty;
                         if (string.IsNullOrEmpty(lineId) || string.IsNullOrEmpty(stationId))
                         {
                             result.error = "Line or station is missing.";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
+                        if (!scope.MatchesLineId(lineId))
+                        {
+                            result.error = "Line does not belong to mode " + scope.Token + ".";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
@@ -142,7 +165,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.success = true;
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(lineId));
+                            m_Ctx.Snapshot.Build(scope, lineId));
+                        }
                     }
                     catch (Exception ex)
                     {

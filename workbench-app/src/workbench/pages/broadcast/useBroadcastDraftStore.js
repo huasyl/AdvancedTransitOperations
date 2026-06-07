@@ -57,8 +57,8 @@ export default function useBroadcastDraftStore() {
   const lineDraftsRef = useRef({});
   const dirtyLineIdsRef = useRef(new Set());
   const lineGenerationsRef = useRef({});
-  const volumeDraftRef = useRef(null);
-  const volumeGenerationRef = useRef(0);
+  const volumeDraftsByModeRef = useRef({});
+  const volumeGenerationsByModeRef = useRef({});
 
   function notify() {
     setVersion((value) => value + 1);
@@ -132,53 +132,86 @@ export default function useBroadcastDraftStore() {
     notify();
   }
 
-  function setVolumeDraft(value) {
+  function normalizeMode(mode = "train") {
+    return String(mode || "train").trim().toLowerCase() || "train";
+  }
+
+  function lineMatchesMode(lineId, mode = "train") {
+    const modeKey = normalizeMode(mode);
+    const id = String(lineId || "");
+    if (!id) {
+      return false;
+    }
+
+    if (id.includes(":")) {
+      return id.toLowerCase().startsWith(`${modeKey}:`);
+    }
+
+    return modeKey === "train";
+  }
+
+  function setVolumeDraft(value, mode = "train") {
+    const modeKey = normalizeMode(mode);
     const normalizedValue = Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Math.round(Number(value)))) : 80;
-    volumeDraftRef.current = normalizedValue;
-    volumeGenerationRef.current += 1;
+    volumeDraftsByModeRef.current = {
+      ...volumeDraftsByModeRef.current,
+      [modeKey]: normalizedValue,
+    };
+    volumeGenerationsByModeRef.current = {
+      ...volumeGenerationsByModeRef.current,
+      [modeKey]: Number(volumeGenerationsByModeRef.current[modeKey] || 0) + 1,
+    };
     notify();
   }
 
-  function clearVolumeDraft(expectedGeneration = null) {
-    if (expectedGeneration != null && volumeGenerationRef.current !== expectedGeneration) {
+  function clearVolumeDraft(expectedGeneration = null, mode = "train") {
+    const modeKey = normalizeMode(mode);
+    if (expectedGeneration != null && Number(volumeGenerationsByModeRef.current[modeKey] || 0) !== expectedGeneration) {
       return;
     }
 
-    if (volumeDraftRef.current == null) {
+    if (volumeDraftsByModeRef.current[modeKey] == null) {
       return;
     }
 
-    volumeDraftRef.current = null;
+    const nextDrafts = { ...volumeDraftsByModeRef.current };
+    delete nextDrafts[modeKey];
+    volumeDraftsByModeRef.current = nextDrafts;
     notify();
   }
 
-  function hasVolumeDirty() {
-    return volumeDraftRef.current != null;
+  function hasVolumeDirty(mode = "train") {
+    return volumeDraftsByModeRef.current[normalizeMode(mode)] != null;
   }
 
-  function getVolumeDraft(fallbackValue = 80) {
-    return volumeDraftRef.current != null ? volumeDraftRef.current : fallbackValue;
+  function getVolumeDraft(fallbackValue = 80, mode = "train") {
+    const modeKey = normalizeMode(mode);
+    return volumeDraftsByModeRef.current[modeKey] != null ? volumeDraftsByModeRef.current[modeKey] : fallbackValue;
   }
 
-  function getDirtyLineIds() {
-    return Array.from(dirtyLineIdsRef.current);
+  function getDirtyLineIds(mode = null) {
+    const lineIds = Array.from(dirtyLineIdsRef.current);
+    return mode ? lineIds.filter((lineId) => lineMatchesMode(lineId, mode)) : lineIds;
   }
 
-  function hasDirty() {
-    return dirtyLineIdsRef.current.size > 0 || hasVolumeDirty();
+  function hasDirty(mode = null) {
+    return (mode ? getDirtyLineIds(mode).length > 0 : dirtyLineIdsRef.current.size > 0)
+      || (mode ? hasVolumeDirty(mode) : Object.keys(volumeDraftsByModeRef.current).length > 0);
   }
 
   function getLineDraftGeneration(lineId) {
     return Number(lineGenerationsRef.current[lineId] || 0);
   }
 
-  function getVolumeDraftGeneration() {
-    return volumeGenerationRef.current;
+  function getVolumeDraftGeneration(mode = "train") {
+    return Number(volumeGenerationsByModeRef.current[normalizeMode(mode)] || 0);
   }
 
-  function buildApplyRequest() {
+  function buildApplyRequest(mode = "train") {
+    const modeKey = normalizeMode(mode);
     return {
       lines: getDirtyLineIds()
+        .filter((lineId) => lineMatchesMode(lineId, modeKey))
         .map((lineId) => {
           const draft = getLineDraft(lineId);
           if (!draft) {
@@ -196,8 +229,8 @@ export default function useBroadcastDraftStore() {
           };
         })
         .filter(Boolean),
-      volume: hasVolumeDirty() ? volumeDraftRef.current : null,
-      volumeDirty: hasVolumeDirty(),
+      volume: hasVolumeDirty(modeKey) ? volumeDraftsByModeRef.current[modeKey] : null,
+      volumeDirty: hasVolumeDirty(modeKey),
     };
   }
 

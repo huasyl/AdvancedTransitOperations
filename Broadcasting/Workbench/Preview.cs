@@ -37,8 +37,10 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         internal Preview(Context context) : base(context) { }
 
-                public string PlayBroadcastAssetPreviewJson(string assetName)
+                public string PlayBroadcastAssetPreviewJson(string requestJson)
                 {
+                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "playBroadcastAssetPreview");
+                    string assetName = Workbenches.ModeRequest.ReadAssetName(requestJson);
                     BroadcastWorkbenchAssetPreviewResult result = new BroadcastWorkbenchAssetPreviewResult
                     {
                         success = false,
@@ -49,24 +51,23 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
-                        string requestedAssetName = assetName ?? string.Empty;
-                        if (!FeatureEnabled())
+                        using (UseScope(scope))
                         {
-                            MainThreadDispatcher.RunOnMainThread(() => Stop());
-                            result.error = "Broadcast preview is disabled.";
-                            return global::RapidTransitMod.Workbenches.Json.Write(result);
-                        }
+                        string requestedAssetName = assetName ?? string.Empty;
                         if (string.IsNullOrWhiteSpace(requestedAssetName))
                         {
                             result.error = "Asset name is missing.";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
+                        string modeToken = scope.Token;
                         MainThreadDispatcher.RunOnMainThread(() =>
-                            StopRule(m_RuleId, notify: true));
+                            StopRule(m_RuleId, notify: true, modeToken: modeToken));
 
                         MainThreadDispatcher.RunOnMainThread(async () =>
                         {
+                            using (UseScope(scope))
+                            {
                             try
                             {
                                 await PlayAsset(requestedAssetName);
@@ -76,10 +77,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                 NotifyAsset(requestedAssetName, "error", ex.Message ?? string.Empty);
                                 LogException("PlayAsset", ex);
                             }
+                            }
                         });
 
                         result.success = true;
                         result.state = "pending";
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -92,6 +95,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string PlayBroadcastRulePreviewJson(string requestJson)
                 {
+                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "playBroadcastRulePreview");
                     BroadcastWorkbenchRulePreviewResult result = new BroadcastWorkbenchRulePreviewResult
                     {
                         success = false,
@@ -102,16 +106,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
-                        LoadWorkbench();
-                        if (!FeatureEnabled())
+                        using (UseScope(scope))
                         {
-                            MainThreadDispatcher.RunOnMainThread(() => Stop());
-                            result.error = "Broadcast preview is disabled.";
-                            return global::RapidTransitMod.Workbenches.Json.Write(result);
-                        }
+                        LoadWorkbench();
                         BroadcastWorkbenchRulePreviewRequest request =
                             global::RapidTransitMod.Workbenches.Json.Read<BroadcastWorkbenchRulePreviewRequest>(requestJson);
-                        string lineId = request?.lineId ?? string.Empty;
+                        string lineId = scope.NormalizeLineId(request?.lineId);
                         string ruleId = request?.ruleId ?? string.Empty;
                         if (string.IsNullOrWhiteSpace(lineId) || string.IsNullOrWhiteSpace(ruleId))
                         {
@@ -123,18 +123,23 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.state = "pending";
                         result.ruleId = ruleId;
                         BroadcastWorkbenchRuleDto previewRule = request?.rule;
+                        string modeToken = scope.Token;
                         MainThreadDispatcher.RunOnMainThread(async () =>
                         {
+                            using (UseScope(scope))
+                            {
                             try
                             {
-                                await PlayRule(lineId, ruleId, previewRule);
+                                await PlayRule(lineId, ruleId, previewRule, modeToken);
                             }
                             catch (Exception ex)
                             {
-                                NotifyRule(ruleId, "error", ex.Message ?? string.Empty);
+                                NotifyRule(modeToken, ruleId, "error", ex.Message ?? string.Empty);
                                 LogException("PlayRule", ex);
                             }
+                            }
                         });
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -145,8 +150,10 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
 
-                public string StopBroadcastAssetPreviewJson(string assetName)
+                public string StopBroadcastAssetPreviewJson(string requestJson)
                 {
+                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "stopBroadcastAssetPreview");
+                    string assetName = Workbenches.ModeRequest.ReadAssetName(requestJson);
                     BroadcastWorkbenchAssetPreviewResult result = new BroadcastWorkbenchAssetPreviewResult
                     {
                         success = true,
@@ -157,8 +164,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
+                        using (UseScope(scope))
+                        {
                         string requestedAssetName = assetName ?? string.Empty;
-                        MainThreadDispatcher.RunOnMainThread(() => StopAsset(requestedAssetName, notify: true));
+                        string modeToken = scope.Token;
+                        MainThreadDispatcher.RunOnMainThread(() => StopAsset(requestedAssetName, notify: true, modeToken: modeToken));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -171,8 +182,10 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
 
-                public string StopBroadcastRulePreviewJson(string ruleId)
+                public string StopBroadcastRulePreviewJson(string requestJson)
                 {
+                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "stopBroadcastRulePreview");
+                    string ruleId = Workbenches.ModeRequest.ReadRuleId(requestJson);
                     BroadcastWorkbenchRulePreviewResult result = new BroadcastWorkbenchRulePreviewResult
                     {
                         success = true,
@@ -183,8 +196,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
+                        using (UseScope(scope))
+                        {
                         string requestedRuleId = ruleId ?? string.Empty;
-                        MainThreadDispatcher.RunOnMainThread(() => StopRule(requestedRuleId, notify: true));
+                        string modeToken = scope.Token;
+                        MainThreadDispatcher.RunOnMainThread(() => StopRule(requestedRuleId, notify: true, modeToken: modeToken));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -197,7 +214,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
 
-                public string SetBroadcastPreviewVolumeJson(string volumeJson)
+                public string SetBroadcastPreviewVolumeJson(string requestJson)
                 {
                     BroadcastWorkbenchVolumeResult result = new BroadcastWorkbenchVolumeResult
                     {
@@ -211,19 +228,23 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        int nextVolume = ParseVolume(volumeJson, DraftVol);
-                        bool changed = nextVolume != DraftVol;
-                        DraftVol = nextVolume;
-                        ApplyVolume();
-                        if (changed)
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "setBroadcastPreviewVolume");
+                        using (UseScope(scope))
                         {
-                            IncrementWorkbenchSnapshotVersion();
-                            SaveWorkbench();
-                        }
+                            int nextVolume = Clamp(Workbenches.ModeRequest.ReadVolume(requestJson, DraftVol));
+                            bool changed = nextVolume != DraftVol;
+                            DraftVol = nextVolume;
+                            ApplyVolume();
+                            if (changed)
+                            {
+                                IncrementWorkbenchSnapshotVersion();
+                                SaveWorkbench();
+                            }
 
-                        result.success = true;
-                        result.volume = Clamp(DraftVol);
-                        result.volumeDirty = DraftVol != AppliedVol;
+                            result.success = true;
+                            result.volume = Clamp(DraftVol);
+                            result.volumeDirty = DraftVol != AppliedVol;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -305,7 +326,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     MainThreadDispatcher.RegisterUpdater(() => ObserveAsset(playbackToken, requestedAssetName));
                 }
 
-                internal void StopAsset(string assetName, bool notify)
+                internal void StopAsset(string assetName, bool notify, string modeToken = null)
                 {
                     string resolvedAssetName = !string.IsNullOrWhiteSpace(assetName)
                         ? assetName
@@ -335,7 +356,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     if (notify && !string.IsNullOrWhiteSpace(resolvedAssetName))
                     {
-                        NotifyAsset(resolvedAssetName, "stopped", string.Empty);
+                        NotifyAsset(modeToken, resolvedAssetName, "stopped", string.Empty);
                     }
                 }
 
@@ -407,7 +428,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     m_Clip = null;
                 }
 
-                internal async Task PlayRule(string lineId, string ruleId, BroadcastWorkbenchRuleDto previewRule = null)
+                internal async Task PlayRule(string lineId, string ruleId, BroadcastWorkbenchRuleDto previewRule = null, string modeToken = null)
                 {
                     StopAsset(m_AssetName, notify: true);
                     StopRule(ruleId, notify: false);
@@ -419,19 +440,19 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                 candidate != null && string.Equals(candidate.id, ruleId, StringComparison.Ordinal));
                     if (rule?.nodes == null || rule.nodes.Length == 0)
                     {
-                        NotifyRule(ruleId, "error", "Selected rule has no previewable nodes.");
+                        NotifyRule(modeToken, ruleId, "error", "Selected rule has no previewable nodes.");
                         return;
                     }
 
                     if (!Context(lineId, out TriggerContext context))
                     {
-                        NotifyRule(ruleId, "error", "Preview context is unavailable.");
+                        NotifyRule(modeToken, ruleId, "error", "Preview context is unavailable.");
                         return;
                     }
 
                     int playbackToken = unchecked(++m_RuleToken);
                     m_RuleId = ruleId;
-                    NotifyRule(ruleId, "started", string.Empty);
+                    NotifyRule(modeToken, ruleId, "started", string.Empty);
 
                     for (int nodeIndex = 0; nodeIndex < rule.nodes.Length; nodeIndex++)
                     {
@@ -493,7 +514,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     StopRule(ruleId, notify: false);
-                    NotifyRule(ruleId, "ended", string.Empty);
+                    NotifyRule(modeToken, ruleId, "ended", string.Empty);
                 }
 
                 internal async Task<AudioClip> Load(string assetName)
@@ -551,7 +572,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return completion.Task;
                 }
 
-                internal void StopRule(string ruleId, bool notify)
+                internal void StopRule(string ruleId, bool notify, string modeToken = null)
                 {
                     string resolvedRuleId = !string.IsNullOrWhiteSpace(ruleId)
                         ? ruleId
@@ -581,7 +602,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     if (notify && !string.IsNullOrWhiteSpace(resolvedRuleId))
                     {
-                        NotifyRule(resolvedRuleId, "stopped", string.Empty);
+                        NotifyRule(modeToken, resolvedRuleId, "stopped", string.Empty);
                     }
                 }
 
@@ -632,8 +653,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal void NotifyRule(string ruleId, string state, string error)
                 {
+                    NotifyRule(CurrentScope.Token, ruleId, state, error);
+                }
+
+                internal void NotifyRule(string modeToken, string ruleId, string state, string error)
+                {
                     global::RapidTransitMod.Workbenches.UiEvents.Push(new BroadcastWorkbenchRulePreviewStateDto
                     {
+                        mode = modeToken ?? CurrentScope.Token,
                         ruleId = ruleId ?? string.Empty,
                         state = state ?? string.Empty,
                         error = error ?? string.Empty
@@ -724,8 +751,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal void NotifyAsset(string assetName, string state, string error)
                 {
+                    NotifyAsset(CurrentScope.Token, assetName, state, error);
+                }
+
+                internal void NotifyAsset(string modeToken, string assetName, string state, string error)
+                {
                     global::RapidTransitMod.Workbenches.UiEvents.Push(new BroadcastWorkbenchAssetPreviewStateDto
                     {
+                        mode = modeToken ?? CurrentScope.Token,
                         assetName = assetName ?? string.Empty,
                         state = state ?? string.Empty,
                         error = error ?? string.Empty

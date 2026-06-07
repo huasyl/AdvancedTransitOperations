@@ -18,7 +18,7 @@ namespace RapidTransitMod.Planner
         {
             try
             {
-                string json = Workbenches.Json.Write(export.Load());
+                string json = Workbenches.Json.Write(export.Load(ModeScope.DefaultWorkbench));
                 string logsDirectory = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     "AppData",

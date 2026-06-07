@@ -6,9 +6,12 @@ import ManualDraftSection from "./components/ManualDraftSection";
 import ScheduleTopbar from "./components/ScheduleTopbar";
 import SummarySection from "./components/SummarySection";
 
-function SchedulePage({ registerHostActions }) {
+function SchedulePage({ registerHostActions, activeTransportMode = "train" }) {
   const { t } = useNativeScheduleI18n();
-  const { topbar, summary, auto, manual, refs, actions } = useScheduleController({ registerHostActions });
+  const { topbar, summary, auto, manual, refs, actions } = useScheduleController({
+    registerHostActions,
+    activeTransportMode
+  });
 
   return (
     <div className="dw-demo-page-root">

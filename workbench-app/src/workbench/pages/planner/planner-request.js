@@ -42,7 +42,8 @@ export function buildPlannerRequest(params) {
     maxLocalShift,
     maxLocalWait,
     forcedOvertakes,
-    forcedBypassOptions
+    forcedBypassOptions,
+    mode
   } = params;
 
   const lineCollections = buildLineCollections(plannerInput);
@@ -51,6 +52,7 @@ export function buildPlannerRequest(params) {
     .map(canonicalizeLineId)
     .filter(Boolean);
   const request = {
+    mode: String(mode || plannerInput?.mode || "train").trim().toLowerCase() || "train",
     draftKey: pickPlannerDraft(plannerInput)?.lineKey || "",
     windowStart: analysisStart,
     windowEnd: analysisEnd,

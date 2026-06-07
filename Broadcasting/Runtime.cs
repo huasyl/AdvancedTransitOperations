@@ -138,10 +138,21 @@ namespace RapidTransitMod.Broadcasting
             m_Playback.RemoveAsset(assetName);
         }
 
+        internal void RemoveAsset(ModeScope scope, string assetName)
+        {
+            m_Playback.RemoveAsset(scope, assetName);
+        }
+
         internal void RemoveAllAssets()
         {
             m_Playback.RemoveAllAssets();
             m_Platforms.ClearAssetState();
+        }
+
+        internal void RemoveAllAssets(ModeScope scope)
+        {
+            m_Playback.RemoveAllAssets(scope);
+            m_Platforms.ClearAssetState(scope);
         }
 
         internal void ApplyVolume()

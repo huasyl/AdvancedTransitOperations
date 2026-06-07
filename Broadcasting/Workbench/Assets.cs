@@ -26,9 +26,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
     {
         internal Assets(Context context) : base(context) { }
 
-                public string LoadBroadcastAssetBrowserJson(string requestedPath)
+                public string LoadBroadcastAssetBrowserJson(string requestJson)
                 {
-                    return global::RapidTransitMod.Workbenches.Json.Write(Browser(requestedPath));
+                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadBroadcastAssetBrowser");
+                    using (UseScope(scope))
+                    {
+                        return global::RapidTransitMod.Workbenches.Json.Write(
+                            Browser(Workbenches.ModeRequest.ReadPath(requestJson)));
+                    }
                 }
 
                 public string ImportBroadcastExternalAssetsJson(string requestJson)
@@ -43,6 +48,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "importBroadcastExternalAssets");
+                        using (UseScope(scope))
+                        {
                         BroadcastWorkbenchImportExternalAssetsRequest request =
                             global::RapidTransitMod.Workbenches.Json.Read<BroadcastWorkbenchImportExternalAssetsRequest>(requestJson);
                         string[] selectedPaths = request?.selectedPaths ?? Array.Empty<string>();
@@ -120,7 +128,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.importedCount = importedAssets.Count;
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(string.Empty));
+                            m_Ctx.Snapshot.Build(scope, string.Empty));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -131,7 +140,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
 
-                public string DeleteBroadcastAssetJson(string assetName)
+                public string DeleteBroadcastAssetJson(string requestJson)
                 {
                     BroadcastWorkbenchDeleteAssetResult result = new BroadcastWorkbenchDeleteAssetResult
                     {
@@ -142,14 +151,17 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        string normalizedAssetName = assetName?.Trim() ?? string.Empty;
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "deleteBroadcastAsset");
+                        using (UseScope(scope))
+                        {
+                        string normalizedAssetName = Workbenches.ModeRequest.ReadAssetName(requestJson)?.Trim() ?? string.Empty;
                         if (string.IsNullOrEmpty(normalizedAssetName))
                         {
                             result.error = "Asset name is missing.";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
 
-                        if (HasAppliedRefs(normalizedAssetName))
+                        if (HasAppliedRefs(scope, normalizedAssetName))
                         {
                             result.error = "broadcast-asset-in-use";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
@@ -167,7 +179,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.success = true;
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(string.Empty));
+                            m_Ctx.Snapshot.Build(scope, string.Empty));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -178,7 +191,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
 
-                public string DeleteAllBroadcastAssetsJson()
+                public string DeleteAllBroadcastAssetsJson(string requestJson)
                 {
                     BroadcastWorkbenchDeleteAllAssetsResult result = new BroadcastWorkbenchDeleteAllAssetsResult
                     {
@@ -188,8 +201,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "deleteAllBroadcastAssets");
+                        using (UseScope(scope))
+                        {
                         LoadWorkbench();
-                        if (HasAnyAppliedRefs())
+                        if (HasAnyAppliedRefs(scope))
                         {
                             result.error = "broadcast-asset-in-use";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
@@ -202,7 +218,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         result.success = true;
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
-                            m_Ctx.Snapshot.Build(string.Empty));
+                            m_Ctx.Snapshot.Build(scope, string.Empty));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -213,7 +230,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return global::RapidTransitMod.Workbenches.Json.Write(result);
                 }
 
-                public string OpenBroadcastAssetDirectoryPickerJson()
+                public string OpenBroadcastAssetDirectoryPickerJson(string requestJson)
                 {
                     BroadcastWorkbenchDirectoryPickerResult result = new BroadcastWorkbenchDirectoryPickerResult
                     {
@@ -224,8 +241,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
+                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "openBroadcastAssetDirectoryPicker");
                         MainThreadDispatcher.RunOnMainThread(() =>
                         {
+                            using (UseScope(scope))
+                            {
                             try
                             {
                                 GameScreenUISystem gameScreenSystem =
@@ -244,7 +264,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                 {
                                     try
                                     {
-                                        SelectDir(directory);
+                                        SelectDir(scope, directory);
                                         gameScreenSystem.activeScreen = previousScreen;
                                     }
                                     catch (Exception ex)
@@ -256,6 +276,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             catch (Exception ex)
                             {
                                 LogException("OpenBroadcastAssetDirectoryPicker", ex);
+                            }
                             }
                         });
 
@@ -392,18 +413,26 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal void SelectDir(string directory)
                 {
+                    SelectDir(CurrentScope, directory);
+                }
+
+                internal void SelectDir(ModeScope scope, string directory)
+                {
                     string normalizedDirectory = Dir(directory);
                     if (string.IsNullOrEmpty(normalizedDirectory))
                     {
                         return;
                     }
 
-                    AssetFolder = normalizedDirectory;
-                    Catalog.Clear();
-                    Catalog.AddRange(Scan(normalizedDirectory));
+                    using (UseScope(scope))
+                    {
+                        AssetFolder = normalizedDirectory;
+                        Catalog.Clear();
+                        Catalog.AddRange(Scan(normalizedDirectory));
 
-                    global::RapidTransitMod.Workbenches.UiEvents.Push(
-                        m_Ctx.Snapshot.Build(string.Empty));
+                        global::RapidTransitMod.Workbenches.UiEvents.Push(
+                            m_Ctx.Snapshot.Build(scope, string.Empty));
+                    }
                 }
 
                 internal string Root()
@@ -645,11 +674,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 internal string EnsureDir()
                 {
-                    string localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    string localLowPath = IoPath.Combine(Directory.GetParent(localAppDataPath).FullName, "LocalLow");
-                    string directory = IoPath.Combine(localLowPath, "Colossal Order", "Cities Skylines II", "ModsData", Mod.Id, ManagedDirName);
-                    Directory.CreateDirectory(directory);
-                    return NormalizeDirectoryBrowserPath(directory);
+                    return new AssetScope(CurrentScope).EnsureDir();
                 }
 
                 internal bool Remove(string assetName)
@@ -662,8 +687,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     bool removed = false;
                     string normalizedAssetName = assetName.Trim();
 
+                    ModeScope scope = CurrentScope;
                     MainThreadDispatcher.RunOnMainThread(() =>
-                        m_Ctx.Preview.StopAsset(normalizedAssetName, notify: true));
+                        m_Ctx.Preview.StopAsset(normalizedAssetName, notify: true, modeToken: scope.Token));
 
                     for (int i = Catalog.Count - 1; i >= 0; i--)
                     {
@@ -688,14 +714,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         return false;
                     }
 
-                    MainThreadDispatcher.RunOnMainThread(() => m_Announcements.RemoveAsset(normalizedAssetName));
+                    MainThreadDispatcher.RunOnMainThread(() => m_Announcements.RemoveAsset(scope, normalizedAssetName));
                     return true;
                 }
 
                 internal void RemoveAll()
                 {
+                    ModeScope scope = CurrentScope;
                     MainThreadDispatcher.RunOnMainThread(() =>
-                        m_Ctx.Preview.StopAsset(string.Empty, notify: true));
+                        m_Ctx.Preview.StopAsset(string.Empty, notify: true, modeToken: scope.Token));
 
                     for (int i = 0; i < Catalog.Count; i++)
                     {
@@ -709,10 +736,10 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     Catalog.Clear();
-                    MainThreadDispatcher.RunOnMainThread(m_Announcements.RemoveAllAssets);
+                    MainThreadDispatcher.RunOnMainThread(() => m_Announcements.RemoveAllAssets(scope));
                 }
 
-                private bool HasAnyAppliedRefs()
+                private bool HasAnyAppliedRefs(ModeScope scope)
                 {
                     HashSet<string> assetNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     for (int i = 0; i < Catalog.Count; i++)
@@ -731,7 +758,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     foreach (string assetName in assetNames)
                     {
-                        if (HasAppliedRefs(assetName))
+                        if (HasAppliedRefs(scope, assetName))
                         {
                             return true;
                         }
@@ -740,24 +767,30 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     return false;
                 }
 
-                private bool HasAppliedRefs(string assetName)
+                private bool HasAppliedRefs(ModeScope scope, string assetName)
                 {
                     if (string.IsNullOrWhiteSpace(assetName))
                     {
                         return false;
                     }
 
-                    return HasBindingRefs(AppliedBindings, assetName)
-                        || HasRuleRefs(AppliedRules, assetName)
-                        || HasPlatformRefs(AppliedPlatforms, assetName);
+                    return HasBindingRefs(scope, AppliedBindings, assetName)
+                        || HasRuleRefs(scope, AppliedRules, assetName)
+                        || HasPlatformRefs(scope, AppliedPlatforms, assetName);
                 }
 
                 private static bool HasBindingRefs(
+                    ModeScope scope,
                     Dictionary<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> allBindings,
                     string assetName)
                 {
                     foreach (KeyValuePair<string, Dictionary<string, List<BroadcastWorkbenchStationBindingDto>>> lineEntry in allBindings)
                     {
+                        if (!MatchesAppliedLineScope(scope, lineEntry.Key))
+                        {
+                            continue;
+                        }
+
                         Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> bindings = lineEntry.Value;
                         if (bindings == null)
                         {
@@ -778,11 +811,17 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 }
 
                 private static bool HasRuleRefs(
+                    ModeScope scope,
                     Dictionary<string, List<BroadcastWorkbenchRuleDto>> allRules,
                     string assetName)
                 {
                     foreach (KeyValuePair<string, List<BroadcastWorkbenchRuleDto>> lineEntry in allRules)
                     {
+                        if (!MatchesAppliedLineScope(scope, lineEntry.Key))
+                        {
+                            continue;
+                        }
+
                         List<BroadcastWorkbenchRuleDto> rules = lineEntry.Value;
                         if (rules == null)
                         {
@@ -802,11 +841,17 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 }
 
                 private static bool HasPlatformRefs(
+                    ModeScope scope,
                     Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> allAnnouncements,
                     string assetName)
                 {
                     foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in allAnnouncements)
                     {
+                        if (!MatchesAppliedLineScope(scope, lineEntry.Key))
+                        {
+                            continue;
+                        }
+
                         Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> announcements = lineEntry.Value;
                         if (announcements == null)
                         {
@@ -844,6 +889,21 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     return false;
+                }
+
+                private static bool MatchesAppliedLineScope(ModeScope scope, string lineId)
+                {
+                    if (string.IsNullOrWhiteSpace(lineId))
+                    {
+                        return false;
+                    }
+
+                    if (LineIdentityService.TryGetMode(lineId, out TransitMode mode) && mode != TransitMode.Unknown)
+                    {
+                        return mode == scope.Mode;
+                    }
+
+                    return lineId.IndexOf(':') < 0 && scope.Mode == ModeScope.DefaultWorkbench.Mode;
                 }
 
                 internal static BroadcastWorkbenchAssetDto CloneAsset(BroadcastWorkbenchAssetDto asset)

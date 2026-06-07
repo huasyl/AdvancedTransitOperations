@@ -12,6 +12,7 @@ namespace RapidTransitMod.Planner
             DispatchPlannerResult result = new DispatchPlannerResult();
             PlannerContext context = state.Context;
             List<PlannerPlanModel> projectedPlans = SelectPlansForFrontend(state.Plans);
+            result.mode = context.Request.mode ?? string.Empty;
             result.success = state.Diagnostics.All(issue => !string.Equals(issue.Level, "error", StringComparison.Ordinal));
             result.engineVersion = PlannerDefaults.EngineVersion;
             result.requestEcho = BuildRequestEcho(context);
@@ -184,6 +185,7 @@ namespace RapidTransitMod.Planner
         {
             return new DispatchPlannerRequestEchoDto
             {
+                mode = context.Request.mode ?? string.Empty,
                 draftKey = context.Request.draftKey,
                 analysisWindowId = context.Request.analysisWindowId,
                 windowStart = context.WindowStart,

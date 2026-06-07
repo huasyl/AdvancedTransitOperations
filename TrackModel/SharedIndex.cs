@@ -22,6 +22,8 @@ namespace RapidTransitMod.TrackModel
         private readonly List<Entity> m_ProtectedIntervalOrderedCandidateKeys = new List<Entity>();
         private readonly List<int> m_ProtectedIntervalOrderedSourceAtomIndices = new List<int>();
         private readonly List<int> m_ProtectedIntervalOrderedCandidateAtomIndices = new List<int>();
+        private delegate bool SharedPhysicalContextResolver(Entity line, TrackAtom atom, out int sharedLineCount, out bool mirroredContext);
+        private delegate bool SharedPhysicalForLineResolver(Entity line, TrackAtom atom, Entity otherLine, out bool mirroredContext);
 
         internal SharedIndex(TrackSupport support, TrackBuild build)
         {
@@ -47,9 +49,21 @@ namespace RapidTransitMod.TrackModel
         {
             m_Index.Track.Clear();
             m_Index.Physical.Clear();
+            RebuildSharedInto(m_Index, _ => true);
 
+            m_Index.ClearDirty();
+            m_Index.Bump();
+        }
+
+        private void RebuildSharedInto(
+            TrackModelBuilder target,
+            Func<KeyValuePair<string, AppliedLine>, bool> include)
+        {
             foreach (KeyValuePair<string, AppliedLine> entry in m_Support.AppliedLines)
             {
+                if (include != null && !include(entry))
+                    continue;
+
                 Entity line = entry.Value.LineEntity;
                 if (line == Entity.Null
                     || !EntityManager.Exists(line)
@@ -68,20 +82,20 @@ namespace RapidTransitMod.TrackModel
                     if (atom.AtomClass != TrackAtomClass.PrimaryLane)
                         continue;
 
-                    if (!m_Index.Track.TryGetValue(atom.Key, out List<SharedTrackOccurrence> occurrences))
+                    if (!target.Track.TryGetValue(atom.Key, out List<SharedTrackOccurrence> occurrences))
                     {
                         occurrences = new List<SharedTrackOccurrence>();
-                        m_Index.Track[atom.Key] = occurrences;
+                        target.Track[atom.Key] = occurrences;
                     }
 
                     int waypointSegmentIndex = ResolveWaypointSegmentIndex(chain, atomIndex);
                     occurrences.Add(new SharedTrackOccurrence(line, atomIndex, waypointSegmentIndex));
 
                     Entity physicalLaneKey = atom.Key.PhysicalLaneKey;
-                    if (!m_Index.Physical.TryGetValue(physicalLaneKey, out List<SharedPhysicalOccurrence> physicalOccurrences))
+                    if (!target.Physical.TryGetValue(physicalLaneKey, out List<SharedPhysicalOccurrence> physicalOccurrences))
                     {
                         physicalOccurrences = new List<SharedPhysicalOccurrence>();
-                        m_Index.Physical[physicalLaneKey] = physicalOccurrences;
+                        target.Physical[physicalLaneKey] = physicalOccurrences;
                     }
 
                     physicalOccurrences.Add(new SharedPhysicalOccurrence(
@@ -92,15 +106,41 @@ namespace RapidTransitMod.TrackModel
                         atom.Key.NextTarget));
                 }
             }
-
-            m_Index.ClearDirty();
-            m_Index.Bump();
         }
 
         internal void EnsureSharedTrackIndexCurrent()
         {
             if (m_Index.Dirty())
                 RebuildShared();
+        }
+
+        internal uint BuildScopedSharedTrackIndex(ModeScope scope, TrackModelBuilder scopedIndex)
+        {
+            if (scopedIndex == null)
+                return 0;
+
+            scopedIndex.Track.Clear();
+            scopedIndex.Physical.Clear();
+            RebuildSharedInto(scopedIndex, entry => MatchesScope(entry, scope));
+            scopedIndex.ClearDirty();
+            scopedIndex.Bump();
+            return scopedIndex.Version();
+        }
+
+        private bool MatchesScope(KeyValuePair<string, AppliedLine> entry, ModeScope scope)
+        {
+            string lineId = entry.Key ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(lineId))
+                return false;
+
+            if (LineKey.TryParse(lineId, out LineKey key))
+                return key.Mode == scope.Mode;
+
+            Entity line = entry.Value?.LineEntity ?? Entity.Null;
+            TransitMode resolvedMode = TransportModeResolver.Resolve(EntityManager, line);
+            return resolvedMode == TransitMode.Unknown
+                ? scope.Mode == ModeScope.DefaultWorkbench.Mode
+                : resolvedMode == scope.Mode;
         }
 
         internal static int ResolveWaypointSegmentIndex(LineTrackChain chain, int atomIndex)
@@ -121,7 +161,37 @@ namespace RapidTransitMod.TrackModel
                 return;
 
             EnsureSharedTrackIndexCurrent();
-            if (chain.SharedRunsVersion == Version)
+            RefreshSharedRunsCore(
+                chain,
+                m_Index,
+                Version,
+                TryGetSharedPhysicalContext,
+                TryGetSharedPhysicalContextForLine);
+        }
+
+        internal void RefreshSharedRuns(LineTrackChain chain, TrackModelBuilder scopedIndex, uint scopedVersion)
+        {
+            if (chain == null || scopedIndex == null || scopedVersion == 0)
+                return;
+
+            RefreshSharedRunsCore(
+                chain,
+                scopedIndex,
+                scopedVersion,
+                (Entity line, TrackAtom atom, out int sharedLineCount, out bool mirroredContext) =>
+                    TryGetSharedPhysicalContext(scopedIndex, line, atom, out sharedLineCount, out mirroredContext),
+                (Entity line, TrackAtom atom, Entity otherLine, out bool mirroredContext) =>
+                    TryGetSharedPhysicalContextForLine(scopedIndex, line, atom, otherLine, out mirroredContext));
+        }
+
+        private void RefreshSharedRunsCore(
+            LineTrackChain chain,
+            TrackModelBuilder index,
+            uint version,
+            SharedPhysicalContextResolver sharedContext,
+            SharedPhysicalForLineResolver sharedForLine)
+        {
+            if (chain.SharedRunsVersion == version)
                 return;
 
             chain.SharedRuns.Clear();
@@ -139,7 +209,7 @@ namespace RapidTransitMod.TrackModel
             {
                 TrackAtom atom = chain.TrackAtoms[atomIndex];
                 if (atom.AtomClass != TrackAtomClass.PrimaryLane
-                    || !TryGetSharedPhysicalContext(chain.LineEntity, atom, out int sharedLineCount, out bool mirroredContext))
+                    || !sharedContext(chain.LineEntity, atom, out int sharedLineCount, out bool mirroredContext))
                 {
                     if (runStart >= 0)
                     {
@@ -167,11 +237,14 @@ namespace RapidTransitMod.TrackModel
             if (runStart >= 0)
                 chain.SharedRuns.Add(new SharedTrackRun(runStart, chain.TrackAtoms.Count, runMirrored, runSharedLineCount));
 
-            RefreshSharedRunsByOtherLine(chain);
-            chain.SharedRunsVersion = Version;
+            RefreshSharedRunsByOtherLine(chain, index, sharedForLine);
+            chain.SharedRunsVersion = version;
         }
 
-        private void RefreshSharedRunsByOtherLine(LineTrackChain chain)
+        private void RefreshSharedRunsByOtherLine(
+            LineTrackChain chain,
+            TrackModelBuilder index,
+            SharedPhysicalForLineResolver sharedForLine)
         {
             if (chain == null || chain.TrackAtoms.Count == 0)
                 return;
@@ -183,7 +256,7 @@ namespace RapidTransitMod.TrackModel
                 if (atom.AtomClass != TrackAtomClass.PrimaryLane)
                     continue;
 
-                if (!m_Index.Physical.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
+                if (!index.Physical.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
                     || occurrences == null)
                 {
                     continue;
@@ -206,7 +279,7 @@ namespace RapidTransitMod.TrackModel
                 {
                     TrackAtom atom = chain.TrackAtoms[atomIndex];
                     if (atom.AtomClass != TrackAtomClass.PrimaryLane
-                        || !TryGetSharedPhysicalContextForLine(chain.LineEntity, atom, otherLine, out bool mirroredContext))
+                        || !sharedForLine(chain.LineEntity, atom, otherLine, out bool mirroredContext))
                     {
                         if (runStart >= 0)
                         {
@@ -568,11 +641,70 @@ namespace RapidTransitMod.TrackModel
             return sharedLineCount > 0;
         }
 
+        private bool TryGetSharedPhysicalContext(TrackModelBuilder index, Entity line, TrackAtom atom, out int sharedLineCount, out bool mirroredContext)
+        {
+            sharedLineCount = 0;
+            mirroredContext = false;
+
+            if (index == null
+                || !index.Physical.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
+                || occurrences == null
+                || occurrences.Count == 0)
+            {
+                return false;
+            }
+
+            var sharedLines = new HashSet<Entity>();
+            foreach (SharedPhysicalOccurrence occurrence in occurrences)
+            {
+                if (occurrence.LineEntity == line)
+                    continue;
+
+                sharedLines.Add(occurrence.LineEntity);
+                if (occurrence.PreviousTarget == atom.Key.NextTarget
+                    && occurrence.NextTarget == atom.Key.PreviousTarget)
+                {
+                    mirroredContext = true;
+                }
+            }
+
+            sharedLineCount = sharedLines.Count;
+            return sharedLineCount > 0;
+        }
+
         private bool TryGetSharedPhysicalContextForLine(Entity line, TrackAtom atom, Entity otherLine, out bool mirroredContext)
         {
             mirroredContext = false;
             if (otherLine == Entity.Null
                 || !TryPhysical(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
+                || occurrences == null)
+            {
+                return false;
+            }
+
+            bool found = false;
+            foreach (SharedPhysicalOccurrence occurrence in occurrences)
+            {
+                if (occurrence.LineEntity != otherLine)
+                    continue;
+
+                found = true;
+                if (occurrence.PreviousTarget == atom.Key.NextTarget
+                    && occurrence.NextTarget == atom.Key.PreviousTarget)
+                {
+                    mirroredContext = true;
+                }
+            }
+
+            return found;
+        }
+
+        private bool TryGetSharedPhysicalContextForLine(TrackModelBuilder index, Entity line, TrackAtom atom, Entity otherLine, out bool mirroredContext)
+        {
+            mirroredContext = false;
+            if (index == null
+                || otherLine == Entity.Null
+                || !index.Physical.TryGetValue(atom.Key.PhysicalLaneKey, out List<SharedPhysicalOccurrence> occurrences)
                 || occurrences == null)
             {
                 return false;

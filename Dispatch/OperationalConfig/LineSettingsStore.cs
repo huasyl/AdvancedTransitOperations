@@ -75,6 +75,33 @@ namespace RapidTransitMod
             m_Lines.Clear();
         }
 
+        public void Clear(TransitMode mode)
+        {
+            if (mode == TransitMode.Unknown)
+            {
+                Clear();
+                return;
+            }
+
+            List<LineKey> keys = new List<LineKey>();
+            foreach (LineKey key in m_Lines.Keys)
+            {
+                if (key.Mode == mode)
+                {
+                    keys.Add(key);
+                }
+            }
+
+            if (keys.Count == 0)
+                return;
+
+            m_Version++;
+            for (int i = 0; i < keys.Count; i++)
+            {
+                m_Lines.Remove(keys[i]);
+            }
+        }
+
         public IEnumerable<KeyValuePair<LineKey, LineConfigState>> GetAll()
         {
             foreach (KeyValuePair<LineKey, LineConfigState> entry in m_Lines)

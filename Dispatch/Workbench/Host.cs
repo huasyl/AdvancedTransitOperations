@@ -50,6 +50,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<RuntimeFeatureSettingsDto, bool> m_SameFeatures;
         private readonly Action<IEnumerable<DispatchWorkbenchLineSettingDto>> m_LineCfg;
         private readonly Func<IEnumerable<DispatchWorkbenchLineSettingDto>, bool> m_SameLineCfg;
+        private readonly Action<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>> m_LineCfgForMode;
+        private readonly Func<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>, bool> m_SameLineCfgForMode;
         private readonly Action m_ClearLineCfg;
         private readonly Action m_DropDepotCache;
         private readonly Func<RuntimeFeatureSettingsDto> m_FeatureDto;
@@ -64,6 +66,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<RuntimeFeatureSettingsDto, bool> sameFeatures,
             Action<IEnumerable<DispatchWorkbenchLineSettingDto>> lineCfg,
             Func<IEnumerable<DispatchWorkbenchLineSettingDto>, bool> sameLineCfg,
+            Action<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>> lineCfgForMode,
+            Func<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>, bool> sameLineCfgForMode,
             Action clearLineCfg,
             Action dropDepotCache,
             Func<RuntimeFeatureSettingsDto> featureDto,
@@ -77,6 +81,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_SameFeatures = sameFeatures ?? throw new ArgumentNullException(nameof(sameFeatures));
             m_LineCfg = lineCfg ?? throw new ArgumentNullException(nameof(lineCfg));
             m_SameLineCfg = sameLineCfg ?? throw new ArgumentNullException(nameof(sameLineCfg));
+            m_LineCfgForMode = lineCfgForMode ?? throw new ArgumentNullException(nameof(lineCfgForMode));
+            m_SameLineCfgForMode = sameLineCfgForMode ?? throw new ArgumentNullException(nameof(sameLineCfgForMode));
             m_ClearLineCfg = clearLineCfg ?? throw new ArgumentNullException(nameof(clearLineCfg));
             m_DropDepotCache = dropDepotCache ?? throw new ArgumentNullException(nameof(dropDepotCache));
             m_FeatureDto = featureDto ?? throw new ArgumentNullException(nameof(featureDto));
@@ -102,9 +108,19 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_LineCfg(settings);
         }
 
+        internal void LineCfg(ModeScope scope, IEnumerable<DispatchWorkbenchLineSettingDto> settings)
+        {
+            m_LineCfgForMode(scope.Mode, settings);
+        }
+
         internal bool SameLineCfg(IEnumerable<DispatchWorkbenchLineSettingDto> settings)
         {
             return m_SameLineCfg(settings);
+        }
+
+        internal bool SameLineCfg(ModeScope scope, IEnumerable<DispatchWorkbenchLineSettingDto> settings)
+        {
+            return m_SameLineCfgForMode(scope.Mode, settings);
         }
 
         internal void ClearLineCfg()

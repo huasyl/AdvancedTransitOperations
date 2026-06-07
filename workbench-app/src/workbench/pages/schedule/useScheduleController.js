@@ -11,6 +11,7 @@ import {
   LINE_OPTIONS,
   MIN_LINE_SETTING_MINUTES,
   buildPlanLineOptions,
+  buildCatalog,
   buildRuntimeCatalog,
   directionFromOffsetMode,
   getReferenceLineIdsForLine,
@@ -51,9 +52,34 @@ import {
 import { readPersistedNativeScheduleState, writePersistedNativeScheduleState } from "./schedule-persistence";
 import { runNativeSaveOperation } from "./schedule-save-operation";
 
-export default function useScheduleController({ registerHostActions } = {}) {
+const DEFAULT_SCHEDULE_MODE = "train";
+
+function normalizeScheduleMode(mode) {
+  const token = String(mode || "").trim().toLowerCase();
+  return token || DEFAULT_SCHEDULE_MODE;
+}
+
+function getPayloadMode(payload) {
+  return typeof payload?.mode === "string" ? normalizeScheduleMode(payload.mode) : "";
+}
+
+function shouldConsumeSchedulePayload(payload, expectedMode) {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const payloadMode = getPayloadMode(payload);
+  if (payloadMode) {
+    return payloadMode === normalizeScheduleMode(expectedMode);
+  }
+
+  return normalizeScheduleMode(expectedMode) === DEFAULT_SCHEDULE_MODE;
+}
+
+export default function useScheduleController({ registerHostActions, activeTransportMode = "train" } = {}) {
 
   const { t } = useNativeScheduleI18n();
+  const scheduleMode = normalizeScheduleMode(activeTransportMode);
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
   const [catalogRevision, setCatalogRevision] = useState(0);
@@ -93,10 +119,14 @@ export default function useScheduleController({ registerHostActions } = {}) {
   const hasHydratedRuntimeRef = useRef(false);
   const lastHydratedSnapshotRef = useRef(null);
   const suppressNextSnapshotRef = useRef(false);
+  const suppressNextSnapshotModeRef = useRef("");
   const skipNextBackendSaveRef = useRef(false);
   const latestDraftSaveOperationRunIdRef = useRef(0);
   const latestApplySaveOperationRunIdRef = useRef(0);
   const applyingSaveOperationRef = useRef(false);
+  const activeModeRef = useRef(scheduleMode);
+  const scheduleModeGenerationRef = useRef(0);
+  activeModeRef.current = scheduleMode;
 
   const planLineOptions = useMemo(
     () => buildPlanLineOptions(LINE_OPTIONS),
@@ -276,13 +306,44 @@ export default function useScheduleController({ registerHostActions } = {}) {
     }
   }
 
-  function applyHydratedState(snapshot, metadataSnapshot = null) {
+  function suppressNextSnapshotForMode(mode) {
+    suppressNextSnapshotRef.current = true;
+    suppressNextSnapshotModeRef.current = normalizeScheduleMode(mode);
+  }
+
+  function clearSnapshotSuppression(mode) {
+    if (!suppressNextSnapshotRef.current) {
+      return;
+    }
+
+    if (suppressNextSnapshotModeRef.current && suppressNextSnapshotModeRef.current !== normalizeScheduleMode(mode)) {
+      return;
+    }
+
+    suppressNextSnapshotRef.current = false;
+    suppressNextSnapshotModeRef.current = "";
+  }
+
+  function isCurrentModeRequest(mode, generation) {
+    return activeModeRef.current === normalizeScheduleMode(mode)
+      && scheduleModeGenerationRef.current === generation;
+  }
+
+  function applyHydratedState(snapshot, metadataSnapshot = null, expectedMode = scheduleMode) {
+    const targetMode = normalizeScheduleMode(expectedMode);
+    if (!shouldConsumeSchedulePayload(snapshot, targetMode)) {
+      return false;
+    }
+
+    const scopedMetadata = shouldConsumeSchedulePayload(metadataSnapshot, targetMode)
+      ? metadataSnapshot
+      : null;
     lastHydratedSnapshotRef.current = snapshot ?? null;
     skipNextBackendSaveRef.current = true;
-    const persistedState = readPersistedNativeScheduleState();
+    const persistedState = readPersistedNativeScheduleState(targetMode);
     const runtimeCatalog = buildRuntimeCatalog(
       snapshot,
-      metadataSnapshot,
+      scopedMetadata,
       null,
       t
     );
@@ -368,27 +429,104 @@ export default function useScheduleController({ registerHostActions } = {}) {
     );
     setPanelMessage(null);
     hasHydratedRuntimeRef.current = true;
+    return true;
+  }
+
+  async function refreshCatalog(modeAtRequest = scheduleMode) {
+    let metadata = null;
+
+    try {
+      metadata = await workbenchApi.refreshMetadata?.({ mode: modeAtRequest });
+    } catch {
+      return;
+    }
+
+    if (!shouldConsumeSchedulePayload(metadata, modeAtRequest)) {
+      return;
+    }
+
+    const runtimeCatalog = buildCatalog(metadata, t);
+    replaceRuntimeCatalog({
+      lines: runtimeCatalog.lineOptions,
+      depots: runtimeCatalog.depotOptions,
+      origins: runtimeCatalog.originOptions
+    });
+    bumpCatalogRevision();
+
+    const nextLine =
+      runtimeCatalog.lineOptions.find((line) => line?.id === selectedLineId) ??
+      runtimeCatalog.lineOptions[0] ??
+      null;
+
+    if (!nextLine) {
+      setSelectedLineId("");
+      setSelectedLineType("local");
+      setSelectedDepot("");
+      setOrigin("");
+      setHoldMinutes("");
+      setDwellMinutes("");
+      return;
+    }
+
+    const changedLine = nextLine.id !== selectedLineId;
+    if (changedLine) {
+      setSelectedLineId(nextLine.id);
+      setSelectedLineType(nextLine.kind);
+      setSelectedDepot(nextLine.depotId);
+      setOrigin(nextLine.originId);
+      setHoldMinutes(nextLine.hold);
+      setDwellMinutes(nextLine.dwell);
+    }
   }
 
   useEffect(() => {
     let disposed = false;
+    const modeAtRequest = scheduleMode;
+    const generation = scheduleModeGenerationRef.current + 1;
+    scheduleModeGenerationRef.current = generation;
+    hasHydratedRuntimeRef.current = false;
+    suppressNextSnapshotRef.current = false;
+    suppressNextSnapshotModeRef.current = "";
+    skipNextBackendSaveRef.current = true;
+    latestDraftSaveOperationRunIdRef.current += 1;
+    latestApplySaveOperationRunIdRef.current += 1;
+    applyingSaveOperationRef.current = false;
+    lastHydratedSnapshotRef.current = null;
+    setIsApplyingSchedule(false);
+    replaceRuntimeCatalog({ lines: [], depots: [], origins: [] });
+    bumpCatalogRevision();
+    setSelectedLineId("");
+    setSelectedLineType("local");
+    setSelectedDepot("");
+    setOrigin("");
+    setHoldMinutes("");
+    setDwellMinutes("");
+    setFeatureSettings({ ...DEFAULT_RUNTIME_FEATURE_SETTINGS });
+    setSummaryEntries([]);
+    setAutoRules([]);
+    setManualDrafts([]);
+    setPlanRefsByLine({});
+    setAppliedSummarySignature("");
+    setAppliedSummaryRowKeys([]);
+    setSummaryFilter("all");
+    setPanelMessage(null);
 
     async function hydrateFromBackend({ forceRefresh = false } = {}) {
       try {
         const snapshot = forceRefresh
-          ? await workbenchApi.refreshSnapshot?.()
-          : await workbenchApi.loadSnapshot?.();
+          ? await workbenchApi.refreshSnapshot?.({ mode: modeAtRequest })
+          : await workbenchApi.loadSnapshot?.({ mode: modeAtRequest });
         let metadata = null;
 
         try {
-          metadata = await workbenchApi.refreshMetadata?.();
+          metadata = await workbenchApi.refreshMetadata?.({ mode: modeAtRequest });
         } catch {}
 
-        if (!disposed) {
-          applyHydratedState(snapshot, metadata);
+        if (!disposed && isCurrentModeRequest(modeAtRequest, generation)) {
+          applyHydratedState(snapshot, metadata, modeAtRequest);
         }
       } catch (error) {
-        if (!disposed) {
+        if (!disposed && isCurrentModeRequest(modeAtRequest, generation)) {
           console.error("[RT Native Schedule] backend hydrate failed", error);
         }
       }
@@ -396,13 +534,18 @@ export default function useScheduleController({ registerHostActions } = {}) {
 
     hydrateFromBackend();
     const unsubscribe = workbenchApi.onSnapshotChanged?.((snapshot) => {
-      if (suppressNextSnapshotRef.current) {
-        suppressNextSnapshotRef.current = false;
+      if (!isCurrentModeRequest(modeAtRequest, generation)
+        || !shouldConsumeSchedulePayload(snapshot, modeAtRequest)) {
+        return;
+      }
+
+      if (suppressNextSnapshotRef.current && suppressNextSnapshotModeRef.current === modeAtRequest) {
+        clearSnapshotSuppression(modeAtRequest);
         return;
       }
 
       if (!disposed) {
-        applyHydratedState(snapshot, null);
+        applyHydratedState(snapshot, null, modeAtRequest);
       }
     });
 
@@ -410,7 +553,22 @@ export default function useScheduleController({ registerHostActions } = {}) {
       disposed = true;
       unsubscribe?.();
     };
-  }, [t, workbenchApi]);
+  }, [scheduleMode, t, workbenchApi]);
+
+  useEffect(() => {
+    const unsubscribe = workbenchApi.onCatalogChanged?.((event) => {
+      const modeAtRequest = normalizeScheduleMode(event?.mode || scheduleMode);
+      if (modeAtRequest !== scheduleMode) {
+        return;
+      }
+
+      refreshCatalog(modeAtRequest);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [scheduleMode, selectedLineId, t, workbenchApi]);
 
   useEffect(() => {
     if (typeof registerHostActions !== "function") {
@@ -419,21 +577,25 @@ export default function useScheduleController({ registerHostActions } = {}) {
 
     registerHostActions({
       refreshData: async () => {
-        const snapshot = await workbenchApi.refreshSnapshot?.();
+        const modeAtRequest = scheduleMode;
+        const generation = scheduleModeGenerationRef.current;
+        const snapshot = await workbenchApi.refreshSnapshot?.({ mode: modeAtRequest });
         let metadata = null;
 
         try {
-          metadata = await workbenchApi.refreshMetadata?.();
+          metadata = await workbenchApi.refreshMetadata?.({ mode: modeAtRequest });
         } catch {}
 
-        applyHydratedState(snapshot, metadata);
+        if (isCurrentModeRequest(modeAtRequest, generation)) {
+          applyHydratedState(snapshot, metadata, modeAtRequest);
+        }
       }
     });
 
     return () => {
       registerHostActions(null);
     };
-  }, [registerHostActions, t, workbenchApi]);
+  }, [scheduleMode, registerHostActions, t, workbenchApi]);
 
   useEffect(() => {
     if (!hasHydratedRuntimeRef.current) {
@@ -448,7 +610,7 @@ export default function useScheduleController({ registerHostActions } = {}) {
       autoOffsetDirection,
       autoOffsetMinutesText,
       summaryFilter
-    });
+    }, scheduleMode);
   }, [
     autoFrequencyText,
     autoOffsetDirection,
@@ -456,6 +618,7 @@ export default function useScheduleController({ registerHostActions } = {}) {
     editorEnd,
     editorStart,
     manualInput,
+    scheduleMode,
     summaryFilter
   ]);
 
@@ -464,9 +627,15 @@ export default function useScheduleController({ registerHostActions } = {}) {
       return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
     }
 
+    const requestMode = scheduleMode;
+    const requestGeneration = scheduleModeGenerationRef.current;
     const runRef = applyDraft ? latestApplySaveOperationRunIdRef : latestDraftSaveOperationRunIdRef;
     const runId = runRef.current + 1;
     runRef.current = runId;
+    if (!isCurrentModeRequest(requestMode, requestGeneration)) {
+      return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
+    }
+
     if (applyDraft) {
       applyingSaveOperationRef.current = true;
       setIsApplyingSchedule(true);
@@ -476,6 +645,7 @@ export default function useScheduleController({ registerHostActions } = {}) {
     const currentManualRows = manualDrafts.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const currentAutoRows = autoRules.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const request = {
+      mode: requestMode,
       selectedLineId,
       selectedEditLine: selectedLineId,
       mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
@@ -490,15 +660,16 @@ export default function useScheduleController({ registerHostActions } = {}) {
       returnSnapshot: false
     };
 
-    suppressNextSnapshotRef.current = true;
+    suppressNextSnapshotForMode(requestMode);
     try {
       const operationResult = await runNativeSaveOperation(workbenchApi, request, {
         applyDraft,
-        shouldContinue: () => runRef.current === runId
+        expectedMode: requestMode,
+        shouldContinue: () => runRef.current === runId && isCurrentModeRequest(requestMode, requestGeneration)
       });
 
       if (operationResult.interrupted) {
-        suppressNextSnapshotRef.current = false;
+        clearSnapshotSuppression(requestMode);
         if (applyDraft) {
           throw new Error("apply-operation-interrupted");
         }
@@ -507,7 +678,7 @@ export default function useScheduleController({ registerHostActions } = {}) {
       }
 
       if (operationResult.superseded) {
-        suppressNextSnapshotRef.current = false;
+        clearSnapshotSuppression(requestMode);
         if (applyDraft) {
           throw new Error("apply-operation-superseded");
         }
@@ -516,15 +687,26 @@ export default function useScheduleController({ registerHostActions } = {}) {
       }
 
       const result = operationResult.result;
+      if (result && !shouldConsumeSchedulePayload(result, requestMode)) {
+        clearSnapshotSuppression(requestMode);
+        if (applyDraft) {
+          throw new Error("apply-operation-mode-mismatch");
+        }
+
+        return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
+      }
+
       if (result?.snapshot) {
-        applyHydratedState(result.snapshot, null);
+        if (isCurrentModeRequest(requestMode, requestGeneration)) {
+          applyHydratedState(result.snapshot, null, requestMode);
+        }
       } else {
-        suppressNextSnapshotRef.current = false;
+        clearSnapshotSuppression(requestMode);
       }
 
       return result;
     } catch (error) {
-      suppressNextSnapshotRef.current = false;
+      clearSnapshotSuppression(requestMode);
       throw error;
     } finally {
       if (applyDraft && runRef.current === runId) {
@@ -548,9 +730,11 @@ export default function useScheduleController({ registerHostActions } = {}) {
       return undefined;
     }
 
+    const modeAtSchedule = scheduleMode;
+    const generation = scheduleModeGenerationRef.current;
     const timeoutId = window.setTimeout(async () => {
       try {
-        if (applyingSaveOperationRef.current) {
+        if (applyingSaveOperationRef.current || !isCurrentModeRequest(modeAtSchedule, generation)) {
           return;
         }
 
@@ -566,6 +750,7 @@ export default function useScheduleController({ registerHostActions } = {}) {
     featureSettings,
     catalogRevision,
     manualDrafts,
+    scheduleMode,
     selectedLineId,
     summaryEntries,
     t,
@@ -970,9 +1155,15 @@ export default function useScheduleController({ registerHostActions } = {}) {
   }
 
   async function handleApplySchedule() {
+    const modeAtRequest = scheduleMode;
+    const generation = scheduleModeGenerationRef.current;
     setPanelMessage({ scope: "summary", tone: "neutral", text: t("nativeSchedule.message.summary.applying") });
     try {
       const result = await saveNativeWorkbenchDraft({ applyDraft: true });
+      if (!isCurrentModeRequest(modeAtRequest, generation)) {
+        return;
+      }
+
       if (result?.superseded) {
         throw new Error("apply-operation-superseded");
       }
@@ -997,6 +1188,10 @@ export default function useScheduleController({ registerHostActions } = {}) {
       setAppliedSummarySignature(getSummaryRowsSignature(summaryEntries));
       setAppliedSummaryRowKeys(summaryEntries.map((row) => getSummaryRowKey(row)));
     } catch (error) {
+      if (!isCurrentModeRequest(modeAtRequest, generation)) {
+        return;
+      }
+
       setPanelMessage({
         scope: "summary",
         tone: "error",

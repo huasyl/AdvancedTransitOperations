@@ -20,7 +20,15 @@ export default function useBroadcastApplyOperation(workbenchApi) {
   });
   const generationRef = useRef(0);
 
-  async function apply(request) {
+  function normalizeMode(mode = "train") {
+    return String(mode || "train").trim().toLowerCase() || "train";
+  }
+
+  function matchesMode(payload, mode) {
+    return normalizeMode(payload?.mode) === normalizeMode(mode);
+  }
+
+  async function apply(request, mode = "train", isCurrentMode = null) {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     setApplyState({
@@ -36,6 +44,12 @@ export default function useBroadcastApplyOperation(workbenchApi) {
       if (!startedOperation?.operationId) {
         throw new Error(startedOperation?.error || "broadcast-apply-operation-start-failed");
       }
+      if (typeof isCurrentMode === "function" && !isCurrentMode(mode)) {
+        return { interrupted: true, result: null, latestStatus: startedOperation };
+      }
+      if (!matchesMode(startedOperation, mode)) {
+        return { interrupted: true, result: null, latestStatus: startedOperation };
+      }
 
       let latestStatus = startedOperation;
       while (generationRef.current === generation && !isTerminalBroadcastApplyState(latestStatus?.state)) {
@@ -45,6 +59,12 @@ export default function useBroadcastApplyOperation(workbenchApi) {
 
         await waitForDelay(APPLY_OPERATION_STATUS_DELAY_MS);
         latestStatus = await workbenchApi.getBroadcastApplyOperationStatus?.(startedOperation.operationId);
+        if (typeof isCurrentMode === "function" && !isCurrentMode(mode)) {
+          return { interrupted: true, result: null, latestStatus };
+        }
+        if (latestStatus && !matchesMode(latestStatus, mode)) {
+          return { interrupted: true, result: null, latestStatus };
+        }
       }
 
       if (generationRef.current !== generation) {
@@ -69,6 +89,9 @@ export default function useBroadcastApplyOperation(workbenchApi) {
       if (!result?.success) {
         throw new Error(result?.error || "broadcast-apply-failed");
       }
+      if (typeof isCurrentMode === "function" && !isCurrentMode(mode)) {
+        return { interrupted: true, result, latestStatus };
+      }
 
       setApplyState({
         phase: "applied",
@@ -79,7 +102,8 @@ export default function useBroadcastApplyOperation(workbenchApi) {
       return { interrupted: false, superseded: false, result, latestStatus };
     } catch (error) {
       const message = error instanceof Error ? error.message : "broadcast-apply-failed";
-      if (generationRef.current === generation) {
+      if (generationRef.current === generation
+        && (typeof isCurrentMode !== "function" || isCurrentMode(mode))) {
         setApplyState({
           phase: "error",
           error: message,
