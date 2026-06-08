@@ -72,6 +72,22 @@ namespace RapidTransitMod.Dispatch.Observation
         }
     }
 
+    internal readonly struct TraversalSliceLineEligibilityCache
+    {
+        public readonly Entity Line;
+        public readonly ulong ChainSignature;
+        public readonly bool Eligible;
+        public readonly uint NextRefreshFrame;
+
+        public TraversalSliceLineEligibilityCache(Entity line, ulong chainSignature, bool eligible, uint nextRefreshFrame)
+        {
+            Line = line;
+            ChainSignature = chainSignature;
+            Eligible = eligible;
+            NextRefreshFrame = nextRefreshFrame;
+        }
+    }
+
     internal readonly struct VehicleTraversalSliceSession
     {
         public readonly Entity Line;
@@ -212,6 +228,10 @@ namespace RapidTransitMod.Dispatch.Observation
             new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, TraversalSliceSamplingPlanCache> m_Plans =
             new Dictionary<Entity, TraversalSliceSamplingPlanCache>();
+        private readonly Dictionary<Entity, TraversalSliceLineEligibilityCache> m_LineEligibility =
+            new Dictionary<Entity, TraversalSliceLineEligibilityCache>();
+        private readonly Dictionary<Entity, uint> m_NextEntryProbeFrames =
+            new Dictionary<Entity, uint>();
         private readonly Dictionary<ulong, TraversalSliceLapDebugAggregate> m_LapDebug =
             new Dictionary<ulong, TraversalSliceLapDebugAggregate>();
         private readonly List<TraversalSliceActualSample> m_RecentActualSamples =
@@ -224,6 +244,8 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Dictionary<Entity, uint> LastSampleFrames => m_LastSampleFrames;
         internal Dictionary<Entity, uint> LastPositionSampleFrames => m_LastPositionFrames;
         internal Dictionary<Entity, TraversalSliceSamplingPlanCache> Plans => m_Plans;
+        internal Dictionary<Entity, TraversalSliceLineEligibilityCache> LineEligibility => m_LineEligibility;
+        internal Dictionary<Entity, uint> NextEntryProbeFrames => m_NextEntryProbeFrames;
         internal Dictionary<ulong, TraversalSliceLapDebugAggregate> LapDebug => m_LapDebug;
         internal List<TraversalSliceActualSample> RecentActualSamples => m_RecentActualSamples;
         internal List<TraversalPositionSample> RecentPositionSamples => m_RecentPositionSamples;
@@ -235,6 +257,8 @@ namespace RapidTransitMod.Dispatch.Observation
             m_LastSampleFrames.Clear();
             m_LastPositionFrames.Clear();
             m_Plans.Clear();
+            m_LineEligibility.Clear();
+            m_NextEntryProbeFrames.Clear();
             m_LapDebug.Clear();
             m_RecentActualSamples.Clear();
             m_RecentPositionSamples.Clear();
@@ -246,6 +270,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_LastSampleFrames.Remove(vehicle);
             m_LastPositionFrames.Remove(vehicle);
             m_Plans.Remove(vehicle);
+            m_NextEntryProbeFrames.Remove(vehicle);
         }
 
         internal bool TryObservation(ulong key, out TraversalSliceObservation observation) =>

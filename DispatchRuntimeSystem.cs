@@ -72,6 +72,8 @@ namespace RapidTransitMod
         internal TrackProjectionService m_TrackProjection = null!;
         internal RuntimeFacade m_Bypass = null!;
         internal SharedCorridorSupport m_SharedCorridor = null!;
+        internal CatalogCache m_WorkbenchCatalogCache = null!;
+        internal CatalogDirty m_WorkbenchCatalogDirty = null!;
 
         internal IReadOnlyDictionary<string, AppliedLine> AppliedLines => m_WorkbenchBridge.AppliedLines;
 

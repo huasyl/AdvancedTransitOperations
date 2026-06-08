@@ -122,6 +122,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Mileage = new LineMileagePort
                 {
                     EntityManager = runtime.EntityManager,
+                    Frame = () => runtime.m_SimulationSystem.frameIndex,
                     MixSignature = runtime.m_LineProfile.MixSignature,
                     Log = message => runtime.log.Info(message),
                     Name = entity => runtime.m_NameSystem.GetRenderedLabelName(entity),

@@ -30,6 +30,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             return resultJson;
         }
 
+        internal static string HostState(string requestJson)
+        {
+            return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.SetHostState(requestJson) ?? string.Empty;
+        }
+
         internal static string Start(string requestJson)
         {
             Mod.log.Info($"[WorkbenchSaveOperationBridge] startNativeSaveOperation length={requestJson?.Length ?? 0}");

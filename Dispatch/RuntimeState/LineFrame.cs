@@ -8,8 +8,11 @@ namespace RapidTransitMod
     {
         public readonly Entity Line;
         public readonly uint Frame;
+        public readonly ulong CfgVersion;
+        public readonly ulong AppliedVersion;
         public readonly string Id;
         public readonly string Key;
+        public readonly LineKey StoreKey;
         public readonly bool Applied;
         public readonly string CfgKind;
         public readonly string AppliedKind;
@@ -18,8 +21,11 @@ namespace RapidTransitMod
         public LineFrame(
             Entity line,
             uint frame,
+            ulong cfgVersion,
+            ulong appliedVersion,
             string id,
             string key,
+            LineKey storeKey,
             bool applied,
             string cfgKind,
             string appliedKind,
@@ -27,8 +33,11 @@ namespace RapidTransitMod
         {
             Line = line;
             Frame = frame;
+            CfgVersion = cfgVersion;
+            AppliedVersion = appliedVersion;
             Id = id ?? string.Empty;
             Key = key ?? string.Empty;
+            StoreKey = storeKey;
             Applied = applied;
             CfgKind = cfgKind ?? string.Empty;
             AppliedKind = appliedKind ?? string.Empty;

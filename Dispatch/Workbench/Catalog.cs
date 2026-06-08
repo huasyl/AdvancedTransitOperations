@@ -140,6 +140,53 @@ namespace RapidTransitMod.Dispatch.Workbench
             return lines;
         }
 
+        internal NativeArray<Entity> LineEntities(Allocator allocator)
+        {
+            return m_LineQuery().ToEntityArray(allocator);
+        }
+
+        internal bool TryRuntimeLine(Entity line, out WorkbenchLineRuntime runtimeLine)
+        {
+            runtimeLine = null;
+            if (line == Entity.Null
+                || !m_EntityManager.Exists(line)
+                || !m_EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                return false;
+            }
+
+            int routeNumber = int.MaxValue;
+            if (m_EntityManager.HasComponent<RouteNumber>(line))
+            {
+                routeNumber = m_EntityManager.GetComponentData<RouteNumber>(line).m_Number;
+            }
+
+            string originStationId;
+            string originStationName;
+            LineOrigin(line, out originStationId, out originStationName);
+
+            string name = Name(line);
+            if (string.IsNullOrEmpty(name))
+            {
+                name = routeNumber != int.MaxValue
+                    ? ("Line " + routeNumber.ToString())
+                    : ("Line " + line.Index.ToString());
+            }
+
+            runtimeLine = new WorkbenchLineRuntime
+            {
+                Entity = line,
+                Id = m_LineId(m_LineKey(line)),
+                Name = name,
+                RouteNumber = routeNumber,
+                StationCount = CountStops(line),
+                TransportType = m_TransportType(line),
+                OriginStationId = originStationId,
+                OriginStationName = originStationName
+            };
+            return true;
+        }
+
         internal HashSet<string> LineIds()
         {
             HashSet<string> lineIds = new HashSet<string>(StringComparer.Ordinal);
@@ -277,6 +324,49 @@ namespace RapidTransitMod.Dispatch.Workbench
                 .OrderBy(entry => entry.name, StringComparer.CurrentCultureIgnoreCase)
                 .ThenBy(entry => entry.id, StringComparer.Ordinal)
                 .ToList();
+        }
+
+        internal NativeArray<Entity> DepotEntities(Allocator allocator)
+        {
+            return m_DepotQuery().ToEntityArray(allocator);
+        }
+
+        internal bool TryDepot(Entity rawDepot, HashSet<Entity> seenCanonicalDepots, out DispatchWorkbenchDepotDto depotDto)
+        {
+            depotDto = null;
+            if (rawDepot == Entity.Null
+                || !m_EntityManager.Exists(rawDepot)
+                || m_EntityManager.HasComponent<Game.Buildings.ServiceUpgrade>(rawDepot))
+            {
+                return false;
+            }
+
+            Entity depot = m_DepotCanon(rawDepot);
+            if (depot == Entity.Null || (seenCanonicalDepots != null && !seenCanonicalDepots.Add(depot)))
+            {
+                return false;
+            }
+
+            string name = Name(depot);
+            if (string.IsNullOrEmpty(name))
+            {
+                name = "Depot " + depot.Index;
+            }
+
+            string transportType = string.Empty;
+            Entity prefab = m_EntityManager.GetComponentData<PrefabRef>(depot).m_Prefab;
+            if (prefab != Entity.Null && m_EntityManager.HasComponent<TransportDepotData>(prefab))
+            {
+                transportType = m_EntityManager.GetComponentData<TransportDepotData>(prefab).m_TransportType.ToString();
+            }
+
+            depotDto = new DispatchWorkbenchDepotDto
+            {
+                id = DepotId(depot),
+                name = name,
+                transportType = transportType
+            };
+            return true;
         }
 
         internal void LineOrigin(Entity line, out string originStationId, out string originStationName)

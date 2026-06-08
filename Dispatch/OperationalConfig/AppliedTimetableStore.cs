@@ -8,6 +8,9 @@ namespace RapidTransitMod
     {
         private readonly Dictionary<LineKey, AppliedTimetableState> m_Lines =
             new Dictionary<LineKey, AppliedTimetableState>();
+        private ulong m_Version = 1;
+
+        public ulong Version => m_Version;
 
         public bool IsManaged(LineKey lineKey)
         {
@@ -16,6 +19,23 @@ namespace RapidTransitMod
                 && m_Lines.TryGetValue(key, out AppliedTimetableState state)
                 && state != null
                 && state.Managed;
+        }
+
+        public bool TryGetRuntimeSummary(LineKey lineKey, out bool managed, out string serviceKind)
+        {
+            LineKey key = RuntimeConfigStoreDefaults.NormalizeLineKey(lineKey);
+            if (!key.IsEmpty
+                && m_Lines.TryGetValue(key, out AppliedTimetableState state)
+                && state != null)
+            {
+                managed = state.Managed;
+                serviceKind = state.ServiceKind ?? string.Empty;
+                return true;
+            }
+
+            managed = false;
+            serviceKind = string.Empty;
+            return false;
         }
 
         public bool IsManaged(string lineId, TransitMode mode)
@@ -81,11 +101,13 @@ namespace RapidTransitMod
 
             if (state == null)
             {
-                m_Lines.Remove(key);
+                if (m_Lines.Remove(key))
+                    m_Version++;
                 return;
             }
 
             m_Lines[key] = Normalize(state);
+            m_Version++;
         }
 
         public void Clear(LineKey lineKey)
@@ -94,11 +116,14 @@ namespace RapidTransitMod
             if (key.IsEmpty)
                 return;
 
-            m_Lines.Remove(key);
+            if (m_Lines.Remove(key))
+                m_Version++;
         }
 
         public void Clear()
         {
+            if (m_Lines.Count > 0)
+                m_Version++;
             m_Lines.Clear();
         }
 
@@ -144,6 +169,7 @@ namespace RapidTransitMod
 
             m_Lines[targetKey] = state.Clone();
             m_Lines.Remove(legacyKey);
+            m_Version++;
             return true;
         }
 

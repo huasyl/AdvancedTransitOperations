@@ -1,153 +1,229 @@
-import { getPrototypeFallbackLines } from "../shared/prototype-fallback-data";
-
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function getLineName(line, index) {
-  return line?.name || line?.displayName || line?.id || `Line ${index + 1}`;
-}
+const LINE_COLORS = ["#38bdf8", "#f59e0b", "#10b981", "#ef4444", "#a78bfa", "#f472b6", "#22c55e", "#eab308"];
 
-function getLineCode(line, index) {
-  return line?.code || line?.number || String(index + 1).padStart(2, "0");
-}
-
-function getLineShortName(line, index) {
-  const name = getLineName(line, index);
-  const splitName = name.split(" - ");
-  return splitName.length > 1 ? splitName[1] : name;
-}
-
-function getLineStations(line) {
-  const stations = asArray(line?.stations);
-  if (stations.length > 0) {
-    return stations;
-  }
-
-  return [
-    { id: line?.originStationId || `${line?.id || "line"}-origin`, name: line?.originStationName || "起点站" },
-    { id: line?.terminalStationId || `${line?.id || "line"}-terminal`, name: line?.terminalStationName || "终点站" }
-  ];
-}
-
-function deterministicValue(seed, min, max) {
+function hashText(text) {
   let hash = 0;
-  const text = String(seed);
-  for (let index = 0; index < text.length; index += 1) {
-    hash = (hash * 31 + text.charCodeAt(index)) % 100000;
+  const source = String(text || "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash * 31) + source.charCodeAt(index)) >>> 0;
   }
-  return Math.round(min + (hash / 100000) * (max - min));
+  return hash;
 }
 
-function buildTrendForLine(line, index) {
-  const base = Number(line?.ridershipHour || 1200 + index * 900);
-  return Array.from({ length: 24 }).map((_, hour) => {
-    const morningPeak = hour >= 7 && hour <= 9 ? 1.85 : 1;
-    const eveningPeak = hour >= 17 && hour <= 19 ? 2.05 : 1;
-    const offPeak = hour >= 0 && hour <= 5 ? 0.36 : 0.72;
-    const shape = Math.max(morningPeak, eveningPeak, offPeak);
-    const noise = deterministicValue(`${line?.id || index}-${hour}`, 86, 116) / 100;
-    return {
-      hour: `${hour}:00`,
-      lineId: line?.id || `line-${index + 1}`,
-      passengers: Math.round(base * shape * noise)
-    };
-  });
+function lineCode(lineId) {
+  const parts = String(lineId || "").split(":");
+  return parts[parts.length - 1] || String(lineId || "");
 }
 
-function aggregateTrend(lines) {
-  const trendsByLine = lines.map(buildTrendForLine);
-  return Array.from({ length: 24 }).map((_, hour) => ({
-    hour: `${hour}:00`,
-    passengers: trendsByLine.reduce((sum, points) => sum + Number(points[hour]?.passengers || 0), 0)
-  }));
+function lineColor(lineId) {
+  return LINE_COLORS[hashText(lineId) % LINE_COLORS.length];
 }
 
-function buildFallbackPassengerData(lines) {
-  const normalizedLines = getPrototypeFallbackLines(lines);
-  const lineTrendById = {};
-  const stationVolumes = [];
-  const sectionVolumes = [];
-  const odFlows = [];
-
-  normalizedLines.forEach((line, lineIndex) => {
-    const lineId = line?.id || `line-${lineIndex + 1}`;
-    const stations = getLineStations(line);
-    const ridershipHour = Number(line?.ridershipHour || 1200 + lineIndex * 900);
-    lineTrendById[lineId] = buildTrendForLine(line, lineIndex);
-
-    stations.forEach((station, stationIndex) => {
-      const base = Math.max(420, ridershipHour / Math.max(2, stations.length));
-      stationVolumes.push({
-        lineId,
-        stationId: station?.id || `${lineId}-station-${stationIndex + 1}`,
-        stationName: station?.name || `Station ${stationIndex + 1}`,
-        inflow: deterministicValue(`${lineId}-${stationIndex}-in`, base * 0.7, base * 2.1),
-        outflow: deterministicValue(`${lineId}-${stationIndex}-out`, base * 0.6, base * 2)
-      });
-    });
-
-    for (let stationIndex = 0; stationIndex < stations.length - 1; stationIndex += 1) {
-      const left = stations[stationIndex];
-      const right = stations[stationIndex + 1];
-      sectionVolumes.push({
-        lineId,
-        label: `${left?.name || left?.id}-${right?.name || right?.id}`,
-        fromStationId: left?.id || "",
-        toStationId: right?.id || "",
-        volume: deterministicValue(`${lineId}-${stationIndex}-section`, ridershipHour * 2.8, ridershipHour * 9.6)
-      });
+function buildLineCatalog(metadataSnapshot) {
+  const map = new Map();
+  asArray(metadataSnapshot?.lines).forEach((line) => {
+    const id = String(line?.id || "");
+    if (!id) {
+      return;
     }
-
-    stations.forEach((origin, originIndex) => {
-      stations.forEach((destination, destinationIndex) => {
-        if (originIndex === destinationIndex || Math.abs(originIndex - destinationIndex) > 3) {
-          return;
-        }
-        const distanceFactor = Math.abs(originIndex - destinationIndex) + 1;
-        odFlows.push({
-          lineId,
-          originStationId: origin?.id || "",
-          destinationStationId: destination?.id || "",
-          originName: origin?.name || "",
-          destinationName: destination?.name || "",
-          volume: deterministicValue(`${lineId}-${originIndex}-${destinationIndex}-od`, ridershipHour / distanceFactor, ridershipHour * 3.2 / distanceFactor)
-        });
-      });
+    const code = lineCode(id);
+    map.set(id, {
+      id,
+      code,
+      name: line?.name || code,
+      shortName: line?.name || "",
+      color: line?.color || lineColor(id)
     });
   });
+  return map;
+}
 
+function buildStationCatalog(snapshot) {
+  const map = new Map();
+  asArray(snapshot?.stationCatalog).forEach((station) => {
+    const id = String(station?.stationId || "");
+    const name = String(station?.stationName || "");
+    if (id && name) {
+      map.set(id, name);
+    }
+  });
+  return map;
+}
+
+function stationName(stationCatalog, stationId) {
+  const id = String(stationId || "");
+  return stationCatalog.get(id) || id;
+}
+
+function bucketLabel(entry) {
+  const bucketStartMinute = Number(entry?.bucketStartMinute || 0);
+  if (!Number.isFinite(bucketStartMinute)) {
+    return "";
+  }
+  const minuteOfDay = ((Math.round(bucketStartMinute) % 1440) + 1440) % 1440;
+  const hour = Math.floor(minuteOfDay / 60);
+  const minute = minuteOfDay % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function addTrendValue(map, key, entry, passengers) {
+  const existing = map.get(key);
+  if (existing) {
+    existing.passengers += passengers;
+    return;
+  }
+  map.set(key, {
+    hour: bucketLabel(entry),
+    serviceDayIndex: Number(entry?.serviceDayIndex || 0),
+    bucketStartMinute: Number(entry?.bucketStartMinute || 0),
+    passengers
+  });
+}
+
+function sortByBucket(left, right) {
+  const dayDelta = Number(left?.serviceDayIndex || 0) - Number(right?.serviceDayIndex || 0);
+  if (dayDelta !== 0) {
+    return dayDelta;
+  }
+  return Number(left?.bucketStartMinute || 0) - Number(right?.bucketStartMinute || 0);
+}
+
+function normalizeStationVolume(entry, stationCatalog) {
+  const stationId = String(entry?.stationId || "");
   return {
-    lines: normalizedLines,
-    lineTrendById,
-    systemTrend: aggregateTrend(normalizedLines),
-    stationVolumes,
-    sectionVolumes: sectionVolumes.sort((left, right) => Number(right.volume || 0) - Number(left.volume || 0)).slice(0, 10),
-    odFlows: odFlows.sort((left, right) => Number(right.volume || 0) - Number(left.volume || 0)).slice(0, 16)
+    ...entry,
+    lineId: String(entry?.lineId || ""),
+    stationId,
+    stationName: stationName(stationCatalog, stationId),
+    inflow: Number(entry?.boardings || 0),
+    outflow: Number(entry?.alightings || 0)
   };
 }
 
-export function buildPassengerFlowViewModel(snapshot, metadataSnapshot) {
-  const source = asArray(snapshot?.lines).length > 0 ? snapshot : metadataSnapshot;
-  const fallback = buildFallbackPassengerData(asArray(source?.lines));
-  const sourceLines = asArray(source?.lines).length > 0 ? asArray(source?.lines) : fallback.lines;
-  const lines = sourceLines.map((line, index) => ({
-    id: line?.id || `line-${index + 1}`,
-    code: getLineCode(line, index),
-    name: getLineName(line, index),
-    shortName: getLineShortName(line, index),
-    color: line?.color || (line?.kind === "express" ? "#c084fc" : "#5ab4c5")
-  }));
+function normalizeSectionVolume(entry, stationCatalog) {
+  const fromStationId = String(entry?.fromStationId || "");
+  const toStationId = String(entry?.toStationId || "");
+  const fromStationName = stationName(stationCatalog, fromStationId);
+  const toStationName = stationName(stationCatalog, toStationId);
+  return {
+    ...entry,
+    lineId: String(entry?.lineId || ""),
+    fromStationId,
+    toStationId,
+    fromStationName,
+    toStationName,
+    label: `${fromStationName}-${toStationName}`,
+    volume: Number(entry?.averageLoadPassengers || 0)
+  };
+}
+
+function normalizeOdFlow(entry, stationCatalog) {
+  const firstLineId = String(entry?.firstLineId || entry?.lineId || "");
+  const lastLineId = String(entry?.lastLineId || firstLineId);
+  const originStationId = String(entry?.originStationId || "");
+  const destinationStationId = String(entry?.destinationStationId || "");
+  const displayLineId = firstLineId && lastLineId && firstLineId !== lastLineId ? `${firstLineId} -> ${lastLineId}` : firstLineId;
+  return {
+    ...entry,
+    lineId: String(entry?.lineId || firstLineId),
+    firstLineId,
+    lastLineId,
+    displayLineId,
+    originStationId,
+    destinationStationId,
+    originName: stationName(stationCatalog, originStationId),
+    destinationName: stationName(stationCatalog, destinationStationId),
+    volume: Number(entry?.completedCount || 0)
+  };
+}
+
+function addLine(lineMap, lineCatalog, lineId) {
+  const id = String(lineId || "");
+  if (!id || lineMap.has(id)) {
+    return;
+  }
+  if (lineCatalog.has(id)) {
+    lineMap.set(id, lineCatalog.get(id));
+    return;
+  }
+  const code = lineCode(id);
+  lineMap.set(id, {
+    id,
+    code,
+    name: code,
+    shortName: "",
+    color: lineColor(id)
+  });
+}
+
+function buildLines(stationVolumes, sectionVolumes, odFlows, lineCatalog) {
+  const lineMap = new Map();
+  stationVolumes.forEach((entry) => addLine(lineMap, lineCatalog, entry?.lineId));
+  sectionVolumes.forEach((entry) => addLine(lineMap, lineCatalog, entry?.lineId));
+  odFlows.forEach((entry) => {
+    addLine(lineMap, lineCatalog, entry?.lineId);
+    addLine(lineMap, lineCatalog, entry?.firstLineId);
+    addLine(lineMap, lineCatalog, entry?.lastLineId);
+  });
+  return [...lineMap.values()];
+}
+
+function buildTrends(stationVolumes) {
+  const systemMap = new Map();
+  const lineMaps = new Map();
+
+  stationVolumes.forEach((entry) => {
+    const passengers = Number(entry?.inflow || 0) + Number(entry?.outflow || 0);
+    const bucketKey = `${Number(entry?.serviceDayIndex || 0)}:${Number(entry?.bucketStartMinute || 0)}`;
+    addTrendValue(systemMap, bucketKey, entry, passengers);
+
+    const lineId = String(entry?.lineId || "");
+    if (!lineId) {
+      return;
+    }
+    if (!lineMaps.has(lineId)) {
+      lineMaps.set(lineId, new Map());
+    }
+    addTrendValue(lineMaps.get(lineId), bucketKey, entry, passengers);
+  });
+
+  const lineTrendById = {};
+  lineMaps.forEach((lineMap, lineId) => {
+    lineTrendById[lineId] = [...lineMap.values()].sort(sortByBucket);
+  });
 
   return {
-    lines,
-    lineTrendById: fallback.lineTrendById,
-    systemTrend: asArray(source?.systemTrend).length > 0 ? asArray(source.systemTrend) : fallback.systemTrend,
-    stationVolumes: asArray(source?.stationVolumes).length > 0 ? asArray(source.stationVolumes) : fallback.stationVolumes,
-    sectionVolumes: asArray(source?.sectionVolumes).length > 0 ? asArray(source.sectionVolumes) : fallback.sectionVolumes,
-    odFlows: asArray(source?.odFlows).length > 0 ? asArray(source.odFlows) : fallback.odFlows,
-    warnings: asArray(source?.passengerFlowWarnings)
+    systemTrend: [...systemMap.values()].sort(sortByBucket),
+    lineTrendById
   };
+}
+
+export function buildPassengerFlowViewModel(snapshot = {}, lineCatalogSnapshot = {}) {
+  const lineCatalog = buildLineCatalog(lineCatalogSnapshot);
+  const stationCatalog = buildStationCatalog(snapshot);
+  const stationVolumes = asArray(snapshot?.stationVolumes).map((entry) => normalizeStationVolume(entry, stationCatalog));
+  const sectionVolumes = asArray(snapshot?.sectionVolumes).map((entry) => normalizeSectionVolume(entry, stationCatalog));
+  const odFlows = asArray(snapshot?.odFlows).map((entry) => normalizeOdFlow(entry, stationCatalog));
+  const trends = buildTrends(stationVolumes);
+
+  return {
+    lines: buildLines(stationVolumes, sectionVolumes, odFlows, lineCatalog),
+    lineTrendById: trends.lineTrendById,
+    systemTrend: trends.systemTrend,
+    stationVolumes,
+    sectionVolumes,
+    odFlows,
+    warnings: asArray(snapshot?.warnings)
+  };
+}
+
+function matchesLine(entry, selectedLineId) {
+  return entry?.lineId === selectedLineId
+    || entry?.firstLineId === selectedLineId
+    || entry?.lastLineId === selectedLineId;
 }
 
 export function filterPassengerFlow(viewModel, selectedLineId) {
@@ -160,6 +236,7 @@ export function filterPassengerFlow(viewModel, selectedLineId) {
     systemTrend: viewModel.lineTrendById?.[selectedLineId] || viewModel.systemTrend.filter((entry) => entry?.lineId === selectedLineId),
     stationVolumes: viewModel.stationVolumes.filter((entry) => entry?.lineId === selectedLineId),
     sectionVolumes: viewModel.sectionVolumes.filter((entry) => entry?.lineId === selectedLineId),
-    odFlows: viewModel.odFlows.filter((entry) => entry?.lineId === selectedLineId)
+    odFlows: viewModel.odFlows.filter((entry) => matchesLine(entry, selectedLineId)),
+    warnings: viewModel.warnings.filter((entry) => !entry?.lineId || entry.lineId === selectedLineId)
   };
 }

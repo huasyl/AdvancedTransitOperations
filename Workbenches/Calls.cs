@@ -10,6 +10,7 @@ namespace RapidTransitMod.Workbenches
         {
             return BindDispatch()
                 && BindBroadcast()
+                && BindPassengerFlow()
                 && BindPlanner()
                 && BindLocale();
         }
@@ -54,11 +55,13 @@ namespace RapidTransitMod.Workbenches
 
             view.BindCall(ApiHost.Prefix + "loadSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Load));
             view.BindCall(ApiHost.Prefix + "refreshSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Refresh));
-            view.BindCall(ApiHost.Prefix + "refreshMetadata", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Meta));
+            view.BindCall(ApiHost.Prefix + "refreshMetadata", new Func<string, string>(global::RapidTransitMod.Workbenches.TransitCatalog.RefreshMetadata));
+            view.BindCall(ApiHost.Prefix + "refreshTransitCatalog", new Func<string, string>(global::RapidTransitMod.Workbenches.TransitCatalog.Refresh));
             view.BindCall(ApiHost.Prefix + "saveWorkbenchDraft", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Legacy));
             view.BindCall(ApiHost.Prefix + "saveNativeWorkbenchDraft", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Save));
             view.BindCall(ApiHost.Prefix + "startNativeSaveOperation", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Start));
             view.BindCall(ApiHost.Prefix + "getNativeSaveOperationStatus", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Status));
+            view.BindCall(ApiHost.Prefix + "setWorkbenchHostState", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.HostState));
             return true;
         }
 
@@ -109,6 +112,18 @@ namespace RapidTransitMod.Workbenches
             view.BindCall(ApiHost.Prefix + "getPlannerJobStatus", new Func<string, string>(Status));
             view.BindCall(ApiHost.Prefix + "runPlanner", new Func<string, string>(Run));
             view.BindCall(ApiHost.Prefix + "getObservationSnapshot", new Func<string>(Observe));
+            return true;
+        }
+
+        private static bool BindPassengerFlow()
+        {
+            var view = GameManager.instance?.userInterface?.view?.View;
+            if (view == null)
+            {
+                return false;
+            }
+
+            view.BindCall(ApiHost.Prefix + "loadPassengerFlowSnapshot", new Func<string, string>(global::RapidTransitMod.PassengerFlow.Api.Load));
             return true;
         }
 

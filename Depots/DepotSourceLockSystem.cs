@@ -215,7 +215,24 @@ namespace RapidTransitMod
             }
         }
 
+        private readonly struct DepotAffinityCacheEntry
+        {
+            public readonly Entity Line;
+            public readonly Entity PreferredDepot;
+            public readonly int RouteVehicleCount;
+            public readonly uint NextRefreshFrame;
+
+            public DepotAffinityCacheEntry(Entity line, Entity preferredDepot, int routeVehicleCount, uint nextRefreshFrame)
+            {
+                Line = line;
+                PreferredDepot = preferredDepot;
+                RouteVehicleCount = routeVehicleCount;
+                NextRefreshFrame = nextRefreshFrame;
+            }
+        }
+
         private readonly Dictionary<Entity, Entity> m_PreferredDepotByLine = new Dictionary<Entity, Entity>();
+        private readonly Dictionary<Entity, DepotAffinityCacheEntry> m_DepotAffinityByLine = new Dictionary<Entity, DepotAffinityCacheEntry>();
         private readonly Dictionary<Entity, string> m_RequestDecisionLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, Entity> m_PendingConfiguredRequestSources = new Dictionary<Entity, Entity>();
         private readonly Dictionary<Entity, ConfiguredDepotBlockedRequestState> m_ConfiguredDepotBlockedRequests = new Dictionary<Entity, ConfiguredDepotBlockedRequestState>();
@@ -230,6 +247,8 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, Entity> m_FrameConfiguredDepotByLine = new Dictionary<Entity, Entity>();
         private readonly Dictionary<Entity, PendingRequestRouteSetupCacheEntry> m_FramePendingRequestRouteSetupByLine = new Dictionary<Entity, PendingRequestRouteSetupCacheEntry>();
         private readonly Dictionary<DepotLineCacheKey, Entity> m_FrameReusableConfiguredSourceByDepotLine = new Dictionary<DepotLineCacheKey, Entity>();
+        private readonly Dictionary<TransportType, (Entity depot, float priority)> m_FrameLockedDepotByType =
+            new Dictionary<TransportType, (Entity depot, float priority)>();
         private readonly Dictionary<Entity, LineRuntimeSnapshot> m_LineRuntimeSnapshots = new Dictionary<Entity, LineRuntimeSnapshot>();
         private int m_FrameCacheLogCountdown = DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES;
         private int m_ConfiguredDepotFrameCacheHits;
@@ -244,6 +263,7 @@ namespace RapidTransitMod
         private int m_BlockedRequestProbeExtends;
         private int m_BlockedRequestProbeReleases;
         private const byte CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN = 16;
+        private const byte DEPOT_AFFINITY_REFRESH_FRAMES = 64;
         private const int CONFIGURED_DEPOT_OUTBOUND_PATH_LOOKAHEAD = 8;
         private const int DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES = 3600;
 
@@ -313,6 +333,7 @@ namespace RapidTransitMod
             m_FrameConfiguredDepotByLine.Clear();
             m_FramePendingRequestRouteSetupByLine.Clear();
             m_FrameReusableConfiguredSourceByDepotLine.Clear();
+            m_FrameLockedDepotByType.Clear();
         }
 
         private void TickDepotFrameCacheLogging()
@@ -502,6 +523,9 @@ namespace RapidTransitMod
                     }
 
                     ServiceRequest serviceRequest = EntityManager.GetComponentData<ServiceRequest>(request);
+                    if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
+                        continue;
+
                     TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
                     Entity line = vehicleRequest.m_Route;
                     if (EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
@@ -513,9 +537,6 @@ namespace RapidTransitMod
                     {
                         continue;
                     }
-
-                    if ((serviceRequest.m_Flags & ServiceRequestFlags.Reversed) != 0)
-                        continue;
 
                     ManagedRequestPort managedRequests = LifecyclePort.Current?.ManagedRequests;
                     if (managedRequests != null && managedRequests.ShouldDestroyOfficial(request, line))
@@ -758,7 +779,8 @@ namespace RapidTransitMod
 
                 for (int i = 0; i < m_RequestCleanupScratch.Count; i++)
                 {
-                    m_ConfiguredRequestParkedFallbacks.Remove(m_RequestCleanupScratch[i]);
+                    Entity request = m_RequestCleanupScratch[i];
+                    m_ConfiguredRequestParkedFallbacks.Remove(request);
                 }
             }
 
@@ -781,7 +803,8 @@ namespace RapidTransitMod
 
             for (int i = 0; i < m_RequestCleanupScratch.Count; i++)
             {
-                m_ConfiguredDepotBlockedRequests.Remove(m_RequestCleanupScratch[i]);
+                Entity request = m_RequestCleanupScratch[i];
+                m_ConfiguredDepotBlockedRequests.Remove(request);
             }
         }
 
@@ -1152,6 +1175,7 @@ namespace RapidTransitMod
 
         private void UpdateLineDepotAffinity()
         {
+            uint nowFrame = GetCurrentFrame();
             var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
             var ownerLookup = GetComponentLookup<Owner>(true);
             var depotLookup = GetComponentLookup<Game.Buildings.TransportDepot>(true);
@@ -1168,6 +1192,16 @@ namespace RapidTransitMod
 
                 if (!routeVehicleBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
                     continue;
+
+                if (m_DepotAffinityByLine.TryGetValue(line, out DepotAffinityCacheEntry cached)
+                    && cached.Line == line
+                    && cached.RouteVehicleCount == vehicles.Length
+                    && nowFrame < cached.NextRefreshFrame)
+                {
+                    if (cached.PreferredDepot != Entity.Null)
+                        m_PreferredDepotByLine[line] = cached.PreferredDepot;
+                    continue;
+                }
 
                 Dictionary<Entity, int> counts = null;
                 Entity bestDepot = Entity.Null;
@@ -1197,6 +1231,12 @@ namespace RapidTransitMod
                 {
                     m_PreferredDepotByLine[line] = bestDepot;
                 }
+
+                m_DepotAffinityByLine[line] = new DepotAffinityCacheEntry(
+                    line,
+                    bestDepot,
+                    vehicles.Length,
+                    nowFrame + DEPOT_AFFINITY_REFRESH_FRAMES);
             }
         }
 
@@ -1206,9 +1246,6 @@ namespace RapidTransitMod
             var prefabLookup = GetComponentLookup<PrefabRef>(true);
             var lineDataLookup = GetComponentLookup<TransportLineData>(true);
             var depotDataLookup = GetComponentLookup<TransportDepotData>(true);
-
-            Dictionary<TransportType, (Entity depot, float priority)> lockedDepotByType =
-                new Dictionary<TransportType, (Entity depot, float priority)>();
 
             for (int i = 0; i < m_FramePendingRequests.Count; i++)
             {
@@ -1258,16 +1295,16 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                if (!lockedDepotByType.TryGetValue(lineData.m_TransportType, out var existing)
+                if (!m_FrameLockedDepotByType.TryGetValue(lineData.m_TransportType, out var existing)
                     || request.m_Priority > existing.priority)
                 {
-                    lockedDepotByType[lineData.m_TransportType] = (preferredDepot, request.m_Priority);
+                    m_FrameLockedDepotByType[lineData.m_TransportType] = (preferredDepot, request.m_Priority);
                 }
 
                 LogRequestDecision(line, request, configuredDepot, preferredDepot, preferredDepot, true, "lock-candidate");
             }
 
-            if (lockedDepotByType.Count == 0)
+            if (m_FrameLockedDepotByType.Count == 0)
                 return;
 
             using (var depots = m_DepotQuery.ToEntityArray(Unity.Collections.Allocator.Temp))
@@ -1283,7 +1320,7 @@ namespace RapidTransitMod
                         continue;
 
                     TransportDepotData depotData = depotDataLookup[depotPrefab];
-                    if (!lockedDepotByType.TryGetValue(depotData.m_TransportType, out var locked)
+                    if (!m_FrameLockedDepotByType.TryGetValue(depotData.m_TransportType, out var locked)
                         || locked.depot == depot)
                     {
                         continue;

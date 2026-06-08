@@ -40,6 +40,10 @@ namespace RapidTransitMod.Bypass
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
         private const uint BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES = 60;
         private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 6;
+        private const uint VANILLA_BLOCKER_RESCUE_STALL_FRAMES = 240;
+        private const uint VANILLA_BLOCKER_RESCUE_RECHECK_FRAMES = 60;
+        private const uint VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES = 20;
+        private const int VANILLA_BLOCKER_CHAIN_MAX_DEPTH = 12;
         private const uint LINE_ORDERED_RUNTIME_FORCE_FULL_SORT_INTERVAL_FRAMES = 360;
         private const uint LINE_ORDERED_PROBE_LOG_INTERVAL_FRAMES = 3600;
 
@@ -94,7 +98,24 @@ namespace RapidTransitMod.Bypass
         private readonly Dictionary<ActiveConflictCorridorCacheKey, ActiveConflictCorridorSnapshot> m_ActiveConflictCorridorSnapshots = new Dictionary<ActiveConflictCorridorCacheKey, ActiveConflictCorridorSnapshot>();
         private readonly Dictionary<Entity, BypassLineExecutionModeSnapshot> m_LineBypassExecutionModeSnapshots = new Dictionary<Entity, BypassLineExecutionModeSnapshot>();
         private readonly Dictionary<Entity, string> m_LineBypassExecutionModeLogCache = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, VanillaBlockerStall> m_VanillaBlockerStalls = new Dictionary<Entity, VanillaBlockerStall>();
         private uint m_ActiveConflictCorridorSnapshotFrame;
+
+        private readonly struct VanillaBlockerStall
+        {
+            public readonly Entity Blocker;
+            public readonly uint FirstSeenFrame;
+            public readonly uint LastSeenFrame;
+            public readonly uint LastResolvedFrame;
+
+            public VanillaBlockerStall(Entity blocker, uint firstSeenFrame, uint lastSeenFrame, uint lastResolvedFrame)
+            {
+                Blocker = blocker;
+                FirstSeenFrame = firstSeenFrame;
+                LastSeenFrame = lastSeenFrame;
+                LastResolvedFrame = lastResolvedFrame;
+            }
+        }
 
         private static bool IsTrackModelDiagnosticLoggingEnabled() => false;
         private static bool IsBypassPerfProbeLoggingEnabled() => false;
@@ -130,8 +151,13 @@ namespace RapidTransitMod.Bypass
             m_ActiveConflictCorridorSnapshotFrame = 0;
             m_LineBypassExecutionModeSnapshots.Clear();
             m_LineBypassExecutionModeLogCache.Clear();
+            m_VanillaBlockerStalls.Clear();
         }
-        internal void ClearVehicle(Entity vehicle) => m_Decision.Remove(vehicle);
+        internal void ClearVehicle(Entity vehicle)
+        {
+            m_Decision.Remove(vehicle);
+            m_VanillaBlockerStalls.Remove(vehicle);
+        }
         internal void FlushPerfProbeIfDue(uint nowFrame)
         {
             if (!IsBypassPerfProbeLoggingEnabled())
@@ -381,6 +407,178 @@ namespace RapidTransitMod.Bypass
             m_LineOrderedRuntimeForceRefreshReasons[line] = string.IsNullOrWhiteSpace(reason)
                 ? "unspecified"
                 : reason;
+        }
+        internal bool TryFindBypassHeldLocalBlockingExpress(
+            Entity expressVehicle,
+            Entity expressLine,
+            uint nowFrame,
+            out Entity localVehicle)
+        {
+            localVehicle = Entity.Null;
+            if (expressVehicle == Entity.Null
+                || expressLine == Entity.Null)
+            {
+                return false;
+            }
+
+            if (!ShouldProbeVanillaBlockerRescue(expressVehicle, nowFrame))
+                return false;
+
+            if (!BypassRun()
+                || !Managed(expressLine)
+                || !Express(expressLine)
+                || !TryReadVanillaBlocker(expressVehicle, out Entity vanillaBlockerSource, out Blocker vanillaBlocker)
+                || vanillaBlocker.m_Blocker == Entity.Null)
+            {
+                m_VanillaBlockerStalls.Remove(expressVehicle);
+                return false;
+            }
+
+            Entity firstBlocker = vanillaBlocker.m_Blocker;
+            if (!m_VanillaBlockerStalls.TryGetValue(expressVehicle, out VanillaBlockerStall stall)
+                || stall.Blocker != firstBlocker
+                || nowFrame < stall.LastSeenFrame)
+            {
+                stall = new VanillaBlockerStall(firstBlocker, nowFrame, nowFrame, 0);
+                m_VanillaBlockerStalls[expressVehicle] = stall;
+                return false;
+            }
+
+            if (nowFrame - stall.FirstSeenFrame < VANILLA_BLOCKER_RESCUE_STALL_FRAMES)
+            {
+                m_VanillaBlockerStalls[expressVehicle] = new VanillaBlockerStall(firstBlocker, stall.FirstSeenFrame, nowFrame, stall.LastResolvedFrame);
+                return false;
+            }
+
+            if (stall.LastResolvedFrame != 0
+                && nowFrame - stall.LastResolvedFrame < VANILLA_BLOCKER_RESCUE_RECHECK_FRAMES)
+            {
+                m_VanillaBlockerStalls[expressVehicle] = new VanillaBlockerStall(firstBlocker, stall.FirstSeenFrame, nowFrame, stall.LastResolvedFrame);
+                return false;
+            }
+
+            m_VanillaBlockerStalls[expressVehicle] = new VanillaBlockerStall(firstBlocker, stall.FirstSeenFrame, nowFrame, nowFrame);
+            if (!TryResolveVanillaBlockerRoot(firstBlocker, vanillaBlockerSource, out Entity rootBlocker))
+                return false;
+
+            Entity localCandidate = ResolveBypassVehicle(rootBlocker);
+            Entity rootLine = ResolveLine(localCandidate);
+            if (rootLine == Entity.Null
+                || !Managed(rootLine)
+                || !Local(rootLine)
+                || !m_Decision.TryGetLatchedBlocker(localCandidate, out Entity latchedExpress))
+            {
+                return false;
+            }
+
+            Entity latchedExpressLine = ResolveLine(latchedExpress);
+            if (latchedExpress != expressVehicle
+                && latchedExpressLine != expressLine)
+            {
+                return false;
+            }
+
+            localVehicle = localCandidate;
+            return true;
+        }
+
+        private static bool ShouldProbeVanillaBlockerRescue(Entity vehicle, uint nowFrame)
+        {
+            uint bucket = (uint)(vehicle.Index & 0x7fffffff) % VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES;
+            return nowFrame % VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES == bucket;
+        }
+
+        private bool TryReadVanillaBlocker(Entity vehicle, out Entity sourceVehicle, out Blocker blocker)
+        {
+            sourceVehicle = Entity.Null;
+            blocker = default;
+            if (vehicle == Entity.Null)
+                return false;
+
+            if (m_Runtime.EntityManager.Exists(vehicle)
+                && m_Runtime.EntityManager.HasComponent<Blocker>(vehicle))
+            {
+                sourceVehicle = vehicle;
+                blocker = m_Runtime.EntityManager.GetComponentData<Blocker>(vehicle);
+                return true;
+            }
+
+            Entity runtimeVehicle = m_Runtime.ResolveVehicle(vehicle);
+            if (runtimeVehicle == Entity.Null
+                || runtimeVehicle == vehicle
+                || !m_Runtime.EntityManager.Exists(runtimeVehicle)
+                || !m_Runtime.EntityManager.HasComponent<Blocker>(runtimeVehicle))
+            {
+                return false;
+            }
+
+            sourceVehicle = runtimeVehicle;
+            blocker = m_Runtime.EntityManager.GetComponentData<Blocker>(runtimeVehicle);
+            return true;
+        }
+
+        private bool TryResolveVanillaBlockerRoot(Entity firstBlocker, Entity blockedVehicle, out Entity rootBlocker)
+        {
+            rootBlocker = Entity.Null;
+            if (firstBlocker == Entity.Null)
+                return false;
+
+            Entity current = firstBlocker;
+            Entity previous = blockedVehicle;
+            for (int depth = 0; depth < VANILLA_BLOCKER_CHAIN_MAX_DEPTH; depth++)
+            {
+                if (current == Entity.Null || !m_Runtime.EntityManager.Exists(current))
+                    return false;
+
+                Entity normalized = NormalizeVanillaBlockerEntity(current);
+                if (normalized != Entity.Null)
+                    current = normalized;
+
+                if (!m_Runtime.EntityManager.HasComponent<Blocker>(current))
+                {
+                    rootBlocker = current;
+                    return true;
+                }
+
+                Blocker blocker = m_Runtime.EntityManager.GetComponentData<Blocker>(current);
+                Entity next = blocker.m_Blocker;
+                if (next == Entity.Null)
+                {
+                    rootBlocker = current;
+                    return true;
+                }
+
+                if (next == current || next == previous || next == firstBlocker)
+                    return false;
+
+                previous = current;
+                current = next;
+            }
+
+            return false;
+        }
+
+        private Entity NormalizeVanillaBlockerEntity(Entity entity)
+        {
+            if (entity == Entity.Null
+                || !m_Runtime.EntityManager.Exists(entity)
+                || !m_Runtime.EntityManager.HasComponent<Controller>(entity))
+            {
+                return entity;
+            }
+
+            Entity controller = m_Runtime.EntityManager.GetComponentData<Controller>(entity).m_Controller;
+            return controller != Entity.Null && m_Runtime.EntityManager.Exists(controller)
+                ? controller
+                : entity;
+        }
+
+        private Entity ResolveBypassVehicle(Entity entity)
+        {
+            Entity runtimeVehicle = m_Runtime.ResolveVehicle(entity);
+            return runtimeVehicle != Entity.Null && m_Runtime.EntityManager.Exists(runtimeVehicle)
+                ? runtimeVehicle
+                : entity;
         }
         internal bool Get(Entity vehicle, out BypassControlScopeCacheEntry scope) => m_Decision.Get(vehicle, out scope);
         internal bool Get(Entity vehicle, out BypassHoldCadenceSnapshot cadence) => m_Decision.Get(vehicle, out cadence);

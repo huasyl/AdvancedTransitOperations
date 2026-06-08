@@ -142,6 +142,13 @@ namespace RapidTransitMod.Bypass
                 return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "feature-disabled");
             }
 
+            if (!hadLatchedYield && !m_Runtime.IsLocalLine(line))
+            {
+                Remove(vehicle, BypassEntryKind.Cadence);
+                Remove(vehicle, BypassEntryKind.Episode);
+                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "line-not-local");
+            }
+
             if (!m_Runtime.TryScope(
                 vehicle,
                 line,

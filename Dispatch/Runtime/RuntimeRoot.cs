@@ -29,6 +29,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SharedCorridor = new SharedCorridorSupport(runtime.m_Resolve, runtime.IsBypassStationSetting);
             runtime.m_StationAnchorDiagnostics = new StationAnchorDiagnostics(runtime);
             runtime.m_WorkbenchBridge = new RapidTransitMod.Dispatch.Workbench.Bridge(runtime);
+            runtime.m_WorkbenchCatalogCache = runtime.m_WorkbenchBridge.CatalogCache();
+            runtime.m_WorkbenchCatalogDirty = new CatalogDirty(
+                runtime.EntityManager,
+                runtime.m_WorkbenchCatalogCache.MarkDirty);
             runtime.m_DispatchCache = new DispatchCache(runtime, runtime.LineId, runtime.GetDepot, runtime.DepotId);
             runtime.m_LapCache = new LapCache(runtime);
             runtime.m_RouteProgress = new RouteProgress(runtime);
@@ -163,10 +167,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_RouteProgress.TryOriginArrivalRepair)));
 
             RuntimePorts.Build(runtime);
+            PassengerFlow.Runtime.Bind(new PassengerFlow.Port(runtime));
         }
 
         public static void Clear(DispatchRuntimeSystem runtime)
         {
+            PassengerFlow.SamplingSystem.ClearState();
+            PassengerFlow.Runtime.Clear();
             LifecyclePort.Clear();
             runtime.m_CommandApplier = null!;
             runtime.m_DispatchScheduler = null!;
@@ -175,6 +182,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SelectPanel = null!;
             runtime.m_SelectPort = null!;
             runtime.m_StationAnchorDiagnostics = null!;
+            runtime.m_WorkbenchCatalogDirty = null!;
+            runtime.m_WorkbenchCatalogCache = null!;
             runtime.m_WorkbenchBridge = null!;
             runtime.m_PlannerApi = null!;
             runtime.m_PlannerJobs = null!;

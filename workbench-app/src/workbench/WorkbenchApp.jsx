@@ -172,7 +172,11 @@ export default function WorkbenchApp({ registerHostActions }) {
           className={`dw-native-workbench-page ${renderedPage === "schedule" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="schedule"
         >
-          <SchedulePage registerHostActions={registerHostActions} activeTransportMode={modeForPage("schedule")} />
+          <SchedulePage
+            registerHostActions={registerHostActions}
+            activeTransportMode={modeForPage("schedule")}
+            isActive={renderedPage === "schedule"}
+          />
         </div>
         <div
           className={`dw-native-workbench-page ${renderedPage === "planner" ? "is-active" : "is-inactive"} is-${pageStage}`}
@@ -199,7 +203,11 @@ export default function WorkbenchApp({ registerHostActions }) {
           data-workbench-page="passenger"
         >
           {shouldMountPassenger ? (
-            <PassengerFlowPage activeTransportMode={modeForPage("passenger")} isActive={renderedPage === "passenger"} />
+            <PassengerFlowPage
+              activeTransportMode={modeForPage("passenger")}
+              isActive={renderedPage === "passenger"}
+              registerHostActions={registerHostActions}
+            />
           ) : null}
         </div>
       </div>

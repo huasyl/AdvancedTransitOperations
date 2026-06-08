@@ -45,7 +45,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private Trips m_Trips;
         private Workbench m_Workbench;
         private AppliedTimetable m_Applied;
-        private CatalogMonitor m_CatalogMonitor;
+        private HostState m_HostState;
         private ulong m_Version = 1;
         private string m_LastSnapshotLogKey = string.Empty;
         private static readonly bool EnableIntegrity = true;
@@ -153,6 +153,32 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Ids().Type,
                 CanonDepot);
             return m_Catalog;
+        }
+
+        internal CatalogCache CatalogCache()
+        {
+            if (m_Runtime.m_WorkbenchCatalogCache != null)
+                return m_Runtime.m_WorkbenchCatalogCache;
+
+            m_Runtime.m_WorkbenchCatalogCache = new CatalogCache(
+                Catalog(),
+                Workbenches.UiEvents.Push,
+                Workbenches.UiEvents.Push,
+                () => m_Version,
+                () => HostState().IsParked,
+                () => Snapshot().Build(
+                    string.IsNullOrEmpty(HostState().SelectedLineId)
+                        ? Drafts().Preferred()
+                        : HostState().SelectedLineId,
+                    HostState().TransitMode,
+                    m_Version,
+                    "game-backend"));
+            return m_Runtime.m_WorkbenchCatalogCache;
+        }
+
+        internal HostState HostState()
+        {
+            return m_HostState ?? (m_HostState = new HostState());
         }
 
         internal ObsStops ObservationStops()
@@ -292,7 +318,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 LineCfg,
                 Depots,
                 m_Runtime.m_LineView,
-                Applied);
+                Applied,
+                () => CatalogCache().MarkDirty());
             m_Run = m_RunHooks.Port();
             return m_Run;
         }
@@ -461,7 +488,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Runtime.m_Features.Reset();
             m_Runtime.m_LineView.Clear();
             Depots().Clear();
-            CatalogMonitor().Reset();
+            CatalogCache().Reset();
+            m_Runtime.m_WorkbenchCatalogDirty.Reset();
             m_LastSnapshotLogKey = string.Empty;
         }
 
@@ -490,6 +518,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             return Root().Save(requestJson);
         }
 
+        internal string SetHostState(string requestJson)
+        {
+            return HostState().Update(requestJson);
+        }
+
         internal string Start(string requestJson)
         {
             return Root().Start(requestJson);
@@ -504,20 +537,6 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             m_Version++;
             return m_Version;
-        }
-
-        internal CatalogMonitor CatalogMonitor()
-        {
-            if (m_CatalogMonitor != null)
-                return m_CatalogMonitor;
-
-            m_CatalogMonitor = new CatalogMonitor(
-                mode => Snapshot().Meta(string.Empty, mode, m_Version, "game-backend"),
-                mode => Query().GetLines(mode),
-                line => Query().GetStations(line),
-                Workbenches.UiEvents.Push,
-                () => m_Version);
-            return m_CatalogMonitor;
         }
 
         internal DispatchWorkbenchSnapshot Build(string preferredLineId)
@@ -554,7 +573,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Lines = m_Lines ?? new Lines(
                 LoadPersist,
                 LoadApplied,
-                () => Catalog().RuntimeLines(),
+                () => CatalogCache().RuntimeLines(),
                 (lineId, applied) => m_Runtime.m_LineView.Kind(lineId, applied),
                 Ids().Color);
             return m_Lines.All(AppliedLines);
@@ -638,7 +657,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         private List<WorkbenchLineRuntime> AppliedRuntimeLines()
         {
-            List<WorkbenchLineRuntime> lines = Catalog().RuntimeLines();
+            List<WorkbenchLineRuntime> lines = CatalogCache().RuntimeLines();
             for (int i = 0; i < lines.Count; i++)
             {
                 WorkbenchLineRuntime line = lines[i];
@@ -660,12 +679,12 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         private List<DispatchWorkbenchStationDto> Stations(Entity line)
         {
-            return Catalog().Stations(line);
+            return CatalogCache().Stations(line);
         }
 
         private List<DispatchWorkbenchDepotDto> DepotDtos()
         {
-            return Catalog().Depots();
+            return CatalogCache().Depots();
         }
 
         private void LogSnapshot(

@@ -996,6 +996,22 @@ namespace RapidTransitMod.Broadcasting
             new Dictionary<string, uint>(StringComparer.Ordinal);
         private readonly Dictionary<string, uint> m_StationQuietSinceFrame =
             new Dictionary<string, uint>(StringComparer.Ordinal);
+        private readonly Dictionary<string, LineAnnouncementFlags> m_LineAnnouncementFlags =
+            new Dictionary<string, LineAnnouncementFlags>(StringComparer.Ordinal);
+
+        private readonly struct LineAnnouncementFlags
+        {
+            public readonly uint Frame;
+            public readonly bool HasPlatform;
+            public readonly bool HasApproach;
+
+            public LineAnnouncementFlags(uint frame, bool hasPlatform, bool hasApproach)
+            {
+                Frame = frame;
+                HasPlatform = hasPlatform;
+                HasApproach = hasApproach;
+            }
+        }
 
         internal Platforms(BroadcastAccess access, Config config, Stations stations, Playback playback, Diagnostics diagnostics)
         {
@@ -1017,12 +1033,22 @@ namespace RapidTransitMod.Broadcasting
             int currentWaypointIndex,
             bool boarding)
         {
-            bool hasPlatformAnnouncements = HasPlatformAnnouncements(line);
-            bool hasApproachWatch = HasApproachAnnouncements(line);
+            if (!m_Config.Enabled || m_Config.PlatformsByLine.Count == 0)
+            {
+                m_ApproachStateByVehicle.Remove(vehicle);
+                return;
+            }
+
+            GetLineAnnouncementFlags(line, out bool hasPlatformAnnouncements, out bool hasApproachWatch);
             bool needsContext = hasPlatformAnnouncements || hasApproachWatch;
+            if (!needsContext)
+            {
+                m_ApproachStateByVehicle.Remove(vehicle);
+                return;
+            }
+
             FrameContext context = default;
-            bool hasContext = needsContext
-                && FrameContexts.TryBuild(
+            bool hasContext = FrameContexts.TryBuild(
                     m_Access,
                     m_Stations,
                     vehicle,
@@ -1043,6 +1069,7 @@ namespace RapidTransitMod.Broadcasting
         internal void Clear()
         {
             m_CheckedLineIds.Clear();
+            m_LineAnnouncementFlags.Clear();
             m_ApproachStateByVehicle.Clear();
             m_AnnouncementCooldownUntilFrame.Clear();
             m_StationBusyUntilFrame.Clear();
@@ -1395,6 +1422,9 @@ namespace RapidTransitMod.Broadcasting
 
         private bool HasApproachAnnouncements(Entity line)
         {
+            if (!m_Config.Enabled)
+                return false;
+
             string lineId = m_Access.DraftKey(m_Access.LineId(line));
             if (string.IsNullOrWhiteSpace(lineId)
                 || !m_Config.PlatformsByLine.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
@@ -1416,6 +1446,52 @@ namespace RapidTransitMod.Broadcasting
             }
 
             return false;
+        }
+
+        private void GetLineAnnouncementFlags(Entity line, out bool hasPlatform, out bool hasApproach)
+        {
+            hasPlatform = false;
+            hasApproach = false;
+            if (!m_Config.Enabled || line == Entity.Null)
+                return;
+
+            string lineId = m_Access.DraftKey(m_Access.LineId(line));
+            if (string.IsNullOrWhiteSpace(lineId))
+                return;
+
+            uint frame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
+            if (m_LineAnnouncementFlags.TryGetValue(lineId, out LineAnnouncementFlags cached)
+                && cached.Frame == frame)
+            {
+                hasPlatform = cached.HasPlatform;
+                hasApproach = cached.HasApproach;
+                return;
+            }
+
+            EnsureBroadcastRuntimeLineState(lineId, line);
+            if (m_Config.PlatformsByLine.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
+                && lineAnnouncements != null)
+            {
+                foreach (BroadcastWorkbenchPlatformAnnouncementDto announcement in lineAnnouncements.Values)
+                {
+                    if (announcement == null
+                        || !announcement.enabled
+                        || announcement.nodes == null
+                        || announcement.nodes.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    hasPlatform = true;
+                    if (string.Equals(announcement.triggerId, TriggerConstants.PlatformApproachTriggerId, StringComparison.Ordinal))
+                        hasApproach = true;
+
+                    if (hasPlatform && hasApproach)
+                        break;
+                }
+            }
+
+            m_LineAnnouncementFlags[lineId] = new LineAnnouncementFlags(frame, hasPlatform, hasApproach);
         }
 
 

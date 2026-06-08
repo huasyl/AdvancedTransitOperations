@@ -6,11 +6,12 @@ import ManualDraftSection from "./components/ManualDraftSection";
 import ScheduleTopbar from "./components/ScheduleTopbar";
 import SummarySection from "./components/SummarySection";
 
-function SchedulePage({ registerHostActions, activeTransportMode = "train" }) {
+function SchedulePage({ registerHostActions, activeTransportMode = "train", isActive = false }) {
   const { t } = useNativeScheduleI18n();
   const { topbar, summary, auto, manual, refs, actions } = useScheduleController({
     registerHostActions,
-    activeTransportMode
+    activeTransportMode,
+    isActive
   });
 
   return (

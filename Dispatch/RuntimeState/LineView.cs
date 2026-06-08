@@ -61,24 +61,34 @@ namespace RapidTransitMod
             }
 
             uint nowFrame = m_Frame();
+            ulong cfgVersion = m_Cfg.Version;
+            ulong appliedVersion = m_AppliedStore.Version;
+            string lineId = m_LineId(line);
+            string lineKey = m_DraftKey(lineId);
+            LineKey storeKey = m_KeyByLine(line, lineId);
             if (m_Frames.TryGetValue(line, out frame)
                 && frame.Line == line
-                && frame.Frame == nowFrame)
+                && frame.CfgVersion == cfgVersion
+                && frame.AppliedVersion == appliedVersion
+                && string.Equals(frame.Id, lineId, StringComparison.Ordinal)
+                && string.Equals(frame.Key, lineKey, StringComparison.Ordinal)
+                && frame.StoreKey.Equals(storeKey))
             {
                 return true;
             }
 
-            string lineId = m_LineId(line);
-            string lineKey = m_DraftKey(lineId);
-            LineKey storeKey = m_KeyByLine(line, lineId);
             IReadOnlyDictionary<string, AppliedLine> appliedLines = m_AppliedLines();
-            bool applied = !storeKey.IsEmpty
-                ? m_AppliedStore.IsManaged(storeKey)
-                : appliedLines.ContainsKey(lineKey);
             appliedLines.TryGetValue(lineKey, out AppliedLine appliedState);
+            bool storeManaged = false;
+            string storeAppliedKind = string.Empty;
+            bool hasStoreSummary = !storeKey.IsEmpty
+                && m_AppliedStore.TryGetRuntimeSummary(storeKey, out storeManaged, out storeAppliedKind);
+            bool applied = hasStoreSummary
+                ? storeManaged
+                : appliedLines.ContainsKey(lineKey);
             string cfgKind = Kind(lineId);
             string appliedKind = applied
-                ? AppliedKind(storeKey, appliedState)
+                ? (hasStoreSummary ? storeAppliedKind : AppliedKind(appliedState))
                 : string.Empty;
             string kind = !string.IsNullOrEmpty(cfgKind)
                 ? cfgKind
@@ -87,8 +97,11 @@ namespace RapidTransitMod
             frame = new LineFrame(
                 line,
                 nowFrame,
+                cfgVersion,
+                appliedVersion,
                 lineId,
                 lineKey,
+                storeKey,
                 applied,
                 cfgKind,
                 appliedKind,
@@ -162,7 +175,7 @@ namespace RapidTransitMod
 
         public bool Applied(Entity line)
         {
-            return Get(line).Applied;
+            return TryFrame(line, out LineFrame frame) && frame.Applied;
         }
 
         public bool Managed(Entity line, bool dispatchOn)
@@ -306,14 +319,16 @@ namespace RapidTransitMod
 
         public bool Local(Entity line)
         {
-            LineInfo info = Get(line);
-            return info.Applied && string.Equals(info.Kind, "local", StringComparison.Ordinal);
+            return TryFrame(line, out LineFrame frame)
+                && frame.Applied
+                && string.Equals(frame.Kind, "local", StringComparison.Ordinal);
         }
 
         public bool Express(Entity line)
         {
-            LineInfo info = Get(line);
-            return info.Applied && string.Equals(info.Kind, "express", StringComparison.Ordinal);
+            return TryFrame(line, out LineFrame frame)
+                && frame.Applied
+                && string.Equals(frame.Kind, "express", StringComparison.Ordinal);
         }
 
         public int Hold(string lineId)
@@ -323,7 +338,7 @@ namespace RapidTransitMod
 
         public int Hold(Entity line)
         {
-            return Get(line).Hold;
+            return m_Cfg.GetHold(line);
         }
 
         public int Dwell(string lineId)
@@ -333,7 +348,7 @@ namespace RapidTransitMod
 
         public int Dwell(Entity line)
         {
-            return Get(line).Dwell;
+            return m_Cfg.GetDwell(line);
         }
 
         public string DepotId(string lineId)
@@ -343,7 +358,7 @@ namespace RapidTransitMod
 
         public string DepotId(Entity line)
         {
-            return Get(line).DepotId;
+            return m_Cfg.GetDepotId(line);
         }
 
         public ulong CfgVersion()

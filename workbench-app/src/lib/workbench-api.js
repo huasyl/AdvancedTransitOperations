@@ -9,6 +9,7 @@ const CALLS = {
   refreshSnapshot: "suhua::rt.workbench.refreshSnapshot",
   loadBroadcastSnapshot: "suhua::rt.workbench.loadBroadcastSnapshot",
   refreshBroadcastSnapshot: "suhua::rt.workbench.refreshBroadcastSnapshot",
+  loadPassengerFlowSnapshot: "suhua::rt.workbench.loadPassengerFlowSnapshot",
   loadBroadcastBindingSlotHints: "suhua::rt.workbench.loadBroadcastBindingSlotHints",
   loadBroadcastAssetBrowser: "suhua::rt.workbench.loadBroadcastAssetBrowser",
   importBroadcastExternalAssets: "suhua::rt.workbench.importBroadcastExternalAssets",
@@ -30,6 +31,7 @@ const CALLS = {
   startBroadcastApplyOperation: "suhua::rt.workbench.startBroadcastApplyOperation",
   getBroadcastApplyOperationStatus: "suhua::rt.workbench.getBroadcastApplyOperationStatus",
   refreshMetadata: "suhua::rt.workbench.refreshMetadata",
+  refreshTransitCatalog: "suhua::rt.workbench.refreshTransitCatalog",
   loadPlannerContext: "suhua::rt.workbench.loadPlannerContext",
   exportPlannerInput: "suhua::rt.workbench.exportPlannerInput",
   startPlannerJob: "suhua::rt.workbench.startPlannerJob",
@@ -39,6 +41,7 @@ const CALLS = {
   saveNativeWorkbenchDraft: "suhua::rt.workbench.saveNativeWorkbenchDraft",
   startNativeSaveOperation: "suhua::rt.workbench.startNativeSaveOperation",
   getNativeSaveOperationStatus: "suhua::rt.workbench.getNativeSaveOperationStatus",
+  setWorkbenchHostState: "suhua::rt.workbench.setWorkbenchHostState",
   getLocale: "suhua::rt.workbench.getLocale"
 };
 
@@ -179,6 +182,20 @@ function createEmptyPlannerInput() {
     },
     runtimeParams: {},
     drafts: []
+  };
+}
+
+function createEmptyPassengerFlowSnapshot(mode = getWorkbenchApiTransportMode()) {
+  return {
+    schemaVersion: 1,
+    mode: normalizeTransportMode(mode),
+    generatedAtFrame: 0,
+    bucketMinutes: 15,
+    stationVolumes: [],
+    sectionVolumes: [],
+    odFlows: [],
+    stationCatalog: [],
+    warnings: []
   };
 }
 
@@ -345,6 +362,12 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.refreshBroadcastSnapshot, requestJson({ preferredLineId: selectedLineId || "" }));
       return parsePayload(payload, createEmptyBroadcastSnapshot());
     },
+    async loadPassengerFlowSnapshot(request = {}) {
+      const engineCall = getEngineCall();
+      const scopedRequest = withMode(request);
+      const payload = await engineCall(CALLS.loadPassengerFlowSnapshot, requestJson(scopedRequest));
+      return parsePayload(payload, createEmptyPassengerFlowSnapshot(scopedRequest.mode));
+    },
     async loadBroadcastBindingSlotHints(lineId = "") {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.loadBroadcastBindingSlotHints, requestJson({ lineId: lineId || "" }));
@@ -450,6 +473,11 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.refreshMetadata, requestJson(request));
       return parsePayload(payload, createEmptySnapshot());
     },
+    async refreshTransitCatalog(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.refreshTransitCatalog, requestJson(request));
+      return parsePayload(payload, createEmptySnapshot());
+    },
     async loadPlannerContext(request = {}) {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.loadPlannerContext, requestJson(request));
@@ -515,6 +543,12 @@ function createLiveApi() {
       } catch {
         return "";
       }
+    },
+    async setHostState(request = {}) {
+      try {
+        const engineCall = getEngineCall();
+        await engineCall(CALLS.setWorkbenchHostState, requestJson(request ?? {}));
+      } catch {}
     },
     onSnapshotChanged(callback) {
       if (typeof window.engine.on !== "function") {

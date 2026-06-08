@@ -22,6 +22,7 @@ namespace RapidTransitMod
         private readonly RuntimeVehicleCleanup m_RuntimeVehicleCleanup;
         private readonly SchedulerApply m_SchedulerApply;
         private readonly Dictionary<Entity, AssistLaunchPendingRecord> m_AssistLaunchPendingByVehicle = new Dictionary<Entity, AssistLaunchPendingRecord>();
+        private readonly Dictionary<Entity, uint> m_PreparingWaypointLiveFrames = new Dictionary<Entity, uint>();
 
         private readonly struct AssistLaunchPendingRecord
         {
@@ -52,6 +53,7 @@ namespace RapidTransitMod
         private const uint FORCED_MIDSTOP_BV_GRACE_FRAMES = DispatchRuntimeSystem.FORCED_MIDSTOP_BV_GRACE_FRAMES;
         private const int IDLE_TIMEOUT_MIN = DispatchRuntimeSystem.IDLE_TIMEOUT_MIN;
         private const uint LAUNCH_COOLDOWN_FRAMES = DispatchRuntimeSystem.LAUNCH_COOLDOWN_FRAMES;
+        private const uint PREPARING_WAYPOINT_LIVE_REFRESH_FRAMES = 16;
         private const float ORIGIN_CONGESTION_RADIUS_METERS = DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS;
         private const float ORIGIN_FORCE_IDLE_RADIUS_METERS = DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS;
         private const double SIM_FRAMES_PER_MINUTE = DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
@@ -271,11 +273,13 @@ namespace RapidTransitMod
                 return;
 
             m_AssistLaunchPendingByVehicle.Remove(vehicle);
+            m_PreparingWaypointLiveFrames.Remove(vehicle);
         }
 
         public void ClearAssistLaunchPending()
         {
             m_AssistLaunchPendingByVehicle.Clear();
+            m_PreparingWaypointLiveFrames.Clear();
         }
 
         private bool TryGetAssistLaunchPending(
@@ -716,11 +720,21 @@ namespace RapidTransitMod
                     if (state == VehicleState.Preparing)
                     {
                         m_Runtime.Bypass.ClearVehicle(v);
-                        int liveWpIdx = m_Runtime.m_WaypointIndex.Compute(v, wps);
-                        if (liveWpIdx >= 0 && liveWpIdx != curWpIdx)
+                        bool hasPreparingStartFrame = m_Runtime.m_VehicleView.TryGetPreparing(v, out uint preparingStartFrame);
+                        bool shouldRefreshPreparingWaypoint = boardingChanged
+                            || !m_PreparingWaypointLiveFrames.TryGetValue(v, out uint lastPreparingWaypointFrame)
+                            || (hasPreparingStartFrame && preparingStartFrame > lastPreparingWaypointFrame)
+                            || nowFrame <= lastPreparingWaypointFrame
+                            || nowFrame - lastPreparingWaypointFrame >= PREPARING_WAYPOINT_LIVE_REFRESH_FRAMES;
+                        if (shouldRefreshPreparingWaypoint)
                         {
-                            curWpIdx = liveWpIdx;
-                            m_Runtime.m_CachedWpIdx[v] = liveWpIdx;
+                            m_PreparingWaypointLiveFrames[v] = nowFrame;
+                            int liveWpIdx = m_Runtime.m_WaypointIndex.Compute(v, wps);
+                            if (liveWpIdx >= 0 && liveWpIdx != curWpIdx)
+                            {
+                                curWpIdx = liveWpIdx;
+                                m_Runtime.m_CachedWpIdx[v] = liveWpIdx;
+                            }
                         }
                     }
 
@@ -753,7 +767,7 @@ namespace RapidTransitMod
                     uint midStopDwellSinceFrame = 0;
                     uint midStopDwellDeadlineFrame = 0;
                     int maxStationDwellMinutes = 0;
-                    bool midStopDwellTimedOut = state == VehicleState.Running
+                    bool midStopDwellTimedOut = midStopBoarding
                         && m_Runtime.m_Observation.Dwell(
                             v,
                             lineEnt,
@@ -1163,6 +1177,7 @@ namespace RapidTransitMod
                             m_Runtime.m_Observation.UpdateSlice(v, lineEnt, wps, nowFrame);
 
                             m_Runtime.m_Announcements.Running(v, routeEnt, wps, curWpIdx, boarding);
+                            m_Runtime.Bypass.TickExpressVanillaBlockerRescue(v, lineEnt, nowFrame);
 
                             int bypassControlWaypointIndex = curWpIdx >= 0 ? curWpIdx : previousCachedWpIdx;
                             RapidTransitMod.Bypass.BypassControlResult runningBypass = m_Runtime.Bypass.TickVehicle(

@@ -44,6 +44,7 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal sealed class LineMileagePort
     {
         public EntityManager EntityManager;
+        public Func<uint> Frame = null!;
         public Func<ulong, int, ulong> MixSignature = null!;
         public Action<string> Log = null!;
         public Func<Entity, string> Name = null!;

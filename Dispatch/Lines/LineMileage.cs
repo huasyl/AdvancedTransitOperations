@@ -15,8 +15,26 @@ namespace RapidTransitMod.Dispatch.Lines
     {
         private readonly LineMileagePort m_Port;
         private readonly Dictionary<Entity, LineMileageModel> m_Models = new Dictionary<Entity, LineMileageModel>();
+        private readonly Dictionary<Entity, LineMileageFrameValidation> m_FrameValidations = new Dictionary<Entity, LineMileageFrameValidation>();
         private SharedLocalCorridorGraph m_Shared;
+        private uint m_SharedSignatureFrame;
+        private ulong m_SharedSignatureValue;
+        private bool m_HasSharedSignatureFrame;
         private bool m_Faulted;
+
+        private readonly struct LineMileageFrameValidation
+        {
+            public readonly uint Frame;
+            public readonly int WaypointCount;
+            public readonly LineMileageModel Model;
+
+            public LineMileageFrameValidation(uint frame, int waypointCount, LineMileageModel model)
+            {
+                Frame = frame;
+                WaypointCount = waypointCount;
+                Model = model;
+            }
+        }
 
         public LineMileage(LineMileagePort port)
         {
@@ -26,7 +44,11 @@ namespace RapidTransitMod.Dispatch.Lines
         public void Clear()
         {
             m_Models.Clear();
+            m_FrameValidations.Clear();
             m_Shared = null;
+            m_SharedSignatureFrame = 0;
+            m_SharedSignatureValue = 0;
+            m_HasSharedSignatureFrame = false;
             m_Faulted = false;
         }
 
@@ -66,6 +88,17 @@ namespace RapidTransitMod.Dispatch.Lines
                 if (segments.Length != waypoints.Length)
                     return false;
 
+                uint frame = m_Port.Frame != null ? m_Port.Frame() : 0u;
+                if (m_FrameValidations.TryGetValue(line, out LineMileageFrameValidation validation)
+                    && validation.Frame == frame
+                    && validation.WaypointCount == waypoints.Length
+                    && validation.Model != null
+                    && validation.Model.TotalDistanceMeters > 0f)
+                {
+                    model = validation.Model;
+                    return true;
+                }
+
                 ulong signature = Signature(line, waypoints, segments);
                 if (Shared(out SharedLocalCorridorGraph sharedGraph) && sharedGraph != null)
                 {
@@ -78,12 +111,14 @@ namespace RapidTransitMod.Dispatch.Lines
                     && model.WaypointDistances.Length == waypoints.Length
                     && model.TotalDistanceMeters > 0f)
                 {
+                    m_FrameValidations[line] = new LineMileageFrameValidation(frame, waypoints.Length, model);
                     return true;
                 }
 
                 if (ReadBuf(line, signature, waypoints.Length, out model))
                 {
                     m_Models[line] = model;
+                    m_FrameValidations[line] = new LineMileageFrameValidation(frame, waypoints.Length, model);
                     return true;
                 }
 
@@ -92,6 +127,7 @@ namespace RapidTransitMod.Dispatch.Lines
                     return false;
 
                 m_Models[line] = model;
+                m_FrameValidations[line] = new LineMileageFrameValidation(frame, waypoints.Length, model);
                 Log(line, model);
                 WriteBuf(line, model);
                 return true;
@@ -583,6 +619,10 @@ namespace RapidTransitMod.Dispatch.Lines
 
         private ulong SharedSignature()
         {
+            uint frame = m_Port.Frame != null ? m_Port.Frame() : 0u;
+            if (m_HasSharedSignatureFrame && m_SharedSignatureFrame == frame)
+                return m_SharedSignatureValue;
+
             ulong hash = 1469598103934665603UL;
             List<Entity> localLines = new List<Entity>();
             foreach (KeyValuePair<string, AppliedLine> entry in m_Port.AppliedLines())
@@ -615,6 +655,9 @@ namespace RapidTransitMod.Dispatch.Lines
                 }
             }
 
+            m_SharedSignatureFrame = frame;
+            m_SharedSignatureValue = hash;
+            m_HasSharedSignatureFrame = true;
             return hash;
         }
 

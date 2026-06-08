@@ -1,5 +1,5 @@
 import { descending } from "d3-array";
-import { chord, ribbon } from "d3-chord";
+import { chordDirected, ribbonArrow } from "d3-chord";
 import { arc } from "d3-shape";
 import { useEffect, useMemo, useState } from "react";
 import { traceWorkbench } from "../../../shared/workbench-trace";
@@ -10,6 +10,19 @@ const INNER_RADIUS = 260;
 const OUTER_RADIUS = 272;
 const MAX_STATIONS = 14;
 const ENABLE_PASSENGER_CHART_HOVER = true;
+const FALLBACK_COLORS = ["#3b82f6", "#ef4444", "#eab308", "#10b981", "#f97316", "#ec4899"];
+const MIN_VISUAL_OD = 2.6;
+const VISUAL_OD_POWER = 0.35;
+const VISUAL_CAP_PERCENTILE = 0.90;
+
+function hashText(text) {
+  let hash = 0;
+  const source = String(text || "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash * 31) + source.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
 
 function getFlowVolume(flow) {
   const value = Number(flow?.volume || 0);
@@ -24,10 +37,58 @@ function getFlowStationName(flow, idKey, nameKey) {
   return String(flow?.[nameKey] || flow?.[idKey] || "");
 }
 
+function getFlowLineId(flow) {
+  return String(flow?.firstLineId || flow?.lineId || flow?.lastLineId || "");
+}
+
+function addLineVolume(volumeMap, key, lineId, volume) {
+  if (!key || !lineId || volume <= 0) {
+    return;
+  }
+  if (!volumeMap.has(key)) {
+    volumeMap.set(key, new Map());
+  }
+  const lineVolumes = volumeMap.get(key);
+  lineVolumes.set(lineId, (lineVolumes.get(lineId) || 0) + volume);
+}
+
+function dominantLineId(lineVolumes) {
+  let bestLineId = "";
+  let bestVolume = -1;
+  (lineVolumes || new Map()).forEach((volume, lineId) => {
+    if (volume > bestVolume) {
+      bestLineId = lineId;
+      bestVolume = volume;
+    }
+  });
+  return bestLineId;
+}
+
+function percentile(values, ratio) {
+  const sorted = values
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
+  if (!sorted.length) {
+    return 1;
+  }
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio)));
+  return sorted[index] || 1;
+}
+
+function visualOdValue(volume, cap) {
+  const capped = Math.min(Math.max(0, volume), cap);
+  if (capped <= 0) {
+    return 0;
+  }
+  return Math.max(MIN_VISUAL_OD, Math.pow(capped, VISUAL_OD_POWER));
+}
+
 function buildChordInput(flows, lines) {
   const stationTotals = new Map();
   const stationNames = new Map();
-  const stationLineIds = new Map();
+  const stationLineVolumes = new Map();
+  const pairLineVolumes = new Map();
+  const pairVolumes = new Map();
   const lineColors = new Map((Array.isArray(lines) ? lines : []).map((line) => [line.id, line.color]));
 
   flows.forEach((flow) => {
@@ -46,8 +107,11 @@ function buildChordInput(flows, lines) {
     stationTotals.set(destinationId, (stationTotals.get(destinationId) || 0) + volume);
     stationNames.set(originId, getFlowStationName(flow, "originStationId", "originName"));
     stationNames.set(destinationId, getFlowStationName(flow, "destinationStationId", "destinationName"));
-    stationLineIds.set(originId, flow?.lineId || stationLineIds.get(originId) || "");
-    stationLineIds.set(destinationId, flow?.lineId || stationLineIds.get(destinationId) || "");
+    const lineId = getFlowLineId(flow);
+    const pairKey = `${originId}->${destinationId}`;
+    addLineVolume(stationLineVolumes, originId, lineId, volume);
+    addLineVolume(pairLineVolumes, pairKey, lineId, volume);
+    pairVolumes.set(pairKey, (pairVolumes.get(pairKey) || 0) + volume);
   });
 
   const stationIds = [...stationTotals.entries()]
@@ -56,28 +120,37 @@ function buildChordInput(flows, lines) {
     .map(([id]) => id);
   const stationIndex = new Map(stationIds.map((id, index) => [id, index]));
   const matrix = stationIds.map(() => stationIds.map(() => 0));
+  const visualCap = percentile([...pairVolumes.values()], VISUAL_CAP_PERCENTILE);
 
-  flows.forEach((flow) => {
-    const originIndex = stationIndex.get(getFlowStationId(flow, "originStationId"));
-    const destinationIndex = stationIndex.get(getFlowStationId(flow, "destinationStationId"));
+  pairVolumes.forEach((volume, pairKey) => {
+    const parts = String(pairKey || "").split("->");
+    const originIndex = stationIndex.get(parts[0]);
+    const destinationIndex = stationIndex.get(parts[1]);
     if (originIndex === undefined || destinationIndex === undefined || originIndex === destinationIndex) {
       return;
     }
-    matrix[originIndex][destinationIndex] += getFlowVolume(flow);
+    matrix[originIndex][destinationIndex] = visualOdValue(volume, visualCap);
   });
 
   const colors = stationIds.map((stationId, index) => {
-    const lineColor = lineColors.get(stationLineIds.get(stationId));
+    const lineColor = lineColors.get(dominantLineId(stationLineVolumes.get(stationId)));
     if (lineColor) {
       return lineColor;
     }
-    return ["#3b82f6", "#ef4444", "#eab308", "#10b981", "#f97316", "#ec4899"][index % 6];
+    return FALLBACK_COLORS[hashText(stationId || index) % FALLBACK_COLORS.length];
+  });
+  const pairColors = stationIds.map((originId, originIndex) => {
+    return stationIds.map((destinationId) => {
+      const lineColor = lineColors.get(dominantLineId(pairLineVolumes.get(`${originId}->${destinationId}`)));
+      return lineColor || colors[originIndex] || "#38bdf8";
+    });
   });
 
   return {
     matrix,
     names: stationIds.map((stationId) => stationNames.get(stationId) || stationId),
     colors,
+    pairColors,
     totals: stationIds.map((stationId) => stationTotals.get(stationId) || 0)
   };
 }
@@ -85,14 +158,9 @@ function buildChordInput(flows, lines) {
 export default function PassengerOdFlowDiagram({ flows, lines, isActive = false }) {
   const [hoveredGroup, setHoveredGroup] = useState(null);
   const chordInput = useMemo(() => buildChordInput(flows, lines), [flows, lines]);
-  const chordData = useMemo(() => chord().padAngle(0.04).sortSubgroups(descending)(chordInput.matrix), [chordInput.matrix]);
+  const chordData = useMemo(() => chordDirected().padAngle(0.04).sortSubgroups(descending)(chordInput.matrix), [chordInput.matrix]);
   const arcPath = useMemo(() => arc().innerRadius(INNER_RADIUS).outerRadius(OUTER_RADIUS), []);
-  const ribbonPath = useMemo(() => ribbon().radius(INNER_RADIUS), []);
-  const hoveredInfo = !ENABLE_PASSENGER_CHART_HOVER || hoveredGroup === null ? null : {
-    name: chordInput.names[hoveredGroup],
-    value: chordInput.totals[hoveredGroup] || 0,
-    color: chordInput.colors[hoveredGroup] || "#38bdf8"
-  };
+  const ribbonPath = useMemo(() => ribbonArrow().radius(INNER_RADIUS).headRadius(22), []);
 
   useEffect(() => {
     traceWorkbench("passenger.od.mount");
@@ -129,15 +197,6 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
     setHoveredGroup(null);
   }
 
-  const hoveredGroupShape = hoveredGroup === null ? null : chordData.groups.find((group) => group.index === hoveredGroup);
-  const hoveredTooltipPosition = hoveredGroupShape ? (() => {
-    const angle = (hoveredGroupShape.startAngle + hoveredGroupShape.endAngle) / 2;
-    const radius = OUTER_RADIUS + 72;
-    return {
-      left: `${Math.max(6, Math.min(88, ((WIDTH / 2 + Math.sin(angle) * radius) / WIDTH) * 100))}%`,
-      top: `${Math.max(8, Math.min(92, ((HEIGHT / 2 - Math.cos(angle) * radius) / HEIGHT) * 100))}%`
-    };
-  })() : { left: "50%", top: "50%" };
   const hitNodes = chordData.groups.map((group, index) => {
     const angle = (group.startAngle + group.endAngle) / 2;
     const radius = OUTER_RADIUS + 18;
@@ -155,12 +214,12 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
         <g transform={`translate(${WIDTH / 2} ${HEIGHT / 2})`}>
           {chordData.map((entry, index) => {
             const isHovered = hoveredGroup === entry.source.index || hoveredGroup === entry.target.index;
-            const fillOpacity = hoveredGroup === null ? 0.35 : (isHovered ? 0.82 : 0.06);
+            const fillOpacity = hoveredGroup === null ? 0.22 : (isHovered ? 0.68 : 0.04);
             return (
               <path
                 key={`flow-${index}`}
                 d={ribbonPath(entry) || ""}
-                fill={chordInput.colors[entry.source.index] || "#38bdf8"}
+                fill={chordInput.pairColors?.[entry.source.index]?.[entry.target.index] || chordInput.colors[entry.source.index] || "#38bdf8"}
                 fillOpacity={fillOpacity}
               />
             );
@@ -206,12 +265,6 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
               aria-label={node.label}
             />
           ))}
-          {hoveredInfo ? (
-            <div className="rtw-passenger-od-tooltip" style={hoveredTooltipPosition}>
-              <div className="rtw-passenger-chart-tooltip-title">{hoveredInfo.name}</div>
-              <div className="rtw-passenger-chart-tooltip-value">OD 汇总: {hoveredInfo.value.toLocaleString()}</div>
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>

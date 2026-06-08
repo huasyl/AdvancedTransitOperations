@@ -39,9 +39,10 @@ function buildChartData(points) {
     value: yMax * ratio,
     y: TOP + PLOT_HEIGHT - PLOT_HEIGHT * ratio
   }));
+  const xTickStep = Math.max(1, Math.ceil(points.length / 6));
   const xTicks = points
     .map((point, index) => ({ point, index }))
-    .filter((item) => item.index % 2 === 0 || item.index === points.length - 1)
+    .filter((item) => item.index % xTickStep === 0 || item.index === points.length - 1)
     .map((item) => ({
       label: item.point?.hour || `${item.index}:00`,
       x: coords[item.index]?.x || LEFT,
@@ -92,7 +93,9 @@ export default function PassengerTrendChart({ points }) {
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="rtw-passenger-chart-svg">
         {chart.yTicks.map((tick) => (
           <g key={`y-${tick.value}`}>
-            <line x1={LEFT} y1={tick.y} x2={LEFT + PLOT_WIDTH} y2={tick.y} stroke="#27272a" strokeWidth="1" strokeDasharray="3 3" />
+            {tick.value > 0 && tick.value < chart.yMax ? (
+              <line x1={LEFT} y1={tick.y} x2={LEFT + PLOT_WIDTH} y2={tick.y} stroke="#27272a" strokeWidth="1" strokeDasharray="3 3" />
+            ) : null}
             <text x={LEFT - 10} y={tick.y + 5} fill="#71717a" fontSize="14" fontWeight="600" textAnchor="end">{formatTick(tick.value)}</text>
           </g>
         ))}

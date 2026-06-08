@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import { buildPassengerFlowViewModel, filterPassengerFlow } from "./passenger-view-model";
 import PassengerLineTabs from "./components/PassengerLineTabs";
@@ -8,6 +8,7 @@ import PassengerSectionRanking from "./components/PassengerSectionRanking";
 import PassengerStationVolumeChart from "./components/PassengerStationVolumeChart";
 import PassengerTrendChart from "./components/PassengerTrendChart";
 import { traceWorkbench } from "../../shared/workbench-trace";
+import WorkbenchScrollArea from "../../shared/WorkbenchScrollArea";
 
 function ChartPanel({ title, children, large = false }) {
   return (
@@ -23,9 +24,7 @@ function normalizePassengerMode(mode) {
   return token === "subway" ? "subway" : "train";
 }
 
-function hasScopedLines(snapshot) {
-  return Array.isArray(snapshot?.lines) && snapshot.lines.length > 0;
-}
+const PASSENGER_FLOW_POLL_INTERVAL_MS = 5000;
 
 function buildEmptyPassengerFlowViewModel() {
   return {
@@ -39,76 +38,193 @@ function buildEmptyPassengerFlowViewModel() {
   };
 }
 
-export default function PassengerFlowPage({ activeTransportMode = "train", isActive = false }) {
+function sumBy(values, selector) {
+  return values.reduce((sum, entry) => sum + Number(selector(entry) || 0), 0);
+}
+
+function warningCount(warnings, code) {
+  return sumBy(warnings.filter((entry) => entry?.code === code), (entry) => entry?.count);
+}
+
+function isRenderableOdFlow(flow) {
+  return Number(flow?.volume || 0) > 0
+    && !!flow?.originStationId
+    && !!flow?.destinationStationId
+    && flow.originStationId !== flow.destinationStationId;
+}
+
+function PassengerDiagnostics({ data }) {
+  const odRows = data.odFlows.length;
+  const renderableOdRows = data.odFlows.filter(isRenderableOdFlow).length;
+  const odCompleted = sumBy(data.odFlows, (entry) => entry?.volume);
+  const items = [
+    { label: "OD rows", value: odRows },
+    { label: "Renderable OD", value: renderableOdRows },
+    { label: "OD completed", value: odCompleted },
+    { label: "Unknown origin", value: warningCount(data.warnings, "unknownOriginAlighting") },
+    { label: "Transfer expired", value: warningCount(data.warnings, "transferWindowExpired") },
+    { label: "Station mismatch", value: warningCount(data.warnings, "transferBoardStationMismatch") },
+    { label: "Pending overflow", value: warningCount(data.warnings, "pendingTransferOverflow") }
+  ];
+
+  return (
+    <div className="rtw-passenger-diagnostics">
+      {items.map((item) => (
+        <div key={item.label} className="rtw-passenger-diagnostic">
+          <span className="rtw-passenger-diagnostic-label">{item.label}</span>
+          <span className="rtw-passenger-diagnostic-value">{Number(item.value || 0).toLocaleString()}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function PassengerFlowPage({ activeTransportMode = "train", isActive = false, registerHostActions }) {
   const [snapshot, setSnapshot] = useState(null);
-  const [metadataSnapshot, setMetadataSnapshot] = useState(null);
+  const [lineCatalogSnapshot, setLineCatalogSnapshot] = useState(null);
   const [selectedLineId, setSelectedLineId] = useState("ALL");
   const [error, setError] = useState("");
-  const modeCacheRef = useRef({});
   const loadGenerationRef = useRef(0);
+  const mountedRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
+  const pollInFlightRef = useRef(false);
   const activeModeRef = useRef(normalizePassengerMode(activeTransportMode));
   activeModeRef.current = normalizePassengerMode(activeTransportMode);
 
   useEffect(() => {
-    const mode = normalizePassengerMode(activeTransportMode);
-    const generation = loadGenerationRef.current + 1;
-    loadGenerationRef.current = generation;
-    traceWorkbench("passenger.mount", { mode });
-    let cancelled = false;
-    const api = getWorkbenchApi();
-    const cached = modeCacheRef.current[mode] || null;
-
-    setSelectedLineId("ALL");
-    setSnapshot(cached?.snapshot || null);
-    setMetadataSnapshot(cached?.metadataSnapshot || null);
-    setError("");
-
-    if (cached) {
-      traceWorkbench("passenger.load.cache", { mode });
-      return () => {
-        cancelled = true;
-        traceWorkbench("passenger.unmount");
-      };
-    }
-
-    Promise.all([api.loadSnapshot({ mode }), api.refreshMetadata({ mode })])
-      .then(([nextSnapshot, nextMetadata]) => {
-        if (cancelled || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
-          return;
-        }
-        modeCacheRef.current[mode] = {
-          snapshot: nextSnapshot,
-          metadataSnapshot: nextMetadata
-        };
-        setSnapshot(nextSnapshot);
-        setMetadataSnapshot(nextMetadata);
-        setError("");
-        traceWorkbench("passenger.load.done", {
-          mode,
-          lines: Array.isArray(nextMetadata?.lines) ? nextMetadata.lines.length : 0
-        });
-      })
-      .catch((loadError) => {
-        if (cancelled || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
-          return;
-        }
-        setError(loadError?.message || "Unable to load passenger flow data.");
-        traceWorkbench("passenger.load.error", { mode, message: loadError?.message || loadError });
-      });
-
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      loadGenerationRef.current += 1;
       traceWorkbench("passenger.unmount");
     };
+  }, []);
+
+  const refreshPassengerFlow = useCallback(async ({ includeCatalog = false, reset = false, reason = "refresh" } = {}) => {
+    const mode = normalizePassengerMode(activeTransportMode);
+    if (reason === "poll" && (pollInFlightRef.current || refreshInFlightRef.current)) {
+      return;
+    }
+
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    refreshInFlightRef.current = true;
+    if (reason === "poll") {
+      pollInFlightRef.current = true;
+    }
+
+    traceWorkbench("passenger.load.begin", { mode, reason, includeCatalog });
+    const api = getWorkbenchApi();
+
+    if (reset) {
+      setSelectedLineId("ALL");
+      setSnapshot(null);
+      setLineCatalogSnapshot(null);
+    }
+    setError("");
+
+    try {
+      const [nextSnapshot, nextLineCatalogSnapshot] = await Promise.all([
+        api.loadPassengerFlowSnapshot({ mode }),
+        includeCatalog
+          ? api.refreshTransitCatalog({ mode }).catch((metadataError) => {
+              traceWorkbench("passenger.lineCatalog.error", { mode, message: metadataError?.message || metadataError });
+              return null;
+            })
+          : Promise.resolve(null)
+      ]);
+
+      if (!mountedRef.current || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
+        return;
+      }
+
+      setSnapshot(nextSnapshot);
+      if (nextLineCatalogSnapshot) {
+        setLineCatalogSnapshot(nextLineCatalogSnapshot);
+      }
+      setError("");
+      traceWorkbench("passenger.load.done", {
+        mode,
+        reason,
+        stationVolumes: Array.isArray(nextSnapshot?.stationVolumes) ? nextSnapshot.stationVolumes.length : 0,
+        sectionVolumes: Array.isArray(nextSnapshot?.sectionVolumes) ? nextSnapshot.sectionVolumes.length : 0,
+        odFlows: Array.isArray(nextSnapshot?.odFlows) ? nextSnapshot.odFlows.length : 0,
+        lines: Array.isArray(nextLineCatalogSnapshot?.lines) ? nextLineCatalogSnapshot.lines.length : 0
+      });
+    } catch (loadError) {
+      if (!mountedRef.current || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
+        return;
+      }
+      setError(loadError?.message || "Unable to load passenger flow data.");
+      traceWorkbench("passenger.load.error", { mode, reason, message: loadError?.message || loadError });
+    } finally {
+      if (loadGenerationRef.current === generation) {
+        refreshInFlightRef.current = false;
+      }
+      if (reason === "poll") {
+        pollInFlightRef.current = false;
+      }
+    }
   }, [activeTransportMode]);
 
+  useEffect(() => {
+    refreshPassengerFlow({ includeCatalog: true, reset: true, reason: "mode" });
+  }, [refreshPassengerFlow]);
+
+  useEffect(() => {
+    if (!isActive) {
+      return undefined;
+    }
+
+    refreshPassengerFlow({ includeCatalog: true, reason: "active" });
+    const intervalId = window.setInterval(() => {
+      refreshPassengerFlow({ includeCatalog: false, reason: "poll" });
+    }, PASSENGER_FLOW_POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isActive, refreshPassengerFlow]);
+
+  useEffect(() => {
+    if (!isActive) {
+      return undefined;
+    }
+
+    const mode = normalizePassengerMode(activeTransportMode);
+    if (typeof window !== "undefined") {
+      window.__RT_WORKBENCH_ACTIVE_PAGE__ = "passenger";
+      window.__RT_WORKBENCH_SELECTED_LINE_ID__ = selectedLineId === "ALL" ? "" : selectedLineId;
+      window.__RT_WORKBENCH_SELECTED_EDIT_LINE__ = "";
+    }
+    getWorkbenchApi().setHostState?.({
+      mode,
+      activePage: "passenger",
+      selectedLineId: selectedLineId === "ALL" ? "" : selectedLineId,
+      selectedEditLine: ""
+    });
+    return undefined;
+  }, [activeTransportMode, isActive, selectedLineId]);
+
+  useEffect(() => {
+    if (!isActive || typeof registerHostActions !== "function") {
+      return undefined;
+    }
+
+    registerHostActions({
+      refreshData: async () => {
+        await refreshPassengerFlow({ includeCatalog: true, reason: "host" });
+      }
+    });
+
+    return () => {
+      registerHostActions(null);
+    };
+  }, [isActive, refreshPassengerFlow, registerHostActions]);
+
   const viewModel = useMemo(
-    () => (
-      hasScopedLines(snapshot) || hasScopedLines(metadataSnapshot)
-        ? buildPassengerFlowViewModel(snapshot || {}, metadataSnapshot || {})
-        : buildEmptyPassengerFlowViewModel()
-    ),
-    [metadataSnapshot, snapshot]
+    () => (snapshot ? buildPassengerFlowViewModel(snapshot || {}, lineCatalogSnapshot || {}) : buildEmptyPassengerFlowViewModel()),
+    [lineCatalogSnapshot, snapshot]
   );
   const filteredData = useMemo(
     () => filterPassengerFlow(viewModel, selectedLineId),
@@ -142,13 +258,14 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
 
   return (
     <div className="rtw-passenger-root">
-      <div className="rtw-passenger-body">
+      <WorkbenchScrollArea className="rtw-passenger-body" metricsKey={`${selectedLineId}:${filteredData.stationVolumes.length}:${filteredData.sectionVolumes.length}:${filteredData.odFlows.length}`}>
         <div className="rtw-passenger-content">
           <div className="rtw-passenger-header">
             <h2 className="rtw-passenger-title">全息客流数据中心 / ANALYTICS</h2>
             <PassengerLineTabs lines={viewModel.lines} selectedLineId={selectedLineId} onSelect={handleLineSelect} />
           </div>
           <PassengerMetricCards data={filteredData} />
+          <PassengerDiagnostics data={filteredData} />
           <div className="rtw-passenger-panels">
             <ChartPanel title={selectedLineId === "ALL" ? "全网分时客流走势 / SYSTEM TREND" : "单线分时客流走势 / LINE TREND"}>
               <div className="rtw-passenger-chart is-trend">
@@ -167,12 +284,12 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
             </ChartPanel>
             <ChartPanel title="最高压断面管段排行 (Top 10) / SECTION VOLUME RANKING" large>
               <div className="rtw-passenger-chart is-ranking">
-                <PassengerSectionRanking sections={filteredData.sectionVolumes} />
+                <PassengerSectionRanking sections={filteredData.sectionVolumes} lines={viewModel.lines} />
               </div>
             </ChartPanel>
           </div>
         </div>
-      </div>
+      </WorkbenchScrollArea>
     </div>
   );
 }

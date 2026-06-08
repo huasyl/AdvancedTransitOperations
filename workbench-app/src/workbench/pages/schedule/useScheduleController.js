@@ -76,7 +76,7 @@ function shouldConsumeSchedulePayload(payload, expectedMode) {
   return normalizeScheduleMode(expectedMode) === DEFAULT_SCHEDULE_MODE;
 }
 
-export default function useScheduleController({ registerHostActions, activeTransportMode = "train" } = {}) {
+export default function useScheduleController({ registerHostActions, activeTransportMode = "train", isActive = false } = {}) {
 
   const { t } = useNativeScheduleI18n();
   const scheduleMode = normalizeScheduleMode(activeTransportMode);
@@ -571,7 +571,26 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }, [scheduleMode, selectedLineId, t, workbenchApi]);
 
   useEffect(() => {
-    if (typeof registerHostActions !== "function") {
+    if (!isActive) {
+      return undefined;
+    }
+
+    const selectedEditLineId = selectedLine?.id || selectedLineId || "";
+    if (typeof window !== "undefined") {
+      window.__RT_WORKBENCH_ACTIVE_PAGE__ = "schedule";
+      window.__RT_WORKBENCH_SELECTED_LINE_ID__ = selectedLineId || "";
+      window.__RT_WORKBENCH_SELECTED_EDIT_LINE__ = selectedEditLineId;
+    }
+    workbenchApi.setHostState?.({
+      mode: scheduleMode,
+      activePage: "schedule",
+      selectedLineId: selectedLineId || "",
+      selectedEditLine: selectedEditLineId
+    });
+  }, [isActive, scheduleMode, selectedLine, selectedLineId, workbenchApi]);
+
+  useEffect(() => {
+    if (!isActive || typeof registerHostActions !== "function") {
       return undefined;
     }
 
@@ -595,7 +614,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     return () => {
       registerHostActions(null);
     };
-  }, [scheduleMode, registerHostActions, t, workbenchApi]);
+  }, [isActive, scheduleMode, registerHostActions, t, workbenchApi]);
 
   useEffect(() => {
     if (!hasHydratedRuntimeRef.current) {

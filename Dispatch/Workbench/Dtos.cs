@@ -57,6 +57,21 @@ namespace RapidTransitMod
     }
 
     [DataContract]
+    public class DispatchWorkbenchHostStateDto
+    {
+        [DataMember]
+        public string phase;
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public string activePage;
+        [DataMember]
+        public string selectedLineId;
+        [DataMember]
+        public string selectedEditLine;
+    }
+
+    [DataContract]
     public class RuntimeFeatureSettingsDto
     {
         [DataMember]

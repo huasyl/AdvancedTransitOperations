@@ -58,6 +58,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 if (!m_Runtime.m_StartupRuntimeStateCleared)
                 {
                     ClearTracking();
+                    try
+                    {
+                        PassengerFlow.Persistence.RestoreFromCity(m_Runtime.EntityManager, m_Runtime.m_CitySystem.City);
+                    }
+                    catch (Exception ex)
+                    {
+                        m_Runtime.log.Info("[PassengerFlowPersistence] Restore failed -> " + ex.GetType().Name + ": " + ex.Message);
+                    }
                     m_Runtime.m_StartupRuntimeStateCleared = true;
                 }
 
@@ -134,16 +142,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_LastVehicleCacheFlushFrame = nowFrame;
             }
 
-            if ((nowFrame & 63u) == 0u)
-            {
-                m_Runtime.m_WorkbenchBridge.CatalogMonitor().Check();
-            }
+            m_Runtime.m_WorkbenchCatalogDirty.Check(nowFrame);
+            m_Runtime.m_WorkbenchCatalogCache.Tick(nowFrame);
 
             m_Runtime.m_Bypass.FlushProbeLogs(nowFrame);
         }
 
         public void Loaded(Context serializationContext)
         {
+            PassengerFlow.SamplingSystem.ClearState();
             m_Runtime.m_AnnouncementWorkbench.Reset();
             m_Runtime.m_WorkbenchBridge.Reset();
             m_Runtime.m_WorkbenchBridge.Restore();
@@ -160,6 +167,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearAll()
         {
+            PassengerFlow.SamplingSystem.ClearState();
             EntityCommandBuffer commandBuffer = m_Runtime.m_EndFrameBarrier.CreateCommandBuffer();
             NativeArray<Entity> entities = m_Runtime.m_AllPublicTransportQuery.ToEntityArray(Allocator.Temp);
             foreach (Entity entity in entities)
@@ -219,6 +227,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearTracking()
         {
+            PassengerFlow.SamplingSystem.ClearState();
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_ObsPersist.ClearLaps();

@@ -2732,12 +2732,27 @@
   color: #f4f4f5;
 }
 
+.rtw-passenger-root .dw-demo-scroll-shell {
+  height: 100%;
+}
+
+.rtw-passenger-root .dw-demo-scroll-indicator {
+  right: 16rem;
+  width: 28rem;
+}
+
+.rtw-passenger-root .dw-demo-scroll-indicator::before,
+.rtw-passenger-root .dw-demo-scroll-thumb {
+  left: 12rem;
+  right: 12rem;
+}
+
 .rtw-passenger-body {
   height: 100%;
   min-height: 0;
   overflow-y: scroll;
   padding-top: 32rem;
-  padding-right: 32rem;
+  padding-right: 72rem;
   padding-bottom: 32rem;
   padding-left: 32rem;
   box-sizing: border-box;
@@ -2847,6 +2862,36 @@
   font-weight: 700;
 }
 
+.rtw-passenger-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 24rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 8rem;
+  padding-bottom: 8rem;
+}
+
+.rtw-passenger-diagnostic {
+  display: flex;
+  align-items: center;
+  margin-right: 24rem;
+  margin-top: 8rem;
+  margin-bottom: 8rem;
+  color: #a1a1aa;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
+}
+
+.rtw-passenger-diagnostic-label {
+  margin-right: 8rem;
+}
+
+.rtw-passenger-diagnostic-value {
+  color: #f4f4f5;
+}
+
 .rtw-passenger-panels {
   display: flex;
   flex-wrap: wrap;
@@ -2870,7 +2915,8 @@
 
 .rtw-passenger-panel.is-large {
   width: 100%;
-  margin-right: 0;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .rtw-passenger-panel-title {
@@ -2906,13 +2952,16 @@
   height: 100%;
 }
 
-.rtw-passenger-chart.is-trend,
-.rtw-passenger-chart.is-stations {
+.rtw-passenger-chart.is-trend {
   height: 220rem;
 }
 
+.rtw-passenger-chart.is-stations {
+  height: 280rem;
+}
+
 .rtw-passenger-chart.is-ranking {
-  height: 260rem;
+  height: 340rem;
 }
 
 .rtw-passenger-chart.is-od {
@@ -2921,8 +2970,11 @@
 
 .rtw-passenger-od-chord {
   position: relative;
-  width: 100%;
+  width: 720rem;
+  max-width: 100%;
   height: 100%;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .rtw-passenger-chart-svg,
@@ -2978,7 +3030,8 @@
 .rtw-passenger-od-tooltip {
   position: absolute;
   z-index: 3;
-  min-width: 120rem;
+  min-width: 220rem;
+  max-width: 360rem;
   padding-top: 8rem;
   padding-right: 10rem;
   padding-bottom: 8rem;
@@ -2991,6 +3044,7 @@
   pointer-events: none;
   transform: translate(12rem, -50%);
   box-sizing: border-box;
+  white-space: normal;
 }
 
 .rtw-passenger-od-tooltip {
@@ -2999,11 +3053,41 @@
   transform: translate(24rem, -50%);
 }
 
+.rtw-passenger-chart-tooltip.is-ranking {
+  min-width: 180rem;
+  max-width: 240rem;
+}
+
 .rtw-passenger-chart-tooltip-title {
   color: #f4f4f5;
   font-size: 14rem;
   line-height: 18rem;
   font-weight: 700;
+}
+
+.rtw-passenger-chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  margin-top: 4rem;
+}
+
+.rtw-passenger-chart-tooltip-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 8rem;
+  color: #38bdf8;
+  font-size: 14rem;
+  line-height: 18rem;
+  font-weight: 800;
+}
+
+.rtw-passenger-chart-tooltip-number {
+  flex: 0 0 auto;
+  color: #38bdf8;
+  font-size: 14rem;
+  line-height: 18rem;
+  font-weight: 800;
+  text-align: right;
 }
 
 .rtw-passenger-chart-tooltip-value {
@@ -3035,7 +3119,7 @@
 
 .rtw-passenger-ranking {
   position: relative;
-  height: 260rem;
+  height: 340rem;
   min-height: 0;
 }
 
@@ -3058,8 +3142,8 @@
 }
 
 .rtw-passenger-ranking-label {
-  width: 190rem;
-  flex: 0 0 190rem;
+  width: 260rem;
+  flex: 0 0 260rem;
   padding-right: 16rem;
   color: #a1a1aa;
   font-size: 12rem;
@@ -3086,14 +3170,21 @@
 }
 
 .rtw-passenger-ranking-bar {
-  display: block;
+  display: flex;
   height: 100%;
   border-radius: 999rem;
   background: #38bdf8;
+  overflow: hidden;
 }
 
 .rtw-passenger-ranking-row.is-hovered .rtw-passenger-ranking-bar {
   background: #7dd3fc;
+}
+
+.rtw-passenger-ranking-segment {
+  display: block;
+  height: 100%;
+  min-width: 2rem;
 }
 
 .rtw-passenger-ranking-value {

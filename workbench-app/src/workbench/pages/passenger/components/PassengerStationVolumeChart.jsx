@@ -1,15 +1,16 @@
 import { useMemo, useRef, useState } from "react";
 
 const WIDTH = 720;
-const HEIGHT = 250;
+const HEIGHT = 300;
 const LEFT = 52;
 const RIGHT = 12;
 const TOP = 16;
-const BOTTOM = 56;
+const BOTTOM = 88;
 const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM;
 const ENABLE_PASSENGER_CHART_HOVER = false;
 const HOVER_THROTTLE_MS = 80;
+const MAX_STATIONS = 12;
 
 function getValue(entry, key) {
   const value = Number(entry?.[key] || 0);
@@ -18,6 +19,35 @@ function getValue(entry, key) {
 
 function getStationName(entry, index) {
   return entry?.stationName || entry?.name || entry?.stationId || `Station ${index + 1}`;
+}
+
+function splitStationLabel(name) {
+  const text = String(name || "");
+  if (text.length <= 8) {
+    return [text];
+  }
+  return [text.slice(0, 8), text.slice(8, 16)];
+}
+
+function buildDisplayVolumes(volumes) {
+  const stationMap = new Map();
+  volumes.forEach((entry, index) => {
+    const stationId = String(entry?.stationId || entry?.stationName || entry?.name || index);
+    if (!stationMap.has(stationId)) {
+      stationMap.set(stationId, {
+        ...entry,
+        stationId,
+        inflow: 0,
+        outflow: 0
+      });
+    }
+    const station = stationMap.get(stationId);
+    station.inflow += getValue(entry, "inflow");
+    station.outflow += getValue(entry, "outflow");
+  });
+  return [...stationMap.values()]
+    .sort((left, right) => (getValue(right, "inflow") + getValue(right, "outflow")) - (getValue(left, "inflow") + getValue(left, "outflow")))
+    .slice(0, MAX_STATIONS);
 }
 
 function formatTick(value) {
@@ -61,10 +91,11 @@ function buildChartData(volumes) {
 export default function PassengerStationVolumeChart({ volumes }) {
   const [hoveredIndex, setHoveredIndex] = useState(null);
   const hoverRef = useRef({ lastTime: 0 });
-  const chart = useMemo(() => buildChartData(volumes), [volumes]);
+  const displayVolumes = useMemo(() => buildDisplayVolumes(volumes), [volumes]);
+  const chart = useMemo(() => buildChartData(displayVolumes), [displayVolumes]);
   const hovered = !ENABLE_PASSENGER_CHART_HOVER || hoveredIndex === null ? null : chart.items[hoveredIndex];
 
-  if (!volumes.length) {
+  if (!displayVolumes.length) {
     return <div className="rtw-passenger-empty">暂无真实站点进出站数据</div>;
   }
 
@@ -101,7 +132,9 @@ export default function PassengerStationVolumeChart({ volumes }) {
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="rtw-passenger-chart-svg">
         {chart.yTicks.map((tick) => (
           <g key={`y-${tick.value}`}>
-            <line x1={LEFT} y1={tick.y} x2={LEFT + PLOT_WIDTH} y2={tick.y} stroke="#27272a" strokeWidth="1" strokeDasharray="3 3" />
+            {tick.value > 0 && tick.value < chart.yMax ? (
+              <line x1={LEFT} y1={tick.y} x2={LEFT + PLOT_WIDTH} y2={tick.y} stroke="#27272a" strokeWidth="1" strokeDasharray="3 3" />
+            ) : null}
             <text x={LEFT - 10} y={tick.y + 5} fill="#71717a" fontSize="14" fontWeight="600" textAnchor="end">{formatTick(tick.value)}</text>
           </g>
         ))}
@@ -116,9 +149,13 @@ export default function PassengerStationVolumeChart({ volumes }) {
               fontSize="13"
               fontWeight="600"
               textAnchor="end"
-              transform={`rotate(-30 ${item.labelX} ${TOP + PLOT_HEIGHT + 18})`}
+              transform={`rotate(-32 ${item.labelX} ${TOP + PLOT_HEIGHT + 18})`}
             >
-              {item.name}
+              {splitStationLabel(item.name).map((label, labelIndex) => (
+                <tspan key={`${item.entry?.stationId || item.index}-${labelIndex}`} x={item.labelX} dy={labelIndex === 0 ? 0 : 14}>
+                  {label}
+                </tspan>
+              ))}
             </text>
           </g>
         ))}

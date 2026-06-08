@@ -105,8 +105,14 @@ namespace RapidTransitMod.Bypass
 
         internal void ClearVehicle(Entity vehicle, string releaseReason = null)
         {
-            if (vehicle == Entity.Null || !m_Admission.TryGetLatchedBlocker(vehicle, out Entity blocker))
+            if (vehicle == Entity.Null)
                 return;
+
+            if (!m_Admission.TryGetLatchedBlocker(vehicle, out Entity blocker))
+            {
+                m_Admission.ClearVehicle(vehicle);
+                return;
+            }
 
             m_Admission.ClearBlocker(vehicle);
             m_Admission.RemoveCadence(vehicle);
@@ -176,6 +182,12 @@ namespace RapidTransitMod.Bypass
         internal bool TryGetLatchedBlocker(Entity vehicle, out Entity blocker)
         {
             return m_Admission.TryGetLatchedBlocker(vehicle, out blocker);
+        }
+
+        internal void TickExpressVanillaBlockerRescue(Entity vehicle, Entity line, uint nowFrame)
+        {
+            if (m_Admission.TryFindBypassHeldLocalBlockingExpress(vehicle, line, nowFrame, out Entity localVehicle))
+                ClearVehicle(localVehicle, "vanilla-blocker-chain-stall");
         }
 
         internal void LogDepartureGate(Entity vehicle, string key, string message)

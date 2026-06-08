@@ -1,4 +1,10 @@
 export default function PassengerLineTabs({ lines, selectedLineId, onSelect }) {
+  function lineLabel(line) {
+    const code = String(line?.code || "").trim();
+    const name = String(line?.shortName || line?.name || "").trim();
+    return name || code || line?.id || "";
+  }
+
   return (
     <div className="rtw-passenger-line-tabs">
       <button
@@ -16,7 +22,7 @@ export default function PassengerLineTabs({ lines, selectedLineId, onSelect }) {
           onClick={() => onSelect(line.id)}
         >
           <span className="rtw-passenger-line-dot" style={{ backgroundColor: line.color }} />
-          {line.code} {line.shortName || line.name}
+          {lineLabel(line)}
         </button>
       ))}
     </div>
