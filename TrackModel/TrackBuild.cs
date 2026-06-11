@@ -178,6 +178,7 @@ namespace RapidTransitMod.TrackModel
                 TryAppendControlPoint(chain.ControlPoints, waypoints, waypointIndex, startAtomIndex);
             }
 
+            BuildAtomStationBuildings(chain);
             BuildControlEdges(chain, line, waypoints);
             m_Profile.BuildTraversalProfile(chain, line, waypoints);
             m_Profile.BuildTurnbackBoundaries(chain, line, waypoints);
@@ -302,6 +303,32 @@ namespace RapidTransitMod.TrackModel
                 ? ControlPointKind.Bypass
                 : ControlPointKind.Stop;
             controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, kind));
+        }
+
+        private static void BuildAtomStationBuildings(LineTrackChain chain)
+        {
+            if (chain == null || chain.TrackAtoms.Count == 0)
+            {
+                if (chain != null)
+                    chain.AtomStationBuildings = Array.Empty<Entity>();
+                return;
+            }
+
+            Entity[] atomStationBuildings = new Entity[chain.TrackAtoms.Count];
+            const int stationWindowAtoms = 3;
+            for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count; controlPointIndex++)
+            {
+                ControlPointMarker controlPoint = chain.ControlPoints[controlPointIndex];
+                if (controlPoint.Building == Entity.Null)
+                    continue;
+
+                int start = math.max(0, controlPoint.AtomIndex - stationWindowAtoms);
+                int endExclusive = math.min(chain.TrackAtoms.Count, controlPoint.AtomIndex + stationWindowAtoms + 1);
+                for (int atomIndex = start; atomIndex < endExclusive; atomIndex++)
+                    atomStationBuildings[atomIndex] = controlPoint.Building;
+            }
+
+            chain.AtomStationBuildings = atomStationBuildings;
         }
 
         private void BuildControlEdges(LineTrackChain chain, Entity line, DynamicBuffer<RouteWaypoint> waypoints)

@@ -17,6 +17,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly Func<Entity, string> m_LineId;
         private readonly Func<Entity, string> m_Kind;
         private readonly Action<Entity, Entity, Entity, ResolvedStopKind, int, bool, bool, string, uint> m_RecordStop;
+        private readonly Func<bool> m_ShouldLog;
         private readonly Action<TraceEvent> m_Log;
 
         internal StopPort(
@@ -31,6 +32,7 @@ namespace RapidTransitMod.Dispatch.Observation
             Func<Entity, string> lineId,
             Func<Entity, string> kind,
             Action<Entity, Entity, Entity, ResolvedStopKind, int, bool, bool, string, uint> recordStop,
+            Func<bool> shouldLog,
             Action<TraceEvent> log)
         {
             Vehicles = vehicles ?? throw new ArgumentNullException(nameof(vehicles));
@@ -44,6 +46,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_LineId = lineId ?? throw new ArgumentNullException(nameof(lineId));
             m_Kind = kind ?? throw new ArgumentNullException(nameof(kind));
             m_RecordStop = recordStop ?? throw new ArgumentNullException(nameof(recordStop));
+            m_ShouldLog = shouldLog ?? throw new ArgumentNullException(nameof(shouldLog));
             m_Log = log ?? throw new ArgumentNullException(nameof(log));
         }
 
@@ -58,6 +61,7 @@ namespace RapidTransitMod.Dispatch.Observation
         internal string StopName(Entity stop, ResolvedStopKind kind) => m_StopName(stop, kind);
         internal string LineId(Entity line) => m_LineId(line);
         internal string Kind(Entity line) => m_Kind(line);
+        internal bool ShouldLog() => m_ShouldLog();
 
         internal void RecordStop(
             Entity vehicle,
@@ -194,9 +198,18 @@ namespace RapidTransitMod.Dispatch.Observation
             StopTrace stopTrace = trip.Stops.Count > 0
                 ? trip.Stops[trip.Stops.Count - 1]
                 : null;
-            bool reuse = stopTrace != null
+            bool sameStop = stopTrace != null
                 && stopTrace.Stop == stop.Ent
-                && stopTrace.Kind == stop.Kind
+                && stopTrace.Kind == stop.Kind;
+            if (sameStop)
+            {
+                if (boarding && !string.IsNullOrEmpty(stopTrace.Arrival))
+                    return;
+                if (!boarding && !string.IsNullOrEmpty(stopTrace.Departure))
+                    return;
+            }
+
+            bool reuse = sameStop
                 && ((boarding && string.IsNullOrEmpty(stopTrace.Arrival))
                     || (!boarding && string.IsNullOrEmpty(stopTrace.Departure)));
             if (!reuse)
@@ -226,23 +239,26 @@ namespace RapidTransitMod.Dispatch.Observation
             trip.Frame = nowFrame;
             m_Port.RecordStop(vehicle, line, stop.Ent, stop.Kind, stopWp, origin, boarding, nowTime, nowFrame);
 
-            string stopName = m_Port.StopName(stop.Ent, stop.Kind);
-            if (string.IsNullOrEmpty(stopName))
+            if (m_Port.ShouldLog())
             {
-                stopName = "Stop " + stop.Ent.Index.ToString();
-            }
+                string stopName = m_Port.StopName(stop.Ent, stop.Kind);
+                if (string.IsNullOrEmpty(stopName))
+                {
+                    stopName = "Stop " + stop.Ent.Index.ToString();
+                }
 
-            m_Port.Log(new TraceEvent(
-                line,
-                vehicle,
-                trip.Seq,
-                boarding ? "arrival" : "departure",
-                stopName,
-                stop.Ent,
-                stopWp,
-                nowTime,
-                trip.Stops.Count,
-                origin));
+                m_Port.Log(new TraceEvent(
+                    line,
+                    vehicle,
+                    trip.Seq,
+                    boarding ? "arrival" : "departure",
+                    stopName,
+                    stop.Ent,
+                    stopWp,
+                    nowTime,
+                    trip.Stops.Count,
+                    origin));
+            }
         }
 
         internal void Start(

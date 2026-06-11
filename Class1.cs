@@ -57,6 +57,8 @@ namespace RapidTransitMod
             log.Info(nameof(OnLoad));
             TryEnableCohtmlDebugger();
             updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<Dispatch.Runtime.BoardingFirstFrameGuardSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<Dispatch.Runtime.BoardingFirstFrameGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<PassengerFlow.SamplingSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<PassengerFlow.SamplingSystem, DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<PreSerialize<PassengerFlow.SamplingSystem>>(SystemUpdatePhase.Serialize);

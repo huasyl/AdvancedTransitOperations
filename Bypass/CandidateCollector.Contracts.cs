@@ -76,7 +76,6 @@ namespace RapidTransitMod.Bypass
         public readonly TrunkSkeleton TrunkSkeleton;
         public readonly RelativeToTrunkState LocalTrunkState;
         public readonly RelativeToTrunkState ExpressTrunkState;
-        public readonly bool ExpressCurrentWaypointMatchesBypassBuilding;
         public readonly int RelevantSharedEntryAtomIndex;
         public readonly int EntryDistanceAtoms;
 
@@ -95,7 +94,6 @@ namespace RapidTransitMod.Bypass
             TrunkSkeleton trunkSkeleton,
             RelativeToTrunkState localTrunkState,
             RelativeToTrunkState expressTrunkState,
-            bool expressCurrentWaypointMatchesBypassBuilding,
             int relevantSharedEntryAtomIndex,
             int entryDistanceAtoms)
         {
@@ -113,7 +111,6 @@ namespace RapidTransitMod.Bypass
             TrunkSkeleton = trunkSkeleton;
             LocalTrunkState = localTrunkState;
             ExpressTrunkState = expressTrunkState;
-            ExpressCurrentWaypointMatchesBypassBuilding = expressCurrentWaypointMatchesBypassBuilding;
             RelevantSharedEntryAtomIndex = relevantSharedEntryAtomIndex;
             EntryDistanceAtoms = entryDistanceAtoms;
         }

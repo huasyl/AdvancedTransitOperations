@@ -19,6 +19,8 @@ namespace RapidTransitMod.Bypass
         public readonly BypassConflictMode Mode;
         public readonly uint AcquiredFrame;
         public readonly uint LastQueuedLocalReleaseCheckFrame;
+        public readonly uint LastReleaseCheckFrame;
+        public readonly bool LastReleaseCheckBeforeRelease;
         public readonly bool CanClearAfterExit;
         public readonly bool SameStationRequired;
         public readonly bool HasLatchedBlockerProjection;
@@ -32,6 +34,8 @@ namespace RapidTransitMod.Bypass
             BypassConflictMode mode,
             uint acquiredFrame,
             uint lastQueuedLocalReleaseCheckFrame,
+            uint lastReleaseCheckFrame,
+            bool lastReleaseCheckBeforeRelease,
             bool canClearAfterExit,
             bool sameStationRequired,
             bool hasLatchedBlockerProjection = false,
@@ -44,6 +48,8 @@ namespace RapidTransitMod.Bypass
             Mode = mode;
             AcquiredFrame = acquiredFrame;
             LastQueuedLocalReleaseCheckFrame = lastQueuedLocalReleaseCheckFrame;
+            LastReleaseCheckFrame = lastReleaseCheckFrame;
+            LastReleaseCheckBeforeRelease = lastReleaseCheckBeforeRelease;
             CanClearAfterExit = canClearAfterExit;
             SameStationRequired = sameStationRequired;
             HasLatchedBlockerProjection = hasLatchedBlockerProjection;
@@ -59,13 +65,15 @@ namespace RapidTransitMod.Bypass
         public readonly GlobalSharedTrunkSegment SelectedTrunkSegment;
         public readonly ulong ExpressChainSignature;
         public readonly uint SharedTrackVersion;
+        public readonly float ExpressReleaseCoordinate;
 
         public BypassLatchedBlockerProjection(
             Entity expressLine,
             BypassProtectedInterval expressProtectedInterval,
             GlobalSharedTrunkSegment selectedTrunkSegment,
             ulong expressChainSignature,
-            uint sharedTrackVersion)
+            uint sharedTrackVersion,
+            float expressReleaseCoordinate)
         {
             Available = expressLine != Entity.Null;
             ExpressLine = expressLine;
@@ -73,6 +81,7 @@ namespace RapidTransitMod.Bypass
             SelectedTrunkSegment = selectedTrunkSegment;
             ExpressChainSignature = expressChainSignature;
             SharedTrackVersion = sharedTrackVersion;
+            ExpressReleaseCoordinate = expressReleaseCoordinate;
         }
     }
 }

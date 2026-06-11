@@ -26,6 +26,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
         private readonly DispatchRuntimeSystem m_Runtime;
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_FrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
+        private readonly Dictionary<Entity, TrackAnchorSnapshot> m_TrackAnchorSnapshots = new Dictionary<Entity, TrackAnchorSnapshot>();
 
         private readonly struct WaypointIndexFrameSnapshot
         {
@@ -40,6 +41,38 @@ namespace RapidTransitMod.Dispatch.Lines
                 Route = route;
                 Boarding = boarding;
                 WaypointIndex = waypointIndex;
+            }
+        }
+
+        private readonly struct TrackAnchorSnapshot
+        {
+            public readonly Entity Line;
+            public readonly int TargetWaypointIndex;
+            public readonly int BoardingWaypointIndex;
+            public readonly int WaypointIndex;
+            public readonly int SegmentIndex;
+            public readonly int AtomIndex;
+            public readonly int WindowStart;
+            public readonly int WindowEndExclusive;
+
+            public TrackAnchorSnapshot(
+                Entity line,
+                int targetWaypointIndex,
+                int boardingWaypointIndex,
+                int waypointIndex,
+                int segmentIndex,
+                int atomIndex,
+                int windowStart,
+                int windowEndExclusive)
+            {
+                Line = line;
+                TargetWaypointIndex = targetWaypointIndex;
+                BoardingWaypointIndex = boardingWaypointIndex;
+                WaypointIndex = waypointIndex;
+                SegmentIndex = segmentIndex;
+                AtomIndex = atomIndex;
+                WindowStart = windowStart;
+                WindowEndExclusive = windowEndExclusive;
             }
         }
 
@@ -252,13 +285,61 @@ namespace RapidTransitMod.Dispatch.Lines
                 && trackState != VehicleState.Retiring;
 
             if (allowTrackWaypointAnchoring
-                && TryTrack(vehicle, ways, targetWaypointIndex, boardingWaypointIndex, -1, out int anchoredWaypointIndex, out string anchorDetail, out string anchorStableKey))
-            {
-                m_Runtime.m_RuntimeLog.Once(
-                    m_Runtime.m_RuntimeLog.m_BvTrackAnchorRecoveryLogCache,
+                && boarding
+                && TryGetTrackAnchorSnapshot(
                     vehicle,
-                    "track-anchor|" + anchorStableKey,
-                    "[定位接管] 车辆" + vehicle.Index + " 按track锚定 wp[" + anchoredWaypointIndex + "] " + anchorDetail);
+                    line,
+                    targetWaypointIndex,
+                    boardingWaypointIndex,
+                    out TrackAnchorSnapshot cachedAnchor))
+            {
+                MaybeLogTrackAnchor(
+                    vehicle,
+                    targetWaypointIndex,
+                    boardingWaypointIndex,
+                    cachedAnchor.WaypointIndex,
+                    cachedAnchor.SegmentIndex,
+                    cachedAnchor.AtomIndex,
+                    cachedAnchor.WindowStart,
+                    cachedAnchor.WindowEndExclusive);
+                return cachedAnchor.WaypointIndex;
+            }
+
+            if (allowTrackWaypointAnchoring
+                && TryTrack(
+                    vehicle,
+                    ways,
+                    targetWaypointIndex,
+                    boardingWaypointIndex,
+                    -1,
+                    out int anchoredWaypointIndex,
+                    out int anchorSegmentIndex,
+                    out int anchorAtomIndex,
+                    out int anchorWindowStart,
+                    out int anchorWindowEndExclusive))
+            {
+                if (boarding)
+                {
+                    m_TrackAnchorSnapshots[vehicle] = new TrackAnchorSnapshot(
+                        line,
+                        targetWaypointIndex,
+                        boardingWaypointIndex,
+                        anchoredWaypointIndex,
+                        anchorSegmentIndex,
+                        anchorAtomIndex,
+                        anchorWindowStart,
+                        anchorWindowEndExclusive);
+                }
+
+                MaybeLogTrackAnchor(
+                    vehicle,
+                    targetWaypointIndex,
+                    boardingWaypointIndex,
+                    anchoredWaypointIndex,
+                    anchorSegmentIndex,
+                    anchorAtomIndex,
+                    anchorWindowStart,
+                    anchorWindowEndExclusive);
                 return anchoredWaypointIndex;
             }
 
@@ -268,6 +349,57 @@ namespace RapidTransitMod.Dispatch.Lines
             return -1;
         }
 
+        private bool TryGetTrackAnchorSnapshot(
+            Entity vehicle,
+            Entity line,
+            int targetWaypointIndex,
+            int boardingWaypointIndex,
+            out TrackAnchorSnapshot snapshot)
+        {
+            if (m_TrackAnchorSnapshots.TryGetValue(vehicle, out snapshot)
+                && snapshot.Line == line
+                && snapshot.TargetWaypointIndex == targetWaypointIndex
+                && snapshot.BoardingWaypointIndex == boardingWaypointIndex)
+            {
+                return true;
+            }
+
+            snapshot = default;
+            return false;
+        }
+
+        private void MaybeLogTrackAnchor(
+            Entity vehicle,
+            int targetWaypointIndex,
+            int boardingWaypointIndex,
+            int anchoredWaypointIndex,
+            int anchorSegmentIndex,
+            int anchorAtomIndex,
+            int anchorWindowStart,
+            int anchorWindowEndExclusive)
+        {
+            string anchorStableKey = "track-anchor|wp=" + anchoredWaypointIndex;
+            if (!m_Runtime.m_RuntimeLog.ShouldLogOnce(
+                    m_Runtime.m_RuntimeLog.m_BvTrackAnchorRecoveryLogCache,
+                    vehicle,
+                    anchorStableKey))
+            {
+                return;
+            }
+
+            string anchorDetail = "atom=" + anchorAtomIndex
+                + " seg=" + anchorSegmentIndex
+                + " targetWp=" + targetWaypointIndex
+                + " bvWp=" + boardingWaypointIndex
+                + " closestWp=-1"
+                + " window=" + anchorWindowStart + ".." + anchorWindowEndExclusive;
+            m_Runtime.m_RuntimeLog.Once(
+                m_Runtime.m_RuntimeLog.m_BvTrackAnchorRecoveryLogCache,
+                vehicle,
+                anchorStableKey,
+                "[定位接管] 车辆" + vehicle.Index + " 按track锚定 wp[" + anchoredWaypointIndex + "] " + anchorDetail);
+        }
+
         private bool TryTrack(
             Entity vehicle,
             DynamicBuffer<RouteWaypoint> ways,
@@ -275,12 +407,16 @@ namespace RapidTransitMod.Dispatch.Lines
             int boardingWaypointIndex,
             int closestWaypointIndex,
             out int waypointIndex,
-            out string detail,
-            out string stableKey)
+            out int segmentIndex,
+            out int atomIndex,
+            out int selectedWindowStart,
+            out int selectedWindowEndExclusive)
         {
             waypointIndex = -1;
-            detail = string.Empty;
-            stableKey = string.Empty;
+            segmentIndex = -1;
+            atomIndex = -1;
+            selectedWindowStart = -1;
+            selectedWindowEndExclusive = -1;
             Entity line = m_Runtime.m_Resolve.Line(vehicle);
             if (vehicle == Entity.Null
                 || line == Entity.Null
@@ -290,11 +426,44 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
             }
 
-            HashSet<int> candidateIndices = new HashSet<int>();
+            int candidateCount = 0;
+            int candidate0 = -1;
+            int candidate1 = -1;
+            int candidate2 = -1;
+            int candidate3 = -1;
+            int candidate4 = -1;
+            int candidate5 = -1;
+            int candidate6 = -1;
             void AddCandidate(int index)
             {
                 if (index >= 0 && index < ways.Length)
-                    candidateIndices.Add(index);
+                {
+                    for (int i = 0; i < candidateCount; i++)
+                    {
+                        int existing = i == 0 ? candidate0
+                            : i == 1 ? candidate1
+                            : i == 2 ? candidate2
+                            : i == 3 ? candidate3
+                            : i == 4 ? candidate4
+                            : i == 5 ? candidate5
+                            : candidate6;
+                        if (existing == index)
+                            return;
+                    }
+
+                    switch (candidateCount)
+                    {
+                        case 0: candidate0 = index; break;
+                        case 1: candidate1 = index; break;
+                        case 2: candidate2 = index; break;
+                        case 3: candidate3 = index; break;
+                        case 4: candidate4 = index; break;
+                        case 5: candidate5 = index; break;
+                        case 6: candidate6 = index; break;
+                        default: return;
+                    }
+                    candidateCount++;
+                }
             }
 
             AddCandidate(targetWaypointIndex);
@@ -314,8 +483,15 @@ namespace RapidTransitMod.Dispatch.Lines
             int bestDistance = int.MaxValue;
             const int anchorSlackAtoms = 3;
 
-            foreach (int candidateIndex in candidateIndices)
+            for (int candidateSlot = 0; candidateSlot < candidateCount; candidateSlot++)
             {
+                int candidateIndex = candidateSlot == 0 ? candidate0
+                    : candidateSlot == 1 ? candidate1
+                    : candidateSlot == 2 ? candidate2
+                    : candidateSlot == 3 ? candidate3
+                    : candidateSlot == 4 ? candidate4
+                    : candidateSlot == 5 ? candidate5
+                    : candidate6;
                 if (!TryWindow(chain, candidateIndex, cursor.AtomCursorIndex, out int windowStart, out int windowEndExclusive))
                     continue;
 
@@ -342,18 +518,10 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
 
             waypointIndex = bestWaypointIndex;
-            stableKey = "wp=" + bestWaypointIndex
-                + " seg=" + cursor.SegmentIndex
-                + " targetWp=" + targetWaypointIndex
-                + " bvWp=" + boardingWaypointIndex
-                + " closestWp=" + closestWaypointIndex
-                + " window=" + bestWindowStart + ".." + bestWindowEndExclusive;
-            detail = "atom=" + cursor.AtomCursorIndex
-                + " seg=" + cursor.SegmentIndex
-                + " targetWp=" + targetWaypointIndex
-                + " bvWp=" + boardingWaypointIndex
-                + " closestWp=" + closestWaypointIndex
-                + " window=" + bestWindowStart + ".." + bestWindowEndExclusive;
+            segmentIndex = cursor.SegmentIndex;
+            atomIndex = cursor.AtomCursorIndex;
+            selectedWindowStart = bestWindowStart;
+            selectedWindowEndExclusive = bestWindowEndExclusive;
             return true;
         }
 
@@ -366,12 +534,16 @@ namespace RapidTransitMod.Dispatch.Lines
         public void Remove(Entity vehicle)
         {
             if (vehicle != Entity.Null)
+            {
                 m_FrameSnapshots.Remove(vehicle);
+                m_TrackAnchorSnapshots.Remove(vehicle);
+            }
         }
 
         public void Clear()
         {
             m_FrameSnapshots.Clear();
+            m_TrackAnchorSnapshots.Clear();
         }
     }
 }

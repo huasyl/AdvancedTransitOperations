@@ -4,10 +4,10 @@ import { arc } from "d3-shape";
 import { useEffect, useMemo, useState } from "react";
 import { traceWorkbench } from "../../../shared/workbench-trace";
 
-const WIDTH = 800;
-const HEIGHT = 800;
-const INNER_RADIUS = 260;
-const OUTER_RADIUS = 272;
+const WIDTH = 540;
+const HEIGHT = 540;
+const INNER_RADIUS = 176;
+const OUTER_RADIUS = 184;
 const MAX_STATIONS = 14;
 const ENABLE_PASSENGER_CHART_HOVER = true;
 const FALLBACK_COLORS = ["#3b82f6", "#ef4444", "#eab308", "#10b981", "#f97316", "#ec4899"];
@@ -39,6 +39,10 @@ function getFlowStationName(flow, idKey, nameKey) {
 
 function getFlowLineId(flow) {
   return String(flow?.firstLineId || flow?.lineId || flow?.lastLineId || "");
+}
+
+function getFlowDestinationLineId(flow) {
+  return String(flow?.lastLineId || flow?.lineId || flow?.firstLineId || "");
 }
 
 function addLineVolume(volumeMap, key, lineId, volume) {
@@ -87,6 +91,7 @@ function buildChordInput(flows, lines) {
   const stationTotals = new Map();
   const stationNames = new Map();
   const stationLineVolumes = new Map();
+  const destinationStationLineVolumes = new Map();
   const pairLineVolumes = new Map();
   const pairVolumes = new Map();
   const lineColors = new Map((Array.isArray(lines) ? lines : []).map((line) => [line.id, line.color]));
@@ -108,8 +113,10 @@ function buildChordInput(flows, lines) {
     stationNames.set(originId, getFlowStationName(flow, "originStationId", "originName"));
     stationNames.set(destinationId, getFlowStationName(flow, "destinationStationId", "destinationName"));
     const lineId = getFlowLineId(flow);
+    const destinationLineId = getFlowDestinationLineId(flow);
     const pairKey = `${originId}->${destinationId}`;
     addLineVolume(stationLineVolumes, originId, lineId, volume);
+    addLineVolume(destinationStationLineVolumes, destinationId, destinationLineId, volume);
     addLineVolume(pairLineVolumes, pairKey, lineId, volume);
     pairVolumes.set(pairKey, (pairVolumes.get(pairKey) || 0) + volume);
   });
@@ -133,7 +140,9 @@ function buildChordInput(flows, lines) {
   });
 
   const colors = stationIds.map((stationId, index) => {
-    const lineColor = lineColors.get(dominantLineId(stationLineVolumes.get(stationId)));
+    const departureLineId = dominantLineId(stationLineVolumes.get(stationId));
+    const fallbackArrivalLineId = departureLineId ? "" : dominantLineId(destinationStationLineVolumes.get(stationId));
+    const lineColor = lineColors.get(departureLineId || fallbackArrivalLineId);
     if (lineColor) {
       return lineColor;
     }
@@ -160,7 +169,7 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
   const chordInput = useMemo(() => buildChordInput(flows, lines), [flows, lines]);
   const chordData = useMemo(() => chordDirected().padAngle(0.04).sortSubgroups(descending)(chordInput.matrix), [chordInput.matrix]);
   const arcPath = useMemo(() => arc().innerRadius(INNER_RADIUS).outerRadius(OUTER_RADIUS), []);
-  const ribbonPath = useMemo(() => ribbonArrow().radius(INNER_RADIUS).headRadius(22), []);
+  const ribbonPath = useMemo(() => ribbonArrow().radius(INNER_RADIUS).headRadius(15), []);
 
   useEffect(() => {
     traceWorkbench("passenger.od.mount");
@@ -234,8 +243,6 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
                 <path
                   d={arcPath(group) || ""}
                   fill={chordInput.colors[index] || "#71717a"}
-                  stroke="#09090b"
-                  strokeWidth="2"
                 />
                 <text
                   transform={labelTransform}

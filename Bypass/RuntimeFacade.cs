@@ -80,6 +80,7 @@ namespace RapidTransitMod.Bypass
                     ClearVehicle(yieldVehiclesToRelease[i], "线路运行态失效");
             }
 
+            m_Admission.InvalidateStaticSceneIndex();
             m_Runtime.TrackModel.ClearStaticCachesForLine(line);
         }
 
@@ -89,6 +90,7 @@ namespace RapidTransitMod.Bypass
                 return;
 
             m_Runtime.ClearLineTimeProfiles();
+            m_Admission.InvalidateStaticSceneIndex();
 
             List<Entity> expiredVehicles = m_Admission.ExpireLine(line);
             if (expiredVehicles == null)
@@ -105,12 +107,25 @@ namespace RapidTransitMod.Bypass
 
         internal void ClearVehicle(Entity vehicle, string releaseReason = null)
         {
+            ClearVehicle(vehicle, releaseReason, true);
+        }
+
+        internal void ClearVehiclePreservingBypassHoldSkipped(Entity vehicle, string releaseReason = null)
+        {
+            ClearVehicle(vehicle, releaseReason, false);
+        }
+
+        private void ClearVehicle(Entity vehicle, string releaseReason, bool clearBypassHoldSkipped)
+        {
             if (vehicle == Entity.Null)
                 return;
 
             if (!m_Admission.TryGetLatchedBlocker(vehicle, out Entity blocker))
             {
-                m_Admission.ClearVehicle(vehicle);
+                if (clearBypassHoldSkipped)
+                    m_Admission.ClearVehicle(vehicle);
+                else
+                    m_Admission.ClearVehiclePreservingBypassHoldSkipped(vehicle);
                 return;
             }
 
@@ -184,10 +199,40 @@ namespace RapidTransitMod.Bypass
             return m_Admission.TryGetLatchedBlocker(vehicle, out blocker);
         }
 
-        internal void TickExpressVanillaBlockerRescue(Entity vehicle, Entity line, uint nowFrame)
+        internal bool TryGetBypassHoldSkipped(Entity vehicle, out Entity blocker)
+        {
+            return m_Admission.TryGetBypassHoldSkipped(vehicle, out blocker);
+        }
+
+        internal bool IsStopSceneEligible(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            out bool known)
+        {
+            return m_Admission.IsStopSceneEligible(line, waypoints, waypointIndex, out known);
+        }
+
+        internal void ClearBypassHoldSkipped(Entity vehicle)
+        {
+            m_Admission.ClearBypassHoldSkipped(vehicle);
+        }
+
+        internal void MarkBypassHoldSkipped(Entity vehicle, Entity blocker)
+        {
+            m_Admission.MarkBypassHoldSkipped(vehicle, blocker);
+        }
+
+        internal Entity TickExpressVanillaBlockerRescue(Entity vehicle, Entity line, uint nowFrame)
         {
             if (m_Admission.TryFindBypassHeldLocalBlockingExpress(vehicle, line, nowFrame, out Entity localVehicle))
+            {
                 ClearVehicle(localVehicle, "vanilla-blocker-chain-stall");
+                m_Admission.MarkBypassHoldSkipped(localVehicle, vehicle);
+                return localVehicle;
+            }
+
+            return Entity.Null;
         }
 
         internal void LogDepartureGate(Entity vehicle, string key, string message)
@@ -199,6 +244,11 @@ namespace RapidTransitMod.Bypass
         {
             m_Admission.FlushPerfProbeIfDue(nowFrame);
             m_Admission.FlushLineOrderedProbeIfDue(nowFrame);
+        }
+
+        internal void WarmStaticSceneIndex()
+        {
+            m_Admission.WarmStaticSceneIndex();
         }
 
         internal void RequestLineOrderedRuntimeForceRefresh(Entity line, string reason)

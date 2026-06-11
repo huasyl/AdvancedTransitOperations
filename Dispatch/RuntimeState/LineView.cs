@@ -21,7 +21,24 @@ namespace RapidTransitMod
         private readonly Func<int, string> m_SlotText;
         private readonly Action<string> m_Log;
         private readonly Dictionary<Entity, LineFrame> m_Frames = new Dictionary<Entity, LineFrame>();
+        private readonly Dictionary<Entity, ManagedLineFrame> m_ManagedFrames = new Dictionary<Entity, ManagedLineFrame>();
         private string m_LastLog = string.Empty;
+
+        private readonly struct ManagedLineFrame
+        {
+            public readonly Entity Line;
+            public readonly uint Frame;
+            public readonly ulong AppliedVersion;
+            public readonly bool Applied;
+
+            public ManagedLineFrame(Entity line, uint frame, ulong appliedVersion, bool applied)
+            {
+                Line = line;
+                Frame = frame;
+                AppliedVersion = appliedVersion;
+                Applied = applied;
+            }
+        }
 
         public LineView(
             Func<Entity, bool> exists,
@@ -57,12 +74,22 @@ namespace RapidTransitMod
             if (line == Entity.Null || !m_Exists(line))
             {
                 m_Frames.Remove(line);
+                m_ManagedFrames.Remove(line);
                 return false;
             }
 
             uint nowFrame = m_Frame();
             ulong cfgVersion = m_Cfg.Version;
             ulong appliedVersion = m_AppliedStore.Version;
+            if (m_Frames.TryGetValue(line, out frame)
+                && frame.Line == line
+                && frame.Frame == nowFrame
+                && frame.CfgVersion == cfgVersion
+                && frame.AppliedVersion == appliedVersion)
+            {
+                return true;
+            }
+
             string lineId = m_LineId(line);
             string lineKey = m_DraftKey(lineId);
             LineKey storeKey = m_KeyByLine(line, lineId);
@@ -165,6 +192,7 @@ namespace RapidTransitMod
         public void Clear()
         {
             m_Frames.Clear();
+            m_ManagedFrames.Clear();
             m_LastLog = string.Empty;
         }
 
@@ -181,6 +209,71 @@ namespace RapidTransitMod
         public bool Managed(Entity line, bool dispatchOn)
         {
             return dispatchOn && Applied(line);
+        }
+
+        public bool ManagedRuntime(Entity line, bool dispatchOn)
+        {
+            if (!dispatchOn)
+                return false;
+
+            if (line == Entity.Null || !m_Exists(line))
+            {
+                m_Frames.Remove(line);
+                m_ManagedFrames.Remove(line);
+                return false;
+            }
+
+            uint nowFrame = m_Frame();
+            ulong appliedVersion = m_AppliedStore.Version;
+            if (m_Frames.TryGetValue(line, out LineFrame frame)
+                && frame.Line == line
+                && frame.Frame == nowFrame
+                && frame.AppliedVersion == appliedVersion)
+            {
+                return frame.Applied;
+            }
+
+            if (m_ManagedFrames.TryGetValue(line, out ManagedLineFrame managedFrame)
+                && managedFrame.Line == line
+                && managedFrame.Frame == nowFrame
+                && managedFrame.AppliedVersion == appliedVersion)
+            {
+                return managedFrame.Applied;
+            }
+
+            LineKey storeKey = m_KeyByLine(line, null);
+            bool storeManaged = false;
+            bool hasStoreSummary = !storeKey.IsEmpty
+                && m_AppliedStore.TryGetRuntimeSummary(storeKey, out storeManaged, out _);
+            bool applied = hasStoreSummary && storeManaged;
+            if (!hasStoreSummary)
+            {
+                string lineId = m_LineId(line);
+                string lineKey = m_DraftKey(lineId);
+                applied = m_AppliedLines().ContainsKey(lineKey);
+            }
+
+            m_ManagedFrames[line] = new ManagedLineFrame(line, nowFrame, appliedVersion, applied);
+            return applied;
+        }
+
+        public bool TrySnapshot(Entity line, bool dispatchOn, out LineRuntimeSnapshot snapshot)
+        {
+            snapshot = default;
+            if (!TryFrame(line, out LineFrame frame))
+                return false;
+
+            bool managed = dispatchOn && frame.Applied;
+            bool local = frame.Applied && string.Equals(frame.Kind, "local", StringComparison.Ordinal);
+            bool express = frame.Applied && string.Equals(frame.Kind, "express", StringComparison.Ordinal);
+            snapshot = new LineRuntimeSnapshot(
+                line,
+                managed,
+                local,
+                express,
+                0,
+                frame);
+            return true;
         }
 
         public void Log(Entity line, int nowMin, int nextSlot)

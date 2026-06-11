@@ -63,7 +63,15 @@ namespace RapidTransitMod
                 m_Runtime.m_VehicleRegistry.Remove(dead);
                 m_Runtime.m_ObsPersist.ClearLap(dead);
                 m_Runtime.m_UICache.Remove(dead);
-                m_Runtime.m_LastBoarding.Remove(dead);
+                m_Runtime.m_VehicleLabels.Remove(dead);
+                m_Runtime.m_LastEffectiveBoardingState.Remove(dead);
+                m_Runtime.m_LastOfficialBoardingState.Remove(dead);
+                m_Runtime.m_BoardingFirstFrameGuardState.Remove(dead);
+                m_Runtime.m_StopSessionLine.Remove(dead);
+                m_Runtime.m_StopSessionWaypointIndex.Remove(dead);
+                m_Runtime.m_StopSessionArrivalFrame.Remove(dead);
+                m_Runtime.m_StopSessionBoardingChangeCount.Remove(dead);
+                m_Runtime.m_DeparturePendingSinceFrame.Remove(dead);
                 m_Runtime.m_CachedWpIdx.Remove(dead);
                 m_Runtime.TrackProjection.ClearVehicle(dead);
                 m_Runtime.m_WaypointIndex.Remove(dead);
@@ -79,6 +87,7 @@ namespace RapidTransitMod
                 m_Runtime.m_PreparingFixCooldownUntil.Remove(dead);
                 m_Runtime.m_RetireFixCount.Remove(dead);
                 m_ClearAssistLaunchPending(dead);
+                m_Runtime.m_Observation.ClearDwellDeadlineCache(dead);
                 m_Runtime.m_ObsPersist.ClearDwell(dead);
                 m_Runtime.m_ObsPersist.ClearVehicleSlices(dead);
                 m_Runtime.m_Observation.ClearDebug(dead);

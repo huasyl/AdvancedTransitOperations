@@ -105,7 +105,6 @@ namespace RapidTransitMod.TrackProjection
     internal readonly struct LineRunningVehicleSnapshot
     {
         public readonly Entity Vehicle;
-        public readonly int NextWaypointIndex;
         public readonly bool Boarding;
         public readonly bool HasProjection;
         public readonly float ProjectionDistanceMeters;
@@ -121,7 +120,6 @@ namespace RapidTransitMod.TrackProjection
 
         public LineRunningVehicleSnapshot(
             Entity vehicle,
-            int nextWaypointIndex,
             bool boarding,
             bool hasProjection,
             float projectionDistanceMeters,
@@ -136,7 +134,6 @@ namespace RapidTransitMod.TrackProjection
             int nextTurnbackBoundaryAtomIndex)
         {
             Vehicle = vehicle;
-            NextWaypointIndex = nextWaypointIndex;
             Boarding = boarding;
             HasProjection = hasProjection;
             ProjectionDistanceMeters = projectionDistanceMeters;

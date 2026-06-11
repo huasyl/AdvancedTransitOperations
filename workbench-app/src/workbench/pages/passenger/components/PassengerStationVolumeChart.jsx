@@ -54,9 +54,22 @@ function formatTick(value) {
   return Math.round(value).toLocaleString();
 }
 
+function chartMax(value) {
+  const target = Math.max(1, Number(value || 0) * 1.08);
+  const magnitude = Math.pow(10, Math.floor(Math.log10(target)));
+  const steps = [1, 2, 5, 10];
+  for (let index = 0; index < steps.length; index += 1) {
+    const candidate = steps[index] * magnitude;
+    if (candidate >= target) {
+      return candidate;
+    }
+  }
+  return 10 * magnitude;
+}
+
 function buildChartData(volumes) {
-  const maxValue = Math.max(1, ...volumes.map((entry) => getValue(entry, "inflow") + getValue(entry, "outflow")));
-  const yMax = Math.ceil(maxValue / 1000) * 1000;
+  const maxValue = Math.max(1, ...volumes.map((entry) => Math.max(getValue(entry, "inflow"), getValue(entry, "outflow"))));
+  const yMax = chartMax(maxValue);
   const bandWidth = PLOT_WIDTH / Math.max(1, volumes.length);
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
     value: yMax * ratio,
@@ -129,6 +142,16 @@ export default function PassengerStationVolumeChart({ volumes }) {
 
   return (
     <div className="rtw-passenger-chart-wrap" onMouseLeave={handleHoverLeave}>
+      <div className="rtw-passenger-station-legend">
+        <span className="rtw-passenger-station-legend-item">
+          <span className="rtw-passenger-station-legend-swatch is-inflow" />
+          <span>进站量</span>
+        </span>
+        <span className="rtw-passenger-station-legend-item">
+          <span className="rtw-passenger-station-legend-swatch is-outflow" />
+          <span>出站量</span>
+        </span>
+      </div>
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="rtw-passenger-chart-svg">
         {chart.yTicks.map((tick) => (
           <g key={`y-${tick.value}`}>

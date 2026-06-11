@@ -199,6 +199,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Ids().Get,
                     line => m_Runtime.m_LineView.Kind(line, null),
                     m_Runtime.m_Observation.Stop,
+                    DispatchRuntimeSystem.IsTripTraceLoggingEnabled,
                     evt => TraceLog.Write(message => Mod.log.Info(message), evt)));
             return m_ObsStops;
         }

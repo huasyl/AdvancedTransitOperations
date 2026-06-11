@@ -70,7 +70,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
             m_Host.SetPreparing(vehicle, nowFrame);
             m_Host.ClearCachedWaypoint(vehicle);
-            m_Host.ClearLastBoarding(vehicle);
+            m_Host.ClearBoardingObservation(vehicle);
             m_Host.ClearMisfire(vehicle);
             publicTransport.m_State &= ~PublicTransportFlags.Boarding;
             publicTransport.m_DepartureFrame = nowFrame + 9999;

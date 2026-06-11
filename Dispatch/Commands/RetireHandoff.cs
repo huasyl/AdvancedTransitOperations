@@ -28,6 +28,7 @@ namespace RapidTransitMod.Dispatch.Commands
         public uint LastPreCommitLogFrame;
         public uint LastEndReachedRepairLogFrame;
         public uint LastRedispatchBlockedLogFrame;
+        public string LastTraceGateKey = string.Empty;
         public string LastTraceKey = string.Empty;
     }
 
@@ -46,6 +47,59 @@ namespace RapidTransitMod.Dispatch.Commands
             new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, uint> m_RetireShadowLastFrame =
             new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, uint> m_RetireShadowLastRetiringFrame =
+            new Dictionary<Entity, uint>();
+        private readonly List<Entity> m_WatchKeysScratch = new List<Entity>();
+
+        private readonly struct RetireGuardInputSnapshot
+        {
+            public readonly Entity OwnerDepot;
+            public readonly Target Target;
+            public readonly Entity HeadVehicle;
+            public readonly PathFlags PathState;
+            public readonly bool HasVehicleTrainCurrentLane;
+            public readonly TrainCurrentLane VehicleTrainCurrentLane;
+            public readonly bool HasHeadTrainCurrentLane;
+            public readonly TrainCurrentLane HeadTrainCurrentLane;
+            public readonly bool HasHeadTrainNavigation;
+            public readonly TrainNavigation HeadTrainNavigation;
+            public readonly bool HasPublicTransport;
+            public readonly PublicTransport PublicTransport;
+            public readonly bool HasCargoTransport;
+            public readonly CargoTransport CargoTransport;
+
+            public RetireGuardInputSnapshot(
+                Entity ownerDepot,
+                Target target,
+                Entity headVehicle,
+                PathFlags pathState,
+                bool hasVehicleTrainCurrentLane,
+                TrainCurrentLane vehicleTrainCurrentLane,
+                bool hasHeadTrainCurrentLane,
+                TrainCurrentLane headTrainCurrentLane,
+                bool hasHeadTrainNavigation,
+                TrainNavigation headTrainNavigation,
+                bool hasPublicTransport,
+                PublicTransport publicTransport,
+                bool hasCargoTransport,
+                CargoTransport cargoTransport)
+            {
+                OwnerDepot = ownerDepot;
+                Target = target;
+                HeadVehicle = headVehicle;
+                PathState = pathState;
+                HasVehicleTrainCurrentLane = hasVehicleTrainCurrentLane;
+                VehicleTrainCurrentLane = vehicleTrainCurrentLane;
+                HasHeadTrainCurrentLane = hasHeadTrainCurrentLane;
+                HeadTrainCurrentLane = headTrainCurrentLane;
+                HasHeadTrainNavigation = hasHeadTrainNavigation;
+                HeadTrainNavigation = headTrainNavigation;
+                HasPublicTransport = hasPublicTransport;
+                PublicTransport = publicTransport;
+                HasCargoTransport = hasCargoTransport;
+                CargoTransport = cargoTransport;
+            }
+        }
 
         private EntityManager EntityManager => m_RetireHost.EntityManager;
         private TimedLogger Log => m_RetireHost.Log;
@@ -157,12 +211,10 @@ namespace RapidTransitMod.Dispatch.Commands
                     continue;
                 }
 
-                Entity ownerDepot = EntityManager.HasComponent<Owner>(vehicle)
-                    ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
-                    : Entity.Null;
-                if (ownerDepot == Entity.Null || !EntityManager.HasComponent<Target>(vehicle))
+                if (!TryBuildRetireGuardInputSnapshot(vehicle, out RetireGuardInputSnapshot guardInput))
                     continue;
 
+                Entity ownerDepot = guardInput.OwnerDepot;
                 int serviceDispatchCount;
                 int publicRequestCount = 0;
                 int cargoRequestCount = 0;
@@ -174,49 +226,52 @@ namespace RapidTransitMod.Dispatch.Commands
                 bool cargoWasReturning = false;
                 bool wasBoarding = false;
 
-                Target target = EntityManager.GetComponentData<Target>(vehicle);
-                Entity headVehicle = m_RetireHost.ResolveHandoffHead(vehicle);
+                Target target = guardInput.Target;
+                Entity headVehicle = guardInput.HeadVehicle;
                 bool targetWasRouteWaypoint = target.m_Target != Entity.Null
                     && EntityManager.Exists(target.m_Target)
                     && m_RetireHost.IsRouteWaypointTarget(vehicle, target.m_Target);
                 bool alreadyDepotTarget = m_RetireHost.IsDepotTarget(target.m_Target, ownerDepot);
-                PathFlags pathState = 0;
-                if (EntityManager.HasComponent<PathOwner>(vehicle))
-                    pathState = EntityManager.GetComponentData<PathOwner>(vehicle).m_State;
+                PathFlags pathState = guardInput.PathState;
 
-                TryRepairRetireEndReached(
+                bool repairedPathEndReached = TryRepairRetireEndReached(
                     vehicle,
                     headVehicle,
                     targetWasRouteWaypoint,
                     pathState,
                     nowFrame,
                     watch,
+                    guardInput.HasHeadTrainCurrentLane,
+                    guardInput.HeadTrainCurrentLane,
+                    guardInput.HasHeadTrainNavigation,
+                    guardInput.HeadTrainNavigation,
                     out _);
 
-                bool pathEndReached = (EntityManager.HasComponent<TrainCurrentLane>(vehicle)
-                        && (EntityManager.GetComponentData<TrainCurrentLane>(vehicle).m_Front.m_LaneFlags
-                            & (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
-                            == (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
-                    || (headVehicle != vehicle
-                        && EntityManager.HasComponent<TrainCurrentLane>(headVehicle)
-                        && (EntityManager.GetComponentData<TrainCurrentLane>(headVehicle).m_Front.m_LaneFlags
-                            & (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
-                            == (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached));
+                bool vehiclePathEndReached = guardInput.HasVehicleTrainCurrentLane
+                    && (guardInput.VehicleTrainCurrentLane.m_Front.m_LaneFlags
+                        & (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
+                        == (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached);
+                bool headPathEndReached = headVehicle != vehicle
+                    && guardInput.HasHeadTrainCurrentLane
+                    && (guardInput.HeadTrainCurrentLane.m_Front.m_LaneFlags
+                        & (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached))
+                        == (TrainLaneFlags.EndOfPath | TrainLaneFlags.EndReached);
+                bool pathEndReached = repairedPathEndReached || vehiclePathEndReached || headPathEndReached;
                 bool handoffBoundaryReady = IsRetireBoundaryReady(
                     vehicle,
                     headVehicle,
                     pathEndReached,
                     out string handoffBoundary);
 
-                if (EntityManager.HasComponent<PublicTransport>(vehicle))
+                if (guardInput.HasPublicTransport)
                 {
-                    PublicTransport publicSnapshot = EntityManager.GetComponentData<PublicTransport>(vehicle);
+                    PublicTransport publicSnapshot = guardInput.PublicTransport;
                     publicWasReturning = (publicSnapshot.m_State & PublicTransportFlags.Returning) != 0;
                     wasBoarding |= (publicSnapshot.m_State & PublicTransportFlags.Boarding) != 0;
                 }
-                if (EntityManager.HasComponent<CargoTransport>(vehicle))
+                if (guardInput.HasCargoTransport)
                 {
-                    CargoTransport cargoSnapshot = EntityManager.GetComponentData<CargoTransport>(vehicle);
+                    CargoTransport cargoSnapshot = guardInput.CargoTransport;
                     cargoWasReturning = (cargoSnapshot.m_State & CargoTransportFlags.Returning) != 0;
                     wasBoarding |= (cargoSnapshot.m_State & CargoTransportFlags.Boarding) != 0;
                 }
@@ -232,9 +287,9 @@ namespace RapidTransitMod.Dispatch.Commands
 
                 bool publicReturning = false;
                 bool cargoReturning = false;
-                if (EntityManager.HasComponent<PublicTransport>(vehicle))
+                if (guardInput.HasPublicTransport)
                 {
-                    PublicTransport publicTransport = EntityManager.GetComponentData<PublicTransport>(vehicle);
+                    PublicTransport publicTransport = guardInput.PublicTransport;
                     publicRequestCount = publicTransport.m_RequestCount;
                     PublicTransportFlags oldState = publicTransport.m_State;
                     bool publicClampedDeparture = false;
@@ -269,9 +324,9 @@ namespace RapidTransitMod.Dispatch.Commands
                     }
                 }
 
-                if (EntityManager.HasComponent<CargoTransport>(vehicle))
+                if (guardInput.HasCargoTransport)
                 {
-                    CargoTransport cargoTransport = EntityManager.GetComponentData<CargoTransport>(vehicle);
+                    CargoTransport cargoTransport = guardInput.CargoTransport;
                     cargoRequestCount = cargoTransport.m_RequestCount;
                     CargoTransportFlags oldState = cargoTransport.m_State;
                     bool cargoClampedDeparture = false;
@@ -379,6 +434,64 @@ namespace RapidTransitMod.Dispatch.Commands
                         + " reason=" + watch.ReasonCode);
                 }
             }
+        }
+
+        private bool TryBuildRetireGuardInputSnapshot(Entity vehicle, out RetireGuardInputSnapshot snapshot)
+        {
+            snapshot = default;
+            Entity ownerDepot = EntityManager.HasComponent<Owner>(vehicle)
+                ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
+                : Entity.Null;
+            if (ownerDepot == Entity.Null || !EntityManager.HasComponent<Target>(vehicle))
+                return false;
+
+            Target target = EntityManager.GetComponentData<Target>(vehicle);
+            Entity headVehicle = m_RetireHost.ResolveHandoffHead(vehicle);
+            PathFlags pathState = EntityManager.HasComponent<PathOwner>(vehicle)
+                ? EntityManager.GetComponentData<PathOwner>(vehicle).m_State
+                : 0;
+
+            bool hasVehicleTrainCurrentLane = EntityManager.HasComponent<TrainCurrentLane>(vehicle);
+            TrainCurrentLane vehicleTrainCurrentLane = hasVehicleTrainCurrentLane
+                ? EntityManager.GetComponentData<TrainCurrentLane>(vehicle)
+                : default;
+            bool hasHeadTrainCurrentLane = headVehicle != Entity.Null
+                && EntityManager.Exists(headVehicle)
+                && EntityManager.HasComponent<TrainCurrentLane>(headVehicle);
+            TrainCurrentLane headTrainCurrentLane = hasHeadTrainCurrentLane
+                ? EntityManager.GetComponentData<TrainCurrentLane>(headVehicle)
+                : default;
+            bool hasHeadTrainNavigation = headVehicle != Entity.Null
+                && EntityManager.Exists(headVehicle)
+                && EntityManager.HasComponent<TrainNavigation>(headVehicle);
+            TrainNavigation headTrainNavigation = hasHeadTrainNavigation
+                ? EntityManager.GetComponentData<TrainNavigation>(headVehicle)
+                : default;
+            bool hasPublicTransport = EntityManager.HasComponent<PublicTransport>(vehicle);
+            PublicTransport publicTransport = hasPublicTransport
+                ? EntityManager.GetComponentData<PublicTransport>(vehicle)
+                : default;
+            bool hasCargoTransport = EntityManager.HasComponent<CargoTransport>(vehicle);
+            CargoTransport cargoTransport = hasCargoTransport
+                ? EntityManager.GetComponentData<CargoTransport>(vehicle)
+                : default;
+
+            snapshot = new RetireGuardInputSnapshot(
+                ownerDepot,
+                target,
+                headVehicle,
+                pathState,
+                hasVehicleTrainCurrentLane,
+                vehicleTrainCurrentLane,
+                hasHeadTrainCurrentLane,
+                headTrainCurrentLane,
+                hasHeadTrainNavigation,
+                headTrainNavigation,
+                hasPublicTransport,
+                publicTransport,
+                hasCargoTransport,
+                cargoTransport);
+            return true;
         }
 
         public void TickRetireHandoffWatch(EntityCommandBuffer ecb, uint nowFrame)
@@ -490,6 +603,7 @@ namespace RapidTransitMod.Dispatch.Commands
                     ownerDepot,
                     pathInfoDestination,
                     headPathInfoDestination,
+                    currentPathState,
                     softAck,
                     hardAck,
                     returning,
@@ -536,6 +650,7 @@ namespace RapidTransitMod.Dispatch.Commands
                         ownerDepot,
                         pathInfoDestination,
                         headPathInfoDestination,
+                        currentPathState,
                         softAck,
                         hardAck,
                         returning,
@@ -576,6 +691,7 @@ namespace RapidTransitMod.Dispatch.Commands
                         ownerDepot,
                         pathInfoDestination,
                         headPathInfoDestination,
+                        currentPathState,
                         softAck,
                         hardAck,
                         returning,
@@ -603,6 +719,7 @@ namespace RapidTransitMod.Dispatch.Commands
                         ownerDepot,
                         pathInfoDestination,
                         headPathInfoDestination,
+                        currentPathState,
                         softAck,
                         hardAck,
                         returning,
@@ -642,6 +759,7 @@ namespace RapidTransitMod.Dispatch.Commands
                             ownerDepot,
                             pathInfoDestination,
                             headPathInfoDestination,
+                            currentPathState,
                             softAck,
                             hardAck,
                             returning,
@@ -694,6 +812,7 @@ namespace RapidTransitMod.Dispatch.Commands
                         ownerDepot,
                         pathInfoDestination,
                         headPathInfoDestination,
+                        currentPathState,
                         softAck,
                         hardAck,
                         returning,
@@ -819,6 +938,10 @@ namespace RapidTransitMod.Dispatch.Commands
             PathFlags pathState,
             uint nowFrame,
             RetireHandoffWatchRecord watch,
+            bool hasHeadTrainCurrentLane,
+            TrainCurrentLane headTrainCurrentLane,
+            bool hasHeadTrainNavigation,
+            TrainNavigation headTrainNavigation,
             out string boundary)
         {
             boundary = "not-repaired";
@@ -826,20 +949,20 @@ namespace RapidTransitMod.Dispatch.Commands
                 || (pathState & (PathFlags.Pending | PathFlags.Obsolete | PathFlags.Updated | PathFlags.Stuck | PathFlags.Failed)) != 0
                 || headVehicle == Entity.Null
                 || !EntityManager.Exists(headVehicle)
-                || !EntityManager.HasComponent<TrainCurrentLane>(headVehicle)
-                || !EntityManager.HasComponent<TrainNavigation>(headVehicle))
+                || !hasHeadTrainCurrentLane
+                || !hasHeadTrainNavigation)
             {
                 return false;
             }
 
-            TrainNavigation navigation = EntityManager.GetComponentData<TrainNavigation>(headVehicle);
+            TrainNavigation navigation = headTrainNavigation;
             if (!(navigation.m_Speed < 0.1f))
             {
                 boundary = "speed-not-stopped";
                 return false;
             }
 
-            TrainCurrentLane currentLane = EntityManager.GetComponentData<TrainCurrentLane>(headVehicle);
+            TrainCurrentLane currentLane = headTrainCurrentLane;
             TrainLaneFlags beforeFlags = currentLane.m_Front.m_LaneFlags;
             TrainLaneFlags movedFlags = 0;
             int navLenBefore = EntityManager.HasBuffer<TrainNavigationLane>(vehicle)
@@ -1039,6 +1162,7 @@ namespace RapidTransitMod.Dispatch.Commands
             Entity ownerDepot,
             Entity pathInfoDestination,
             Entity headPathInfoDestination,
+            PathFlags currentPathState,
             bool softAck,
             bool hardAck,
             bool returning,
@@ -1046,9 +1170,34 @@ namespace RapidTransitMod.Dispatch.Commands
             string reason,
             bool force)
         {
-            string pathFlags = EntityManager.HasComponent<PathOwner>(vehicle)
-                ? EntityManager.GetComponentData<PathOwner>(vehicle).m_State.ToString()
-                : "-";
+            bool gateCooled = watch.LastTraceFrame == 0
+                || (nowFrame - watch.LastTraceFrame) >= DispatchRuntimeSystem.RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
+            string gateKey = targetEntity.Index.ToString()
+                + "|"
+                + currentRoute.Index
+                + "|"
+                + pathInfoDestination.Index
+                + "|"
+                + headPathInfoDestination.Index
+                + "|"
+                + (int)currentPathState
+                + "|"
+                + (returning ? "1" : "0")
+                + "|"
+                + (parking ? "1" : "0")
+                + "|"
+                + (softAck ? "1" : "0")
+                + "|"
+                + (hardAck ? "1" : "0")
+                + "|"
+                + watch.AttemptCount;
+            bool gateChanged = !string.Equals(watch.LastTraceGateKey, gateKey, StringComparison.Ordinal);
+            if (!force && !gateChanged && !gateCooled)
+                return;
+
+            watch.LastTraceGateKey = gateKey;
+
+            string pathFlags = currentPathState.ToString();
             bool pathfindUpdated = EntityManager.HasComponent<PathfindUpdated>(vehicle);
             string navLastFlags = "-";
             if (EntityManager.HasBuffer<TrainNavigationLane>(vehicle))
@@ -1095,8 +1244,7 @@ namespace RapidTransitMod.Dispatch.Commands
                 + "|attempt=" + watch.AttemptCount;
 
             bool changed = !string.Equals(watch.LastTraceKey, key, StringComparison.Ordinal);
-            bool cooled = watch.LastTraceFrame == 0
-                || (nowFrame - watch.LastTraceFrame) >= DispatchRuntimeSystem.RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
+            bool cooled = gateCooled;
             if (!force && !changed && !cooled)
                 return;
             if (!force && !changed)
@@ -1124,6 +1272,7 @@ namespace RapidTransitMod.Dispatch.Commands
                 + " hardAck=" + (hardAck ? "1" : "0"));
 
             watch.LastTraceFrame = nowFrame;
+            watch.LastTraceGateKey = gateKey;
             watch.LastTraceKey = key;
         }
 
@@ -1175,11 +1324,15 @@ namespace RapidTransitMod.Dispatch.Commands
             m_RetireShadowHistory.Clear();
             m_RetireShadowLastSnapshot.Clear();
             m_RetireShadowLastFrame.Clear();
+            m_RetireShadowLastRetiringFrame.Clear();
         }
 
         private List<Entity> WatchKeys()
         {
-            return new List<Entity>(m_RetireHandoffWatch.Keys);
+            m_WatchKeysScratch.Clear();
+            foreach (Entity vehicle in m_RetireHandoffWatch.Keys)
+                m_WatchKeysScratch.Add(vehicle);
+            return m_WatchKeysScratch;
         }
 
         private void RecordShadow(Entity vehicle, string phase)
@@ -1187,8 +1340,11 @@ namespace RapidTransitMod.Dispatch.Commands
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
                 return;
 
-            string snapshot = BuildShadowSnapshot(vehicle, phase);
             uint nowFrame = m_RetireHost.Frame;
+            if (!ShouldRecordShadowBeforeSnapshot(vehicle, phase, nowFrame))
+                return;
+
+            string snapshot = BuildShadowSnapshot(vehicle, phase);
             bool shouldSample = true;
             if (phase == "retiring"
                 && m_RetireShadowLastSnapshot.TryGetValue(vehicle, out string lastSnapshot)
@@ -1200,10 +1356,16 @@ namespace RapidTransitMod.Dispatch.Commands
             }
 
             if (!shouldSample)
+            {
+                if (phase == "retiring")
+                    m_RetireShadowLastRetiringFrame[vehicle] = nowFrame;
                 return;
+            }
 
             m_RetireShadowLastSnapshot[vehicle] = snapshot;
             m_RetireShadowLastFrame[vehicle] = nowFrame;
+            if (phase == "retiring")
+                m_RetireShadowLastRetiringFrame[vehicle] = nowFrame;
 
             if (!m_RetireShadowHistory.TryGetValue(vehicle, out List<string> history) || history == null)
             {
@@ -1235,6 +1397,22 @@ namespace RapidTransitMod.Dispatch.Commands
             m_RetireShadowHistory.Remove(vehicle);
             m_RetireShadowLastSnapshot.Remove(vehicle);
             m_RetireShadowLastFrame.Remove(vehicle);
+            m_RetireShadowLastRetiringFrame.Remove(vehicle);
+        }
+
+        private bool ShouldRecordShadowBeforeSnapshot(Entity vehicle, string phase, uint nowFrame)
+        {
+            if (phase != "retiring")
+                return true;
+
+            if (EntityManager.HasComponent<Deleted>(vehicle)
+                || EntityManager.HasComponent<ParkedTrain>(vehicle))
+            {
+                return true;
+            }
+
+            return !m_RetireShadowLastRetiringFrame.TryGetValue(vehicle, out uint lastFrame)
+                || nowFrame - lastFrame >= DispatchRuntimeSystem.RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES;
         }
 
         private string BuildShadowSnapshot(Entity vehicle, string phase)

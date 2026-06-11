@@ -34,6 +34,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly LineMileage m_LineMileage;
         private readonly LineTimes m_LineTimes;
         private readonly Func<Entity, string> m_EntityName;
+        private readonly RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe m_HotPathProbe;
 
         internal BypassAdmissionPort(
             EntityManager entityManager,
@@ -56,7 +57,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             VehicleView vehicleView,
             LineMileage lineMileage,
             LineTimes lineTimes,
-            Func<Entity, string> entityName)
+            Func<Entity, string> entityName,
+            RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe)
         {
             m_EntityManager = entityManager;
             m_Log = log;
@@ -79,6 +81,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_LineMileage = lineMileage;
             m_LineTimes = lineTimes;
             m_EntityName = entityName;
+            m_HotPathProbe = hotPathProbe;
         }
 
         protected Func<uint> FrameGetter => m_Frame;
@@ -91,6 +94,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         IEnumerable<KeyValuePair<string, AppliedLine>> IBypassAdmissionRuntimeContext.AppliedLines => m_AppliedLines();
         TrackModelService IBypassAdmissionRuntimeContext.TrackModel => m_TrackModel;
         TrackProjectionService IBypassAdmissionRuntimeContext.TrackProjection => m_TrackProjection();
+        RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe IBypassAdmissionRuntimeContext.HotPathProbe => m_HotPathProbe;
 
         BufferLookup<T> IBypassAdmissionRuntimeContext.GetBufferLookup<T>(bool isReadOnly)
         {
@@ -102,11 +106,12 @@ namespace RapidTransitMod.Dispatch.Runtime
         bool IBypassAdmissionRuntimeContext.IsAppliedLocal(Entity line) => m_IsLocal(line);
         bool IBypassAdmissionRuntimeContext.IsAppliedExpress(Entity line) => m_IsExpress(line);
         Entity IBypassAdmissionRuntimeContext.ResolveLine(Entity vehicle) => m_Resolve.Line(vehicle);
+        Entity IBypassAdmissionRuntimeContext.ResolveStopForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex) => waypointIndex >= 0 && waypointIndex < waypoints.Length ? m_Resolve.Stop(waypoints[waypointIndex].m_Waypoint) : Entity.Null;
         bool IBypassAdmissionRuntimeContext.IsLineOrderedRuntimeLoggingEnabled() => m_IsLineOrderedRuntimeLoggingEnabled();
         int IBypassAdmissionRuntimeContext.ComputeWaypointIndex(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints) => m_WaypointIndex.Compute(vehicle, waypoints);
         Entity IBypassAdmissionRuntimeContext.GetStationBuildingForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex) => m_Shared.GetStationBuildingForWaypoint(waypoints, waypointIndex);
         Entity IBypassAdmissionRuntimeContext.ResolvePassingStation(Entity entity) => m_Resolve.PassingStation(entity);
-        bool IBypassAdmissionRuntimeContext.TryEstimateRemainingBoardingDwellFrames(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, Entity currentBypassBuilding, uint nowFrame, out float remainingFrames) => m_Observation.TryEstimateRemainingBoardingDwellFrames(vehicle, line, waypoints, currentWaypointIndex, currentBypassBuilding, nowFrame, out remainingFrames);
+        bool IBypassAdmissionRuntimeContext.TryEstimateRemainingBoardingTime(Entity vehicle, Entity line, int currentWaypointIndex, uint nowFrame, out float remainingFrames) => m_Observation.TryEstimateRemainingBoardingTime(vehicle, line, currentWaypointIndex, nowFrame, out remainingFrames);
         bool IBypassAdmissionRuntimeContext.TryGetEffectiveTraversalRunSliceFrames(Entity line, TraversalRunSlice slice, out float effectiveRunFrames) => m_Observation.EffectiveFrames(line, slice, out effectiveRunFrames);
         bool IBypassAdmissionRuntimeContext.TryGetBypassWaypointContext(DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out Entity currentBypassBuilding, out int nextBypassWaypointIndex, out Entity nextBypassBuilding) => m_Shared.TryGetBypassWaypointContext(waypoints, currentWaypointIndex, out currentBypassBuilding, out nextBypassWaypointIndex, out nextBypassBuilding);
         void IBypassAdmissionRuntimeContext.LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message) => m_LogVehicleStateOnce(cache, vehicle, key, message);

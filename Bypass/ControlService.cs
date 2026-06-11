@@ -73,12 +73,30 @@ namespace RapidTransitMod.Bypass
             bool boarding,
             uint nowFrame)
         {
+            if (m_Admission.TryGetBypassHoldSkipped(vehicle, out Entity skippedBlocker))
+            {
+                m_Admission.Probe.CountBypassSkipped();
+                return new BypassControlResult(
+                    true,
+                    vehicle,
+                    line,
+                    waypointIndex,
+                    false,
+                    false,
+                    skippedBlocker,
+                    true,
+                    null);
+            }
+
             bool hadLatchedYield = m_Admission.TryGetLatchedBlocker(vehicle, out _);
+            if (hadLatchedYield)
+                m_Admission.Probe.CountBypassLatched();
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypointIndex <= 0
                 || (!boarding && !hadLatchedYield))
             {
+                m_Admission.Probe.CountBypassEarlyReturn();
                 return new BypassControlResult(
                     false,
                     vehicle,
@@ -97,6 +115,7 @@ namespace RapidTransitMod.Bypass
                 waypoints,
                 waypointIndex,
                 nowFrame);
+            m_Admission.Probe.CountBypassEvaluated();
             Entity blocker = m_Admission.FindBlocker(decision);
             string releaseReason = null;
             if (m_Admission.CanRelease(decision))
@@ -141,7 +160,8 @@ namespace RapidTransitMod.Bypass
                     + "|" + control.CanClearAfterExit
                     + "|" + midStopDwellTimedOut
                     + "|" + control.Blocker.Index
-                    + "|" + holdFrameAction,
+                    + "|" + holdFrameAction
+                    + "|" + (control.ReleaseReason ?? "-"),
                 "[待避压车帧] vehicle=" + control.Vehicle.Index
                     + " line=" + control.Line.Index
                     + " wp=" + control.WaypointIndex
@@ -153,7 +173,8 @@ namespace RapidTransitMod.Bypass
                     + " midTimeout=" + midStopDwellTimedOut
                     + " depBefore=" + departureFrame
                     + " frame=" + nowFrame
-                    + " action=" + holdFrameAction);
+                    + " action=" + holdFrameAction
+                    + (!string.IsNullOrWhiteSpace(control.ReleaseReason) ? " reason=" + control.ReleaseReason : string.Empty));
         }
 
         internal void Hold(
@@ -186,7 +207,14 @@ namespace RapidTransitMod.Bypass
             if (!control.ShouldRelease)
                 return;
 
-            m_Runtime.RecordRelease(control.Vehicle, control.Blocker, control.ReleaseReason);
+            Entity blocker = control.Blocker;
+            if (blocker == Entity.Null)
+                m_Admission.TryGetLatchedBlocker(control.Vehicle, out blocker);
+
+            m_Admission.ClearBlocker(control.Vehicle);
+            m_Admission.RemoveCadence(control.Vehicle);
+            m_Admission.RemoveEpisode(control.Vehicle);
+            m_Runtime.RecordRelease(control.Vehicle, blocker, control.ReleaseReason);
         }
 
         internal BypassControlResult TickVehicle(

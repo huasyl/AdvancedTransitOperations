@@ -46,6 +46,8 @@ namespace RapidTransitMod.TrackProjection
             m_Service = service;
         }
 
+        private static bool IsProgressSuspectValidationLoggingEnabled() => false;
+
         internal void Clear()
         {
             m_SuspectProgressSinceFrame.Clear();
@@ -68,6 +70,7 @@ namespace RapidTransitMod.TrackProjection
             m_SuspectProgressReason[vehicle] = reason ?? "unknown";
             m_SuspectProgressProjectionInvalid.Remove(vehicle);
             m_Service.Cursors.Remove(vehicle, keepCursor: true);
+            m_Service.ClearFacts(vehicle);
             m_SuspectProgressRecoveryWaypoint.Remove(vehicle);
             m_SuspectProgressValidationCount.Remove(vehicle);
             m_SuspectProgressFirstSample.Remove(vehicle);
@@ -89,6 +92,7 @@ namespace RapidTransitMod.TrackProjection
             m_SuspectProgressLastValidationFrame.Remove(vehicle);
             m_SuspectProgressProjectionInvalid.Remove(vehicle);
             m_Service.Cursors.Remove(vehicle, keepCursor: true);
+            m_Service.ClearFacts(vehicle);
             m_SuspectProgressReason.Remove(vehicle);
             m_SuspectProgressLogCache.Remove(vehicle);
             m_SuspectProgressRecoveryWaypoint.Remove(vehicle);
@@ -152,7 +156,8 @@ namespace RapidTransitMod.TrackProjection
             }
 
             m_SuspectProgressLastValidationFrame[vehicle] = nowFrame;
-            if (!TryValidateSuspectVehicleProjection(vehicle, line, chain, segmentIndex, projectedAtomIndex, out SuspectProgressSample sample, out string validationSummary, out bool projectionInvalid))
+            bool logValidation = IsProgressSuspectValidationLoggingEnabled();
+            if (!TryValidateSuspectVehicleProjection(vehicle, line, chain, segmentIndex, projectedAtomIndex, logValidation, out SuspectProgressSample sample, out string validationSummary, out bool projectionInvalid))
                 return false;
 
             int validationCount = m_SuspectProgressValidationCount.TryGetValue(vehicle, out int previousCount)
@@ -162,33 +167,36 @@ namespace RapidTransitMod.TrackProjection
             if (!m_SuspectProgressFirstSample.ContainsKey(vehicle))
                 m_SuspectProgressFirstSample[vehicle] = sample;
 
-            string logKey = vehicle.Index + "|" + validationSummary;
-            if (!m_SuspectProgressLogCache.TryGetValue(vehicle, out string previous) || previous != logKey)
+            if (logValidation)
             {
-                m_SuspectProgressLogCache[vehicle] = logKey;
-                m_Service.Runtime.Log.Info("[ProgressSuspectCheck] " + validationSummary);
-            }
+                string logKey = vehicle.Index + "|" + validationSummary;
+                if (!m_SuspectProgressLogCache.TryGetValue(vehicle, out string previous) || previous != logKey)
+                {
+                    m_SuspectProgressLogCache[vehicle] = logKey;
+                    m_Service.Runtime.Log.Info("[ProgressSuspectCheck] " + validationSummary);
+                }
 
-            if (validationCount % 36 == 0
-                && m_SuspectProgressFirstSample.TryGetValue(vehicle, out SuspectProgressSample firstSample))
-            {
-                m_Service.Runtime.Log.Info("[ProgressSuspectWindow] vehicle=" + vehicle.Index
-                    + " scans=" + validationCount
-                    + " startAtom=" + firstSample.ProjectedAtomIndex
-                    + " startBestAtom=" + firstSample.BestAtomIndex
-                    + " startPos=(" + firstSample.VehiclePosition.x.ToString("F1")
-                    + "," + firstSample.VehiclePosition.y.ToString("F1")
-                    + "," + firstSample.VehiclePosition.z.ToString("F1") + ")"
-                    + " startDist=" + firstSample.ProjectedDistanceMeters.ToString("F1")
-                    + "/" + firstSample.BestDistanceMeters.ToString("F1")
-                    + " currentAtom=" + sample.ProjectedAtomIndex
-                    + " currentBestAtom=" + sample.BestAtomIndex
-                    + " currentPos=(" + sample.VehiclePosition.x.ToString("F1")
-                    + "," + sample.VehiclePosition.y.ToString("F1")
-                    + "," + sample.VehiclePosition.z.ToString("F1") + ")"
-                    + " currentDist=" + sample.ProjectedDistanceMeters.ToString("F1")
-                    + "/" + sample.BestDistanceMeters.ToString("F1")
-                    + (projectionInvalid ? " invalid=true" : " invalid=false"));
+                if (validationCount % 36 == 0
+                    && m_SuspectProgressFirstSample.TryGetValue(vehicle, out SuspectProgressSample firstSample))
+                {
+                    m_Service.Runtime.Log.Info("[ProgressSuspectWindow] vehicle=" + vehicle.Index
+                        + " scans=" + validationCount
+                        + " startAtom=" + firstSample.ProjectedAtomIndex
+                        + " startBestAtom=" + firstSample.BestAtomIndex
+                        + " startPos=(" + firstSample.VehiclePosition.x.ToString("F1")
+                        + "," + firstSample.VehiclePosition.y.ToString("F1")
+                        + "," + firstSample.VehiclePosition.z.ToString("F1") + ")"
+                        + " startDist=" + firstSample.ProjectedDistanceMeters.ToString("F1")
+                        + "/" + firstSample.BestDistanceMeters.ToString("F1")
+                        + " currentAtom=" + sample.ProjectedAtomIndex
+                        + " currentBestAtom=" + sample.BestAtomIndex
+                        + " currentPos=(" + sample.VehiclePosition.x.ToString("F1")
+                        + "," + sample.VehiclePosition.y.ToString("F1")
+                        + "," + sample.VehiclePosition.z.ToString("F1") + ")"
+                        + " currentDist=" + sample.ProjectedDistanceMeters.ToString("F1")
+                        + "/" + sample.BestDistanceMeters.ToString("F1")
+                        + (projectionInvalid ? " invalid=true" : " invalid=false"));
+                }
             }
 
             if (!projectionInvalid)
@@ -204,6 +212,7 @@ namespace RapidTransitMod.TrackProjection
             LineTrackChain chain,
             int projectedSegmentIndex,
             int projectedAtomIndex,
+            bool buildValidationSummary,
             out SuspectProgressSample sample,
             out string validationSummary,
             out bool projectionInvalid)
@@ -256,14 +265,17 @@ namespace RapidTransitMod.TrackProjection
                 projectedDistance,
                 bestDistance);
 
-            validationSummary = "vehicle=" + vehicle.Index
-                + " line=" + line.Index
-                + " projectedAtom=" + projectedAtomIndex
-                + " bestAtom=" + bestAtomIndex
-                + " projectedDist=" + projectedDistance.ToString("F1")
-                + "m bestDist=" + bestDistance.ToString("F1")
-                + "m delta=" + atomDelta
-                + (projectionInvalid ? " invalid=true" : " invalid=false");
+            if (buildValidationSummary)
+            {
+                validationSummary = "vehicle=" + vehicle.Index
+                    + " line=" + line.Index
+                    + " projectedAtom=" + projectedAtomIndex
+                    + " bestAtom=" + bestAtomIndex
+                    + " projectedDist=" + projectedDistance.ToString("F1")
+                    + "m bestDist=" + bestDistance.ToString("F1")
+                    + "m delta=" + atomDelta
+                    + (projectionInvalid ? " invalid=true" : " invalid=false");
+            }
             return true;
         }
     }

@@ -15,6 +15,7 @@ namespace RapidTransitMod.Bypass
         IEnumerable<KeyValuePair<string, AppliedLine>> AppliedLines { get; }
         TrackModelService TrackModel { get; }
         TrackProjectionService TrackProjection { get; }
+        RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe HotPathProbe { get; }
         BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData;
 
         bool IsBypassRuntimeFeatureEnabled();
@@ -22,11 +23,12 @@ namespace RapidTransitMod.Bypass
         bool IsAppliedLocal(Entity line);
         bool IsAppliedExpress(Entity line);
         Entity ResolveLine(Entity vehicle);
+        Entity ResolveStopForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
         bool IsLineOrderedRuntimeLoggingEnabled();
         int ComputeWaypointIndex(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints);
         Entity GetStationBuildingForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
         Entity ResolvePassingStation(Entity entity);
-        bool TryEstimateRemainingBoardingDwellFrames(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, Entity currentBypassBuilding, uint nowFrame, out float remainingFrames);
+        bool TryEstimateRemainingBoardingTime(Entity vehicle, Entity line, int currentWaypointIndex, uint nowFrame, out float remainingFrames);
         bool TryGetEffectiveTraversalRunSliceFrames(Entity line, TraversalRunSlice slice, out float effectiveRunFrames);
         bool TryGetBypassWaypointContext(DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out Entity currentBypassBuilding, out int nextBypassWaypointIndex, out Entity nextBypassBuilding);
         void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message);

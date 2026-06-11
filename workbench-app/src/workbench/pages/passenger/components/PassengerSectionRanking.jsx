@@ -126,16 +126,18 @@ export default function PassengerSectionRanking({ sections, lines = [] }) {
       {hovered ? (
         <div className="rtw-passenger-chart-tooltip is-ranking" style={{ left: "68%", top: `${Math.max(8, Math.min(88, 6 + (hoveredIndex || 0) * 10))}%` }}>
           <div className="rtw-passenger-chart-tooltip-title">{hovered.label}</div>
-          <div className="rtw-passenger-chart-tooltip-row">
-            <span className="rtw-passenger-chart-tooltip-label">断面累计</span>
-            <span className="rtw-passenger-chart-tooltip-number">{Math.round(Number(hovered.total || 0)).toLocaleString()}</span>
+          <div className="rtw-passenger-chart-tooltip-total">
+            <span className="rtw-passenger-chart-tooltip-total-label">断面累计</span>
+            <span className="rtw-passenger-chart-tooltip-total-number">{Math.round(Number(hovered.total || 0)).toLocaleString()}</span>
           </div>
-          {hovered.segments.slice(0, 4).map((segment) => (
-            <div key={segment.lineId} className="rtw-passenger-chart-tooltip-row">
-              <span className="rtw-passenger-chart-tooltip-label">{segment.label}</span>
-              <span className="rtw-passenger-chart-tooltip-number">{Math.round(Number(segment.total || 0)).toLocaleString()}</span>
-            </div>
-          ))}
+          <div className="rtw-passenger-chart-tooltip-lines">
+            {hovered.segments.slice(0, 4).map((segment) => (
+              <div key={segment.lineId} className="rtw-passenger-chart-tooltip-row">
+                <span className="rtw-passenger-chart-tooltip-label" style={{ color: segment.color }}>{segment.label}</span>
+                <span className="rtw-passenger-chart-tooltip-number" style={{ color: segment.color }}>{Math.round(Number(segment.total || 0)).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>

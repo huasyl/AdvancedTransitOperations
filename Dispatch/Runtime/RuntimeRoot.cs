@@ -52,6 +52,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_AnnouncementWorkbench.StopPreview());
             runtime.m_LineProfile = new LineProfile(runtime);
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
+            runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
             runtime.m_RuntimeShell = new RuntimeShell(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
                 runtime,
@@ -139,7 +140,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 message => Mod.log.Info(message));
 
             runtime.m_UICache = new NativeHashMap<Entity, FixedString64Bytes>(1024, Allocator.Persistent);
-            runtime.m_LastBoarding = new NativeHashMap<Entity, bool>(1024, Allocator.Persistent);
+            runtime.m_LastEffectiveBoardingState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
+            runtime.m_LastOfficialBoardingState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
+            runtime.m_BoardingFirstFrameGuardState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
+            runtime.m_StopSessionLine = new NativeHashMap<Entity, Entity>(1024, Allocator.Persistent);
+            runtime.m_StopSessionWaypointIndex = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
+            runtime.m_StopSessionArrivalFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
+            runtime.m_StopSessionBoardingChangeCount = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
+            runtime.m_DeparturePendingSinceFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
             runtime.m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);

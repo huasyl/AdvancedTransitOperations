@@ -14,7 +14,6 @@ namespace RapidTransitMod.PassengerFlow
             TransitMode mode,
             string lineId,
             int cachedWaypointIndex,
-            bool rawBoarding,
             bool acceptedBoarding,
             bool hasLaunchFrame,
             uint launchFrame)

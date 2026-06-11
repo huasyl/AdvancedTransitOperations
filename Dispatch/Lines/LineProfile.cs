@@ -1,6 +1,8 @@
+using System.Collections.Generic;
 using Game.Common;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.Dispatch.Diagnostics;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -15,6 +17,7 @@ namespace RapidTransitMod.Dispatch.Lines
         private NativeHashMap<Entity, ulong> m_LineWaypointSignature;
         private NativeHashMap<Entity, uint> m_LineStableSinceFrame;
         private NativeHashSet<Entity> m_DiagnosedLines;
+        private readonly Dictionary<Entity, Entity> m_OriginStopByWaypoint = new Dictionary<Entity, Entity>();
 
         public LineProfile(DispatchRuntimeSystem runtime)
         {
@@ -26,19 +29,50 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public float DistanceToOrigin(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints)
         {
-            EntityManager entityManager = m_Runtime.EntityManager;
-            if (!entityManager.HasComponent<Game.Objects.Transform>(vehicle))
+            if (!TryGetOriginDistanceSquared(vehicle, waypoints, out float distanceSq))
                 return float.MaxValue;
 
-            Entity stop = waypoints[0].m_Waypoint;
-            if (entityManager.HasComponent<Connected>(stop))
-                stop = entityManager.GetComponentData<Connected>(stop).m_Connected;
+            return math.sqrt(distanceSq);
+        }
+
+        public bool IsWithinOriginDistance(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints, float radiusMeters)
+        {
+            return TryGetOriginDistanceSquared(vehicle, waypoints, out float distanceSq)
+                && distanceSq <= radiusMeters * radiusMeters;
+        }
+
+        private bool TryGetOriginDistanceSquared(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints, out float distanceSq)
+        {
+            distanceSq = float.MaxValue;
+            EntityManager entityManager = m_Runtime.EntityManager;
+            if (waypoints.Length == 0 || !entityManager.HasComponent<Game.Objects.Transform>(vehicle))
+                return false;
+
+            Entity stop = ResolveOriginStop(waypoints[0].m_Waypoint);
             if (stop == Entity.Null || !entityManager.HasComponent<Game.Objects.Transform>(stop))
-                return float.MaxValue;
+                return false;
 
             float3 vehiclePos = entityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position;
             float3 stopPos = entityManager.GetComponentData<Game.Objects.Transform>(stop).m_Position;
-            return math.distance(vehiclePos, stopPos);
+            distanceSq = math.lengthsq(vehiclePos - stopPos);
+            return true;
+        }
+
+        private Entity ResolveOriginStop(Entity waypoint)
+        {
+            if (waypoint == Entity.Null)
+                return Entity.Null;
+
+            if (m_OriginStopByWaypoint.TryGetValue(waypoint, out Entity cachedStop))
+                return cachedStop;
+
+            Entity stop = waypoint;
+            EntityManager entityManager = m_Runtime.EntityManager;
+            if (entityManager.HasComponent<Connected>(stop))
+                stop = entityManager.GetComponentData<Connected>(stop).m_Connected;
+
+            m_OriginStopByWaypoint[waypoint] = stop;
+            return stop;
         }
 
         public bool ShouldEvaluateOriginSettle(
@@ -49,7 +83,10 @@ namespace RapidTransitMod.Dispatch.Lines
             bool lastBoarding,
             int targetMin)
         {
-            m_Runtime.m_PerfProbeOriginSettleCalls++;
+            bool probeEnabled = RuntimeHotPathProbe.Enabled();
+            if (probeEnabled)
+                m_Runtime.m_PerfProbeOriginSettleCalls++;
+            m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleCall();
             if (vehicle == Entity.Null || waypoints.Length == 0)
                 return false;
 
@@ -59,7 +96,9 @@ namespace RapidTransitMod.Dispatch.Lines
                 || targetMin >= 0
                 || m_Runtime.m_VehicleStateStore.OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
             {
-                m_Runtime.m_PerfProbeOriginSettleFastPathHits++;
+                if (probeEnabled)
+                    m_Runtime.m_PerfProbeOriginSettleFastPathHits++;
+                m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleFastPath(m_Runtime.m_VehicleStateStore.OriginArrivalCandidateSinceFrame.ContainsKey(vehicle));
                 return true;
             }
 
@@ -70,7 +109,9 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
             }
 
-            m_Runtime.m_PerfProbeOriginSettleSlowPathEntered++;
+            if (probeEnabled)
+                m_Runtime.m_PerfProbeOriginSettleSlowPathEntered++;
+            m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleSlowPath();
             if (!m_Runtime.m_TrackProjection.TrySnapshot(
                     vehicle,
                     line,
@@ -78,7 +119,8 @@ namespace RapidTransitMod.Dispatch.Lines
                     m_Runtime.m_SimulationSystem.frameIndex,
                     out VehicleTrackCursor cursor))
             {
-                m_Runtime.m_PerfProbeOriginSettlePreSnapshotMisses++;
+                if (probeEnabled)
+                    m_Runtime.m_PerfProbeOriginSettlePreSnapshotMisses++;
                 return false;
             }
 
@@ -90,7 +132,11 @@ namespace RapidTransitMod.Dispatch.Lines
             bool inOriginWindow = atomCursorIndex <= originAtomWindow
                 || atomCursorIndex >= math.max(0, chain.TrackAtoms.Count - 1 - originAtomWindow);
             if (inOriginWindow)
-                m_Runtime.m_PerfProbeOriginSettleWindowHits++;
+            {
+                if (probeEnabled)
+                    m_Runtime.m_PerfProbeOriginSettleWindowHits++;
+                m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleWindowHit();
+            }
             return inOriginWindow;
         }
 
@@ -112,8 +158,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
             if (!waitingAtOrigin)
             {
-                float originDist = DistanceToOrigin(vehicle, waypoints);
-                if (originDist > DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
+                if (!IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
                 {
                     m_Runtime.m_RuntimeController.ClearOriginCandidate(vehicle);
                     return false;
@@ -143,7 +188,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public bool IsBorderlineOriginArrivalCandidate(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints)
         {
-            if (DistanceToOrigin(vehicle, waypoints) > DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
+            if (!IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
                 return false;
 
             if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
@@ -204,7 +249,7 @@ namespace RapidTransitMod.Dispatch.Lines
             if (m_Runtime.m_VehicleView.TryGetCooldown(nearestVehicle, out uint cooldownUntil) && nowFrame < cooldownUntil)
                 return false;
 
-            if (DistanceToOrigin(nearestVehicle, waypoints) <= DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS)
+            if (IsWithinOriginDistance(nearestVehicle, waypoints, DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS))
                 return true;
 
             if (m_Runtime.m_RouteProgress.Try(nearestVehicle, out int nextWaypointIndex, out float segmentPosition))
@@ -335,6 +380,7 @@ namespace RapidTransitMod.Dispatch.Lines
             m_LineWaypointSignature.Remove(line);
             m_LineStableSinceFrame.Remove(line);
             m_DiagnosedLines.Remove(line);
+            m_OriginStopByWaypoint.Clear();
         }
 
         public void ClearStability()
@@ -342,6 +388,7 @@ namespace RapidTransitMod.Dispatch.Lines
             if (m_LineWaypointSignature.IsCreated) m_LineWaypointSignature.Clear();
             if (m_LineStableSinceFrame.IsCreated) m_LineStableSinceFrame.Clear();
             if (m_DiagnosedLines.IsCreated) m_DiagnosedLines.Clear();
+            m_OriginStopByWaypoint.Clear();
         }
 
         public void Dispose()

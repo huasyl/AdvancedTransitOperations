@@ -226,6 +226,8 @@ namespace RapidTransitMod.Dispatch.Observation
             new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, uint> m_LastPositionFrames =
             new Dictionary<Entity, uint>();
+        private readonly Dictionary<Entity, uint> m_NextSampleFrames =
+            new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, TraversalSliceSamplingPlanCache> m_Plans =
             new Dictionary<Entity, TraversalSliceSamplingPlanCache>();
         private readonly Dictionary<Entity, TraversalSliceLineEligibilityCache> m_LineEligibility =
@@ -243,6 +245,7 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Dictionary<Entity, VehicleTraversalSliceSession> Sessions => m_Sessions;
         internal Dictionary<Entity, uint> LastSampleFrames => m_LastSampleFrames;
         internal Dictionary<Entity, uint> LastPositionSampleFrames => m_LastPositionFrames;
+        internal Dictionary<Entity, uint> NextSampleFrames => m_NextSampleFrames;
         internal Dictionary<Entity, TraversalSliceSamplingPlanCache> Plans => m_Plans;
         internal Dictionary<Entity, TraversalSliceLineEligibilityCache> LineEligibility => m_LineEligibility;
         internal Dictionary<Entity, uint> NextEntryProbeFrames => m_NextEntryProbeFrames;
@@ -256,6 +259,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Sessions.Clear();
             m_LastSampleFrames.Clear();
             m_LastPositionFrames.Clear();
+            m_NextSampleFrames.Clear();
             m_Plans.Clear();
             m_LineEligibility.Clear();
             m_NextEntryProbeFrames.Clear();
@@ -269,6 +273,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Sessions.Remove(vehicle);
             m_LastSampleFrames.Remove(vehicle);
             m_LastPositionFrames.Remove(vehicle);
+            m_NextSampleFrames.Remove(vehicle);
             m_Plans.Remove(vehicle);
             m_NextEntryProbeFrames.Remove(vehicle);
         }

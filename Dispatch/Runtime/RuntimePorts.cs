@@ -176,7 +176,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_VehicleView,
                 runtime.m_LineMileage,
                 runtime.m_LineTimes,
-                runtime.EntityName);
+                runtime.EntityName,
+                runtime.m_RuntimeHotPathProbe);
         }
 
         public static BypassRuntimePort BuildBypassRuntime(DispatchRuntimeSystem runtime)
@@ -203,6 +204,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_LineMileage,
                 runtime.m_LineTimes,
                 runtime.EntityName,
+                runtime.m_RuntimeHotPathProbe,
                 DispatchRuntimeSystem.IsBypassRuntimeLoggingEnabled,
                 runtime.m_Observation.Hold,
                 runtime.m_Observation.Release,
@@ -241,6 +243,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 FlushLap = runtime.m_LapCache.Flush,
                 FlushSlice = (line, sliceIndex, observation) => runtime.m_ObsBuffers.Flush(line, sliceIndex, observation),
                 FlushStationDwell = (observationKey, observation) => runtime.m_ObsBuffers.Flush(observationKey, observation),
+                HotPathProbe = runtime.m_RuntimeHotPathProbe,
                 Log = message => runtime.log.Info(message)
             };
         }

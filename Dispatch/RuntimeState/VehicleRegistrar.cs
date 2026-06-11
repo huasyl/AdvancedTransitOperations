@@ -18,38 +18,70 @@ namespace RapidTransitMod
 
         public void Register(bool fullSweep)
         {
-            NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+            NativeArray<Entity> lines = default;
+            NativeArray<Entity> spawnLines = default;
+            NativeArray<Entity> spawnRequestLines = default;
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
             try
             {
-                foreach (Entity line in lines)
+                if (fullSweep)
                 {
-                    if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs)) continue;
-                    if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2) continue;
-                    if (!m_Runtime.m_LineProfile.IsStable(line, wps)) continue;
-                    if (!m_Runtime.m_LineView.Managed(line, m_Runtime.m_Features.Dispatch())) continue;
-                    bool adoptExistingVehicles = !m_Runtime.m_LineInitialAdopted.Contains(line);
-                    bool isHotLine = adoptExistingVehicles || m_Runtime.m_SpawningLines.ContainsKey(line);
-                    if (!fullSweep && !isHotLine) continue;
+                    lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+                    foreach (Entity line in lines)
+                        RegisterLine(line, fullSweep, rvBuffers, wpBuffers);
+                }
+                else
+                {
+                    spawnLines = m_Runtime.m_SpawningLines.GetKeyArray(Allocator.Temp);
+                    for (int i = 0; i < spawnLines.Length; i++)
+                        RegisterLine(spawnLines[i], fullSweep, rvBuffers, wpBuffers);
 
-                    string lineTag = "线路" + line.Index;
-                    HashSet<Entity> seenVehicles = new HashSet<Entity>();
+                    spawnRequestLines = m_Runtime.m_LineSpawnRequestFrame.GetKeyArray(Allocator.Temp);
+                    for (int i = 0; i < spawnRequestLines.Length; i++)
+                        RegisterLine(spawnRequestLines[i], fullSweep, rvBuffers, wpBuffers);
+                }
+            }
+            finally
+            {
+                if (lines.IsCreated) lines.Dispose();
+                if (spawnLines.IsCreated) spawnLines.Dispose();
+                if (spawnRequestLines.IsCreated) spawnRequestLines.Dispose();
+            }
+        }
 
-                    if (!adoptExistingVehicles && !m_Runtime.m_LineProfile.IsDiagnosed(line))
-                    {
-                        m_Runtime.m_LineProfile.MarkDiagnosed(line);
-                        m_Runtime.m_TrackModel.LogLineTrackChainDiagnostics(line);
-                        string lineName = m_Runtime.EntityName(line);
-                        m_Runtime.log.Info("[诊断] " + lineTag + " (" + lineName + ") waypoint数=" + wps.Length);
-                    }
+        private void RegisterLine(
+            Entity line,
+            bool fullSweep,
+            BufferLookup<RouteVehicle> rvBuffers,
+            BufferLookup<RouteWaypoint> wpBuffers)
+        {
+            if (line == Entity.Null || !m_Runtime.EntityManager.Exists(line)) return;
+            if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs)) return;
+            if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2) return;
+            if (!m_Runtime.m_LineProfile.IsStable(line, wps)) return;
+            if (!m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch())) return;
+            bool adoptExistingVehicles = !m_Runtime.m_LineInitialAdopted.Contains(line);
+            bool isHotLine = adoptExistingVehicles || m_Runtime.m_SpawningLines.ContainsKey(line);
+            if (!fullSweep && !isHotLine) return;
 
-                    for (int i = 0; i < rvs.Length; i++)
-                    {
-                        Entity v = m_Runtime.m_Resolve.RuntimeVehicle(rvs[i].m_Vehicle);
-                        if (!m_Runtime.EntityManager.Exists(v)) continue;
-                        if (!seenVehicles.Add(v)) continue;
-                        if (m_Runtime.m_VehicleView.Contains(v)) continue;
+            string lineTag = "线路" + line.Index;
+            HashSet<Entity> seenVehicles = new HashSet<Entity>();
+
+            if (!adoptExistingVehicles && !m_Runtime.m_LineProfile.IsDiagnosed(line))
+            {
+                m_Runtime.m_LineProfile.MarkDiagnosed(line);
+                m_Runtime.m_TrackModel.LogLineTrackChainDiagnostics(line);
+                string lineName = m_Runtime.EntityName(line);
+                m_Runtime.log.Info("[诊断] " + lineTag + " (" + lineName + ") waypoint数=" + wps.Length);
+            }
+
+            for (int i = 0; i < rvs.Length; i++)
+            {
+                Entity v = m_Runtime.m_Resolve.RuntimeVehicle(rvs[i].m_Vehicle);
+                if (!m_Runtime.EntityManager.Exists(v)) continue;
+                if (!seenVehicles.Add(v)) continue;
+                if (m_Runtime.m_VehicleView.Contains(v)) continue;
 
                         Game.Vehicles.PublicTransport pt0 =
                             m_Runtime.EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v);
@@ -78,9 +110,20 @@ namespace RapidTransitMod
 
                         m_Runtime.m_RuntimeController.Adopt(v, line, initState, m_Runtime.m_SimulationSystem.frameIndex, dispatchFrame);
                         m_Runtime.m_ObsPersist.SetLapDistance(v, -1f);
-                        m_Runtime.m_LastBoarding[v] = boarding0;
+                        byte boardingByte = boarding0 ? (byte)1 : (byte)0;
+                        m_Runtime.m_LastEffectiveBoardingState[v] = boardingByte;
+                        m_Runtime.m_LastOfficialBoardingState[v] = boardingByte;
+                        if (boarding0 && initWpIdx >= 0)
+                        {
+                            m_Runtime.m_StopSessionLine[v] = line;
+                            m_Runtime.m_StopSessionWaypointIndex[v] = initWpIdx;
+                            m_Runtime.m_StopSessionArrivalFrame[v] = m_Runtime.m_SimulationSystem.frameIndex;
+                            m_Runtime.m_StopSessionBoardingChangeCount[v] = 0;
+                            m_Runtime.m_DeparturePendingSinceFrame.Remove(v);
+                        }
                         m_Runtime.m_CachedWpIdx[v] = initWpIdx;
                         m_Runtime.m_UICache.Remove(v);
+                        m_Runtime.m_VehicleLabels.Remove(v);
                         m_Runtime.TrackProjection.ClearVehicleProgressSuspect(v, "register-reset");
                         if (initReason == "boarding-midway")
                             m_Runtime.TrackProjection.MarkVehicleProgressSuspect(v, initReason);
@@ -144,15 +187,10 @@ namespace RapidTransitMod
                         }
                         if (!adoptExistingVehicles)
                             m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.m_RuntimeShell.Minute(), v, finalState);
-                }
-                    if (adoptExistingVehicles)
-                        m_Runtime.m_LineInitialAdopted.Add(line);
-                }
             }
-            finally
-            {
-                if (lines.IsCreated) lines.Dispose();
-            }
+
+            if (adoptExistingVehicles)
+                m_Runtime.m_LineInitialAdopted.Add(line);
         }
 
         internal VehicleState InferInitialState(
@@ -173,8 +211,7 @@ namespace RapidTransitMod
             }
             if (boarding)
             {
-                float originDistanceAtBoarding = m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints);
-                if (originDistanceAtBoarding <= DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
+                if (m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
                 {
                     if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nearOriginWaypointIndex, out float nearOriginSegmentPosition)
                         || (nearOriginWaypointIndex == 1 && nearOriginSegmentPosition <= 0.10f)
@@ -204,9 +241,9 @@ namespace RapidTransitMod
 
             if (m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
             {
-                float nearOriginDistance = m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints);
                 bool nearOriginProgress = nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.05f);
-                if (nearOriginProgress && nearOriginDistance <= DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS
+                if (nearOriginProgress
+                    && m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
                     && (boarding || arriving))
                 {
                     reason = "route-progress-origin-fallback wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");

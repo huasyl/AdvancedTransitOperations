@@ -15,7 +15,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity> m_ClearAssistLaunchPending;
         private readonly Action<Entity> m_ClearBoardingGrace;
         private NativeHashMap<Entity, int> m_CachedWaypoint;
-        private NativeHashMap<Entity, bool> m_LastBoarding;
+        private NativeHashMap<Entity, byte> m_LastEffectiveBoardingState;
+        private NativeHashMap<Entity, byte> m_LastOfficialBoardingState;
+        private NativeHashMap<Entity, Entity> m_StopSessionLine;
+        private NativeHashMap<Entity, int> m_StopSessionWaypointIndex;
+        private NativeHashMap<Entity, uint> m_StopSessionArrivalFrame;
+        private NativeHashMap<Entity, uint> m_StopSessionBoardingChangeCount;
+        private NativeHashMap<Entity, uint> m_DeparturePendingSinceFrame;
         private NativeHashSet<Entity> m_Misfires;
         private NativeHashMap<Entity, uint> m_MisfireStartFrames;
         private NativeHashMap<Entity, uint> m_PreparingCooldown;
@@ -32,7 +38,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ClearAssistLaunchPending = runtime.m_RuntimeController.ClearAssistLaunchPending;
             m_ClearBoardingGrace = runtime.m_RuntimeController.ClearBoardingGrace;
             m_CachedWaypoint = runtime.m_CachedWpIdx;
-            m_LastBoarding = runtime.m_LastBoarding;
+            m_LastEffectiveBoardingState = runtime.m_LastEffectiveBoardingState;
+            m_LastOfficialBoardingState = runtime.m_LastOfficialBoardingState;
+            m_StopSessionLine = runtime.m_StopSessionLine;
+            m_StopSessionWaypointIndex = runtime.m_StopSessionWaypointIndex;
+            m_StopSessionArrivalFrame = runtime.m_StopSessionArrivalFrame;
+            m_StopSessionBoardingChangeCount = runtime.m_StopSessionBoardingChangeCount;
+            m_DeparturePendingSinceFrame = runtime.m_DeparturePendingSinceFrame;
             m_Misfires = runtime.m_BVMisfire;
             m_MisfireStartFrames = runtime.m_BVMisfireStartFrame;
             m_PreparingCooldown = runtime.m_PreparingFixCooldownUntil;
@@ -83,9 +95,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_CachedWaypoint.Remove(vehicle);
         }
 
-        public void ClearLastBoarding(Entity vehicle)
+        public void ClearBoardingObservation(Entity vehicle)
         {
-            m_LastBoarding.Remove(vehicle);
+            m_LastEffectiveBoardingState.Remove(vehicle);
+            m_LastOfficialBoardingState.Remove(vehicle);
+            m_StopSessionLine.Remove(vehicle);
+            m_StopSessionWaypointIndex.Remove(vehicle);
+            m_StopSessionArrivalFrame.Remove(vehicle);
+            m_StopSessionBoardingChangeCount.Remove(vehicle);
+            m_DeparturePendingSinceFrame.Remove(vehicle);
         }
 
         public void ClearMisfire(Entity vehicle)

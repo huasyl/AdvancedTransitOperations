@@ -123,6 +123,13 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_Runtime.log.Info(message);
         }
 
+        public bool ShouldLogOnce(Dictionary<Entity, string> cache, Entity vehicle, string key)
+        {
+            return vehicle == Entity.Null
+                || !cache.TryGetValue(vehicle, out string previous)
+                || previous != key;
+        }
+
         public bool Cooldown(
             Dictionary<Entity, string> keyCache,
             Dictionary<Entity, uint> lastLogFrameCache,

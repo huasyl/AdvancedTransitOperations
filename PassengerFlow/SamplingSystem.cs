@@ -21,6 +21,7 @@ namespace RapidTransitMod.PassengerFlow
         internal const int MaxDueSamplesPerTick = 32;
         internal const int MaxOpenStopProbeRequestsPerTick = 32;
         internal const int MaxPendingTransfers = 20000;
+        private static SamplingSystem s_Current;
         internal static State CurrentState { get; private set; }
         private readonly Dictionary<Entity, LineSampleMetadata> m_LineMetadata = new Dictionary<Entity, LineSampleMetadata>();
 
@@ -41,6 +42,7 @@ namespace RapidTransitMod.PassengerFlow
         protected override void OnCreate()
         {
             base.OnCreate();
+            s_Current = this;
             CurrentState = new State();
         }
 
@@ -55,7 +57,6 @@ namespace RapidTransitMod.PassengerFlow
             UpdateBucketIfNeeded(state, frame, port.FramesPerMinute());
             RunPendingCleanup(state, frame);
             ExpirePendingSamples(port, state, frame);
-            m_LineMetadata.Clear();
 
             NativeArray<Entity> vehicles = port.Vehicles(Allocator.Temp);
             try
@@ -87,7 +88,6 @@ namespace RapidTransitMod.PassengerFlow
                     int cachedWaypointIndex = port.TryCachedWaypoint(vehicle, out int cached)
                         ? cached
                         : -1;
-                    bool rawBoarding = port.IsBoarding(vehicle);
                     bool acceptedBoarding = port.TryAcceptedBoarding(vehicle, out bool accepted) && accepted;
                     bool hasLaunchFrame = port.TryLaunchFrame(vehicle, out uint launchFrame);
 
@@ -101,7 +101,6 @@ namespace RapidTransitMod.PassengerFlow
                         mode,
                         lineId,
                         cachedWaypointIndex,
-                        rawBoarding,
                         acceptedBoarding,
                         hasLaunchFrame,
                         launchFrame);
@@ -118,13 +117,17 @@ namespace RapidTransitMod.PassengerFlow
         protected override void OnDestroy()
         {
             CurrentState?.Clear();
+            ClearLineMetadata();
             CurrentState = null;
+            if (ReferenceEquals(s_Current, this))
+                s_Current = null;
             base.OnDestroy();
         }
 
         internal static void ClearState()
         {
             CurrentState?.Clear();
+            s_Current?.ClearLineMetadata();
         }
 
         public void PreSerialize(Colossal.Serialization.Entities.Context context)
@@ -146,15 +149,31 @@ namespace RapidTransitMod.PassengerFlow
         private static bool IsSupportedMode(TransitMode mode)
             => mode == TransitMode.Train || mode == TransitMode.Subway;
 
+        private void ClearLineMetadata()
+        {
+            m_LineMetadata.Clear();
+        }
+
         private LineSampleMetadata GetLineMetadata(Port port, Entity line)
         {
+            if (port == null || !port.LineExists(line))
+            {
+                m_LineMetadata.Remove(line);
+                return new LineSampleMetadata(TransitMode.Unknown, string.Empty, false);
+            }
+
             if (m_LineMetadata.TryGetValue(line, out LineSampleMetadata metadata))
                 return metadata;
 
-            TransitMode mode = port.ModeOf(line);
+            if (!port.TryLineMetadata(line, out TransitMode mode, out string lineId))
+            {
+                m_LineMetadata.Remove(line);
+                return new LineSampleMetadata(TransitMode.Unknown, string.Empty, false);
+            }
+
             metadata = new LineSampleMetadata(
                 mode,
-                port.LineId(line, mode),
+                lineId,
                 IsSupportedMode(mode));
             m_LineMetadata[line] = metadata;
             return metadata;
@@ -282,7 +301,8 @@ namespace RapidTransitMod.PassengerFlow
                 || !port.TryState(request.Vehicle, out _)
                 || !port.TryLine(request.Vehicle, out Entity currentLine)
                 || currentLine != request.Line
-                || port.ModeOf(request.Line) != request.Mode)
+                || !port.TryLineMetadata(request.Line, out TransitMode mode, out _)
+                || mode != request.Mode)
             {
                 return false;
             }

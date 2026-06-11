@@ -1,5 +1,6 @@
 using System;
 using Game.Routes;
+using RapidTransitMod.Dispatch.Diagnostics;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Observation
@@ -35,5 +36,6 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Action<Entity, int, TraversalSliceObservation> FlushSlice;
         internal Action<string, StationDwellObservation> FlushStationDwell;
         internal Action<string> Log;
+        internal RuntimeHotPathProbe HotPathProbe;
     }
 }

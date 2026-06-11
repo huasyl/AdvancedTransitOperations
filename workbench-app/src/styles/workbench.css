@@ -2970,11 +2970,12 @@
 
 .rtw-passenger-od-chord {
   position: relative;
-  width: 720rem;
+  left: 50%;
+  width: 540rem;
   max-width: 100%;
-  height: 100%;
-  margin-left: auto;
-  margin-right: auto;
+  height: 540rem;
+  margin-left: -270rem;
+  margin-right: 0;
 }
 
 .rtw-passenger-chart-svg,
@@ -2986,11 +2987,10 @@
 
 .rtw-passenger-od-hit-layer {
   position: absolute;
-  left: 50%;
+  left: 0;
   top: 0;
   width: 540rem;
   height: 540rem;
-  margin-left: -270rem;
   z-index: 2;
   pointer-events: none;
 }
@@ -3026,6 +3026,52 @@
   bottom: 22.4%;
 }
 
+.rtw-passenger-station-legend {
+  position: absolute;
+  right: 12rem;
+  top: 8rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  padding-top: 6rem;
+  padding-right: 8rem;
+  padding-bottom: 6rem;
+  padding-left: 8rem;
+  border: 1px solid rgba(82, 82, 91, 0.70);
+  background: rgba(24, 24, 27, 0.82);
+  color: #d4d4d8;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.rtw-passenger-station-legend-item {
+  display: flex;
+  align-items: center;
+  margin-left: 10rem;
+}
+
+.rtw-passenger-station-legend-item:first-child {
+  margin-left: 0;
+}
+
+.rtw-passenger-station-legend-swatch {
+  width: 10rem;
+  height: 10rem;
+  flex: 0 0 10rem;
+  margin-right: 6rem;
+  border-radius: 999rem;
+}
+
+.rtw-passenger-station-legend-swatch.is-inflow {
+  background: #10b981;
+}
+
+.rtw-passenger-station-legend-swatch.is-outflow {
+  background: #f59e0b;
+}
+
 .rtw-passenger-chart-tooltip,
 .rtw-passenger-od-tooltip {
   position: absolute;
@@ -3054,8 +3100,8 @@
 }
 
 .rtw-passenger-chart-tooltip.is-ranking {
-  min-width: 180rem;
-  max-width: 240rem;
+  min-width: 220rem;
+  max-width: 280rem;
 }
 
 .rtw-passenger-chart-tooltip-title {
@@ -3088,6 +3134,41 @@
   line-height: 18rem;
   font-weight: 800;
   text-align: right;
+}
+
+.rtw-passenger-chart-tooltip-total {
+  display: flex;
+  align-items: center;
+  margin-top: 8rem;
+  padding-top: 6rem;
+  padding-right: 0;
+  padding-bottom: 7rem;
+  padding-left: 0;
+  border-top: 1px solid rgba(244, 244, 245, 0.18);
+  border-bottom: 1px solid rgba(244, 244, 245, 0.14);
+}
+
+.rtw-passenger-chart-tooltip-total-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 12rem;
+  color: #f4f4f5;
+  font-size: 15rem;
+  line-height: 20rem;
+  font-weight: 900;
+}
+
+.rtw-passenger-chart-tooltip-total-number {
+  flex: 0 0 auto;
+  color: #f4f4f5;
+  font-size: 16rem;
+  line-height: 20rem;
+  font-weight: 900;
+  text-align: right;
+}
+
+.rtw-passenger-chart-tooltip-lines {
+  margin-top: 8rem;
 }
 
 .rtw-passenger-chart-tooltip-value {
@@ -3158,7 +3239,7 @@
 .rtw-passenger-ranking-track {
   position: relative;
   flex: 1 1 auto;
-  height: 16rem;
+  height: 20rem;
   min-width: 0;
   border-radius: 999rem;
   background: rgba(255, 255, 255, 0.06);
@@ -3172,9 +3253,9 @@
 .rtw-passenger-ranking-bar {
   display: flex;
   height: 100%;
-  border-radius: 999rem;
+  border-radius: 0;
   background: #38bdf8;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .rtw-passenger-ranking-row.is-hovered .rtw-passenger-ranking-bar {

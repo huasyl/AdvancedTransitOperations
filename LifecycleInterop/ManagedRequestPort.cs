@@ -22,7 +22,7 @@ namespace RapidTransitMod
             return line != Entity.Null
                 && m_Runtime.EntityManager.Exists(line)
                 && !m_Runtime.EntityManager.HasComponent<Disabled>(line)
-                && m_Runtime.m_LineView.Managed(line, m_Runtime.m_Features.Dispatch());
+                && m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch());
         }
 
         public bool TryGetSpawnTarget(Entity line, out int targetCount)

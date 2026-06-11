@@ -17,7 +17,7 @@ namespace RapidTransitMod
 {
     public sealed class DepotSourceLockSystem : GameSystemBase
     {
-        private EntityQuery m_PendingRequestQuery;
+        private EntityQuery m_RtSpawnPermitRequestQuery;
         private EntityQuery m_ConfiguredDispatchRequestQuery;
         private EntityQuery m_DepotQuery;
         private EntityQuery m_LineQuery;
@@ -215,30 +215,11 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly struct DepotAffinityCacheEntry
-        {
-            public readonly Entity Line;
-            public readonly Entity PreferredDepot;
-            public readonly int RouteVehicleCount;
-            public readonly uint NextRefreshFrame;
-
-            public DepotAffinityCacheEntry(Entity line, Entity preferredDepot, int routeVehicleCount, uint nextRefreshFrame)
-            {
-                Line = line;
-                PreferredDepot = preferredDepot;
-                RouteVehicleCount = routeVehicleCount;
-                NextRefreshFrame = nextRefreshFrame;
-            }
-        }
-
-        private readonly Dictionary<Entity, Entity> m_PreferredDepotByLine = new Dictionary<Entity, Entity>();
-        private readonly Dictionary<Entity, DepotAffinityCacheEntry> m_DepotAffinityByLine = new Dictionary<Entity, DepotAffinityCacheEntry>();
         private readonly Dictionary<Entity, string> m_RequestDecisionLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, Entity> m_PendingConfiguredRequestSources = new Dictionary<Entity, Entity>();
         private readonly Dictionary<Entity, ConfiguredDepotBlockedRequestState> m_ConfiguredDepotBlockedRequests = new Dictionary<Entity, ConfiguredDepotBlockedRequestState>();
         private readonly HashSet<Entity> m_ConfiguredRequestParkedFallbacks = new HashSet<Entity>();
         private readonly List<Entity> m_RequestCleanupScratch = new List<Entity>();
-        private readonly HashSet<Entity> m_LineAffinityScratch = new HashSet<Entity>();
         private readonly List<Entity> m_LineRuntimeSnapshotCleanupScratch = new List<Entity>();
         private readonly List<PendingRequestFrameEntry> m_FramePendingRequests = new List<PendingRequestFrameEntry>();
         private readonly List<Entity> m_FramePendingLines = new List<Entity>();
@@ -263,7 +244,6 @@ namespace RapidTransitMod
         private int m_BlockedRequestProbeExtends;
         private int m_BlockedRequestProbeReleases;
         private const byte CONFIGURED_DEPOT_BRANCH_BLOCK_COOLDOWN = 16;
-        private const byte DEPOT_AFFINITY_REFRESH_FRAMES = 64;
         private const int CONFIGURED_DEPOT_OUTBOUND_PATH_LOOKAHEAD = 8;
         private const int DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES = 3600;
 
@@ -273,15 +253,17 @@ namespace RapidTransitMod
             m_NameSystem = World.GetOrCreateSystemManaged<NameSystem>();
             m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
             m_PathfindSetupSystem = World.GetOrCreateSystemManaged<PathfindSetupSystem>();
-            m_PendingRequestQuery = GetEntityQuery(
+            m_RtSpawnPermitRequestQuery = GetEntityQuery(
                 ComponentType.ReadOnly<ServiceRequest>(),
                 ComponentType.ReadOnly<TransportVehicleRequest>(),
+                ComponentType.ReadOnly<RtSpawnPermitRequest>(),
                 ComponentType.Exclude<Dispatched>(),
                 ComponentType.Exclude<PathInformation>(),
                 ComponentType.Exclude<Deleted>());
             m_ConfiguredDispatchRequestQuery = GetEntityQuery(
                 ComponentType.ReadOnly<ServiceRequest>(),
                 ComponentType.ReadOnly<TransportVehicleRequest>(),
+                ComponentType.ReadOnly<RtSpawnPermitRequest>(),
                 ComponentType.ReadOnly<PathInformation>(),
                 ComponentType.Exclude<Dispatched>(),
                 ComponentType.Exclude<Deleted>());
@@ -307,7 +289,7 @@ namespace RapidTransitMod
                 return;
             }
 
-            if ((m_PendingRequestQuery.IsEmptyIgnoreFilter && m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
+            if ((m_RtSpawnPermitRequestQuery.IsEmptyIgnoreFilter && m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
                 || m_DepotQuery.IsEmptyIgnoreFilter
                 || m_LineQuery.IsEmptyIgnoreFilter)
             {
@@ -316,7 +298,6 @@ namespace RapidTransitMod
             }
 
             BuildPendingRequestFrameState();
-            UpdateLineDepotAffinity();
             FinalizePendingRequestPreferredDepots();
             QueueConfiguredDepotRequests();
             GateConfiguredDepotDispatchRequests();
@@ -510,7 +491,7 @@ namespace RapidTransitMod
         private void BuildPendingRequestFrameState()
         {
             var lineLookup = GetComponentLookup<TransportLine>(true);
-            using (NativeArray<Entity> requests = m_PendingRequestQuery.ToEntityArray(Allocator.Temp))
+            using (NativeArray<Entity> requests = m_RtSpawnPermitRequestQuery.ToEntityArray(Allocator.Temp))
             {
                 for (int i = 0; i < requests.Length; i++)
                 {
@@ -528,9 +509,6 @@ namespace RapidTransitMod
 
                     TransportVehicleRequest vehicleRequest = EntityManager.GetComponentData<TransportVehicleRequest>(request);
                     Entity line = vehicleRequest.m_Route;
-                    if (EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
-                        continue;
-
                     if (line == Entity.Null
                         || !EntityManager.Exists(line)
                         || !lineLookup.HasComponent(line))
@@ -539,11 +517,12 @@ namespace RapidTransitMod
                     }
 
                     ManagedRequestPort managedRequests = LifecyclePort.Current?.ManagedRequests;
-                    if (managedRequests != null && managedRequests.ShouldDestroyOfficial(request, line))
-                    {
-                        DestroySuppressedManagedLineRequest(request, line);
+                    if (managedRequests == null || !managedRequests.IsManagedLine(line))
                         continue;
-                    }
+
+                    TransportLine transportLine = lineLookup[line];
+                    if (transportLine.m_VehicleRequest != request)
+                        continue;
 
                     if (ShouldSkipFrozenConfiguredDepotRequest(request, line))
                         continue;
@@ -559,21 +538,6 @@ namespace RapidTransitMod
             }
         }
 
-        private void DestroySuppressedManagedLineRequest(Entity request, Entity line)
-        {
-            if (request == Entity.Null || !EntityManager.Exists(request))
-                return;
-
-            m_PendingConfiguredRequestSources.Remove(request);
-            m_ConfiguredDepotBlockedRequests.Remove(request);
-            m_ConfiguredRequestParkedFallbacks.Remove(request);
-
-            Mod.log.Info("[OfficialRequestAbort] line=" + line.Index
-                + " request=" + request.Index
-                + " reason=managed-line-without-rt-spawn-pending");
-            EntityManager.DestroyEntity(request);
-        }
-
         private void FinalizePendingRequestPreferredDepots()
         {
             for (int i = 0; i < m_FramePendingLines.Count; i++)
@@ -582,10 +546,7 @@ namespace RapidTransitMod
                 if (!m_FramePendingLineStates.TryGetValue(line, out PendingRequestLineFrameState state))
                     continue;
 
-                Entity preferredDepot = state.ConfiguredDepot != Entity.Null
-                    ? state.ConfiguredDepot
-                    : (m_PreferredDepotByLine.TryGetValue(line, out Entity inferredDepot) ? inferredDepot : Entity.Null);
-                m_FramePendingLineStates[line] = state.WithPreferredDepot(preferredDepot);
+                m_FramePendingLineStates[line] = state.WithPreferredDepot(state.ConfiguredDepot);
             }
         }
 
@@ -881,6 +842,7 @@ namespace RapidTransitMod
             if (m_ConfiguredDispatchRequestQuery.IsEmptyIgnoreFilter)
                 return;
 
+            var lineLookup = GetComponentLookup<TransportLine>(true);
             using (NativeArray<Entity> requests = m_ConfiguredDispatchRequestQuery.ToEntityArray(Allocator.Temp))
             {
                 for (int i = 0; i < requests.Length; i++)
@@ -901,15 +863,18 @@ namespace RapidTransitMod
 
                     TransportVehicleRequest request = EntityManager.GetComponentData<TransportVehicleRequest>(requestEntity);
                     Entity line = request.m_Route;
-                    if (line == Entity.Null || !EntityManager.Exists(line))
+                    if (line == Entity.Null
+                        || !EntityManager.Exists(line)
+                        || !lineLookup.HasComponent(line))
                         continue;
 
                     ManagedRequestPort managedRequests = LifecyclePort.Current?.ManagedRequests;
-                    if (managedRequests != null && managedRequests.ShouldDestroyOfficial(requestEntity, line))
-                    {
-                        DestroySuppressedManagedLineRequest(requestEntity, line);
+                    if (managedRequests == null || !managedRequests.IsManagedLine(line))
                         continue;
-                    }
+
+                    TransportLine transportLine = lineLookup[line];
+                    if (transportLine.m_VehicleRequest != requestEntity)
+                        continue;
 
                     Entity configuredDepot = GetConfiguredDepotForLine(line);
                     if (!IsDepotCompatibleWithLine(configuredDepot, line))
@@ -1171,73 +1136,6 @@ namespace RapidTransitMod
                 && EntityManager.Exists(depot)
                 && EntityManager.HasComponent<Game.Buildings.TransportDepot>(depot)
                 && DepotCompatibilityService.Match(EntityManager, line, depot);
-        }
-
-        private void UpdateLineDepotAffinity()
-        {
-            uint nowFrame = GetCurrentFrame();
-            var routeVehicleBuffers = GetBufferLookup<RouteVehicle>(true);
-            var ownerLookup = GetComponentLookup<Owner>(true);
-            var depotLookup = GetComponentLookup<Game.Buildings.TransportDepot>(true);
-            m_LineAffinityScratch.Clear();
-            for (int i = 0; i < m_FramePendingLines.Count; i++)
-            {
-                Entity line = m_FramePendingLines[i];
-                if (!m_LineAffinityScratch.Add(line)
-                    || !TryGetPendingRequestLineFrameState(line, out PendingRequestLineFrameState lineState)
-                    || lineState.ConfiguredDepot != Entity.Null)
-                {
-                    continue;
-                }
-
-                if (!routeVehicleBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
-                    continue;
-
-                if (m_DepotAffinityByLine.TryGetValue(line, out DepotAffinityCacheEntry cached)
-                    && cached.Line == line
-                    && cached.RouteVehicleCount == vehicles.Length
-                    && nowFrame < cached.NextRefreshFrame)
-                {
-                    if (cached.PreferredDepot != Entity.Null)
-                        m_PreferredDepotByLine[line] = cached.PreferredDepot;
-                    continue;
-                }
-
-                Dictionary<Entity, int> counts = null;
-                Entity bestDepot = Entity.Null;
-                int bestCount = 0;
-
-                for (int j = 0; j < vehicles.Length; j++)
-                {
-                    Entity vehicle = vehicles[j].m_Vehicle;
-                    if (vehicle == Entity.Null || !EntityManager.Exists(vehicle) || !ownerLookup.HasComponent(vehicle))
-                        continue;
-
-                    Entity depot = ownerLookup[vehicle].m_Owner;
-                    if (depot == Entity.Null || !EntityManager.Exists(depot) || !depotLookup.HasComponent(depot))
-                        continue;
-
-                    counts ??= new Dictionary<Entity, int>();
-                    int nextCount = counts.TryGetValue(depot, out int currentCount) ? currentCount + 1 : 1;
-                    counts[depot] = nextCount;
-                    if (nextCount > bestCount)
-                    {
-                        bestCount = nextCount;
-                        bestDepot = depot;
-                    }
-                }
-
-                if (bestDepot != Entity.Null)
-                {
-                    m_PreferredDepotByLine[line] = bestDepot;
-                }
-
-                m_DepotAffinityByLine[line] = new DepotAffinityCacheEntry(
-                    line,
-                    bestDepot,
-                    vehicles.Length,
-                    nowFrame + DEPOT_AFFINITY_REFRESH_FRAMES);
-            }
         }
 
         private void ApplyDepotSourceLocks()

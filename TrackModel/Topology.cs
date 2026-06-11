@@ -321,6 +321,7 @@ namespace RapidTransitMod.TrackModel
         public Entity LineEntity;
         public ulong Signature;
         public List<TrackAtom> TrackAtoms = new List<TrackAtom>();
+        public Entity[] AtomStationBuildings = Array.Empty<Entity>();
         public Dictionary<Entity, List<int>> AtomIndicesByLane = new Dictionary<Entity, List<int>>();
         public List<TrackSegmentRange> SegmentRanges = new List<TrackSegmentRange>();
         public List<ControlPointMarker> ControlPoints = new List<ControlPointMarker>();

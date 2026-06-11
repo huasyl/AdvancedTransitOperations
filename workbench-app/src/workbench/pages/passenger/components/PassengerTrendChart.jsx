@@ -20,9 +20,22 @@ function formatTick(value) {
   return Math.round(value).toLocaleString();
 }
 
+function chartMax(value) {
+  const target = Math.max(1, Number(value || 0) * 1.08);
+  const magnitude = Math.pow(10, Math.floor(Math.log10(target)));
+  const steps = [1, 2, 5, 10];
+  for (let index = 0; index < steps.length; index += 1) {
+    const candidate = steps[index] * magnitude;
+    if (candidate >= target) {
+      return candidate;
+    }
+  }
+  return 10 * magnitude;
+}
+
 function buildChartData(points) {
   const maxValue = Math.max(1, ...points.map(getPassengerValue));
-  const yMax = Math.ceil(maxValue / 1000) * 1000;
+  const yMax = chartMax(maxValue);
   const coords = points.map((point, index) => {
     const x = LEFT + (points.length <= 1 ? 0 : (index / (points.length - 1)) * PLOT_WIDTH);
     const y = TOP + PLOT_HEIGHT - (getPassengerValue(point) / yMax) * PLOT_HEIGHT;
@@ -49,7 +62,7 @@ function buildChartData(points) {
       y: TOP + PLOT_HEIGHT
     }));
 
-  return { coords, linePath, areaPath, yTicks, xTicks };
+  return { coords, linePath, areaPath, yTicks, xTicks, yMax };
 }
 
 export default function PassengerTrendChart({ points }) {

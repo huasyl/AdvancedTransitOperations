@@ -36,11 +36,12 @@ namespace RapidTransitMod.PassengerFlow
         internal bool TryCachedWaypoint(Entity vehicle, out int waypointIndex)
             => m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out waypointIndex);
 
-        internal bool IsBoarding(Entity vehicle)
-            => m_Runtime.IsVehicleBoarding(vehicle);
-
         internal bool TryAcceptedBoarding(Entity vehicle, out bool boarding)
-            => m_Runtime.m_LastBoarding.TryGetValue(vehicle, out boarding);
+        {
+            boarding = m_Runtime.m_StopSessionWaypointIndex.ContainsKey(vehicle)
+                && !m_Runtime.m_DeparturePendingSinceFrame.ContainsKey(vehicle);
+            return boarding;
+        }
 
         internal bool HasWaypoints(Entity line)
             => line != Entity.Null && m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line);
@@ -78,20 +79,24 @@ namespace RapidTransitMod.PassengerFlow
             return m_Runtime.m_TrackModel != null && m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out chain);
         }
 
-        internal string LineId(Entity line)
-        {
-            TransitMode mode = ModeOf(line);
-            return LineId(line, mode);
-        }
+        internal bool LineExists(Entity line)
+            => line != Entity.Null && m_Runtime.EntityManager.Exists(line);
 
-        internal string LineId(Entity line, TransitMode mode)
+        internal bool TryLineMetadata(Entity line, out TransitMode mode, out string lineId)
         {
-            string lineId = m_Runtime.LineId(line);
-            return LineIdentityService.GetId(LineIdentityService.GetKey(lineId, mode));
-        }
+            mode = TransitMode.Unknown;
+            lineId = string.Empty;
+            if (!LineExists(line))
+                return false;
 
-        internal TransitMode ModeOf(Entity line)
-            => TransportModeResolver.Resolve(m_Runtime.EntityManager, line);
+            LineKey key = LineIdentityService.GetKey(m_Runtime.EntityManager, line);
+            if (key.IsEmpty)
+                return false;
+
+            mode = key.Mode;
+            lineId = LineIdentityService.GetId(key);
+            return true;
+        }
 
         internal string Name(Entity entity)
             => entity != Entity.Null ? m_Runtime.EntityName(entity) : string.Empty;

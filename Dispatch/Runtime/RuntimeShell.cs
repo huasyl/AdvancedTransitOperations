@@ -146,6 +146,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_WorkbenchCatalogCache.Tick(nowFrame);
 
             m_Runtime.m_Bypass.FlushProbeLogs(nowFrame);
+            m_Runtime.m_RuntimeHotPathProbe.FlushIfDue(nowFrame);
         }
 
         public void Loaded(Context serializationContext)
@@ -155,6 +156,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_WorkbenchBridge.Reset();
             m_Runtime.m_WorkbenchBridge.Restore();
             m_Runtime.m_WorkbenchBridge.Applied().Load();
+            m_Runtime.m_Bypass.WarmStaticSceneIndex();
             try
             {
                 Workbenches.UiEvents.Push(m_Runtime.m_WorkbenchBridge.Build(m_Runtime.m_WorkbenchBridge.Drafts().Preferred()));
@@ -180,7 +182,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();
-            m_Runtime.m_LastBoarding.Clear();
+            m_Runtime.m_VehicleLabels.Clear();
+            m_Runtime.m_LastEffectiveBoardingState.Clear();
+            m_Runtime.m_LastOfficialBoardingState.Clear();
+            m_Runtime.m_BoardingFirstFrameGuardState.Clear();
+            m_Runtime.m_StopSessionLine.Clear();
+            m_Runtime.m_StopSessionWaypointIndex.Clear();
+            m_Runtime.m_StopSessionArrivalFrame.Clear();
+            m_Runtime.m_StopSessionBoardingChangeCount.Clear();
+            m_Runtime.m_DeparturePendingSinceFrame.Clear();
             m_Runtime.m_CachedWpIdx.Clear();
             m_Runtime.m_BVMisfire.Clear();
             m_Runtime.m_BVMisfireStartFrame.Clear();
@@ -196,6 +206,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastScheduleDiagnosticLogFrame.Clear();
             m_Runtime.m_LineTimes.Clear();
             m_Runtime.m_LineProfile.ClearStability();
+            m_Runtime.m_Observation.ClearDwellDeadlineCache();
             m_Runtime.m_ObsPersist.ClearDwell();
             m_Runtime.m_DwellObservationBufferReady = false;
             m_Runtime.m_DwellObservationCacheLoaded = false;
@@ -222,6 +233,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastSchedulerTickMinute = -1;
             m_Runtime.m_SelectPanel.ClearDebugSummaries();
             m_Runtime.m_RuntimeLog.Clear();
+            m_Runtime.m_RuntimeHotPathProbe.Clear();
             m_Runtime.log.Info("[清场] 已清除所有公共交通车辆");
         }
 
@@ -232,7 +244,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();
-            m_Runtime.m_LastBoarding.Clear();
+            m_Runtime.m_VehicleLabels.Clear();
+            m_Runtime.m_LastEffectiveBoardingState.Clear();
+            m_Runtime.m_LastOfficialBoardingState.Clear();
+            m_Runtime.m_BoardingFirstFrameGuardState.Clear();
+            m_Runtime.m_StopSessionLine.Clear();
+            m_Runtime.m_StopSessionWaypointIndex.Clear();
+            m_Runtime.m_StopSessionArrivalFrame.Clear();
+            m_Runtime.m_StopSessionBoardingChangeCount.Clear();
+            m_Runtime.m_DeparturePendingSinceFrame.Clear();
             m_Runtime.m_CachedWpIdx.Clear();
             m_Runtime.m_BVMisfire.Clear();
             m_Runtime.m_BVMisfireStartFrame.Clear();
@@ -248,6 +268,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastScheduleDiagnosticLogFrame.Clear();
             m_Runtime.m_LineTimes.Clear();
             m_Runtime.m_LineProfile.ClearStability();
+            m_Runtime.m_Observation.ClearDwellDeadlineCache();
             m_Runtime.m_ObsPersist.ClearDwell();
             m_Runtime.m_DwellObservationBufferReady = false;
             m_Runtime.m_DwellObservationCacheLoaded = false;
@@ -270,6 +291,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastSchedulerTickMinute = -1;
             m_Runtime.m_SelectPanel.ClearDebugSummaries();
             m_Runtime.m_RuntimeLog.Clear();
+            m_Runtime.m_RuntimeHotPathProbe.Clear();
             m_Runtime.log.Info("[启动] 已清空跨档运行态缓存");
         }
 
