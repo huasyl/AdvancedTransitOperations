@@ -455,6 +455,15 @@ namespace RapidTransitMod.Dispatch.Observation
                     hash = m_Runtime.m_LineProfile.MixSignature(hash, 0);
                 }
 
+                if (m_Runtime.EntityManager.HasComponent<RouteLane>(waypointEntity))
+                {
+                    RouteLane routeLane = m_Runtime.EntityManager.GetComponentData<RouteLane>(waypointEntity);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, routeLane.m_StartLane.Index);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, routeLane.m_EndLane.Index);
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, (int)math.round(routeLane.m_StartCurvePos * 1000f));
+                    hash = m_Runtime.m_LineProfile.MixSignature(hash, (int)math.round(routeLane.m_EndCurvePos * 1000f));
+                }
+
                 Entity segmentEntity = segments[i].m_Segment;
                 float durationSeconds = 0f;
                 if (segmentEntity != Entity.Null

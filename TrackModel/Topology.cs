@@ -152,6 +152,32 @@ namespace RapidTransitMod.TrackModel
         }
     }
 
+    internal readonly struct EndpointMarker
+    {
+        public readonly int AtomIndex;
+        public readonly int WaypointIndex;
+        public readonly Entity Waypoint;
+        public readonly Entity OutsideConnection;
+        public readonly RouteWaypointEndpointKind Kind;
+        public readonly RouteWaypointEndpointDirection Direction;
+
+        public EndpointMarker(
+            int atomIndex,
+            int waypointIndex,
+            Entity waypoint,
+            Entity outsideConnection,
+            RouteWaypointEndpointKind kind,
+            RouteWaypointEndpointDirection direction)
+        {
+            AtomIndex = atomIndex;
+            WaypointIndex = waypointIndex;
+            Waypoint = waypoint;
+            OutsideConnection = outsideConnection;
+            Kind = kind;
+            Direction = direction;
+        }
+    }
+
     internal readonly struct ControlEdge
     {
         public readonly int StartControlPointIndex;
@@ -182,6 +208,7 @@ namespace RapidTransitMod.TrackModel
         Pass = 2,
         ApproachSplitBoundary = 3,
         DepartureSplitBoundary = 4,
+        OutsideEndpointBoundary = 5,
     }
 
     internal readonly struct TraversalEvent
@@ -325,6 +352,7 @@ namespace RapidTransitMod.TrackModel
         public Dictionary<Entity, List<int>> AtomIndicesByLane = new Dictionary<Entity, List<int>>();
         public List<TrackSegmentRange> SegmentRanges = new List<TrackSegmentRange>();
         public List<ControlPointMarker> ControlPoints = new List<ControlPointMarker>();
+        public List<EndpointMarker> EndpointMarkers = new List<EndpointMarker>();
         public List<ControlEdge> ControlEdges = new List<ControlEdge>();
         public LineTraversalProfile TraversalProfile = new LineTraversalProfile();
         public List<SharedTrackRun> SharedRuns = new List<SharedTrackRun>();

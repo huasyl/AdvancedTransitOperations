@@ -21,7 +21,6 @@ namespace RapidTransitMod.Bypass
         private readonly DecisionEngine m_Decision;
         private readonly BypassQueue m_Queue;
         private readonly SceneStaticIndex m_SceneIndex;
-
         internal AdmissionService(IBypassAdmissionRuntimeContext runtime)
         {
             m_Runtime = runtime;
@@ -581,7 +580,9 @@ namespace RapidTransitMod.Bypass
             if (expiredVehicles != null)
             {
                 for (int i = 0; i < expiredVehicles.Count; i++)
+                {
                     m_Decision.Remove(expiredVehicles[i], BypassEntryKind.Cadence);
+                }
             }
 
             return expiredVehicles;

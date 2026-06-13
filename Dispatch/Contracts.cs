@@ -33,6 +33,10 @@ namespace RapidTransitMod
         public string Color = string.Empty;
         public string OriginStationId = string.Empty;
         public string OriginStationName = string.Empty;
+        public bool DispatchSupported = true;
+        public string UnsupportedReason = string.Empty;
+        public string OriginStatus = string.Empty;
+        public string OriginMessageKey = string.Empty;
     }
 
     internal enum ResolvedStopKind

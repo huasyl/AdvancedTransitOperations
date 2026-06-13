@@ -5,6 +5,7 @@ import OverviewHeaderStats from "./components/OverviewHeaderStats";
 import OverviewModeRail from "./components/OverviewModeRail";
 import OverviewNetworkDiagram from "./components/OverviewNetworkDiagram";
 import OverviewSystemSwitches from "./components/OverviewSystemSwitches";
+import useOverviewFeatureSettings from "./useOverviewFeatureSettings";
 import { traceWorkbench } from "../../shared/workbench-trace";
 
 function toOverviewMode(mode) {
@@ -24,7 +25,16 @@ function hasScopedLines(snapshot) {
   return Array.isArray(snapshot?.lines) && snapshot.lines.length > 0;
 }
 
-function buildEmptyOverviewViewModel() {
+function buildOverviewSystems(featureSettings) {
+  return [
+    { key: "dispatchEnabled", title: "发车控制", enabled: featureSettings?.dispatchEnabled !== false },
+    { key: "bypassEnabled", title: "智能待避", enabled: featureSettings?.bypassEnabled !== false },
+    { key: "broadcastEnabled", title: "自动广播", enabled: featureSettings?.broadcastEnabled !== false },
+    { key: "depotLockEnabled", title: "车库锁定", enabled: featureSettings?.depotLockEnabled !== false }
+  ];
+}
+
+function buildEmptyOverviewViewModel(featureSettings) {
   return {
     generatedAtGameMinute: 0,
     modes: [
@@ -37,12 +47,7 @@ function buildEmptyOverviewViewModel() {
       stations: [],
       vehicles: []
     },
-    systems: [
-      { key: "dispatchEnabled", title: "发车控制", enabled: false },
-      { key: "bypassEnabled", title: "智能待避", enabled: false },
-      { key: "broadcastEnabled", title: "自动广播", enabled: false },
-      { key: "depotLockEnabled", title: "车库锁定", enabled: false }
-    ],
+    systems: buildOverviewSystems(featureSettings),
     warnings: []
   };
 }
@@ -50,7 +55,6 @@ function buildEmptyOverviewViewModel() {
 export default function OverviewPage({ activeTransportMode = "train", onTransportModeChange }) {
   const [snapshot, setSnapshot] = useState(null);
   const [metadataSnapshot, setMetadataSnapshot] = useState(null);
-  const [systemOverrides, setSystemOverrides] = useState({});
   const [error, setError] = useState("");
   const modeCacheRef = useRef({});
   const loadGenerationRef = useRef(0);
@@ -109,13 +113,15 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
     };
   }, [activeTransportMode]);
 
+  const snapshotFeatureSettings = snapshot?.featureSettings || null;
+
   const viewModel = useMemo(
     () => (
       hasScopedLines(snapshot) || hasScopedLines(metadataSnapshot)
         ? buildOverviewViewModel(snapshot || {}, metadataSnapshot || {})
-        : buildEmptyOverviewViewModel()
+        : buildEmptyOverviewViewModel(snapshotFeatureSettings)
     ),
-    [metadataSnapshot, snapshot]
+    [metadataSnapshot, snapshot, snapshotFeatureSettings]
   );
 
   const selectedMode = toOverviewMode(activeTransportMode || viewModel.activeMode);
@@ -130,24 +136,39 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
     ...modeSummary,
     peakStationName: firstStation?.name || ""
   };
-  const systems = viewModel.systems.map((system) => ({
-    ...system,
-    enabled: Object.prototype.hasOwnProperty.call(systemOverrides, system.key) ? systemOverrides[system.key] : system.enabled
-  }));
 
-  function handleSystemToggle(key) {
-    traceWorkbench("overview.system.toggle", { key });
-    setSystemOverrides((current) => {
-      const source = systems.find((system) => system.key === key);
-      if (!source) {
-        return current;
+  function handleFeatureSettingsSaved(nextFeatureSettings) {
+    setSnapshot((current) => (
+      current
+        ? {
+            ...current,
+            featureSettings: nextFeatureSettings
+          }
+        : current
+    ));
+
+    Object.keys(modeCacheRef.current).forEach((modeKey) => {
+      const cached = modeCacheRef.current[modeKey];
+      if (!cached?.snapshot) {
+        return;
       }
-      return {
-        ...current,
-        [key]: !source.enabled
+
+      modeCacheRef.current[modeKey] = {
+        ...cached,
+        snapshot: {
+          ...cached.snapshot,
+          featureSettings: nextFeatureSettings
+        }
       };
     });
   }
+
+  const overviewFeatureSettings = useOverviewFeatureSettings({
+    featureSettings: snapshotFeatureSettings,
+    systems: viewModel.systems,
+    canEdit: Boolean(snapshotFeatureSettings),
+    onSaved: handleFeatureSettingsSaved
+  });
 
   function handleModeChange(mode) {
     const nextTransportMode = toTransportMode(mode);
@@ -170,7 +191,7 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
       <div className="rtw-overview-body">
         <aside className="rtw-overview-sidebar">
           <OverviewModeRail modes={viewModel.modes} activeMode={selectedMode} onModeChange={handleModeChange} />
-          <OverviewSystemSwitches systems={systems} onSystemToggle={handleSystemToggle} />
+          <OverviewSystemSwitches systems={overviewFeatureSettings.systems} onSystemToggle={overviewFeatureSettings.toggleFeature} />
           <div className="rtw-overview-footer-tag">CS2-BUS-SUB-V0.90 / ONLINE</div>
         </aside>
         <main className="rtw-overview-main">

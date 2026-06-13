@@ -4,16 +4,29 @@ using Game.Routes;
 using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
     internal sealed class VehicleRegistrar
     {
         private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly List<Entity> m_DisabledLineLateSpawnRetireQueue = new List<Entity>();
+        private readonly HashSet<Entity> m_DisabledLineLateSpawnRetireQueueSeen = new HashSet<Entity>();
+        private readonly HashSet<Entity> m_DisabledLineLateSpawnHandledLines = new HashSet<Entity>();
 
         public VehicleRegistrar(DispatchRuntimeSystem runtime)
         {
             m_Runtime = runtime;
+        }
+
+        internal IReadOnlyList<Entity> DisabledLineLateSpawnRetireQueue => m_DisabledLineLateSpawnRetireQueue;
+
+        internal void ClearDisabledLineLateSpawnRetireQueue()
+        {
+            m_DisabledLineLateSpawnRetireQueue.Clear();
+            m_DisabledLineLateSpawnRetireQueueSeen.Clear();
+            m_DisabledLineLateSpawnHandledLines.Clear();
         }
 
         public void Register(bool fullSweep)
@@ -23,23 +36,25 @@ namespace RapidTransitMod
             NativeArray<Entity> spawnRequestLines = default;
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
+            BufferLookup<RouteModifier> modBuffers = m_Runtime.GetBufferLookup<RouteModifier>(false);
+            ClearDisabledLineLateSpawnRetireQueue();
             try
             {
                 if (fullSweep)
                 {
                     lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
                     foreach (Entity line in lines)
-                        RegisterLine(line, fullSweep, rvBuffers, wpBuffers);
+                        RegisterLine(line, fullSweep, rvBuffers, wpBuffers, modBuffers);
                 }
                 else
                 {
                     spawnLines = m_Runtime.m_SpawningLines.GetKeyArray(Allocator.Temp);
                     for (int i = 0; i < spawnLines.Length; i++)
-                        RegisterLine(spawnLines[i], fullSweep, rvBuffers, wpBuffers);
+                        RegisterLine(spawnLines[i], fullSweep, rvBuffers, wpBuffers, modBuffers);
 
                     spawnRequestLines = m_Runtime.m_LineSpawnRequestFrame.GetKeyArray(Allocator.Temp);
                     for (int i = 0; i < spawnRequestLines.Length; i++)
-                        RegisterLine(spawnRequestLines[i], fullSweep, rvBuffers, wpBuffers);
+                        RegisterLine(spawnRequestLines[i], fullSweep, rvBuffers, wpBuffers, modBuffers);
                 }
             }
             finally
@@ -54,9 +69,21 @@ namespace RapidTransitMod
             Entity line,
             bool fullSweep,
             BufferLookup<RouteVehicle> rvBuffers,
-            BufferLookup<RouteWaypoint> wpBuffers)
+            BufferLookup<RouteWaypoint> wpBuffers,
+            BufferLookup<RouteModifier> modBuffers)
         {
             if (line == Entity.Null || !m_Runtime.EntityManager.Exists(line)) return;
+            if (m_DisabledLineLateSpawnHandledLines.Contains(line)) return;
+
+            bool hasPendingSpawn = m_Runtime.m_SpawningLines.ContainsKey(line)
+                || m_Runtime.m_LineSpawnRequestFrame.ContainsKey(line);
+            if (hasPendingSpawn && m_Runtime.EntityManager.HasComponent<Disabled>(line))
+            {
+                m_DisabledLineLateSpawnHandledLines.Add(line);
+                HandleDisabledLinePendingSpawn(line, rvBuffers, modBuffers);
+                return;
+            }
+
             if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs)) return;
             if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2) return;
             if (!m_Runtime.m_LineProfile.IsStable(line, wps)) return;
@@ -191,6 +218,63 @@ namespace RapidTransitMod
 
             if (adoptExistingVehicles)
                 m_Runtime.m_LineInitialAdopted.Add(line);
+        }
+
+        private void HandleDisabledLinePendingSpawn(
+            Entity line,
+            BufferLookup<RouteVehicle> rvBuffers,
+            BufferLookup<RouteModifier> modBuffers)
+        {
+            m_Runtime.m_SpawningLines.Remove(line);
+            m_Runtime.m_LineSpawnRequestFrame.Remove(line);
+            RestoreVehicleIntervalModifier(line, modBuffers);
+
+            int queuedRetires = 0;
+            if (rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs))
+            {
+                HashSet<Entity> seenVehicles = new HashSet<Entity>();
+                for (int i = 0; i < rvs.Length; i++)
+                {
+                    Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(rvs[i].m_Vehicle);
+                    if (!m_Runtime.EntityManager.Exists(vehicle)) continue;
+                    if (!seenVehicles.Add(vehicle)) continue;
+                    if (m_Runtime.m_VehicleView.Contains(vehicle)) continue;
+                    if (m_Runtime.EntityManager.HasComponent<Deleted>(vehicle)
+                        || m_Runtime.EntityManager.HasComponent<ParkedTrain>(vehicle))
+                    {
+                        continue;
+                    }
+                    if (!m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle)
+                        || !m_Runtime.EntityManager.HasComponent<Target>(vehicle)
+                        || !m_Runtime.EntityManager.HasComponent<Owner>(vehicle))
+                    {
+                        continue;
+                    }
+                    if (!m_DisabledLineLateSpawnRetireQueueSeen.Add(vehicle)) continue;
+
+                    m_DisabledLineLateSpawnRetireQueue.Add(vehicle);
+                    queuedRetires++;
+                }
+            }
+
+            m_Runtime.log.Info("[DisabledLineLateSpawnCleanup] 线路" + line.Index
+                + " 清理关闭线路残留产车状态 queuedRetires=" + queuedRetires);
+        }
+
+        private static void RestoreVehicleIntervalModifier(
+            Entity line,
+            BufferLookup<RouteModifier> modBuffers)
+        {
+            if (!modBuffers.TryGetBuffer(line, out DynamicBuffer<RouteModifier> mods))
+                return;
+
+            int modifierIndex = (int)RouteModifierType.VehicleInterval;
+            if (mods.Length <= modifierIndex)
+                return;
+
+            RouteModifier modifier = mods[modifierIndex];
+            modifier.m_Delta = float2.zero;
+            mods[modifierIndex] = modifier;
         }
 
         internal VehicleState InferInitialState(

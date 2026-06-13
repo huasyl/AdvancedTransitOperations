@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 export default function WorkbenchScrollArea({
   className = "",
@@ -9,19 +9,60 @@ export default function WorkbenchScrollArea({
 }) {
   const scrollRef = useRef(null);
   const indicatorRef = useRef(null);
+  const thumbRef = useRef(null);
   const hideTimerRef = useRef(0);
   const hoverRef = useRef(false);
+  const indicatorActiveRef = useRef(false);
+  const scrollMetricsRef = useRef({
+    visible: false,
+    thumbTop: 0,
+    thumbHeight: 0
+  });
   const dragRef = useRef({
     dragging: false,
     pointerId: null,
     pointerOffset: 0
   });
-  const [scrollMetrics, setScrollMetrics] = useState({
-    visible: false,
-    thumbTop: 0,
-    thumbHeight: 0
-  });
-  const [indicatorActive, setIndicatorActive] = useState(false);
+
+  function syncIndicatorState() {
+    const indicatorElement = indicatorRef.current;
+    if (!indicatorElement) {
+      return;
+    }
+
+    indicatorElement.classList.toggle("is-visible", scrollMetricsRef.current.visible);
+    indicatorElement.classList.toggle("is-active", indicatorActiveRef.current);
+  }
+
+  function applyScrollMetrics(nextMetrics) {
+    const previousMetrics = scrollMetricsRef.current;
+    if (
+      previousMetrics.visible === nextMetrics.visible
+      && previousMetrics.thumbTop === nextMetrics.thumbTop
+      && previousMetrics.thumbHeight === nextMetrics.thumbHeight
+    ) {
+      return;
+    }
+
+    scrollMetricsRef.current = nextMetrics;
+
+    const thumbElement = thumbRef.current;
+    if (thumbElement) {
+      thumbElement.style.height = `${nextMetrics.thumbHeight}px`;
+      thumbElement.style.transform = `translateY(${nextMetrics.thumbTop}px)`;
+    }
+
+    syncIndicatorState();
+  }
+
+  function setIndicatorActive(nextActive) {
+    if (indicatorActiveRef.current === nextActive) {
+      return;
+    }
+
+    indicatorActiveRef.current = nextActive;
+    syncIndicatorState();
+  }
 
   useEffect(() => {
     const scrollElement = scrollRef.current;
@@ -56,7 +97,7 @@ export default function WorkbenchScrollArea({
       const maxScroll = scrollHeight - clientHeight;
 
       if (clientHeight <= 0 || maxScroll <= 0) {
-        setScrollMetrics({
+        applyScrollMetrics({
           visible: false,
           thumbTop: 0,
           thumbHeight: 0
@@ -68,7 +109,7 @@ export default function WorkbenchScrollArea({
       const maxThumbTop = Math.max(0, clientHeight - thumbHeight);
       const thumbTop = Math.round((scrollTop / maxScroll) * maxThumbTop);
 
-      setScrollMetrics({
+      applyScrollMetrics({
         visible: true,
         thumbTop,
         thumbHeight
@@ -150,7 +191,7 @@ export default function WorkbenchScrollArea({
     const scrollRange = scrollHeight - clientHeight;
 
     if (clientHeight <= 0 || scrollRange <= 0) {
-      setScrollMetrics({
+      applyScrollMetrics({
         visible: false,
         thumbTop: 0,
         thumbHeight: 0
@@ -165,7 +206,7 @@ export default function WorkbenchScrollArea({
     const nextScrollTop = maxThumbTop <= 0 ? 0 : (nextThumbTop / maxThumbTop) * scrollRange;
     scrollElement.scrollTop = nextScrollTop;
 
-    setScrollMetrics({
+    applyScrollMetrics({
       visible: true,
       thumbTop: Math.round(nextThumbTop),
       thumbHeight
@@ -174,6 +215,7 @@ export default function WorkbenchScrollArea({
 
   function handleIndicatorMouseDown(event) {
     const indicatorElement = indicatorRef.current;
+    const scrollMetrics = scrollMetricsRef.current;
     if (!indicatorElement || !scrollMetrics.visible) {
       return;
     }
@@ -214,6 +256,7 @@ export default function WorkbenchScrollArea({
   function handleIndicatorPointerDown(event) {
     const scrollElement = scrollRef.current;
     const indicatorElement = indicatorRef.current;
+    const scrollMetrics = scrollMetricsRef.current;
     if (!scrollElement || !indicatorElement || !scrollMetrics.visible) {
       return;
     }
@@ -281,7 +324,7 @@ export default function WorkbenchScrollArea({
       </div>
       <div
         ref={indicatorRef}
-        className={`dw-demo-scroll-indicator ${scrollMetrics.visible ? "is-visible" : ""} ${indicatorActive ? "is-active" : ""}`.trim()}
+        className="dw-demo-scroll-indicator"
         onMouseEnter={handleIndicatorMouseEnter}
         onMouseLeave={handleIndicatorMouseLeave}
         onMouseDown={handleIndicatorMouseDown}
@@ -290,10 +333,11 @@ export default function WorkbenchScrollArea({
         onPointerUp={handleIndicatorPointerUp}
       >
         <div
+          ref={thumbRef}
           className="dw-demo-scroll-thumb"
           style={{
-            height: `${scrollMetrics.thumbHeight}px`,
-            transform: `translateY(${scrollMetrics.thumbTop}px)`
+            height: "0px",
+            transform: "translateY(0px)"
           }}
         />
       </div>

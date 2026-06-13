@@ -2,7 +2,6 @@ using System;
 using Game.Buildings;
 using Game.Common;
 using Game.Objects;
-using Game.Prefabs;
 using Game.Routes;
 using Game.UI;
 using Unity.Entities;
@@ -11,6 +10,8 @@ namespace RapidTransitMod.Dispatch.Workbench
 {
     internal sealed class CatalogDirty
     {
+        private const uint CountGuardIntervalFrames = 90;
+
         private readonly EntityQuery m_LineDirtyQuery;
         private readonly EntityQuery m_StopDirtyQuery;
         private readonly EntityQuery m_DepotDirtyQuery;
@@ -19,7 +20,12 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly EntityQuery m_StopNameDirtyQuery;
         private readonly EntityQuery m_DepotNameDirtyQuery;
         private readonly EntityQuery m_BuildingNameDirtyQuery;
+        private readonly EntityQuery m_LineCountQuery;
+        private readonly EntityQuery m_DepotCountQuery;
         private readonly Action m_MarkDirty;
+        private uint m_LastCountGuardFrame;
+        private int m_LastLineCount;
+        private int m_LastDepotCount;
         private bool m_WasDirty;
 
         internal CatalogDirty(
@@ -32,12 +38,15 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 All = new[]
                 {
-                    ComponentType.ReadOnly<Route>(),
                     ComponentType.ReadOnly<TransportLine>(),
-                    ComponentType.ReadOnly<RouteWaypoint>(),
-                    ComponentType.ReadOnly<PrefabRef>()
+                    ComponentType.ReadOnly<RouteWaypoint>()
                 },
-                Any = DirtyMarkers(includeBatchesUpdated: true)
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Deleted>(),
+                    ComponentType.ReadOnly<Disabled>()
+                },
+                Any = DirtyMarkers(includeBatchesUpdated: false)
             });
             m_StopDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
             {
@@ -94,16 +103,39 @@ namespace RapidTransitMod.Dispatch.Workbench
                 },
                 Any = DirtyMarkers(includeBatchesUpdated: true)
             });
+            m_LineCountQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
+            {
+                All = new[]
+                {
+                    ComponentType.ReadOnly<TransportLine>(),
+                    ComponentType.ReadOnly<RouteWaypoint>()
+                },
+                None = new[]
+                {
+                    ComponentType.ReadOnly<Deleted>(),
+                    ComponentType.ReadOnly<Disabled>()
+                }
+            });
+            m_DepotCountQuery = entityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.Exclude<Deleted>());
+            ResetCountGuard(0);
         }
 
         internal void Reset()
         {
             m_WasDirty = false;
+            ResetCountGuard(0);
         }
 
         internal void Check(uint nowFrame)
         {
             bool dirty = IsDirty();
+            if (CountChanged(nowFrame))
+            {
+                dirty = true;
+            }
+
             if (dirty)
             {
                 if (!m_WasDirty)
@@ -128,6 +160,33 @@ namespace RapidTransitMod.Dispatch.Workbench
                 || !m_StopNameDirtyQuery.IsEmptyIgnoreFilter
                 || !m_DepotNameDirtyQuery.IsEmptyIgnoreFilter
                 || !m_BuildingNameDirtyQuery.IsEmptyIgnoreFilter;
+        }
+
+        private bool CountChanged(uint nowFrame)
+        {
+            if (nowFrame - m_LastCountGuardFrame < CountGuardIntervalFrames)
+            {
+                return false;
+            }
+
+            m_LastCountGuardFrame = nowFrame;
+            int lineCount = m_LineCountQuery.CalculateEntityCount();
+            int depotCount = m_DepotCountQuery.CalculateEntityCount();
+            if (lineCount == m_LastLineCount && depotCount == m_LastDepotCount)
+            {
+                return false;
+            }
+
+            m_LastLineCount = lineCount;
+            m_LastDepotCount = depotCount;
+            return true;
+        }
+
+        private void ResetCountGuard(uint nowFrame)
+        {
+            m_LastCountGuardFrame = nowFrame;
+            m_LastLineCount = m_LineCountQuery.CalculateEntityCount();
+            m_LastDepotCount = m_DepotCountQuery.CalculateEntityCount();
         }
 
         private static ComponentType[] DirtyMarkers(bool includeBatchesUpdated)

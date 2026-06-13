@@ -8,6 +8,8 @@ namespace RapidTransitMod
 {
     internal sealed class LineView
     {
+        private readonly EntityManager m_EntityManager;
+        private readonly Func<Entity, Entity> m_Stop;
         private readonly Func<Entity, bool> m_Exists;
         private readonly Func<uint> m_Frame;
         private readonly Func<Entity, string> m_LineId;
@@ -22,6 +24,7 @@ namespace RapidTransitMod
         private readonly Action<string> m_Log;
         private readonly Dictionary<Entity, LineFrame> m_Frames = new Dictionary<Entity, LineFrame>();
         private readonly Dictionary<Entity, ManagedLineFrame> m_ManagedFrames = new Dictionary<Entity, ManagedLineFrame>();
+        private readonly Dictionary<Entity, bool> m_SupportCache = new Dictionary<Entity, bool>();
         private string m_LastLog = string.Empty;
 
         private readonly struct ManagedLineFrame
@@ -41,6 +44,8 @@ namespace RapidTransitMod
         }
 
         public LineView(
+            EntityManager entityManager,
+            Func<Entity, Entity> stop,
             Func<Entity, bool> exists,
             Func<uint> frame,
             Func<Entity, string> lineId,
@@ -54,6 +59,8 @@ namespace RapidTransitMod
             Func<int, string> slotText,
             Action<string> log)
         {
+            m_EntityManager = entityManager;
+            m_Stop = stop ?? throw new ArgumentNullException(nameof(stop));
             m_Exists = exists ?? throw new ArgumentNullException(nameof(exists));
             m_Frame = frame ?? throw new ArgumentNullException(nameof(frame));
             m_LineId = lineId ?? throw new ArgumentNullException(nameof(lineId));
@@ -77,6 +84,8 @@ namespace RapidTransitMod
                 m_ManagedFrames.Remove(line);
                 return false;
             }
+
+            EnsureSupportCached(line);
 
             uint nowFrame = m_Frame();
             ulong cfgVersion = m_Cfg.Version;
@@ -120,6 +129,9 @@ namespace RapidTransitMod
             string kind = !string.IsNullOrEmpty(cfgKind)
                 ? cfgKind
                 : appliedKind;
+
+            bool supported = ComputeSupported(line);
+            m_SupportCache[line] = supported;
 
             frame = new LineFrame(
                 line,
@@ -193,12 +205,46 @@ namespace RapidTransitMod
         {
             m_Frames.Clear();
             m_ManagedFrames.Clear();
+            m_SupportCache.Clear();
             m_LastLog = string.Empty;
         }
 
         public void Dirty()
         {
             m_DirtyTrack();
+        }
+
+        private bool IsSupported(Entity line)
+        {
+            if (line == Entity.Null || !m_EntityManager.Exists(line))
+                return false;
+
+            if (m_SupportCache.TryGetValue(line, out bool supported))
+                return supported;
+
+            return false;
+        }
+
+        private bool EnsureSupportCached(Entity line)
+        {
+            if (line == Entity.Null || !m_EntityManager.Exists(line))
+                return false;
+
+            if (m_SupportCache.TryGetValue(line, out bool supported))
+                return supported;
+
+            supported = ComputeSupported(line);
+            m_SupportCache[line] = supported;
+            return supported;
+        }
+
+        private bool ComputeSupported(Entity line)
+        {
+            if (line == Entity.Null || !m_EntityManager.Exists(line))
+                return false;
+
+            LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(m_EntityManager, line, m_Stop);
+            return support.Supported;
         }
 
         public bool Applied(Entity line)
@@ -208,12 +254,19 @@ namespace RapidTransitMod
 
         public bool Managed(Entity line, bool dispatchOn)
         {
-            return dispatchOn && Applied(line);
+            if (!dispatchOn)
+                return false;
+            if (!EnsureSupportCached(line))
+                return false;
+            return Applied(line);
         }
 
         public bool ManagedRuntime(Entity line, bool dispatchOn)
         {
             if (!dispatchOn)
+                return false;
+
+            if (!EnsureSupportCached(line))
                 return false;
 
             if (line == Entity.Null || !m_Exists(line))
@@ -263,9 +316,10 @@ namespace RapidTransitMod
             if (!TryFrame(line, out LineFrame frame))
                 return false;
 
-            bool managed = dispatchOn && frame.Applied;
-            bool local = frame.Applied && string.Equals(frame.Kind, "local", StringComparison.Ordinal);
-            bool express = frame.Applied && string.Equals(frame.Kind, "express", StringComparison.Ordinal);
+            bool supported = IsSupported(line);
+            bool managed = dispatchOn && supported && frame.Applied;
+            bool local = supported && frame.Applied && string.Equals(frame.Kind, "local", StringComparison.Ordinal);
+            bool express = supported && frame.Applied && string.Equals(frame.Kind, "express", StringComparison.Ordinal);
             snapshot = new LineRuntimeSnapshot(
                 line,
                 managed,
@@ -412,14 +466,16 @@ namespace RapidTransitMod
 
         public bool Local(Entity line)
         {
-            return TryFrame(line, out LineFrame frame)
+            return EnsureSupportCached(line)
+                && TryFrame(line, out LineFrame frame)
                 && frame.Applied
                 && string.Equals(frame.Kind, "local", StringComparison.Ordinal);
         }
 
         public bool Express(Entity line)
         {
-            return TryFrame(line, out LineFrame frame)
+            return EnsureSupportCached(line)
+                && TryFrame(line, out LineFrame frame)
                 && frame.Applied
                 && string.Equals(frame.Kind, "express", StringComparison.Ordinal);
         }

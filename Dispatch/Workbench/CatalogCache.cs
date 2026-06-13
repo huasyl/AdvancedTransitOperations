@@ -96,6 +96,27 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_PendingEvent = true;
         }
 
+        internal void RefreshNow()
+        {
+            CancelLineRebuild();
+            CancelDepotRebuild();
+            m_LineGeneration++;
+            m_DepotGeneration++;
+            m_Lines = m_Catalog.RuntimeLines();
+            m_Depots = m_Catalog.Depots()
+                .OrderBy(entry => entry.name, StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(entry => entry.id, StringComparer.Ordinal)
+                .ToList();
+            m_Stations.Clear();
+            m_StationQueue.Clear();
+            m_QueuedStations.Clear();
+            m_LinesReady = true;
+            m_DepotsReady = true;
+            m_LinesStale = false;
+            m_DepotsStale = false;
+            m_StationsStale = true;
+        }
+
         internal void Tick(uint nowFrame)
         {
             if (m_LinesStale && m_LineRebuildResult == null)
@@ -408,5 +429,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 })
                 .ToList();
         }
+
     }
 }

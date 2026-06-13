@@ -133,7 +133,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     AppliedLines = () => runtime.AppliedLines,
                     IsLocalLine = line => runtime.m_LineView.Local(line),
                     TryRouteProgress = runtime.m_RouteProgress.Try,
-                    CachedWaypointIndex = entity => runtime.m_CachedWpIdx.TryGetValue(entity, out int waypointIndex) ? waypointIndex : -1
+                    CachedWaypointIndex = entity => runtime.m_CachedWpIdx.TryGetValue(entity, out int waypointIndex) ? waypointIndex : -1,
+                    ResolveStop = waypoint => runtime.m_Resolve.Stop(waypoint)
                 }
             };
         }

@@ -22,6 +22,7 @@ using Game.Prefabs;
 using Game.Rendering;
 using Game.Routes;
 using Game.SceneFlow;
+using Game.Serialization;
 using Game.Simulation;
 using Game.UI;
 using RapidTransitMod.Dispatch.Scheduling;
@@ -62,7 +63,7 @@ namespace RapidTransitMod
         Retiring = 5,
     }
 
-    public class DispatchRuntimeSystem : GameSystemBase
+    public class DispatchRuntimeSystem : GameSystemBase, IPreSerialize
     {
         internal const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 3f;
         internal CameraUpdateSystem m_CameraUpdateSystem;
@@ -166,6 +167,7 @@ namespace RapidTransitMod
         internal VehicleView m_VehicleView = null!;
         internal LineView m_LineView = null!;
         internal FeatureGate m_Features = null!;
+        internal RapidTransitMod.Overview.FeatureSettingsPersist m_OverviewFeatureSettingsPersist = null!;
         internal DispatchRuntimeController m_RuntimeController = null!;
         internal VehicleRegistrar m_VehicleRegistrar = null!;
         internal RuntimeVehicleLabels m_VehicleLabels = null!;
@@ -173,6 +175,7 @@ namespace RapidTransitMod
         internal SelectPort m_SelectPort = null!;
         internal SelectPanel m_SelectPanel = null!;
         internal StationAnchorDiagnostics m_StationAnchorDiagnostics = null!;
+        internal RapidTransitMod.Overview.FeatureSettingsOperations m_OverviewFeatureSettingsOperations = null!;
         internal RapidTransitMod.Dispatch.Workbench.Bridge m_WorkbenchBridge = null!;
         internal PlannerApi m_PlannerApi = null!;
         internal PlannerPort m_PlannerPort = null!;
@@ -465,6 +468,18 @@ namespace RapidTransitMod
         {
             base.OnGameLoaded(serializationContext);
             m_RuntimeShell.Loaded(serializationContext);
+        }
+
+        public void PreSerialize(Context context)
+        {
+            try
+            {
+                m_OverviewFeatureSettingsPersist?.SaveIfDirty();
+            }
+            catch (Exception ex)
+            {
+                log.Info("[OverviewFeatureSettingsPersist] Save failed -> " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         protected override void OnDestroy()

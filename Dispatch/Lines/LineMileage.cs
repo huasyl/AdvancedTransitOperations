@@ -61,6 +61,9 @@ namespace RapidTransitMod.Dispatch.Lines
             {
                 hash = m_Port.MixSignature(hash, segments[i].m_Segment.Index);
             }
+            uint endpointSignature = RouteWaypointEndpointResolver.ComputeRouteEndpointSignature(m_Port.EntityManager, line, m_Port.ResolveStop);
+            hash = m_Port.MixSignature(hash, (int)(endpointSignature & 0x7FFFFFFF));
+            hash = m_Port.MixSignature(hash, (int)((endpointSignature >> 16) & 0x7FFFFFFF));
             return hash;
         }
 
@@ -605,6 +608,7 @@ namespace RapidTransitMod.Dispatch.Lines
             int endWaypointIndex = (segmentIndex + 1) % count;
             Entity startWaypoint = waypoints[startWaypointIndex].m_Waypoint;
             Entity endWaypoint = waypoints[endWaypointIndex].m_Waypoint;
+
             if (m_Port.EntityManager.HasComponent<Position>(startWaypoint) && m_Port.EntityManager.HasComponent<Position>(endWaypoint))
             {
                 float distance = math.distance(

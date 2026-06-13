@@ -56,5 +56,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public Func<Entity, bool> IsLocalLine = null!;
         public TryLineRouteProgress TryRouteProgress = null!;
         public Func<Entity, int> CachedWaypointIndex = null!;
+        public Func<Entity, Entity> ResolveStop = null!;
     }
 }

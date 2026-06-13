@@ -6,7 +6,6 @@ import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
 import { validateManualRows } from "../../../lib/validation";
 import {
   DEFAULT_LINE_OPTIONS,
-  DEFAULT_RUNTIME_FEATURE_SETTINGS,
   DEPOT_OPTIONS,
   LINE_OPTIONS,
   MIN_LINE_SETTING_MINUTES,
@@ -16,7 +15,6 @@ import {
   directionFromOffsetMode,
   getReferenceLineIdsForLine,
   normalizeKind,
-  normalizeRuntimeFeatureSettings,
   offsetModeFromDirection,
   patchRuntimeLineOption,
   replaceRuntimeCatalog
@@ -46,8 +44,7 @@ import {
   serializeNativeLineDraftRowsByLineId,
   serializeNativeLineSettings,
   serializeNativeManualRows,
-  serializePlanRefs,
-  serializeRuntimeFeatureSettings
+  serializePlanRefs
 } from "./schedule-serialization";
 import { readPersistedNativeScheduleState, writePersistedNativeScheduleState } from "./schedule-persistence";
 import { runNativeSaveOperation } from "./schedule-save-operation";
@@ -90,7 +87,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const [origin, setOrigin] = useState(LINE_OPTIONS[0]?.originId || "");
   const [holdMinutes, setHoldMinutes] = useState(LINE_OPTIONS[0]?.hold || "");
   const [dwellMinutes, setDwellMinutes] = useState(LINE_OPTIONS[0]?.dwell || "");
-  const [featureSettings, setFeatureSettings] = useState(() => ({ ...DEFAULT_RUNTIME_FEATURE_SETTINGS }));
   const holdMinutesValue = Number(holdMinutes);
   const dwellMinutesValue = Number(dwellMinutes);
   const holdMinutesTooSmall =
@@ -409,7 +405,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setOrigin(sourceLine.originId);
     setHoldMinutes(sourceLine.hold);
     setDwellMinutes(sourceLine.dwell);
-    setFeatureSettings(normalizeRuntimeFeatureSettings(snapshot?.featureSettings));
     setSummaryEntries(nextSummaryEntries);
     setAutoRules(nextAutoRules);
     setManualDrafts(nextManualDrafts);
@@ -501,7 +496,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setOrigin("");
     setHoldMinutes("");
     setDwellMinutes("");
-    setFeatureSettings({ ...DEFAULT_RUNTIME_FEATURE_SETTINGS });
     setSummaryEntries([]);
     setAutoRules([]);
     setManualDrafts([]);
@@ -673,7 +667,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
       lineDraftRowsByLineId: serializeNativeLineDraftRowsByLineId(summaryEntries),
       planRefs: serializePlanRefs(planRefsByLine),
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
-      featureSettings: serializeRuntimeFeatureSettings(featureSettings),
       applyDraft,
       nativeScheduleWriter: true,
       returnSnapshot: false
@@ -766,8 +759,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     };
   }, [
     autoRules,
-    featureSettings,
-    catalogRevision,
     manualDrafts,
     scheduleMode,
     selectedLineId,
@@ -824,6 +815,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     clearPanelMessage();
+    if (nextLine.dispatchSupported === false) {
+      setPanelMessage({ scope: "summary", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+    }
     applySelectedLine(nextLine);
   }
 
@@ -893,18 +887,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     updateRuntimeLineOption(selectedLine.id, { dwell: value });
   }
 
-  function handleFeatureToggle(featureKey) {
-    if (!Object.prototype.hasOwnProperty.call(DEFAULT_RUNTIME_FEATURE_SETTINGS, featureKey)) {
-      return;
-    }
-
-    markLocalDataDirty();
-    setFeatureSettings((current) => ({
-      ...normalizeRuntimeFeatureSettings(current),
-      [featureKey]: !normalizeRuntimeFeatureSettings(current)[featureKey]
-    }));
-  }
-
   function handleEditorStartChange(value) {
     clearPanelMessage();
     if (!value || (value.length === 5 && isValidTimeValue(value))) {
@@ -940,6 +922,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   function addAutoRule() {
+    if (selectedLine.dispatchSupported === false) {
+      setPanelMessage({ scope: "auto", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+      return;
+    }
+
     if (!isValidTimeValue(editorStart) || !isValidTimeValue(editorEnd)) {
       setPanelMessage({ scope: "auto", tone: "error", text: t("nativeSchedule.message.auto.invalidWindow") });
       return;
@@ -974,6 +961,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   function addManualDraft() {
+    if (selectedLine.dispatchSupported === false) {
+      setPanelMessage({ scope: "manual", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+      return;
+    }
+
     if (isAddManualDisabled || !isValidTimeValue(normalizedManualInput)) {
       setPanelMessage({ scope: "manual", tone: "error", text: t("nativeSchedule.message.manual.invalidTime") });
       return;
@@ -1031,6 +1023,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   function importManualToSummary() {
+    if (selectedLine.dispatchSupported === false) {
+      setPanelMessage({ scope: "manual", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+      return;
+    }
+
     const sortedDrafts = [...currentManualDrafts].sort((left, right) => (left.time || "").localeCompare(right.time || ""));
     const validatedRows = validateManualRows(sortedDrafts, t);
     const validRows = validatedRows.filter((row) => row.validation.status !== "error");
@@ -1112,6 +1109,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   function importAutoToSummary() {
+    if (selectedLine.dispatchSupported === false) {
+      setPanelMessage({ scope: "auto", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+      return;
+    }
+
     if (currentAutoRules.length === 0) {
       setPanelMessage({ scope: "auto", tone: "warning", text: t("nativeSchedule.message.auto.noRules") });
       return;
@@ -1174,6 +1176,16 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   async function handleApplySchedule() {
+    const unsupportedRow = summaryEntries.find((row) => {
+      const rowLineId = row?.lineId || row?.serviceId;
+      const lineOption = LINE_OPTIONS.find((line) => line?.id === rowLineId);
+      return lineOption?.dispatchSupported === false;
+    });
+    if (unsupportedRow) {
+      setPanelMessage({ scope: "summary", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+      return;
+    }
+
     const modeAtRequest = scheduleMode;
     const generation = scheduleModeGenerationRef.current;
     setPanelMessage({ scope: "summary", tone: "neutral", text: t("nativeSchedule.message.summary.applying") });
@@ -1188,9 +1200,14 @@ export default function useScheduleController({ registerHostActions, activeTrans
       }
 
       if (!result?.success) {
-        const message = Array.isArray(result?.errors) && result.errors.length > 0
-          ? result.errors.join("; ")
-          : t("nativeSchedule.message.summary.saveFailed", { message: "unknown" });
+        const errors = Array.isArray(result?.errors) && result.errors.length > 0 ? result.errors : [];
+        const mappedErrors = errors.map((err) => {
+          if (typeof err === "string" && err.startsWith("line-unsupported:")) {
+            return t("nativeSchedule.message.lineUnsupported");
+          }
+          return err;
+        });
+        const message = mappedErrors.length > 0 ? mappedErrors.join("; ") : t("nativeSchedule.message.summary.saveFailed", { message: "unknown" });
         setPanelMessage({ scope: "summary", tone: "error", text: t("nativeSchedule.message.summary.applyFailed", { message }) });
         return;
       }
@@ -1251,7 +1268,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
       dwellMinutes,
       holdMinutesTooSmall,
       dwellMinutesTooSmall,
-      featureSettings,
       availableDepots,
       lineOptions: LINE_OPTIONS
     },
@@ -1303,7 +1319,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
       changeDwellMinutes: handleDwellMinutesChange,
       setHoldMinutes,
       setDwellMinutes,
-      toggleFeature: handleFeatureToggle,
       setSummaryFilter,
       removeSummaryRow,
       clearSummaryTable,

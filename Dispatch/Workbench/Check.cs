@@ -292,6 +292,16 @@ namespace RapidTransitMod.Dispatch.Workbench
 
                 if (validateApplyOnlyConstraints)
                 {
+                    foreach (string lineId in localIds.Concat(expressIds).Distinct(StringComparer.Ordinal))
+                    {
+                        if (runtimeLineById.TryGetValue(lineId, out var runtimeLine)
+                            && runtimeLine != null
+                            && !runtimeLine.DispatchSupported)
+                        {
+                            errors.Add($"line-unsupported:{lineId}:{runtimeLine.UnsupportedReason}");
+                        }
+                    }
+
                     foreach (IGrouping<string, (string RowId, string LineId, string OriginId, string OriginName, int Minutes)> group in stagedOriginDepartures
                         .GroupBy(row => row.OriginId, StringComparer.Ordinal))
                     {

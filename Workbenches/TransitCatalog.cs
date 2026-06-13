@@ -116,7 +116,11 @@ namespace RapidTransitMod.Workbenches
                 originHoldLimitMinutes = runtime.GetHold(lineId),
                 maxStationDwellMinutes = runtime.GetDwell(lineId),
                 transportType = line.TransportType ?? string.Empty,
-                allowedDepotId = runtime.GetDepotId(lineId)
+                allowedDepotId = runtime.GetDepotId(lineId),
+                dispatchSupported = line.DispatchSupported,
+                unsupportedReason = line.UnsupportedReason ?? string.Empty,
+                originStatus = line.OriginStatus ?? string.Empty,
+                originMessageKey = line.OriginMessageKey ?? string.Empty
             };
         }
 

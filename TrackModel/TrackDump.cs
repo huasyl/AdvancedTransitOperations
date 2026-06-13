@@ -682,11 +682,79 @@ namespace RapidTransitMod.TrackModel
                     }
                 }
 
+                Entity waypointEntity = waypoints[i].m_Waypoint;
+                string endpointInfo = "-";
+                string endpointDetail = "";
+                if (RouteWaypointEndpointResolver.TryResolveRouteWaypointEndpoint(EntityManager, waypointEntity, out RouteWaypointEndpoint endpoint))
+                {
+                    endpointInfo = $"{endpoint.Kind}/{endpoint.Direction}";
+
+                    string startFlags = "-";
+                    string startTrackTypes = "-";
+                    string endFlags = "-";
+                    string endTrackTypes = "-";
+                    string connectedStatus = "-";
+                    string ownerChain = "-";
+                    string outsideName = "-";
+
+                    if (endpoint.OutsideConnection != Entity.Null)
+                    {
+                        outsideName = FormatTrackModelDisplayStationLabel(endpoint.OutsideConnection, i);
+                    }
+
+                    if (endpoint.StartLane != Entity.Null && EntityManager.HasComponent<ConnectionLane>(endpoint.StartLane))
+                    {
+                        ConnectionLane cl = EntityManager.GetComponentData<ConnectionLane>(endpoint.StartLane);
+                        startFlags = cl.m_Flags.ToString();
+                        startTrackTypes = cl.m_TrackTypes.ToString();
+                    }
+
+                    if (endpoint.EndLane != Entity.Null && EntityManager.HasComponent<ConnectionLane>(endpoint.EndLane))
+                    {
+                        ConnectionLane cl = EntityManager.GetComponentData<ConnectionLane>(endpoint.EndLane);
+                        endFlags = cl.m_Flags.ToString();
+                        endTrackTypes = cl.m_TrackTypes.ToString();
+                    }
+
+                    if (EntityManager.HasComponent<Game.Routes.Connected>(waypointEntity))
+                    {
+                        Entity connected = EntityManager.GetComponentData<Game.Routes.Connected>(waypointEntity).m_Connected;
+                        connectedStatus = connected.Index.ToString();
+
+                        List<int> ownerChainIndices = new List<int>();
+                        Entity current = connected;
+                        for (int depth = 0; depth < 4 && current != Entity.Null; depth++)
+                        {
+                            if (EntityManager.HasComponent<Game.Objects.OutsideConnection>(current))
+                            {
+                                ownerChainIndices.Add(current.Index);
+                                break;
+                            }
+                            if (EntityManager.HasComponent<Game.Common.Owner>(current))
+                            {
+                                current = EntityManager.GetComponentData<Game.Common.Owner>(current).m_Owner;
+                                if (current != Entity.Null)
+                                    ownerChainIndices.Add(current.Index);
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                        if (ownerChainIndices.Count > 0)
+                            ownerChain = string.Join("->", ownerChainIndices);
+                    }
+
+                    endpointDetail = $" outside={outsideName} startFlags={startFlags} startTrackTypes={startTrackTypes} endFlags={endFlags} endTrackTypes={endTrackTypes} connected={connectedStatus} ownerChain={ownerChain}";
+                }
+
                 sb.Append(" | wp").Append(i)
-                  .Append(" target=").Append(waypoints[i].m_Waypoint.Index)
+                  .Append(" target=").Append(waypointEntity.Index)
                   .Append(" stop=").Append(building.Index)
                   .Append(" label=").Append(FormatTrackModelDisplayStationLabel(building, i))
                   .Append(" bypass=").Append(GetBypassBuildingForWaypoint(waypoints, i) != Entity.Null ? "1" : "0")
+                  .Append(" endpoint=").Append(endpointInfo)
+                  .Append(endpointDetail)
                   .Append(" cp=").Append(cpIndex >= 0 ? cpIndex.ToString() : "-")
                   .Append(" kind=").Append(cpKind.HasValue ? cpKind.Value.ToString() : "-")
                   .Append(" atom=").Append(stationAtom >= 0 ? stationAtom.ToString() : "-")

@@ -119,6 +119,35 @@ namespace RapidTransitMod.TrackModel
                 boundaryEventIndexByAtom[pass.EndAtomIndexExclusive] = departureIndex;
             }
 
+            for (int endpointIndex = 0; endpointIndex < chain.EndpointMarkers.Count; endpointIndex++)
+            {
+                EndpointMarker endpoint = chain.EndpointMarkers[endpointIndex];
+                if (endpoint.Kind != RouteWaypointEndpointKind.OutsideTrainConnection
+                    || endpoint.AtomIndex < 0
+                    || endpoint.AtomIndex > chain.TrackAtoms.Count)
+                {
+                    continue;
+                }
+
+                if (!boundaries.Contains(endpoint.AtomIndex))
+                    boundaries.Add(endpoint.AtomIndex);
+
+                int endpointEventIndex = chain.TraversalProfile.Events.Count;
+                Entity endpointEntity = endpoint.OutsideConnection != Entity.Null
+                    ? endpoint.OutsideConnection
+                    : endpoint.Waypoint;
+                chain.TraversalProfile.Events.Add(new TraversalEvent(
+                    endpointEventIndex,
+                    TraversalEventKind.OutsideEndpointBoundary,
+                    endpointEntity,
+                    endpoint.WaypointIndex,
+                    -1,
+                    endpoint.AtomIndex,
+                    endpoint.AtomIndex,
+                    0f));
+                boundaryEventIndexByAtom[endpoint.AtomIndex] = endpointEventIndex;
+            }
+
             boundaries.Sort();
             for (int boundaryIndex = 0; boundaryIndex < boundaries.Count - 1; boundaryIndex++)
             {

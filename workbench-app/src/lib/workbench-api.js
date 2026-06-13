@@ -41,6 +41,8 @@ const CALLS = {
   saveNativeWorkbenchDraft: "suhua::rt.workbench.saveNativeWorkbenchDraft",
   startNativeSaveOperation: "suhua::rt.workbench.startNativeSaveOperation",
   getNativeSaveOperationStatus: "suhua::rt.workbench.getNativeSaveOperationStatus",
+  startOverviewFeatureSettingsOperation: "suhua::rt.workbench.startOverviewFeatureSettingsOperation",
+  getOverviewFeatureSettingsOperationStatus: "suhua::rt.workbench.getOverviewFeatureSettingsOperationStatus",
   setWorkbenchHostState: "suhua::rt.workbench.setWorkbenchHostState",
   getLocale: "suhua::rt.workbench.getLocale"
 };
@@ -89,6 +91,14 @@ function withMode(request = {}) {
 
 function requestJson(request = {}) {
   return JSON.stringify(withMode(request));
+}
+
+function plainRequestJson(request = {}) {
+  if (request && typeof request === "object" && !Array.isArray(request)) {
+    return JSON.stringify(request);
+  }
+
+  return JSON.stringify({});
 }
 
 function parsePayload(payload, fallbackValue) {
@@ -232,6 +242,21 @@ function createEmptySaveOperationStatus() {
     state: "missing",
     error: "",
     result: null
+  };
+}
+
+function createEmptyOverviewFeatureSettingsOperationStatus() {
+  return {
+    success: false,
+    operationId: "",
+    state: "missing",
+    error: "",
+    result: {
+      success: false,
+      errors: [],
+      version: "",
+      featureSettings: null
+    }
   };
 }
 
@@ -534,6 +559,16 @@ function createLiveApi() {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.getNativeSaveOperationStatus, operationId || "");
       return parsePayload(payload, createEmptySaveOperationStatus());
+    },
+    async startOverviewFeatureSettingsOperation(request) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.startOverviewFeatureSettingsOperation, plainRequestJson(request ?? {}));
+      return parsePayload(payload, createEmptyOverviewFeatureSettingsOperationStatus());
+    },
+    async getOverviewFeatureSettingsOperationStatus(operationId = "") {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.getOverviewFeatureSettingsOperationStatus, operationId || "");
+      return parsePayload(payload, createEmptyOverviewFeatureSettingsOperationStatus());
     },
     async getLocale() {
       try {

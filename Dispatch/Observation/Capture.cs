@@ -1036,6 +1036,10 @@ namespace RapidTransitMod.Dispatch.Observation
                     string buildingLabel = traversalEvent.Building != Entity.Null
                         ? m_Port.Name(traversalEvent.Building)
                         : "atom" + atomIndex;
+                    if (string.IsNullOrEmpty(buildingLabel))
+                        buildingLabel = traversalEvent.Building != Entity.Null
+                            ? "#" + traversalEvent.Building.Index
+                            : "atom" + atomIndex;
                     switch (traversalEvent.Kind)
                     {
                         case TraversalEventKind.Stop:
@@ -1046,6 +1050,8 @@ namespace RapidTransitMod.Dispatch.Observation
                             return "ApproachSplit(" + buildingLabel + ")";
                         case TraversalEventKind.DepartureSplitBoundary:
                             return "DepartureSplit(" + buildingLabel + ")";
+                        case TraversalEventKind.OutsideEndpointBoundary:
+                            return "OutsideEndpoint(" + buildingLabel + ")";
                     }
                 }
             }

@@ -52,7 +52,19 @@ namespace RapidTransitMod.TrackModel
             hash = MixLineSignature(hash, segments.Length);
 
             for (int i = 0; i < waypoints.Length; i++)
-                hash = MixLineSignature(hash, waypoints[i].m_Waypoint.Index);
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                hash = MixLineSignature(hash, waypoint.Index);
+
+                if (EntityManager.HasComponent<RouteLane>(waypoint))
+                {
+                    RouteLane routeLane = EntityManager.GetComponentData<RouteLane>(waypoint);
+                    hash = MixLineSignature(hash, routeLane.m_StartLane.Index);
+                    hash = MixLineSignature(hash, routeLane.m_EndLane.Index);
+                    hash = MixLineSignature(hash, (int)math.round(routeLane.m_StartCurvePos * 1000f));
+                    hash = MixLineSignature(hash, (int)math.round(routeLane.m_EndCurvePos * 1000f));
+                }
+            }
 
             for (int i = 0; i < segments.Length; i++)
             {
@@ -176,6 +188,7 @@ namespace RapidTransitMod.TrackModel
                 int endAtomIndexExclusive = chain.TrackAtoms.Count;
                 chain.SegmentRanges.Add(new TrackSegmentRange(startAtomIndex, endAtomIndexExclusive));
                 TryAppendControlPoint(chain.ControlPoints, waypoints, waypointIndex, startAtomIndex);
+                TryAppendEndpointMarker(chain.EndpointMarkers, waypoints, waypointIndex, startAtomIndex);
             }
 
             BuildAtomStationBuildings(chain);
@@ -303,6 +316,19 @@ namespace RapidTransitMod.TrackModel
                 ? ControlPointKind.Bypass
                 : ControlPointKind.Stop;
             controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, kind));
+        }
+
+        private void TryAppendEndpointMarker(
+            List<EndpointMarker> endpointMarkers,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            int atomIndex)
+        {
+            Entity waypoint = waypoints[waypointIndex].m_Waypoint;
+            if (RouteWaypointEndpointResolver.TryResolveRouteWaypointEndpoint(EntityManager, waypoint, out RouteWaypointEndpoint endpoint))
+            {
+                endpointMarkers.Add(new EndpointMarker(atomIndex, waypointIndex, waypoint, endpoint.OutsideConnection, endpoint.Kind, endpoint.Direction));
+            }
         }
 
         private static void BuildAtomStationBuildings(LineTrackChain chain)

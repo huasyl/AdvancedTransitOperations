@@ -841,6 +841,27 @@ namespace RapidTransitMod
         public bool hasTimeProfile;
         [DataMember]
         public float estimatedLoopMinutes;
+        [DataMember]
+        public DispatchPlannerOutsideEndpointDto[] outsideEndpoints;
+    }
+
+    [DataContract]
+    public class DispatchPlannerOutsideEndpointDto
+    {
+        [DataMember]
+        public int waypointIndex;
+        [DataMember]
+        public string direction;
+        [DataMember]
+        public string kind;
+        [DataMember]
+        public int startLaneIndex;
+        [DataMember]
+        public int endLaneIndex;
+        [DataMember]
+        public float startCurvePos;
+        [DataMember]
+        public float endCurvePos;
     }
 
     [DataContract]

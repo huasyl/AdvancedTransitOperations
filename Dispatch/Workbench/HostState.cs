@@ -16,7 +16,11 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal bool IsParked
             => string.Equals(m_State?.phase, "parked", System.StringComparison.Ordinal);
 
+        internal bool IsOpen
+            => IsOpenPhase(m_State?.phase);
+
         internal string Mode => m_State?.mode ?? string.Empty;
+        internal string Phase => m_State?.phase ?? "unknown";
         internal TransitMode TransitMode
         {
             get
@@ -31,15 +35,26 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal string Update(string requestJson)
         {
+            Update(requestJson, out _);
+            return "{\"ok\":true}";
+        }
+
+        internal string Update(string requestJson, out string explicitPhase)
+        {
             DispatchWorkbenchHostStateDto state = Json.Read<DispatchWorkbenchHostStateDto>(requestJson);
+            bool hasExplicitPhase = !string.IsNullOrWhiteSpace(state?.phase);
+            string nextPhase = hasExplicitPhase
+                ? NormalizePhase(state.phase)
+                : (m_State?.phase ?? "unknown");
             m_State = new DispatchWorkbenchHostStateDto
             {
-                phase = string.IsNullOrWhiteSpace(state?.phase) ? (m_State?.phase ?? "unknown") : NormalizePhase(state.phase),
+                phase = nextPhase,
                 mode = string.IsNullOrWhiteSpace(state?.mode) ? (m_State?.mode ?? string.Empty) : state.mode,
                 activePage = string.IsNullOrWhiteSpace(state?.activePage) ? (m_State?.activePage ?? string.Empty) : state.activePage,
                 selectedLineId = string.IsNullOrWhiteSpace(state?.selectedLineId) ? (m_State?.selectedLineId ?? string.Empty) : state.selectedLineId,
                 selectedEditLine = string.IsNullOrWhiteSpace(state?.selectedEditLine) ? (m_State?.selectedEditLine ?? string.Empty) : state.selectedEditLine
             };
+            explicitPhase = hasExplicitPhase ? nextPhase : string.Empty;
             return "{\"ok\":true}";
         }
 
@@ -52,6 +67,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             return "unknown";
+        }
+
+        private static bool IsOpenPhase(string phase)
+        {
+            return string.Equals(phase, "opening", System.StringComparison.Ordinal)
+                || string.Equals(phase, "visible", System.StringComparison.Ordinal);
         }
     }
 }

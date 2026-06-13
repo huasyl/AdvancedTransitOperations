@@ -186,8 +186,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 && Rows.SameRules(state.AutoRules, nextAutoRules)
                 && Rows.SameRows(state.StagedRows, nextStagedRows)
                 && Rows.SamePlan(state.PlannerImportContract, nextPlanRef)
-                && m_Run.SameLineCfg(prepared.Scope, request.lineSettings)
-                && m_Run.SameFeatures(request.featureSettings))
+                && m_Run.SameLineCfg(prepared.Scope, request.lineSettings))
             {
                 result.success = true;
                 result.version = m_Host.Version().ToString();
@@ -195,10 +194,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return result;
             }
 
-            if (request.featureSettings != null)
-            {
-                m_Run.Features(request.featureSettings);
-            }
             if (request.lineSettings != null)
             {
                 m_Run.LineCfg(prepared.Scope, request.lineSettings);
@@ -734,7 +729,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 StationCount = line.StationCount,
                 Color = line.Color ?? string.Empty,
                 OriginStationId = line.OriginStationId ?? string.Empty,
-                OriginStationName = line.OriginStationName ?? string.Empty
+                OriginStationName = line.OriginStationName ?? string.Empty,
+                DispatchSupported = line.DispatchSupported,
+                UnsupportedReason = line.UnsupportedReason ?? string.Empty,
+                OriginStatus = line.OriginStatus ?? string.Empty,
+                OriginMessageKey = line.OriginMessageKey ?? string.Empty
             };
         }
 

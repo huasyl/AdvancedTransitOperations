@@ -112,6 +112,8 @@ namespace RapidTransitMod.Planner
 
                 segments.AddRange(BuildPlannerSegments(runtime, waypoints.Length, lineStations, hasProfile, profile));
 
+                DispatchPlannerOutsideEndpointDto[] endpoints = BuildOutsideEndpoints(runtime.Entity, waypoints);
+
                 lines.Add(new DispatchPlannerLineDto
                 {
                     id = runtime.Id,
@@ -129,7 +131,8 @@ namespace RapidTransitMod.Planner
                     maxStationDwellMinutes = GetDwell(runtime.Entity),
                     allowedDepotId = GetDepotId(runtime.Id),
                     hasTimeProfile = hasProfile,
-                    estimatedLoopMinutes = hasProfile ? RoundPlannerMinutes(profile.m_BaseLoopFrames) : 0f
+                    estimatedLoopMinutes = hasProfile ? RoundPlannerMinutes(profile.m_BaseLoopFrames) : 0f,
+                    outsideEndpoints = endpoints
                 });
             }
 
@@ -1328,6 +1331,35 @@ namespace RapidTransitMod.Planner
                 return 0f;
 
             return (float)Math.Round(frames / (float)SIM_FRAMES_PER_MINUTE, 2);
+        }
+
+        private DispatchPlannerOutsideEndpointDto[] BuildOutsideEndpoints(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            List<DispatchPlannerOutsideEndpointDto> endpoints = new List<DispatchPlannerOutsideEndpointDto>();
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                if (RouteWaypointEndpointResolver.TryResolveRouteWaypointEndpoint(EntityManager, waypoint, out RouteWaypointEndpoint endpoint))
+                {
+                    string direction = endpoint.Direction == RouteWaypointEndpointDirection.Entry ? "entry"
+                        : endpoint.Direction == RouteWaypointEndpointDirection.Exit ? "exit"
+                        : endpoint.Direction == RouteWaypointEndpointDirection.Boundary ? "boundary"
+                        : "unknown";
+                    string kind = endpoint.Kind == RouteWaypointEndpointKind.OutsideTrainConnection ? "outside-train" : "unknown";
+
+                    endpoints.Add(new DispatchPlannerOutsideEndpointDto
+                    {
+                        waypointIndex = i,
+                        direction = direction,
+                        kind = kind,
+                        startLaneIndex = endpoint.StartLane.Index,
+                        endLaneIndex = endpoint.EndLane.Index,
+                        startCurvePos = endpoint.StartCurvePos,
+                        endCurvePos = endpoint.EndCurvePos
+                    });
+                }
+            }
+            return endpoints.ToArray();
         }
 
         private static float ComputePlannerSampleConfidence(int sampleCount)

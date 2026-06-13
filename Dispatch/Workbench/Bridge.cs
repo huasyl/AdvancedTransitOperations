@@ -267,7 +267,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     CopyPlan,
                     lineId => m_Drafts.TryGetValue(lineId, out DispatchWorkbenchDraftState draft)
                         ? draft?.PlannerImportContract
-                        : null));
+                        : null,
+                    waypoint => m_Runtime.m_Resolve.Stop(waypoint)));
             return m_Applied;
         }
 
@@ -415,6 +416,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 lineId => m_Runtime.m_LineView.Kind(lineId),
                 () => Catalog().LineIds(),
                 Clock().Window,
+                settings => m_Runtime.m_OverviewFeatureSettingsPersist.MigrateLegacy(settings),
                 Drafts().New,
                 CopyManual,
                 CopyRule,

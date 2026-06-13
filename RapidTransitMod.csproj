@@ -30,9 +30,6 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>Locales\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
-    <None Include="RapidTransitMod.l10n.*.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <None Include="mod.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
@@ -133,7 +130,6 @@
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.pdb" />
       <RapidTransitDeployFiles Include="$(OutputPath)0Harmony.dll" />
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.mjs" />
-      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.l10n.*.json" />
       <RapidTransitDeployFiles Include="$(OutputPath)mod.json" />
     </ItemGroup>
     <ItemGroup>

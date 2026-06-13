@@ -610,6 +610,11 @@
   border-bottom-color: rgba(236, 111, 111, 0.92);
 }
 
+.dw-demo-field.is-origin.is-error .dw-demo-display-value {
+  color: #f3aaaa;
+  border-bottom-color: rgba(236, 111, 111, 0.92);
+}
+
 .dw-demo-input.is-readonly {
   cursor: default;
 }

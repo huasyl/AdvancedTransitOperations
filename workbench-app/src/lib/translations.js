@@ -183,7 +183,10 @@ export const translations = {
     "direction.down": "Downbound",
     "fallback.line.local": "Local #{key}",
     "fallback.line.express": "Express #{key}",
-    "fallback.station": "Stop {index}"
+    "fallback.station": "Stop {index}",
+    "nativeSchedule.origin.unsupportedOutsideEndpoint": "Lines whose origin is an outside connection are not supported.",
+    "nativeSchedule.origin.unsupportedNotPassengerStop": "Lines whose origin is not a passenger stop are not supported.",
+    "nativeSchedule.message.lineUnsupported": "This line is not supported for RT dispatch. Drafts, rules, and apply are unavailable."
   },
   "zh-CN": {
     "app.title": "快速交通调度工作台",
@@ -363,7 +366,10 @@ export const translations = {
     "direction.down": "下行",
     "fallback.line.local": "慢车 #{key}",
     "fallback.line.express": "快车 #{key}",
-    "fallback.station": "车站 {index}"
+    "fallback.station": "车站 {index}",
+    "nativeSchedule.origin.unsupportedOutsideEndpoint": "不支持始发站为对外链接的线路",
+    "nativeSchedule.origin.unsupportedNotPassengerStop": "不支持始发站不是乘客站点的线路",
+    "nativeSchedule.message.lineUnsupported": "此线路不支持 RT 调度，无法添加草稿、规则或应用。"
   }
 };
 

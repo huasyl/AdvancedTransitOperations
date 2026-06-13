@@ -1,9 +1,11 @@
 using System;
 using Colossal.Serialization.Entities;
+using System.Collections.Generic;
 using Game;
 using Game.Common;
 using Game.Routes;
 using Game.SceneFlow;
+using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
 using UnityEngine;
@@ -125,6 +127,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 throw;
             }
 
+            DrainDisabledLineLateSpawnRetireQueue(commandBuffer);
+
             try
             {
                 m_Runtime.m_RuntimeController.Tick(commandBuffer, nowMin);
@@ -153,6 +157,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             PassengerFlow.SamplingSystem.ClearState();
             m_Runtime.m_AnnouncementWorkbench.Reset();
+            m_Runtime.m_OverviewFeatureSettingsPersist.Reset();
+            m_Runtime.m_OverviewFeatureSettingsPersist.Restore();
             m_Runtime.m_WorkbenchBridge.Reset();
             m_Runtime.m_WorkbenchBridge.Restore();
             m_Runtime.m_WorkbenchBridge.Applied().Load();
@@ -326,6 +332,44 @@ namespace RapidTransitMod.Dispatch.Runtime
         public int Minute()
         {
             return (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
+        }
+
+        private void DrainDisabledLineLateSpawnRetireQueue(EntityCommandBuffer commandBuffer)
+        {
+            IReadOnlyList<Entity> queue = m_Runtime.m_VehicleRegistrar.DisabledLineLateSpawnRetireQueue;
+            if (queue.Count == 0)
+                return;
+
+            try
+            {
+                for (int i = 0; i < queue.Count; i++)
+                {
+                    Entity vehicle = queue[i];
+                    if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
+                        continue;
+                    if (m_Runtime.EntityManager.HasComponent<Deleted>(vehicle)
+                        || m_Runtime.EntityManager.HasComponent<ParkedTrain>(vehicle))
+                    {
+                        continue;
+                    }
+                    if (!m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle)
+                        || !m_Runtime.EntityManager.HasComponent<Target>(vehicle)
+                        || !m_Runtime.EntityManager.HasComponent<Owner>(vehicle))
+                    {
+                        m_Runtime.log.Info("[DisabledLineLateSpawnSkip] 车辆" + vehicle.Index
+                            + " 缺少回库前置组件，跳过误产车回库");
+                        continue;
+                    }
+
+                    PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+                    Target target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
+                    m_Runtime.m_CommandApplier.Retire(vehicle, publicTransport, target, commandBuffer, "关闭线路误产车");
+                }
+            }
+            finally
+            {
+                m_Runtime.m_VehicleRegistrar.ClearDisabledLineLateSpawnRetireQueue();
+            }
         }
     }
 }

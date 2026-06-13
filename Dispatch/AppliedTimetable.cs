@@ -26,6 +26,7 @@ namespace RapidTransitMod.Dispatch
         private readonly Action<string, Exception> m_Fault;
         private readonly Func<DispatchWorkbenchPlannerImportContractDto, DispatchWorkbenchPlannerImportContractDto> m_ClonePlan;
         private readonly Func<string, DispatchWorkbenchPlannerImportContractDto> m_PlanFromDraft;
+        private readonly Func<Entity, Entity> m_Stop;
 
         internal AppliedPort(
             Func<Entity, string> lineId,
@@ -44,7 +45,8 @@ namespace RapidTransitMod.Dispatch
             Action<string> log,
             Action<string, Exception> fault,
             Func<DispatchWorkbenchPlannerImportContractDto, DispatchWorkbenchPlannerImportContractDto> clonePlan,
-            Func<string, DispatchWorkbenchPlannerImportContractDto> planFromDraft)
+            Func<string, DispatchWorkbenchPlannerImportContractDto> planFromDraft,
+            Func<Entity, Entity> stop)
         {
             m_LineId = lineId ?? throw new ArgumentNullException(nameof(lineId));
             m_DraftKey = draftKey ?? throw new ArgumentNullException(nameof(draftKey));
@@ -63,6 +65,7 @@ namespace RapidTransitMod.Dispatch
             m_Fault = fault ?? throw new ArgumentNullException(nameof(fault));
             m_ClonePlan = clonePlan ?? throw new ArgumentNullException(nameof(clonePlan));
             m_PlanFromDraft = planFromDraft ?? throw new ArgumentNullException(nameof(planFromDraft));
+            m_Stop = stop ?? throw new ArgumentNullException(nameof(stop));
         }
 
         internal string LineId(Entity line) => m_LineId(line);
@@ -82,6 +85,7 @@ namespace RapidTransitMod.Dispatch
         internal void Fault(string scope, Exception ex) => m_Fault(scope, ex);
         internal DispatchWorkbenchPlannerImportContractDto ClonePlan(DispatchWorkbenchPlannerImportContractDto dto) => m_ClonePlan(dto);
         internal DispatchWorkbenchPlannerImportContractDto PlanFromDraft(string key) => m_PlanFromDraft(key);
+        internal Entity Stop(Entity waypoint) => m_Stop(waypoint);
     }
 
     internal sealed class AppliedTimetable
@@ -152,7 +156,6 @@ namespace RapidTransitMod.Dispatch
                 if (HasDraftRows())
                 {
                     Backfill();
-                    Save();
                     Loaded = true;
                     return true;
                 }
@@ -164,6 +167,8 @@ namespace RapidTransitMod.Dispatch
             m_Lines.Clear();
             m_Store.Clear();
 
+            bool filteredAny = false;
+            HashSet<Entity> unsupportedLines = new HashSet<Entity>();
             try
             {
                 if (m_EntityManager.HasBuffer<AppliedWorkbenchLineStateElement>(city))
@@ -174,6 +179,15 @@ namespace RapidTransitMod.Dispatch
                         AppliedWorkbenchLineStateElement entry = lineBuffer[i];
                         if (entry.m_LineEntity == Entity.Null)
                         {
+                            continue;
+                        }
+
+                        LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                            m_EntityManager, entry.m_LineEntity, waypoint => m_Host.Stop(waypoint));
+                        if (!support.Supported)
+                        {
+                            unsupportedLines.Add(entry.m_LineEntity);
+                            filteredAny = true;
                             continue;
                         }
 
@@ -196,6 +210,21 @@ namespace RapidTransitMod.Dispatch
                         AppliedWorkbenchStagedRowElement row = rowBuffer[i];
                         if (row.m_LineEntity == Entity.Null)
                         {
+                            continue;
+                        }
+
+                        if (unsupportedLines.Contains(row.m_LineEntity))
+                        {
+                            filteredAny = true;
+                            continue;
+                        }
+
+                        LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                            m_EntityManager, row.m_LineEntity, waypoint => m_Host.Stop(waypoint));
+                        if (!support.Supported)
+                        {
+                            unsupportedLines.Add(row.m_LineEntity);
+                            filteredAny = true;
                             continue;
                         }
 
@@ -236,7 +265,7 @@ namespace RapidTransitMod.Dispatch
                 }
 
                 RecoverRows();
-                Sync(saveDrafts: true);
+                Sync(saveDrafts: false);
                 if (HasRows())
                 {
                     string firstLine = m_Lines.Keys.OrderBy(key => key, StringComparer.Ordinal).FirstOrDefault() ?? string.Empty;
@@ -245,6 +274,8 @@ namespace RapidTransitMod.Dispatch
 
                 m_Host.Log("[AppliedRestore] lines=" + m_Lines.Count);
                 Loaded = true;
+                if (filteredAny)
+                    m_Host.Log("[AppliedRestore] filtered unsupported lines during load; persistence deferred");
                 return true;
             }
             catch (Exception ex)
@@ -270,6 +301,7 @@ namespace RapidTransitMod.Dispatch
         {
             Dictionary<string, WorkbenchLineRuntime> runtimeById = BuildRuntimeIndex(m_RuntimeLines());
             m_Lines.Clear();
+            bool filteredAny = false;
             foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_Drafts)
             {
                 DispatchWorkbenchDraftState draft = entry.Value;
@@ -285,6 +317,14 @@ namespace RapidTransitMod.Dispatch
                     string key = group.Key;
                     if (!runtimeById.TryGetValue(key, out WorkbenchLineRuntime runtime))
                     {
+                        continue;
+                    }
+
+                    LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                        m_EntityManager, runtime.Entity, waypoint => m_Host.Stop(waypoint));
+                    if (!support.Supported)
+                    {
+                        filteredAny = true;
                         continue;
                     }
 
@@ -307,6 +347,8 @@ namespace RapidTransitMod.Dispatch
             }
 
             Sync(saveDrafts: false);
+            if (filteredAny)
+                m_Host.Log("[AppliedBackfill] filtered unsupported lines; persistence deferred");
         }
 
         internal void ApplyDraft(IEnumerable<string> draftKeys, List<WorkbenchLineRuntime> runtimeLines)
@@ -334,8 +376,15 @@ namespace RapidTransitMod.Dispatch
                         && string.Equals(m_Host.DraftKey(row.lineId), key, StringComparison.Ordinal))
                     .Select(m_Host.CopyRow)
                     .ToList();
-                if (rows.Count == 0 || !runtimeById.TryGetValue(key, out WorkbenchLineRuntime runtime))
+                if (rows.Count == 0 || !runtimeById.TryGetValue(key, out WorkbenchLineRuntime runtime) || runtime == null)
                 {
+                    m_Lines.Remove(key);
+                    continue;
+                }
+
+                if (!runtime.DispatchSupported)
+                {
+                    m_Host.Log($"Line {key} removed from applied timetable: {runtime.UnsupportedReason}");
                     m_Lines.Remove(key);
                     continue;
                 }

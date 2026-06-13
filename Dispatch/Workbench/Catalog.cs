@@ -111,6 +111,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                     string originStationName;
                     LineOrigin(line, out originStationId, out originStationName);
 
+                    LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                        m_EntityManager, line, m_Stop);
+
                     string name = Name(line);
                     if (string.IsNullOrEmpty(name))
                     {
@@ -118,6 +121,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                             ? ("Line " + routeNumber.ToString())
                             : ("Line " + line.Index.ToString());
                     }
+
+                    string originStatus = support.Supported ? string.Empty : "error";
+                    string originMessageKey = support.Supported
+                        ? string.Empty
+                        : (support.Reason == LineDispatchSupport.ReasonOriginOutsideEndpoint
+                            ? "nativeSchedule.origin.unsupportedOutsideEndpoint"
+                            : "nativeSchedule.origin.unsupportedNotPassengerStop");
 
                     lines.Add(new WorkbenchLineRuntime
                     {
@@ -128,7 +138,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                         StationCount = CountStops(line),
                         TransportType = m_TransportType(line),
                         OriginStationId = originStationId,
-                        OriginStationName = originStationName
+                        OriginStationName = originStationName,
+                        DispatchSupported = support.Supported,
+                        UnsupportedReason = support.Reason ?? string.Empty,
+                        OriginStatus = originStatus,
+                        OriginMessageKey = originMessageKey
                     });
                 }
             }
@@ -165,6 +179,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             string originStationName;
             LineOrigin(line, out originStationId, out originStationName);
 
+            LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                m_EntityManager, line, m_Stop);
+
             string name = Name(line);
             if (string.IsNullOrEmpty(name))
             {
@@ -172,6 +189,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ? ("Line " + routeNumber.ToString())
                     : ("Line " + line.Index.ToString());
             }
+
+            string originStatus = support.Supported ? string.Empty : "error";
+            string originMessageKey = support.Supported
+                ? string.Empty
+                : (support.Reason == LineDispatchSupport.ReasonOriginOutsideEndpoint
+                    ? "nativeSchedule.origin.unsupportedOutsideEndpoint"
+                    : "nativeSchedule.origin.unsupportedNotPassengerStop");
 
             runtimeLine = new WorkbenchLineRuntime
             {
@@ -182,7 +206,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 StationCount = CountStops(line),
                 TransportType = m_TransportType(line),
                 OriginStationId = originStationId,
-                OriginStationName = originStationName
+                OriginStationName = originStationName,
+                DispatchSupported = support.Supported,
+                UnsupportedReason = support.Reason ?? string.Empty,
+                OriginStatus = originStatus,
+                OriginMessageKey = originMessageKey
             };
             return true;
         }
@@ -378,19 +406,22 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return;
 
             DynamicBuffer<RouteWaypoint> waypoints = m_EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            for (int i = 0; i < waypoints.Length; i++)
-            {
-                Entity stopEntity = Stop(waypoints[i].m_Waypoint);
-                if (stopEntity == Entity.Null)
-                    continue;
-
-                Entity anchor = Anchor(stopEntity);
-                originStationId = anchor != Entity.Null && anchor != stopEntity
-                    ? "station-building-" + anchor.Index.ToString()
-                    : Stops.OriginId(stopEntity);
-                originStationName = StationName(stopEntity);
+            if (waypoints.Length == 0)
                 return;
-            }
+
+            Entity firstWaypoint = waypoints[0].m_Waypoint;
+            if (RouteWaypointEndpointResolver.TryResolveRouteWaypointEndpoint(m_EntityManager, firstWaypoint, out _))
+                return;
+
+            Entity stopEntity = Stop(firstWaypoint);
+            if (stopEntity == Entity.Null)
+                return;
+
+            Entity anchor = Anchor(stopEntity);
+            originStationId = anchor != Entity.Null && anchor != stopEntity
+                ? "station-building-" + anchor.Index.ToString()
+                : Stops.OriginId(stopEntity);
+            originStationName = StationName(stopEntity);
         }
 
         internal string Name(Entity entity)

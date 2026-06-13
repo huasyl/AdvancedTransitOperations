@@ -11,6 +11,7 @@ namespace RapidTransitMod.Workbenches
             return BindDispatch()
                 && BindBroadcast()
                 && BindPassengerFlow()
+                && BindOverview()
                 && BindPlanner()
                 && BindLocale();
         }
@@ -124,6 +125,19 @@ namespace RapidTransitMod.Workbenches
             }
 
             view.BindCall(ApiHost.Prefix + "loadPassengerFlowSnapshot", new Func<string, string>(global::RapidTransitMod.PassengerFlow.Api.Load));
+            return true;
+        }
+
+        private static bool BindOverview()
+        {
+            var view = GameManager.instance?.userInterface?.view?.View;
+            if (view == null)
+            {
+                return false;
+            }
+
+            view.BindCall(ApiHost.Prefix + "startOverviewFeatureSettingsOperation", new Func<string, string>(global::RapidTransitMod.Overview.FeatureSettingsApi.Start));
+            view.BindCall(ApiHost.Prefix + "getOverviewFeatureSettingsOperationStatus", new Func<string, string>(global::RapidTransitMod.Overview.FeatureSettingsApi.Status));
             return true;
         }
 

@@ -21,6 +21,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<string, string> m_GetConfiguredServiceKind;
         private readonly Func<HashSet<string>> m_BuildRuntimeLineIdsForRestore;
         private readonly Action<DispatchWorkbenchMergedView> m_Window;
+        private readonly Action<RuntimeFeatureSettingsDto> m_MigrateLegacyFeatureSettings;
         private readonly Func<string, DispatchWorkbenchDraftState> m_NewDraft;
         private readonly Func<DispatchWorkbenchManualRowDto, DispatchWorkbenchManualRowDto> m_CopyManual;
         private readonly Func<DispatchWorkbenchAutoRuleDto, DispatchWorkbenchAutoRuleDto> m_CopyRule;
@@ -45,6 +46,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<string, string> getConfiguredServiceKind,
             Func<HashSet<string>> buildRuntimeLineIdsForRestore,
             Action<DispatchWorkbenchMergedView> window,
+            Action<RuntimeFeatureSettingsDto> migrateLegacyFeatureSettings,
             Func<string, DispatchWorkbenchDraftState> newDraft,
             Func<DispatchWorkbenchManualRowDto, DispatchWorkbenchManualRowDto> cloneManualRow,
             Func<DispatchWorkbenchAutoRuleDto, DispatchWorkbenchAutoRuleDto> cloneAutoRule,
@@ -68,6 +70,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_GetConfiguredServiceKind = getConfiguredServiceKind ?? throw new ArgumentNullException(nameof(getConfiguredServiceKind));
             m_BuildRuntimeLineIdsForRestore = buildRuntimeLineIdsForRestore ?? throw new ArgumentNullException(nameof(buildRuntimeLineIdsForRestore));
             m_Window = window ?? throw new ArgumentNullException(nameof(window));
+            m_MigrateLegacyFeatureSettings = migrateLegacyFeatureSettings ?? throw new ArgumentNullException(nameof(migrateLegacyFeatureSettings));
             m_NewDraft = newDraft ?? throw new ArgumentNullException(nameof(newDraft));
             m_CopyManual = cloneManualRow ?? throw new ArgumentNullException(nameof(cloneManualRow));
             m_CopyRule = cloneAutoRule ?? throw new ArgumentNullException(nameof(cloneAutoRule));
@@ -189,8 +192,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     })
                     .ToArray(),
                 lineSettings = lineSettings,
-                drafts = drafts.ToArray(),
-                featureSettings = m_Run.FeatureDto()
+                drafts = drafts.ToArray()
             };
             m_BuildCompatState(state);
             return state;
@@ -201,8 +203,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Drafts.Clear();
             m_Run.ClearLineCfg();
             m_Run.DropDepotCache();
-            m_Run.Features(persisted?.featureSettings);
+            if (persisted?.featureSettings != null)
+            {
+                m_MigrateLegacyFeatureSettings(persisted.featureSettings);
+            }
             bool normalizedLegacy = HasLegacyRestoredState(persisted);
+            bool migratedLegacyFeatureSettings = persisted?.featureSettings != null;
             m_Drafts.SetPreferredLineId(
                 NormalizeLegacyRestoredLineId(persisted?.preferredLineId ?? string.Empty));
             if (persisted?.preferredLineIdsByMode != null)
@@ -230,7 +236,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             if (persisted?.drafts == null)
             {
-                return persisted?.featureSettings == null;
+                return migratedLegacyFeatureSettings || normalizedLegacy;
             }
 
             for (int i = 0; i < persisted.drafts.Length; i++)
@@ -251,7 +257,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             bool migrated = Migrate();
-            return persisted?.featureSettings == null || migrated || normalizedLegacy;
+            return migrated || normalizedLegacy || migratedLegacyFeatureSettings;
         }
 
         internal WorkbenchSavePersistencePayload Capture()

@@ -94,6 +94,9 @@ export function buildNativeLineOptions(snapshotLines = [], t) {
   return snapshotLines.map((line, index) => {
     const fallbackKey = line?.sourceLineId || line?.id || String(index + 1);
     const fallbackName = (line?.kind === "express" ? "Rapid " : "Local ") + fallbackKey;
+    const dispatchSupported = line?.dispatchSupported !== false;
+    const originFallback = dispatchSupported ? `origin-${index + 1}` : "";
+    const originNameFallback = dispatchSupported ? `Origin ${index + 1}` : "";
 
     return {
       id: line?.id || `line-${index + 1}`,
@@ -104,11 +107,15 @@ export function buildNativeLineOptions(snapshotLines = [], t) {
       transportType: line?.transportType || "",
       color: line?.color || (line?.kind === "express" ? "#c084fc" : "#5ab4c5"),
       depotId: line?.allowedDepotId || "",
-      originId: line?.originStationId || `origin-${index + 1}`,
-      originStationId: line?.originStationId || `origin-${index + 1}`,
-      originStationName: line?.originStationName || line?.originStationId || `Origin ${index + 1}`,
+      originId: line?.originStationId || originFallback,
+      originStationId: line?.originStationId || originFallback,
+      originStationName: line?.originStationName || line?.originStationId || originNameFallback,
       hold: String(clampPositiveMinutes(line?.originHoldLimitMinutes, 20)),
-      dwell: String(clampPositiveMinutes(line?.maxStationDwellMinutes, 10))
+      dwell: String(clampPositiveMinutes(line?.maxStationDwellMinutes, 10)),
+      dispatchSupported,
+      unsupportedReason: line?.unsupportedReason || "",
+      originStatus: line?.originStatus || "",
+      originMessageKey: line?.originMessageKey || ""
     };
   });
 }
@@ -118,7 +125,8 @@ export function buildNativeOriginOptions(lineOptions = []) {
   const origins = [];
 
   lineOptions.forEach((line, index) => {
-    const originId = line?.originId || line?.originStationId || `origin-${index + 1}`;
+    const dispatchSupported = line?.dispatchSupported !== false;
+    const originId = line?.originId || line?.originStationId || (dispatchSupported ? `origin-${index + 1}` : "");
     if (!originId || seen.has(originId)) {
       return;
     }
@@ -126,7 +134,10 @@ export function buildNativeOriginOptions(lineOptions = []) {
     seen.add(originId);
     origins.push({
       id: originId,
-      label: line?.originStationName || line?.originName || line?.originId || originId
+      label: line?.originStationName || line?.originName || line?.originId || originId,
+      dispatchSupported: line?.dispatchSupported !== false,
+      originStatus: line?.originStatus || "",
+      originMessageKey: line?.originMessageKey || ""
     });
   });
 
@@ -298,7 +309,8 @@ export function buildPlanLineOptions(lines = LINE_OPTIONS) {
     .map((line) => ({
       id: line.id || "",
       originStationId: line.originStationId || "",
-      originStationName: line.originStationName || line.originId || ""
+      originStationName: line.originStationName || line.originId || "",
+      dispatchSupported: line.dispatchSupported !== false
     }));
 }
 

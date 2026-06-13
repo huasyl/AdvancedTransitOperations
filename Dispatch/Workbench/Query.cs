@@ -84,7 +84,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 StationCount = line.StationCount,
                 Color = line.Color ?? string.Empty,
                 OriginStationId = line.OriginStationId ?? string.Empty,
-                OriginStationName = line.OriginStationName ?? string.Empty
+                OriginStationName = line.OriginStationName ?? string.Empty,
+                DispatchSupported = line.DispatchSupported,
+                UnsupportedReason = line.UnsupportedReason ?? string.Empty,
+                OriginStatus = line.OriginStatus ?? string.Empty,
+                OriginMessageKey = line.OriginMessageKey ?? string.Empty
             };
         }
 
@@ -235,7 +239,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                     originHoldLimitMinutes = getOriginHoldLimitMinutes(line.Entity),
                     maxStationDwellMinutes = getMaxStationDwellMinutes(line.Entity),
                     transportType = line.TransportType,
-                    allowedDepotId = getAllowedDepotId(line.Entity)
+                    allowedDepotId = getAllowedDepotId(line.Entity),
+                    dispatchSupported = line.DispatchSupported,
+                    unsupportedReason = line.UnsupportedReason,
+                    originStatus = line.OriginStatus,
+                    originMessageKey = line.OriginMessageKey
                 })
                 .ToArray();
         }

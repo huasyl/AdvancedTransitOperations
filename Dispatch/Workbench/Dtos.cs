@@ -143,8 +143,6 @@ namespace RapidTransitMod
         public DispatchWorkbenchPlanRefDto[] planRefs;
         [DataMember]
         public DispatchWorkbenchPlannerImportContractDto plannerImportContract;
-        [DataMember]
-        public RuntimeFeatureSettingsDto featureSettings;
     }
 
     [DataContract]
@@ -236,7 +234,7 @@ namespace RapidTransitMod
         public int? broadcastDraftVolume;
         [DataMember]
         public BroadcastWorkbenchPersistedVolumeState[] broadcastVolumeStates;
-        [DataMember]
+        [DataMember(EmitDefaultValue = false)]
         public RuntimeFeatureSettingsDto featureSettings;
     }
 
@@ -345,6 +343,14 @@ namespace RapidTransitMod
         public string transportType;
         [DataMember]
         public string allowedDepotId;
+        [DataMember]
+        public bool dispatchSupported;
+        [DataMember]
+        public string unsupportedReason;
+        [DataMember]
+        public string originStatus;
+        [DataMember]
+        public string originMessageKey;
     }
 
     [DataContract]

@@ -1,4 +1,5 @@
 using System;
+using Colossal.Core;
 using Game.Common;
 using Game.Routes;
 using RapidTransitMod.Bypass;
@@ -32,7 +33,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_WorkbenchCatalogCache = runtime.m_WorkbenchBridge.CatalogCache();
             runtime.m_WorkbenchCatalogDirty = new CatalogDirty(
                 runtime.EntityManager,
-                runtime.m_WorkbenchCatalogCache.MarkDirty);
+                () =>
+                {
+                    runtime.m_WorkbenchCatalogCache.MarkDirty();
+                    if (runtime.m_LineView != null)
+                        runtime.m_LineView.Clear();
+                });
             runtime.m_DispatchCache = new DispatchCache(runtime, runtime.LineId, runtime.GetDepot, runtime.DepotId);
             runtime.m_LapCache = new LapCache(runtime);
             runtime.m_RouteProgress = new RouteProgress(runtime);
@@ -50,6 +56,16 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_Bypass.RuntimeEnabled(),
                 () => runtime.m_Bypass.ClearAll(),
                 () => runtime.m_AnnouncementWorkbench.StopPreview());
+            runtime.m_OverviewFeatureSettingsPersist = new RapidTransitMod.Overview.FeatureSettingsPersist(
+                runtime.EntityManager,
+                () => runtime.m_CitySystem.City,
+                runtime.m_Features);
+            runtime.m_OverviewFeatureSettingsOperations = new RapidTransitMod.Overview.FeatureSettingsOperations(
+                new RapidTransitMod.Overview.FeatureSettingsService(
+                    runtime.m_Features,
+                    () => runtime.m_OverviewFeatureSettingsPersist.MarkDirty(),
+                    () => runtime.m_WorkbenchBridge.Version.ToString()),
+                action => MainThreadDispatcher.RunOnMainThread(action));
             runtime.m_LineProfile = new LineProfile(runtime);
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
             runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
@@ -122,6 +138,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Observation = new ObservationPort(runtime, runtime.m_ObsCapture);
             runtime.m_Bypass = new RuntimeFacade(RuntimePorts.BuildBypassRuntime(runtime));
             runtime.m_LineView = new LineView(
+                runtime.EntityManager,
+                waypoint => runtime.m_Resolve.Stop(waypoint),
                 entity => entity != Entity.Null && runtime.EntityManager.Exists(entity),
                 () => runtime.m_SimulationSystem.frameIndex,
                 runtime.m_WorkbenchBridge.Ids().Get,
@@ -190,6 +208,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SelectPanel = null!;
             runtime.m_SelectPort = null!;
             runtime.m_StationAnchorDiagnostics = null!;
+            runtime.m_OverviewFeatureSettingsOperations = null!;
             runtime.m_WorkbenchCatalogDirty = null!;
             runtime.m_WorkbenchCatalogCache = null!;
             runtime.m_WorkbenchBridge = null!;
@@ -200,6 +219,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_AnnouncementWorkbench = null!;
             runtime.m_Announcements = null!;
             runtime.m_RuntimeController = null!;
+            runtime.m_OverviewFeatureSettingsPersist = null!;
             runtime.m_Features = null!;
             runtime.m_LineView = null!;
             runtime.m_VehicleView = null!;
