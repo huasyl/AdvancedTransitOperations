@@ -271,10 +271,13 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_DwellObservationCacheLoaded = true;
             m_Runtime.m_LastStationStopDwellLegacyBufferCount = buffer.Length;
             m_Runtime.m_LastStationStopDwellLegacyRestoredCount = restoredCount;
-            m_Runtime.log.Info("[恢复] DwellObservations buffer=" + buffer.Length
-                + " restored=" + restoredCount
-                + " legacyTopologyFallback=" + restoredByLegacyTopologyCount
-                + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[恢复] DwellObservations buffer=" + buffer.Length
+                    + " restored=" + restoredCount
+                    + " legacyTopologyFallback=" + restoredByLegacyTopologyCount
+                    + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
+            }
         }
 
         private void EnsureStationDwellCore()
@@ -333,11 +336,14 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_StationDwellObservationCacheLoaded = true;
             m_Runtime.m_LastStationStopDwellAnchorBufferCount = buffer.Length;
             m_Runtime.m_LastStationStopDwellAnchorRestoredCount = restoredCount;
-            m_Runtime.log.Info("[StopDwellAnchorRestore] anchorBuffer=" + buffer.Length
-                + " anchorRestored=" + restoredCount
-                + " legacyBuffer=" + m_Runtime.m_LastStationStopDwellLegacyBufferCount
-                + " legacyRestored=" + m_Runtime.m_LastStationStopDwellLegacyRestoredCount
-                + " legacyPreserved=1");
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[StopDwellAnchorRestore] anchorBuffer=" + buffer.Length
+                    + " anchorRestored=" + restoredCount
+                    + " legacyBuffer=" + m_Runtime.m_LastStationStopDwellLegacyBufferCount
+                    + " legacyRestored=" + m_Runtime.m_LastStationStopDwellLegacyRestoredCount
+                    + " legacyPreserved=1");
+            }
         }
 
         private void EnsureSliceCore()
@@ -397,9 +403,12 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             m_Runtime.m_TraversalSliceObservationCacheLoaded = true;
-            m_Runtime.log.Info("[恢复] TraversalSliceObservations buffer=" + buffer.Length
-                + " restored=" + restoredCount
-                + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[恢复] TraversalSliceObservations buffer=" + buffer.Length
+                    + " restored=" + restoredCount
+                    + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
+            }
         }
 
         private bool TryGetSignature(Entity line, out ulong signature)

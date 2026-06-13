@@ -45,7 +45,7 @@ namespace RapidTransitMod.Dispatch.Observation
     {
         internal static void Write(Action<string> log, TraceEvent evt)
         {
-            if (log == null)
+            if (log == null || !RtLog.VerboseEnabled)
                 return;
 
             log(

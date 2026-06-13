@@ -64,11 +64,14 @@ namespace RapidTransitMod.Dispatch.Scheduling
             }
 
             claims.Add(new DispatchScheduler.SlotClaim(pick.Vehicle, slot, holder, commitHold: false, clearIdle: false));
-            m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
-                + " 选择车辆" + pick.Vehicle.Index
-                + " state=" + bestState
-                + " eta=" + (pick.Eta / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
-                + " prevTarget=" + (pick.PrevTarget >= 0 ? DispatchRuntimeSystem.SlotStr(pick.PrevTarget) : "-"));
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
+                    + " 选择车辆" + pick.Vehicle.Index
+                    + " state=" + bestState
+                    + " eta=" + (pick.Eta / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                    + " prevTarget=" + (pick.PrevTarget >= 0 ? DispatchRuntimeSystem.SlotStr(pick.PrevTarget) : "-"));
+            }
             return Status.Claimed;
         }
 
@@ -132,14 +135,17 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 return false;
 
             assignedTarget = nextTarget;
-            Once(
-                m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
-                vehicle,
-                "UpcomingTarget|" + nextTarget + "|" + stateTag,
-                "[预分配] " + lineTag + " 车辆" + vehicle.Index
-                    + " state=" + stateTag
-                    + " 预分配未来班次" + DispatchRuntimeSystem.SlotStr(nextTarget)
-                    + " 距今" + waitMinutes + "分钟");
+            if (RtLog.VerboseEnabled)
+            {
+                Once(
+                    m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
+                    vehicle,
+                    "UpcomingTarget|" + nextTarget + "|" + stateTag,
+                    "[预分配] " + lineTag + " 车辆" + vehicle.Index
+                        + " state=" + stateTag
+                        + " 预分配未来班次" + DispatchRuntimeSystem.SlotStr(nextTarget)
+                        + " 距今" + waitMinutes + "分钟");
+            }
             return true;
         }
 
@@ -232,14 +238,17 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 }
 
                 releasedVehicle = other;
-                Once(
-                    m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
-                    vehicle,
-                    "LateDispatchTakeover|" + target + "|" + other.Index,
-                    "[补发接管] " + lineTag + " 车辆" + vehicle.Index
-                        + " 接管班次" + DispatchRuntimeSystem.SlotStr(target)
-                        + " 释放车辆" + other.Index
-                        + " state=" + (m_Runtime.m_VehicleView.TryGetState(other, out VehicleState releasedState) ? releasedState.ToString() : "?"));
+                if (RtLog.VerboseEnabled)
+                {
+                    Once(
+                        m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
+                        vehicle,
+                        "LateDispatchTakeover|" + target + "|" + other.Index,
+                        "[补发接管] " + lineTag + " 车辆" + vehicle.Index
+                            + " 接管班次" + DispatchRuntimeSystem.SlotStr(target)
+                            + " 释放车辆" + other.Index
+                            + " state=" + (m_Runtime.m_VehicleView.TryGetState(other, out VehicleState releasedState) ? releasedState.ToString() : "?"));
+                }
             }
 
             return true;

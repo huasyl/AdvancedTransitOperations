@@ -432,6 +432,9 @@ namespace RapidTransitMod.TrackModel
 
         internal void LogLineTrackChainDiagnostics(Entity line)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (line == Entity.Null || !EntityManager.Exists(line) || !EntityManager.HasBuffer<RouteWaypoint>(line))
                 return;
 

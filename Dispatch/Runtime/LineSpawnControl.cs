@@ -57,7 +57,8 @@ namespace RapidTransitMod
                 {
                     if (!EntityManager.Exists(spawnKeys[i]))
                     {
-                        log.Info("[PuppetMaster] 清理失效产车记录 线路" + spawnKeys[i].Index);
+                        if (RtLog.VerboseEnabled)
+                            log.Info("[PuppetMaster] 清理失效产车记录 线路" + spawnKeys[i].Index);
                         m_Runtime.m_SpawningLines.Remove(spawnKeys[i]);
                         m_Runtime.m_LineSpawnRequestFrame.Remove(spawnKeys[i]);
                         m_Runtime.m_LastSpawnBlockedLogFrame.Remove(spawnKeys[i]);
@@ -111,7 +112,8 @@ namespace RapidTransitMod
                 {
                     m_Runtime.m_SpawningLines.Remove(line);
                     m_Runtime.m_LineSpawnRequestFrame.Remove(line);
-                    log.Info("[PuppetMaster] 线路" + line.Index + " 产车完成 actualCount=" + actualCount);
+                    if (RtLog.VerboseEnabled)
+                        log.Info("[PuppetMaster] 线路" + line.Index + " 产车完成 actualCount=" + actualCount);
                 }
                 else
                 {
@@ -144,18 +146,24 @@ namespace RapidTransitMod
                 {
                     m_Runtime.m_SpawningLines.Remove(line);
                     m_Runtime.m_LineSpawnRequestFrame.Remove(line);
-                    log.Info("[CleanupTargetAdjust] 线路" + line.Index
-                        + " 清理" + removedCount + "辆"
-                        + " spawnTarget=" + spawnTarget + " -> -"
-                        + " actualCount=" + actualCount);
+                    if (RtLog.VerboseEnabled)
+                    {
+                        log.Info("[CleanupTargetAdjust] 线路" + line.Index
+                            + " 清理" + removedCount + "辆"
+                            + " spawnTarget=" + spawnTarget + " -> -"
+                            + " actualCount=" + actualCount);
+                    }
                 }
                 else if (newSpawnTarget != spawnTarget)
                 {
                     m_Runtime.m_SpawningLines[line] = newSpawnTarget;
-                    log.Info("[CleanupTargetAdjust] 线路" + line.Index
-                        + " 清理" + removedCount + "辆"
-                        + " spawnTarget=" + spawnTarget + " -> " + newSpawnTarget
-                        + " actualCount=" + actualCount);
+                    if (RtLog.VerboseEnabled)
+                    {
+                        log.Info("[CleanupTargetAdjust] 线路" + line.Index
+                            + " 清理" + removedCount + "辆"
+                            + " spawnTarget=" + spawnTarget + " -> " + newSpawnTarget
+                            + " actualCount=" + actualCount);
+                    }
                 }
             }
 

@@ -339,7 +339,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             uint nowFrame,
             string extra = "")
         {
-            if (vehicle == Entity.Null)
+            if (!RtLog.VerboseEnabled || vehicle == Entity.Null)
                 return;
 
             int cachedWaypointIndex = m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypoint)
@@ -405,7 +405,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             uint nowFrame,
             string reason)
         {
-            if (line == Entity.Null || holder == Entity.Null || !m_Runtime.EntityManager.Exists(holder))
+            if (!RtLog.VerboseEnabled || line == Entity.Null || holder == Entity.Null || !m_Runtime.EntityManager.Exists(holder))
                 return;
 
             VehicleState holderState = m_Runtime.m_VehicleView.TryGetState(holder, out VehicleState state)

@@ -110,11 +110,11 @@ namespace RapidTransitMod
                 Detail7LabelKey = data.IsChineseLocale ? "车辆概览" : "Fleet",
                 Detail7Value = data.Total + " / " + data.Running + " / " + data.Holding,
                 AlertText = data.AlertText,
-                ShowLineSpawnAction = data.IsManagedLine,
-                ShowDumpTrackModelAction = true,
-                ShowDumpPlannerInputAction = true,
-                ShowDumpObservationAction = true,
-                ShowDumpStationAnchorObservationAction = true,
+                ShowLineSpawnAction = data.IsManagedLine && BuildFlavor.DebugTools,
+                ShowDumpTrackModelAction = BuildFlavor.DebugTools,
+                ShowDumpPlannerInputAction = BuildFlavor.DebugTools,
+                ShowDumpObservationAction = BuildFlavor.DebugTools,
+                ShowDumpStationAnchorObservationAction = BuildFlavor.DebugTools,
                 ShowBypassStationToggle = data.ShowBypassStationToggle,
                 BypassStationChecked = data.BypassStationChecked
             };
@@ -148,7 +148,7 @@ namespace RapidTransitMod
                 AlertText = data.AlertText,
                 ShowRetireAction = data.IsManagedVehicle,
                 ShowForceDepartAction = data.IsManagedVehicle,
-                ShowReevaluateAction = data.IsManagedVehicle
+                ShowReevaluateAction = data.IsManagedVehicle && BuildFlavor.DebugTools
             };
         }
 

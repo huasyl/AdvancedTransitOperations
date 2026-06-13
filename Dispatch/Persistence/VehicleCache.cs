@@ -94,8 +94,11 @@ namespace RapidTransitMod.Dispatch.Persistence
                         pt.m_DepartureFrame = m_Runtime.m_SimulationSystem.frameIndex + 99999;
                         m_Runtime.EntityManager.SetComponentData(v, pt);
                     }
-                    m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                        + " Holding target=" + (cachedTarget >= 0 ? DispatchRuntimeSystem.SlotStr(cachedTarget) : "-"));
+                    if (RtLog.VerboseEnabled)
+                    {
+                        m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
+                            + " Holding target=" + (cachedTarget >= 0 ? DispatchRuntimeSystem.SlotStr(cachedTarget) : "-"));
+                    }
                     return true;
                 }
 
@@ -125,10 +128,13 @@ namespace RapidTransitMod.Dispatch.Persistence
                     m_Runtime.m_BVMisfire.Remove(v);
                     m_Runtime.m_BVMisfireStartFrame.Remove(v);
                     m_Runtime.m_ObsPersist.MarkLapRestored(v);
-                    m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                        + " Running lapDist=" + cachedLapDist.ToString("F1")
-                        + " lapStart=" + (restoredLapStart ? "ok" : "missing-odometer")
-                        + " startFrame=" + (restoredLapStart ? m_Runtime.m_SimulationSystem.frameIndex.ToString() : "-"));
+                    if (RtLog.VerboseEnabled)
+                    {
+                        m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
+                            + " Running lapDist=" + cachedLapDist.ToString("F1")
+                            + " lapStart=" + (restoredLapStart ? "ok" : "missing-odometer")
+                            + " startFrame=" + (restoredLapStart ? m_Runtime.m_SimulationSystem.frameIndex.ToString() : "-"));
+                    }
 
                     return true;
                 }
@@ -167,14 +173,17 @@ namespace RapidTransitMod.Dispatch.Persistence
                     m_Runtime.m_ObsPersist.SetLapStartOdo(v, currentOdo);
             }
 
-            m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                + " Running进度恢复"
-                + " progress=" + progress.ToString("F2")
-                + " wp=" + nextWaypointIndex
-                + " seg=" + segmentPosition.ToString("F2")
-                + " lapFrames=" + ((uint)cachedLapFrames).ToString()
-                + " startFrame=" + estimatedStartFrame
-                + " from=" + initReason);
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
+                    + " Running进度恢复"
+                    + " progress=" + progress.ToString("F2")
+                    + " wp=" + nextWaypointIndex
+                    + " seg=" + segmentPosition.ToString("F2")
+                    + " lapFrames=" + ((uint)cachedLapFrames).ToString()
+                    + " startFrame=" + estimatedStartFrame
+                    + " from=" + initReason);
+            }
             return true;
         }
     }

@@ -11,6 +11,14 @@
     <RapidTransitDeployDir>$(UserProfile)\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\RapidTransitMod</RapidTransitDeployDir>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <DefineConstants>$(DefineConstants);RT_DEBUG_TOOLS;RT_VERBOSE_LOGS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <DefineConstants>$(DefineConstants);RT_RELEASE</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <Compile Remove="references\**\*.cs" />
     <Compile Remove="tools\**\*.cs" />

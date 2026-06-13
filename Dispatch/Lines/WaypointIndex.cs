@@ -378,6 +378,9 @@ namespace RapidTransitMod.Dispatch.Lines
             int anchorWindowStart,
             int anchorWindowEndExclusive)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             string anchorStableKey = "track-anchor|wp=" + anchoredWaypointIndex;
             if (!m_Runtime.m_RuntimeLog.ShouldLogOnce(
                     m_Runtime.m_RuntimeLog.m_BvTrackAnchorRecoveryLogCache,

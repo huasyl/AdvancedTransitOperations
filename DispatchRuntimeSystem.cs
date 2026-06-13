@@ -359,11 +359,11 @@ namespace RapidTransitMod
         private const int TURNBACK_REPEAT_MIN_PRIMARY_ATOMS = 3;
         private const int TURNBACK_REPEAT_MIN_UNIQUE_LANES = 2;
         private const int TURNBACK_ADJACENT_SEGMENT_MAX_EDGE_SKIP = 2;
-        internal static bool IsBypassRuntimeLoggingEnabled() => true;
-        internal static bool IsLineOrderedRuntimeLoggingEnabled() => true;
+        internal static bool IsBypassRuntimeLoggingEnabled() => RtLog.VerboseEnabled;
+        internal static bool IsLineOrderedRuntimeLoggingEnabled() => RtLog.VerboseEnabled;
         internal static bool IsTripTraceLoggingEnabled() => false;
         internal static bool IsDepartureObserveLoggingEnabled() => false;
-        private static bool IsTrackModelTurnbackBuildLoggingEnabled() => true;
+        private static bool IsTrackModelTurnbackBuildLoggingEnabled() => RtLog.VerboseEnabled;
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
         internal const uint RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES = 30;
         internal const int RETIRE_SHADOW_HISTORY_LIMIT = 4;

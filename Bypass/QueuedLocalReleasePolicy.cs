@@ -38,7 +38,7 @@ namespace RapidTransitMod.Bypass
             m_SameStopLocalLineCacheSignature = 0UL;
         }
 
-        private static bool IsBypassAdmissionLoggingEnabled() => false;
+        private static bool IsBypassAdmissionLoggingEnabled() => RtLog.VerboseEnabled;
 
         private static float ForwardDistanceOnLoop(float totalDistanceMeters, float fromMeters, float toMeters)
         {

@@ -77,27 +77,34 @@ namespace RapidTransitMod.Dispatch.Observation
         internal void RecordLapStart(Entity vehicle, string reason = "")
         {
             Entity line = m_Port.LineOf(vehicle);
-            string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
             if (!m_Port.HasOdo(vehicle))
             {
-                m_Port.Log("[LapStartSkip] " + lineTag + " vehicle" + vehicle.Index
-                    + " reason=" + (reason.Length > 0 ? reason : "unspecified")
-                    + " no-odometer");
+                if (RtLog.VerboseEnabled)
+                {
+                    string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
+                    m_Port.Log("[LapStartSkip] " + lineTag + " vehicle" + vehicle.Index
+                        + " reason=" + (reason.Length > 0 ? reason : "unspecified")
+                        + " no-odometer");
+                }
                 return;
             }
 
             float currentOdo = m_Port.Odo(vehicle);
             uint nowFrame = m_Port.Frame();
             m_Laps.Start(vehicle, currentOdo, nowFrame);
-            int slot = m_Port.SlotOf(vehicle);
-            string curSlot = slot >= 0 ? SlotStr(slot) : "-";
-            int cachedWp = m_Port.CachedWp(vehicle);
-            m_Port.Log("[LapStart] " + lineTag + " vehicle" + vehicle.Index
-                + " reason=" + (reason.Length > 0 ? reason : "unspecified")
-                + " frame=" + nowFrame
-                + " odo=" + currentOdo.ToString("F1")
-                + " curSlot=" + curSlot
-                + " cachedWp=" + cachedWp);
+            if (RtLog.VerboseEnabled)
+            {
+                string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
+                int slot = m_Port.SlotOf(vehicle);
+                string curSlot = slot >= 0 ? SlotStr(slot) : "-";
+                int cachedWp = m_Port.CachedWp(vehicle);
+                m_Port.Log("[LapStart] " + lineTag + " vehicle" + vehicle.Index
+                    + " reason=" + (reason.Length > 0 ? reason : "unspecified")
+                    + " frame=" + nowFrame
+                    + " odo=" + currentOdo.ToString("F1")
+                    + " curSlot=" + curSlot
+                    + " cachedWp=" + cachedWp);
+            }
         }
 
         internal void UpdateLapStats(Entity vehicle)
@@ -110,29 +117,36 @@ namespace RapidTransitMod.Dispatch.Observation
             float current = m_Port.Odo(vehicle);
             float lapDist = current - startOdo;
             Entity line = m_Port.LineOf(vehicle);
-            string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
 
             if (m_Laps.ConsumeRestored(vehicle))
             {
                 if (lapDist > 0f)
                     m_Laps.SetDistance(vehicle, lapDist);
                 ClearVehicleTraversalSliceLapDebug(vehicle);
-                m_Port.Log("[LapStatsSkipRestored] " + lineTag + " vehicle" + vehicle.Index
-                    + " lapDist=" + (lapDist / 1000f).ToString("F2") + "km"
-                    + " restored-first-lap skip-lap-time-write");
+                if (RtLog.VerboseEnabled)
+                {
+                    string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
+                    m_Port.Log("[LapStatsSkipRestored] " + lineTag + " vehicle" + vehicle.Index
+                        + " lapDist=" + (lapDist / 1000f).ToString("F2") + "km"
+                        + " restored-first-lap skip-lap-time-write");
+                }
                 return;
             }
 
             if (lapDist > 0f)
             {
                 m_Laps.SetDistance(vehicle, lapDist);
-                float maintenanceRange = m_Port.Range(vehicle);
-                float remaining = maintenanceRange > 0f ? maintenanceRange - current : -1f;
-                string maintStr = maintenanceRange > 0f
-                    ? " maintenance=" + (maintenanceRange / 1000f).ToString("F1") + "km remaining=" + (remaining / 1000f).ToString("F1") + "km"
-                    : " maintenance=none";
-                m_Port.Log("[LapDistance] " + lineTag + " vehicle" + vehicle.Index
-                    + " lap=" + (lapDist / 1000f).ToString("F2") + "km" + maintStr);
+                if (RtLog.VerboseEnabled)
+                {
+                    string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
+                    float maintenanceRange = m_Port.Range(vehicle);
+                    float remaining = maintenanceRange > 0f ? maintenanceRange - current : -1f;
+                    string maintStr = maintenanceRange > 0f
+                        ? " maintenance=" + (maintenanceRange / 1000f).ToString("F1") + "km remaining=" + (remaining / 1000f).ToString("F1") + "km"
+                        : " maintenance=none";
+                    m_Port.Log("[LapDistance] " + lineTag + " vehicle" + vehicle.Index
+                        + " lap=" + (lapDist / 1000f).ToString("F2") + "km" + maintStr);
+                }
             }
 
             if (!m_Laps.TryStartFrame(vehicle, out uint startFrame))
@@ -141,31 +155,35 @@ namespace RapidTransitMod.Dispatch.Observation
             uint framesDelta = m_Port.Frame() - startFrame;
             m_Laps.SetFrames(vehicle, framesDelta);
             float realMin = framesDelta / (float)m_Port.FramesPerMinute();
-            m_Port.Log("[LapStats] " + lineTag + " vehicle" + vehicle.Index
-                + " lap=" + realMin.ToString("F1") + "min/" + framesDelta + "frames");
-
-            if (line != Entity.Null
-                && m_Port.Express(line)
-                && m_Port.HasWaypoints(line))
+            if (RtLog.VerboseEnabled)
             {
-                DynamicBuffer<RouteWaypoint> timingWaypoints = m_Port.Waypoints(line);
-                if (TryGetTraversalProfileLapTiming(
-                        line,
-                        timingWaypoints,
-                        out float profileRunFrames,
-                        out float profileStopFrames,
-                        out int profileStopCount,
-                        out int profilePassCount))
+                string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
+                m_Port.Log("[LapStats] " + lineTag + " vehicle" + vehicle.Index
+                    + " lap=" + realMin.ToString("F1") + "min/" + framesDelta + "frames");
+
+                if (line != Entity.Null
+                    && m_Port.Express(line)
+                    && m_Port.HasWaypoints(line))
                 {
-                    float profileTotalFrames = profileRunFrames + profileStopFrames;
-                    m_Port.Log("[ExpressLapProfile] " + lineTag + " vehicle" + vehicle.Index
-                        + " observed=" + realMin.ToString("F1") + "min"
-                        + " profileTotal=" + (profileTotalFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
-                        + " run=" + (profileRunFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
-                        + " stop=" + (profileStopFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
-                        + " stopCount=" + profileStopCount
-                        + " passCount=" + profilePassCount);
-                    LogTraversalProfileLapSlices(vehicle, line, timingWaypoints);
+                    DynamicBuffer<RouteWaypoint> timingWaypoints = m_Port.Waypoints(line);
+                    if (TryGetTraversalProfileLapTiming(
+                            line,
+                            timingWaypoints,
+                            out float profileRunFrames,
+                            out float profileStopFrames,
+                            out int profileStopCount,
+                            out int profilePassCount))
+                    {
+                        float profileTotalFrames = profileRunFrames + profileStopFrames;
+                        m_Port.Log("[ExpressLapProfile] " + lineTag + " vehicle" + vehicle.Index
+                            + " observed=" + realMin.ToString("F1") + "min"
+                            + " profileTotal=" + (profileTotalFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
+                            + " run=" + (profileRunFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
+                            + " stop=" + (profileStopFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
+                            + " stopCount=" + profileStopCount
+                            + " passCount=" + profilePassCount);
+                        LogTraversalProfileLapSlices(vehicle, line, timingWaypoints);
+                    }
                 }
             }
 
@@ -723,6 +741,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void RecordTraversalSliceLapDebugStart(Entity vehicle, TraversalRunSlice slice, int atomIndex, float atomPosition01)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (vehicle == Entity.Null || slice.SliceIndex < 0)
                 return;
 
@@ -739,6 +760,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void RecordTraversalSliceLapDebugDropped(Entity vehicle, int sliceIndex)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (vehicle == Entity.Null || sliceIndex < 0)
                 return;
 
@@ -752,6 +776,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void RecordTraversalSliceLapDebugFinalize(Entity vehicle, int sliceIndex, float observedFrames)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (vehicle == Entity.Null || sliceIndex < 0 || observedFrames <= 0f)
                 return;
 
@@ -765,6 +792,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void ClearVehicleTraversalSliceLapDebug(Entity vehicle)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (vehicle == Entity.Null || m_Slices.LapDebug.Count == 0)
                 return;
 
@@ -936,6 +966,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private void LogTraversalProfileLapSlices(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypoints.Length == 0

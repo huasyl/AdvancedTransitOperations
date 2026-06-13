@@ -55,7 +55,9 @@ namespace RapidTransitMod
         public void OnLoad(UpdateSystem updateSystem)
         {
             log.Info(nameof(OnLoad));
+#if RT_DEBUG_TOOLS
             TryEnableCohtmlDebugger();
+#endif
             updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<Dispatch.Runtime.BoardingFirstFrameGuardSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Dispatch.Runtime.BoardingFirstFrameGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
@@ -75,10 +77,14 @@ namespace RapidTransitMod
             updateSystem.UpdateAt<DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<DepotSourceLockSystem, TransportDepotAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<DepotSourceLockSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
+#if RT_DEBUG_TOOLS
             updateSystem.UpdateAt<DevSightRaycastCollectorSystem>(SystemUpdatePhase.Raycast);
             updateSystem.UpdateAfter<DevSightRaycastCollectorSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
+#endif
             updateSystem.UpdateBefore<RapidTransitPanelUISystem>(SystemUpdatePhase.Rendering);
+#if RT_DEBUG_TOOLS
             updateSystem.UpdateAt<DevSightTooltipSystem>(SystemUpdatePhase.UITooltip);
+#endif
 
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
             {
@@ -96,6 +102,7 @@ namespace RapidTransitMod
             log.Info("RapidTransitMod initialized.");
         }
 
+#if RT_DEBUG_TOOLS
         private static void TryEnableCohtmlDebugger()
         {
             try
@@ -122,6 +129,7 @@ namespace RapidTransitMod
                 log.Info("[CohtmlDebugger] configure failed: " + ex.GetType().Name + ": " + ex.Message);
             }
         }
+#endif
 
         public void OnDispose()
         {

@@ -155,10 +155,13 @@ namespace RapidTransitMod
             Target target = EntityManager.GetComponentData<Target>(vehicle);
             if ((publicTransport.m_State & PublicTransportFlags.Boarding) != 0)
             {
-                Mod.log.Info("[OriginArrivingStallAck] vehicle=" + vehicle.Index
-                    + " target=" + record.Target.Index
-                    + " frame=" + nowFrame
-                    + " ptState=" + publicTransport.m_State);
+                if (RtLog.VerboseEnabled)
+                {
+                    Mod.log.Info("[OriginArrivingStallAck] vehicle=" + vehicle.Index
+                        + " target=" + record.Target.Index
+                        + " frame=" + nowFrame
+                        + " ptState=" + publicTransport.m_State);
+                }
                 m_Records.Remove(vehicle);
                 return true;
             }
@@ -171,10 +174,13 @@ namespace RapidTransitMod
 
             if (nowFrame - record.RepairFrame >= RepairAckTimeoutFrames)
             {
-                Mod.log.Info("[OriginArrivingStallRepairMiss] vehicle=" + vehicle.Index
-                    + " target=" + record.Target.Index
-                    + " frame=" + nowFrame
-                    + " ptState=" + publicTransport.m_State);
+                if (RtLog.VerboseEnabled)
+                {
+                    Mod.log.Info("[OriginArrivingStallRepairMiss] vehicle=" + vehicle.Index
+                        + " target=" + record.Target.Index
+                        + " frame=" + nowFrame
+                        + " ptState=" + publicTransport.m_State);
+                }
                 m_Records.Remove(vehicle);
                 return true;
             }
@@ -380,29 +386,32 @@ namespace RapidTransitMod
                 return;
 
             m_LastRejectKeys[vehicle] = key;
-            Mod.log.Info("[OriginArrivingStallReject] vehicle=" + GetEntityIndex(vehicle)
-                + " head=" + GetEntityIndex(reject.HeadVehicle)
-                + " line=" + GetEntityIndex(reject.Line)
-                + " target=" + GetEntityIndex(reject.Target)
-                + " stop=" + GetEntityIndex(reject.Stop)
-                + " frame=" + nowFrame
-                + " reason=" + reject.Reason
-                + " speed=" + reject.Speed.ToString("F2")
-                + " frontFlags=" + reject.FrontFlags
-                + " navLen=" + reject.NavigationLaneCount
-                + " navEndIndex=" + reject.NavigationEndIndex
-                + " computeWp=" + reject.WaypointIndex
-                + " routeWp=" + reject.RouteProgressWaypointIndex
-                + " routeSeg=" + reject.RouteProgressSegmentPosition.ToString("F2")
-                + " routeHit=" + (reject.HasRouteProgress ? "1" : "0")
-                + " pathState=" + reject.PathState
-                + " ptState=" + reject.PublicTransportState
-                + " stopVehicle=" + GetEntityIndex(reject.StopBoardingVehicle)
-                + " stopVehicleBoarding=" + (reject.StopBoardingVehicleBoarding ? "1" : "0")
-                + " hasHead=" + (reject.HasHead ? "1" : "0")
-                + " hasCurrentLane=" + (reject.HasCurrentLane ? "1" : "0")
-                + " hasNavigation=" + (reject.HasNavigation ? "1" : "0")
-                + " hasNavBuffer=" + (reject.HasNavigationBuffer ? "1" : "0"));
+            if (RtLog.VerboseEnabled)
+            {
+                Mod.log.Info("[OriginArrivingStallReject] vehicle=" + GetEntityIndex(vehicle)
+                    + " head=" + GetEntityIndex(reject.HeadVehicle)
+                    + " line=" + GetEntityIndex(reject.Line)
+                    + " target=" + GetEntityIndex(reject.Target)
+                    + " stop=" + GetEntityIndex(reject.Stop)
+                    + " frame=" + nowFrame
+                    + " reason=" + reject.Reason
+                    + " speed=" + reject.Speed.ToString("F2")
+                    + " frontFlags=" + reject.FrontFlags
+                    + " navLen=" + reject.NavigationLaneCount
+                    + " navEndIndex=" + reject.NavigationEndIndex
+                    + " computeWp=" + reject.WaypointIndex
+                    + " routeWp=" + reject.RouteProgressWaypointIndex
+                    + " routeSeg=" + reject.RouteProgressSegmentPosition.ToString("F2")
+                    + " routeHit=" + (reject.HasRouteProgress ? "1" : "0")
+                    + " pathState=" + reject.PathState
+                    + " ptState=" + reject.PublicTransportState
+                    + " stopVehicle=" + GetEntityIndex(reject.StopBoardingVehicle)
+                    + " stopVehicleBoarding=" + (reject.StopBoardingVehicleBoarding ? "1" : "0")
+                    + " hasHead=" + (reject.HasHead ? "1" : "0")
+                    + " hasCurrentLane=" + (reject.HasCurrentLane ? "1" : "0")
+                    + " hasNavigation=" + (reject.HasNavigation ? "1" : "0")
+                    + " hasNavBuffer=" + (reject.HasNavigationBuffer ? "1" : "0"));
+            }
         }
 
         private static string BuildRejectKey(RejectDiagnostic reject)
@@ -456,25 +465,28 @@ namespace RapidTransitMod
             currentLane.m_Front.m_LaneFlags |= TrainLaneFlags.EndReached;
             EntityManager.SetComponentData(candidate.HeadVehicle, currentLane);
 
-            Mod.log.Info("[OriginArrivingStallRepair] vehicle=" + vehicle.Index
-                + " head=" + candidate.HeadVehicle.Index
-                + " line=" + candidate.Line.Index
-                + " target=" + candidate.Target.Index
-                + " stop=" + candidate.Stop.Index
-                + " frame=" + nowFrame
-                + " speed=" + candidate.Speed
-                + " frontBefore=" + beforeFlags
-                + " frontAfter=" + currentLane.m_Front.m_LaneFlags
-                + " movedFlags=" + movedFlags
-                + " navLenBefore=" + candidate.NavigationLaneCount
-                + " navEndIndex=" + candidate.NavigationEndIndex
-                + " computeWp=" + candidate.WaypointIndex
-                + " routeWp=" + candidate.RouteProgressWaypointIndex
-                + " routeSeg=" + candidate.RouteProgressSegmentPosition.ToString("F2")
-                + " routeOrigin=" + candidate.RouteProgressAtOrigin
-                + " navConsumed=" + consumedNavigationLanes
-                + " ptState=" + candidate.PublicTransportState
-                + " pathState=" + candidate.PathState);
+            if (RtLog.VerboseEnabled)
+            {
+                Mod.log.Info("[OriginArrivingStallRepair] vehicle=" + vehicle.Index
+                    + " head=" + candidate.HeadVehicle.Index
+                    + " line=" + candidate.Line.Index
+                    + " target=" + candidate.Target.Index
+                    + " stop=" + candidate.Stop.Index
+                    + " frame=" + nowFrame
+                    + " speed=" + candidate.Speed
+                    + " frontBefore=" + beforeFlags
+                    + " frontAfter=" + currentLane.m_Front.m_LaneFlags
+                    + " movedFlags=" + movedFlags
+                    + " navLenBefore=" + candidate.NavigationLaneCount
+                    + " navEndIndex=" + candidate.NavigationEndIndex
+                    + " computeWp=" + candidate.WaypointIndex
+                    + " routeWp=" + candidate.RouteProgressWaypointIndex
+                    + " routeSeg=" + candidate.RouteProgressSegmentPosition.ToString("F2")
+                    + " routeOrigin=" + candidate.RouteProgressAtOrigin
+                    + " navConsumed=" + consumedNavigationLanes
+                    + " ptState=" + candidate.PublicTransportState
+                    + " pathState=" + candidate.PathState);
+            }
             return true;
         }
 
@@ -523,6 +535,9 @@ namespace RapidTransitMod
 
         private static void LogCandidate(Entity vehicle, Candidate candidate, uint nowFrame)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             Mod.log.Info("[OriginArrivingStallCandidate] vehicle=" + vehicle.Index
                 + " head=" + candidate.HeadVehicle.Index
                 + " line=" + candidate.Line.Index

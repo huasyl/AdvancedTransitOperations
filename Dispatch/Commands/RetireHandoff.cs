@@ -376,7 +376,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
                 bool guardCooled = watch.LastDispatchGuardLogFrame == 0
                     || nowFrame - watch.LastDispatchGuardLogFrame >= 180;
-                if (clearedDispatch && guardCooled)
+                if (RtLog.VerboseEnabled && clearedDispatch && guardCooled)
                 {
                     watch.LastDispatchGuardLogFrame = nowFrame;
                     Log.Info("[RetireHandoffGuard] " + lineTag + " 车辆" + vehicle.Index
@@ -390,7 +390,7 @@ namespace RapidTransitMod.Dispatch.Commands
                     && (serviceDispatchCount > 0 || publicRequestCount > 0 || cargoRequestCount > 0);
                 bool redispatchCooled = watch.LastRedispatchBlockedLogFrame == 0
                     || nowFrame - watch.LastRedispatchBlockedLogFrame >= 180;
-                if (redispatchBlocked && redispatchCooled)
+                if (RtLog.VerboseEnabled && redispatchBlocked && redispatchCooled)
                 {
                     watch.LastRedispatchBlockedLogFrame = nowFrame;
                     Log.Info("[RetireHandoffGuard] " + lineTag + " 车辆" + vehicle.Index
@@ -407,7 +407,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
                 bool preCommitCooled = watch.LastPreCommitLogFrame == 0
                     || nowFrame - watch.LastPreCommitLogFrame >= 180;
-                if (preCommitCooled)
+                if (RtLog.VerboseEnabled && preCommitCooled)
                 {
                     watch.LastPreCommitLogFrame = nowFrame;
                     Log.Info("[RetireHandoffArmVanillaReturn] " + lineTag + " 车辆" + vehicle.Index
@@ -518,9 +518,12 @@ namespace RapidTransitMod.Dispatch.Commands
                 if (!hasRuntimeState || runtimeState != VehicleState.Retiring)
                 {
                     RecordShadow(vehicle, "handoff-abort-runtime-state");
-                    Log.Info("[RetireHandoffAbort] 车辆" + vehicle.Index
-                        + " runtime state=" + (hasRuntimeState ? runtimeState.ToString() : "-")
-                        + "，停止回库watch");
+                    if (RtLog.VerboseEnabled)
+                    {
+                        Log.Info("[RetireHandoffAbort] 车辆" + vehicle.Index
+                            + " runtime state=" + (hasRuntimeState ? runtimeState.ToString() : "-")
+                            + "，停止回库watch");
+                    }
                     removals ??= new List<Entity>();
                     removals.Add(vehicle);
                     continue;
@@ -550,8 +553,11 @@ namespace RapidTransitMod.Dispatch.Commands
                     || !EntityManager.HasComponent<PublicTransport>(vehicle))
                 {
                     RecordShadow(vehicle, "handoff-abort-missing-components");
-                    Log.Info("[RetireHandoffAbort] " + lineTag + " 车辆" + vehicle.Index
-                        + " 缺少Owner/Target/PublicTransport，停止回库watch，保留RT Retiring ownership");
+                    if (RtLog.VerboseEnabled)
+                    {
+                        Log.Info("[RetireHandoffAbort] " + lineTag + " 车辆" + vehicle.Index
+                            + " 缺少Owner/Target/PublicTransport，停止回库watch，保留RT Retiring ownership");
+                    }
                     removals ??= new List<Entity>();
                     removals.Add(vehicle);
                     continue;
@@ -627,7 +633,7 @@ namespace RapidTransitMod.Dispatch.Commands
                 {
                     watch.SoftAckFrame = nowFrame;
                     RecordShadow(vehicle, "handoff-soft-ack");
-                    if (watch.HasIntervention)
+                    if (RtLog.VerboseEnabled && watch.HasIntervention)
                     {
                         Log.Info("[RetireHandoffAck] " + lineTag + " 车辆" + vehicle.Index
                             + " soft target=" + m_RetireHost.DescribeEntity(targetEntity)
@@ -657,7 +663,7 @@ namespace RapidTransitMod.Dispatch.Commands
                         parking,
                         "hard-ack",
                         force: true);
-                    if (watch.HasIntervention)
+                    if (RtLog.VerboseEnabled && watch.HasIntervention)
                     {
                         Log.Info("[RetireHandoffAck] " + lineTag + " 车辆" + vehicle.Index
                             + " hard target=" + m_RetireHost.DescribeEntity(targetEntity)
@@ -726,12 +732,15 @@ namespace RapidTransitMod.Dispatch.Commands
                         parking,
                         "soft-stagnant-retry",
                         force: true);
-                    Log.Info("[RetireHandoffRetry] " + lineTag + " 车辆" + vehicle.Index
-                        + " soft ack后未进入hard ack，超时重投"
-                        + " attempts=" + watch.AttemptCount
-                        + " ageFrames=" + (nowFrame - watch.RequestedFrame)
-                        + " target=" + m_RetireHost.DescribeEntity(targetEntity)
-                        + " reason=" + watch.ReasonCode);
+                    if (RtLog.VerboseEnabled)
+                    {
+                        Log.Info("[RetireHandoffRetry] " + lineTag + " 车辆" + vehicle.Index
+                            + " soft ack后未进入hard ack，超时重投"
+                            + " attempts=" + watch.AttemptCount
+                            + " ageFrames=" + (nowFrame - watch.RequestedFrame)
+                            + " target=" + m_RetireHost.DescribeEntity(targetEntity)
+                            + " reason=" + watch.ReasonCode);
+                    }
                     watch.HasIntervention = true;
                     ArmRetireHandoffRetry(vehicle, ownerDepot, watch, nowFrame, lineTag);
                     watch.RequestedFrame = nowFrame;
@@ -766,22 +775,25 @@ namespace RapidTransitMod.Dispatch.Commands
                             parking,
                             "hard-stalled",
                             force: true);
-                        Log.Info("[RetireHandoffStall] " + lineTag + " 车辆" + vehicle.Index
-                            + " hard ack后长期未收口"
-                            + " hardAckAgeFrames=" + hardAckAgeFrames
-                            + " attempts=" + watch.AttemptCount
-                            + " target=" + m_RetireHost.DescribeEntity(targetEntity)
-                            + " targetKind=" + m_RetireHost.DescribeTargetKind(targetEntity)
-                            + " targetExists=" + ((targetEntity != Entity.Null && EntityManager.Exists(targetEntity)) ? "1" : "0")
-                            + " owner=" + m_RetireHost.DescribeEntity(ownerDepot)
-                            + " route=" + m_RetireHost.DescribeEntity(currentRoute)
-                            + " returning=" + (returning ? "1" : "0")
-                            + " ptState=" + publicTransport.m_State
-                            + " piDest=" + m_RetireHost.DescribeEntity(pathInfoDestination)
-                            + " headPiDest=" + m_RetireHost.DescribeEntity(headPathInfoDestination)
-                            + " parking=" + (parking ? "1" : "0")
-                            + " headParking=" + ((headVehicle != vehicle && m_RetireHost.HasParkingNavLane(headVehicle)) ? "1" : "0")
-                            + " reason=" + watch.ReasonCode);
+                        if (RtLog.VerboseEnabled)
+                        {
+                            Log.Info("[RetireHandoffStall] " + lineTag + " 车辆" + vehicle.Index
+                                + " hard ack后长期未收口"
+                                + " hardAckAgeFrames=" + hardAckAgeFrames
+                                + " attempts=" + watch.AttemptCount
+                                + " target=" + m_RetireHost.DescribeEntity(targetEntity)
+                                + " targetKind=" + m_RetireHost.DescribeTargetKind(targetEntity)
+                                + " targetExists=" + ((targetEntity != Entity.Null && EntityManager.Exists(targetEntity)) ? "1" : "0")
+                                + " owner=" + m_RetireHost.DescribeEntity(ownerDepot)
+                                + " route=" + m_RetireHost.DescribeEntity(currentRoute)
+                                + " returning=" + (returning ? "1" : "0")
+                                + " ptState=" + publicTransport.m_State
+                                + " piDest=" + m_RetireHost.DescribeEntity(pathInfoDestination)
+                                + " headPiDest=" + m_RetireHost.DescribeEntity(headPathInfoDestination)
+                                + " parking=" + (parking ? "1" : "0")
+                                + " headParking=" + ((headVehicle != vehicle && m_RetireHost.HasParkingNavLane(headVehicle)) ? "1" : "0")
+                                + " reason=" + watch.ReasonCode);
+                        }
                     }
 
                     if (ShouldRetryRetireHandoff(watch, nowFrame))
@@ -819,12 +831,15 @@ namespace RapidTransitMod.Dispatch.Commands
                         parking,
                         "abort-timeout",
                         force: true);
-                    Log.Info("[RetireHandoffAbort] " + lineTag + " 车辆" + vehicle.Index
-                        + " 回库交接未被vanilla接住，停止重投"
-                        + " attempts=" + watch.AttemptCount
-                        + " ageFrames=" + (nowFrame - watch.RequestedFrame)
-                        + " target=" + m_RetireHost.DescribeEntity(targetEntity)
-                        + " reason=" + watch.ReasonCode);
+                    if (RtLog.VerboseEnabled)
+                    {
+                        Log.Info("[RetireHandoffAbort] " + lineTag + " 车辆" + vehicle.Index
+                            + " 回库交接未被vanilla接住，停止重投"
+                            + " attempts=" + watch.AttemptCount
+                            + " ageFrames=" + (nowFrame - watch.RequestedFrame)
+                            + " target=" + m_RetireHost.DescribeEntity(targetEntity)
+                            + " reason=" + watch.ReasonCode);
+                    }
                     removals ??= new List<Entity>();
                     removals.Add(vehicle);
                     continue;
@@ -1006,7 +1021,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
             bool cooled = watch.LastEndReachedRepairLogFrame == 0
                 || nowFrame - watch.LastEndReachedRepairLogFrame >= 180;
-            if (cooled)
+            if (RtLog.VerboseEnabled && cooled)
             {
                 watch.LastEndReachedRepairLogFrame = nowFrame;
                 Log.Info("[RetireHandoffEndReachedRepair] 车辆" + vehicle.Index
@@ -1130,7 +1145,7 @@ namespace RapidTransitMod.Dispatch.Commands
             bool returning,
             bool parking)
         {
-            if (!parking)
+            if (!RtLog.VerboseEnabled || !parking)
                 return;
 
             bool cooled = watch.LastParkingDiagLogFrame == 0 || nowFrame - watch.LastParkingDiagLogFrame >= 180;
@@ -1170,6 +1185,9 @@ namespace RapidTransitMod.Dispatch.Commands
             string reason,
             bool force)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             bool gateCooled = watch.LastTraceFrame == 0
                 || (nowFrame - watch.LastTraceFrame) >= DispatchRuntimeSystem.RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
             string gateKey = targetEntity.Index.ToString()
@@ -1286,7 +1304,7 @@ namespace RapidTransitMod.Dispatch.Commands
             watch.LastWriteFrame = nowFrame;
             watch.AttemptCount = (byte)(watch.AttemptCount + 1);
             RecordShadow(vehicle, "handoff-precommit-requested");
-            if (watch.HasIntervention || watch.AttemptCount > 2)
+            if (RtLog.VerboseEnabled && (watch.HasIntervention || watch.AttemptCount > 2))
             {
                 Log.Info("[RetireHandoffRetry] " + lineTag + " 车辆" + vehicle.Index
                     + " attempt=" + watch.AttemptCount
@@ -1337,7 +1355,9 @@ namespace RapidTransitMod.Dispatch.Commands
 
         private void RecordShadow(Entity vehicle, string phase)
         {
-            if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+            if (!RtLog.VerboseEnabled
+                || vehicle == Entity.Null
+                || !EntityManager.Exists(vehicle))
                 return;
 
             uint nowFrame = m_RetireHost.Frame;
@@ -1380,6 +1400,9 @@ namespace RapidTransitMod.Dispatch.Commands
 
         private void FlushShadow(Entity vehicle, string reason)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (!m_RetireShadowHistory.TryGetValue(vehicle, out List<string> history) || history == null || history.Count == 0)
                 return;
 

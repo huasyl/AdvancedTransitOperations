@@ -45,7 +45,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_Log = log;
         }
 
-        internal static bool Enabled() => true;
+        internal static bool Enabled() => RtLog.VerboseEnabled;
 
         internal void CountRunning(bool boardingChanged, bool boarding, bool midStopBoarding, int waypointIndex)
         {

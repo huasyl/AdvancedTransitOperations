@@ -188,8 +188,8 @@ namespace RapidTransitMod.Bypass
         }
 
         private static bool IsTrackModelDiagnosticLoggingEnabled() => false;
-        private static bool IsBypassPerfProbeLoggingEnabled() => false;
-        private static bool IsLineOrderedRuntimeProbeLoggingEnabled() => true;
+        private static bool IsBypassPerfProbeLoggingEnabled() => RtLog.VerboseEnabled;
+        private static bool IsLineOrderedRuntimeProbeLoggingEnabled() => RtLog.VerboseEnabled;
 
         internal void Dispose() => m_Decision.Dispose();
         internal void Clear()
@@ -1021,9 +1021,23 @@ namespace RapidTransitMod.Bypass
         uint IDecisionContext.EpisodeRecheckFrames() => BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES;
         uint IDecisionContext.LatchedReleaseRecheckFrames() => BYPASS_LATCHED_RELEASE_RECHECK_INTERVAL_FRAMES;
         uint IDecisionContext.UnlatchedReevaluateFrames() => BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES;
-        void IDecisionContext.CountCadenceCall() => m_BypassPerfProbeCadenceCalls++;
-        void IDecisionContext.CountCadenceMiss() => m_BypassPerfProbeCadenceMisses++;
-        void IDecisionContext.CountEpisodeReuse() => m_BypassPerfProbeEpisodeReuses++;
+        void IDecisionContext.CountCadenceCall()
+        {
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeCadenceCalls++;
+        }
+
+        void IDecisionContext.CountCadenceMiss()
+        {
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeCadenceMisses++;
+        }
+
+        void IDecisionContext.CountEpisodeReuse()
+        {
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeEpisodeReuses++;
+        }
         bool IDecisionContext.TryGetLatchedBlocker(Entity vehicle, out Entity blocker) => m_Decision.TryGetLatchedBlocker(vehicle, out blocker);
 
         private bool TryGetQueuedLocalReleaseFrameCache(BypassControlScope scope, Entity blocker, out bool shouldRelease)
@@ -1062,7 +1076,8 @@ namespace RapidTransitMod.Bypass
             out bool hasLatchedBlockerProjection,
             out BypassLatchedBlockerProjection latchedBlockerProjection)
         {
-            m_BypassPerfProbeBaselineCalls++;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeBaselineCalls++;
             shouldYield = false;
             trackModelReason = string.Empty;
             trackModelBlocker = Entity.Null;
@@ -1960,7 +1975,8 @@ namespace RapidTransitMod.Bypass
             out BypassProtectedInterval protectedInterval,
             out string resolutionSource)
         {
-            m_BypassPerfProbeResolveCalls++;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeResolveCalls++;
             resolutionSource = "direct";
             if (TryResolveVehicleCurrentProtectedInterval(vehicle, line, waypoints, chain, out protectedIntervalIndex, out protectedInterval))
                 return true;
@@ -2159,7 +2175,7 @@ namespace RapidTransitMod.Bypass
 
         private void RecordSceneExpressLineQueryProbe(Entity expressLine, uint nowFrame)
         {
-            if (expressLine == Entity.Null)
+            if (!IsBypassPerfProbeLoggingEnabled() || expressLine == Entity.Null)
                 return;
 
             m_PerfProbeSceneExpressLineQueries++;
@@ -2810,7 +2826,8 @@ namespace RapidTransitMod.Bypass
 
             InsertSceneExpressFrontierCandidate(frontier, candidate);
             sameStationCandidates?.Add(candidate);
-            m_BypassPerfProbeSceneAdmittedCandidates++;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeSceneAdmittedCandidates++;
             return true;
         }
 
@@ -3050,7 +3067,8 @@ namespace RapidTransitMod.Bypass
                 ? new List<SceneExpressVehicleCandidate>()
                 : null;
             fatalReason = string.Empty;
-            m_BypassPerfProbeSceneSamples++;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeSceneSamples++;
             if (!m_SceneIndex.TryGetEntry(localChain, currentBypassBuilding, protectedIntervalIndex, out SceneStaticIndexEntry staticEntry)
                 || staticEntry.ExpressRelations.Count == 0)
                 return true;
@@ -3098,7 +3116,8 @@ namespace RapidTransitMod.Bypass
                 }
 
                 RecordSceneExpressLineQueryProbe(expressLine, nowFrame);
-                m_LineOrderedProbeExpressLineQueries++;
+                if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                    m_LineOrderedProbeExpressLineQueries++;
                 SceneExpressFrontierAccumulator frontier = new SceneExpressFrontierAccumulator(relation);
                 LineOrderedRuntimeState orderedState = null;
                 BypassExecutionMode executionMode = staticEntry.ExecutionMode;
@@ -3106,7 +3125,8 @@ namespace RapidTransitMod.Bypass
                     && TryGetLineOrderedRuntimeState(expressLine, expressWaypoints, nowFrame, out orderedState);
                 if (useOrderedRuntime)
                 {
-                    m_LineOrderedProbeOrderedAttempts++;
+                    if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                        m_LineOrderedProbeOrderedAttempts++;
                     bool usedThreatHeadFallback = false;
                     SceneExpressFrontierAccumulator threatHeadFrontier = new SceneExpressFrontierAccumulator(relation);
                     List<SceneExpressVehicleCandidate> threatHeadSameStationCandidates = sameStationCandidates != null
@@ -3138,8 +3158,10 @@ namespace RapidTransitMod.Bypass
                     {
                         if (hasPrimaryThreat)
                         {
-                            m_BypassPerfProbeSceneCandidateVehicles++;
-                            m_LineOrderedProbeHeadCandidateBuilds++;
+                            if (IsBypassPerfProbeLoggingEnabled())
+                                m_BypassPerfProbeSceneCandidateVehicles++;
+                            if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                                m_LineOrderedProbeHeadCandidateBuilds++;
                             TryBuildAndInsertSceneExpressVehicleCandidate(
                                 localVehicle,
                                 localLine,
@@ -3160,8 +3182,10 @@ namespace RapidTransitMod.Bypass
 
                         if (hasSecondaryThreat && secondaryThreat.Vehicle != primaryThreat.Vehicle)
                         {
-                            m_BypassPerfProbeSceneCandidateVehicles++;
-                            m_LineOrderedProbeHeadCandidateBuilds++;
+                            if (IsBypassPerfProbeLoggingEnabled())
+                                m_BypassPerfProbeSceneCandidateVehicles++;
+                            if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                                m_LineOrderedProbeHeadCandidateBuilds++;
                             TryBuildAndInsertSceneExpressVehicleCandidate(
                                 localVehicle,
                                 localLine,
@@ -3184,8 +3208,10 @@ namespace RapidTransitMod.Bypass
                             && sameStationThreat.Vehicle != primaryThreat.Vehicle
                             && (!hasSecondaryThreat || sameStationThreat.Vehicle != secondaryThreat.Vehicle))
                         {
-                            m_BypassPerfProbeSceneCandidateVehicles++;
-                            m_LineOrderedProbeHeadCandidateBuilds++;
+                            if (IsBypassPerfProbeLoggingEnabled())
+                                m_BypassPerfProbeSceneCandidateVehicles++;
+                            if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                                m_LineOrderedProbeHeadCandidateBuilds++;
                             TryBuildAndInsertSceneExpressVehicleCandidate(
                                 localVehicle,
                                 localLine,
@@ -3214,7 +3240,8 @@ namespace RapidTransitMod.Bypass
 
                     if (!usedThreatHeadFallback)
                     {
-                        m_LineOrderedProbeHeadOnlySuccesses++;
+                        if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                            m_LineOrderedProbeHeadOnlySuccesses++;
                         frontier = threatHeadFrontier;
                         if (sameStationCandidates != null && threatHeadSameStationCandidates != null)
                             sameStationCandidates.AddRange(threatHeadSameStationCandidates);
@@ -3223,7 +3250,8 @@ namespace RapidTransitMod.Bypass
                         continue;
                     }
 
-                    m_LineOrderedProbeFallbacks++;
+                    if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                        m_LineOrderedProbeFallbacks++;
                     LogLineOrderedFallbackCase(
                         localVehicle,
                         localLine,
@@ -3248,9 +3276,13 @@ namespace RapidTransitMod.Bypass
                 for (int rvIndex = 0; rvIndex < runningSnapshot.Vehicles.Count; rvIndex++)
                 {
                     LineRunningVehicleSnapshot runningVehicle = runningSnapshot.Vehicles[rvIndex];
-                    m_BypassPerfProbeSceneCandidateVehicles++;
+                    if (IsBypassPerfProbeLoggingEnabled())
+                        m_BypassPerfProbeSceneCandidateVehicles++;
                     if (useOrderedRuntime)
-                        m_LineOrderedProbeFallbackCandidateBuilds++;
+                    {
+                        if (IsLineOrderedRuntimeProbeLoggingEnabled())
+                            m_LineOrderedProbeFallbackCandidateBuilds++;
+                    }
                     if (!TryBuildAndInsertSceneExpressVehicleCandidate(
                             localVehicle,
                             localLine,
@@ -3277,7 +3309,8 @@ namespace RapidTransitMod.Bypass
             }
 
             frontiers.Sort(CompareSceneExpressFrontier);
-            m_BypassPerfProbeSceneFrontiers += (ulong)frontiers.Count;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeSceneFrontiers += (ulong)frontiers.Count;
             if (sameStationCandidates != null)
                 sameStationCandidates.Sort(CompareSceneExpressVehicleCandidate);
             return true;
@@ -3374,8 +3407,11 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            m_BypassPerfProbeSameStationCalls++;
-            m_BypassPerfProbeSameStationReusedCandidates += (ulong)orderedCandidates.Count;
+            if (IsBypassPerfProbeLoggingEnabled())
+            {
+                m_BypassPerfProbeSameStationCalls++;
+                m_BypassPerfProbeSameStationReusedCandidates += (ulong)orderedCandidates.Count;
+            }
 
             bool found = false;
             Entity bestExpressLine = Entity.Null;
@@ -3612,7 +3648,8 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            m_BypassPerfProbeDeepCorridorEntries++;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeDeepCorridorEntries++;
             if (!TryGetActiveConflictCorridorCurrent(
                     localChain,
                     localProtectedInterval,
@@ -5654,7 +5691,8 @@ namespace RapidTransitMod.Bypass
             out ConflictCorridor expressCorridor,
             out GlobalSharedTrunkSegment trunkSegment)
         {
-            m_BypassPerfProbeActiveCorridorCalls++;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeActiveCorridorCalls++;
             localCorridor = default;
             expressCorridor = default;
             trunkSegment = default;
@@ -6018,7 +6056,9 @@ namespace RapidTransitMod.Bypass
                 return false;
 
             bool canClear = localCoordinate > stationExitCoordinate + LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS;
-            if (canClear && m_Decision.TryGetLatchedBlocker(localVehicle, out Entity blocker))
+            if (RtLog.VerboseEnabled
+                && canClear
+                && m_Decision.TryGetLatchedBlocker(localVehicle, out Entity blocker))
             {
                 string lineTag = localLine != Entity.Null ? " line=" + localLine.Index : " line=-";
                 m_Runtime.LogVehicleStateOnce(
@@ -6143,7 +6183,8 @@ namespace RapidTransitMod.Bypass
             uint nowFrame,
             out BypassTrackModelDecision trackModelDecision)
         {
-            m_BypassPerfProbeTrackDecisionCalls++;
+            if (IsBypassPerfProbeLoggingEnabled())
+                m_BypassPerfProbeTrackDecisionCalls++;
             trackModelDecision = default;
             if (!m_Runtime.TrackModel.TryGetLocalSceneSnapshot(
                     localLine,

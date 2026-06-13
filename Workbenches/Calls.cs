@@ -9,6 +9,7 @@ namespace RapidTransitMod.Workbenches
         internal static bool Bind()
         {
             return BindDispatch()
+                && BindHost()
                 && BindBroadcast()
                 && BindPassengerFlow()
                 && BindOverview()
@@ -46,6 +47,15 @@ namespace RapidTransitMod.Workbenches
             return GameManager.instance?.localizationManager?.activeLocaleId ?? string.Empty;
         }
 
+        internal static string BuildFlavorJson()
+        {
+            return "{\"debugTools\":"
+                + (BuildFlavor.DebugTools ? "true" : "false")
+                + ",\"verboseLogs\":"
+                + (BuildFlavor.VerboseLogs ? "true" : "false")
+                + "}";
+        }
+
         private static bool BindDispatch()
         {
             var view = GameManager.instance?.userInterface?.view?.View;
@@ -63,6 +73,18 @@ namespace RapidTransitMod.Workbenches
             view.BindCall(ApiHost.Prefix + "startNativeSaveOperation", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Start));
             view.BindCall(ApiHost.Prefix + "getNativeSaveOperationStatus", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Status));
             view.BindCall(ApiHost.Prefix + "setWorkbenchHostState", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.HostState));
+            return true;
+        }
+
+        private static bool BindHost()
+        {
+            var view = GameManager.instance?.userInterface?.view?.View;
+            if (view == null)
+            {
+                return false;
+            }
+
+            view.BindCall(ApiHost.Prefix + "getBuildFlavor", new Func<string>(BuildFlavorJson));
             return true;
         }
 

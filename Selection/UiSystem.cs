@@ -51,12 +51,14 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding<bool>(kGroup, "setPanelOpen", SetPanelOpen));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleRetire", RequestVehicleRetire));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleForceDepart", RequestVehicleForceDepart));
+#if RT_DEBUG_TOOLS
             AddBinding(new TriggerBinding(kGroup, "requestVehicleReevaluate", RequestVehicleReevaluate));
             AddBinding(new TriggerBinding(kGroup, "requestLineSpawn", RequestLineSpawn));
             AddBinding(new TriggerBinding(kGroup, "requestDumpTrackModel", RequestDumpTrackModel));
             AddBinding(new TriggerBinding(kGroup, "requestDumpPlannerInput", RequestDumpPlannerInput));
             AddBinding(new TriggerBinding(kGroup, "requestDumpObservation", RequestDumpObservation));
             AddBinding(new TriggerBinding(kGroup, "requestDumpStationAnchorObservation", RequestDumpStationAnchorObservation));
+#endif
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
@@ -65,6 +67,7 @@ namespace RapidTransitMod
         {
             base.OnUpdate();
 
+#if RT_DEBUG_TOOLS
             try
             {
                 UpdateDevSightBindings();
@@ -74,6 +77,7 @@ namespace RapidTransitMod
                 ClearDevSightBindings();
                 Mod.log.Info("[DevSightPanel] update failed: " + ex.GetType().Name + ": " + ex.Message);
             }
+#endif
 
             if (!m_PanelOpen)
             {
@@ -371,6 +375,7 @@ namespace RapidTransitMod
             }
         }
 
+#if RT_DEBUG_TOOLS
         private void RequestVehicleReevaluate()
         {
             if (DispatchRuntimeSystem.Instance == null)
@@ -439,6 +444,7 @@ namespace RapidTransitMod
                 m_LastSnapshotVersion = 0;
             }
         }
+#endif
 
         private void SetBypassStation(bool enabled)
         {

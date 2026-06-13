@@ -75,6 +75,9 @@ namespace RapidTransitMod.TrackProjection
             m_SuspectProgressValidationCount.Remove(vehicle);
             m_SuspectProgressFirstSample.Remove(vehicle);
 
+            if (!RtLog.VerboseEnabled)
+                return;
+
             string summary = vehicle.Index + "|" + reason;
             if (m_SuspectProgressLogCache.TryGetValue(vehicle, out string previous) && previous == summary)
                 return;
@@ -99,7 +102,7 @@ namespace RapidTransitMod.TrackProjection
             m_SuspectProgressValidationCount.Remove(vehicle);
             m_SuspectProgressFirstSample.Remove(vehicle);
 
-            if (hadState)
+            if (RtLog.VerboseEnabled && hadState)
             {
                 m_Service.Runtime.Log.Info("[ProgressSuspectClear] 杞﹁締" + vehicle.Index
                     + (!string.IsNullOrWhiteSpace(reason) ? " reason=" + reason : string.Empty));
@@ -156,7 +159,7 @@ namespace RapidTransitMod.TrackProjection
             }
 
             m_SuspectProgressLastValidationFrame[vehicle] = nowFrame;
-            bool logValidation = IsProgressSuspectValidationLoggingEnabled();
+            bool logValidation = RtLog.VerboseEnabled && IsProgressSuspectValidationLoggingEnabled();
             if (!TryValidateSuspectVehicleProjection(vehicle, line, chain, segmentIndex, projectedAtomIndex, logValidation, out SuspectProgressSample sample, out string validationSummary, out bool projectionInvalid))
                 return false;
 

@@ -1656,6 +1656,9 @@ namespace RapidTransitMod.TrackModel
 
         internal void DumpTrackModelSnapshot()
         {
+            if (!RtLog.DebugToolsEnabled)
+                return;
+
             var lines = m_Support.GetLineEntities(Allocator.Temp);
             try
             {

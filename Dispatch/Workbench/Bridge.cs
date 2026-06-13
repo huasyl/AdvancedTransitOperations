@@ -698,6 +698,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             List<DispatchWorkbenchStagedRowDto> activeLineDraftRows,
             List<DispatchWorkbenchStagedRowDto> combinedDraftRows)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             Report.Snapshot(
                 ref m_LastSnapshotLogKey,
                 activeRuntime,
@@ -718,6 +721,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             List<DispatchWorkbenchStagedRowDto> activeLineDraftRows,
             List<DispatchWorkbenchStagedRowDto> combinedDraftRows)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             Report.Integrity(
                 EnableIntegrity,
                 reason,

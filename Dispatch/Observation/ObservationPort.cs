@@ -216,12 +216,15 @@ namespace RapidTransitMod.Dispatch.Observation
                 if (m_Runtime.m_ObsPersist.RemoveDwellStart(vehicle))
                 {
                     ClearForcedMidStop(vehicle);
-                    m_Runtime.log.Info("[StopDwellEnd] line" + line.Index
-                        + " vehicle" + vehicle.Index
-                        + " boarding=" + boarding
-                        + " wp=" + currentWaypointIndex
-                        + "/" + (waypointCount - 1)
-                        + " nowFrame=" + nowFrame);
+                    if (RtLog.VerboseEnabled)
+                    {
+                        m_Runtime.log.Info("[StopDwellEnd] line" + line.Index
+                            + " vehicle" + vehicle.Index
+                            + " boarding=" + boarding
+                            + " wp=" + currentWaypointIndex
+                            + "/" + (waypointCount - 1)
+                            + " nowFrame=" + nowFrame);
+                    }
                 }
                 return false;
             }
@@ -234,12 +237,15 @@ namespace RapidTransitMod.Dispatch.Observation
                 dwellSinceFrame = nowFrame;
                 m_Runtime.m_ObsPersist.SetDwellStart(vehicle, dwellSinceFrame);
                 dwellDeadlineFrame = GetDwellDeadline(vehicle, line, currentWaypointIndex, dwellSinceFrame, maxDwellMinutes);
-                m_Runtime.log.Info("[StopDwellBegin] line" + line.Index
-                    + " vehicle" + vehicle.Index
-                    + " wp=" + currentWaypointIndex
-                    + "/" + (waypointCount - 1)
-                    + " limit=" + maxDwellMinutes + "min"
-                    + " deadlineFrame=" + dwellDeadlineFrame);
+                if (RtLog.VerboseEnabled)
+                {
+                    m_Runtime.log.Info("[StopDwellBegin] line" + line.Index
+                        + " vehicle" + vehicle.Index
+                        + " wp=" + currentWaypointIndex
+                        + "/" + (waypointCount - 1)
+                        + " limit=" + maxDwellMinutes + "min"
+                        + " deadlineFrame=" + dwellDeadlineFrame);
+                }
                 return false;
             }
 
@@ -412,8 +418,11 @@ namespace RapidTransitMod.Dispatch.Observation
             if (sampleMinutes < DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES
                 || sampleMinutes > DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_MINUTES)
             {
-                m_Runtime.log.Info("[DispatchSample] line" + line.Index + " vehicle" + vehicle.Index
-                    + " sample=" + sampleMinutes.ToString("F1") + "min out-of-range skip");
+                if (RtLog.VerboseEnabled)
+                {
+                    m_Runtime.log.Info("[DispatchSample] line" + line.Index + " vehicle" + vehicle.Index
+                        + " sample=" + sampleMinutes.ToString("F1") + "min out-of-range skip");
+                }
                 return;
             }
 
@@ -429,6 +438,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void Dump()
         {
+            if (!RtLog.DebugToolsEnabled)
+                return;
+
             try
             {
                 string json = Json();
@@ -806,6 +818,12 @@ namespace RapidTransitMod.Dispatch.Observation
                 && m_Runtime.m_StationAnchorDiagLegacyWritten == 0
                 && m_Runtime.m_StationAnchorDiagAnchorWritten == 0
                 && m_Runtime.m_StationAnchorDiagAnchorMissing == 0)
+            {
+                m_Runtime.m_StationAnchorObservationDiagLastLogFrame = nowFrame;
+                return;
+            }
+
+            if (!RtLog.VerboseEnabled)
             {
                 m_Runtime.m_StationAnchorObservationDiagLastLogFrame = nowFrame;
                 return;

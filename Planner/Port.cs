@@ -16,6 +16,9 @@ namespace RapidTransitMod.Planner
 
         internal void Dump(PlannerExport export)
         {
+            if (!RtLog.DebugToolsEnabled)
+                return;
+
             try
             {
                 string json = Workbenches.Json.Write(export.Load(ModeScope.DefaultWorkbench));

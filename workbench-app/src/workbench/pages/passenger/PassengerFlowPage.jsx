@@ -38,47 +38,6 @@ function buildEmptyPassengerFlowViewModel() {
   };
 }
 
-function sumBy(values, selector) {
-  return values.reduce((sum, entry) => sum + Number(selector(entry) || 0), 0);
-}
-
-function warningCount(warnings, code) {
-  return sumBy(warnings.filter((entry) => entry?.code === code), (entry) => entry?.count);
-}
-
-function isRenderableOdFlow(flow) {
-  return Number(flow?.volume || 0) > 0
-    && !!flow?.originStationId
-    && !!flow?.destinationStationId
-    && flow.originStationId !== flow.destinationStationId;
-}
-
-function PassengerDiagnostics({ data }) {
-  const odRows = data.odFlows.length;
-  const renderableOdRows = data.odFlows.filter(isRenderableOdFlow).length;
-  const odCompleted = sumBy(data.odFlows, (entry) => entry?.volume);
-  const items = [
-    { label: "OD rows", value: odRows },
-    { label: "Renderable OD", value: renderableOdRows },
-    { label: "OD completed", value: odCompleted },
-    { label: "Unknown origin", value: warningCount(data.warnings, "unknownOriginAlighting") },
-    { label: "Transfer expired", value: warningCount(data.warnings, "transferWindowExpired") },
-    { label: "Station mismatch", value: warningCount(data.warnings, "transferBoardStationMismatch") },
-    { label: "Pending overflow", value: warningCount(data.warnings, "pendingTransferOverflow") }
-  ];
-
-  return (
-    <div className="rtw-passenger-diagnostics">
-      {items.map((item) => (
-        <div key={item.label} className="rtw-passenger-diagnostic">
-          <span className="rtw-passenger-diagnostic-label">{item.label}</span>
-          <span className="rtw-passenger-diagnostic-value">{Number(item.value || 0).toLocaleString()}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export default function PassengerFlowPage({ activeTransportMode = "train", isActive = false, registerHostActions }) {
   const [snapshot, setSnapshot] = useState(null);
   const [lineCatalogSnapshot, setLineCatalogSnapshot] = useState(null);
@@ -265,7 +224,6 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
             <PassengerLineTabs lines={viewModel.lines} selectedLineId={selectedLineId} onSelect={handleLineSelect} />
           </div>
           <PassengerMetricCards data={filteredData} />
-          <PassengerDiagnostics data={filteredData} />
           <div className="rtw-passenger-panels">
             <ChartPanel title={selectedLineId === "ALL" ? "全网分时客流走势 / SYSTEM TREND" : "单线分时客流走势 / LINE TREND"}>
               <div className="rtw-passenger-chart is-trend">

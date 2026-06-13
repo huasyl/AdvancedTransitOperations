@@ -133,14 +133,17 @@ namespace RapidTransitMod.Bypass
             m_Admission.RemoveCadence(vehicle);
             m_Admission.RemoveEpisode(vehicle);
             m_Runtime.RecordRelease(vehicle, blocker, releaseReason);
-            ((IControlContext)m_Runtime).LogVehicleStateOnce(
-                m_ReleaseDiagLogCache,
-                vehicle,
-                "release|blocker=" + blocker.Index + "|reason=" + (releaseReason ?? "-"),
-                "[待避释放诊断] vehicle=" + vehicle.Index
-                    + " blocker=" + blocker.Index
-                    + " reason=" + (releaseReason ?? "-")
-                    + " frame=" + ((IControlContext)m_Runtime).Frame);
+            if (RtLog.VerboseEnabled)
+            {
+                ((IControlContext)m_Runtime).LogVehicleStateOnce(
+                    m_ReleaseDiagLogCache,
+                    vehicle,
+                    "release|blocker=" + blocker.Index + "|reason=" + (releaseReason ?? "-"),
+                    "[待避释放诊断] vehicle=" + vehicle.Index
+                        + " blocker=" + blocker.Index
+                        + " reason=" + (releaseReason ?? "-")
+                        + " frame=" + ((IControlContext)m_Runtime).Frame);
+            }
             if (m_Runtime.IsBypassRuntimeLoggingEnabled())
             {
                 Entity line = m_Runtime.ResolveLine(vehicle);

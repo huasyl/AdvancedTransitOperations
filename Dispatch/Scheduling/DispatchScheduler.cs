@@ -307,7 +307,8 @@ namespace RapidTransitMod
 
                         if (currentHolder != Entity.Null && currentHolderTier == 0)
                         {
-                            m_LogDispatchSlotHeld(line, slot, currentHolder, line, wps, nowMin, nowFrame, "idle-or-holding-holder");
+                            if (RtLog.VerboseEnabled)
+                                m_LogDispatchSlotHeld(line, slot, currentHolder, line, wps, nowMin, nowFrame, "idle-or-holding-holder");
                             slot = (slot + DispatchRuntimeSystem.SLOT_INTERVAL) % 1440;
                             continue;
                         }
@@ -401,7 +402,7 @@ namespace RapidTransitMod
 
                             if (canMakeItCount == 0 && !m_Runtime.m_SpawningLines.ContainsKey(line))
                             {
-                                if (pick.NearVehicle != Entity.Null)
+                                if (RtLog.VerboseEnabled && pick.NearVehicle != Entity.Null)
                                 {
                                     string etaText = pick.NearEta == float.MaxValue
                                         ? "?"
@@ -461,9 +462,12 @@ namespace RapidTransitMod
                                 m_Runtime.m_SpawningLines[line] = actualCount + 1;
                                 m_Runtime.m_LineSpawnRequestFrame[line] = nowFrame;
                                 m_RecordLineSpawnTriggerSummary(line, nowMin, slot, actualCount);
-                                m_Runtime.log.Info("[调度] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
-                                    + " 无候选，触发产车+1 (当前=" + actualCount
-                                    + " 圈时=" + (lineDurationFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟)");
+                                if (RtLog.VerboseEnabled)
+                                {
+                                    m_Runtime.log.Info("[调度] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
+                                        + " 无候选，触发产车+1 (当前=" + actualCount
+                                        + " 圈时=" + (lineDurationFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟)");
+                                }
                             }
                         }
 
@@ -513,6 +517,9 @@ namespace RapidTransitMod
 
         private void TryLogSpawnBlocked(Entity line, string lineTag, int slot)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             if (m_Runtime.m_LastSpawnBlockedLogFrame.TryGetValue(line, out uint lastFrame)
                 && (nowFrame - lastFrame) < DispatchRuntimeSystem.SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES)
@@ -532,6 +539,9 @@ namespace RapidTransitMod
             float spawnLeadFrames,
             float reachableWindowFrames)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             ulong key = MakeLineSlotKey(line, slot) ^ 0x8000000000000000UL;
             if (m_Runtime.m_LastScheduleDiagnosticLogFrame.TryGetValue(key, out uint lastFrame)
@@ -557,6 +567,9 @@ namespace RapidTransitMod
             string etaText,
             string nearestReason)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             ulong key = MakeLineSlotKey(line, slot);
             if (m_Runtime.m_LastScheduleDiagnosticLogFrame.TryGetValue(key, out uint lastFrame)

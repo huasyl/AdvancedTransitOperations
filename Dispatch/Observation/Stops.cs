@@ -322,23 +322,26 @@ namespace RapidTransitMod.Dispatch.Observation
             record.Trips.Add(trip);
             Trips.Trim(record.Trips, MaxTrips);
 
-            string stopName = m_Port.StopName(stop, ResolvedStopKind.Stop);
-            if (string.IsNullOrEmpty(stopName))
+            if (m_Port.ShouldLog())
             {
-                stopName = "Stop " + stop.Index.ToString();
-            }
+                string stopName = m_Port.StopName(stop, ResolvedStopKind.Stop);
+                if (string.IsNullOrEmpty(stopName))
+                {
+                    stopName = "Stop " + stop.Index.ToString();
+                }
 
-            m_Port.Log(new TraceEvent(
-                line,
-                vehicle,
-                trip.Seq,
-                "launch-origin",
-                stopName,
-                stop,
-                0,
-                nowTime,
-                1,
-                true));
+                m_Port.Log(new TraceEvent(
+                    line,
+                    vehicle,
+                    trip.Seq,
+                    "launch-origin",
+                    stopName,
+                    stop,
+                    0,
+                    nowTime,
+                    1,
+                    true));
+            }
         }
     }
 }

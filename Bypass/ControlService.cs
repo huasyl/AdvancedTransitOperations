@@ -144,7 +144,8 @@ namespace RapidTransitMod.Bypass
             uint departureFrame,
             uint nowFrame)
         {
-            if (!control.HadLatchedYield && !control.ShouldHold)
+            if (!RtLog.VerboseEnabled
+                || (!control.HadLatchedYield && !control.ShouldHold))
                 return;
 
             string holdFrameAction = control.ShouldHold

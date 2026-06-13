@@ -60,8 +60,11 @@ namespace RapidTransitMod.Dispatch.Persistence
                             m_MaxLapFrames = bestFrames,
                             m_MaxLapDistance = bestDist
                         };
-                        m_Runtime.log.Info("[缓存写入] 线路" + line.Index
-                            + " 圈时=" + (bestFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟");
+                        if (RtLog.VerboseEnabled)
+                        {
+                            m_Runtime.log.Info("[缓存写入] 线路" + line.Index
+                                + " 圈时=" + (bestFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟");
+                        }
                     }
                     return;
                 }
@@ -73,8 +76,11 @@ namespace RapidTransitMod.Dispatch.Persistence
                 m_MaxLapFrames = bestFrames,
                 m_MaxLapDistance = bestDist
             });
-            m_Runtime.log.Info("[缓存新增] 线路" + line.Index
-                + " 圈时=" + (bestFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟");
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[缓存新增] 线路" + line.Index
+                    + " 圈时=" + (bestFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟");
+            }
         }
 
         public float Read(Entity line)

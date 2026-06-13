@@ -130,8 +130,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                         Save();
                     }
 
-                    Mod.log.Info("[WorkbenchRestore] drafts=" + m_Drafts.Count
-                        + " " + Report.DraftSummary(m_Drafts));
+                    if (RtLog.VerboseEnabled)
+                    {
+                        Mod.log.Info("[WorkbenchRestore] drafts=" + m_Drafts.Count
+                            + " " + Report.DraftSummary(m_Drafts));
+                    }
                 }
 
                 m_Loaded = true;
@@ -354,14 +357,17 @@ namespace RapidTransitMod.Dispatch.Workbench
                 NormalizeMigratedWorkbenchDraftState(draftKey, draft);
             }
 
-            Mod.log.Info("[WorkbenchDraftMigration] relocatedRows="
-                + relocatedRows
-                + " droppedRows="
-                + droppedRows
-                + " touchedDrafts="
-                + touchedDraftKeys.Count
-                + " createdDrafts="
-                + createdDrafts);
+            if (RtLog.VerboseEnabled)
+            {
+                Mod.log.Info("[WorkbenchDraftMigration] relocatedRows="
+                    + relocatedRows
+                    + " droppedRows="
+                    + droppedRows
+                    + " touchedDrafts="
+                    + touchedDraftKeys.Count
+                    + " createdDrafts="
+                    + createdDrafts);
+            }
             return true;
         }
 

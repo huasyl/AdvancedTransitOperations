@@ -51,11 +51,14 @@ namespace RapidTransitMod
                     uint removedPrepAge = m_Runtime.m_VehicleView.TryGetPreparing(dead, out uint removedPrepStart)
                         ? m_Runtime.m_SimulationSystem.frameIndex - removedPrepStart
                         : 0;
-                    log.Info("[PreparingRemoved] 车辆" + dead.Index
-                        + " line=" + DispatchCommandApplier.DescribeRetireShadowEntity(mappedLine)
-                        + " targetMin=" + (removedTargetMin >= 0 ? DispatchRuntimeSystem.SlotStr(removedTargetMin) : "-")
-                        + " cachedWp=" + removedCachedWp
-                        + " prepAgeFrames=" + removedPrepAge);
+                    if (RtLog.VerboseEnabled)
+                    {
+                        log.Info("[PreparingRemoved] 车辆" + dead.Index
+                            + " line=" + DispatchCommandApplier.DescribeRetireShadowEntity(mappedLine)
+                            + " targetMin=" + (removedTargetMin >= 0 ? DispatchRuntimeSystem.SlotStr(removedTargetMin) : "-")
+                            + " cachedWp=" + removedCachedWp
+                            + " prepAgeFrames=" + removedPrepAge);
+                    }
                 }
                 m_Runtime.m_Announcements.RemoveVehicle(dead);
                 m_Runtime.m_CommandApplier.FlushRetireShadowSnapshots(dead, "entity-removed");

@@ -188,6 +188,9 @@ namespace RapidTransitMod.Broadcasting
             ProgressState state,
             bool onceOnly)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
             if (!TryBuildAnchorDiagnostic(
                     phase,
@@ -232,6 +235,9 @@ namespace RapidTransitMod.Broadcasting
             ApproachState state,
             bool onceOnly)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
             if (!TryBuildPlatformApproachDiagnostic(
                     phase,

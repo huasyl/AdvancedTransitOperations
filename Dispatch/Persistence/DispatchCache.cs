@@ -101,7 +101,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 Upsert(historyBuf, updatedHistory);
                 float oldMinutes = oldFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
                 float newMinutes = newFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-                if (!depotUpdated)
+                if (RtLog.VerboseEnabled && !depotUpdated)
                 {
                     m_Runtime.log.Info("[出库缓存] 线路" + line.Index
                         + " 样本=" + (sampleFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
@@ -122,7 +122,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 m_DepotToOriginFrames = createdFrames
             });
             Upsert(historyBuf, createdHistory);
-            if (!depotUpdated)
+            if (RtLog.VerboseEnabled && !depotUpdated)
             {
                 m_Runtime.log.Info("[出库缓存新增] 线路" + line.Index
                     + " 最近" + createdHistory.m_SampleCount + "条均值"
@@ -315,13 +315,16 @@ namespace RapidTransitMod.Dispatch.Persistence
                     : newFrames > oldFrames
                         ? "slow-up"
                         : "hold";
-            m_Runtime.log.Info("[出库缓存] 线路" + line.Index
-                + " depot=" + depotId
-                + " 样本=" + (sampleFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
-                + " 最近" + sampleCount + "条"
-                + " ETA=" + (newFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
-                + (oldFrames > 0 ? " 旧值" + (oldFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟" : "")
-                + " mode=" + mode);
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[出库缓存] 线路" + line.Index
+                    + " depot=" + depotId
+                    + " 样本=" + (sampleFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                    + " 最近" + sampleCount + "条"
+                    + " ETA=" + (newFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                    + (oldFrames > 0 ? " 旧值" + (oldFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟" : "")
+                    + " mode=" + mode);
+            }
         }
 
         private static LineDispatchHistoryElement GetHistory(DynamicBuffer<LineDispatchHistoryElement> historyBuf, Entity line)

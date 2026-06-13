@@ -319,6 +319,23 @@ namespace RapidTransitMod
 
         private void TickDepotFrameCacheLogging()
         {
+            if (!RtLog.VerboseEnabled)
+            {
+                m_FrameCacheLogCountdown = DEPOT_FRAME_CACHE_LOG_INTERVAL_FRAMES;
+                m_ConfiguredDepotFrameCacheHits = 0;
+                m_ConfiguredDepotFrameCacheMisses = 0;
+                m_RouteSetupFrameCacheHits = 0;
+                m_RouteSetupFrameCacheMisses = 0;
+                m_ReusableSourceFrameCacheHits = 0;
+                m_ReusableSourceFrameCacheMisses = 0;
+                m_LineRuntimeSnapshotHits = 0;
+                m_LineRuntimeSnapshotMisses = 0;
+                m_BlockedRequestFreezeSkips = 0;
+                m_BlockedRequestProbeExtends = 0;
+                m_BlockedRequestProbeReleases = 0;
+                return;
+            }
+
             m_FrameCacheLogCountdown--;
             if (m_FrameCacheLogCountdown > 0)
                 return;
@@ -1494,6 +1511,9 @@ namespace RapidTransitMod
             bool willLock,
             string reason)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             string key = request.m_Priority.ToString("F2")
                 + "|cfg=" + configuredDepot.Index
                 + "|pref=" + inferredOrPreferredDepot.Index
@@ -1520,6 +1540,9 @@ namespace RapidTransitMod
             Entity blocker,
             Entity blockedLane)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             string key = "gate|req=" + request.Index
                 + "|depot=" + configuredDepot.Index
                 + "|blocker=" + blocker.Index

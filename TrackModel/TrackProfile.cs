@@ -1529,7 +1529,7 @@ namespace RapidTransitMod.TrackModel
                 : 0f;
         }
 
-        private static bool IsTurnbackBuildLoggingEnabled() => false;
+        private static bool IsTurnbackBuildLoggingEnabled() => RtLog.VerboseEnabled;
 
         internal void ClearAll()
         {

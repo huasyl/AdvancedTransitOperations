@@ -154,6 +154,9 @@ namespace RapidTransitMod
 
         public void Dump()
         {
+            if (!RtLog.DebugToolsEnabled)
+                return;
+
             try
             {
                 StationAnchorObservationDiagnosticsDto diagnostics = Build();

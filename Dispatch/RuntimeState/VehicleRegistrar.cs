@@ -100,7 +100,8 @@ namespace RapidTransitMod
                 m_Runtime.m_LineProfile.MarkDiagnosed(line);
                 m_Runtime.m_TrackModel.LogLineTrackChainDiagnostics(line);
                 string lineName = m_Runtime.EntityName(line);
-                m_Runtime.log.Info("[诊断] " + lineTag + " (" + lineName + ") waypoint数=" + wps.Length);
+                if (RtLog.VerboseEnabled)
+                    m_Runtime.log.Info("[诊断] " + lineTag + " (" + lineName + ") waypoint数=" + wps.Length);
             }
 
             for (int i = 0; i < rvs.Length; i++)
@@ -184,33 +185,36 @@ namespace RapidTransitMod
                         else
                             m_Runtime.m_VehicleLabels.Set(v, atA0 ? "候车 等待调度" : "前往始发站");
 
-                        m_Runtime.log.Info("[注册] " + lineTag + " 车辆" + v.Index
-                            + " 初始:" + initState + " 最终:" + finalState
-                            + (restored ? "(缓存恢复)" : "")
-                            + " targetMin=" + finalTarget
-                            + " initReason=" + initReason
-                            + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v));
-                        m_Runtime.m_RuntimeLog.Once(
-                            m_Runtime.m_RuntimeLog.m_RouteVehicleOwnerMismatchLogCache,
-                            v,
-                            "register-detail|line=" + line.Index
-                                + "|state=" + finalState
-                                + "|target=" + (m_Runtime.EntityManager.HasComponent<Target>(v) ? m_Runtime.EntityManager.GetComponentData<Target>(v).m_Target.Index : -1)
-                                + "|route=" + (m_Runtime.EntityManager.HasComponent<CurrentRoute>(v) ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(v).m_Route.Index : -1),
-                            "[RegisterDetail] " + lineTag + " 车辆" + v.Index
-                                + " " + m_Runtime.m_RuntimeLog.VehicleOwnership(line, v, finalState, finalTarget, "register")
-                                + " initReason=" + initReason
-                                + " restored=" + (restored ? "1" : "0")
-                                + " atA0=" + (atA0 ? "1" : "0")
-                                + " initWp=" + initWpIdx);
-                        if (!adoptExistingVehicles)
+                        if (RtLog.VerboseEnabled)
                         {
-                            m_Runtime.log.Info("[OfficialSpawnResult] line=" + line.Index
-                                + " vehicle=" + v.Index
-                                + " state=" + finalState
+                            m_Runtime.log.Info("[注册] " + lineTag + " 车辆" + v.Index
+                                + " 初始:" + initState + " 最终:" + finalState
+                                + (restored ? "(缓存恢复)" : "")
                                 + " targetMin=" + finalTarget
                                 + " initReason=" + initReason
                                 + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v));
+                            m_Runtime.m_RuntimeLog.Once(
+                                m_Runtime.m_RuntimeLog.m_RouteVehicleOwnerMismatchLogCache,
+                                v,
+                                "register-detail|line=" + line.Index
+                                    + "|state=" + finalState
+                                    + "|target=" + (m_Runtime.EntityManager.HasComponent<Target>(v) ? m_Runtime.EntityManager.GetComponentData<Target>(v).m_Target.Index : -1)
+                                    + "|route=" + (m_Runtime.EntityManager.HasComponent<CurrentRoute>(v) ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(v).m_Route.Index : -1),
+                                "[RegisterDetail] " + lineTag + " 车辆" + v.Index
+                                    + " " + m_Runtime.m_RuntimeLog.VehicleOwnership(line, v, finalState, finalTarget, "register")
+                                    + " initReason=" + initReason
+                                    + " restored=" + (restored ? "1" : "0")
+                                    + " atA0=" + (atA0 ? "1" : "0")
+                                    + " initWp=" + initWpIdx);
+                            if (!adoptExistingVehicles)
+                            {
+                                m_Runtime.log.Info("[OfficialSpawnResult] line=" + line.Index
+                                    + " vehicle=" + v.Index
+                                    + " state=" + finalState
+                                    + " targetMin=" + finalTarget
+                                    + " initReason=" + initReason
+                                    + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v));
+                            }
                         }
                         if (!adoptExistingVehicles)
                             m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.m_RuntimeShell.Minute(), v, finalState);
@@ -257,8 +261,11 @@ namespace RapidTransitMod
                 }
             }
 
-            m_Runtime.log.Info("[DisabledLineLateSpawnCleanup] 线路" + line.Index
-                + " 清理关闭线路残留产车状态 queuedRetires=" + queuedRetires);
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[DisabledLineLateSpawnCleanup] 线路" + line.Index
+                    + " 清理关闭线路残留产车状态 queuedRetires=" + queuedRetires);
+            }
         }
 
         private static void RestoreVehicleIntervalModifier(

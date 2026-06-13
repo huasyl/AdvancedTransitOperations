@@ -37,7 +37,8 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal static string Start(string requestJson)
         {
-            Mod.log.Info($"[WorkbenchSaveOperationBridge] startNativeSaveOperation length={requestJson?.Length ?? 0}");
+            if (RtLog.VerboseEnabled)
+                Mod.log.Info($"[WorkbenchSaveOperationBridge] startNativeSaveOperation length={requestJson?.Length ?? 0}");
             return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Start(requestJson) ?? string.Empty;
         }
 
@@ -45,7 +46,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             if (string.IsNullOrWhiteSpace(operationId))
             {
-                Mod.log.Info("[WorkbenchSaveOperationBridge] getNativeSaveOperationStatus empty id");
+                if (RtLog.VerboseEnabled)
+                    Mod.log.Info("[WorkbenchSaveOperationBridge] getNativeSaveOperationStatus empty id");
             }
 
             return DispatchRuntimeSystem.Instance?.m_WorkbenchBridge?.Status(operationId) ?? string.Empty;

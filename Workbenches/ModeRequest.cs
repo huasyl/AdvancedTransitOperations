@@ -12,14 +12,16 @@ namespace RapidTransitMod.Workbenches
                 if (allowLegacyDefault)
                     return ModeScope.DefaultWorkbench;
 
-                Mod.log.Info("[WorkbenchMode] " + (apiName ?? string.Empty) + " received legacy non-JSON request; defaulting to train.");
+                if (RtLog.VerboseEnabled)
+                    Mod.log.Info("[WorkbenchMode] " + (apiName ?? string.Empty) + " received legacy non-JSON request; defaulting to train.");
                 return ModeScope.DefaultWorkbench;
             }
 
             string modeToken = request?.mode;
             if (string.IsNullOrWhiteSpace(modeToken))
             {
-                Mod.log.Info("[WorkbenchMode] " + (apiName ?? string.Empty) + " request is missing mode; defaulting to train.");
+                if (RtLog.VerboseEnabled)
+                    Mod.log.Info("[WorkbenchMode] " + (apiName ?? string.Empty) + " request is missing mode; defaulting to train.");
                 return ModeScope.DefaultWorkbench;
             }
 

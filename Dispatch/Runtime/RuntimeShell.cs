@@ -26,6 +26,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (GameManager.instance.gameMode != GameMode.Game) return;
             m_Runtime.m_SelectPanel.UpdateVersionBucket();
 
+#if RT_DEBUG_TOOLS
             if (Input.GetKey(KeyCode.LeftControl)
                 && Input.GetKey(KeyCode.LeftAlt)
                 && Input.GetKey(KeyCode.X))
@@ -54,6 +55,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_CommandApplier.ForceRetireOne(m_Runtime.m_EndFrameBarrier.CreateCommandBuffer());
                 return;
             }
+#endif
 
             if (!m_Runtime.m_SystemReady)
             {
@@ -301,6 +303,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.log.Info("[启动] 已清空跨档运行态缓存");
         }
 
+#if RT_DEBUG_TOOLS
         public void SpawnTest()
         {
             NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
@@ -328,6 +331,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 lines.Dispose();
             }
         }
+#endif
 
         public int Minute()
         {
