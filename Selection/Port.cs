@@ -14,7 +14,13 @@ namespace RapidTransitMod
     {
         internal delegate bool Progress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
         internal delegate bool Blocker(Entity vehicle, out Entity blockerVehicle);
-        internal delegate void StationText(Entity vehicle, Entity line, out string currentStationName, out string nextStationName);
+        internal delegate void StationText(
+            Entity vehicle,
+            Entity line,
+            out string currentStationName,
+            out string nextPhysicalStationName,
+            out string nextStopStationName,
+            out bool nextPhysicalIsPass);
 
         internal EntityManager EntityManager;
         internal TimedLogger Log;
@@ -38,10 +44,12 @@ namespace RapidTransitMod
         internal Func<Entity, Entity, Entity> ResolveLine;
         internal Func<Entity, Entity> ResolveVehicle;
         internal Func<Entity, Entity> ResolveVehicleLine;
+        internal Func<Entity, string> ResolveLineDisplayName;
         internal Func<Entity, Entity> ResolveBypassBuilding;
         internal Action EnsureBypassBuffer;
         internal Action InvalidateBypassModel;
         internal Func<Entity, float> ReadLap;
+        internal Func<Entity, float> ReadLineDuration;
         internal Func<Entity, float> ReadDispatch;
         internal Func<bool, BufferLookup<RouteVehicle>> RouteVehicles;
         internal Func<bool, BufferLookup<RouteWaypoint>> RouteWaypoints;
@@ -53,6 +61,5 @@ namespace RapidTransitMod
         internal Blocker TryBlocker;
         internal Action<Entity, string> ClearBypass;
         internal StationText Stations;
-        internal Func<Entity, string> EventText;
     }
 }

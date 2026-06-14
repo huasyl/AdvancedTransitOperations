@@ -45,6 +45,15 @@ namespace RapidTransitMod.TrackProjection
         }
     }
 
+    internal enum VehicleTrackCursorSource : byte
+    {
+        Unknown = 0,
+        CurrentLane = 1,
+        RouteProgress = 2,
+        CachedWaypoint = 3,
+        AnchoredRouteProgress = 4,
+    }
+
     internal readonly struct VehicleTrackCursor
     {
         public readonly bool Available;
@@ -56,6 +65,7 @@ namespace RapidTransitMod.TrackProjection
         public readonly int AtomCursorIndex;
         public readonly float AtomPosition01;
         public readonly float Confidence;
+        public readonly VehicleTrackCursorSource Source;
 
         public VehicleTrackCursor(
             Entity lineEntity,
@@ -65,7 +75,8 @@ namespace RapidTransitMod.TrackProjection
             int atomEndIndexExclusive,
             int atomCursorIndex,
             float atomPosition01,
-            float confidence)
+            float confidence,
+            VehicleTrackCursorSource source = VehicleTrackCursorSource.Unknown)
         {
             Available = lineEntity != Entity.Null;
             LineEntity = lineEntity;
@@ -76,6 +87,7 @@ namespace RapidTransitMod.TrackProjection
             AtomCursorIndex = atomCursorIndex;
             AtomPosition01 = atomPosition01;
             Confidence = confidence;
+            Source = source;
         }
     }
 

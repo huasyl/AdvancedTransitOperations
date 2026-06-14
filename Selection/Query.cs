@@ -16,6 +16,7 @@ namespace RapidTransitMod
         public bool IsManagedLine;
         public bool IsChineseLocale;
         public int NextSlot;
+        public float RouteDurationFrames;
         public float LapCacheFrames;
         public float DispatchCacheFrames;
         public int Preparing;
@@ -39,6 +40,8 @@ namespace RapidTransitMod
         public string OfficialDispatchValue;
         public string NowText;
         public string NextSlotText;
+        public string LineDisplayName;
+        public string RouteDurationText;
         public string LapCacheText;
         public string DispatchCacheText;
         public string ManagedText;
@@ -69,8 +72,8 @@ namespace RapidTransitMod
         public string StopDwellValue;
         public string InboundTimeValue;
         public string CurrentStationName;
-        public string NextStationName;
-        public string EventValue;
+        public string NextPhysicalStationName;
+        public string NextStopStationName;
         public string AlertText;
     }
 
@@ -89,9 +92,11 @@ namespace RapidTransitMod
         private readonly Func<Entity, Entity, Entity> m_ResolveSelectedLine;
         private readonly Func<Entity, Entity> m_ResolveSelectedVehicle;
         private readonly Func<Entity, Entity> m_ResolveVehicleLine;
+        private readonly Func<Entity, string> m_GetLineDisplayName;
         private readonly Func<Entity, bool> m_IsManagedLine;
         private readonly Func<Entity, int, int> m_GetNextSlot;
         private readonly Action<Entity, int, int> m_LogLineState;
+        private readonly Func<Entity, float> m_ReadLineDuration;
         private readonly Func<Entity, float> m_ReadLineLapCache;
         private readonly Func<Entity, float> m_ReadDispatchCache;
         private readonly Func<Entity, bool> m_CanConfigureBypass;
@@ -99,8 +104,7 @@ namespace RapidTransitMod
         private readonly Func<Entity, VehicleState, string> m_GetManagedVehicleStateText;
         private readonly Func<Entity, string> m_BuildTraversalProgress;
         private readonly Func<Entity, Entity, VehicleState, string> m_BuildEta;
-        private readonly Func<Entity, Entity, (string CurrentStationName, string NextStationName)> m_GetStationContext;
-        private readonly Func<Entity, string> m_BuildBroadcastEvent;
+        private readonly Func<Entity, Entity, (string CurrentStationName, string NextPhysicalStationName, string NextStopStationName)> m_GetStationContext;
         private readonly Func<Entity, Entity, int, int, string> m_BuildVehicleAlert;
         private readonly Func<Entity, int, int, float, float, int, string> m_BuildLineAlert;
         private readonly Func<int, string> m_SlotText;
@@ -127,9 +131,11 @@ namespace RapidTransitMod
             Func<Entity, Entity, Entity> resolveSelectedLine,
             Func<Entity, Entity> resolveSelectedVehicle,
             Func<Entity, Entity> resolveVehicleLine,
+            Func<Entity, string> getLineDisplayName,
             Func<Entity, bool> isManagedLine,
             Func<Entity, int, int> getNextSlot,
             Action<Entity, int, int> logLineState,
+            Func<Entity, float> readLineDuration,
             Func<Entity, float> readLineLapCache,
             Func<Entity, float> readDispatchCache,
             Func<Entity, bool> canConfigureBypass,
@@ -137,8 +143,7 @@ namespace RapidTransitMod
             Func<Entity, VehicleState, string> getManagedVehicleStateText,
             Func<Entity, string> buildTraversalProgress,
             Func<Entity, Entity, VehicleState, string> buildEta,
-            Func<Entity, Entity, (string CurrentStationName, string NextStationName)> getStationContext,
-            Func<Entity, string> buildBroadcastEvent,
+            Func<Entity, Entity, (string CurrentStationName, string NextPhysicalStationName, string NextStopStationName)> getStationContext,
             Func<Entity, Entity, int, int, string> buildVehicleAlert,
             Func<Entity, int, int, float, float, int, string> buildLineAlert,
             Func<int, string> slotText,
@@ -164,9 +169,11 @@ namespace RapidTransitMod
             m_ResolveSelectedLine = resolveSelectedLine;
             m_ResolveSelectedVehicle = resolveSelectedVehicle;
             m_ResolveVehicleLine = resolveVehicleLine;
+            m_GetLineDisplayName = getLineDisplayName;
             m_IsManagedLine = isManagedLine;
             m_GetNextSlot = getNextSlot;
             m_LogLineState = logLineState;
+            m_ReadLineDuration = readLineDuration;
             m_ReadLineLapCache = readLineLapCache;
             m_ReadDispatchCache = readDispatchCache;
             m_CanConfigureBypass = canConfigureBypass;
@@ -175,7 +182,6 @@ namespace RapidTransitMod
             m_BuildTraversalProgress = buildTraversalProgress;
             m_BuildEta = buildEta;
             m_GetStationContext = getStationContext;
-            m_BuildBroadcastEvent = buildBroadcastEvent;
             m_BuildVehicleAlert = buildVehicleAlert;
             m_BuildLineAlert = buildLineAlert;
             m_SlotText = slotText;
@@ -203,6 +209,7 @@ namespace RapidTransitMod
             if (isManagedLine)
                 m_LogLineState(line, nowMin, nextSlot);
 
+            float routeDurationFrames = isManagedLine ? m_ReadLineDuration(line) : 0f;
             float lapCacheFrames = isManagedLine ? m_ReadLineLapCache(line) : 0f;
             float dispatchCacheFrames = isManagedLine ? m_ReadDispatchCache(line) : 0f;
             int spawnPending = isManagedLine && m_SpawningLines.IsCreated && m_SpawningLines.TryGetValue(line, out int pending)
@@ -218,6 +225,7 @@ namespace RapidTransitMod
                 IsManagedLine = isManagedLine,
                 IsChineseLocale = isChineseLocale,
                 NextSlot = nextSlot,
+                RouteDurationFrames = routeDurationFrames,
                 LapCacheFrames = lapCacheFrames,
                 DispatchCacheFrames = dispatchCacheFrames,
                 SpawnPending = spawnPending,
@@ -232,6 +240,8 @@ namespace RapidTransitMod
                 OfficialDispatchValue = officialDispatchValue,
                 NowText = m_SlotText(nowMin),
                 NextSlotText = isManagedLine ? m_SlotText(nextSlot) : officialDispatchValue,
+                LineDisplayName = m_GetLineDisplayName(line),
+                RouteDurationText = FormatMinutes(routeDurationFrames),
                 LapCacheText = FormatMinutes(lapCacheFrames),
                 DispatchCacheText = FormatMinutes(dispatchCacheFrames),
                 ManagedText = m_BoolText(isManagedLine),
@@ -286,14 +296,14 @@ namespace RapidTransitMod
                 line,
                 isManagedLine ? nextSlotOccupancy : 0,
                 data.NearingTerminus,
-                lapCacheFrames,
+                routeDurationFrames,
                 dispatchCacheFrames,
                 spawnPending);
             data.CardAlertText = m_BuildLineAlert(
                 line,
                 isManagedLine && spawnPending > 0 ? 1 : 0,
                 0,
-                lapCacheFrames,
+                routeDurationFrames,
                 dispatchCacheFrames,
                 spawnPending);
 
@@ -318,7 +328,7 @@ namespace RapidTransitMod
             Entity line = m_ResolveVehicleLine(vehicle);
             int targetMin = m_VehicleView.TryGetTarget(vehicle, out int targetSlot) ? targetSlot : -1;
             int currentMin = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) ? currentSlot : -1;
-            (string currentStationName, string nextStationName) = m_GetStationContext(vehicle, line);
+            (string currentStationName, string nextPhysicalStationName, string nextStopStationName) = m_GetStationContext(vehicle, line);
 
             data = new VehicleSelectData
             {
@@ -342,8 +352,8 @@ namespace RapidTransitMod
                 StopDwellValue = BuildStopDwellValue(vehicle),
                 InboundTimeValue = BuildInboundTimeValue(vehicle),
                 CurrentStationName = currentStationName ?? string.Empty,
-                NextStationName = nextStationName ?? string.Empty,
-                EventValue = m_BuildBroadcastEvent(vehicle),
+                NextPhysicalStationName = nextPhysicalStationName ?? string.Empty,
+                NextStopStationName = nextStopStationName ?? string.Empty,
                 AlertText = isManagedVehicle
                     ? m_BuildVehicleAlert(vehicle, line, nowMin, targetMin)
                     : (line != Entity.Null ? "using-native-fallback" : "vehicle-not-tracked")

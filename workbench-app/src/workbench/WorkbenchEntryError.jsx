@@ -1,15 +1,21 @@
 import React from "react";
+import { useNativeScheduleI18n } from "../workbench-i18n";
 
-export default function WorkbenchEntryError({ error, title = "RT Dispatch Workbench", body = "Native schedule mount failed." }) {
+export default function WorkbenchEntryError({ error, title, body }) {
+  const { t } = useNativeScheduleI18n();
+  const resolvedTitle = title || t("nativeSchedule.error.title");
+  const resolvedBody = body || t("nativeSchedule.error.mountFailed");
+  const resolvedDetail = error?.message || t("nativeSchedule.error.unknown");
+
   return (
     <div className="dw-native-schedule-root">
       <div className="dw-native-schedule-error">
-        <div className="dw-native-schedule-error-title">{title}</div>
+        <div className="dw-native-schedule-error-title">{resolvedTitle}</div>
         <div className="dw-native-schedule-error-text">
-          {body}
+          {resolvedBody}
         </div>
         <div className="dw-native-schedule-error-detail">
-          {error?.message || "Unknown error"}
+          {resolvedDetail}
         </div>
       </div>
     </div>

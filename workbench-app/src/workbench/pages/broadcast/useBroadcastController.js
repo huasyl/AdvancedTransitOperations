@@ -1229,7 +1229,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
       setIsApplyingBroadcastConfig(false);
       setBroadcastApplyPhase("");
-      setBroadcastApplyError(result?.error || "Apply failed");
+      setBroadcastApplyError(result?.error || t("broadcast.footer.applyFailedFallback"));
     } catch (error) {
       if (!isCurrentBroadcastMode(requestMode)) {
         return;
@@ -1237,7 +1237,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
       setIsApplyingBroadcastConfig(false);
       setBroadcastApplyPhase("");
-      setBroadcastApplyError(error instanceof Error ? error.message : "Apply failed");
+      setBroadcastApplyError(error instanceof Error ? error.message : t("broadcast.footer.applyFailedFallback"));
     }
   }
 

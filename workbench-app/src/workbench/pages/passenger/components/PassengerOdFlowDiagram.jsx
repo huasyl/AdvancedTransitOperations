@@ -3,6 +3,7 @@ import { chordDirected, ribbonArrow } from "d3-chord";
 import { arc } from "d3-shape";
 import { useEffect, useMemo, useState } from "react";
 import { traceWorkbench } from "../../../shared/workbench-trace";
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 
 const WIDTH = 540;
 const HEIGHT = 540;
@@ -165,6 +166,7 @@ function buildChordInput(flows, lines) {
 }
 
 export default function PassengerOdFlowDiagram({ flows, lines, isActive = false }) {
+  const { t } = useNativeScheduleI18n();
   const [hoveredGroup, setHoveredGroup] = useState(null);
   const chordInput = useMemo(() => buildChordInput(flows, lines), [flows, lines]);
   const chordData = useMemo(() => chordDirected().padAngle(0.04).sortSubgroups(descending)(chordInput.matrix), [chordInput.matrix]);
@@ -181,7 +183,7 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
   }, [hoveredGroup, isActive]);
 
   if (!flows.length || chordInput.names.length < 2) {
-    return <div className="rtw-passenger-empty is-large">暂无真实 OD 客流数据</div>;
+    return <div className="rtw-passenger-empty is-large">{t("nativeWorkbench.passenger.empty.odFlow")}</div>;
   }
 
   function setStationHover(nextGroup) {

@@ -240,6 +240,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastRegisterSweepMinute = -1;
             m_Runtime.m_LastSchedulerTickMinute = -1;
             m_Runtime.m_SelectPanel.ClearDebugSummaries();
+            m_Runtime.m_StationContextQuery.Clear();
             m_Runtime.m_RuntimeLog.Clear();
             m_Runtime.m_RuntimeHotPathProbe.Clear();
             m_Runtime.log.Info("[清场] 已清除所有公共交通车辆");
@@ -298,6 +299,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastRegisterSweepMinute = -1;
             m_Runtime.m_LastSchedulerTickMinute = -1;
             m_Runtime.m_SelectPanel.ClearDebugSummaries();
+            m_Runtime.m_StationContextQuery.Clear();
             m_Runtime.m_RuntimeLog.Clear();
             m_Runtime.m_RuntimeHotPathProbe.Clear();
             m_Runtime.log.Info("[启动] 已清空跨档运行态缓存");

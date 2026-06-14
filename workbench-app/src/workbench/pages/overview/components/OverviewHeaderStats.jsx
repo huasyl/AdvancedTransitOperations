@@ -1,14 +1,17 @@
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
+
 function formatNumber(value) {
   const numeric = Number(value || 0);
   return numeric.toLocaleString();
 }
 
 export default function OverviewHeaderStats({ summary }) {
+  const { t } = useNativeScheduleI18n();
   const items = [
-    { label: "总客流数据", value: formatNumber(summary.estimatedPassengerLoad), unit: "/h" },
-    { label: "服役车辆", value: `${summary.activeVehicleCount}/${summary.scheduledVehicleCount}`, unit: "" },
-    { label: "最高负荷枢纽", value: summary.peakStationName || "暂无数据", unit: "" },
-    { label: "运行准点率", value: `${summary.healthPercent.toFixed(1)}%`, unit: "" }
+    { label: t("nativeWorkbench.overview.stats.totalBoardings"), value: formatNumber(summary.totalBoardingsAlightings24h), unit: "" },
+    { label: t("nativeWorkbench.overview.stats.busiestStation"), value: summary.busiestStationName || t("nativeWorkbench.overview.empty.noData"), unit: "" },
+    { label: t("nativeWorkbench.overview.stats.peakSectionLoad"), value: formatNumber(summary.peakSectionLoad), unit: "" },
+    { label: t("nativeWorkbench.overview.stats.peakQuarterHourFlow"), value: formatNumber(summary.peakQuarterHourFlow), unit: "" }
   ];
 
   return (

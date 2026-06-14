@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import { buildOverviewViewModel } from "./overview-view-model";
+import { buildOverviewMetrics } from "./overview-metrics";
 import OverviewHeaderStats from "./components/OverviewHeaderStats";
 import OverviewModeRail from "./components/OverviewModeRail";
 import OverviewNetworkDiagram from "./components/OverviewNetworkDiagram";
 import OverviewSystemSwitches from "./components/OverviewSystemSwitches";
 import useOverviewFeatureSettings from "./useOverviewFeatureSettings";
 import { traceWorkbench } from "../../shared/workbench-trace";
+import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
+
+const PASSENGER_CACHE_TTL_MS = 60000;
 
 function toOverviewMode(mode) {
   const token = String(mode || "").toLowerCase();
@@ -25,21 +29,21 @@ function hasScopedLines(snapshot) {
   return Array.isArray(snapshot?.lines) && snapshot.lines.length > 0;
 }
 
-function buildOverviewSystems(featureSettings) {
+function buildOverviewSystems(featureSettings, t) {
   return [
-    { key: "dispatchEnabled", title: "发车控制", enabled: featureSettings?.dispatchEnabled !== false },
-    { key: "bypassEnabled", title: "智能待避", enabled: featureSettings?.bypassEnabled !== false },
-    { key: "broadcastEnabled", title: "自动广播", enabled: featureSettings?.broadcastEnabled !== false },
-    { key: "depotLockEnabled", title: "车库锁定", enabled: featureSettings?.depotLockEnabled !== false }
+    { key: "dispatchEnabled", title: t("nativeWorkbench.overview.system.dispatch"), enabled: featureSettings?.dispatchEnabled !== false },
+    { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false },
+    { key: "broadcastEnabled", title: t("nativeWorkbench.overview.system.broadcast"), enabled: featureSettings?.broadcastEnabled !== false },
+    { key: "depotLockEnabled", title: t("nativeWorkbench.overview.system.depotLock"), enabled: featureSettings?.depotLockEnabled !== false }
   ];
 }
 
-function buildEmptyOverviewViewModel(featureSettings) {
+function buildEmptyOverviewViewModel(featureSettings, t) {
   return {
     generatedAtGameMinute: 0,
     modes: [
-      { mode: "Subway", label: "城市地铁", lineCount: 0, activeVehicleCount: 0, scheduledVehicleCount: 0, estimatedPassengerLoad: 0, healthPercent: 0 },
-      { mode: "Train", label: "城际铁路", lineCount: 0, activeVehicleCount: 0, scheduledVehicleCount: 0, estimatedPassengerLoad: 0, healthPercent: 0 }
+      { mode: "Subway", label: t("nativeWorkbench.overview.mode.subway"), lineCount: 0, appliedDepartureCount: 0 },
+      { mode: "Train", label: t("nativeWorkbench.overview.mode.train"), lineCount: 0, appliedDepartureCount: 0 }
     ],
     activeMode: "Train",
     network: {
@@ -47,19 +51,23 @@ function buildEmptyOverviewViewModel(featureSettings) {
       stations: [],
       vehicles: []
     },
-    systems: buildOverviewSystems(featureSettings),
+    systems: buildOverviewSystems(featureSettings, t),
     warnings: []
   };
 }
 
-export default function OverviewPage({ activeTransportMode = "train", onTransportModeChange }) {
+export default function OverviewPage({ activeTransportMode = "train", isActive = false, registerHostActions, onTransportModeChange }) {
+  const { t } = useNativeScheduleI18n();
   const [snapshot, setSnapshot] = useState(null);
   const [metadataSnapshot, setMetadataSnapshot] = useState(null);
+  const [passengerSnapshot, setPassengerSnapshot] = useState(null);
   const [error, setError] = useState("");
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const modeCacheRef = useRef({});
   const loadGenerationRef = useRef(0);
   const activeModeRef = useRef(toTransportMode(activeTransportMode));
   activeModeRef.current = toTransportMode(activeTransportMode);
+  const hasActivatedRef = useRef(false);
 
   useEffect(() => {
     const mode = toTransportMode(activeTransportMode);
@@ -69,12 +77,21 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
     let cancelled = false;
     const api = getWorkbenchApi();
     const cached = modeCacheRef.current[mode] || null;
+    const shouldForceRefresh = refreshNonce > 0;
 
     setSnapshot(cached?.snapshot || null);
     setMetadataSnapshot(cached?.metadataSnapshot || null);
+    setPassengerSnapshot(cached?.passengerSnapshot || null);
     setError("");
 
-    if (cached) {
+    const shouldRefreshPassenger = shouldForceRefresh
+      || !cached?.passengerLoadedAtMs
+      || (isActive && hasActivatedRef.current && (Date.now() - cached.passengerLoadedAtMs) > PASSENGER_CACHE_TTL_MS);
+    if (isActive) {
+      hasActivatedRef.current = true;
+    }
+
+    if (cached && !shouldForceRefresh && !shouldRefreshPassenger) {
       traceWorkbench("overview.load.cache", { mode });
       return () => {
         cancelled = true;
@@ -82,28 +99,40 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
       };
     }
 
-    Promise.all([api.loadSnapshot({ mode }), api.refreshMetadata({ mode })])
-      .then(([nextSnapshot, nextMetadata]) => {
+    const snapshotPromise = shouldForceRefresh || !cached?.snapshot ? api.loadSnapshot({ mode }) : Promise.resolve(cached.snapshot);
+    const metadataPromise = shouldForceRefresh || !cached?.metadataSnapshot ? api.refreshMetadata({ mode }) : Promise.resolve(cached.metadataSnapshot);
+    const passengerPromise = shouldRefreshPassenger || !cached?.passengerSnapshot
+      ? api.loadPassengerFlowSnapshot({ mode })
+      : Promise.resolve(cached.passengerSnapshot);
+
+    Promise.all([snapshotPromise, metadataPromise, passengerPromise])
+      .then(([nextSnapshot, nextMetadata, nextPassengerSnapshot]) => {
         if (cancelled || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
           return;
         }
         modeCacheRef.current[mode] = {
           snapshot: nextSnapshot,
-          metadataSnapshot: nextMetadata
+          metadataSnapshot: nextMetadata,
+          passengerSnapshot: nextPassengerSnapshot,
+          passengerLoadedAtMs: Date.now()
         };
         setSnapshot(nextSnapshot);
         setMetadataSnapshot(nextMetadata);
+        setPassengerSnapshot(nextPassengerSnapshot);
         setError("");
         traceWorkbench("overview.load.done", {
           mode,
-          lines: Array.isArray(nextMetadata?.lines) ? nextMetadata.lines.length : 0
+          lines: Array.isArray(nextMetadata?.lines) ? nextMetadata.lines.length : 0,
+          stationVolumes: Array.isArray(nextPassengerSnapshot?.stationVolumes) ? nextPassengerSnapshot.stationVolumes.length : 0
         });
       })
       .catch((loadError) => {
         if (cancelled || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
           return;
         }
-        setError(loadError?.message || "Unable to load overview data.");
+        if (!cached?.snapshot && !cached?.metadataSnapshot && !cached?.passengerSnapshot) {
+          setError(loadError?.message || t("nativeWorkbench.overview.error.loadFailed"));
+        }
         traceWorkbench("overview.load.error", { mode, message: loadError?.message || loadError });
       });
 
@@ -111,30 +140,35 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
       cancelled = true;
       traceWorkbench("overview.unmount");
     };
-  }, [activeTransportMode]);
+  }, [activeTransportMode, isActive, refreshNonce, t]);
 
   const snapshotFeatureSettings = snapshot?.featureSettings || null;
 
   const viewModel = useMemo(
     () => (
       hasScopedLines(snapshot) || hasScopedLines(metadataSnapshot)
-        ? buildOverviewViewModel(snapshot || {}, metadataSnapshot || {})
-        : buildEmptyOverviewViewModel(snapshotFeatureSettings)
+        ? buildOverviewViewModel(snapshot || {}, metadataSnapshot || {}, t)
+        : buildEmptyOverviewViewModel(snapshotFeatureSettings, t)
     ),
-    [metadataSnapshot, snapshot, snapshotFeatureSettings]
+    [metadataSnapshot, snapshot, snapshotFeatureSettings, t]
+  );
+
+  const overviewMetrics = useMemo(
+    () => buildOverviewMetrics(passengerSnapshot || {}),
+    [passengerSnapshot]
   );
 
   const selectedMode = toOverviewMode(activeTransportMode || viewModel.activeMode);
   const modeSummary = viewModel.modes.find((mode) => mode.mode === selectedMode) || viewModel.modes[0] || {
-    estimatedPassengerLoad: 0,
-    activeVehicleCount: 0,
-    scheduledVehicleCount: 0,
-    healthPercent: 0
+    lineCount: 0,
+    appliedDepartureCount: 0
   };
-  const firstStation = viewModel.network.stations[0];
   const summary = {
     ...modeSummary,
-    peakStationName: firstStation?.name || ""
+    totalBoardingsAlightings24h: overviewMetrics.totalBoardingsAlightings24h,
+    busiestStationName: overviewMetrics.busiestStationName,
+    peakSectionLoad: overviewMetrics.peakSectionLoad,
+    peakQuarterHourFlow: overviewMetrics.peakQuarterHourFlow
   };
 
   function handleFeatureSettingsSaved(nextFeatureSettings) {
@@ -178,6 +212,45 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
     }
   }
 
+  useEffect(() => {
+    const api = getWorkbenchApi();
+    const unsubscribe = api.onSnapshotChanged?.((nextSnapshot) => {
+      if (!nextSnapshot || toTransportMode(nextSnapshot?.mode) !== activeModeRef.current) {
+        return;
+      }
+
+      const mode = activeModeRef.current;
+      const cached = modeCacheRef.current[mode] || {};
+      modeCacheRef.current[mode] = {
+        ...cached,
+        snapshot: nextSnapshot
+      };
+      setSnapshot(nextSnapshot);
+    });
+
+    return () => {
+      if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isActive || typeof registerHostActions !== "function") {
+      return undefined;
+    }
+
+    registerHostActions({
+      refreshData: async () => {
+        setRefreshNonce((current) => current + 1);
+      }
+    });
+
+    return () => {
+      registerHostActions(null);
+    };
+  }, [isActive, registerHostActions]);
+
   if (error) {
     return (
       <div className="rtw-overview-root">
@@ -192,7 +265,7 @@ export default function OverviewPage({ activeTransportMode = "train", onTranspor
         <aside className="rtw-overview-sidebar">
           <OverviewModeRail modes={viewModel.modes} activeMode={selectedMode} onModeChange={handleModeChange} />
           <OverviewSystemSwitches systems={overviewFeatureSettings.systems} onSystemToggle={overviewFeatureSettings.toggleFeature} />
-          <div className="rtw-overview-footer-tag">CS2-BUS-SUB-V0.90 / ONLINE</div>
+          <div className="rtw-overview-footer-tag">{t("nativeWorkbench.overview.footer.online")}</div>
         </aside>
         <main className="rtw-overview-main">
           <OverviewHeaderStats summary={summary} />

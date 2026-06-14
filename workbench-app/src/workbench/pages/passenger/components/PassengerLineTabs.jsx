@@ -1,4 +1,8 @@
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
+
 export default function PassengerLineTabs({ lines, selectedLineId, onSelect }) {
+  const { t } = useNativeScheduleI18n();
+
   function lineLabel(line) {
     const code = String(line?.code || "").trim();
     const name = String(line?.shortName || line?.name || "").trim();
@@ -12,7 +16,7 @@ export default function PassengerLineTabs({ lines, selectedLineId, onSelect }) {
         className={`rtw-passenger-line-tab ${selectedLineId === "ALL" ? "is-active" : ""}`}
         onClick={() => onSelect("ALL")}
       >
-        全网综合
+        {t("nativeWorkbench.passenger.filter.all")}
       </button>
       {lines.map((line) => (
         <button

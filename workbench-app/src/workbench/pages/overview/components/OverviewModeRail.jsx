@@ -1,3 +1,7 @@
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
+
+// Overview rail icons are adapted from Lucide Icons under the ISC license.
+// See THIRD_PARTY_NOTICES.txt at the repository root.
 function SubwayIcon() {
   return (
     <svg className="rtw-overview-mode-svg" viewBox="0 0 24 24" aria-hidden="true">
@@ -36,9 +40,11 @@ function getModeIcon(mode, label) {
 }
 
 export default function OverviewModeRail({ modes, activeMode, onModeChange }) {
+  const { t } = useNativeScheduleI18n();
+
   return (
     <div className="rtw-overview-mode-rail">
-      <div className="rtw-overview-section-label">交通网模式 / MODE</div>
+      <div className="rtw-overview-section-label">{t("nativeWorkbench.overview.section.mode")}</div>
       <div className="rtw-overview-mode-list">
         {modes.map((mode) => (
           <button
@@ -50,7 +56,7 @@ export default function OverviewModeRail({ modes, activeMode, onModeChange }) {
             <span className="rtw-overview-mode-icon">{getModeIcon(mode.mode, mode.label)}</span>
             <span className="rtw-overview-mode-main">
               <span className="rtw-overview-mode-name">{mode.label}</span>
-              <span className="rtw-overview-mode-meta">{mode.lineCount} lines / {mode.scheduledVehicleCount} scheduled</span>
+              <span className="rtw-overview-mode-meta">{t("nativeWorkbench.overview.mode.meta", { lineCount: mode.lineCount, appliedDepartureCount: mode.appliedDepartureCount })}</span>
             </span>
           </button>
         ))}

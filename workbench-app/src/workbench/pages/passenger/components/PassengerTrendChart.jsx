@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 
 const WIDTH = 720;
 const HEIGHT = 250;
@@ -66,13 +67,14 @@ function buildChartData(points) {
 }
 
 export default function PassengerTrendChart({ points }) {
+  const { t } = useNativeScheduleI18n();
   const [hoveredIndex, setHoveredIndex] = useState(null);
   const hoverRef = useRef({ lastTime: 0 });
   const chart = useMemo(() => buildChartData(points), [points]);
   const hovered = !ENABLE_PASSENGER_CHART_HOVER || hoveredIndex === null ? null : chart.coords[hoveredIndex];
 
   if (!points.length) {
-    return <div className="rtw-passenger-empty">暂无真实分时客流数据</div>;
+    return <div className="rtw-passenger-empty">{t("nativeWorkbench.passenger.empty.trend")}</div>;
   }
 
   function handleHoverMove(event) {
@@ -134,7 +136,7 @@ export default function PassengerTrendChart({ points }) {
       {hovered ? (
         <div className="rtw-passenger-chart-tooltip" style={{ left: `${(hovered.x / WIDTH) * 100}%`, top: `${(hovered.y / HEIGHT) * 100}%` }}>
           <div className="rtw-passenger-chart-tooltip-title">{hovered.point?.hour || ""}</div>
-          <div className="rtw-passenger-chart-tooltip-value">实时客流: {hovered.value.toLocaleString()}</div>
+          <div className="rtw-passenger-chart-tooltip-value">{t("nativeWorkbench.passenger.tooltip.realtime", { value: hovered.value.toLocaleString() })}</div>
         </div>
       ) : null}
     </div>

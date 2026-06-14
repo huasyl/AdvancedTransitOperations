@@ -9,6 +9,7 @@ import PassengerStationVolumeChart from "./components/PassengerStationVolumeChar
 import PassengerTrendChart from "./components/PassengerTrendChart";
 import { traceWorkbench } from "../../shared/workbench-trace";
 import WorkbenchScrollArea from "../../shared/WorkbenchScrollArea";
+import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
 
 function ChartPanel({ title, children, large = false }) {
   return (
@@ -39,6 +40,7 @@ function buildEmptyPassengerFlowViewModel() {
 }
 
 export default function PassengerFlowPage({ activeTransportMode = "train", isActive = false, registerHostActions }) {
+  const { t } = useNativeScheduleI18n();
   const [snapshot, setSnapshot] = useState(null);
   const [lineCatalogSnapshot, setLineCatalogSnapshot] = useState(null);
   const [selectedLineId, setSelectedLineId] = useState("ALL");
@@ -114,7 +116,7 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
       if (!mountedRef.current || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
         return;
       }
-      setError(loadError?.message || "Unable to load passenger flow data.");
+      setError(loadError?.message || t("nativeWorkbench.passenger.error.loadFailed"));
       traceWorkbench("passenger.load.error", { mode, reason, message: loadError?.message || loadError });
     } finally {
       if (loadGenerationRef.current === generation) {
@@ -124,7 +126,7 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
         pollInFlightRef.current = false;
       }
     }
-  }, [activeTransportMode]);
+  }, [activeTransportMode, t]);
 
   useEffect(() => {
     refreshPassengerFlow({ includeCatalog: true, reset: true, reason: "mode" });
@@ -220,27 +222,27 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
       <WorkbenchScrollArea className="rtw-passenger-body" metricsKey={`${selectedLineId}:${filteredData.stationVolumes.length}:${filteredData.sectionVolumes.length}:${filteredData.odFlows.length}`}>
         <div className="rtw-passenger-content">
           <div className="rtw-passenger-header">
-            <h2 className="rtw-passenger-title">全息客流数据中心 / ANALYTICS</h2>
+            <h2 className="rtw-passenger-title">{t("nativeWorkbench.passenger.title")}</h2>
             <PassengerLineTabs lines={viewModel.lines} selectedLineId={selectedLineId} onSelect={handleLineSelect} />
           </div>
           <PassengerMetricCards data={filteredData} />
           <div className="rtw-passenger-panels">
-            <ChartPanel title={selectedLineId === "ALL" ? "全网分时客流走势 / SYSTEM TREND" : "单线分时客流走势 / LINE TREND"}>
+            <ChartPanel title={selectedLineId === "ALL" ? t("nativeWorkbench.passenger.chart.systemTrend") : t("nativeWorkbench.passenger.chart.lineTrend")}>
               <div className="rtw-passenger-chart is-trend">
                 <PassengerTrendChart points={filteredData.systemTrend} />
               </div>
             </ChartPanel>
-            <ChartPanel title="各站进出站量 / STATION VOLUMES">
+            <ChartPanel title={t("nativeWorkbench.passenger.chart.stationVolumes")}>
               <div className="rtw-passenger-chart is-stations">
                 <PassengerStationVolumeChart volumes={filteredData.stationVolumes} />
               </div>
             </ChartPanel>
-            <ChartPanel title="站间客流 OD 矩阵 / O-D FLOW" large>
+            <ChartPanel title={t("nativeWorkbench.passenger.chart.odFlow")} large>
               <div className="rtw-passenger-chart is-od">
                 <PassengerOdFlowDiagram flows={filteredData.odFlows} lines={viewModel.lines} isActive={isActive} />
               </div>
             </ChartPanel>
-            <ChartPanel title="最高压断面管段排行 (Top 10) / SECTION VOLUME RANKING" large>
+            <ChartPanel title={t("nativeWorkbench.passenger.chart.sectionRanking")} large>
               <div className="rtw-passenger-chart is-ranking">
                 <PassengerSectionRanking sections={filteredData.sectionVolumes} lines={viewModel.lines} />
               </div>

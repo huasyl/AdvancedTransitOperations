@@ -23,8 +23,9 @@
     <Compile Remove="references\**\*.cs" />
     <Compile Remove="tools\**\*.cs" />
     <None Include="references\**\*.cs" />
-    <None Include="RapidTransitMod.mjs">
+    <None Include="rapidtransit-ui-module\dist\RapidTransitMod.mjs">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>RapidTransitMod.mjs</TargetPath>
     </None>
     <None Include="UI\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

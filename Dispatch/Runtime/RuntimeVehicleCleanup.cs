@@ -61,6 +61,7 @@ namespace RapidTransitMod
                     }
                 }
                 m_Runtime.m_Announcements.RemoveVehicle(dead);
+                m_Runtime.m_StationContextQuery.RemoveVehicle(dead);
                 m_Runtime.m_CommandApplier.FlushRetireShadowSnapshots(dead, "entity-removed");
                 m_Runtime.m_CommandApplier.ResetRetireShadowSnapshots(dead);
                 m_Runtime.m_VehicleRegistry.Remove(dead);

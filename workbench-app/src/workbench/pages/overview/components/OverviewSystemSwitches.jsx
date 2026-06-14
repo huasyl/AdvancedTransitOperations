@@ -1,7 +1,11 @@
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
+
 export default function OverviewSystemSwitches({ systems, onSystemToggle }) {
+  const { t } = useNativeScheduleI18n();
+
   return (
     <div className="rtw-overview-switches">
-      <div className="rtw-overview-section-label">功能开关 / TOGGLES</div>
+      <div className="rtw-overview-section-label">{t("nativeWorkbench.overview.section.systems")}</div>
       {systems.map((system) => (
         <button
           key={system.key}

@@ -167,6 +167,34 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_StopSessionBoardingChangeCount = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_DeparturePendingSinceFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
+            runtime.m_StationContextQuery = new VehicleStationContextQuery(
+                runtime.EntityManager,
+                runtime.m_Resolve.Stop,
+                runtime.m_Resolve.Anchor,
+                runtime.m_Resolve.AnchorFromStop,
+                runtime.m_Resolve.EnsureSak,
+                runtime.m_Resolve.Sak,
+                runtime.m_Resolve.StationId,
+                runtime.m_Resolve.StationName,
+                runtime.EntityName,
+                runtime.m_LineProfile.ComputeWaypointSignature,
+                (line, waypoints) => runtime.m_WaypointIndex.TryLookup(line, waypoints, out LineWaypointIndexLookup lookup)
+                    ? lookup
+                    : null,
+                (line, waypoints) => runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
+                    ? chain
+                    : null,
+                (vehicle, line, waypoints, chain) => runtime.m_TrackProjection.TryGetVehicleTrackCursorCurrentFrame(
+                        vehicle,
+                        line,
+                        waypoints,
+                        chain,
+                        out VehicleTrackCursor cursor)
+                    ? (VehicleTrackCursor?)cursor
+                    : null,
+                runtime.LineId,
+                RapidTransitMod.Dispatch.Workbench.Drafts.Key,
+                runtime.m_CachedWpIdx);
             runtime.m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             runtime.m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
@@ -207,6 +235,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_VehicleLabels = null!;
             runtime.m_SelectPanel = null!;
             runtime.m_SelectPort = null!;
+            runtime.m_StationContextQuery = null!;
             runtime.m_StationAnchorDiagnostics = null!;
             runtime.m_OverviewFeatureSettingsOperations = null!;
             runtime.m_WorkbenchCatalogDirty = null!;

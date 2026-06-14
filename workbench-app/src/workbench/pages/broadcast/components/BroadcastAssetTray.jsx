@@ -190,7 +190,7 @@ export default function BroadcastAssetTray({
                         : "dw-bc-tray-item-note"
                     }
                   >
-                    {asset.isStationBound ? "站名" : asset.desc}
+                    {asset.isStationBound ? labels.t("broadcast.assetType.station") : asset.desc}
                   </span>
                 </button>
               ))}

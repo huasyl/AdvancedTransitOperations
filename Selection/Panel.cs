@@ -278,9 +278,11 @@ namespace RapidTransitMod
                     m_Port.ResolveLine,
                     m_Port.ResolveVehicle,
                     m_Port.ResolveVehicleLine,
+                    m_Port.ResolveLineDisplayName,
                     m_Port.Lines.Applied,
                     m_Port.Scheduler.NextManagedTarget,
                     m_Port.Lines.Log,
+                    m_Port.ReadLineDuration,
                     m_Port.ReadLap,
                     m_Port.ReadDispatch,
                     CanConfigureBypassStation,
@@ -290,10 +292,18 @@ namespace RapidTransitMod
                     EstimateVehicleEtaText,
                     (vehicle, line) =>
                     {
-                        m_Port.Stations(vehicle, line, out string currentStationName, out string nextStationName);
-                        return (currentStationName, nextStationName);
+                        m_Port.Stations(
+                            vehicle,
+                            line,
+                            out string currentStationName,
+                            out string nextPhysicalStationName,
+                            out string nextStopStationName,
+                            out bool nextPhysicalIsPass);
+                        return (
+                            currentStationName,
+                            FormatNextPhysicalStationName(nextPhysicalStationName, nextPhysicalIsPass),
+                            nextStopStationName);
                     },
-                    m_Port.EventText,
                     BuildVehicleAlertSummary,
                     BuildLineAlertSummary,
                     DispatchRuntimeSystem.SlotStr,
@@ -308,6 +318,16 @@ namespace RapidTransitMod
             }
 
             return m_Query;
+        }
+
+        private static string FormatNextPhysicalStationName(string stationName, bool isPass)
+        {
+            if (string.IsNullOrWhiteSpace(stationName) || !isPass)
+                return stationName ?? string.Empty;
+
+            return IsChineseLocale()
+                ? stationName + "（通过）"
+                : stationName + " (pass)";
         }
 
         private SelectView View()
@@ -567,15 +587,18 @@ namespace RapidTransitMod
             Entity line,
             int nextSlotOccupancy,
             int nearingTerminus,
-            float lapCacheFrames,
+            float routeDurationFrames,
             float dispatchCacheFrames,
             int spawning)
         {
+#if !RT_DEBUG_TOOLS
+            return "None";
+#else
             if (!m_Port.Lines.Applied(line))
             {
                 if (EntityManager.HasComponent<Disabled>(line))
                     return "line-disabled";
-                return IsChineseLocale() ? "官方调度" : "Official dispatch";
+                return "official-dispatch";
             }
 
             string alerts = string.Empty;
@@ -587,17 +610,21 @@ namespace RapidTransitMod
                 alerts = AppendAlert(alerts, "spawn-pending:" + spawning);
             if (nearingTerminus > 0)
                 alerts = AppendAlert(alerts, "yield-guard:" + nearingTerminus);
-            if (lapCacheFrames <= 0f)
+            if (routeDurationFrames <= 0f)
                 alerts = AppendAlert(alerts, "no-lap-cache");
             if (dispatchCacheFrames <= 0f)
                 alerts = AppendAlert(alerts, "no-dispatch-cache");
             return alerts.Length > 0 ? alerts : "None";
+#endif
         }
 
         private string BuildVehicleAlertSummary(Entity vehicle, Entity line, int nowMin, int targetMin)
         {
+#if !RT_DEBUG_TOOLS
+            return "None";
+#else
             if (line == Entity.Null || !m_Port.Lines.Applied(line))
-                return IsChineseLocale() ? "官方调度" : "Official dispatch";
+                return "official-dispatch";
 
             string alerts = string.Empty;
             if (m_Port.TryBlocker(vehicle, out Entity blockerVehicle) && blockerVehicle != Entity.Null)
@@ -619,6 +646,7 @@ namespace RapidTransitMod
             }
 
             return alerts.Length > 0 ? alerts : "None";
+#endif
         }
 
         private string BuildVehicleTraversalProgressValue(Entity vehicle)
@@ -656,7 +684,7 @@ namespace RapidTransitMod
             if (line == Entity.Null || !m_Port.Lines.Applied(line))
                 return "-";
 
-            float lineDurationFrames = m_Port.ReadLap(line);
+            float lineDurationFrames = m_Port.ReadLineDuration(line);
             bool lineHasHistory = lineDurationFrames > 0f;
             uint nowFrame = m_Port.Sim.frameIndex;
             float etaFrames = float.MaxValue;
@@ -765,8 +793,10 @@ namespace RapidTransitMod
             int nextSlot = isManagedLine
                 ? m_Port.Scheduler.NextManagedTarget(line, nowMin)
                 : m_Port.Scheduler.NextSlotMin(nowMin);
+            float routeDurationFrames = m_Port.ReadLineDuration(line);
             float lapCacheFrames = m_Port.ReadLap(line);
             float dispatchCacheFrames = m_Port.ReadDispatch(line);
+            string routeDuration = routeDurationFrames > 0f ? (routeDurationFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "min" : "-";
             string lapCache = lapCacheFrames > 0f ? (lapCacheFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "min" : "-";
             string dispatchCache = dispatchCacheFrames > 0f ? (dispatchCacheFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "min" : "-";
             string spawning = m_Port.Spawns.TryGetValue(line, out int spawnTarget) ? spawnTarget.ToString() : "-";
@@ -805,7 +835,6 @@ namespace RapidTransitMod
             }
 
             AddDebugItem(list, "线路", "Line", line.Index.ToString());
-            AddDebugItem(list, "时间", "Time", DispatchRuntimeSystem.SlotStr(nowMin));
             AddDebugItem(list, isManagedLine ? LocalizedNextSlotLabel() : "下一班次", "Next Slot", DispatchRuntimeSystem.SlotStr(nextSlot));
             AddDebugItem(list, "总车数", "Total Vehicles", total.ToString());
             AddDebugItem(list, "预备数", "Preparing Count", preparing.ToString());
@@ -815,6 +844,7 @@ namespace RapidTransitMod
             AddDebugItem(list, "回库数", "Retiring Count", retiring.ToString());
             AddDebugItem(list, "回流标签数", "Nearing Terminus Count", tagged.ToString());
             AddDebugItem(list, "产车目标", "Spawn Target", spawning);
+            AddDebugItem(list, "全程用时", "Route Duration", routeDuration);
             AddDebugItem(list, "圈时缓存", "Lap Cache", lapCache);
             AddDebugItem(list, "出库缓存", "Dispatch Cache", dispatchCache);
         }

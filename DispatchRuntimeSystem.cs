@@ -174,6 +174,7 @@ namespace RapidTransitMod
         internal RuntimeResolve m_Resolve = null!;
         internal SelectPort m_SelectPort = null!;
         internal SelectPanel m_SelectPanel = null!;
+        internal VehicleStationContextQuery m_StationContextQuery = null!;
         internal StationAnchorDiagnostics m_StationAnchorDiagnostics = null!;
         internal RapidTransitMod.Overview.FeatureSettingsOperations m_OverviewFeatureSettingsOperations = null!;
         internal RapidTransitMod.Dispatch.Workbench.Bridge m_WorkbenchBridge = null!;

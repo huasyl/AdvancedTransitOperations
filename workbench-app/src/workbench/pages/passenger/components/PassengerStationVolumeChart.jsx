@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 
 const WIDTH = 720;
 const HEIGHT = 300;
@@ -17,8 +18,8 @@ function getValue(entry, key) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function getStationName(entry, index) {
-  return entry?.stationName || entry?.name || entry?.stationId || `Station ${index + 1}`;
+function getStationName(entry, index, t) {
+  return entry?.stationName || entry?.name || entry?.stationId || t("nativeWorkbench.passenger.fallback.stationName", { index: index + 1 });
 }
 
 function splitStationLabel(name) {
@@ -67,7 +68,7 @@ function chartMax(value) {
   return 10 * magnitude;
 }
 
-function buildChartData(volumes) {
+function buildChartData(volumes, t) {
   const maxValue = Math.max(1, ...volumes.map((entry) => Math.max(getValue(entry, "inflow"), getValue(entry, "outflow"))));
   const yMax = chartMax(maxValue);
   const bandWidth = PLOT_WIDTH / Math.max(1, volumes.length);
@@ -88,7 +89,7 @@ function buildChartData(volumes) {
       return {
         entry,
         index,
-        name: getStationName(entry, index),
+        name: getStationName(entry, index, t),
         inflow,
         outflow,
         x,
@@ -102,14 +103,15 @@ function buildChartData(volumes) {
 }
 
 export default function PassengerStationVolumeChart({ volumes }) {
+  const { t } = useNativeScheduleI18n();
   const [hoveredIndex, setHoveredIndex] = useState(null);
   const hoverRef = useRef({ lastTime: 0 });
   const displayVolumes = useMemo(() => buildDisplayVolumes(volumes), [volumes]);
-  const chart = useMemo(() => buildChartData(displayVolumes), [displayVolumes]);
+  const chart = useMemo(() => buildChartData(displayVolumes, t), [displayVolumes, t]);
   const hovered = !ENABLE_PASSENGER_CHART_HOVER || hoveredIndex === null ? null : chart.items[hoveredIndex];
 
   if (!displayVolumes.length) {
-    return <div className="rtw-passenger-empty">暂无真实站点进出站数据</div>;
+    return <div className="rtw-passenger-empty">{t("nativeWorkbench.passenger.empty.stationVolumes")}</div>;
   }
 
   function handleHoverMove(event) {
@@ -145,11 +147,11 @@ export default function PassengerStationVolumeChart({ volumes }) {
       <div className="rtw-passenger-station-legend">
         <span className="rtw-passenger-station-legend-item">
           <span className="rtw-passenger-station-legend-swatch is-inflow" />
-          <span>进站量</span>
+          <span>{t("nativeWorkbench.passenger.legend.inflow")}</span>
         </span>
         <span className="rtw-passenger-station-legend-item">
           <span className="rtw-passenger-station-legend-swatch is-outflow" />
-          <span>出站量</span>
+          <span>{t("nativeWorkbench.passenger.legend.outflow")}</span>
         </span>
       </div>
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="rtw-passenger-chart-svg">
@@ -193,8 +195,8 @@ export default function PassengerStationVolumeChart({ volumes }) {
       {hovered ? (
         <div className="rtw-passenger-chart-tooltip" style={{ left: `${(hovered.labelX / WIDTH) * 100}%`, top: `${((TOP + PLOT_HEIGHT - Math.max(hovered.inflowHeight, hovered.outflowHeight)) / HEIGHT) * 100}%` }}>
           <div className="rtw-passenger-chart-tooltip-title">{hovered.name}</div>
-          <div className="rtw-passenger-chart-tooltip-value">进站量: {hovered.inflow.toLocaleString()}</div>
-          <div className="rtw-passenger-chart-tooltip-value">出站量: {hovered.outflow.toLocaleString()}</div>
+          <div className="rtw-passenger-chart-tooltip-value">{t("nativeWorkbench.passenger.tooltip.inflow", { value: hovered.inflow.toLocaleString() })}</div>
+          <div className="rtw-passenger-chart-tooltip-value">{t("nativeWorkbench.passenger.tooltip.outflow", { value: hovered.outflow.toLocaleString() })}</div>
         </div>
       ) : null}
     </div>

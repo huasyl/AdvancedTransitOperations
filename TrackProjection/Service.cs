@@ -497,7 +497,8 @@ namespace RapidTransitMod.TrackProjection
                 segmentRange.EndAtomIndexExclusive,
                 atomIndex,
                 atomPosition01,
-                1f);
+                1f,
+                VehicleTrackCursorSource.CurrentLane);
             return true;
         }
 
@@ -657,7 +658,8 @@ namespace RapidTransitMod.TrackProjection
                             cursor.AtomEndIndexExclusive,
                             cursor.AtomCursorIndex,
                             cursor.AtomPosition01,
-                            cursor.Confidence * 0.7f);
+                            cursor.Confidence * 0.7f,
+                            cursor.Source);
                     }
                 }
 
@@ -668,6 +670,9 @@ namespace RapidTransitMod.TrackProjection
             }
 
             bool trustedRouteProgress = TryRouteProgress(vehicle, out int nextWaypointIndex, out float segmentPosition);
+            VehicleTrackCursorSource cursorSource = trustedRouteProgress
+                ? VehicleTrackCursorSource.RouteProgress
+                : VehicleTrackCursorSource.CachedWaypoint;
             if (!trustedRouteProgress)
             {
                 if (!m_Runtime.CachedWaypointIndex.TryGetValue(vehicle, out nextWaypointIndex))
@@ -689,6 +694,7 @@ namespace RapidTransitMod.TrackProjection
                     nextWaypointIndex = cachedWaypointIndex;
                     segmentPosition = 0f;
                     trustedRouteProgress = false;
+                    cursorSource = VehicleTrackCursorSource.CachedWaypoint;
                 }
                 else if (trustedRouteProgress && TryResolveStationAnchoredProgressFallback(
                     vehicle,
@@ -702,6 +708,7 @@ namespace RapidTransitMod.TrackProjection
                     nextWaypointIndex = anchoredWaypointIndex;
                     segmentPosition = 0f;
                     trustedRouteProgress = false;
+                    cursorSource = VehicleTrackCursorSource.AnchoredRouteProgress;
                 }
             }
             else if (trustedRouteProgress && TryResolveStationAnchoredProgressFallback(
@@ -716,6 +723,7 @@ namespace RapidTransitMod.TrackProjection
                 nextWaypointIndex = anchoredWaypointIndex;
                 segmentPosition = 0f;
                 trustedRouteProgress = false;
+                cursorSource = VehicleTrackCursorSource.AnchoredRouteProgress;
             }
 
             nextWaypointIndex = math.clamp(nextWaypointIndex, 0, waypoints.Length - 1);
@@ -766,7 +774,8 @@ namespace RapidTransitMod.TrackProjection
                 segmentRange.EndAtomIndexExclusive,
                 approximateAtomIndex,
                 math.saturate(segmentPosition),
-                confidence);
+                confidence,
+                cursorSource);
             return true;
         }
 

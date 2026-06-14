@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 
 const FALLBACK_COLORS = ["#38bdf8", "#f59e0b", "#10b981", "#ef4444", "#a78bfa", "#f472b6", "#22c55e", "#eab308"];
 
@@ -72,10 +73,11 @@ function buildStackedSections(sections, lines) {
 }
 
 export default function PassengerSectionRanking({ sections, lines = [] }) {
+  const { t } = useNativeScheduleI18n();
   const [hoveredIndex, setHoveredIndex] = useState(null);
 
   if (!sections.length) {
-    return <div className="rtw-passenger-empty">暂无真实断面流量排行</div>;
+    return <div className="rtw-passenger-empty">{t("nativeWorkbench.passenger.empty.sectionRanking")}</div>;
   }
 
   const sorted = buildStackedSections(sections, lines);
@@ -83,7 +85,7 @@ export default function PassengerSectionRanking({ sections, lines = [] }) {
   const hovered = hoveredIndex === null ? null : sorted[hoveredIndex];
 
   if (!sorted.length) {
-    return <div className="rtw-passenger-empty">暂无真实断面流量排行</div>;
+    return <div className="rtw-passenger-empty">{t("nativeWorkbench.passenger.empty.sectionRanking")}</div>;
   }
 
   function handleHoverEnter(index) {
@@ -127,7 +129,7 @@ export default function PassengerSectionRanking({ sections, lines = [] }) {
         <div className="rtw-passenger-chart-tooltip is-ranking" style={{ left: "68%", top: `${Math.max(8, Math.min(88, 6 + (hoveredIndex || 0) * 10))}%` }}>
           <div className="rtw-passenger-chart-tooltip-title">{hovered.label}</div>
           <div className="rtw-passenger-chart-tooltip-total">
-            <span className="rtw-passenger-chart-tooltip-total-label">断面累计</span>
+            <span className="rtw-passenger-chart-tooltip-total-label">{t("nativeWorkbench.passenger.tooltip.sectionTotal")}</span>
             <span className="rtw-passenger-chart-tooltip-total-number">{Math.round(Number(hovered.total || 0)).toLocaleString()}</span>
           </div>
           <div className="rtw-passenger-chart-tooltip-lines">

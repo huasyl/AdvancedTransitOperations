@@ -67,6 +67,17 @@ namespace RapidTransitMod.Dispatch.Runtime
                 ResolveLine = runtime.m_Resolve.SelectedLine,
                 ResolveVehicle = runtime.m_Resolve.SelectedVehicle,
                 ResolveVehicleLine = runtime.m_Resolve.Line,
+                ResolveLineDisplayName = line =>
+                {
+                    if (line == Entity.Null
+                        || runtime.m_WorkbenchBridge == null
+                        || !runtime.m_WorkbenchBridge.Catalog().TryRuntimeLine(line, out var runtimeLine))
+                    {
+                        return string.Empty;
+                    }
+
+                    return runtimeLine?.Name ?? string.Empty;
+                },
                 ResolveBypassBuilding = runtime.m_Resolve.PassingStation,
                 EnsureBypassBuffer = runtime.m_BypassStore.Ensure,
                 InvalidateBypassModel = () =>
@@ -75,6 +86,27 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_TrackModel.InvalidateAll();
                 },
                 ReadLap = runtime.m_LapCache.Read,
+                ReadLineDuration = line =>
+                {
+                    if (line == Entity.Null)
+                        return 0f;
+
+                    var routeWaypoints = runtime.GetBufferLookup<RouteWaypoint>(true);
+                    if (routeWaypoints.TryGetBuffer(line, out var waypoints)
+                        && waypoints.Length > 0
+                        && runtime.m_Observation.LapTiming(line, waypoints, out float runFrames, out float stopFrames, out _, out _))
+                    {
+                        float totalFrames = runFrames + stopFrames;
+                        if (totalFrames > 0f)
+                            return totalFrames;
+                    }
+
+                    float durationFrames = runtime.m_LineTimes.Duration(line) * 60f;
+                    if (durationFrames > 0f && durationFrames < float.MaxValue)
+                        return durationFrames;
+
+                    return runtime.m_LapCache.Read(line);
+                },
                 ReadDispatch = runtime.m_DispatchCache.Read,
                 RouteVehicles = runtime.GetBufferLookup<RouteVehicle>,
                 RouteWaypoints = runtime.GetBufferLookup<RouteWaypoint>,
@@ -85,11 +117,17 @@ namespace RapidTransitMod.Dispatch.Runtime
                 TryProgress = runtime.m_RouteProgress.Try,
                 TryBlocker = (Entity vehicle, out Entity blocker) => runtime.m_Bypass.TryGetLatchedBlocker(vehicle, out blocker),
                 ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
-                Stations = (Entity vehicle, Entity line, out string current, out string next) =>
+                Stations = (Entity vehicle, Entity line, out string current, out string nextPhysical, out string nextStop, out bool nextPhysicalIsPass) =>
                 {
-                    runtime.m_Announcements.TryPanelContext(vehicle, line, out current, out next, out _);
-                },
-                EventText = runtime.m_Announcements.EventText
+                    runtime.m_StationContextQuery.TryPanelContext(
+                        vehicle,
+                        line,
+                        out current,
+                        out nextStop,
+                        out nextPhysical,
+                        out nextPhysicalIsPass,
+                        out _);
+                }
             };
         }
 

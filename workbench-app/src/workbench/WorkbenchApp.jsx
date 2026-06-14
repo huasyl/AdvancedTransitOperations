@@ -195,7 +195,12 @@ export default function WorkbenchApp({ registerHostActions }) {
           data-workbench-page="overview"
         >
           {shouldMountOverview ? (
-            <OverviewPage activeTransportMode={modeForPage("overview")} onTransportModeChange={setActiveTransportMode} />
+            <OverviewPage
+              activeTransportMode={modeForPage("overview")}
+              isActive={renderedPage === "overview"}
+              registerHostActions={registerHostActions}
+              onTransportModeChange={setActiveTransportMode}
+            />
           ) : null}
         </div>
         <div
