@@ -1188,7 +1188,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
     const modeAtRequest = scheduleMode;
     const generation = scheduleModeGenerationRef.current;
-    setPanelMessage({ scope: "summary", tone: "neutral", text: t("nativeSchedule.message.summary.applying") });
+    setPanelMessage(null);
     try {
       const result = await saveNativeWorkbenchDraft({ applyDraft: true });
       if (!isCurrentModeRequest(modeAtRequest, generation)) {
@@ -1216,11 +1216,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
         throw new Error("apply-operation-missing-version");
       }
 
-      setPanelMessage({
-        scope: "summary",
-        tone: "neutral",
-        text: t("nativeSchedule.message.summary.applySuccess", { version: result.version || "" })
-      });
+      setPanelMessage(null);
       setAppliedSummarySignature(getSummaryRowsSignature(summaryEntries));
       setAppliedSummaryRowKeys(summaryEntries.map((row) => getSummaryRowKey(row)));
     } catch (error) {

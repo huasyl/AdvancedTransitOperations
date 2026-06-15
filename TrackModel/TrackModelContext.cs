@@ -27,6 +27,7 @@ namespace RapidTransitMod
         internal delegate Dictionary<Entity, int> CorridorMap(DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, int nextBypassWaypointIndex, Entity currentBypassBuilding);
         internal delegate bool CollectTurnback(LineTrackChain chain, List<TrackTurnbackStationBoundary> stationBoundaries);
         internal delegate bool ResolveTurnback(LineTrackChain chain, TurnbackBoundary boundary, out TrackTurnbackStationBoundary stationBoundary);
+        internal delegate void LineTrackChainRebuilt(Entity line, ulong oldSignature, ulong newSignature, int oldAtomCount, int newAtomCount);
 
         internal sealed class Args
         {
@@ -55,6 +56,7 @@ namespace RapidTransitMod
             public CorridorMap BuildCorridorMap;
             public CollectTurnback CollectTurnback;
             public ResolveTurnback ResolveTurnback;
+            public LineTrackChainRebuilt NotifyLineTrackChainRebuilt;
         }
 
         private readonly Args m_Args;
@@ -127,5 +129,6 @@ namespace RapidTransitMod
         public Dictionary<Entity, int> BuildLocalBypassCorridorWaypointMap(DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, int nextBypassWaypointIndex, Entity currentBypassBuilding) => m_Args.BuildCorridorMap(waypoints, currentWaypointIndex, nextBypassWaypointIndex, currentBypassBuilding);
         public bool TryCollectTurnbackStationBoundaries(LineTrackChain chain, List<TrackTurnbackStationBoundary> stationBoundaries) => m_Args.CollectTurnback(chain, stationBoundaries);
         public bool TryResolveTurnbackStationBoundary(LineTrackChain chain, TurnbackBoundary boundary, out TrackTurnbackStationBoundary stationBoundary) => m_Args.ResolveTurnback(chain, boundary, out stationBoundary);
+        public void NotifyLineTrackChainRebuilt(Entity line, ulong oldSignature, ulong newSignature, int oldAtomCount, int newAtomCount) => m_Args.NotifyLineTrackChainRebuilt?.Invoke(line, oldSignature, newSignature, oldAtomCount, newAtomCount);
     }
 }

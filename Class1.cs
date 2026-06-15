@@ -134,6 +134,7 @@ namespace RapidTransitMod
         public void OnDispose()
         {
             log.Info(nameof(OnDispose));
+            Workbenches.ApiHost.Dispose();
             log.Info("RapidTransitMod disposed.");
         }
     }

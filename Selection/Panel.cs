@@ -223,11 +223,24 @@ namespace RapidTransitMod
                 if (buf[i].m_BuildingEntity != building)
                     continue;
 
+                bool previousEnabled = false;
+                if (RtLog.CacheInvalidationDiagnosticsEnabled)
+                    previousEnabled = buf[i].m_IsBypassStation != 0;
                 buf[i] = new BypassStationSettingElement
                 {
                     m_BuildingEntity = building,
                     m_IsBypassStation = enabled ? (byte)1 : (byte)0
                 };
+                if (RtLog.CacheInvalidationDiagnosticsEnabled)
+                {
+                    log.Info("[BypassStationToggle] building=" + building.Index
+                        + " entity=" + entity.Index
+                        + " old=" + (previousEnabled ? 1 : 0)
+                        + " new=" + (enabled ? 1 : 0)
+                        + " mode=update"
+                        + " bufferIndex=" + i
+                        + " invalidateBypassModel=1");
+                }
                 m_Port.InvalidateBypassModel?.Invoke();
                 Invalidate();
                 return true;
@@ -238,6 +251,16 @@ namespace RapidTransitMod
                 m_BuildingEntity = building,
                 m_IsBypassStation = enabled ? (byte)1 : (byte)0
             });
+            if (RtLog.CacheInvalidationDiagnosticsEnabled)
+            {
+                log.Info("[BypassStationToggle] building=" + building.Index
+                    + " entity=" + entity.Index
+                    + " old=-1"
+                    + " new=" + (enabled ? 1 : 0)
+                    + " mode=add"
+                    + " bufferIndex=" + (buf.Length - 1)
+                    + " invalidateBypassModel=1");
+            }
             m_Port.InvalidateBypassModel?.Invoke();
             Invalidate();
             return true;

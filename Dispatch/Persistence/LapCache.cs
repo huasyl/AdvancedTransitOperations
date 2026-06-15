@@ -114,5 +114,21 @@ namespace RapidTransitMod.Dispatch.Persistence
             }
             return 0f;
         }
+
+        public void RemoveLine(Entity line)
+        {
+            if (line == Entity.Null) return;
+            if (!m_Runtime.m_LapCacheBufferReady) return;
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null) return;
+            if (!m_Runtime.EntityManager.HasBuffer<LineLapCacheElement>(city)) return;
+
+            DynamicBuffer<LineLapCacheElement> buf = m_Runtime.EntityManager.GetBuffer<LineLapCacheElement>(city);
+            for (int i = buf.Length - 1; i >= 0; i--)
+            {
+                if (buf[i].m_LineEntity == line)
+                    buf.RemoveAt(i);
+            }
+        }
     }
 }

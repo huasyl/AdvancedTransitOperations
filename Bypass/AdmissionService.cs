@@ -559,6 +559,55 @@ namespace RapidTransitMod.Bypass
 
             return releasedVehicles;
         }
+
+        internal void ClearLineStaticCaches(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_LineOrderedRuntimeStates.Remove(line);
+            m_LineOrderedRuntimeForceRefreshReasons.Remove(line);
+            m_LineOrderedRuntimeLogCache.Remove(line);
+            m_StopSceneEligibilityLineCaches.Remove(line);
+
+            List<SharedWindowMatchCacheKey> sharedWindowKeys = null;
+            foreach (KeyValuePair<SharedWindowMatchCacheKey, SharedWindowMatchSnapshot> entry in m_SharedWindowMatchSnapshots)
+            {
+                if (entry.Key.LocalLine != line && entry.Key.ExpressLine != line)
+                    continue;
+
+                sharedWindowKeys ??= new List<SharedWindowMatchCacheKey>();
+                sharedWindowKeys.Add(entry.Key);
+            }
+
+            if (sharedWindowKeys != null)
+            {
+                for (int i = 0; i < sharedWindowKeys.Count; i++)
+                    m_SharedWindowMatchSnapshots.Remove(sharedWindowKeys[i]);
+            }
+
+            List<LocalSceneExpressStaticMatchCacheKey> staticMatchKeys = null;
+            foreach (KeyValuePair<LocalSceneExpressStaticMatchCacheKey, LocalSceneExpressStaticMatchSnapshot> entry in m_LocalSceneExpressStaticMatchSnapshots)
+            {
+                if (entry.Key.LocalLine != line && entry.Key.ExpressLine != line)
+                    continue;
+
+                staticMatchKeys ??= new List<LocalSceneExpressStaticMatchCacheKey>();
+                staticMatchKeys.Add(entry.Key);
+            }
+
+            if (staticMatchKeys != null)
+            {
+                for (int i = 0; i < staticMatchKeys.Count; i++)
+                    m_LocalSceneExpressStaticMatchSnapshots.Remove(staticMatchKeys[i]);
+            }
+
+            m_LocalSceneCandidateExpressLinesSnapshots.Clear();
+            m_ActiveConflictCorridorSnapshots.Clear();
+            m_ActiveConflictCorridorSnapshotFrame = 0;
+            m_QueuedLocalReleaseFrameCache.Clear();
+            m_QueuedLocalReleaseFrameCacheFrame = 0;
+        }
         internal List<Entity> ExpireLine(Entity line)
         {
             if (line == Entity.Null)

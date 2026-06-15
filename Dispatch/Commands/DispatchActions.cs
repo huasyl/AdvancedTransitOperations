@@ -18,7 +18,7 @@ namespace RapidTransitMod.Dispatch.Commands
             PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
             publicTransport.m_DepartureFrame = m_Host.SimulationSystem.frameIndex + 9999;
             CommitPublicTransport(vehicle, publicTransport, ecb);
-            m_Host.SetVehicleLabel(vehicle, "候车 " + DispatchRuntimeSystem.SlotStr(slot));
+            m_Host.SetLocalizedVehicleLabel(vehicle, "Holding", "候车", " " + DispatchRuntimeSystem.SlotStr(slot));
         }
 
         public void CommitPublicTransport(

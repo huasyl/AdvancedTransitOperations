@@ -72,12 +72,16 @@ export default function BroadcastLayout({ controller }) {
                     "dw-bc-footer-status is-" + preview.broadcastFooterTone
                   }
                 >
-                  <span
-                    className={
-                      "dw-bc-footer-dot is-" + preview.broadcastFooterTone
-                    }
-                  />
-                  <span>{preview.broadcastFooterText}</span>
+                  {preview.broadcastFooterText ? (
+                    <>
+                      <span
+                        className={
+                          "dw-bc-footer-dot is-" + preview.broadcastFooterTone
+                        }
+                      />
+                      <span>{preview.broadcastFooterText}</span>
+                    </>
+                  ) : null}
                 </div>
                 <BroadcastPreviewVolumeControl
                   label={labels.previewVolume}

@@ -3,6 +3,8 @@ import { trigger } from "cs2/api";
 import React from "react";
 import { COLORS } from "../selection/selectionStyles";
 
+declare const __RT_UI_MODULE_DEV__: boolean;
+
 export const NATIVE_WORKBENCH_PANEL_ID = "RapidTransitMod.DispatchWorkbenchNativePanel";
 const NATIVE_WORKBENCH_UI_BUILD = "0.1.0-native-r4e";
 const NATIVE_WORKBENCH_SCHEDULE_GLOBAL = "RTDispatchWorkbenchNativeSchedule";
@@ -34,6 +36,18 @@ let nativeWorkbenchOpenToken = 0;
 
 function getNativeWorkbenchDebugToolsEnabled() {
   return typeof window !== "undefined" && window.__RT_DEBUG_TOOLS__ === true;
+}
+
+function getNativeWorkbenchRescueToolsVisible() {
+  try {
+    return __RT_UI_MODULE_DEV__ === true;
+  } catch {
+    return false;
+  }
+}
+
+function getNativeWorkbenchDebugToolsVisible() {
+  return getNativeWorkbenchDebugToolsEnabled() || getNativeWorkbenchRescueToolsVisible();
 }
 
 function getNativeWorkbenchVerboseLogsEnabled() {
@@ -716,10 +730,31 @@ function formatProbeError(error) {
   return String(error);
 }
 
+function getNativeWorkbenchGameFontFamily() {
+  try {
+    const rootStyle = window.getComputedStyle(document.documentElement);
+    const rootFont = rootStyle?.getPropertyValue("--fontFamily")?.trim();
+    if (rootFont) {
+      return rootFont;
+    }
+
+    const bodyFont = document.body ? window.getComputedStyle(document.body).fontFamily : "";
+    if (bodyFont) {
+      return bodyFont;
+    }
+  } catch {}
+
+  return "var(--fontFamily)";
+}
+
 function ensureNativeWorkbenchShadowSurface(hostElement) {
   if (!(hostElement instanceof HTMLElement)) {
     throw new Error("Native workbench host element is unavailable.");
   }
+
+  const gameFontFamily = getNativeWorkbenchGameFontFamily();
+  hostElement.style.setProperty("--rt-game-font-family", gameFontFamily);
+  hostElement.style.setProperty("--dw-native-font-family", gameFontFamily);
 
   let shadowRoot = hostElement.shadowRoot;
   if (!shadowRoot) {
@@ -755,7 +790,7 @@ function ensureNativeWorkbenchShadowSurface(hostElement) {
       "  --bad: #d37272;",
       "  --good: #88c08f;",
       "  color: #edf5f9;",
-      '  font-family: "Noto Sans SC", "Noto Sans TC", Arial, sans-serif;',
+      "  font-family: var(--rt-game-font-family);",
       "}",
       ":host *, :host input, :host button, :host select, :host textarea {",
       "  font-family: inherit;",
@@ -811,7 +846,7 @@ const RapidTransitWorkbenchBundleHost = (props) => {
   const busyState = React.useState("");
   const busyAction = busyState[0];
   const setBusyAction = busyState[1];
-  const debugToolsVisibleState = React.useState(getNativeWorkbenchDebugToolsEnabled());
+  const debugToolsVisibleState = React.useState(getNativeWorkbenchDebugToolsVisible());
   const debugToolsVisible = debugToolsVisibleState[0];
   const setDebugToolsVisible = debugToolsVisibleState[1];
   const statusState = React.useState({
@@ -824,7 +859,7 @@ const RapidTransitWorkbenchBundleHost = (props) => {
 
   React.useEffect(() => {
     const syncDebugToolsVisible = () => {
-      setDebugToolsVisible(getNativeWorkbenchDebugToolsEnabled());
+      setDebugToolsVisible(getNativeWorkbenchDebugToolsVisible());
     };
 
     syncDebugToolsVisible();
@@ -866,10 +901,22 @@ const RapidTransitWorkbenchBundleHost = (props) => {
       ? "Reload Bundle"
       : action === "remount"
         ? "Remount"
-        : "Refresh Data";
+        : action === "rebind"
+          ? "Rebind API"
+          : "Refresh Data";
     setBusyAction(nextBusyLabel);
 
     try {
+      if (action === "rebind") {
+        trigger("RapidTransitPanel", "requestWorkbenchApiRebind");
+        setStatus({
+          tone: "success",
+          text: "Rebind API requested."
+        });
+        traceNativeWorkbench("bundle.action.done", { action });
+        return;
+      }
+
       if (action === "refresh") {
         const bundleState = await ensureNativeWorkbenchPersistentBundle({
           forceReload: false,
@@ -975,7 +1022,22 @@ const RapidTransitWorkbenchBundleHost = (props) => {
               }
             },
             "Dispatch Workbench"
-          )
+        )
+      ),
+        React.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => runBundleAction("rebind"),
+            disabled: !!busyAction,
+            style: Object.assign({}, buttonBaseStyle, {
+              marginRight: "6px",
+              border: "1px solid rgba(238,204,134,0.34)",
+              background: "rgba(157,113,46,0.52)",
+              color: "#fff2cf"
+            })
+          },
+          busyAction === "Rebind API" ? "Rebinding..." : "Rebind API"
         ),
         React.createElement(
           "button",

@@ -208,6 +208,59 @@ namespace RapidTransitMod.Dispatch.Persistence
             return true;
         }
 
+        public void RemoveLine(Entity line)
+        {
+            if (line == Entity.Null) return;
+            if (!m_Runtime.m_DispatchCacheBufferReady) return;
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null) return;
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchCacheElement>(city))
+            {
+                DynamicBuffer<LineDispatchCacheElement> buf = m_Runtime.EntityManager.GetBuffer<LineDispatchCacheElement>(city);
+                for (int i = buf.Length - 1; i >= 0; i--)
+                {
+                    if (buf[i].m_LineEntity == line)
+                        buf.RemoveAt(i);
+                }
+            }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchHistoryElement> historyBuf = m_Runtime.EntityManager.GetBuffer<LineDispatchHistoryElement>(city);
+                for (int i = historyBuf.Length - 1; i >= 0; i--)
+                {
+                    if (historyBuf[i].m_LineEntity == line)
+                        historyBuf.RemoveAt(i);
+                }
+            }
+
+            string lineId = m_LineId(line);
+            if (string.IsNullOrEmpty(lineId))
+                return;
+
+            FixedString128Bytes lineKey = lineId;
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
+            {
+                DynamicBuffer<LineDispatchDepotCacheElement> depotBuf = m_Runtime.EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city);
+                for (int i = depotBuf.Length - 1; i >= 0; i--)
+                {
+                    if (depotBuf[i].m_LineId == lineKey)
+                        depotBuf.RemoveAt(i);
+                }
+            }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchDepotHistoryElement> depotHistoryBuf = m_Runtime.EntityManager.GetBuffer<LineDispatchDepotHistoryElement>(city);
+                for (int i = depotHistoryBuf.Length - 1; i >= 0; i--)
+                {
+                    if (depotHistoryBuf[i].m_LineId == lineKey)
+                        depotHistoryBuf.RemoveAt(i);
+                }
+            }
+        }
+
         private static LineDispatchDepotHistoryElement GetDepotHistory(
             DynamicBuffer<LineDispatchDepotHistoryElement> historyBuf,
             FixedString128Bytes lineId,

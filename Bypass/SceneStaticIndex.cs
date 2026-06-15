@@ -219,7 +219,8 @@ namespace RapidTransitMod.Bypass
 
             if (localChain.SharedRunsByOtherLine != null)
             {
-                foreach (Entity expressLine in localChain.SharedRunsByOtherLine.Keys)
+                var expressLines = new List<Entity>(localChain.SharedRunsByOtherLine.Keys);
+                foreach (Entity expressLine in expressLines)
                 {
                     if (expressLine == Entity.Null
                         || expressLine == localChain.LineEntity

@@ -27,7 +27,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity> m_ClearAssistLaunchPending;
         private readonly Action<Entity> m_ClearForcedMidStopClosingConsist;
         private readonly Action<Entity> m_RemoveAnnouncementVehicle;
-        private readonly Action<Entity, string> m_SetVehicleLabel;
+        private readonly RuntimeVehicleLabels m_VehicleLabels;
         private readonly Action<Entity> m_ClearVehicleLabel;
         private readonly Action<Entity> m_ClearLap;
         private readonly Action<Entity> m_ClearDwell;
@@ -67,7 +67,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ClearAssistLaunchPending = runtime.m_RuntimeController.ClearAssistLaunchPending;
             m_ClearForcedMidStopClosingConsist = runtime.m_Observation.ClearForcedMidStop;
             m_RemoveAnnouncementVehicle = runtime.m_Announcements.RemoveVehicle;
-            m_SetVehicleLabel = runtime.m_VehicleLabels.Set;
+            m_VehicleLabels = runtime.m_VehicleLabels;
             m_ClearVehicleLabel = runtime.m_VehicleLabels.Remove;
             m_ClearLap = runtime.m_ObsPersist.ClearLap;
             m_ClearDwell = runtime.m_ObsPersist.ClearDwell;
@@ -139,7 +139,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void SetRetireLabel(Entity vehicle, string reason)
         {
-            m_SetVehicleLabel(vehicle, "回库中" + (reason.Length > 0 ? "(" + reason + ")" : ""));
+            m_VehicleLabels.SetLocalized(vehicle, "Returning", "回库中", reason.Length > 0 ? "(" + reason + ")" : "");
         }
 
         public void ClearServiceDispatch(Entity vehicle, out int count)

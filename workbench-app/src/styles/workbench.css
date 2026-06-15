@@ -71,18 +71,11 @@
 }
 
 .dw-native-schedule-root {
-  --dw-native-font-family-latin: "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
-  --dw-native-font-family-cjk: "Noto Sans SC", "Noto Sans TC", "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
-  --dw-native-font-family: var(--dw-native-font-family-latin);
   width: 100%;
   height: 100%;
   min-height: 100%;
   color: #edf5f9;
   font-family: var(--dw-native-font-family);
-}
-
-.dw-native-schedule-root[data-native-schedule-script="cjk"] {
-  --dw-native-font-family: var(--dw-native-font-family-cjk);
 }
 
 .dw-native-schedule-root[data-planner-lab="true"] {
@@ -140,7 +133,7 @@
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
-  padding: 0 48px;
+  padding: 0 36rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background: rgba(12, 18, 24, 0.30);
   -webkit-backdrop-filter: saturate(145%) blur(12px);
@@ -167,7 +160,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  height: 12px;
+  height: 9rem;
   background: linear-gradient(180deg, rgba(116, 193, 193, 0.00) 0%, rgba(116, 193, 193, 0.08) 100%);
   pointer-events: none;
 }
@@ -178,27 +171,28 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 92px;
+  min-height: 69rem;
 }
 
 .dw-native-workbench-tabs {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
+  max-width: 880rem;
 }
 
 .dw-native-workbench-tab + .dw-native-workbench-tab {
-  margin-left: 40px;
+  margin-left: 30rem;
 }
 
 .dw-native-workbench-tab {
   position: relative;
   border: 0;
-  padding: 0 0 14px;
+  padding: 0 0 11rem;
   background: transparent;
   color: rgba(255, 255, 255, 0.56);
-  font-size: 20px;
-  line-height: 24px;
+  font-size: 15rem;
+  line-height: 18rem;
   font-weight: 600;
   font-family: var(--dw-native-font-family);
   cursor: pointer;
@@ -215,7 +209,7 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 4px;
+  bottom: 3rem;
   height: 2px;
   background: #81d4d4;
   box-shadow: 0 0 8px rgba(129, 212, 212, 0.38);
@@ -228,17 +222,17 @@
 
 .dw-native-workbench-close {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 26rem;
+  height: 26rem;
   border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 10px;
+  border-radius: 8rem;
   background: rgba(255, 255, 255, 0.05);
   color: rgba(232, 244, 250, 0.88);
-  font-size: 22px;
-  line-height: 22px;
+  font-size: 17rem;
+  line-height: 17rem;
   font-family: var(--dw-native-font-family);
   cursor: pointer;
-  margin-bottom: 10px;
+  margin-bottom: 8rem;
   transition: color 300ms ease, border-color 300ms ease, background-color 300ms ease, transform 300ms ease;
 }
 
@@ -437,10 +431,10 @@
 }
 
 .dw-demo-topbar {
-  --dw-demo-topbar-content-inset: 12px;
+  --dw-demo-topbar-content-inset: 9rem;
   display: flex;
   align-items: flex-end;
-  padding: 20px 16px 18px;
+  padding: 15rem 12rem 14rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background-color: rgba(255, 255, 255, 0.04);
   -webkit-backdrop-filter: saturate(160%) blur(12px);
@@ -458,55 +452,55 @@
 }
 
 .dw-demo-field + .dw-demo-field {
-  margin-left: 16px;
+  margin-left: 12rem;
 }
 
 .dw-demo-field.is-line {
-  width: 248px;
-  flex: 0 0 248px;
+  width: 186rem;
+  flex: 0 0 186rem;
 }
 
 .dw-demo-field.is-kind {
-  width: 168px;
-  flex: 0 0 168px;
+  width: 126rem;
+  flex: 0 0 126rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-field.is-kind {
-  width: 208px;
-  flex: 0 0 208px;
+  width: 156rem;
+  flex: 0 0 156rem;
 }
 
 .dw-demo-field.is-origin {
   width: auto;
   flex: 0 0 auto;
-  margin-left: 24px;
+  margin-left: 18rem;
   align-items: flex-start;
 }
 
 .dw-demo-field.is-depot {
-  width: 196px;
-  flex: 0 0 196px;
+  width: 147rem;
+  flex: 0 0 147rem;
 }
 
 .dw-demo-field.is-hold,
 .dw-demo-field.is-dwell {
-  width: 120px;
-  flex: 0 0 120px;
+  width: 90rem;
+  flex: 0 0 90rem;
 }
 
 .dw-demo-field.is-features {
-  width: 304px;
-  flex: 0 0 304px;
+  width: 228rem;
+  flex: 0 0 228rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-field.is-features {
-  width: 384px;
-  flex: 0 0 384px;
+  width: 288rem;
+  flex: 0 0 288rem;
 }
 
 .dw-demo-field.is-hold .dw-demo-input-row,
 .dw-demo-field.is-dwell .dw-demo-input-row {
-  width: 84px;
+  width: 63rem;
 }
 
 .dw-demo-field.is-window {
@@ -530,10 +524,10 @@
 }
 
 .dw-demo-label {
-  margin-bottom: 10px;
+  margin-bottom: 8rem;
   color: #b4c2cc;
-  font-size: 16px;
-  line-height: 20px;
+  font-size: 12rem;
+  line-height: 15rem;
   font-weight: 500;
 }
 
@@ -545,14 +539,14 @@
 .dw-demo-input,
 .dw-demo-inline-input {
   width: 100%;
-  height: 46px;
+  height: 35rem;
   border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.20);
-  padding: 10px 10px 2px;
+  padding: 8rem 8rem 2px;
   background: transparent;
   color: #edf5f9;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 15rem;
+  line-height: 20rem;
   box-sizing: border-box;
   transition: border-bottom-color 130ms ease, color 130ms ease, background-color 130ms ease;
 }
@@ -570,7 +564,7 @@
 }
 
 .dw-demo-input-row.has-suffix {
-  column-gap: 8px;
+  column-gap: 6rem;
 }
 
 .dw-demo-input {
@@ -582,24 +576,24 @@
   flex: 1 1 auto;
   min-width: 0;
   width: auto;
-  padding-right: 4px;
+  padding-right: 3rem;
 }
 
 .dw-demo-input-suffix {
   flex: 0 0 auto;
-  padding-bottom: 4px;
+  padding-bottom: 3rem;
   color: #b4c2cc;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
 }
 
 .dw-demo-field.is-hold .dw-demo-input,
 .dw-demo-field.is-dwell .dw-demo-input {
   color: #edf5f9;
-  padding-top: 14px;
+  padding-top: 11rem;
   padding-bottom: 0;
-  line-height: 24px;
+  line-height: 18rem;
 }
 
 .dw-demo-field.is-error .dw-demo-label {
@@ -624,9 +618,9 @@
 }
 
 .dw-demo-inline-input {
-  height: 36px;
-  font-size: 20px;
-  padding-top: 6px;
+  height: 27rem;
+  font-size: 15rem;
+  padding-top: 5rem;
   padding-bottom: 2px;
 }
 
@@ -649,8 +643,8 @@
 
 .dw-demo-field-error {
   color: #f3aaaa;
-  font-size: 14px;
-  line-height: 18px;
+  font-size: 11rem;
+  line-height: 14rem;
   font-weight: 500;
 }
 
@@ -661,17 +655,17 @@
 }
 
 .dw-demo-field-error-slot.is-reserved {
-  min-height: 26px;
-  padding-top: 8px;
+  min-height: 20rem;
+  padding-top: 6rem;
 }
 
 .dw-demo-toggle-group {
   display: flex;
-  height: 46px;
+  height: 35rem;
   padding-top: 0;
-  padding-right: 12px;
+  padding-right: 9rem;
   padding-bottom: 0;
-  padding-left: 12px;
+  padding-left: 9rem;
   box-sizing: border-box;
 }
 
@@ -679,16 +673,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 46px;
+  height: 35rem;
   flex: 1 1 auto;
   min-width: 0;
   border: 0;
-  padding: 0 12px;
+  padding: 0 9rem;
   box-sizing: border-box;
   background-color: rgba(255, 255, 255, 0.04);
   color: #c6d2da;
-  font-size: 20px;
-  line-height: 20px;
+  font-size: 15rem;
+  line-height: 15rem;
   font-weight: 600;
   font-family: inherit;
   text-align: center;
@@ -697,7 +691,7 @@
 }
 
 .dw-demo-toggle + .dw-demo-toggle {
-  margin-left: 8px;
+  margin-left: 6rem;
 }
 
 .dw-demo-toggle:hover {
@@ -722,37 +716,37 @@
 }
 
 .dw-demo-feature-toggle {
-  padding: 0 8px;
-  font-size: 14px;
-  line-height: 16px;
+  padding: 0 6rem;
+  font-size: 11rem;
+  line-height: 12rem;
   white-space: normal;
 }
 
 .dw-demo-offset-control {
   display: flex;
   align-items: center;
-  min-height: 46px;
+  min-height: 35rem;
 }
 
 .dw-demo-offset-toggle {
   display: flex;
-  height: 46px;
+  height: 35rem;
   flex: 0 0 auto;
-  margin-right: 12px;
+  margin-right: 9rem;
   background-color: rgba(255, 255, 255, 0.04);
   box-sizing: border-box;
   overflow: hidden;
 }
 
 .dw-demo-offset-toggle-button {
-  min-width: 42px;
-  padding: 0 10px;
+  min-width: 32rem;
+  padding: 0 8rem;
   border: 0;
-  height: 46px;
+  height: 35rem;
   background-color: transparent;
   color: #aebdc7;
-  font-size: 14px;
-  line-height: 18px;
+  font-size: 11rem;
+  line-height: 14rem;
   font-weight: 700;
   transition: background-color 130ms ease, color 130ms ease;
 }
@@ -787,13 +781,13 @@
 
 .dw-demo-offset-hint {
   position: absolute;
-  left: 10px;
-  right: 10px;
+  left: 8rem;
+  right: 8rem;
   top: 50%;
   overflow: hidden;
   color: #8fa3b0;
-  font-size: 14px;
-  line-height: 18px;
+  font-size: 11rem;
+  line-height: 14rem;
   font-weight: 500;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -802,7 +796,7 @@
 }
 
 .dw-native-schedule-root[data-native-schedule-script="cjk"] .dw-demo-offset-hint {
-  font-size: 13px;
+  font-size: 10rem;
 }
 
 .dw-demo-dropdown {
@@ -820,16 +814,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin-left: 8px;
+  width: 15rem;
+  height: 15rem;
+  margin-left: 6rem;
   color: #a9c7cf;
   transition: transform 180ms ease, color 180ms ease;
 }
 
 .dw-demo-dropdown-caret-icon {
-  width: 20px;
-  height: 20px;
+  width: 15rem;
+  height: 15rem;
   display: block;
 }
 
@@ -840,7 +834,7 @@
 
 .dw-demo-dropdown-menu {
   position: absolute;
-  top: 44px;
+  top: 33rem;
   left: 0;
   right: 0;
   z-index: 40;
@@ -866,16 +860,16 @@
 .dw-demo-dropdown-option {
   display: block;
   width: 100%;
-  min-height: 52px;
+  min-height: 39rem;
   border: 0;
   box-sizing: border-box;
-  padding: 12px 16px;
+  padding: 9rem 12rem;
   background: transparent;
   color: rgba(218, 228, 232, 0.88);
   text-align: left;
   font-family: var(--dw-native-font-family);
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 15rem;
+  line-height: 20rem;
   transition: background-color 130ms ease, color 130ms ease;
 }
 
@@ -906,12 +900,12 @@
   display: flex;
   align-items: center;
   width: 100%;
-  height: 46px;
-  padding: 10px 0 2px;
+  height: 35rem;
+  padding: 8rem 0 2px;
   box-sizing: border-box;
   color: #edf5f9;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 15rem;
+  line-height: 20rem;
 }
 
 .dw-demo-topbar .dw-demo-field.is-origin .dw-demo-display-value {
@@ -948,8 +942,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 56px;
-  padding: 0 16px;
+  min-height: 42rem;
+  padding: 0 12rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background-color: rgba(90, 180, 197, 0.12);
   overflow: hidden;
@@ -977,16 +971,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-right: 12px;
-  flex: 0 0 24px;
+  width: 18rem;
+  height: 18rem;
+  margin-right: 9rem;
+  flex: 0 0 18rem;
   transform: translateY(1px);
 }
 
 .dw-demo-section-status-svg {
-  width: 24px;
-  height: 24px;
+  width: 18rem;
+  height: 18rem;
   display: block;
 }
 
@@ -1009,8 +1003,8 @@
 
 .dw-demo-section-title {
   color: #5ab4c5;
-  font-size: 24px;
-  line-height: 24px;
+  font-size: 18rem;
+  line-height: 18rem;
   font-weight: 800;
 }
 
@@ -1021,12 +1015,12 @@
 .dw-demo-summary-metrics {
   display: flex;
   align-items: center;
-  width: 228px;
-  flex: 0 0 228px;
+  width: 171rem;
+  flex: 0 0 171rem;
   justify-content: flex-end;
   color: #d1dbe2;
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   font-weight: 600;
 }
 
@@ -1036,7 +1030,7 @@
 }
 
 .dw-demo-summary-metrics-group > span + span {
-  margin-left: 16px;
+  margin-left: 12rem;
 }
 
 @keyframes dw-section-ring-draw {
@@ -1105,7 +1099,7 @@
   align-items: center;
   justify-content: center;
   min-height: 100%;
-  padding: 24px;
+  padding: 18rem;
   box-sizing: border-box;
   text-align: center;
 }
@@ -1114,32 +1108,32 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 96px;
-  height: 96px;
+  width: 72rem;
+  height: 72rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
   color: rgba(230, 236, 240, 0.72);
 }
 
 .dw-demo-empty-icon {
-  width: 56px;
-  height: 56px;
+  width: 42rem;
+  height: 42rem;
   display: block;
 }
 
 .dw-demo-empty-title {
-  margin-top: 16px;
+  margin-top: 12rem;
   color: #edf5f9;
-  font-size: 24px;
-  line-height: 30px;
+  font-size: 18rem;
+  line-height: 23rem;
   font-weight: 700;
 }
 
 .dw-demo-empty-text {
-  margin-top: 8px;
+  margin-top: 6rem;
   color: #93a6b2;
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 12rem;
+  line-height: 18rem;
   font-weight: 500;
 }
 
@@ -1151,24 +1145,24 @@
 }
 
 .dw-demo-summary-head {
-  min-height: 46px;
-  padding: 0 24px;
+  min-height: 35rem;
+  padding: 0 18rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background-color: rgba(8, 11, 13, 0.44);
   -webkit-backdrop-filter: saturate(160%) blur(12px);
   backdrop-filter: saturate(160%) blur(12px);
   color: #bcc8d1;
-  font-size: 16px;
+  font-size: 12rem;
   font-weight: 600;
 }
 
 .dw-demo-summary-row {
-  min-height: 68px;
-  padding: 0 24px;
+  min-height: 51rem;
+  padding: 0 18rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   font-family: inherit;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 15rem;
+  line-height: 20rem;
   transition: background-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease, transform 180ms ease;
   animation: dw-row-settle 220ms ease;
 }
@@ -1197,8 +1191,8 @@
 
 .dw-demo-summary-head .is-time,
 .dw-demo-summary-row .is-time {
-  width: 116px;
-  flex: 0 0 116px;
+  width: 87rem;
+  flex: 0 0 87rem;
 }
 
 .dw-demo-summary-head .is-line,
@@ -1227,7 +1221,7 @@
 
 .dw-demo-summary-head-filter-trigger {
   width: 100%;
-  height: 46px;
+  height: 35rem;
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -1236,8 +1230,8 @@
   padding: 0;
   background: transparent;
   color: #b9d0d7;
-  font-size: 16px;
-  line-height: 16px;
+  font-size: 12rem;
+  line-height: 12rem;
   font-weight: 600;
   transition: color 130ms ease;
 }
@@ -1261,10 +1255,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  margin-left: 8px;
+  width: 12rem;
+  height: 12rem;
+  flex: 0 0 12rem;
+  margin-left: 6rem;
   transition: transform 130ms ease;
 }
 
@@ -1277,8 +1271,8 @@
 }
 
 .dw-demo-summary-head-filter-icon {
-  width: 16px;
-  height: 16px;
+  width: 12rem;
+  height: 12rem;
   display: block;
 }
 
@@ -1298,16 +1292,16 @@
 .dw-demo-summary-head-filter-menu {
   left: 0;
   right: auto;
-  top: 44px;
-  width: 132px;
+  top: 33rem;
+  width: 99rem;
   z-index: 40;
 }
 
 .dw-demo-summary-head-filter-menu .dw-demo-dropdown-option {
-  min-height: 42px;
-  padding: 8px 16px;
-  font-size: 16px;
-  line-height: 20px;
+  min-height: 32rem;
+  padding: 6rem 12rem;
+  font-size: 12rem;
+  line-height: 15rem;
 }
 
 .dw-demo-dropdown-portal-layer {
@@ -1358,8 +1352,8 @@
 .dw-demo-line-meta-bottom {
   margin-top: 2px;
   color: #aebec8;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 10rem;
+  line-height: 14rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1367,8 +1361,8 @@
 
 .dw-demo-origin-cell {
   color: #cfdae1;
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 12rem;
+  line-height: 17rem;
   font-weight: 500;
 }
 
@@ -1386,15 +1380,15 @@
 
 .dw-demo-summary-head .is-action,
 .dw-demo-summary-row .is-action {
-  width: 72px;
-  flex: 0 0 72px;
+  width: 54rem;
+  flex: 0 0 54rem;
   text-align: right;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-summary-head .is-action,
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-summary-row .is-action {
-  width: 92px;
-  flex: 0 0 92px;
+  width: 69rem;
+  flex: 0 0 69rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-origin-cell {
@@ -1412,8 +1406,8 @@
 
 .dw-demo-status-subtext {
   margin-top: 2px;
-  font-size: 15px;
-  line-height: 18px;
+  font-size: 11rem;
+  line-height: 14rem;
   font-weight: 600;
 }
 
@@ -1435,10 +1429,10 @@
 }
 
 .dw-demo-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  margin-right: 8px;
+  width: 6rem;
+  height: 6rem;
+  flex: 0 0 6rem;
+  margin-right: 6rem;
   border-radius: 999px;
   background-color: #5ab4c5;
 }
@@ -1450,14 +1444,14 @@
 .dw-demo-badge {
   display: inline-flex;
   align-items: center;
-  height: 22px;
-  margin-left: 8px;
+  height: 17rem;
+  margin-left: 6rem;
   border: 1px solid;
-  padding: 0 8px;
+  padding: 0 6rem;
   border-radius: 999px;
   box-sizing: border-box;
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 600;
   vertical-align: middle;
 }
@@ -1477,8 +1471,8 @@
 .dw-demo-status-text {
   display: inline-flex;
   align-items: center;
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 11rem;
+  line-height: 15rem;
   font-weight: 600;
 }
 
@@ -1496,7 +1490,7 @@
 
 .dw-demo-tabs {
   display: flex;
-  min-height: 56px;
+  min-height: 42rem;
   background-color: rgba(255, 255, 255, 0.02);
   -webkit-backdrop-filter: saturate(160%) blur(12px);
   backdrop-filter: saturate(160%) blur(12px);
@@ -1504,12 +1498,12 @@
 
 .dw-demo-tab {
   flex: 1 1 auto;
-  min-height: 56px;
+  min-height: 42rem;
   border: 0;
   background: transparent;
   box-shadow: inset 0 -2px 0 transparent;
   color: #becbd4;
-  font-size: 20px;
+  font-size: 15rem;
   font-weight: 700;
   transition: background-color 130ms ease, color 130ms ease, box-shadow 130ms ease;
 }
@@ -1534,13 +1528,13 @@
 
 .dw-demo-rule-editor {
   flex: 0 0 auto;
-  padding: 20px 20px 0;
+  padding: 15rem 15rem 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background: linear-gradient(to bottom, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
 }
 
 .dw-demo-rule-editor-row {
-  --dw-demo-rule-editor-content-inset: 10px;
+  --dw-demo-rule-editor-content-inset: 8rem;
   display: flex;
   align-items: flex-end;
 }
@@ -1552,7 +1546,7 @@
 }
 
 .dw-demo-rule-editor-row.is-manual {
-  padding-bottom: 12px;
+  padding-bottom: 9rem;
 }
 
 .dw-demo-rule-editor-row.is-manual .dw-demo-field.is-manual-time {
@@ -1561,13 +1555,13 @@
 
 .dw-demo-rule-editor-row .dw-demo-field.is-window-start,
 .dw-demo-rule-editor-row .dw-demo-field.is-window-end {
-  width: 120px;
-  flex: 0 0 120px;
+  width: 90rem;
+  flex: 0 0 90rem;
 }
 
 .dw-demo-rule-editor-row .dw-demo-field.is-rate {
-  width: 112px;
-  flex: 0 0 112px;
+  width: 84rem;
+  flex: 0 0 84rem;
 }
 
 .dw-demo-rule-editor-row .dw-demo-field.is-offset {
@@ -1578,7 +1572,7 @@
 .dw-demo-preview-panel {
   display: flex;
   align-items: center;
-  min-height: 76px;
+  min-height: 57rem;
   margin-top: 0;
   padding-top: 0;
   padding-bottom: 0;
@@ -1589,7 +1583,7 @@
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
-  padding-right: 12px;
+  padding-right: 9rem;
 }
 
 .dw-demo-preview-inline {
@@ -1597,7 +1591,7 @@
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 76px;
+  min-height: 57rem;
 }
 
 .dw-demo-preview-inline.is-window {
@@ -1605,11 +1599,11 @@
   flex: 1 1 auto;
   display: flex;
   align-items: center;
-  min-height: 76px;
+  min-height: 57rem;
 }
 
 .dw-demo-preview-inline.is-window > .dw-demo-preview-tag {
-  margin-right: 16px;
+  margin-right: 12rem;
 }
 
 .dw-demo-preview-values-slot {
@@ -1617,9 +1611,9 @@
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
-  padding-left: 10px;
-  padding-top: 4px;
-  padding-bottom: 4px;
+  padding-left: 8rem;
+  padding-top: 3rem;
+  padding-bottom: 3rem;
 }
 
 .dw-demo-preview-values-slot > .dw-demo-preview-values {
@@ -1642,10 +1636,10 @@
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  margin-right: 8px;
+  margin-right: 6rem;
   color: #bac7d1;
-  font-size: 15px;
-  line-height: 24px;
+  font-size: 11rem;
+  line-height: 18rem;
   font-weight: 600;
 }
 
@@ -1657,8 +1651,8 @@
   min-width: 0;
   position: relative;
   color: #d7e0e6;
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 12rem;
+  line-height: 18rem;
   font-weight: 500;
 }
 
@@ -1670,8 +1664,8 @@
   max-width: 100%;
   position: relative;
   color: #c7d4dc;
-  font-size: 15px;
-  line-height: 26px;
+  font-size: 11rem;
+  line-height: 20rem;
   font-weight: 500;
 }
 
@@ -1728,11 +1722,11 @@
 }
 
 .dw-demo-preview-values.is-rule .dw-demo-preview-separator {
-  width: 14px;
-  flex: 0 0 14px;
+  width: 11rem;
+  flex: 0 0 11rem;
   color: rgba(199, 212, 220, 0.54);
-  font-size: 15px;
-  line-height: 26px;
+  font-size: 11rem;
+  line-height: 20rem;
 }
 
 .dw-demo-preview-values.is-rule .dw-demo-preview-token.is-skipped {
@@ -1762,11 +1756,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 12px;
-  flex: 0 0 12px;
+  width: 9rem;
+  flex: 0 0 9rem;
   color: rgba(215, 224, 230, 0.68);
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 12rem;
+  line-height: 18rem;
   font-weight: 700;
 }
 
@@ -1775,7 +1769,7 @@
 }
 
 .dw-demo-preview-item.is-wrapped-row {
-  transform: translateX(-12px);
+  transform: translateX(-9rem);
 }
 
 .dw-demo-preview-token.is-skipped {
@@ -1804,10 +1798,10 @@
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  margin-left: 12px;
+  margin-left: 9rem;
   color: #b8c7d0;
-  font-size: 14px;
-  line-height: 24px;
+  font-size: 11rem;
+  line-height: 18rem;
   font-weight: 500;
 }
 
@@ -1818,16 +1812,16 @@
 
 .dw-demo-outline,
 .dw-demo-primary {
-  height: 42px;
-  border-radius: 8px;
+  height: 32rem;
+  border-radius: 6rem;
   border: 1px solid;
-  padding: 0 14px;
-  font-size: 20px;
+  padding: 0 11rem;
+  font-size: 15rem;
   transition: background-color 130ms ease, border-color 130ms ease, color 130ms ease;
 }
 
 .dw-demo-outline {
-  margin-left: 12px;
+  margin-left: 9rem;
   border-color: rgba(90, 180, 197, 0.40);
   background: transparent;
   color: #5ab4c5;
@@ -1841,25 +1835,25 @@
 
 .dw-demo-flat-button {
   flex: 0 0 auto;
-  height: 46px;
-  min-width: 112px;
+  height: 35rem;
+  min-width: 84rem;
   border: 0;
-  padding: 0 20px;
+  padding: 0 15rem;
   background-color: rgba(255, 255, 255, 0.06);
   color: rgba(224, 234, 240, 0.88);
-  font-size: 20px;
+  font-size: 15rem;
   font-weight: 600;
   transition: background-color 130ms ease, color 130ms ease;
 }
 
 .dw-demo-flat-button.is-theme {
-  margin-left: 12px;
+  margin-left: 9rem;
   background-color: rgba(90, 180, 197, 0.12);
   color: #5ab4c5;
 }
 
 .dw-demo-flat-button.is-theme.is-manual-add {
-  margin-bottom: 26px;
+  margin-bottom: 20rem;
 }
 
 .dw-demo-flat-button:disabled,
@@ -1872,14 +1866,14 @@
 .dw-demo-preview-panel .dw-demo-flat-button.is-theme {
   align-self: center;
   margin-left: 0;
-  height: 42px;
+  height: 32rem;
 }
 
 .dw-demo-flat-button.is-muted {
-  min-width: 128px;
+  min-width: 96rem;
   background-color: rgba(255, 255, 255, 0.06);
   color: #d7e2e8;
-  font-size: 16px;
+  font-size: 12rem;
   font-weight: 500;
 }
 
@@ -1971,9 +1965,9 @@
 }
 
 .dw-demo-cta {
-  min-width: 172px;
-  height: 48px;
-  padding: 0 20px;
+  min-width: 129rem;
+  height: 36rem;
+  padding: 0 15rem;
   border-radius: 0;
 }
 
@@ -1984,15 +1978,15 @@
 .dw-demo-rule-list-head {
   display: flex;
   align-items: center;
-  min-height: 44px;
-  padding: 0 20px;
+  min-height: 33rem;
+  padding: 0 15rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   background-color: rgba(8, 11, 13, 0.44);
   color: #bcc8d1;
-  font-size: 16px;
-  line-height: 16px;
+  font-size: 12rem;
+  line-height: 12rem;
   font-weight: 600;
-  min-width: 560px;
+  min-width: 420rem;
 }
 
 .dw-demo-rule-list-head.is-with-offset .is-window,
@@ -2005,7 +1999,7 @@
 .dw-demo-rule-row-main.is-with-offset .is-rate {
   width: 16%;
   flex: 0 0 16%;
-  padding-right: 8px;
+  padding-right: 6rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-rule-list-head.is-with-offset .is-rate,
@@ -2018,7 +2012,7 @@
 .dw-demo-rule-row-main.is-with-offset .is-offset {
   width: 16%;
   flex: 0 0 16%;
-  padding-right: 8px;
+  padding-right: 6rem;
 }
 
 .dw-native-schedule-root[data-native-schedule-script="latin"] .dw-demo-rule-list-head.is-with-offset .is-offset,
@@ -2043,7 +2037,7 @@
 .dw-demo-rule-row-main.is-no-offset .is-rate {
   width: 20%;
   flex: 0 0 20%;
-  padding-right: 8px;
+  padding-right: 6rem;
 }
 
 .dw-demo-rule-list-head.is-no-offset .is-action,
@@ -2053,11 +2047,11 @@
 }
 
 .dw-demo-rule-row {
-  padding: 16px 20px 14px;
+  padding: 12rem 15rem 11rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   font-family: inherit;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 15rem;
+  line-height: 20rem;
   transition: background-color 180ms ease, opacity 180ms ease, transform 180ms ease;
   animation: dw-row-settle 220ms ease;
 }
@@ -2070,7 +2064,7 @@
 .dw-demo-rule-row-main {
   display: flex;
   align-items: center;
-  min-width: 560px;
+  min-width: 420rem;
 }
 
 .dw-demo-rule-row-main .is-rate,
@@ -2084,7 +2078,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding-left: 12px;
+  padding-left: 9rem;
   box-sizing: border-box;
 }
 
@@ -2096,41 +2090,41 @@
 
 .dw-demo-rule-window {
   color: #f6fbfe;
-  font-size: 21px;
-  line-height: 28px;
+  font-size: 16rem;
+  line-height: 21rem;
   font-weight: 700;
 }
 
 .dw-demo-rule-rate,
 .dw-demo-rule-offset {
   color: #d7e1e7;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14rem;
+  line-height: 18rem;
   font-weight: 600;
 }
 
 .dw-demo-rule-preview {
-  margin-top: 10px;
+  margin-top: 8rem;
   padding-left: 0;
   color: #c7d4dc;
-  font-size: 15px;
-  line-height: 26px;
+  font-size: 11rem;
+  line-height: 20rem;
   font-weight: 500;
 }
 
 .dw-demo-rule-preview-meta {
-  margin-left: 12px;
+  margin-left: 9rem;
   color: #82919a;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 11rem;
+  line-height: 17rem;
 }
 
 .dw-demo-manual-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 44px;
-  padding: 0 20px;
+  min-height: 33rem;
+  padding: 0 15rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   font-family: inherit;
   transition: background-color 180ms ease, opacity 180ms ease, transform 180ms ease;
@@ -2157,14 +2151,14 @@
 
 .dw-demo-manual-time {
   color: #edf5f9;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 15rem;
+  line-height: 20rem;
 }
 
 .dw-demo-manual-validation {
   margin-top: 2px;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 10rem;
+  line-height: 14rem;
   font-weight: 500;
 }
 
@@ -2183,8 +2177,8 @@
   margin: 0;
   background: transparent;
   color: #b7c5cf;
-  font-size: 16px;
-  line-height: 20px;
+  font-size: 12rem;
+  line-height: 15rem;
   font-weight: 500;
   font-family: inherit;
   transition: color 130ms ease, background-color 130ms ease;
@@ -2204,26 +2198,26 @@
 }
 
 .dw-demo-button-icon {
-  width: 18px;
-  height: 18px;
+  width: 14rem;
+  height: 14rem;
   display: block;
-  margin-right: 8px;
-  flex: 0 0 18px;
+  margin-right: 6rem;
+  flex: 0 0 14rem;
   color: inherit;
 }
 
 .dw-demo-button-icon.is-play {
-  width: 30px;
-  height: 30px;
-  margin-right: 8px;
-  flex: 0 0 30px;
+  width: 23rem;
+  height: 23rem;
+  margin-right: 6rem;
+  flex: 0 0 23rem;
 }
 
 .dw-demo-button-icon.is-import {
-  width: 22px;
-  height: 22px;
-  margin-right: 8px;
-  flex: 0 0 22px;
+  width: 17rem;
+  height: 17rem;
+  margin-right: 6rem;
+  flex: 0 0 17rem;
 }
 
 @keyframes dw-button-icon-settle {
@@ -2250,8 +2244,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 76px;
-  padding: 0 16px;
+  min-height: 57rem;
+  padding: 0 12rem;
   border-top: 1px solid rgba(255, 255, 255, 0.10);
   background-color: rgba(10, 13, 15, 0.50);
 }
@@ -2264,8 +2258,8 @@
   flex: 1 1 auto;
   min-width: 0;
   color: #bccad3;
-  font-size: 15px;
-  line-height: 18px;
+  font-size: 11rem;
+  line-height: 14rem;
   font-weight: 500;
 }
 
@@ -2289,7 +2283,7 @@
 
 .dw-demo-right .dw-demo-cta {
   flex: 0 0 auto;
-  margin-left: 16px;
+  margin-left: 12rem;
 }
 
 .dw-demo-topbar,
@@ -2480,6 +2474,7 @@
   font-size: 12rem;
   line-height: 16rem;
   font-weight: 600;
+  max-width: 116rem;
 }
 
 .rtw-overview-switches {
@@ -2592,6 +2587,17 @@
   font-size: 30rem;
   line-height: 36rem;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rtw-overview-stat-value.is-text {
+  font-size: 18rem;
+  line-height: 22rem;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .rtw-overview-stat-unit {
@@ -2962,7 +2968,7 @@
 }
 
 .rtw-passenger-chart.is-stations {
-  height: 280rem;
+  height: 300rem;
 }
 
 .rtw-passenger-chart.is-ranking {
@@ -2988,6 +2994,59 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.rtw-passenger-chart.is-stations .rtw-passenger-chart-svg {
+  height: 300rem;
+}
+
+.rtw-passenger-station-label-layer,
+.rtw-passenger-od-label-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.rtw-passenger-station-label {
+  position: absolute;
+  width: 96rem;
+  color: #71717a;
+  font-size: 11rem;
+  line-height: 12rem;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  transform: translate(-50%, 0) rotate(-32deg);
+  transform-origin: center top;
+}
+
+.rtw-passenger-station-label span,
+.rtw-passenger-od-label span {
+  display: block;
+}
+
+.rtw-passenger-od-label {
+  position: absolute;
+  min-width: 72rem;
+  max-width: 112rem;
+  color: #a1a1aa;
+  font-size: 12rem;
+  line-height: 14rem;
+  font-weight: 700;
+  text-align: center;
+  white-space: normal;
+  transform: translate(-50%, -50%);
+}
+
+.rtw-passenger-od-label.is-hovered {
+  color: #f4f4f5;
+  font-size: 14rem;
+  line-height: 16rem;
+  font-weight: 800;
 }
 
 .rtw-passenger-od-hit-layer {

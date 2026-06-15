@@ -71,6 +71,7 @@ namespace RapidTransitMod
         internal Broadcasting.Runtime m_Announcements;
         internal TrackModelService m_TrackModel = null!;
         internal TrackProjectionService m_TrackProjection = null!;
+        internal LineStructureInvalidator m_LineStructureInvalidator = null!;
         internal RuntimeFacade m_Bypass = null!;
         internal SharedCorridorSupport m_SharedCorridor = null!;
         internal CatalogCache m_WorkbenchCatalogCache = null!;

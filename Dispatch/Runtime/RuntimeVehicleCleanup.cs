@@ -116,6 +116,14 @@ namespace RapidTransitMod
                 m_Runtime.m_RouteProgress.Clear();
             if (deadKeys.Length > 0)
                 m_Runtime.TrackProjection.ClearLineRunningVehicleSnapshots();
+            if (deadKeys.Length > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
+            {
+                log.Info("[VehicleCleanupSummary] deadVehicles=" + deadKeys.Length
+                    + " affectedLines=" + (removedCountByLine != null ? removedCountByLine.Count : 0)
+                    + " clearedWaypointIndex=1"
+                    + " clearedRouteProgress=1"
+                    + " clearedLineRunningSnapshots=1");
+            }
             deadKeys.Dispose();
         }
     }

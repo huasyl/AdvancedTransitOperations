@@ -1272,7 +1272,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
         ? broadcastLabels.footerStatusApplying
         : broadcastDraftDirty
           ? broadcastLabels.footerStatusDirty
-          : broadcastLabels.footerStatusApplied;
+          : "";
   const broadcastApplyButtonLabel = isApplyingBroadcastConfig
     ? broadcastLabels.footerStatusApplying
     : broadcastVariableMappingIssue

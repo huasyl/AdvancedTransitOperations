@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Colossal.UI;
 using Colossal.Core;
 using Game;
 using Game.SceneFlow;
@@ -14,6 +15,7 @@ namespace RapidTransitMod.Workbenches
         private static bool HostReady;
         private static bool CallsReady;
         private static string Root = string.Empty;
+        private static UIView ObservedView;
 
         internal static void Init(string modRootPath)
         {
@@ -39,8 +41,32 @@ namespace RapidTransitMod.Workbenches
         private static bool Register()
         {
             Host();
+            ObserveView();
             Bind();
             return HostReady && CallsReady;
+        }
+
+        internal static void Dispose()
+        {
+            Calls.Unbind();
+
+            if (ObservedView != null)
+            {
+                ObservedView.Listener.ReadyForBindings -= OnReadyForBindings;
+                ObservedView = null;
+            }
+
+            Ready = false;
+            HostReady = false;
+            CallsReady = false;
+        }
+
+        internal static void RebindNow()
+        {
+            CallsReady = false;
+            Host();
+            ObserveView();
+            Bind();
         }
 
         private static void Host()
@@ -62,6 +88,30 @@ namespace RapidTransitMod.Workbenches
                 true);
             HostReady = true;
             Mod.log.Info("DispatchWorkbench host location registered.");
+        }
+
+        private static void ObserveView()
+        {
+            var view = GameManager.instance?.userInterface?.view;
+            if (view == null || ReferenceEquals(view, ObservedView))
+            {
+                return;
+            }
+
+            if (ObservedView != null)
+            {
+                ObservedView.Listener.ReadyForBindings -= OnReadyForBindings;
+            }
+
+            ObservedView = view;
+            ObservedView.Listener.ReadyForBindings += OnReadyForBindings;
+        }
+
+        private static void OnReadyForBindings()
+        {
+            Mod.log.Info("DispatchWorkbench UI ready; rebinding API.");
+            CallsReady = false;
+            Bind();
         }
 
         private static void Bind()

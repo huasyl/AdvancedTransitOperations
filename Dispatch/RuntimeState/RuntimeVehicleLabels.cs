@@ -32,6 +32,21 @@ namespace RapidTransitMod
             m_LabelCache[vehicle] = message;
         }
 
+        public void SetLocalized(Entity vehicle, string key, string fallback, string suffix = "")
+        {
+            string message = Label(key, fallback) + (suffix ?? string.Empty);
+            Set(vehicle, message);
+        }
+
+        private static string Label(string key, string fallback)
+        {
+            string localizationKey = "RapidTransit.VehicleLabel." + key;
+            string translated = Names.Key(localizationKey);
+            return string.Equals(translated, localizationKey, System.StringComparison.Ordinal)
+                ? fallback ?? string.Empty
+                : translated;
+        }
+
         public void Remove(Entity vehicle)
         {
             if (vehicle != Entity.Null)

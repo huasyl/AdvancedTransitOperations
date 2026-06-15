@@ -15,7 +15,12 @@ function getBroadcastMatchKey(value) {
   let lastWasSeparator = false;
   for (let index = 0; index < source.length; index += 1) {
     const ch = source[index];
-    if (/[\p{L}\p{N}]/u.test(ch)) {
+    const code = ch.charCodeAt(0);
+    const isAsciiDigit = code >= 48 && code <= 57;
+    const isAsciiLetter = code >= 97 && code <= 122;
+    const isNonAsciiWord =
+      code > 127 && !(ch === " " || ch === "_" || ch === "-");
+    if (isAsciiDigit || isAsciiLetter || isNonAsciiWord) {
       result += ch;
       lastWasSeparator = false;
     } else if ((ch === " " || ch === "_" || ch === "-") && !lastWasSeparator && result) {
@@ -375,7 +380,7 @@ export default function useBroadcastAssets(context) {
       return;
     }
 
-    let boundCount = 0;
+    let changedCount = 0;
     const nextStations = (Array.isArray(stations) ? stations : []).map((station) => {
       if (!station?.id || (Array.isArray(station.audios) && station.audios.length > 0)) {
         return station;
@@ -384,11 +389,31 @@ export default function useBroadcastAssets(context) {
       const matches = (Array.isArray(availableAssetLibrary) ? availableAssetLibrary : []).filter((asset) =>
         asset?.name && isBroadcastStationAssetMatch(asset.name, station.name),
       );
+      if (matches.length > 1) {
+        const conflictAssets = matches
+          .map((asset) => ({ assetName: asset.name, suggestedLang: "" }))
+          .sort((left, right) => String(left.assetName || "").localeCompare(String(right.assetName || "")));
+        const currentConflictKey = (Array.isArray(station.conflictAssets) ? station.conflictAssets : [])
+          .map((entry) => entry?.assetName || "")
+          .join("\n");
+        const nextConflictKey = conflictAssets.map((entry) => entry.assetName || "").join("\n");
+        const status = deriveBroadcastStationStatus(station.audios, conflictAssets);
+        if (currentConflictKey === nextConflictKey && station.status === status) {
+          return station;
+        }
+
+        changedCount += 1;
+        return {
+          ...station,
+          conflictAssets,
+          status,
+        };
+      }
       if (matches.length !== 1) {
         return station;
       }
 
-      boundCount += 1;
+      changedCount += 1;
       const audios = [
         {
           lang: defaultBindingLanguageLabel || "",
@@ -399,11 +424,12 @@ export default function useBroadcastAssets(context) {
       return {
         ...station,
         audios,
-        status: deriveBroadcastStationStatus(audios, station.conflictAssets),
+        conflictAssets: [],
+        status: deriveBroadcastStationStatus(audios, []),
       };
     });
 
-    if (boundCount <= 0) {
+    if (changedCount <= 0) {
       return;
     }
 

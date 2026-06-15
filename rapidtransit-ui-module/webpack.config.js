@@ -1,4 +1,5 @@
 const path = require("path");
+const webpack = require("webpack");
 
 module.exports = (_, argv) => {
   const mode = argv && argv.mode ? argv.mode : "production";
@@ -35,6 +36,11 @@ module.exports = (_, argv) => {
       "cs2/l10n": "cs2/l10n",
       "cs2/ui": "cs2/ui"
     },
+    plugins: [
+      new webpack.DefinePlugin({
+        __RT_UI_MODULE_DEV__: JSON.stringify(isDevelopment)
+      })
+    ],
     output: {
       path: path.resolve(__dirname, "dist"),
       filename: "RapidTransitMod.mjs",

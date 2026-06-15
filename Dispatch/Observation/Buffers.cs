@@ -200,6 +200,23 @@ namespace RapidTransitMod.Dispatch.Observation
             });
         }
 
+        public void RemoveSliceLine(Entity line)
+        {
+            if (line == Entity.Null || !m_Runtime.m_TraversalSliceObservationBufferReady)
+                return;
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null || !m_Runtime.EntityManager.HasBuffer<TraversalSliceObservationElement>(city))
+                return;
+
+            DynamicBuffer<TraversalSliceObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<TraversalSliceObservationElement>(city);
+            for (int i = buffer.Length - 1; i >= 0; i--)
+            {
+                if (buffer[i].m_LineEntity == line)
+                    buffer.RemoveAt(i);
+            }
+        }
+
         public bool TryWaypointPosition(Entity waypoint, out float3 position)
         {
             return m_Runtime.m_MileageStore.TryWaypointPosition(waypoint, out position);

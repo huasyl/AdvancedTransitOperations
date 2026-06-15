@@ -116,6 +116,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_RuntimeCache.LoadSlice();
             }
 
+            m_Runtime.m_LineStructureInvalidator.Drain();
+
             bool runFullRegisterSweep = nowMin != m_Runtime.m_LastRegisterSweepMinute;
             try
             {
@@ -165,6 +167,25 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_WorkbenchBridge.Restore();
             m_Runtime.m_WorkbenchBridge.Applied().Load();
             m_Runtime.m_Bypass.WarmStaticSceneIndex();
+            if (RtLog.CacheInvalidationDiagnosticsEnabled)
+            {
+                Entity city = m_Runtime.m_CitySystem.City;
+                int CountBuffer<T>() where T : unmanaged, IBufferElementData
+                {
+                    return city != Entity.Null && m_Runtime.EntityManager.HasBuffer<T>(city)
+                        ? m_Runtime.EntityManager.GetBuffer<T>(city, true).Length
+                        : 0;
+                }
+
+                m_Runtime.log.Info("[RuntimeLoadedSummary] city=" + city.Index
+                    + " appliedLines=" + m_Runtime.m_WorkbenchBridge.Applied().Lines.Count
+                    + " vehicleStateCache=" + CountBuffer<VehicleStateCacheElement>()
+                    + " lineLapCache=" + CountBuffer<LineLapCacheElement>()
+                    + " lineDispatchCache=" + CountBuffer<LineDispatchCacheElement>()
+                    + " bypassStationSettings=" + CountBuffer<BypassStationSettingElement>()
+                    + " stationDwellBuffer=" + CountBuffer<StationDwellObservationElement>()
+                    + " sliceObservationBuffer=" + CountBuffer<TraversalSliceObservationElement>());
+            }
             try
             {
                 Workbenches.UiEvents.Push(m_Runtime.m_WorkbenchBridge.Build(m_Runtime.m_WorkbenchBridge.Drafts().Preferred()));

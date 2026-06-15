@@ -72,5 +72,20 @@
   "RapidTransit.AlertYieldProtected": "Yield protected",
   "RapidTransit.AlertYieldingFor": "Waiting for rapid train",
   "RapidTransit.AlertSpawnPending": "Spawn pending",
-  "RapidTransit.AlertYieldGuard": "Yield guard"
+  "RapidTransit.AlertYieldGuard": "Yield guard",
+  "RapidTransit.VehicleLabel.Holding": "Holding",
+  "RapidTransit.VehicleLabel.HoldingLate": "Holding late",
+  "RapidTransit.VehicleLabel.HoldingWaitingDispatch": "Holding, waiting for dispatch",
+  "RapidTransit.VehicleLabel.WaitingDispatch": "Waiting for dispatch",
+  "RapidTransit.VehicleLabel.Running": "En Route",
+  "RapidTransit.VehicleLabel.RunningLate": "En Route late",
+  "RapidTransit.VehicleLabel.GoingOrigin": "Heading to origin",
+  "RapidTransit.VehicleLabel.Returning": "Returning",
+  "RapidTransit.VehicleLabel.BoardingEnd": "Ending boarding",
+  "RapidTransit.VehicleLabel.StopTimeout": "Stop timeout",
+  "RapidTransit.VehicleLabel.StopTimeoutAssist": "Stop timeout assist",
+  "RapidTransit.VehicleLabel.BypassExpress": "Holding for express",
+  "RapidTransit.VehicleLabel.RunningAbnormal": "Running (fault)",
+  "RapidTransit.VehicleLabel.AbnormalDeparture": "Running (bad departure)",
+  "RapidTransit.VehicleLabel.PathFault": "Path fault"
 }

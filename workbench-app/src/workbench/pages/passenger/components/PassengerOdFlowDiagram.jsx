@@ -88,6 +88,22 @@ function visualOdValue(volume, cap) {
   return Math.max(MIN_VISUAL_OD, Math.pow(capped, VISUAL_OD_POWER));
 }
 
+function splitStationLabel(value) {
+  const text = String(value || "").trim();
+  if (!text || text.length <= 12) {
+    return [text];
+  }
+
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const midpoint = Math.ceil(words.length / 2);
+    return [words.slice(0, midpoint).join(" "), words.slice(midpoint).join(" ")];
+  }
+
+  const pivot = Math.ceil(text.length / 2);
+  return [text.slice(0, pivot), text.slice(pivot)];
+}
+
 function buildChordInput(flows, lines) {
   const stationTotals = new Map();
   const stationNames = new Map();
@@ -160,8 +176,7 @@ function buildChordInput(flows, lines) {
     matrix,
     names: stationIds.map((stationId) => stationNames.get(stationId) || stationId),
     colors,
-    pairColors,
-    totals: stationIds.map((stationId) => stationTotals.get(stationId) || 0)
+    pairColors
   };
 }
 
@@ -218,6 +233,16 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
       label: chordInput.names[index]
     };
   });
+  const labelNodes = chordData.groups.map((group, index) => {
+    const angle = (group.startAngle + group.endAngle) / 2;
+    const radius = OUTER_RADIUS + 30;
+    return {
+      index,
+      left: `${((WIDTH / 2 + Math.sin(angle) * radius) / WIDTH) * 100}%`,
+      top: `${((HEIGHT / 2 - Math.cos(angle) * radius) / HEIGHT) * 100}%`,
+      label: chordInput.names[index]
+    };
+  });
 
   return (
     <div className="rtw-passenger-od-chord">
@@ -236,31 +261,30 @@ export default function PassengerOdFlowDiagram({ flows, lines, isActive = false 
             );
           })}
           {chordData.groups.map((group, index) => {
-            const angle = (group.startAngle + group.endAngle) / 2;
-            const degree = (angle * 180) / Math.PI - 90;
-            const flipped = angle > Math.PI;
-            const labelTransform = `rotate(${degree}) translate(${OUTER_RADIUS + 15} 0)${flipped ? " rotate(180) translate(-8 0)" : ""}`;
             return (
               <g key={`station-${index}`}>
                 <path
                   d={arcPath(group) || ""}
                   fill={chordInput.colors[index] || "#71717a"}
                 />
-                <text
-                  transform={labelTransform}
-                  fill={hoveredGroup === index ? "#f4f4f5" : "#a1a1aa"}
-                  fontSize={hoveredGroup === index ? "18" : "16"}
-                  fontWeight={hoveredGroup === index ? "800" : "700"}
-                  textAnchor={flipped ? "end" : "start"}
-                  pointerEvents="none"
-                >
-                  {chordInput.names[index]}
-                </text>
               </g>
             );
           })}
         </g>
       </svg>
+      <div className="rtw-passenger-od-label-layer">
+        {labelNodes.map((node) => (
+          <div
+            key={`od-label-${node.index}`}
+            className={`rtw-passenger-od-label ${hoveredGroup === node.index ? "is-hovered" : ""}`}
+            style={{ left: node.left, top: node.top }}
+          >
+            {splitStationLabel(node.label).map((line, lineIndex) => (
+              <span key={`od-label-${node.index}-line-${lineIndex}`}>{line}</span>
+            ))}
+          </div>
+        ))}
+      </div>
       {ENABLE_PASSENGER_CHART_HOVER ? (
         <div className="rtw-passenger-od-hit-layer" onMouseLeave={handleGroupLeave}>
           {hitNodes.map((node) => (

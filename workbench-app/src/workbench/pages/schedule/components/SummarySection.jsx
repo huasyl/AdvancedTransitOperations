@@ -37,7 +37,7 @@ function SummaryTable({
           triggerClassName={`dw-demo-summary-head-filter-trigger ${summaryFilter !== "all" ? "is-filtered" : ""}`}
           menuClassName="dw-demo-summary-head-filter-menu"
           portalHostRef={dropdownPortalHostRef}
-          menuWidth={144}
+          menuWidth={108}
           triggerContent={(
             <>
               <span className="dw-demo-summary-head-filter-label">{t("nativeSchedule.summary.filter.label")}</span>

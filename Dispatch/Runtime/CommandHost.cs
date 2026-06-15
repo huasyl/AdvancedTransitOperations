@@ -8,7 +8,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 {
     internal sealed class CommandHost
     {
-        private readonly Action<Entity, string> m_SetVehicleLabel;
+        private readonly RuntimeVehicleLabels m_VehicleLabels;
         private readonly Func<Entity, Entity> m_ReadVehicleLine;
         private readonly Func<Entity, uint, bool> m_IsFreshPreparing;
         private readonly Action<Entity, uint> m_SetPreparing;
@@ -31,7 +31,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             EntityManager = runtime.EntityManager;
             SimulationSystem = runtime.m_SimulationSystem;
             Log = runtime.log;
-            m_SetVehicleLabel = runtime.m_VehicleLabels.Set;
+            m_VehicleLabels = runtime.m_VehicleLabels;
             m_ReadVehicleLine = vehicle => runtime.m_VehicleView.TryGetLine(vehicle, out Entity line) ? line : Entity.Null;
             m_IsFreshPreparing = (vehicle, nowFrame) => runtime.m_VehicleView.IsFreshPreparing(vehicle, nowFrame, DispatchRuntimeSystem.PREPARING_ROUTE_FIX_GRACE_FRAMES);
             m_SetPreparing = runtime.m_RuntimeController.SetPreparing;
@@ -61,7 +61,12 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void SetVehicleLabel(Entity vehicle, string text)
         {
-            m_SetVehicleLabel(vehicle, text);
+            m_VehicleLabels.Set(vehicle, text);
+        }
+
+        public void SetLocalizedVehicleLabel(Entity vehicle, string key, string fallback, string suffix = "")
+        {
+            m_VehicleLabels.SetLocalized(vehicle, key, fallback, suffix);
         }
 
         public bool TryGetVehicleLine(Entity vehicle, out Entity line)

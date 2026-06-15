@@ -9,7 +9,8 @@ function stationCatalogMap(snapshot) {
     if (!stationId) {
       return;
     }
-    map.set(stationId, String(entry?.stationName || stationId));
+    const stationName = String(entry?.stationName || "").trim();
+    map.set(stationId, stationName || stationId);
   });
   return map;
 }
@@ -23,6 +24,7 @@ export function buildOverviewMetrics(passengerSnapshot = {}) {
   let peakSectionLoad = 0;
   const stationTotals = new Map();
   const bucketTotals = new Map();
+  const sectionTotals = new Map();
 
   stationVolumes.forEach((entry) => {
     const boardings = Number(entry?.boardings || 0);
@@ -31,7 +33,8 @@ export function buildOverviewMetrics(passengerSnapshot = {}) {
     totalBoardingsAlightings24h += total;
 
     const stationId = String(entry?.stationId || "");
-    const stationName = String(entry?.stationName || "") || stationNames.get(stationId) || stationId;
+    const entryStationName = String(entry?.stationName || "").trim();
+    const stationName = stationNames.get(stationId) || entryStationName || stationId;
     if (stationId) {
       const currentStation = stationTotals.get(stationId) || { stationId, stationName, total: 0 };
       currentStation.total += total;
@@ -46,7 +49,20 @@ export function buildOverviewMetrics(passengerSnapshot = {}) {
   });
 
   sectionVolumes.forEach((entry) => {
-    peakSectionLoad = Math.max(peakSectionLoad, Number(entry?.averageLoadPassengers || 0));
+    const fromStationId = String(entry?.fromStationId || "");
+    const toStationId = String(entry?.toStationId || "");
+    if (!fromStationId || !toStationId) {
+      return;
+    }
+    const averageLoadPassengers = Number(entry?.averageLoadPassengers || 0);
+    const sampleCount = Number(entry?.sampleCount || 0);
+    const total = sampleCount > 0 ? averageLoadPassengers * sampleCount : averageLoadPassengers;
+    const sectionKey = `${fromStationId}->${toStationId}`;
+    sectionTotals.set(sectionKey, Number(sectionTotals.get(sectionKey) || 0) + total);
+  });
+
+  sectionTotals.forEach((total) => {
+    peakSectionLoad = Math.max(peakSectionLoad, Number(total || 0));
   });
 
   let busiestStationName = "";

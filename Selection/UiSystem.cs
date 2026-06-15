@@ -58,6 +58,7 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestDumpPlannerInput", RequestDumpPlannerInput));
             AddBinding(new TriggerBinding(kGroup, "requestDumpObservation", RequestDumpObservation));
             AddBinding(new TriggerBinding(kGroup, "requestDumpStationAnchorObservation", RequestDumpStationAnchorObservation));
+            AddBinding(new TriggerBinding(kGroup, "requestWorkbenchApiRebind", RequestWorkbenchApiRebind));
 #endif
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
@@ -443,6 +444,11 @@ namespace RapidTransitMod
                 m_LastRoute = Entity.Null;
                 m_LastSnapshotVersion = 0;
             }
+        }
+
+        private void RequestWorkbenchApiRebind()
+        {
+            Workbenches.ApiHost.RebindNow();
         }
 #endif
 

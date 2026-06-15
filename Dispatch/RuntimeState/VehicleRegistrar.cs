@@ -179,11 +179,15 @@ namespace RapidTransitMod
                             m_Runtime.m_Observation.Seed(v, line, m_Runtime.m_SimulationSystem.frameIndex);
 
                         if (finalState == VehicleState.Running)
-                            m_Runtime.m_VehicleLabels.Set(v, "运行中" + (finalTarget >= 0 ? " " + DispatchRuntimeSystem.SlotStr(finalTarget) : ""));
+                            m_Runtime.m_VehicleLabels.SetLocalized(v, "Running", "运行中", finalTarget >= 0 ? " " + DispatchRuntimeSystem.SlotStr(finalTarget) : "");
                         else if (finalState == VehicleState.Holding)
-                            m_Runtime.m_VehicleLabels.Set(v, finalTarget >= 0 ? "候车 " + DispatchRuntimeSystem.SlotStr(finalTarget) : "候车 等待调度");
+                            m_Runtime.m_VehicleLabels.SetLocalized(
+                                v,
+                                finalTarget >= 0 ? "Holding" : "HoldingWaitingDispatch",
+                                finalTarget >= 0 ? "候车" : "候车 等待调度",
+                                finalTarget >= 0 ? " " + DispatchRuntimeSystem.SlotStr(finalTarget) : "");
                         else
-                            m_Runtime.m_VehicleLabels.Set(v, atA0 ? "候车 等待调度" : "前往始发站");
+                            m_Runtime.m_VehicleLabels.SetLocalized(v, atA0 ? "HoldingWaitingDispatch" : "GoingOrigin", atA0 ? "候车 等待调度" : "前往始发站");
 
                         if (RtLog.VerboseEnabled)
                         {

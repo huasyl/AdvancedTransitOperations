@@ -16,19 +16,22 @@ namespace RapidTransitMod.TrackModel
         private readonly TrackProfile m_Profile;
         private readonly TrackDiag m_Diag;
         private readonly Action m_MarkSharedDirty;
+        private readonly Action<Entity, ulong, ulong, int, int> m_NotifyLineTrackChainRebuilt;
 
         internal TrackBuild(
             TrackState state,
             TrackSupport support,
             TrackProfile profile,
             TrackDiag diag,
-            Action markSharedDirty)
+            Action markSharedDirty,
+            Action<Entity, ulong, ulong, int, int> notifyLineTrackChainRebuilt)
         {
             m_State = state;
             m_Support = support;
             m_Profile = profile;
             m_Diag = diag;
             m_MarkSharedDirty = markSharedDirty;
+            m_NotifyLineTrackChainRebuilt = notifyLineTrackChainRebuilt;
         }
 
         private EntityManager EntityManager => m_Support.EntityManager;
@@ -138,6 +141,8 @@ namespace RapidTransitMod.TrackModel
             }
 
             previousChain = chain;
+            ulong previousSignature = previousChain != null ? previousChain.Signature : 0UL;
+            int previousAtomCount = previousChain != null ? previousChain.TrackAtoms.Count : 0;
             chain = BuildLineTrackChain(line, waypoints, segments, signature);
             if (chain == null || chain.TrackAtoms.Count == 0)
             {
@@ -149,6 +154,18 @@ namespace RapidTransitMod.TrackModel
                 return false;
             }
 
+            if (RtLog.CacheInvalidationDiagnosticsEnabled)
+            {
+                m_Support.Log.Info("[TrackChainRebuilt] line=" + line.Index
+                    + " oldSig=" + previousSignature
+                    + " newSig=" + signature
+                    + " waypoints=" + waypoints.Length
+                    + " segments=" + segments.Length
+                    + " oldAtoms=" + previousAtomCount
+                    + " newAtoms=" + chain.TrackAtoms.Count
+                    + " frame=" + nowFrame);
+            }
+
             if (previousChain != null)
                 m_Diag.RemoveDevSightChain(previousChain);
 
@@ -158,6 +175,7 @@ namespace RapidTransitMod.TrackModel
                 waypoints.Length,
                 true,
                 chain));
+            m_NotifyLineTrackChainRebuilt?.Invoke(line, previousSignature, signature, previousAtomCount, chain.TrackAtoms.Count);
             m_Diag.AddDevSightChain(chain);
             m_MarkSharedDirty?.Invoke();
             return true;

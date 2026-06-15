@@ -72,5 +72,20 @@
   "RapidTransit.AlertYieldProtected": "\u6b63\u5728\u8fdb\u884c\u907f\u8ba9\u4fdd\u62a4",
   "RapidTransit.AlertYieldingFor": "\u7b49\u5f85 rapid train",
   "RapidTransit.AlertSpawnPending": "\u4ea7\u8f66\u6392\u961f",
-  "RapidTransit.AlertYieldGuard": "\u56de\u6d41\u4fdd\u62a4"
+  "RapidTransit.AlertYieldGuard": "\u56de\u6d41\u4fdd\u62a4",
+  "RapidTransit.VehicleLabel.Holding": "\u5019\u8f66",
+  "RapidTransit.VehicleLabel.HoldingLate": "\u5019\u8f66 \u8865\u53d1",
+  "RapidTransit.VehicleLabel.HoldingWaitingDispatch": "\u5019\u8f66 \u7b49\u5f85\u8c03\u5ea6",
+  "RapidTransit.VehicleLabel.WaitingDispatch": "\u7b49\u5f85\u8c03\u5ea6",
+  "RapidTransit.VehicleLabel.Running": "\u8fd0\u884c\u4e2d",
+  "RapidTransit.VehicleLabel.RunningLate": "\u8fd0\u884c\u4e2d \u8865\u53d1",
+  "RapidTransit.VehicleLabel.GoingOrigin": "\u524d\u5f80\u59cb\u53d1\u7ad9",
+  "RapidTransit.VehicleLabel.Returning": "\u56de\u5e93\u4e2d",
+  "RapidTransit.VehicleLabel.BoardingEnd": "\u7ed3\u675f\u4e0a\u5ba2",
+  "RapidTransit.VehicleLabel.StopTimeout": "\u505c\u7ad9\u8d85\u65f6",
+  "RapidTransit.VehicleLabel.StopTimeoutAssist": "\u505c\u7ad9\u8d85\u65f6\u534f\u52a9\u4e2d",
+  "RapidTransit.VehicleLabel.BypassExpress": "\u5f85\u907f\u5feb\u8f66",
+  "RapidTransit.VehicleLabel.RunningAbnormal": "\u8fd0\u884c\u4e2d(\u5f02\u5e38)",
+  "RapidTransit.VehicleLabel.AbnormalDeparture": "\u8fd0\u884c\u4e2d(\u5f02\u5e38\u79bb\u7ad9)",
+  "RapidTransit.VehicleLabel.PathFault": "\u5bfb\u8def\u5f02\u5e38"
 }

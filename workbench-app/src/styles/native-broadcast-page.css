@@ -2086,9 +2086,8 @@
 
 .dw-bc-map-button.is-conflict {
   border-color: rgba(227, 179, 65, 0.40);
-  background: rgba(227, 179, 65, 0.08);
-  color: #11191c;
-  background-color: #e3b341;
+  background: transparent;
+  color: #e3b341;
 }
 
 .dw-bc-map-status.dw-bc-map-col.is-status {
@@ -2572,9 +2571,9 @@
   font-size: 11rem;
   line-height: 15rem;
   font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .dw-bc-footer-status.is-warning,
@@ -2900,8 +2899,8 @@
 }
 
 .dw-bc-map-button.is-conflict:hover {
-  background: #f0c96a;
-  border-color: #f0c96a;
+  background: rgba(227, 179, 65, 0.08);
+  border-color: rgba(227, 179, 65, 0.68);
 }
 
 .dw-bc-map-binding-tag:hover {

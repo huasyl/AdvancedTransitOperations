@@ -159,7 +159,22 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
   );
 
   const selectedMode = toOverviewMode(activeTransportMode || viewModel.activeMode);
-  const modeSummary = viewModel.modes.find((mode) => mode.mode === selectedMode) || viewModel.modes[0] || {
+  const modeRailModes = useMemo(() => {
+    const summariesByMode = new Map(viewModel.modes.map((mode) => [mode.mode, mode]));
+    Object.entries(modeCacheRef.current).forEach(([modeKey, cached]) => {
+      const cachedMode = toOverviewMode(modeKey);
+      if (cachedMode === selectedMode || (!hasScopedLines(cached?.snapshot) && !hasScopedLines(cached?.metadataSnapshot))) {
+        return;
+      }
+      const cachedViewModel = buildOverviewViewModel(cached.snapshot || {}, cached.metadataSnapshot || {}, t);
+      const cachedSummary = cachedViewModel.modes.find((mode) => mode.mode === cachedMode);
+      if (cachedSummary) {
+        summariesByMode.set(cachedMode, cachedSummary);
+      }
+    });
+    return viewModel.modes.map((mode) => summariesByMode.get(mode.mode) || mode);
+  }, [selectedMode, snapshot, metadataSnapshot, t, viewModel.modes]);
+  const modeSummary = modeRailModes.find((mode) => mode.mode === selectedMode) || modeRailModes[0] || {
     lineCount: 0,
     appliedDepartureCount: 0
   };
@@ -263,7 +278,7 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
     <div className="rtw-overview-root">
       <div className="rtw-overview-body">
         <aside className="rtw-overview-sidebar">
-          <OverviewModeRail modes={viewModel.modes} activeMode={selectedMode} onModeChange={handleModeChange} />
+          <OverviewModeRail modes={modeRailModes} activeMode={selectedMode} onModeChange={handleModeChange} />
           <OverviewSystemSwitches systems={overviewFeatureSettings.systems} onSystemToggle={overviewFeatureSettings.toggleFeature} />
           <div className="rtw-overview-footer-tag">{t("nativeWorkbench.overview.footer.online")}</div>
         </aside>

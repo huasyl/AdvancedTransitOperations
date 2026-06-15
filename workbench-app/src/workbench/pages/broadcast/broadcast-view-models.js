@@ -53,7 +53,7 @@ function buildBroadcastFooterView({
             broadcastVariableMappingIssue.stationName,
           )
         : isBroadcastConfigApplied
-          ? labels.footerStatusApplied
+          ? ""
           : labels.footerStatusClean);
   const buttonLabel = isApplyingBroadcastConfig
     ? labels.footerStatusApplying

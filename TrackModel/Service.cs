@@ -25,7 +25,7 @@ namespace RapidTransitMod.TrackModel
             m_Scene = new SceneCache();
             m_Diag = new TrackDiag(m_Support);
             m_Profile = new TrackProfile(m_Support);
-            m_Build = new TrackBuild(m_State, m_Support, m_Profile, m_Diag, () => m_Shared.MarkDirty());
+            m_Build = new TrackBuild(m_State, m_Support, m_Profile, m_Diag, () => m_Shared.MarkDirty(), runtime.NotifyLineTrackChainRebuilt);
             m_Shared = new SharedIndex(m_Support, m_Build);
             m_Intervals = new TrackIntervals(m_Support, m_Scene, m_Shared, m_Build);
             m_Query = new TrackQuery(m_State, m_Shared, m_Support);

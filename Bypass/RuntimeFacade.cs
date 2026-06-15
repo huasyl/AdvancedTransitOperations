@@ -80,8 +80,19 @@ namespace RapidTransitMod.Bypass
                     ClearVehicle(yieldVehiclesToRelease[i], "线路运行态失效");
             }
 
+            m_Admission.ClearLineStaticCaches(line);
             m_Admission.InvalidateStaticSceneIndex();
             m_Runtime.TrackModel.ClearStaticCachesForLine(line);
+            if (RtLog.CacheInvalidationDiagnosticsEnabled)
+            {
+                int releasedVehicleCount = yieldVehiclesToRelease != null ? yieldVehiclesToRelease.Count : 0;
+                m_Runtime.Log.Info("[BypassLineInvalidated] line=" + line.Index
+                    + " mode=clear-line"
+                    + " releasedVehicles=" + releasedVehicleCount
+                    + " clearAdmissionStaticCaches=1"
+                    + " invalidateStaticSceneIndex=1"
+                    + " clearStaticCachesForLine=1");
+            }
         }
 
         internal void ExpireLine(Entity line)
@@ -94,10 +105,30 @@ namespace RapidTransitMod.Bypass
 
             List<Entity> expiredVehicles = m_Admission.ExpireLine(line);
             if (expiredVehicles == null)
+            {
+                if (RtLog.CacheInvalidationDiagnosticsEnabled)
+                {
+                    m_Runtime.Log.Info("[BypassLineInvalidated] line=" + line.Index
+                        + " mode=expire-line"
+                        + " expiredVehicles=0"
+                        + " clearLineTimeProfiles=1"
+                        + " invalidateStaticSceneIndex=1");
+                }
                 return;
+            }
 
             for (int i = 0; i < expiredVehicles.Count; i++)
                 RemoveVehicleLogs(expiredVehicles[i]);
+
+            if (RtLog.CacheInvalidationDiagnosticsEnabled)
+            {
+                int expiredVehicleCount = expiredVehicles.Count;
+                m_Runtime.Log.Info("[BypassLineInvalidated] line=" + line.Index
+                    + " mode=expire-line"
+                    + " expiredVehicles=" + expiredVehicleCount
+                    + " clearLineTimeProfiles=1"
+                    + " invalidateStaticSceneIndex=1");
+            }
         }
 
         internal void ForgetBlocker(Entity blocker)

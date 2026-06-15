@@ -70,6 +70,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
             runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
             runtime.m_RuntimeShell = new RuntimeShell(runtime);
+            runtime.m_LineStructureInvalidator = new LineStructureInvalidator(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
                 runtime,
                 line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
@@ -125,7 +126,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 FindSharedWaypoint = runtime.m_SharedCorridor.TryFindFutureSharedCorridorWaypoint,
                 BuildCorridorMap = runtime.m_SharedCorridor.BuildLocalBypassCorridorWaypointMap,
                 CollectTurnback = Turnbacks.TryCollectTurnbackStationBoundaries,
-                ResolveTurnback = Turnbacks.TryResolveTurnbackStationBoundary
+                ResolveTurnback = Turnbacks.TryResolveTurnbackStationBoundary,
+                NotifyLineTrackChainRebuilt = runtime.m_LineStructureInvalidator.Request
             }));
             runtime.m_TrackProjection = new TrackProjectionService(RuntimePorts.BuildTrackProjection(runtime));
             runtime.m_ObsCapture = new Capture(
@@ -265,6 +267,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SharedCorridor = null!;
             runtime.m_RuntimeLog = null!;
             runtime.m_RuntimeShell = null!;
+            runtime.m_LineStructureInvalidator = null!;
             if (runtime.m_Bypass != null) runtime.m_Bypass.Dispose();
             runtime.m_TrackModel = null!;
             runtime.m_Bypass = null!;

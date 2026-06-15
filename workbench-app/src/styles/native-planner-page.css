@@ -886,6 +886,7 @@
 .dw-planner-risk-route {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   width: 100%;
   min-width: 0;
   margin-top: 6rem;
@@ -923,6 +924,7 @@
 .dw-planner-risk-range {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   color: rgba(218, 228, 232, 0.84);
   font-size: 12rem;
   line-height: 17rem;
@@ -940,6 +942,7 @@
   font-size: 12rem;
   line-height: 17rem;
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .dw-planner-risk-detail {
@@ -948,6 +951,7 @@
   font-size: 11rem;
   line-height: 15rem;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .dw-planner-risk-trip {
@@ -956,6 +960,7 @@
   font-size: 12rem;
   line-height: 17rem;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .dw-planner-risk-events {
@@ -975,6 +980,7 @@
 .dw-planner-risk-event-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   margin-bottom: 6rem;
   color: #edf5f9;
   font-size: 12rem;
@@ -989,6 +995,7 @@
 .dw-planner-risk-stats {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   margin-top: 5rem;
   color: rgba(184, 198, 195, 0.82);
   font-size: 11rem;
@@ -1016,6 +1023,7 @@
 .dw-planner-risk-action {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   margin-top: 9rem;
   color: #d5e1e7;
   font-size: 12rem;
@@ -1027,6 +1035,20 @@
   flex: 0 0 auto;
   margin-right: 6rem;
   color: rgba(184, 198, 195, 0.76);
+}
+
+.dw-planner-risk-range > span:last-child,
+.dw-planner-risk-event-head > span:last-child,
+.dw-planner-risk-action > span:last-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dw-planner-risk-route-source,
+.dw-planner-risk-route-dest,
+.dw-planner-risk-stats > span {
+  overflow-wrap: anywhere;
 }
 
 .dw-planner-table-head {

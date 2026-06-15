@@ -4,6 +4,7 @@ namespace RapidTransitMod
     {
         internal static bool DebugToolsEnabled => BuildFlavor.DebugTools;
         internal static bool VerboseEnabled => BuildFlavor.VerboseLogs;
+        internal static bool CacheInvalidationDiagnosticsEnabled => false;
 
         internal static void Info(string message)
         {

@@ -332,6 +332,9 @@ namespace RapidTransitMod
 
         public void Log(Entity line, int nowMin, int nextSlot)
         {
+            if (!RtLog.CacheInvalidationDiagnosticsEnabled)
+                return;
+
             LineInfo info = Get(line);
             if (line == Entity.Null || !info.Applied)
                 return;

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 
 const WIDTH = 720;
@@ -6,7 +6,7 @@ const HEIGHT = 300;
 const LEFT = 52;
 const RIGHT = 12;
 const TOP = 16;
-const BOTTOM = 88;
+const BOTTOM = 104;
 const PLOT_WIDTH = WIDTH - LEFT - RIGHT;
 const PLOT_HEIGHT = HEIGHT - TOP - BOTTOM;
 const ENABLE_PASSENGER_CHART_HOVER = false;
@@ -22,12 +22,20 @@ function getStationName(entry, index, t) {
   return entry?.stationName || entry?.name || entry?.stationId || t("nativeWorkbench.passenger.fallback.stationName", { index: index + 1 });
 }
 
-function splitStationLabel(name) {
-  const text = String(name || "");
-  if (text.length <= 8) {
+function splitStationLabel(value) {
+  const text = String(value || "").trim();
+  if (!text || text.length <= 12) {
     return [text];
   }
-  return [text.slice(0, 8), text.slice(8, 16)];
+
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const midpoint = Math.ceil(words.length / 2);
+    return [words.slice(0, midpoint).join(" "), words.slice(midpoint).join(" ")];
+  }
+
+  const pivot = Math.ceil(text.length / 2);
+  return [text.slice(0, pivot), text.slice(pivot)];
 }
 
 function buildDisplayVolumes(volumes) {
@@ -105,10 +113,44 @@ function buildChartData(volumes, t) {
 export default function PassengerStationVolumeChart({ volumes }) {
   const { t } = useNativeScheduleI18n();
   const [hoveredIndex, setHoveredIndex] = useState(null);
+  const [chartViewport, setChartViewport] = useState(null);
+  const chartWrapRef = useRef(null);
   const hoverRef = useRef({ lastTime: 0 });
   const displayVolumes = useMemo(() => buildDisplayVolumes(volumes), [volumes]);
   const chart = useMemo(() => buildChartData(displayVolumes, t), [displayVolumes, t]);
   const hovered = !ENABLE_PASSENGER_CHART_HOVER || hoveredIndex === null ? null : chart.items[hoveredIndex];
+
+  useEffect(() => {
+    function updateChartViewport() {
+      const element = chartWrapRef.current;
+      if (!element || typeof element.getBoundingClientRect !== "function") {
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
+      const scale = Math.min(rect.width / WIDTH, rect.height / HEIGHT);
+      const width = WIDTH * scale;
+      const height = HEIGHT * scale;
+      setChartViewport({
+        left: (rect.width - width) / 2,
+        top: (rect.height - height) / 2,
+        width,
+        height
+      });
+    }
+
+    updateChartViewport();
+    const shortTimer = window.setTimeout(updateChartViewport, 0);
+    const revealTimer = window.setTimeout(updateChartViewport, 250);
+    window.addEventListener("resize", updateChartViewport);
+    return () => {
+      window.clearTimeout(shortTimer);
+      window.clearTimeout(revealTimer);
+      window.removeEventListener("resize", updateChartViewport);
+    };
+  }, [displayVolumes.length]);
 
   if (!displayVolumes.length) {
     return <div className="rtw-passenger-empty">{t("nativeWorkbench.passenger.empty.stationVolumes")}</div>;
@@ -143,7 +185,7 @@ export default function PassengerStationVolumeChart({ volumes }) {
   }
 
   return (
-    <div className="rtw-passenger-chart-wrap" onMouseLeave={handleHoverLeave}>
+    <div ref={chartWrapRef} className="rtw-passenger-chart-wrap" onMouseLeave={handleHoverLeave}>
       <div className="rtw-passenger-station-legend">
         <span className="rtw-passenger-station-legend-item">
           <span className="rtw-passenger-station-legend-swatch is-inflow" />
@@ -167,24 +209,25 @@ export default function PassengerStationVolumeChart({ volumes }) {
           <g key={`${item.entry?.stationId || item.index}`}>
             <rect x={item.x} y={TOP + PLOT_HEIGHT - item.inflowHeight} width={item.barWidth} height={item.inflowHeight} rx="4" fill="#10b981" />
             <rect x={item.x + item.barWidth + 4} y={TOP + PLOT_HEIGHT - item.outflowHeight} width={item.barWidth} height={item.outflowHeight} rx="4" fill="#f59e0b" />
-            <text
-              x={item.labelX}
-              y={TOP + PLOT_HEIGHT + 18}
-              fill="#71717a"
-              fontSize="13"
-              fontWeight="600"
-              textAnchor="end"
-              transform={`rotate(-32 ${item.labelX} ${TOP + PLOT_HEIGHT + 18})`}
-            >
-              {splitStationLabel(item.name).map((label, labelIndex) => (
-                <tspan key={`${item.entry?.stationId || item.index}-${labelIndex}`} x={item.labelX} dy={labelIndex === 0 ? 0 : 14}>
-                  {label}
-                </tspan>
-              ))}
-            </text>
           </g>
         ))}
       </svg>
+      {chartViewport ? <div className="rtw-passenger-station-label-layer">
+        {chart.items.map((item) => (
+          <div
+            key={`label-${item.entry?.stationId || item.index}`}
+            className="rtw-passenger-station-label"
+            style={{
+              left: `${chartViewport.left + (item.labelX / WIDTH) * chartViewport.width}px`,
+              top: `${chartViewport.top + ((TOP + PLOT_HEIGHT + 18) / HEIGHT) * chartViewport.height}px`
+            }}
+          >
+            {splitStationLabel(item.name).map((label, labelIndex) => (
+              <span key={`${item.entry?.stationId || item.index}-${labelIndex}`}>{label}</span>
+            ))}
+          </div>
+        ))}
+      </div> : null}
       {ENABLE_PASSENGER_CHART_HOVER ? (
         <div
           className="rtw-passenger-hit-zones is-stations"

@@ -290,7 +290,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         downloadHandler.streamAudio = false;
                     }
 
-                    await request.SendWebRequest();
+                    await WaitUnityWebRequest(request);
                     if (request.result == UnityWebRequest.Result.ConnectionError
                         || request.result == UnityWebRequest.Result.ProtocolError
                         || request.result == UnityWebRequest.Result.DataProcessingError)
@@ -543,7 +543,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             downloadHandler.streamAudio = false;
                         }
 
-                        await request.SendWebRequest();
+                        await WaitUnityWebRequest(request);
                         if (request.result == UnityWebRequest.Result.ConnectionError
                             || request.result == UnityWebRequest.Result.ProtocolError
                             || request.result == UnityWebRequest.Result.DataProcessingError)
@@ -773,6 +773,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     return UnityWebRequestMultimedia.GetAudioClip(new Uri("file://" + path), audioType);
+                }
+
+                internal static async Task WaitUnityWebRequest(UnityWebRequest request)
+                {
+                    UnityWebRequestAsyncOperation operation = request.SendWebRequest();
+                    while (!operation.isDone)
+                    {
+                        await Task.Yield();
+                    }
                 }
 
                 internal static AudioType AudioType(string filePath)

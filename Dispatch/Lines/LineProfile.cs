@@ -340,6 +340,15 @@ namespace RapidTransitMod.Dispatch.Lines
 
             if (!m_LineWaypointSignature.TryGetValue(line, out ulong oldSignature) || oldSignature != signature)
             {
+                if (RtLog.CacheInvalidationDiagnosticsEnabled)
+                {
+                    m_Runtime.log.Info("[LineSignatureChanged] line=" + line.Index
+                        + " oldSig=" + oldSignature
+                        + " newSig=" + signature
+                        + " waypoints=" + waypoints.Length
+                        + " frame=" + nowFrame
+                        + " clearLineTimes=1");
+                }
                 m_Runtime.m_LineTimes.Clear();
                 m_LineWaypointSignature[line] = signature;
                 m_LineStableSinceFrame[line] = nowFrame;
