@@ -4,20 +4,25 @@ import { GROUP } from "./selectionBindings";
 import { COLORS } from "./selectionStyles";
 import { formatValue } from "./selectionViewModel";
 
-export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; first?: boolean; alert?: boolean }>) {
+export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; dense?: boolean; first?: boolean; alert?: boolean }>) {
+  const children = React.Children.toArray(props.children);
+
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: "12rem",
         margin: "0 -12rem",
-        padding: props.compact ? "14rem 12rem 6rem" : "17rem 12rem 15rem",
+        padding: props.dense ? "12rem 12rem 10rem" : props.compact ? "14rem 12rem 6rem" : "17rem 12rem 15rem",
         background: "transparent",
-        borderTop: props.first ? "none" : "3px solid rgba(215,233,245,0.28)"
+        borderTop: props.first ? "none" : "3rem solid rgba(215,233,245,0.28)"
       }}
     >
-      {props.children}
+      {children.map((child, index) => (
+        <div key={"section-child:" + index} style={{ marginTop: index > 0 ? "12rem" : "0" }}>
+          {child}
+        </div>
+      ))}
     </div>
   );
 }
@@ -27,6 +32,7 @@ export function DetailRow(props: {
   value?: string;
   valueKind?: string;
   strong?: boolean;
+  dense?: boolean;
   t: (key: string) => string;
 }) {
   if (!props.label) {
@@ -39,9 +45,8 @@ export function DetailRow(props: {
         display: "flex",
         flexDirection: "row",
         justifyContent: "space-between",
-        gap: "14rem",
         alignItems: "center",
-        minHeight: props.strong ? "36rem" : "32rem"
+        minHeight: props.strong ? "36rem" : props.dense ? "28rem" : "32rem"
       }}
     >
       <div
@@ -63,6 +68,7 @@ export function DetailRow(props: {
           color: COLORS.title,
           textAlign: "right",
           flexShrink: 0,
+          marginLeft: "14rem",
           whiteSpace: "nowrap"
         }}
       >
@@ -84,7 +90,6 @@ export function BypassToggleRow(props: { checked?: boolean; label: string }) {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        gap: "14rem",
         minHeight: "36rem",
         padding: "0",
         border: "none",
@@ -125,6 +130,7 @@ export function BypassToggleRow(props: { checked?: boolean; label: string }) {
           alignItems: "center",
           justifyContent: "center",
           flexShrink: 0,
+          marginLeft: "14rem",
           boxSizing: "border-box"
         }}
       >
@@ -152,7 +158,6 @@ export function DevSightBlock(props: { first?: boolean; source?: string; summary
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: "9rem"
         }}
       >
         <div
@@ -172,10 +177,11 @@ export function DevSightBlock(props: { first?: boolean; source?: string; summary
             style={{
               fontSize: "14rem",
               lineHeight: "18rem",
-              fontWeight: 500,
-              color: COLORS.muted
-            }}
-          >
+            fontWeight: 500,
+            color: COLORS.muted,
+            marginTop: "9rem"
+          }}
+        >
             {props.source}
           </div>
         ) : null}
@@ -185,7 +191,8 @@ export function DevSightBlock(props: { first?: boolean; source?: string; summary
             lineHeight: "18rem",
             color: COLORS.text,
             whiteSpace: "pre-wrap",
-            wordBreak: "break-word"
+            wordBreak: "break-word",
+            marginTop: "9rem"
           }}
         >
           {props.summaryText || "-"}

@@ -33,7 +33,7 @@ export default function ManualDraftSection({
             preserveInvalidTime
             reserveErrorSpace
           />
-          <button type="button" className="dw-demo-flat-button is-theme is-manual-add" onClick={onAddManualDraft} disabled={isAddManualDisabled}>{t("nativeSchedule.manual.button.add")}</button>
+          <button type="button" className={`dw-demo-flat-button is-theme is-manual-add ${isAddManualDisabled ? "is-disabled" : ""}`} onClick={onAddManualDraft} disabled={isAddManualDisabled}>{t("nativeSchedule.manual.button.add")}</button>
         </div>
       </div>
 

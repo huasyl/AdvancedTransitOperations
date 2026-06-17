@@ -57,6 +57,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const [disambiguationNamesByLine, setDisambiguationNamesByLine] = useState({});
   const [mappingBindFeedback, setMappingBindFeedback] = useState(null);
   const [catalogAssetLibrary, setCatalogAssetLibrary] = useState([]);
+  const [pendingAssetDeletionNamesByMode, setPendingAssetDeletionNamesByMode] = useState({});
   const [previewingAssetName, setPreviewingAssetName] = useState("");
   const [previewingRuleId, setPreviewingRuleId] = useState("");
   const [broadcastPreviewVolume, setBroadcastPreviewVolume] = useState(80);
@@ -110,7 +111,14 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const platformRuleIdMemoryRef = useRef({});
   const dirtyPlatformStationIdsRef = useRef([]);
   const skipNextRulesSaveRef = useRef(false);
-  const availableAssetLibrary = catalogAssetLibrary;
+  const pendingAssetDeletionLookup = useMemo(
+    () => pendingAssetDeletionNamesByMode[normalizeBroadcastMode(activeTransportMode)] || {},
+    [activeTransportMode, pendingAssetDeletionNamesByMode],
+  );
+  const availableAssetLibrary = useMemo(
+    () => catalogAssetLibrary.filter((asset) => asset?.name && !pendingAssetDeletionLookup[asset.name]),
+    [catalogAssetLibrary, pendingAssetDeletionLookup],
+  );
   const mappingAssetColumns = useMemo(() => splitIntoColumns(availableAssetLibrary), [availableAssetLibrary]);
   const mappingAssetOrderByName = useMemo(() => {
     const next = new Map();
@@ -167,6 +175,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     mapMissing: t("broadcast.mapping.missing"),
     mapChooseAudio: t("broadcast.mapping.chooseAudio"),
     mapReady: t("broadcast.mapping.ready"),
+    mapClearAll: t("broadcast.mapping.clearAll"),
     mapReadyCount: t("broadcast.mapping.readyCount", { count: "{count}" }),
     mapConflictPending: t("broadcast.mapping.conflictPending", { count: "{count}" }),
     mapDisambiguate: t("broadcast.mapping.disambiguate", { count: "{count}" }),
@@ -219,6 +228,26 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const trayAssetLibrary = useMemo(() => buildBroadcastTrayAssetLibrary(availableAssetLibrary, stations), [availableAssetLibrary, stations]);
   const variableColumns = useMemo(() => splitIntoColumns(variableLibrary), [variableLibrary]);
   const broadcastVariableMappingIssue = useMemo(() => buildBroadcastVariableMappingIssue(rules, stations), [rules, stations]);
+  const globalBroadcastVariableMappingIssue = useMemo(() => {
+    const dirtyLineIds = draftStore.getDirtyLineIds(activeTransportMode);
+    for (let index = 0; index < dirtyLineIds.length; index += 1) {
+      const lineId = dirtyLineIds[index];
+      const draft = draftStore.getLineDraft(lineId);
+      if (!draft) {
+        continue;
+      }
+
+      const issue = buildBroadcastVariableMappingIssue(draft.rules, draft.stationsForUi);
+      if (issue) {
+        return {
+          ...issue,
+          lineId,
+        };
+      }
+    }
+
+    return null;
+  }, [activeTransportMode, draftStore]);
 
   function getActiveBroadcastLineId() {
     return selectedLineIdRef.current || selectedLineId || "";
@@ -226,6 +255,84 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
   function normalizeBroadcastMode(mode = "train") {
     return String(mode || "train").trim().toLowerCase() || "train";
+  }
+
+  function getPendingAssetDeletionLookup(mode = activeTransportMode) {
+    return pendingAssetDeletionNamesByMode[normalizeBroadcastMode(mode)] || {};
+  }
+
+  function getPendingAssetDeletionNames(mode = activeTransportMode) {
+    return Object.keys(getPendingAssetDeletionLookup(mode));
+  }
+
+  function queuePendingAssetDeletions(assetNames, mode = activeTransportMode) {
+    const normalizedNames = Array.from(
+      new Set(
+        (Array.isArray(assetNames) ? assetNames : [])
+          .map((assetName) => String(assetName || "").trim())
+          .filter((assetName) => assetName),
+      ),
+    );
+    if (normalizedNames.length === 0) {
+      return;
+    }
+
+    const modeKey = normalizeBroadcastMode(mode);
+    setPendingAssetDeletionNamesByMode((current) => {
+      const nextModeEntries = { ...(current[modeKey] || {}) };
+      let changed = false;
+      normalizedNames.forEach((assetName) => {
+        if (!nextModeEntries[assetName]) {
+          nextModeEntries[assetName] = true;
+          changed = true;
+        }
+      });
+      if (!changed) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [modeKey]: nextModeEntries,
+      };
+    });
+  }
+
+  function clearPendingAssetDeletions(assetNames = null, mode = activeTransportMode) {
+    const modeKey = normalizeBroadcastMode(mode);
+    setPendingAssetDeletionNamesByMode((current) => {
+      const currentModeEntries = current[modeKey] || {};
+      if (assetNames == null) {
+        if (Object.keys(currentModeEntries).length === 0) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[modeKey];
+        return next;
+      }
+
+      const nextModeEntries = { ...currentModeEntries };
+      let changed = false;
+      (Array.isArray(assetNames) ? assetNames : []).forEach((assetName) => {
+        const normalizedAssetName = String(assetName || "").trim();
+        if (normalizedAssetName && nextModeEntries[normalizedAssetName]) {
+          delete nextModeEntries[normalizedAssetName];
+          changed = true;
+        }
+      });
+      if (!changed) {
+        return current;
+      }
+
+      const next = { ...current };
+      if (Object.keys(nextModeEntries).length > 0) {
+        next[modeKey] = nextModeEntries;
+      } else {
+        delete next[modeKey];
+      }
+      return next;
+    });
   }
 
   function matchesBroadcastMode(payload, mode = activeTransportMode) {
@@ -436,6 +543,9 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
           }))
       : [];
     setCatalogAssetLibrary(nextCatalogAssetLibrary);
+    if (!draftStore.hasDirty(activeTransportMode)) {
+      clearPendingAssetDeletions(null, activeTransportMode);
+    }
 
     if (preserveLocalDraft) {
       applyBroadcastLocalDraft(nextSelectedLineId);
@@ -561,6 +671,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     getDisambiguationNameDraft,
     handleBindStation,
     handleRemoveStationAudio,
+    handleClearAllStationBindings,
     handleDiscardConflict,
     handleResolveStationConflicts,
   } = useBroadcastStationBindings({
@@ -604,6 +715,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     handleImportSelectedExternalFiles,
     assetDeleteBlockedNames,
     deleteAllAssetsKey,
+    showAssetDeleteBlocked,
   } = useBroadcastAssets({
     workbenchApi,
     isAssetExplorerOpen,
@@ -624,6 +736,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     draftStore,
     buildCurrentBroadcastLineDraft,
     markBroadcastDraftDirty,
+    queuePendingAssetDeletions,
     setShouldRenderAssetExplorer,
     setAssetExplorerStage,
     setSelectedExternalFiles,
@@ -632,7 +745,6 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     setIsAssetExplorerOpen,
     setPreviewingAssetName,
     setPreviewingRuleId,
-    setCatalogAssetLibrary,
     setBindingLangDraftsByLine,
     setDisambiguationNamesByLine,
     setStations,
@@ -1161,6 +1273,50 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     setTriggerDropdownOpen(false);
   }
 
+  async function flushPendingAssetDeletions(mode = activeTransportMode) {
+    const pendingAssetNames = getPendingAssetDeletionNames(mode);
+    if (pendingAssetNames.length === 0) {
+      return { deletedAssetNames: [], blockedAssetNames: [] };
+    }
+
+    const pendingAssetNameSet = new Set(pendingAssetNames);
+    if (previewingAssetName && pendingAssetNameSet.has(previewingAssetName)) {
+      try {
+        await workbenchApi.stopBroadcastAssetPreview?.(previewingAssetName);
+      } catch (error) {
+        console.error("[RT Broadcast Workbench] stop asset preview before apply delete failed", error);
+      }
+    }
+
+    const deletedAssetNames = [];
+    const blockedAssetNames = [];
+    for (let index = 0; index < pendingAssetNames.length; index += 1) {
+      const assetName = pendingAssetNames[index];
+      try {
+        const result = await workbenchApi.deleteBroadcastAsset?.(assetName);
+        if (result?.success) {
+          deletedAssetNames.push(assetName);
+        } else {
+          blockedAssetNames.push(assetName);
+        }
+      } catch (error) {
+        console.error("[RT Broadcast Workbench] apply-time asset delete failed", error);
+        blockedAssetNames.push(assetName);
+      }
+    }
+
+    if (deletedAssetNames.length > 0) {
+      const deletedAssetNameSet = new Set(deletedAssetNames);
+      setCatalogAssetLibrary((current) => current.filter((asset) => !deletedAssetNameSet.has(asset?.name)));
+      setPreviewingAssetName((current) => (deletedAssetNameSet.has(current) ? "" : current));
+    }
+    blockedAssetNames.forEach((assetName) => {
+      showAssetDeleteBlocked(assetName);
+    });
+    clearPendingAssetDeletions(pendingAssetNames, mode);
+    return { deletedAssetNames, blockedAssetNames };
+  }
+
   function buildBroadcastApplyOperationRequest(mode = activeTransportMode) {
     return draftStore.buildApplyRequest(mode);
   }
@@ -1169,7 +1325,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     if (
       isApplyingBroadcastConfig ||
       !draftStore.hasDirty(activeTransportMode) ||
-      broadcastVariableMappingIssue
+      globalBroadcastVariableMappingIssue
     ) {
       return;
     }
@@ -1203,6 +1359,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
         if (result.volumeApplied) {
           draftStore.clearVolumeDraft(appliedVolumeGeneration, requestMode);
         }
+        await flushPendingAssetDeletions(requestMode);
 
         if (!isCurrentBroadcastMode(requestMode)) {
           return;
@@ -1242,13 +1399,18 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   }
 
   function handleLocateBroadcastMappingIssue() {
-    if (!broadcastVariableMappingIssue?.stationId) {
+    if (!globalBroadcastVariableMappingIssue?.stationId) {
       return;
+    }
+
+    if (globalBroadcastVariableMappingIssue.lineId
+      && globalBroadcastVariableMappingIssue.lineId !== selectedLineIdRef.current) {
+      handleBroadcastLineSelect(globalBroadcastVariableMappingIssue.lineId);
     }
 
     setTrayContext(null);
     setActiveTab("mapping");
-    setMappingTray(broadcastVariableMappingIssue.stationId);
+    setMappingTray(globalBroadcastVariableMappingIssue.stationId);
   }
 
   const broadcastOperationError = broadcastApplyOperation.applyState.phase === "error" ? broadcastApplyOperation.applyState.error : "";
@@ -1257,7 +1419,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const isBroadcastConfigApplied = !broadcastDraftDirty;
   const broadcastFooterTone = broadcastApplyError || broadcastOperationError
     ? "error"
-    : broadcastVariableMappingIssue
+    : globalBroadcastVariableMappingIssue
       ? "warning"
       : isApplyingBroadcastConfig
         ? "pending"
@@ -1266,8 +1428,8 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
           : "applied";
   const broadcastFooterText = broadcastApplyError || broadcastOperationError
     ? broadcastApplyError || broadcastOperationError
-    : broadcastVariableMappingIssue
-      ? broadcastLabels.footerStatusMappingRequired.replace("{station}", broadcastVariableMappingIssue.stationName || "-")
+    : globalBroadcastVariableMappingIssue
+      ? broadcastLabels.footerStatusMappingRequired.replace("{station}", globalBroadcastVariableMappingIssue.stationName || "-")
       : isApplyingBroadcastConfig
         ? broadcastLabels.footerStatusApplying
         : broadcastDraftDirty
@@ -1275,7 +1437,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
           : "";
   const broadcastApplyButtonLabel = isApplyingBroadcastConfig
     ? broadcastLabels.footerStatusApplying
-    : broadcastVariableMappingIssue
+    : globalBroadcastVariableMappingIssue
       ? broadcastLabels.footerLocateMapping
       : !broadcastDraftDirty
         ? broadcastLabels.appliedConfig
@@ -1345,7 +1507,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       isBroadcastLineContentReady,
       broadcastDraftDirty,
       isBroadcastConfigApplied,
-      broadcastVariableMappingIssue,
+      broadcastVariableMappingIssue: globalBroadcastVariableMappingIssue,
       broadcastFooterTone,
       broadcastFooterText,
       broadcastApplyButtonLabel,
@@ -1398,6 +1560,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       handleAutoBindStations,
       handleBindStation,
       handleRemoveStationAudio,
+      handleClearAllStationBindings,
       handleDiscardConflict,
       handleResolveStationConflicts,
       updateBindingLanguageDraft,

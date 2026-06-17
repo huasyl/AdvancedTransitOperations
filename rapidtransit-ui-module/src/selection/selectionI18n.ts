@@ -20,6 +20,8 @@ const KEYS = {
   dumpPlannerInput: "RapidTransit.DumpPlannerInput",
   dumpObservation: "RapidTransit.DumpObservation",
   dumpStationAnchorObservation: "RapidTransit.DumpStationAnchorObservation",
+  topButtonTitle: "RapidTransit.TopButtonTitle",
+  topButtonDescription: "RapidTransit.TopButtonDescription",
   none: "RapidTransit.None",
   officialDispatch: "RapidTransit.OfficialDispatch",
   vehiclePrefix: "RapidTransit.VehiclePrefix",

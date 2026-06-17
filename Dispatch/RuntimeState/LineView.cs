@@ -243,7 +243,7 @@ namespace RapidTransitMod
             if (line == Entity.Null || !m_EntityManager.Exists(line))
                 return false;
 
-            LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(m_EntityManager, line, m_Stop);
+            LineDispatchSupport support = DispatchLineEligibility.ComputeDispatchSupport(m_EntityManager, line, m_Stop);
             return support.Supported;
         }
 

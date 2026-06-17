@@ -138,9 +138,7 @@ namespace RapidTransitMod.TrackModel
 
             Entity line = entry.Value?.LineEntity ?? Entity.Null;
             TransitMode resolvedMode = TransportModeResolver.Resolve(EntityManager, line);
-            return resolvedMode == TransitMode.Unknown
-                ? scope.Mode == ModeScope.DefaultWorkbench.Mode
-                : resolvedMode == scope.Mode;
+            return resolvedMode != TransitMode.Unknown && resolvedMode == scope.Mode;
         }
 
         internal static int ResolveWaypointSegmentIndex(LineTrackChain chain, int atomIndex)

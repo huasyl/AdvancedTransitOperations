@@ -16,6 +16,8 @@ namespace RapidTransitMod.Dispatch.Observation
 {
     internal sealed class ObservationPort
     {
+        private const float DispatchSampleOutlierFactor = 1.5f;
+
         private readonly DispatchRuntimeSystem m_Runtime;
         private readonly Capture m_Capture;
         private readonly Dictionary<Entity, DwellDeadlineCacheEntry> m_DwellDeadlineCache =
@@ -415,13 +417,25 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
 
             float sampleMinutes = frames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-            if (sampleMinutes < DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES
-                || sampleMinutes > DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_MINUTES)
+            if (sampleMinutes < DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES)
             {
                 if (RtLog.VerboseEnabled)
                 {
                     m_Runtime.log.Info("[DispatchSample] line" + line.Index + " vehicle" + vehicle.Index
                         + " sample=" + sampleMinutes.ToString("F1") + "min out-of-range skip");
+                }
+                return;
+            }
+
+            float cachedFrames = m_Runtime.m_DispatchCache.Read(line);
+            if (cachedFrames > 0f && frames > cachedFrames * DispatchSampleOutlierFactor)
+            {
+                if (RtLog.VerboseEnabled)
+                {
+                    float cachedMinutes = cachedFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+                    m_Runtime.log.Info("[DispatchSample] line" + line.Index + " vehicle" + vehicle.Index
+                        + " sample=" + sampleMinutes.ToString("F1") + "min"
+                        + " cached=" + cachedMinutes.ToString("F1") + "min high-outlier skip");
                 }
                 return;
             }

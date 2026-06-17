@@ -111,7 +111,7 @@ namespace RapidTransitMod
         }
     }
 
-    [InternalBufferCapacity(32)]
+    [InternalBufferCapacity(1)]
     public struct LineDispatchDepotCacheElement : IBufferElementData, ISerializable
     {
         public FixedString128Bytes m_LineId;
@@ -135,7 +135,7 @@ namespace RapidTransitMod
         }
     }
 
-    [InternalBufferCapacity(32)]
+    [InternalBufferCapacity(1)]
     public struct LineDispatchDepotHistoryElement : IBufferElementData, ISerializable
     {
         public FixedString128Bytes m_LineId;

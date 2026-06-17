@@ -9,6 +9,10 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin\$(Configuration)\net6.0\</OutputPath>
     <RapidTransitDeployDir>$(UserProfile)\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\RapidTransitMod</RapidTransitDeployDir>
+    <PublishConfigurationPath>Properties\PublishConfiguration.xml</PublishConfigurationPath>
+    <EnableOfficialToolchain>false</EnableOfficialToolchain>
+    <OfficialToolPath>$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))</OfficialToolPath>
+    <OfficialToolPath Condition="'$(OfficialToolPath)'==''">D:\steam\steamapps\common\Cities Skylines II\Cities2_Data\Content\Game\.ModdingToolchain</OfficialToolPath>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)'=='Debug'">
@@ -31,7 +35,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>UI\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
-    <None Include="workbench-app\dist\**\*">
+    <None Include="workbench-app\workbench-dist\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>UI\workbench\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </None>
+    <None Include="workbench-app\workbench-dist\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>UI\workbench-app\dist\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
@@ -42,10 +50,6 @@
     <None Include="mod.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Lib.Harmony" Version="2.3.3" />
   </ItemGroup>
 
   <ItemGroup>
@@ -134,15 +138,16 @@
   </ItemGroup>
 
   <Target Name="DeployRapidTransitMod" AfterTargets="Build">
+    <Delete Files="$(OutputPath)0Harmony.dll" ContinueOnError="true" />
+    <Delete Files="$(RapidTransitDeployDir)\0Harmony.dll" ContinueOnError="true" />
     <ItemGroup>
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.dll" />
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.pdb" />
-      <RapidTransitDeployFiles Include="$(OutputPath)0Harmony.dll" />
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.mjs" />
       <RapidTransitDeployFiles Include="$(OutputPath)mod.json" />
     </ItemGroup>
     <ItemGroup>
-      <RapidTransitDeployUiFiles Include="$(OutputPath)UI\**\*" Exclude="$(OutputPath)UI\workbench\**\*" />
+      <RapidTransitDeployUiFiles Include="$(OutputPath)UI\**\*" />
       <RapidTransitDeployLocaleFiles Include="$(OutputPath)Locales\**\*.json" />
     </ItemGroup>
     <MakeDir Directories="$(RapidTransitDeployDir)" />
@@ -150,5 +155,8 @@
     <Copy SourceFiles="@(RapidTransitDeployUiFiles)" DestinationFiles="@(RapidTransitDeployUiFiles->'$(RapidTransitDeployDir)\UI\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(RapidTransitDeployLocaleFiles)" DestinationFiles="@(RapidTransitDeployLocaleFiles->'$(RapidTransitDeployDir)\Locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
+
+  <Import Project="$(OfficialToolPath)\Mod.props" Condition="'$(EnableOfficialToolchain)'=='true' and Exists('$(OfficialToolPath)\Mod.props')" />
+  <Import Project="$(OfficialToolPath)\Mod.targets" Condition="'$(EnableOfficialToolchain)'=='true' and Exists('$(OfficialToolPath)\Mod.targets')" />
 
 </Project>

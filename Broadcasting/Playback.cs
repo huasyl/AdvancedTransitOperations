@@ -342,6 +342,7 @@ namespace RapidTransitMod.Broadcasting
                 m_Clips.Cache(pendingCacheKey, loadedClip, nowFrame);
                 if (m_Audio.Play(state, pendingAssetName, loadedClip))
                 {
+                    state.NodeIndex++;
                     return true;
                 }
 
@@ -390,6 +391,7 @@ namespace RapidTransitMod.Broadcasting
                 string assetName = AssetName(node, state.Context);
                 if (string.IsNullOrEmpty(assetName))
                 {
+                    state.NodeIndex++;
                     continue;
                 }
 
@@ -398,6 +400,7 @@ namespace RapidTransitMod.Broadcasting
                 {
                     if (m_Audio.Play(state, assetName, cachedClip))
                     {
+                        state.NodeIndex++;
                         return true;
                     }
 
@@ -887,7 +890,12 @@ namespace RapidTransitMod.Broadcasting
                     downloadHandler.streamAudio = false;
                 }
 
-                await request.SendWebRequest();
+                UnityWebRequestAsyncOperation operation = request.SendWebRequest();
+                while (!operation.isDone)
+                {
+                    await Task.Yield();
+                }
+
                 if (request.result == UnityWebRequest.Result.ConnectionError
                     || request.result == UnityWebRequest.Result.ProtocolError
                     || request.result == UnityWebRequest.Result.DataProcessingError)
@@ -913,11 +921,11 @@ namespace RapidTransitMod.Broadcasting
             {
                 try
                 {
-                    completion.SetResult(await action());
+                    completion.TrySetResult(await action());
                 }
                 catch (Exception ex)
                 {
-                    completion.SetException(ex);
+                    completion.TrySetException(ex);
                 }
             });
             return await completion.Task;
@@ -986,6 +994,59 @@ namespace RapidTransitMod.Broadcasting
 
         internal void RemoveTask(string assetName) => m_LoadTasks.Remove(assetName);
 
+        private void RemoveDetachedLoadTask(string assetName)
+        {
+            if (string.IsNullOrWhiteSpace(assetName)
+                || !m_LoadTasks.TryGetValue(assetName, out Task<AudioClip> task))
+            {
+                return;
+            }
+
+            m_LoadTasks.Remove(assetName);
+            DisposeDetachedLoadResult(task);
+        }
+
+        private void DisposeDetachedLoadResult(Task<AudioClip> task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            if (task.IsCompleted)
+            {
+                MainThreadDispatcher.RunOnMainThread(() => DestroyCompletedLoadResult(task));
+                return;
+            }
+
+            task.ContinueWith(
+                completedTask => MainThreadDispatcher.RunOnMainThread(() => DestroyCompletedLoadResult(completedTask)),
+                TaskScheduler.Default);
+        }
+
+        private void DestroyCompletedLoadResult(Task<AudioClip> task)
+        {
+            if (task == null || task.Status != TaskStatus.RanToCompletion)
+            {
+                return;
+            }
+
+            AudioClip clip = null;
+            try
+            {
+                clip = task.Result;
+            }
+            catch
+            {
+                return;
+            }
+
+            if (clip != null && !InUse(clip))
+            {
+                Destroy(clip);
+            }
+        }
+
         private bool Pending(Task<AudioClip> task)
         {
             if (task == null)
@@ -1040,7 +1101,7 @@ namespace RapidTransitMod.Broadcasting
 
         internal void RemoveAsset(string assetName)
         {
-            m_LoadTasks.Remove(assetName);
+            RemoveDetachedLoadTask(assetName);
             if (!m_Cache.TryGetValue(assetName, out ClipEntry cacheEntry))
             {
                 return;
@@ -1059,7 +1120,7 @@ namespace RapidTransitMod.Broadcasting
             string prefix = scope.Token + ":";
             foreach (string key in m_LoadTasks.Keys.Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray())
             {
-                m_LoadTasks.Remove(key);
+                RemoveDetachedLoadTask(key);
             }
 
             foreach (string key in m_Cache.Keys.Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray())

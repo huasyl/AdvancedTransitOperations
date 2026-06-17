@@ -110,9 +110,16 @@ namespace RapidTransitMod
                 {
                     if (!m_Runtime.EntityManager.Exists(line))
                         continue;
+                    if (!DispatchLineEligibility.IsDispatchTransportLine(m_Runtime.EntityManager, line))
+                        continue;
                     if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs))
                         continue;
                     if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2)
+                        continue;
+                    if (!DispatchLineEligibility.ComputeDispatchSupport(
+                            m_Runtime.EntityManager,
+                            line,
+                            waypoint => m_Runtime.m_Resolve.Stop(waypoint)).Supported)
                         continue;
                     if (!m_IsLineStable(line, wps))
                         continue;
@@ -444,18 +451,6 @@ namespace RapidTransitMod
                                 {
                                     slot = (slot + DispatchRuntimeSystem.SLOT_INTERVAL) % 1440;
                                     continue;
-                                }
-
-                                if (lineDurationFrames > 0f)
-                                {
-                                    int theoreticalCount = (int)math.ceil(
-                                        lineDurationFrames / (dispatchCycleMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE));
-                                    int actualCountForCap = m_Runtime.m_LineVehicles.Count(line, rvBuffers);
-                                    if (actualCountForCap >= theoreticalCount)
-                                    {
-                                        slot = (slot + DispatchRuntimeSystem.SLOT_INTERVAL) % 1440;
-                                        continue;
-                                    }
                                 }
 
                                 int actualCount = m_Runtime.m_LineVehicles.Count(line, rvBuffers);

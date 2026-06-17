@@ -195,6 +195,32 @@ export default function useBroadcastStationBindings(context) {
     setMappingTray(null);
   }
 
+  function handleClearAllStationBindings() {
+    const lineId = getActiveBroadcastLineId();
+    if (!lineId || !Array.isArray(stations) || stations.length === 0) {
+      return;
+    }
+
+    const hasAnyBindings = stations.some((station) =>
+      (Array.isArray(station?.audios) && station.audios.length > 0)
+      || (Array.isArray(station?.conflictAssets) && station.conflictAssets.length > 0),
+    );
+    if (!hasAnyBindings) {
+      return;
+    }
+
+    const nextStations = stations.map((station) => ({
+      ...station,
+      audios: [],
+      conflictAssets: [],
+      status: deriveBroadcastStationStatus([], []),
+    }));
+
+    setStations(nextStations);
+    markBroadcastDraftDirty(lineId, buildCurrentBroadcastLineDraft({ stationsForUi: nextStations }));
+    setMappingTray(null);
+  }
+
   function handleDiscardConflict(stationId, assetName) {
     const targetStation = stations.find((station) => station.id === stationId);
     if (!targetStation) {
@@ -251,6 +277,7 @@ export default function useBroadcastStationBindings(context) {
     scheduleMappingBindFeedback,
     handleBindStation,
     handleRemoveStationAudio,
+    handleClearAllStationBindings,
     handleDiscardConflict,
     handleResolveStationConflicts,
   };

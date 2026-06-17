@@ -141,27 +141,7 @@ function loadNativeWorkbenchBuildFlavor() {
 }
 
 function traceNativeWorkbench(eventName, details) {
-  if (!isNativeWorkbenchTraceEnabled()) {
-    return;
-  }
-
-  try {
-    nativeWorkbenchTraceSeq += 1;
-    const data = details && typeof details === "object" ? details : {};
-    const parts = [];
-    Object.keys(data).forEach((key) => {
-      const value = data[key];
-      if (value === undefined || value === null) {
-        return;
-      }
-      parts.push(key + "=" + String(value));
-    });
-    parts.push("page=" + String(window[NATIVE_WORKBENCH_PAGE_GLOBAL] || ""));
-    parts.push("handle=" + String(!!nativeWorkbenchPersistentBundleHandle));
-    parts.push("loader=" + String(!!nativeWorkbenchScheduleLoader));
-    console.info("[RTWB#" + nativeWorkbenchTraceSeq + "] " + eventName + (parts.length ? " " + parts.join(" ") : ""));
-  } catch (error) {
-  }
+  return;
 }
 
 if (typeof window !== "undefined") {

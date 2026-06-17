@@ -94,7 +94,8 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             Dictionary<string, WorkbenchLineRuntime> runtimeLineById = runtimeLines?
                 .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
-                .ToDictionary(line => line.Id, line => line, StringComparer.Ordinal)
+                .GroupBy(line => line.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal)
                 ?? new Dictionary<string, WorkbenchLineRuntime>(StringComparer.Ordinal);
             Dictionary<string, DispatchWorkbenchDepotDto> depotById = (depots ?? buildWorkbenchDepots())
                 .Where(depot => depot != null && !string.IsNullOrEmpty(depot.id))
@@ -194,6 +195,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                     if (!seenLineSettings.Add(setting.lineId))
                     {
                         errors.Add("Line setting for " + setting.lineId + " is duplicated.");
+                    }
+
+                    if (runtimeLineById.Count > 0 && !runtimeLineById.ContainsKey(setting.lineId))
+                    {
+                        errors.Add("Line setting " + setting.lineId + " references a line that no longer exists.");
                     }
 
                     if (setting.originHoldLimitMinutes < minOriginHoldLimitMinutes
@@ -363,7 +369,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             List<string> errors = new List<string>();
             Dictionary<string, WorkbenchLineRuntime> runtimeLineById = runtimeLines?
                 .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
-                .ToDictionary(line => line.Id, line => line, StringComparer.Ordinal)
+                .GroupBy(line => line.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal)
                 ?? new Dictionary<string, WorkbenchLineRuntime>(StringComparer.Ordinal);
             HashSet<string> replacedLineIds = new HashSet<string>(StringComparer.Ordinal);
             if (!string.IsNullOrEmpty(activeLineKey))

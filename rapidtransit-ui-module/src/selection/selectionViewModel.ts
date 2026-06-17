@@ -45,7 +45,7 @@ export interface PanelData {
 }
 
 const VEHICLE_DETAIL_KEYS = [
-  "managed",
+  "control",
   "currentStation",
   "nextStopStation",
   "nextStation",

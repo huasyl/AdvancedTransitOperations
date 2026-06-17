@@ -17,6 +17,8 @@
   "RapidTransit.DumpPlannerInput": "\u5bfc\u51fa\u89c4\u5212\u8f93\u5165",
   "RapidTransit.DumpObservation": "\u5bfc\u51fa\u89c2\u6d4b",
   "RapidTransit.DumpStationAnchorObservation": "\u5bfc\u51fa\u7ad9\u70b9\u951a\u70b9\u89c2\u6d4b",
+  "RapidTransit.TopButtonTitle": "AdvancedTransitOperations",
+  "RapidTransit.TopButtonDescription": "\u5de6\u952e\u5355\u51fb\u6253\u5f00\u5de5\u4f5c\u53f0\uff0c\u53f3\u952e\u5355\u51fb\u6253\u5f00\u9009\u62e9\u9762\u677f\u3002",
   "RapidTransit.None": "\u65e0",
   "RapidTransit.OfficialDispatch": "\u539f\u7248\u8c03\u5ea6",
   "RapidTransit.LinePrefix": "\u7ebf\u8def #",

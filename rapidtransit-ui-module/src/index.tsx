@@ -1,7 +1,6 @@
 import type { ModRegistrar } from "cs2/modding";
 import { RapidTransitPanelRoot } from "./selection/RapidTransitPanelRoot";
 import { RapidTransitTopButton } from "./top-buttons/RapidTransitTopButton";
-import { RapidTransitWorkbenchTopButton } from "./top-buttons/RapidTransitWorkbenchTopButton";
 import { registerRapidTransitWorkbenchPanel, registerRapidTransitWorkbenchPanelType, prewarmNativeWorkbenchScheduleLoader } from "./workbench-host/workbenchHost";
 import { RapidTransitNativeLocaleSync } from "./workbench-host/RapidTransitNativeLocaleSync";
 
@@ -11,7 +10,6 @@ export default function register(mod: ModRegistrar) {
   mod.extend("game-ui/game/data-binding/game-bindings.ts", "GamePanelType", registerRapidTransitWorkbenchPanelType);
   mod.extend("game-ui/game/components/game-panel-renderer.tsx", "gamePanelComponents", registerRapidTransitWorkbenchPanel);
   mod.append("GameTopRight", RapidTransitTopButton);
-  mod.append("GameTopRight", RapidTransitWorkbenchTopButton);
   mod.append("Game", RapidTransitNativeLocaleSync);
   mod.append("Game", RapidTransitPanelRoot);
 }

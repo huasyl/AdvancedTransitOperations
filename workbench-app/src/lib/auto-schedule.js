@@ -1,8 +1,8 @@
 ﻿import { timeToMinutes } from "./time";
 
 export const MIN_DEPARTURE_INTERVAL_MINUTES = 5;
-export const MAX_AUTO_RULE_TRIPS_PER_HOUR = 240;
-export const MAX_AUTO_RULE_GENERATED_TRIPS = 720;
+export const MAX_AUTO_RULE_TRIPS_PER_HOUR = 60 / MIN_DEPARTURE_INTERVAL_MINUTES;
+export const MAX_AUTO_RULE_GENERATED_TRIPS = (24 * 60) / MIN_DEPARTURE_INTERVAL_MINUTES;
 
 function analyzeAutoRuleGeneration(rule) {
   const start = timeToMinutes(rule.start);
@@ -116,6 +116,210 @@ export function pickEvenlyDistributedIndexes(totalCount, targetCount) {
     }
   }
   return indexes;
+}
+
+function getSegmentCapacity(segment, minGapMinutes) {
+  return Math.floor((segment.end - segment.start) / minGapMinutes) + 1;
+}
+
+function buildOriginAvailableDepartureSegments({
+  windowStart,
+  windowEnd,
+  originStationId,
+  occupiedRows,
+  minGapMinutes = MIN_DEPARTURE_INTERVAL_MINUTES
+}) {
+  const startMinute = Math.ceil(windowStart);
+  const endMinute = Math.ceil(windowEnd) - 1;
+  if (!originStationId || endMinute < startMinute) {
+    return [];
+  }
+
+  const occupiedMinutes = (Array.isArray(occupiedRows) ? occupiedRows : [])
+    .filter((row) => row.originStationId === originStationId && Number.isFinite(row.minute))
+    .map((row) => Math.round(row.minute))
+    .sort((left, right) => left - right);
+
+  const segments = [];
+  let cursor = startMinute;
+  occupiedMinutes.forEach((occupiedMinute) => {
+    if (cursor > endMinute) {
+      return;
+    }
+
+    const segmentEnd = Math.min(endMinute, occupiedMinute - minGapMinutes);
+    if (segmentEnd >= cursor) {
+      segments.push({ start: cursor, end: segmentEnd });
+    }
+
+    cursor = Math.max(cursor, occupiedMinute + minGapMinutes);
+  });
+
+  if (cursor <= endMinute) {
+    segments.push({ start: cursor, end: endMinute });
+  }
+
+  return segments
+    .map((segment) => ({
+      ...segment,
+      capacity: getSegmentCapacity(segment, minGapMinutes),
+      length: segment.end - segment.start + 1
+    }))
+    .filter((segment) => segment.capacity > 0);
+}
+
+function allocateSegmentDepartureCounts(segments, targetCount) {
+  const totalCapacity = segments.reduce((sum, segment) => sum + segment.capacity, 0);
+  const plannedCount = Math.min(targetCount, totalCapacity);
+  if (plannedCount <= 0) {
+    return [];
+  }
+
+  const totalLength = segments.reduce((sum, segment) => sum + segment.length, 0);
+  const allocations = segments.map((segment, index) => {
+    const rawCount = totalLength > 0 ? (plannedCount * segment.length) / totalLength : 0;
+    const count = Math.min(segment.capacity, Math.floor(rawCount));
+    return {
+      index,
+      count,
+      remainder: rawCount - count,
+      length: segment.length
+    };
+  });
+
+  let remaining = plannedCount - allocations.reduce((sum, allocation) => sum + allocation.count, 0);
+  allocations
+    .slice()
+    .sort((left, right) => {
+      if (right.remainder !== left.remainder) {
+        return right.remainder - left.remainder;
+      }
+
+      return right.length - left.length;
+    })
+    .forEach((allocation) => {
+      if (remaining <= 0) {
+        return;
+      }
+
+      const segment = segments[allocation.index];
+      if (allocation.count >= segment.capacity) {
+        return;
+      }
+
+      allocation.count += 1;
+      remaining -= 1;
+    });
+
+  return allocations
+    .sort((left, right) => left.index - right.index)
+    .map((allocation) => allocation.count);
+}
+
+function hasMinimumGapBetweenMinutes(minutes, minGapMinutes) {
+  for (let index = 1; index < minutes.length; index += 1) {
+    if (minutes[index] - minutes[index - 1] < minGapMinutes) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function canUseBaseDepartureMinutes(baseMinutes, originStationId, occupiedRows) {
+  const validationRows = [...occupiedRows];
+  return baseMinutes.every((minute) => {
+    if (!hasMinimumDepartureGapForOrigin(minute, originStationId, validationRows)) {
+      return false;
+    }
+
+    validationRows.push({ minute, originStationId });
+    return true;
+  });
+}
+
+function distributeMinutesInSegment(segment, count, minGapMinutes) {
+  if (count <= 0) {
+    return [];
+  }
+
+  if (count === 1) {
+    return [Math.round((segment.start + segment.end) / 2)];
+  }
+
+  const length = segment.end - segment.start + 1;
+  const minutes = [];
+  for (let index = 0; index < count; index += 1) {
+    const rawMinute = segment.start + ((index + 0.5) * length) / count - 0.5;
+    const minute = Math.max(segment.start, Math.min(segment.end, Math.round(rawMinute)));
+    minutes.push(minute);
+  }
+
+  for (let index = 1; index < minutes.length; index += 1) {
+    if (minutes[index] - minutes[index - 1] < minGapMinutes) {
+      minutes[index] = minutes[index - 1] + minGapMinutes;
+    }
+  }
+
+  if (
+    minutes[0] < segment.start ||
+    minutes[minutes.length - 1] > segment.end ||
+    !hasMinimumGapBetweenMinutes(minutes, minGapMinutes)
+  ) {
+    const packedSpan = (count - 1) * minGapMinutes;
+    const packedStart = Math.max(
+      segment.start,
+      Math.min(segment.end - packedSpan, Math.round(segment.start + (segment.end - segment.start - packedSpan) / 2))
+    );
+    return Array.from({ length: count }, (_, index) => packedStart + index * minGapMinutes);
+  }
+
+  return minutes;
+}
+
+function distributeAutoDepartureMinutes({
+  baseMinutes,
+  windowStart,
+  windowEnd,
+  originStationId,
+  occupiedRows
+}) {
+  if (!originStationId || !Array.isArray(baseMinutes) || baseMinutes.length === 0) {
+    return Array.isArray(baseMinutes) ? baseMinutes : [];
+  }
+
+  if (canUseBaseDepartureMinutes(baseMinutes, originStationId, occupiedRows)) {
+    return baseMinutes;
+  }
+
+  const segments = buildOriginAvailableDepartureSegments({
+    windowStart,
+    windowEnd,
+    originStationId,
+    occupiedRows
+  });
+  const segmentCounts = allocateSegmentDepartureCounts(segments, baseMinutes.length);
+  const candidates = segments
+    .flatMap((segment, index) =>
+      distributeMinutesInSegment(segment, segmentCounts[index] || 0, MIN_DEPARTURE_INTERVAL_MINUTES)
+    )
+    .sort((left, right) => left - right);
+  const validationRows = [...occupiedRows];
+  const acceptedMinutes = [];
+  candidates.forEach((minute) => {
+    if (acceptedMinutes.length >= baseMinutes.length) {
+      return;
+    }
+
+    if (!hasMinimumDepartureGapForOrigin(minute, originStationId, validationRows)) {
+      return;
+    }
+
+    validationRows.push({ minute, originStationId });
+    acceptedMinutes.push(minute);
+  });
+
+  return acceptedMinutes;
 }
 
 export function getLineKinds(rows, lineId) {
@@ -272,7 +476,15 @@ export function buildAutoStagedPlan({
         return;
       }
 
-      baseMinutes.forEach((candidateMinute, generatedIndex) => {
+      const distributedMinutes = distributeAutoDepartureMinutes({
+        baseMinutes,
+        windowStart: generation.start,
+        windowEnd: generation.end,
+        originStationId: selectedOriginStationId,
+        occupiedRows
+      });
+
+      distributedMinutes.forEach((candidateMinute, generatedIndex) => {
         if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows)) {
           pushPreviewEntry(candidateMinute, { skipped: true, reason: "gap" });
           return;
@@ -294,6 +506,10 @@ export function buildAutoStagedPlan({
           end: rule.end
         });
       });
+
+      for (let skippedIndex = distributedMinutes.length; skippedIndex < baseMinutes.length; skippedIndex += 1) {
+        pushPreviewEntry(baseMinutes[skippedIndex], { skipped: true, reason: "gap" });
+      }
 
       previewsByRule[rule.id] = preview;
     });

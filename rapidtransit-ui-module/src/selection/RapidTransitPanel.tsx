@@ -101,7 +101,6 @@ export function RapidTransitPanel() {
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: "0",
               padding: "0 12rem 12rem"
             }}
           >
@@ -123,12 +122,13 @@ export function RapidTransitPanel() {
                     strong={true}
                   />
                 </SectionCard>
-                <SectionCard>
+                <SectionCard dense={true}>
                   {detailRows.map((row, index) => (
                     <DetailRow
                       key={(row.label || "detail") + ":" + index}
                       label={row.label}
                       value={row.value}
+                      dense={true}
                       t={t}
                     />
                   ))}

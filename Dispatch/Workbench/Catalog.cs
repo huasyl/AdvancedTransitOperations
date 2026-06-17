@@ -64,7 +64,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 for (int i = 0; i < entities.Length; i++)
                 {
                     Entity line = entities[i];
-                    if (!m_EntityManager.HasBuffer<RouteWaypoint>(line))
+                    if (!DispatchLineEligibility.IsDispatchTransportLine(m_EntityManager, line))
                         continue;
 
                     string name = Name(line);
@@ -97,53 +97,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 for (int i = 0; i < entities.Length; i++)
                 {
-                    Entity line = entities[i];
-                    if (!m_EntityManager.HasBuffer<RouteWaypoint>(line))
-                        continue;
-
-                    int routeNumber = int.MaxValue;
-                    if (m_EntityManager.HasComponent<RouteNumber>(line))
+                    if (TryRuntimeLine(entities[i], out WorkbenchLineRuntime runtimeLine))
                     {
-                        routeNumber = m_EntityManager.GetComponentData<RouteNumber>(line).m_Number;
+                        lines.Add(runtimeLine);
                     }
-
-                    string originStationId;
-                    string originStationName;
-                    LineOrigin(line, out originStationId, out originStationName);
-
-                    LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
-                        m_EntityManager, line, m_Stop);
-
-                    string name = Name(line);
-                    if (string.IsNullOrEmpty(name))
-                    {
-                        name = routeNumber != int.MaxValue
-                            ? ("Line " + routeNumber.ToString())
-                            : ("Line " + line.Index.ToString());
-                    }
-
-                    string originStatus = support.Supported ? string.Empty : "error";
-                    string originMessageKey = support.Supported
-                        ? string.Empty
-                        : (support.Reason == LineDispatchSupport.ReasonOriginOutsideEndpoint
-                            ? "nativeSchedule.origin.unsupportedOutsideEndpoint"
-                            : "nativeSchedule.origin.unsupportedNotPassengerStop");
-
-                    lines.Add(new WorkbenchLineRuntime
-                    {
-                        Entity = line,
-                        Id = m_LineId(m_LineKey(line)),
-                        Name = name,
-                        RouteNumber = routeNumber,
-                        StationCount = CountStops(line),
-                        TransportType = m_TransportType(line),
-                        OriginStationId = originStationId,
-                        OriginStationName = originStationName,
-                        DispatchSupported = support.Supported,
-                        UnsupportedReason = support.Reason ?? string.Empty,
-                        OriginStatus = originStatus,
-                        OriginMessageKey = originMessageKey
-                    });
                 }
             }
             finally
@@ -162,9 +119,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal bool TryRuntimeLine(Entity line, out WorkbenchLineRuntime runtimeLine)
         {
             runtimeLine = null;
-            if (line == Entity.Null
-                || !m_EntityManager.Exists(line)
-                || !m_EntityManager.HasBuffer<RouteWaypoint>(line))
+            if (!DispatchLineEligibility.IsDispatchTransportLine(m_EntityManager, line))
             {
                 return false;
             }
@@ -224,7 +179,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 for (int i = 0; i < entities.Length; i++)
                 {
                     Entity line = entities[i];
-                    if (!m_EntityManager.HasBuffer<RouteWaypoint>(line))
+                    if (!DispatchLineEligibility.IsDispatchTransportLine(m_EntityManager, line))
                         continue;
 
                     string lineId = m_LineId(m_LineKey(line));

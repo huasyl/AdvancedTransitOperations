@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+const PORTAL_MARGIN = 12;
+const PORTAL_PREFERRED_HEIGHT = 300;
+
 // Shared dropdown base for native workbench pages.
 // Positioning, open/close interaction, and the default trigger/menu typography live here,
 // while each page still chooses its visual variant and any local class overrides.
@@ -45,10 +48,19 @@ export default function WorkbenchDropdown({
       const rect = triggerElement.getBoundingClientRect();
       const portalHostElement = usePortal ? portalHostRef.current : null;
       const portalRect = portalHostElement ? portalHostElement.getBoundingClientRect() : null;
+      const viewportHeight = portalRect ? portalRect.height : window.innerHeight;
+      const triggerTop = portalRect ? rect.top - portalRect.top : rect.top;
+      const triggerBottom = portalRect ? rect.bottom - portalRect.top : rect.bottom;
+      const spaceBelow = Math.max(0, viewportHeight - triggerBottom - PORTAL_MARGIN);
+      const spaceAbove = Math.max(0, triggerTop - PORTAL_MARGIN);
+      const openUp = spaceBelow < PORTAL_PREFERRED_HEIGHT && spaceAbove > spaceBelow;
+      const maxHeight = Math.min(PORTAL_PREFERRED_HEIGHT, openUp ? spaceAbove : spaceBelow);
       setMenuRect({
         left: portalRect ? rect.left - portalRect.left : rect.left,
-        top: portalRect ? rect.bottom - portalRect.top : rect.bottom,
-        width: menuWidth || rect.width
+        top: openUp ? null : triggerBottom,
+        bottom: openUp ? viewportHeight - triggerTop : null,
+        width: menuWidth || rect.width,
+        maxHeight
       });
     }
 
@@ -91,8 +103,10 @@ export default function WorkbenchDropdown({
       className={`dw-demo-dropdown-menu ${usePortal ? "is-portal" : ""} ${menuClassName}`.trim()}
       style={usePortal && menuRect ? {
         left: `${menuRect.left}px`,
-        top: `${menuRect.top}px`,
-        width: `${menuRect.width}px`
+        top: menuRect.top === null ? undefined : `${menuRect.top}px`,
+        bottom: menuRect.bottom === null ? undefined : `${menuRect.bottom}px`,
+        width: `${menuRect.width}px`,
+        maxHeight: `${menuRect.maxHeight}px`
       } : undefined}
     >
       {options.map((option) => (

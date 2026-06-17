@@ -24,6 +24,7 @@ using Game.Routes;
 using Game.SceneFlow;
 using Game.Serialization;
 using Game.Simulation;
+using Game.Tools;
 using Game.UI;
 using RapidTransitMod.Dispatch.Scheduling;
 using Game.UI.InGame;
@@ -431,7 +432,8 @@ namespace RapidTransitMod
                 },
                 None = new ComponentType[] {
                     ComponentType.ReadOnly<Deleted>(),
-                    ComponentType.ReadOnly<Disabled>()
+                    ComponentType.ReadOnly<Disabled>(),
+                    ComponentType.ReadOnly<Temp>()
                 }
             });
 

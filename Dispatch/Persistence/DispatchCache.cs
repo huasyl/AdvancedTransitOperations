@@ -37,10 +37,10 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (m_Runtime.m_DispatchCacheBufferReady) return;
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null) return;
-            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchCacheElement>(city))
-                m_Runtime.EntityManager.AddBuffer<LineDispatchCacheElement>(city);
-            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchHistoryElement>(city))
-                m_Runtime.EntityManager.AddBuffer<LineDispatchHistoryElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
+                m_Runtime.EntityManager.AddBuffer<LineDispatchDepotCacheElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchDepotHistoryElement>(city))
+                m_Runtime.EntityManager.AddBuffer<LineDispatchDepotHistoryElement>(city);
             m_Runtime.m_DispatchCacheBufferReady = true;
         }
 
@@ -49,30 +49,10 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (!m_Runtime.m_DispatchCacheBufferReady) return 0f;
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null) return 0f;
-            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
-            {
-                string lineId = m_LineId(line);
-                Entity configuredDepot = m_Depot(line);
-                string configuredDepotId = m_DepotId(configuredDepot);
-                if (!string.IsNullOrEmpty(lineId) && !string.IsNullOrEmpty(configuredDepotId))
-                {
-                    float depotFrames = ReadDepot(city, lineId, configuredDepotId);
-                    if (depotFrames > 0f)
-                        return depotFrames;
-
-                    return 0f;
-                }
-            }
-
-            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchCacheElement>(city)) return 0f;
-
-            DynamicBuffer<LineDispatchCacheElement> buf = m_Runtime.EntityManager.GetBuffer<LineDispatchCacheElement>(city, true);
-            for (int i = 0; i < buf.Length; i++)
-            {
-                if (buf[i].m_LineEntity == line)
-                    return buf[i].m_DepotToOriginFrames;
-            }
-            return 0f;
+            string lineId = m_LineId(line);
+            Entity configuredDepot = m_Depot(line);
+            string configuredDepotId = m_DepotId(configuredDepot);
+            return ReadDepot(city, lineId, configuredDepotId);
         }
 
         public void Update(Entity line, Entity vehicle, uint sampleFrames)
@@ -80,54 +60,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (!m_Runtime.m_DispatchCacheBufferReady) return;
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null) return;
-            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchCacheElement>(city)) return;
-            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchHistoryElement>(city)) return;
-            bool depotUpdated = UpdateDepot(city, line, vehicle, sampleFrames);
-
-            DynamicBuffer<LineDispatchCacheElement> buf = m_Runtime.EntityManager.GetBuffer<LineDispatchCacheElement>(city);
-            DynamicBuffer<LineDispatchHistoryElement> historyBuf = m_Runtime.EntityManager.GetBuffer<LineDispatchHistoryElement>(city);
-            for (int i = 0; i < buf.Length; i++)
-            {
-                if (buf[i].m_LineEntity != line) continue;
-                uint oldFrames = buf[i].m_DepotToOriginFrames;
-                LineDispatchHistoryElement history = GetHistory(historyBuf, line);
-                LineDispatchHistoryElement updatedHistory = Append(history, sampleFrames);
-                uint newFrames = Average(ReadSamples(updatedHistory));
-                buf[i] = new LineDispatchCacheElement
-                {
-                    m_LineEntity = line,
-                    m_DepotToOriginFrames = newFrames
-                };
-                Upsert(historyBuf, updatedHistory);
-                float oldMinutes = oldFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-                float newMinutes = newFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-                if (RtLog.VerboseEnabled && !depotUpdated)
-                {
-                    m_Runtime.log.Info("[出库缓存] 线路" + line.Index
-                        + " 样本=" + (sampleFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
-                        + " 最近" + updatedHistory.m_SampleCount + "条均值" + newMinutes.ToString("F1") + "分钟"
-                        + (oldFrames > 0 ? " 旧值" + oldMinutes.ToString("F1") + "分钟" : ""));
-                }
-                return;
-            }
-
-            LineDispatchHistoryElement createdHistory = Append(new LineDispatchHistoryElement
-            {
-                m_LineEntity = line
-            }, sampleFrames);
-            uint createdFrames = Average(ReadSamples(createdHistory));
-            buf.Add(new LineDispatchCacheElement
-            {
-                m_LineEntity = line,
-                m_DepotToOriginFrames = createdFrames
-            });
-            Upsert(historyBuf, createdHistory);
-            if (RtLog.VerboseEnabled && !depotUpdated)
-            {
-                m_Runtime.log.Info("[出库缓存新增] 线路" + line.Index
-                    + " 最近" + createdHistory.m_SampleCount + "条均值"
-                    + (createdFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟");
-            }
+            UpdateDepot(city, line, vehicle, sampleFrames);
         }
 
         private float ReadDepot(Entity city, string lineId, string depotId)
@@ -161,10 +94,8 @@ namespace RapidTransitMod.Dispatch.Persistence
             }
 
             string lineId = m_LineId(line);
-            Entity owner = m_Runtime.EntityManager.HasComponent<Owner>(vehicle)
-                ? m_Runtime.EntityManager.GetComponentData<Owner>(vehicle).m_Owner
-                : Entity.Null;
-            string depotId = m_DepotId(owner);
+            Entity configuredDepot = m_Depot(line);
+            string depotId = m_DepotId(configuredDepot);
             if (string.IsNullOrEmpty(lineId) || string.IsNullOrEmpty(depotId))
                 return false;
 

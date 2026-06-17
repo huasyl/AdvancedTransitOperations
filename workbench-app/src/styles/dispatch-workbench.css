@@ -24,18 +24,6 @@
   - If a layout works in browser but fails in EUIS, trust EUIS and adjust the safe subset.
 */
 
-@font-face {
-  font-family: "RTM SimHei";
-  src: url("coui://rapidtransitmod/UI/workbench/simhei.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 400;
-}
-
-/*
-  Chinese rendering depends on the explicit RTM SimHei -> simhei.ttf -> coui://... chain.
-  If simhei.ttf is missing from the live workbench folder, the whole workbench can fall back to garbled text.
-*/
-
 * {
   box-sizing: border-box;
 }
@@ -667,7 +655,7 @@ body {
 .dw-ui-text {
   display: block;
   color: var(--text);
-  font-family: "RTM SimHei", Arial, sans-serif;
+  font-family: Arial, sans-serif;
   font-weight: 600;
   line-height: 1.16;
   white-space: normal;
@@ -679,14 +667,14 @@ body {
 .dw-ui-text-line {
   display: block;
   min-height: 1.08em;
-  font-family: "RTM SimHei", sans-serif;
+  font-family: sans-serif;
   line-height: 1.18;
 }
 
 .dw-control-text {
   display: block;
   color: var(--text);
-  font-family: "RTM SimHei", Arial, sans-serif;
+  font-family: Arial, sans-serif;
   font-weight: 600;
   line-height: 1.18;
   white-space: nowrap;
@@ -747,7 +735,7 @@ body {
   right: 12px;
   color: rgba(236, 244, 248, 0.92);
   font-size: 33px;
-  font-family: "RTM SimHei", Arial, sans-serif;
+  font-family: Arial, sans-serif;
   font-weight: 600;
   line-height: 1.16;
   white-space: normal;
@@ -880,7 +868,6 @@ body {
   font-weight: 700;
   pointer-events: none;
   user-select: none;
-  paint-order: stroke;
   stroke: rgba(8, 14, 20, 0.92);
   stroke-width: 0.22;
   stroke-linejoin: round;
@@ -1562,7 +1549,7 @@ body {
   left: 12px;
   right: 10px;
   font-size: 18px;
-  font-family: "RTM SimHei", Arial, sans-serif;
+  font-family: Arial, sans-serif;
   font-weight: 600;
   line-height: 1.18;
 }
@@ -3659,7 +3646,7 @@ body {
 }
 
 .dw-demo-badge {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   height: 22px;
   margin-left: 8px;
@@ -3683,7 +3670,7 @@ body {
 }
 
 .dw-demo-status {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   height: 24px;
   border-radius: 8px;
@@ -3942,12 +3929,15 @@ body {
 .dw-native-schedule-error {
   display: flex;
   flex-direction: column;
-  gap: 12px;
   min-height: 280px;
   padding: 24px;
   border-radius: 8px;
   background: rgba(18, 31, 44, 0.94);
   color: var(--text);
+}
+
+.dw-native-schedule-error > * + * {
+  margin-top: 12px;
 }
 
 .dw-native-schedule-error-title {

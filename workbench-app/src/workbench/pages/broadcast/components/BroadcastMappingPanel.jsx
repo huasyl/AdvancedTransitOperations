@@ -21,6 +21,11 @@ export default function BroadcastMappingPanel({
     selectedLine,
     fallbackLanguageKey,
   } = mapping;
+  const hasAnyStationBindings = stations.some(
+    (station) =>
+      (Array.isArray(station?.audios) && station.audios.length > 0) ||
+      (Array.isArray(station?.conflictAssets) && station.conflictAssets.length > 0),
+  );
 
   return (
     <div
@@ -30,13 +35,23 @@ export default function BroadcastMappingPanel({
         <div>
           <h2>{labels.mappingTitle}</h2>
         </div>
-        <button
-          type="button"
-          className="dw-bc-secondary-button"
-          onClick={actions.handleAutoBindStations}
-        >
-          {labels.autoBind}
-        </button>
+        <div className="dw-bc-mapping-head-actions">
+          <button
+            type="button"
+            className="dw-bc-secondary-button"
+            onClick={actions.handleAutoBindStations}
+          >
+            {labels.autoBind}
+          </button>
+          <button
+            type="button"
+            className="dw-bc-secondary-button"
+            disabled={!hasAnyStationBindings}
+            onClick={actions.handleClearAllStationBindings}
+          >
+            {labels.mapClearAll}
+          </button>
+        </div>
       </div>
 
       <div className="dw-bc-map-table-head">

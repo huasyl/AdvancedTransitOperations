@@ -68,6 +68,11 @@ namespace RapidTransitMod
             m_Runtime.m_VehicleLabels.SetLocalized(vehicle, key, fallback, suffix);
         }
 
+        private void SetPrefixedLocalizedVehicleLabel(Entity vehicle, string key, string fallback, string prefix, string suffix = "")
+        {
+            m_Runtime.m_VehicleLabels.SetPrefixedLocalized(vehicle, key, fallback, prefix, suffix);
+        }
+
         private void SetHoldingVehicleLabel(Entity vehicle, int targetMin, string tag, bool late = false, bool includeHoldingInWaiting = true)
         {
             if (targetMin >= 0)
@@ -1530,7 +1535,7 @@ namespace RapidTransitMod
 
                             if (bypassControlWaypointIndex > 0 && runningShouldHoldBypass)
                             {
-                                SetLocalizedVehicleLabel(v, "BypassExpress", "待避快车", vTag);
+                                SetPrefixedLocalizedVehicleLabel(v, "BypassExpress", "待避快车", "#" + v.Index + " ");
                                 break;
                             }
 

@@ -280,7 +280,10 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
         <aside className="rtw-overview-sidebar">
           <OverviewModeRail modes={modeRailModes} activeMode={selectedMode} onModeChange={handleModeChange} />
           <OverviewSystemSwitches systems={overviewFeatureSettings.systems} onSystemToggle={overviewFeatureSettings.toggleFeature} />
-          <div className="rtw-overview-footer-tag">{t("nativeWorkbench.overview.footer.online")}</div>
+          <div className="rtw-overview-footer">
+            <div className="rtw-overview-footer-tag">{t("nativeWorkbench.overview.footer.online")}</div>
+            <div className="rtw-overview-footer-warning">{t("nativeWorkbench.overview.footer.tteWarning")}</div>
+          </div>
         </aside>
         <main className="rtw-overview-main">
           <OverviewHeaderStats summary={summary} />

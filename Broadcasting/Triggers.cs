@@ -428,6 +428,8 @@ namespace RapidTransitMod.Broadcasting
         private readonly Dictionary<Entity, string> m_LastStopAndOpenStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LastLeaveStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, string> m_LastBypassStopByVehicle = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_LastApproachStopByVehicle = new Dictionary<Entity, string>();
+        private readonly Dictionary<Entity, string> m_LastMidRouteStopByVehicle = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, ProgressState> m_ProgressStateByVehicle =
             new Dictionary<Entity, ProgressState>();
 
@@ -466,6 +468,8 @@ namespace RapidTransitMod.Broadcasting
             m_LastStopAndOpenStopByVehicle.Remove(vehicle);
             m_LastLeaveStopByVehicle.Remove(vehicle);
             m_LastBypassStopByVehicle.Remove(vehicle);
+            m_LastApproachStopByVehicle.Remove(vehicle);
+            m_LastMidRouteStopByVehicle.Remove(vehicle);
             m_ProgressStateByVehicle.Remove(vehicle);
         }
 
@@ -474,6 +478,8 @@ namespace RapidTransitMod.Broadcasting
             m_LastStopAndOpenStopByVehicle.Clear();
             m_LastLeaveStopByVehicle.Clear();
             m_LastBypassStopByVehicle.Clear();
+            m_LastApproachStopByVehicle.Clear();
+            m_LastMidRouteStopByVehicle.Clear();
             m_ProgressStateByVehicle.Clear();
         }
 
@@ -908,6 +914,12 @@ namespace RapidTransitMod.Broadcasting
                 case "bypass_waiting":
                     return m_LastBypassStopByVehicle.TryGetValue(vehicle, out string bypassStop)
                         && string.Equals(bypassStop, currentStationId, StringComparison.Ordinal);
+                case "approach_station":
+                    return m_LastApproachStopByVehicle.TryGetValue(vehicle, out string approachStop)
+                        && string.Equals(approachStop, currentStationId, StringComparison.Ordinal);
+                case "mid_route":
+                    return m_LastMidRouteStopByVehicle.TryGetValue(vehicle, out string midRouteStop)
+                        && string.Equals(midRouteStop, currentStationId, StringComparison.Ordinal);
                 default:
                     return false;
             }
@@ -931,6 +943,12 @@ namespace RapidTransitMod.Broadcasting
                     break;
                 case "bypass_waiting":
                     m_LastBypassStopByVehicle[vehicle] = currentStationId;
+                    break;
+                case "approach_station":
+                    m_LastApproachStopByVehicle[vehicle] = currentStationId;
+                    break;
+                case "mid_route":
+                    m_LastMidRouteStopByVehicle[vehicle] = currentStationId;
                     break;
             }
         }

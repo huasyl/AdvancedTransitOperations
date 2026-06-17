@@ -25,7 +25,13 @@ namespace RapidTransitMod
 
         public void Info(string message)
         {
-            m_Log.Info(Mod.PrefixWithGameTime(message));
+            try
+            {
+                m_Log?.Info(Mod.PrefixWithGameTime(message));
+            }
+            catch
+            {
+            }
         }
     }
 

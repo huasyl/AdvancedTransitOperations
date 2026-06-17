@@ -48,18 +48,18 @@ export default function PlannerSidebar({ sidebar, refs, actions }) {
                 <PlannerToggleRow options={expressSourceOptions} value={expressSource} onChange={actions.setExpressSource} />
                 {expressSource === "virtual" ? (
                   <PlannerField label={t("planner.field.basedOnLine")}>
-                    <WorkbenchDropdown value={localLineOptions.find((option) => option.value === virtualBaseLine)?.label || ""} onSelect={actions.setVirtualBaseLine} options={localLineOptions.map((option) => ({ ...option, key: option.value, active: option.value === virtualBaseLine }))} className="dw-planner-dropdown-field" variant="field" positioning="portal" portalHostRef={dropdownPortalHostRef} />
+                    <WorkbenchDropdown key="virtual-base-line" value={localLineOptions.find((option) => option.value === virtualBaseLine)?.label || ""} onSelect={actions.setVirtualBaseLine} options={localLineOptions.map((option) => ({ ...option, key: option.value, active: option.value === virtualBaseLine }))} className="dw-planner-dropdown-field" variant="field" positioning="portal" portalHostRef={dropdownPortalHostRef} />
                   </PlannerField>
                 ) : (
                   <PlannerField label={t("planner.field.targetExpressLine")}>
-                    <WorkbenchDropdown value={expressLineOptions.find((option) => option.value === existingExpressLine)?.label || ""} onSelect={actions.setExistingExpressLine} options={expressLineOptions.map((option) => ({ ...option, key: option.value, active: option.value === existingExpressLine }))} className="dw-planner-dropdown-field" variant="field" positioning="portal" portalHostRef={dropdownPortalHostRef} />
+                    <WorkbenchDropdown key="existing-express-line" value={expressLineOptions.find((option) => option.value === existingExpressLine)?.label || ""} onSelect={actions.setExistingExpressLine} options={expressLineOptions.map((option) => ({ ...option, key: option.value, active: option.value === existingExpressLine }))} className="dw-planner-dropdown-field" variant="field" positioning="portal" portalHostRef={dropdownPortalHostRef} />
                   </PlannerField>
                 )}
                 {expressSource === "virtual" ? <PlannerField label={t("planner.field.rapidStops")}><PlannerMultiSelectDropdown options={stationOptions} value={expressStops} onToggle={actions.toggleExpressStop} portalHostRef={dropdownPortalHostRef} /></PlannerField> : null}
               </PlannerSidebarSection>
 
               <PlannerSidebarSection title={t("planner.group.dispatch")}>
-                <PlannerField label={t("planner.field.dispatchMode")}><WorkbenchDropdown value={dispatchOptions.find((option) => option.value === dispatchMode)?.label || ""} onSelect={actions.setDispatchMode} options={dispatchOptions} className="dw-planner-dropdown-field" variant="field" positioning="portal" portalHostRef={dropdownPortalHostRef} /></PlannerField>
+                <PlannerField label={t("planner.field.dispatchMode")}><WorkbenchDropdown key={`dispatch-${expressSource}`} value={dispatchOptions.find((option) => option.value === dispatchMode)?.label || ""} onSelect={actions.setDispatchMode} options={dispatchOptions} className="dw-planner-dropdown-field" variant="field" positioning="portal" portalHostRef={dropdownPortalHostRef} /></PlannerField>
                 {expressSource === "virtual" && dispatchMode === "interval" ? <PlannerCompactField label={t("planner.field.rapidInterval")}><PlannerInput value={dispatchInterval} onChange={actions.setDispatchInterval} suffix={t("nativeSchedule.unit.minutes")} mode="numeric" /></PlannerCompactField> : null}
                 {expressSource === "virtual" && dispatchMode === "frequency" ? <PlannerCompactField label={t("planner.field.tripsPerHour")}><PlannerInput value={dispatchTripsPerHour} onChange={actions.setDispatchTripsPerHour} suffix={t("planner.unit.tripsPerHour")} mode="numeric" /></PlannerCompactField> : null}
                 {expressSource === "virtual" && dispatchMode === "phase" ? (

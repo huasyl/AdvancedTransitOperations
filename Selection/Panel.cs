@@ -643,6 +643,9 @@ namespace RapidTransitMod
 
         private string BuildVehicleAlertSummary(Entity vehicle, Entity line, int nowMin, int targetMin)
         {
+            if (m_Port.TryBlocker(vehicle, out Entity blockerVehicle) && blockerVehicle != Entity.Null)
+                return "yielding-for:" + blockerVehicle.Index;
+
 #if !RT_DEBUG_TOOLS
             return "None";
 #else
@@ -650,8 +653,6 @@ namespace RapidTransitMod
                 return "official-dispatch";
 
             string alerts = string.Empty;
-            if (m_Port.TryBlocker(vehicle, out Entity blockerVehicle) && blockerVehicle != Entity.Null)
-                alerts = AppendAlert(alerts, "yielding-for:" + blockerVehicle.Index);
             if (m_Port.Misfires.Contains(vehicle))
                 alerts = AppendAlert(alerts, "bv-misfire");
             if (m_Port.Vehicles.IsInbound(vehicle))

@@ -182,7 +182,7 @@ namespace RapidTransitMod.Dispatch
                             continue;
                         }
 
-                        LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                        LineDispatchSupport support = DispatchLineEligibility.ComputeDispatchSupport(
                             m_EntityManager, entry.m_LineEntity, waypoint => m_Host.Stop(waypoint));
                         if (!support.Supported)
                         {
@@ -219,7 +219,7 @@ namespace RapidTransitMod.Dispatch
                             continue;
                         }
 
-                        LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                        LineDispatchSupport support = DispatchLineEligibility.ComputeDispatchSupport(
                             m_EntityManager, row.m_LineEntity, waypoint => m_Host.Stop(waypoint));
                         if (!support.Supported)
                         {
@@ -320,7 +320,7 @@ namespace RapidTransitMod.Dispatch
                         continue;
                     }
 
-                    LineDispatchSupport support = RouteWaypointEndpointResolver.ComputeLineDispatchSupport(
+                    LineDispatchSupport support = DispatchLineEligibility.ComputeDispatchSupport(
                         m_EntityManager, runtime.Entity, waypoint => m_Host.Stop(waypoint));
                     if (!support.Supported)
                     {
@@ -382,9 +382,14 @@ namespace RapidTransitMod.Dispatch
                     continue;
                 }
 
-                if (!runtime.DispatchSupported)
+                LineDispatchSupport support = DispatchLineEligibility.ComputeDispatchSupport(
+                    m_EntityManager, runtime.Entity, waypoint => m_Host.Stop(waypoint));
+                if (!runtime.DispatchSupported || !support.Supported)
                 {
-                    m_Host.Log($"Line {key} removed from applied timetable: {runtime.UnsupportedReason}");
+                    string reason = !string.IsNullOrEmpty(runtime.UnsupportedReason)
+                        ? runtime.UnsupportedReason
+                        : support.Reason;
+                    m_Host.Log($"Line {key} removed from applied timetable: {reason}");
                     m_Lines.Remove(key);
                     continue;
                 }
@@ -661,7 +666,8 @@ namespace RapidTransitMod.Dispatch
         {
             return (runtimeLines ?? Enumerable.Empty<WorkbenchLineRuntime>())
                 .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
-                .ToDictionary(line => line.Id, StringComparer.Ordinal);
+                .GroupBy(line => line.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         }
 
         private void EnsureBuffers(Entity city)

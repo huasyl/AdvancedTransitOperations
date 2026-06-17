@@ -376,10 +376,6 @@
   box-sizing: border-box;
 }
 
-.dw-planner-input-core::placeholder {
-  color: #83949f;
-}
-
 .dw-planner-input-core:focus {
   border: 0;
 }

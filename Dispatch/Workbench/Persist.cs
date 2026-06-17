@@ -963,9 +963,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return trimmed;
             }
 
-            return LineIdentityService.NormalizeForMode(
-                trimmed,
-                ModeScope.DefaultWorkbench.Mode);
+            return string.Empty;
         }
 
         private static bool IsLegacyRestoredLineId(string lineId)

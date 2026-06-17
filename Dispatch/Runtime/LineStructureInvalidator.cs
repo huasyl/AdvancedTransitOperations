@@ -69,6 +69,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LineTimes.Clear();
             m_Runtime.m_LineMileage.Clear();
             m_Runtime.m_Slices.Clear();
+            m_Runtime.m_LineView.Clear();
             m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots();
             m_Runtime.m_StationContextQuery.Clear();
 

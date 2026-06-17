@@ -72,6 +72,7 @@ export default function useBroadcastAssets(context) {
     draftStore,
     buildCurrentBroadcastLineDraft,
     markBroadcastDraftDirty,
+    queuePendingAssetDeletions,
     setShouldRenderAssetExplorer,
     setAssetExplorerStage,
     setSelectedExternalFiles,
@@ -80,7 +81,6 @@ export default function useBroadcastAssets(context) {
     setIsAssetExplorerOpen,
     setPreviewingAssetName,
     setPreviewingRuleId,
-    setCatalogAssetLibrary,
     setBindingLangDraftsByLine,
     setDisambiguationNamesByLine,
     setStations,
@@ -245,7 +245,6 @@ export default function useBroadcastAssets(context) {
       ...announcement,
       nodes: (Array.isArray(announcement.nodes) ? announcement.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
     }));
-    setCatalogAssetLibrary((current) => current.filter((asset) => asset.name !== assetName));
     setStations(nextStations);
     setRules(nextRules);
     setPlatformAnnouncements(nextPlatformAnnouncements);
@@ -291,39 +290,31 @@ export default function useBroadcastAssets(context) {
       if (previewingAssetName === assetName) {
         await workbenchApi.stopBroadcastAssetPreview?.(assetName);
       }
-      const result = await workbenchApi.deleteBroadcastAsset?.(assetName);
-      if (!result?.success) {
-        if (result?.error === "broadcast-asset-in-use") {
-          showAssetDeleteBlocked(assetName);
-        }
-        return;
-      }
     } catch (error) {
-      console.error("[RT Broadcast Workbench] delete asset failed", error);
-      return;
+      console.error("[RT Broadcast Workbench] stop asset preview before delete failed", error);
     }
 
+    queuePendingAssetDeletions([assetName]);
     removeAssetFromUi(assetName);
   }
 
   async function handleDeleteAllAssets() {
+    const assetNames = (Array.isArray(availableAssetLibrary) ? availableAssetLibrary : [])
+      .map((asset) => asset?.name || "")
+      .filter((assetName) => assetName);
+    if (assetNames.length === 0) {
+      return;
+    }
+
     try {
       if (previewingAssetName) {
         await workbenchApi.stopBroadcastAssetPreview?.(previewingAssetName);
       }
-      const result = await workbenchApi.deleteAllBroadcastAssets?.();
-      if (!result?.success) {
-        if (result?.error === "broadcast-asset-in-use") {
-          showAssetDeleteBlocked(DELETE_ALL_ASSETS_KEY);
-        }
-        return;
-      }
     } catch (error) {
-      console.error("[RT Broadcast Workbench] delete all assets failed", error);
-      return;
+      console.error("[RT Broadcast Workbench] stop asset preview before delete all failed", error);
     }
 
-    setCatalogAssetLibrary([]);
+    queuePendingAssetDeletions(assetNames);
     const activeLineId = selectedLineIdRef.current || "";
     const nextStations = (Array.isArray(stations) ? stations : []).map((station) => ({
       ...station,
@@ -517,6 +508,7 @@ export default function useBroadcastAssets(context) {
     handleDeleteAllAssets,
     assetDeleteBlockedNames,
     deleteAllAssetsKey: DELETE_ALL_ASSETS_KEY,
+    showAssetDeleteBlocked,
     handleAutoBindStations,
     handleCloseAssetExplorer,
     handleExternalPathChange,
