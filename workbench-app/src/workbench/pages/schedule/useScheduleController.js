@@ -36,9 +36,6 @@ import {
 import { buildSummaryRowsWithConflicts, getSummaryRowKey, getSummaryRowsSignature } from "./schedule-conflicts";
 import {
   createNativeMergedViewForSave,
-  mapSnapshotAutoRules,
-  mapSnapshotManualRows,
-  mapSnapshotPlanRefs,
   mapSnapshotSummaryRows,
   serializeNativeAutoRules,
   serializeNativeLineDraftRowsByLineId,
@@ -46,7 +43,6 @@ import {
   serializeNativeManualRows,
   serializePlanRefs
 } from "./schedule-serialization";
-import { readPersistedNativeScheduleState, writePersistedNativeScheduleState } from "./schedule-persistence";
 import { runNativeSaveOperation } from "./schedule-save-operation";
 
 const DEFAULT_SCHEDULE_MODE = "train";
@@ -116,7 +112,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const lastHydratedSnapshotRef = useRef(null);
   const suppressNextSnapshotRef = useRef(false);
   const suppressNextSnapshotModeRef = useRef("");
-  const skipNextBackendSaveRef = useRef(false);
   const latestDraftSaveOperationRunIdRef = useRef(0);
   const latestApplySaveOperationRunIdRef = useRef(0);
   const applyingSaveOperationRef = useRef(false);
@@ -260,7 +255,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     () => new Set(Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []),
     [appliedSummaryRowKeys]
   );
-  const hasAppliedSchedule = summaryEntries.length > 0 && currentSummarySignature === appliedSummarySignature;
+  const hasAppliedSchedule = currentSummarySignature === appliedSummarySignature;
   const summaryRows = useMemo(
     () => buildSummaryRowsWithConflicts(summaryEntries, t, appliedSummaryRowKeySet),
     [appliedSummaryRowKeySet, summaryEntries, t]
@@ -335,8 +330,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
       ? metadataSnapshot
       : null;
     lastHydratedSnapshotRef.current = snapshot ?? null;
-    skipNextBackendSaveRef.current = true;
-    const persistedState = readPersistedNativeScheduleState(targetMode);
     const runtimeCatalog = buildRuntimeCatalog(
       snapshot,
       scopedMetadata,
@@ -363,40 +356,12 @@ export default function useScheduleController({ registerHostActions, activeTrans
       runtimeCatalog.lineOptions[0] ??
       DEFAULT_LINE_OPTIONS[0];
 
-    const nextManualDrafts = mapSnapshotManualRows(snapshot?.manualRows, sourceLine.id);
-    const nextAutoRules = mapSnapshotAutoRules(snapshot?.autoRules, sourceLine.id);
     const nextSummaryEntries = normalizeSummaryEntries(
-      mapSnapshotSummaryRows(
-        Array.isArray(snapshot?.combinedDraftRows)
-          ? snapshot.combinedDraftRows
-          : Array.isArray(snapshot?.lineDraftRows)
-            ? snapshot.lineDraftRows
-            : []
-      ),
+      mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
       t
     );
     const nextSummarySignature = getSummaryRowsSignature(nextSummaryEntries);
     const currentSummaryRowKeys = nextSummaryEntries.map((row) => getSummaryRowKey(row));
-    const nextAppliedEntries = normalizeSummaryEntries(
-      mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
-      t
-    );
-    const nextAppliedRowKeysFromRuntime = new Set(nextAppliedEntries.map((row) => getSummaryRowKey(row)));
-    const previousAppliedRowKeySet = new Set(
-      Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []
-    );
-    const nextAppliedSummarySignature =
-      nextAppliedEntries.length > 0
-        ? getSummaryRowsSignature(nextAppliedEntries)
-        : snapshot?.rulesApplied || snapshot?.draftApplied
-          ? nextSummarySignature
-          : (appliedSummarySignature || "");
-    const nextAppliedSummaryRowKeys =
-      nextAppliedEntries.length > 0
-        ? currentSummaryRowKeys.filter((rowKey) => nextAppliedRowKeysFromRuntime.has(rowKey))
-        : snapshot?.rulesApplied || snapshot?.draftApplied
-          ? currentSummaryRowKeys
-          : currentSummaryRowKeys.filter((rowKey) => previousAppliedRowKeySet.has(rowKey));
 
     setActiveRightTab((current) => (current === "manual" ? "manual" : "auto"));
     setSelectedLineId(sourceLine.id);
@@ -406,22 +371,18 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setHoldMinutes(sourceLine.hold);
     setDwellMinutes(sourceLine.dwell);
     setSummaryEntries(nextSummaryEntries);
-    setAutoRules(nextAutoRules);
-    setManualDrafts(nextManualDrafts);
-    setPlanRefsByLine(mapSnapshotPlanRefs(snapshot?.planRefs));
-    setManualInput(typeof persistedState?.manualInput === "string" ? persistedState.manualInput : "12:00");
-    setEditorStart(typeof persistedState?.editorStart === "string" ? persistedState.editorStart : "08:00");
-    setEditorEnd(typeof persistedState?.editorEnd === "string" ? persistedState.editorEnd : "10:00");
-    setAutoFrequencyText(typeof persistedState?.autoFrequencyText === "string" ? persistedState.autoFrequencyText : "4");
-    setAutoOffsetDirection(typeof persistedState?.autoOffsetDirection === "string" ? persistedState.autoOffsetDirection : "");
-    setAutoOffsetMinutesText(typeof persistedState?.autoOffsetMinutesText === "string" ? persistedState.autoOffsetMinutesText : "");
-    setAppliedSummarySignature(nextAppliedSummarySignature);
-    setAppliedSummaryRowKeys(nextAppliedSummaryRowKeys);
-    setSummaryFilter(
-      persistedState?.summaryFilter === "current" || persistedState?.summaryFilter === "local" || persistedState?.summaryFilter === "express"
-        ? persistedState.summaryFilter
-        : "all"
-    );
+    setAutoRules([]);
+    setManualDrafts([]);
+    setPlanRefsByLine({});
+    setManualInput("12:00");
+    setEditorStart("08:00");
+    setEditorEnd("10:00");
+    setAutoFrequencyText("4");
+    setAutoOffsetDirection("");
+    setAutoOffsetMinutesText("");
+    setAppliedSummarySignature(nextSummarySignature);
+    setAppliedSummaryRowKeys(currentSummaryRowKeys);
+    setSummaryFilter("all");
     setPanelMessage(null);
     hasHydratedRuntimeRef.current = true;
     return true;
@@ -482,7 +443,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     hasHydratedRuntimeRef.current = false;
     suppressNextSnapshotRef.current = false;
     suppressNextSnapshotModeRef.current = "";
-    skipNextBackendSaveRef.current = true;
     latestDraftSaveOperationRunIdRef.current += 1;
     latestApplySaveOperationRunIdRef.current += 1;
     applyingSaveOperationRef.current = false;
@@ -610,31 +570,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     };
   }, [isActive, scheduleMode, registerHostActions, t, workbenchApi]);
 
-  useEffect(() => {
-    if (!hasHydratedRuntimeRef.current) {
-      return;
-    }
-
-    writePersistedNativeScheduleState({
-      manualInput,
-      editorStart,
-      editorEnd,
-      autoFrequencyText,
-      autoOffsetDirection,
-      autoOffsetMinutesText,
-      summaryFilter
-    }, scheduleMode);
-  }, [
-    autoFrequencyText,
-    autoOffsetDirection,
-    autoOffsetMinutesText,
-    editorEnd,
-    editorStart,
-    manualInput,
-    scheduleMode,
-    summaryFilter
-  ]);
-
   async function saveNativeWorkbenchDraft({ applyDraft = false } = {}) {
     if (!applyDraft && applyingSaveOperationRef.current) {
       return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
@@ -657,6 +592,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
     const currentManualRows = manualDrafts.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const currentAutoRows = autoRules.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
+    const lineDraftRowsByLineId = serializeNativeLineDraftRowsByLineId(summaryEntries);
+    if (applyDraft && selectedLineId && !lineDraftRowsByLineId.some((block) => block?.lineId === selectedLineId)) {
+      lineDraftRowsByLineId.push({ lineId: selectedLineId, lineDraftRows: [] });
+    }
     const request = {
       mode: requestMode,
       selectedLineId,
@@ -664,7 +603,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
       manualRows: serializeNativeManualRows(currentManualRows),
       autoRules: serializeNativeAutoRules(currentAutoRows),
-      lineDraftRowsByLineId: serializeNativeLineDraftRowsByLineId(summaryEntries),
+      lineDraftRowsByLineId,
       planRefs: serializePlanRefs(planRefsByLine),
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
       applyDraft,
@@ -727,46 +666,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
       }
     }
   }
-
-  useEffect(() => {
-    if (!hasHydratedRuntimeRef.current) {
-      return undefined;
-    }
-
-    if (skipNextBackendSaveRef.current) {
-      skipNextBackendSaveRef.current = false;
-      return undefined;
-    }
-
-    if (applyingSaveOperationRef.current) {
-      return undefined;
-    }
-
-    const modeAtSchedule = scheduleMode;
-    const generation = scheduleModeGenerationRef.current;
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        if (applyingSaveOperationRef.current || !isCurrentModeRequest(modeAtSchedule, generation)) {
-          return;
-        }
-
-        await saveNativeWorkbenchDraft({ applyDraft: false });
-      } catch {}
-    }, 1800);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [
-    autoRules,
-    manualDrafts,
-    scheduleMode,
-    selectedLineId,
-    summaryEntries,
-    t,
-    planRefsByLine,
-    workbenchApi
-  ]);
 
   function clearPanelMessage() {
     setPanelMessage(null);
@@ -1166,6 +1065,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
     markLocalDataDirty();
     dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
+    setAutoRules((current) => current.filter((rule) => (
+      rule?.lineId !== selectedLine.id && rule?.serviceId !== selectedLine.id
+    )));
     setPanelMessage({
       scope: "auto",
       tone: "neutral",

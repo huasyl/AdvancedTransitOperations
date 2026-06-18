@@ -60,7 +60,7 @@ export function hasMinimumDepartureGap(candidateMinute, existingMinutes) {
 
 export function hasMinimumDepartureGapForOrigin(candidateMinute, candidateOriginStationId, existingRows) {
   if (!candidateOriginStationId) {
-    return true;
+    return false;
   }
 
   return existingRows.every((row) => {
@@ -277,6 +277,76 @@ function distributeMinutesInSegment(segment, count, minGapMinutes) {
   return minutes;
 }
 
+function getAnchorSlot(baseMinutes, index, windowStart, windowEnd) {
+  const anchor = baseMinutes[index];
+  const previousAnchor = baseMinutes[index - 1];
+  const nextAnchor = baseMinutes[index + 1];
+  const start = Number.isFinite(previousAnchor)
+    ? Math.max(Math.ceil(windowStart), Math.ceil((previousAnchor + anchor) / 2))
+    : Math.ceil(windowStart);
+  const end = Number.isFinite(nextAnchor)
+    ? Math.min(Math.ceil(windowEnd) - 1, Math.ceil((anchor + nextAnchor) / 2) - 1)
+    : Math.ceil(windowEnd) - 1;
+
+  return { start, end };
+}
+
+function pickAnchoredAvailableMinute(anchor, slot, originStationId, occupiedRows) {
+  if (!originStationId || slot.end < slot.start) {
+    return null;
+  }
+
+  const segments = buildOriginAvailableDepartureSegments({
+    windowStart: slot.start,
+    windowEnd: slot.end + 1,
+    originStationId,
+    occupiedRows
+  });
+  if (segments.length === 0) {
+    return null;
+  }
+
+  const ordered = segments
+    .map((segment) => ({
+      segment,
+      distance: anchor < segment.start
+        ? segment.start - anchor
+        : anchor > segment.end
+          ? anchor - segment.end
+          : 0,
+      isAfterAnchor: segment.start >= anchor
+    }))
+    .sort((left, right) => {
+      if (left.distance !== right.distance) {
+        return left.distance - right.distance;
+      }
+
+      if (left.isAfterAnchor !== right.isAfterAnchor) {
+        return left.isAfterAnchor ? -1 : 1;
+      }
+
+      return right.segment.length - left.segment.length;
+    });
+  const selected = ordered[0]?.segment;
+  if (!selected) {
+    return null;
+  }
+
+  if (anchor >= selected.start && anchor <= selected.end) {
+    return anchor;
+  }
+
+  return distributeMinutesInSegment(selected, 1, MIN_DEPARTURE_INTERVAL_MINUTES)[0] ?? null;
+}
+
+function buildAutoDepartureSlots(baseMinutes, resolveMinute) {
+  return (Array.isArray(baseMinutes) ? baseMinutes : []).map((anchorMinute, generatedIndex) => ({
+    anchorMinute,
+    generatedIndex,
+    minute: typeof resolveMinute === "function" ? resolveMinute(anchorMinute, generatedIndex) : null
+  }));
+}
+
 function distributeAutoDepartureMinutes({
   baseMinutes,
   windowStart,
@@ -285,41 +355,28 @@ function distributeAutoDepartureMinutes({
   occupiedRows
 }) {
   if (!originStationId || !Array.isArray(baseMinutes) || baseMinutes.length === 0) {
-    return Array.isArray(baseMinutes) ? baseMinutes : [];
+    return buildAutoDepartureSlots(baseMinutes);
   }
 
   if (canUseBaseDepartureMinutes(baseMinutes, originStationId, occupiedRows)) {
-    return baseMinutes;
+    return buildAutoDepartureSlots(baseMinutes, (anchorMinute) => anchorMinute);
   }
 
-  const segments = buildOriginAvailableDepartureSegments({
-    windowStart,
-    windowEnd,
-    originStationId,
-    occupiedRows
-  });
-  const segmentCounts = allocateSegmentDepartureCounts(segments, baseMinutes.length);
-  const candidates = segments
-    .flatMap((segment, index) =>
-      distributeMinutesInSegment(segment, segmentCounts[index] || 0, MIN_DEPARTURE_INTERVAL_MINUTES)
-    )
-    .sort((left, right) => left - right);
   const validationRows = [...occupiedRows];
-  const acceptedMinutes = [];
-  candidates.forEach((minute) => {
-    if (acceptedMinutes.length >= baseMinutes.length) {
-      return;
+  return buildAutoDepartureSlots(baseMinutes, (anchor, index) => {
+    const slot = getAnchorSlot(baseMinutes, index, windowStart, windowEnd);
+    const minute = pickAnchoredAvailableMinute(anchor, slot, originStationId, validationRows);
+    if (minute === null) {
+      return null;
     }
 
     if (!hasMinimumDepartureGapForOrigin(minute, originStationId, validationRows)) {
-      return;
+      return null;
     }
 
     validationRows.push({ minute, originStationId });
-    acceptedMinutes.push(minute);
+    return minute;
   });
-
-  return acceptedMinutes;
 }
 
 export function getLineKinds(rows, lineId) {
@@ -476,7 +533,7 @@ export function buildAutoStagedPlan({
         return;
       }
 
-      const distributedMinutes = distributeAutoDepartureMinutes({
+      const distributedSlots = distributeAutoDepartureMinutes({
         baseMinutes,
         windowStart: generation.start,
         windowEnd: generation.end,
@@ -484,7 +541,14 @@ export function buildAutoStagedPlan({
         occupiedRows
       });
 
-      distributedMinutes.forEach((candidateMinute, generatedIndex) => {
+      distributedSlots.forEach((slot) => {
+        const generatedIndex = slot?.generatedIndex ?? 0;
+        const candidateMinute = slot?.minute;
+        if (!Number.isFinite(candidateMinute)) {
+          pushPreviewEntry(slot?.anchorMinute, { skipped: true, reason: "gap" });
+          return;
+        }
+
         if (!hasMinimumDepartureGapForOrigin(candidateMinute, selectedOriginStationId, occupiedRows)) {
           pushPreviewEntry(candidateMinute, { skipped: true, reason: "gap" });
           return;
@@ -506,10 +570,6 @@ export function buildAutoStagedPlan({
           end: rule.end
         });
       });
-
-      for (let skippedIndex = distributedMinutes.length; skippedIndex < baseMinutes.length; skippedIndex += 1) {
-        pushPreviewEntry(baseMinutes[skippedIndex], { skipped: true, reason: "gap" });
-      }
 
       previewsByRule[rule.id] = preview;
     });

@@ -244,22 +244,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 state.RulesApplied = true;
             }
 
-            int applyRowCount = nextLineDraftRowsByKey.Values.Sum(rows => rows?.Count ?? 0);
-            if (request.applyDraft && applyRowCount == 0)
-            {
-                result.success = false;
-                result.errors = new[] { "Add rows into the line draft timetable before applying the draft." };
-                m_Drafts.SetPreferred(state.SelectedLineId, prepared.Scope.Mode);
-                m_Run.RefreshApplied();
-                if (persistImmediately)
-                {
-                    m_Persist.Save();
-                    m_Host.SaveApplied();
-                }
-                result.snapshot = BuildSnapshot(prepared.Scope, state.SelectedLineId);
-                return result;
-            }
-
             if (request.applyDraft && nextLineDraftRowsByKey.ContainsKey(lineKey))
             {
                 state.DraftApplied = true;
