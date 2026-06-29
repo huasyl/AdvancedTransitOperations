@@ -841,6 +841,15 @@
   animation: dw-dropdown-enter 160ms ease;
 }
 
+.dw-demo-dropdown-menu.is-open-up {
+  border-top: 1px solid rgba(90, 180, 197, 0.52);
+  border-bottom: 0;
+}
+
+.dw-demo-dropdown-menu.is-open-down {
+  border-top: 0;
+}
+
 .dw-demo-dropdown-menu.is-portal {
   position: fixed;
   top: 0;

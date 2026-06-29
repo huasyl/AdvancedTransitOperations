@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const PORTAL_MARGIN = 12;
@@ -34,8 +34,9 @@ export default function WorkbenchDropdown({
   const menuRef = useRef(null);
   const usePortal = positioning === "portal" && portalHostRef?.current instanceof HTMLElement;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) {
+      setMenuRect(null);
       return undefined;
     }
 
@@ -56,9 +57,10 @@ export default function WorkbenchDropdown({
       const openUp = spaceBelow < PORTAL_PREFERRED_HEIGHT && spaceAbove > spaceBelow;
       const maxHeight = Math.min(PORTAL_PREFERRED_HEIGHT, openUp ? spaceAbove : spaceBelow);
       setMenuRect({
+        direction: openUp ? "up" : "down",
         left: portalRect ? rect.left - portalRect.left : rect.left,
-        top: openUp ? null : triggerBottom,
-        bottom: openUp ? viewportHeight - triggerTop : null,
+        top: openUp ? "auto" : `${triggerBottom}px`,
+        bottom: openUp ? `${viewportHeight - triggerTop}px` : "auto",
         width: menuWidth || rect.width,
         maxHeight
       });
@@ -100,13 +102,16 @@ export default function WorkbenchDropdown({
   const menuContent = open ? (
     <div
       ref={menuRef}
-      className={`dw-demo-dropdown-menu ${usePortal ? "is-portal" : ""} ${menuClassName}`.trim()}
+      className={`dw-demo-dropdown-menu ${usePortal ? "is-portal" : ""} ${menuRect?.direction === "up" ? "is-open-up" : "is-open-down"} ${menuClassName}`.trim()}
       style={usePortal && menuRect ? {
         left: `${menuRect.left}px`,
-        top: menuRect.top === null ? undefined : `${menuRect.top}px`,
-        bottom: menuRect.bottom === null ? undefined : `${menuRect.bottom}px`,
+        top: menuRect.top,
+        bottom: menuRect.bottom,
         width: `${menuRect.width}px`,
         maxHeight: `${menuRect.maxHeight}px`
+      } : usePortal ? {
+        visibility: "hidden",
+        pointerEvents: "none"
       } : undefined}
     >
       {options.map((option) => (

@@ -1,5 +1,9 @@
 import { useMemo } from "react";
-import { resolvePlatformRuntimeTriggerId, resolvePlatformUiTriggerId } from "./broadcast-constants";
+import {
+  RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS,
+  resolvePlatformRuntimeTriggerId,
+  resolvePlatformUiTriggerId,
+} from "./broadcast-constants";
 import { normalizeRuleNode } from "./broadcast-normalize";
 
 export default function useBroadcastPlatformRules(context) {
@@ -41,7 +45,11 @@ export default function useBroadcastPlatformRules(context) {
       const uiTriggerId = announcement?.uiTriggerId || announcement?.triggerId || "platform_idle_clear";
       const signatureKey = `${enabled ? "1" : "0"}:${uiTriggerId}:${JSON.stringify(nodes)}`;
       const explicitTitle = typeof announcement?.title === "string" ? announcement.title.trim() : "";
-      if (!station || (!enabled && nodes.length === 0)) {
+      if (
+        !station ||
+        RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS.includes(uiTriggerId) ||
+        (!enabled && nodes.length === 0)
+      ) {
         return;
       }
 
@@ -74,7 +82,9 @@ export default function useBroadcastPlatformRules(context) {
         id: platformRuleIdMemoryRef.current[idSignature],
         title: group.title || t("broadcast.platform.title"),
         triggerId: group.uiTriggerId,
-        trigger: platformTriggerOptions.find((option) => option.id === group.uiTriggerId)?.label || t("broadcast.platform.idleClear"),
+        trigger:
+          platformTriggerOptions.find((option) => option.id === group.uiTriggerId)
+            ?.label || "",
         enabled: group.enabled,
         stationIds: group.stationIds,
         nodes: group.nodes,
@@ -256,7 +266,7 @@ export default function useBroadcastPlatformRules(context) {
     markDirtyPlatformStations(targetStations.map((station) => station.id), nextPlatformAnnouncements);
     setIsCreatingRule(false);
     setNewRuleTitle("");
-    setNewRuleTriggerId("platform_idle_clear");
+    setNewRuleTriggerId(platformTriggerOptions[0]?.id || "approach_station");
     setPlatformCreateStationIds([]);
     setTrayContext(null);
   }

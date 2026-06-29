@@ -104,6 +104,9 @@ const PLATFORM_TRIGGER_OPTIONS = [
   { id: "platform_idle_clear", labelKey: "broadcast.platform.idleClear" },
 ];
 
+const RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS = ["bypass_waiting"];
+const RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS = ["platform_idle_clear"];
+
 function resolvePlatformUiTriggerId(triggerId) {
   if (
     triggerId === "approach_station" ||
@@ -177,6 +180,8 @@ export {
   BROADCAST_LANGUAGE_DISPLAY_ALIASES,
   TRIGGER_OPTIONS,
   PLATFORM_TRIGGER_OPTIONS,
+  RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS,
+  RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS,
   LINE_OPTIONS,
   EXTERNAL_ASSET_FILE_SYSTEM,
   DEFAULT_EXTERNAL_ASSET_PATH,

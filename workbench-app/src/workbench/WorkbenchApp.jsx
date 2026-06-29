@@ -8,9 +8,14 @@ import SchedulePage from "./pages/schedule/SchedulePage";
 import { setWorkbenchApiTransportMode } from "../lib/workbench-api";
 import { traceWorkbench } from "./shared/workbench-trace";
 
-const DEFAULT_NATIVE_WORKBENCH_PAGE = "schedule";
+const DEFAULT_NATIVE_WORKBENCH_PAGE = "overview";
 const WORKBENCH_PAGE_TRANSITION_MS = 220;
 const DEFAULT_TRANSPORT_MODE = "train";
+const WORKBENCH_DEBUG_FLAGS_EVENT = "rt-native-workbench-debug-flags";
+
+function getWorkbenchDebugToolsEnabled() {
+  return typeof window !== "undefined" && window.__RT_DEBUG_TOOLS__ === true;
+}
 
 function requestWorkbenchClose() {
   if (typeof window === "undefined") {
@@ -39,20 +44,53 @@ export default function WorkbenchApp({ registerHostActions }) {
   const [pageStage, setPageStage] = useState("entered");
   const [plannerEnterSequence, setPlannerEnterSequence] = useState(0);
   const [broadcastEnterSequence, setBroadcastEnterSequence] = useState(0);
+  const [debugToolsEnabled, setDebugToolsEnabled] = useState(getWorkbenchDebugToolsEnabled);
   const [stickyPages, setStickyPages] = useState({
     overview: false,
     passenger: false
   });
   const pageTabs = useMemo(
-    () => ([
-      { key: "schedule", label: t("nativeWorkbench.tab.schedule") },
-      { key: "planner", label: t("nativeWorkbench.tab.planner") },
-      { key: "broadcast", label: t("nativeWorkbench.tab.broadcast") },
-      { key: "overview", label: t("nativeWorkbench.tab.overview") },
-      { key: "passenger", label: t("nativeWorkbench.tab.passenger") }
-    ]),
-    [t]
+    () => {
+      const tabs = [
+        { key: "overview", label: t("nativeWorkbench.tab.overview") },
+        { key: "schedule", label: t("nativeWorkbench.tab.schedule") }
+      ];
+      if (debugToolsEnabled) {
+        tabs.push({ key: "planner", label: t("nativeWorkbench.tab.planner") });
+      }
+      tabs.push(
+        { key: "broadcast", label: t("nativeWorkbench.tab.broadcast") },
+        { key: "passenger", label: t("nativeWorkbench.tab.passenger") }
+      );
+      return tabs;
+    },
+    [debugToolsEnabled, t]
   );
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const syncDebugToolsEnabled = () => {
+      setDebugToolsEnabled(getWorkbenchDebugToolsEnabled());
+    };
+
+    syncDebugToolsEnabled();
+    window.addEventListener(WORKBENCH_DEBUG_FLAGS_EVENT, syncDebugToolsEnabled);
+    return () => {
+      window.removeEventListener(WORKBENCH_DEBUG_FLAGS_EVENT, syncDebugToolsEnabled);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (debugToolsEnabled || activePage !== "planner") {
+      return;
+    }
+
+    traceWorkbench("app.planner.hidden.redirect", { from: activePage });
+    setActivePage(DEFAULT_NATIVE_WORKBENCH_PAGE);
+  }, [activePage, debugToolsEnabled]);
 
   useLayoutEffect(() => {
     traceWorkbench("app.page.state", { activePage, renderedPage, pageStage });
@@ -133,6 +171,10 @@ export default function WorkbenchApp({ registerHostActions }) {
   );
 
   function handleTabClick(tabKey) {
+    if (tabKey === "planner" && !debugToolsEnabled) {
+      return;
+    }
+
     traceWorkbench("app.tab.click", { tab: tabKey, from: activePage });
     setActivePage(tabKey);
   }
@@ -182,7 +224,9 @@ export default function WorkbenchApp({ registerHostActions }) {
           className={`dw-native-workbench-page ${renderedPage === "planner" ? "is-active" : "is-inactive"} is-${pageStage}`}
           data-workbench-page="planner"
         >
-          <PlannerPage pageEnterSequence={plannerEnterSequence} activeTransportMode={modeForPage("planner")} />
+          {debugToolsEnabled ? (
+            <PlannerPage pageEnterSequence={plannerEnterSequence} activeTransportMode={modeForPage("planner")} />
+          ) : null}
         </div>
         <div
           className={`dw-native-workbench-page ${renderedPage === "broadcast" ? "is-active" : "is-inactive"} is-${pageStage}`}

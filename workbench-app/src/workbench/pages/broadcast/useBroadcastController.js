@@ -6,6 +6,8 @@ import {
   DELAY_LIBRARY,
   TRIGGER_OPTIONS,
   PLATFORM_TRIGGER_OPTIONS,
+  RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS,
+  RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS,
   LINE_OPTIONS,
   TAB_TRANSITION_MS,
   PAGE_ENTER_ANIMATION_MS,
@@ -37,8 +39,20 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const broadcastApplyOperation = useBroadcastApplyOperation(workbenchApi);
   const draftStore = useBroadcastDraftStore();
   const delayLibrary = useMemo(() => DELAY_LIBRARY.map((delay) => ({ ...delay, name: t(delay.nameKey), desc: t(delay.descKey) })), [t]);
-  const triggerOptions = useMemo(() => TRIGGER_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) })), [t]);
-  const platformTriggerOptions = useMemo(() => PLATFORM_TRIGGER_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) })), [t]);
+  const triggerOptions = useMemo(
+    () =>
+      TRIGGER_OPTIONS.filter(
+        (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id),
+      ).map((option) => ({ ...option, label: t(option.labelKey) })),
+    [t],
+  );
+  const platformTriggerOptions = useMemo(
+    () =>
+      PLATFORM_TRIGGER_OPTIONS.filter(
+        (option) => !RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS.includes(option.id),
+      ).map((option) => ({ ...option, label: t(option.labelKey) })),
+    [t],
+  );
   const fallbackLineOptions = useMemo(() => LINE_OPTIONS.map((line) => ({ ...line, label: t(line.labelKey) })), [t]);
   const [activeTab, setActiveTab] = useState("sequence");
   const [renderedTab, setRenderedTab] = useState("sequence");
@@ -82,7 +96,11 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const [lineDropdownOpen, setLineDropdownOpen] = useState(false);
   const [isCreatingRule, setIsCreatingRule] = useState(false);
   const [newRuleTitle, setNewRuleTitle] = useState("");
-  const [newRuleTriggerId, setNewRuleTriggerId] = useState(TRIGGER_OPTIONS[0].id);
+  const [newRuleTriggerId, setNewRuleTriggerId] = useState(
+    TRIGGER_OPTIONS.find(
+      (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id),
+    )?.id ?? TRIGGER_OPTIONS[0].id,
+  );
   const [triggerDropdownOpen, setTriggerDropdownOpen] = useState(false);
   const [removingRuleIds, setRemovingRuleIds] = useState({});
   const [removingNodeIds, setRemovingNodeIds] = useState({});
@@ -1269,7 +1287,13 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     setRules(nextRules);
     setIsCreatingRule(false);
     setNewRuleTitle("");
-    setNewRuleTriggerId(TRIGGER_OPTIONS[0].id);
+    setNewRuleTriggerId(
+      triggerOptions[0]?.id ??
+        TRIGGER_OPTIONS.find(
+          (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id),
+        )?.id ??
+        TRIGGER_OPTIONS[0].id,
+    );
     setTriggerDropdownOpen(false);
   }
 
@@ -1458,7 +1482,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       broadcastWarnings,
     },
     rules: {
-      vehicleRules: rules,
+      vehicleRules: rules.filter(
+        (rule) =>
+          !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(rule?.triggerId || ""),
+      ),
       platformRules,
       availableBroadcastTriggerOptions,
       platformTriggerOptions,
