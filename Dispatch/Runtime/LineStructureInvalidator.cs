@@ -129,6 +129,14 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void ClearVehiclePosition(Entity vehicle)
         {
+            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
+            if (m_Runtime.m_StopSessionWaypointIndex.TryGetValue(vehicle, out int stopSessionWaypointIndex)
+                && stopSessionWaypointIndex > 0
+                && !m_Runtime.m_DeparturePendingSinceFrame.ContainsKey(vehicle))
+            {
+                m_Runtime.m_InvalidatedMidStopRecoveryPending.Add(vehicle);
+            }
+
             m_Runtime.m_CachedWpIdx.Remove(vehicle);
             m_Runtime.m_WaypointIndex.Remove(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);

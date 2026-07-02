@@ -1,10 +1,7 @@
 import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 
-export default function OverviewNetworkDiagram({ lines, stations, vehicles, activeMode }) {
+export default function OverviewNetworkDiagram() {
   const { t } = useNativeScheduleI18n();
-  const activeLines = lines.filter((line) => line.mode === activeMode);
-  const activeLineIds = new Set(activeLines.map((line) => line.id));
-  const activeVehicleCount = vehicles.filter((vehicle) => activeLineIds.has(vehicle.lineId)).length;
 
   return (
     <div className="rtw-overview-network-panel">
@@ -14,18 +11,6 @@ export default function OverviewNetworkDiagram({ lines, stations, vehicles, acti
       <div className="rtw-overview-network-stage">
         <div className="rtw-overview-network-placeholder">
           <div className="rtw-overview-network-placeholder-title">{t("nativeWorkbench.overview.network.placeholderTitle")}</div>
-          <div className="rtw-overview-network-placeholder-row">
-            <span>{activeLines.length}</span>
-            <span>{t("nativeWorkbench.overview.network.activeLines")}</span>
-          </div>
-          <div className="rtw-overview-network-placeholder-row">
-            <span>{stations.length}</span>
-            <span>{t("nativeWorkbench.overview.network.stations")}</span>
-          </div>
-          <div className="rtw-overview-network-placeholder-row">
-            <span>{activeVehicleCount}</span>
-            <span>{t("nativeWorkbench.overview.network.vehicles")}</span>
-          </div>
         </div>
       </div>
     </div>

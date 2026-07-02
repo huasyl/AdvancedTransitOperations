@@ -96,7 +96,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const [manualInput, setManualInput] = useState("12:00");
   const [editorStart, setEditorStart] = useState("08:00");
   const [editorEnd, setEditorEnd] = useState("10:00");
-  const [autoFrequencyText, setAutoFrequencyText] = useState("4");
+  const [autoFrequencyText, setAutoFrequencyText] = useState("1");
   const [autoOffsetDirection, setAutoOffsetDirection] = useState("");
   const [autoOffsetMinutesText, setAutoOffsetMinutesText] = useState("");
   const [appliedSummarySignature, setAppliedSummarySignature] = useState("");
@@ -377,7 +377,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setManualInput("12:00");
     setEditorStart("08:00");
     setEditorEnd("10:00");
-    setAutoFrequencyText("4");
+    setAutoFrequencyText("1");
     setAutoOffsetDirection("");
     setAutoOffsetMinutesText("");
     setAppliedSummarySignature(nextSummarySignature);

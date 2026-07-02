@@ -169,6 +169,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_StopSessionBoardingChangeCount = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_DeparturePendingSinceFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
+            runtime.m_InvalidatedMidStopRecoveryPending = new NativeHashSet<Entity>(256, Allocator.Persistent);
             runtime.m_StationContextQuery = new VehicleStationContextQuery(
                 runtime.EntityManager,
                 runtime.m_Resolve.Stop,

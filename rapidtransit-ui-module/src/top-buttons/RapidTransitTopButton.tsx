@@ -58,13 +58,29 @@ export function RapidTransitTopButton() {
           onClick={toggleWorkbench}
           selected={open}
           style={{
-            fontSize: "18px",
-            lineHeight: "22px",
-            fontWeight: 700,
-            letterSpacing: "0.06em"
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center"
           }}
         >
-          ATO
+          <svg
+            aria-hidden="true"
+            viewBox="2 4 44 40"
+            style={{
+              width: "32rem",
+              height: "32rem",
+              display: "block"
+            }}
+          >
+            <path d="M4 20h40M4 28h40" fill="none" stroke="white" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M12 20l6-8h12l6 8M12 28l6 8h12l6-8" fill="none" stroke="white" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
+            <rect x="18" y="6" width="12" height="4" rx="1" fill="white" opacity="0.2" />
+            <rect x="18" y="38" width="12" height="4" rx="1" fill="white" opacity="0.2" />
+            <circle cx="12" cy="20" r="1.5" fill="white" />
+            <circle cx="12" cy="28" r="1.5" fill="white" />
+            <circle cx="36" cy="20" r="1.5" fill="white" />
+            <circle cx="36" cy="28" r="1.5" fill="white" />
+          </svg>
         </Button>
       </div>
     </Tooltip>

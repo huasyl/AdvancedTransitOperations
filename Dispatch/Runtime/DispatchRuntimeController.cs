@@ -109,6 +109,7 @@ namespace RapidTransitMod
         private void OpenStopSession(Entity vehicle, Entity line, int waypointIndex, uint nowFrame)
         {
             m_Runtime.Bypass.ClearBypassHoldSkipped(vehicle);
+            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
             m_Runtime.m_StopSessionLine[vehicle] = line;
             m_Runtime.m_StopSessionWaypointIndex[vehicle] = waypointIndex;
             m_Runtime.m_StopSessionArrivalFrame[vehicle] = nowFrame;
@@ -123,6 +124,7 @@ namespace RapidTransitMod
             m_Runtime.m_StopSessionArrivalFrame.Remove(vehicle);
             m_Runtime.m_StopSessionBoardingChangeCount.Remove(vehicle);
             m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
+            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
             m_Runtime.Bypass.ClearBypassHoldSkipped(vehicle);
         }
 
@@ -135,6 +137,39 @@ namespace RapidTransitMod
         private void CancelDeparturePending(Entity vehicle)
         {
             m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
+        }
+
+        private bool TryRecoverInvalidatedMidStopSession(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame,
+            ref int currentWaypointIndex)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || currentWaypointIndex >= 0
+                || HasOpenStopSession(vehicle)
+                || !m_Runtime.m_InvalidatedMidStopRecoveryPending.Contains(vehicle))
+            {
+                return false;
+            }
+
+            int recoveredWaypointIndex = m_Runtime.m_WaypointIndex.Compute(vehicle, waypoints);
+            if (recoveredWaypointIndex <= 0)
+                return false;
+
+            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
+            currentWaypointIndex = recoveredWaypointIndex;
+            m_Runtime.m_CachedWpIdx[vehicle] = recoveredWaypointIndex;
+            m_Runtime.m_StopSessionLine[vehicle] = line;
+            m_Runtime.m_StopSessionWaypointIndex[vehicle] = recoveredWaypointIndex;
+            m_Runtime.m_StopSessionArrivalFrame[vehicle] = nowFrame;
+            m_Runtime.m_StopSessionBoardingChangeCount[vehicle] = 0;
+            CancelDeparturePending(vehicle);
+            m_Runtime.TrackProjection.NoteVehicleProgressSuspectRecoveryBoarding(vehicle, recoveredWaypointIndex);
+            m_Runtime.m_Observation.ClearForcedMidStop(vehicle);
+            return true;
         }
 
         private void ObserveOfficialBoarding(Entity vehicle, bool officialBoarding)
@@ -850,6 +885,22 @@ namespace RapidTransitMod
                     else
                     {
                         curWpIdx = m_Runtime.m_CachedWpIdx.TryGetValue(v, out int ci) ? ci : -1;
+                    }
+
+                    if (state == VehicleState.Running
+                        && boarding
+                        && curWpIdx < 0
+                        && !lastBoarding)
+                    {
+                        if (TryRecoverInvalidatedMidStopSession(
+                            v,
+                            lineEnt,
+                            wps,
+                            nowFrame,
+                            ref curWpIdx))
+                        {
+                            lastBoarding = true;
+                        }
                     }
 
                     if (!boarding

@@ -408,14 +408,18 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.importBroadcastExternalAssets, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastImportResult());
     },
-    async deleteBroadcastAsset(assetName = "") {
+    async deleteBroadcastAsset(requestOrAssetName = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.deleteBroadcastAsset, requestJson({ assetName: assetName || "" }));
+      const request =
+        requestOrAssetName && typeof requestOrAssetName === "object" && !Array.isArray(requestOrAssetName)
+          ? requestOrAssetName
+          : { assetName: requestOrAssetName || "" };
+      const payload = await engineCall(CALLS.deleteBroadcastAsset, requestJson(request));
       return parsePayload(payload, createBroadcastDeleteAssetResult());
     },
-    async deleteAllBroadcastAssets() {
+    async deleteAllBroadcastAssets(request = {}) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.deleteAllBroadcastAssets, requestJson());
+      const payload = await engineCall(CALLS.deleteAllBroadcastAssets, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastDeleteAllAssetsResult());
     },
     async saveBroadcastStationBinding(request) {
@@ -463,9 +467,13 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.playBroadcastAssetPreview, requestJson({ assetName: assetName || "" }));
       return parsePayload(payload, createBroadcastAssetPreviewResult());
     },
-    async stopBroadcastAssetPreview(assetName = "") {
+    async stopBroadcastAssetPreview(requestOrAssetName = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.stopBroadcastAssetPreview, requestJson({ assetName: assetName || "" }));
+      const request =
+        requestOrAssetName && typeof requestOrAssetName === "object" && !Array.isArray(requestOrAssetName)
+          ? requestOrAssetName
+          : { assetName: requestOrAssetName || "" };
+      const payload = await engineCall(CALLS.stopBroadcastAssetPreview, requestJson(request));
       return parsePayload(payload, createBroadcastAssetPreviewResult());
     },
     async playBroadcastRulePreview(request) {
@@ -473,9 +481,13 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.playBroadcastRulePreview, requestJson(request ?? {}));
       return parsePayload(payload, createBroadcastRulePreviewResult());
     },
-    async stopBroadcastRulePreview(ruleId = "") {
+    async stopBroadcastRulePreview(requestOrRuleId = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.stopBroadcastRulePreview, requestJson({ ruleId: ruleId || "" }));
+      const request =
+        requestOrRuleId && typeof requestOrRuleId === "object" && !Array.isArray(requestOrRuleId)
+          ? requestOrRuleId
+          : { ruleId: requestOrRuleId || "" };
+      const payload = await engineCall(CALLS.stopBroadcastRulePreview, requestJson(request));
       return parsePayload(payload, createBroadcastRulePreviewResult());
     },
     async setBroadcastPreviewVolume(volume = 80) {

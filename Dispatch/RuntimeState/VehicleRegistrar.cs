@@ -148,6 +148,7 @@ namespace RapidTransitMod
                             m_Runtime.m_StopSessionArrivalFrame[v] = m_Runtime.m_SimulationSystem.frameIndex;
                             m_Runtime.m_StopSessionBoardingChangeCount[v] = 0;
                             m_Runtime.m_DeparturePendingSinceFrame.Remove(v);
+                            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(v);
                         }
                         m_Runtime.m_CachedWpIdx[v] = initWpIdx;
                         m_Runtime.m_UICache.Remove(v);

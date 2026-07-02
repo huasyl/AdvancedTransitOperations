@@ -15,6 +15,8 @@ namespace RapidTransitMod
         public string path;
         [DataMember]
         public string extension;
+        [DataMember]
+        public bool missing;
     }
 
     [DataContract]

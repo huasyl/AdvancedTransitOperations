@@ -22,6 +22,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private NativeHashMap<Entity, uint> m_StopSessionArrivalFrame;
         private NativeHashMap<Entity, uint> m_StopSessionBoardingChangeCount;
         private NativeHashMap<Entity, uint> m_DeparturePendingSinceFrame;
+        private NativeHashSet<Entity> m_InvalidatedMidStopRecoveryPending;
         private NativeHashSet<Entity> m_Misfires;
         private NativeHashMap<Entity, uint> m_MisfireStartFrames;
         private NativeHashMap<Entity, uint> m_PreparingCooldown;
@@ -45,6 +46,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_StopSessionArrivalFrame = runtime.m_StopSessionArrivalFrame;
             m_StopSessionBoardingChangeCount = runtime.m_StopSessionBoardingChangeCount;
             m_DeparturePendingSinceFrame = runtime.m_DeparturePendingSinceFrame;
+            m_InvalidatedMidStopRecoveryPending = runtime.m_InvalidatedMidStopRecoveryPending;
             m_Misfires = runtime.m_BVMisfire;
             m_MisfireStartFrames = runtime.m_BVMisfireStartFrame;
             m_PreparingCooldown = runtime.m_PreparingFixCooldownUntil;
@@ -109,6 +111,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_StopSessionArrivalFrame.Remove(vehicle);
             m_StopSessionBoardingChangeCount.Remove(vehicle);
             m_DeparturePendingSinceFrame.Remove(vehicle);
+            m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
         }
 
         public void ClearMisfire(Entity vehicle)

@@ -77,6 +77,7 @@ namespace RapidTransitMod
                 m_Runtime.m_StopSessionBoardingChangeCount.Remove(dead);
                 m_Runtime.m_DeparturePendingSinceFrame.Remove(dead);
                 m_Runtime.m_CachedWpIdx.Remove(dead);
+                m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(dead);
                 m_Runtime.TrackProjection.ClearVehicle(dead);
                 m_Runtime.m_WaypointIndex.Remove(dead);
                 m_Runtime.m_RouteProgress.Remove(dead);

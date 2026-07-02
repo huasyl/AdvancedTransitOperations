@@ -10,6 +10,9 @@ namespace RapidTransitMod.PassengerFlow
         private readonly Queue<PendingExpiry> m_ExpiryQueue = new Queue<PendingExpiry>();
         private int m_NextGeneration;
 
+        internal int ActiveTripCount => m_ActiveTrips.Count;
+        internal int PendingTransferCount => m_Pending.Count;
+
         internal void Clear()
         {
             m_ActiveTrips.Clear();
@@ -61,12 +64,14 @@ namespace RapidTransitMod.PassengerFlow
             TimeBucketKey actualAlightBucket,
             uint expiresFrame)
         {
-            if (passenger == Entity.Null
-                || m_Pending.ContainsKey(passenger)
-                || !m_ActiveTrips.TryGetValue(passenger, out ActiveTrip trip))
-            {
+            if (passenger == Entity.Null)
                 return false;
-            }
+
+            if (m_Pending.ContainsKey(passenger))
+                return false;
+
+            if (!m_ActiveTrips.TryGetValue(passenger, out ActiveTrip trip))
+                return false;
 
             int generation = ++m_NextGeneration;
             PendingTransfer pending = new PendingTransfer(
@@ -257,7 +262,6 @@ namespace RapidTransitMod.PassengerFlow
         {
             if (aggregates == null)
                 return;
-
             aggregates.RecordCompletedOd(
                 pending.Mode,
                 pending.FirstLineId,

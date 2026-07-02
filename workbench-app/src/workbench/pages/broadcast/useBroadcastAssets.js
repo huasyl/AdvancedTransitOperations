@@ -53,6 +53,7 @@ function isBroadcastStationAssetMatch(assetName, stationName) {
 
 export default function useBroadcastAssets(context) {
   const {
+    activeTransportMode,
     workbenchApi,
     isAssetExplorerOpen,
     shouldRenderAssetExplorer,
@@ -64,6 +65,7 @@ export default function useBroadcastAssets(context) {
     previewingAssetName,
     previewingRuleId,
     availableAssetLibrary,
+    bindableAssetLibrary,
     rules,
     stations,
     platformAnnouncements,
@@ -129,8 +131,12 @@ export default function useBroadcastAssets(context) {
     assetDeleteBlockedTimersRef.current = {};
   }, []);
 
-  function showAssetDeleteBlocked(assetName) {
-    const key = assetName || DELETE_ALL_ASSETS_KEY;
+  function getDeleteBlockedKey(assetName, mode = activeTransportMode) {
+    return `${String(mode || "train").trim().toLowerCase() || "train"}::${assetName || DELETE_ALL_ASSETS_KEY}`;
+  }
+
+  function showAssetDeleteBlocked(assetName, mode = activeTransportMode) {
+    const key = getDeleteBlockedKey(assetName, mode);
     if (assetDeleteBlockedTimersRef.current[key]) {
       window.clearTimeout(assetDeleteBlockedTimersRef.current[key]);
     }
@@ -144,6 +150,68 @@ export default function useBroadcastAssets(context) {
       });
       delete assetDeleteBlockedTimersRef.current[key];
     }, ASSET_DELETE_BLOCKED_MS);
+  }
+
+  function hasAssetReferenceInNodes(nodes, assetNames) {
+    return (Array.isArray(nodes) ? nodes : []).some((node) =>
+      node
+      && node.type === "asset"
+      && assetNames.has(String(node.name || "").trim()),
+    );
+  }
+
+  function hasAssetReferenceInStations(stationsForUi, assetNames) {
+    return (Array.isArray(stationsForUi) ? stationsForUi : []).some((station) => {
+      const audios = Array.isArray(station?.audios) ? station.audios : [];
+      return audios.some((entry) => assetNames.has(String(entry?.assetName || "").trim()));
+    });
+  }
+
+  function lineDraftReferencesAssets(draft, assetNames) {
+    if (!draft) {
+      return false;
+    }
+
+    return hasAssetReferenceInStations(draft.stationsForUi, assetNames)
+      || (Array.isArray(draft.stationBindings) ? draft.stationBindings : []).some((binding) =>
+        assetNames.has(String(binding?.assetName || "").trim()),
+      )
+      || (Array.isArray(draft.rules) ? draft.rules : []).some((rule) => hasAssetReferenceInNodes(rule?.nodes, assetNames))
+      || (Array.isArray(draft.platformAnnouncements) ? draft.platformAnnouncements : []).some((announcement) =>
+        hasAssetReferenceInNodes(announcement?.nodes, assetNames),
+      );
+  }
+
+  function hasFrontendAssetReferences(assetNames) {
+    const normalizedAssetNames = new Set(
+      (Array.isArray(assetNames) ? assetNames : [])
+        .map((assetName) => String(assetName || "").trim())
+        .filter((assetName) => assetName),
+    );
+    if (normalizedAssetNames.size === 0) {
+      return false;
+    }
+
+    const activeLineId = selectedLineIdRef.current || "";
+    const dirtyLineIds = draftStore.getDirtyLineIds(activeTransportMode);
+    const dirtyLineIdSet = new Set(dirtyLineIds);
+    if (
+      !dirtyLineIdSet.has(activeLineId)
+      && lineDraftReferencesAssets(
+        {
+          stationsForUi: stations,
+          rules,
+          platformAnnouncements,
+        },
+        normalizedAssetNames,
+      )
+    ) {
+      return true;
+    }
+
+    return dirtyLineIds.some((lineId) =>
+      lineDraftReferencesAssets(draftStore.getLineDraft(lineId), normalizedAssetNames),
+    );
   }
 
   async function loadExternalAssetBrowser(path = "") {
@@ -248,19 +316,22 @@ export default function useBroadcastAssets(context) {
     setStations(nextStations);
     setRules(nextRules);
     setPlatformAnnouncements(nextPlatformAnnouncements);
-    draftStore.getDirtyLineIds().forEach((lineId) => {
+    draftStore.getDirtyLineIds(activeTransportMode).forEach((lineId) => {
       const draft = draftStore.getLineDraft(lineId);
       if (!draft) {
         return;
       }
 
+      const { stationBindings: _ignoredStationBindings, ...draftWithoutBindings } = draft;
+
+      const nextDraftStations = (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
+        ...station,
+        audios: (Array.isArray(station?.audios) ? station.audios : []).filter((entry) => entry.assetName !== assetName),
+        conflictAssets: (Array.isArray(station?.conflictAssets) ? station.conflictAssets : []).filter((entry) => entry.assetName !== assetName),
+      }));
       draftStore.setLineDraft(lineId, {
-        ...draft,
-        stationsForUi: (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
-          ...station,
-          audios: (Array.isArray(station?.audios) ? station.audios : []).filter((entry) => entry.assetName !== assetName),
-          conflictAssets: (Array.isArray(station?.conflictAssets) ? station.conflictAssets : []).filter((entry) => entry.assetName !== assetName),
-        })),
+        ...draftWithoutBindings,
+        stationsForUi: nextDraftStations,
         rules: (Array.isArray(draft.rules) ? draft.rules : []).map((rule) => ({
           ...rule,
           nodes: (Array.isArray(rule?.nodes) ? rule.nodes : []).filter((node) => !(node.type === "asset" && node.name === assetName)),
@@ -286,6 +357,11 @@ export default function useBroadcastAssets(context) {
       return;
     }
 
+    if (hasFrontendAssetReferences([assetName])) {
+      showAssetDeleteBlocked(assetName);
+      return;
+    }
+
     try {
       if (previewingAssetName === assetName) {
         await workbenchApi.stopBroadcastAssetPreview?.(assetName);
@@ -306,6 +382,11 @@ export default function useBroadcastAssets(context) {
       return;
     }
 
+    if (hasFrontendAssetReferences(assetNames)) {
+      showAssetDeleteBlocked(DELETE_ALL_ASSETS_KEY);
+      return;
+    }
+
     try {
       if (previewingAssetName) {
         await workbenchApi.stopBroadcastAssetPreview?.(previewingAssetName);
@@ -314,7 +395,7 @@ export default function useBroadcastAssets(context) {
       console.error("[RT Broadcast Workbench] stop asset preview before delete all failed", error);
     }
 
-    queuePendingAssetDeletions(assetNames);
+    queuePendingAssetDeletions(assetNames, { deleteAll: true });
     const activeLineId = selectedLineIdRef.current || "";
     const nextStations = (Array.isArray(stations) ? stations : []).map((station) => ({
       ...station,
@@ -333,19 +414,22 @@ export default function useBroadcastAssets(context) {
     setStations(nextStations);
     setRules(nextRules);
     setPlatformAnnouncements(nextPlatformAnnouncements);
-    draftStore.getDirtyLineIds().forEach((lineId) => {
+    draftStore.getDirtyLineIds(activeTransportMode).forEach((lineId) => {
       const draft = draftStore.getLineDraft(lineId);
       if (!draft) {
         return;
       }
 
+      const { stationBindings: _ignoredStationBindings, ...draftWithoutBindings } = draft;
+
+      const nextDraftStations = (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
+        ...station,
+        audios: [],
+        conflictAssets: [],
+      }));
       draftStore.setLineDraft(lineId, {
-        ...draft,
-        stationsForUi: (Array.isArray(draft.stationsForUi) ? draft.stationsForUi : []).map((station) => ({
-          ...station,
-          audios: [],
-          conflictAssets: [],
-        })),
+        ...draftWithoutBindings,
+        stationsForUi: nextDraftStations,
         rules: (Array.isArray(draft.rules) ? draft.rules : []).map((rule) => ({
           ...rule,
           nodes: (Array.isArray(rule?.nodes) ? rule.nodes : []).filter((node) => node.type !== "asset"),
@@ -377,7 +461,7 @@ export default function useBroadcastAssets(context) {
         return station;
       }
 
-      const matches = (Array.isArray(availableAssetLibrary) ? availableAssetLibrary : []).filter((asset) =>
+      const matches = (Array.isArray(bindableAssetLibrary) ? bindableAssetLibrary : []).filter((asset) =>
         asset?.name && isBroadcastStationAssetMatch(asset.name, station.name),
       );
       if (matches.length > 1) {
@@ -506,7 +590,19 @@ export default function useBroadcastAssets(context) {
     removeAssetFromUi,
     handleDeleteAsset,
     handleDeleteAllAssets,
-    assetDeleteBlockedNames,
+    assetDeleteBlockedNames: Object.entries(assetDeleteBlockedNames).reduce((result, [key, value]) => {
+      if (!value) {
+        return result;
+      }
+
+      const prefix = `${String(activeTransportMode || "train").trim().toLowerCase() || "train"}::`;
+      if (!key.startsWith(prefix)) {
+        return result;
+      }
+
+      result[key.slice(prefix.length)] = true;
+      return result;
+    }, {}),
     deleteAllAssetsKey: DELETE_ALL_ASSETS_KEY,
     showAssetDeleteBlocked,
     handleAutoBindStations,

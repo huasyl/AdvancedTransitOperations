@@ -11,6 +11,8 @@ namespace RapidTransitMod.PassengerFlow
         private readonly Dictionary<WaypointAnchorCacheKey, WaypointAnchorCacheEntry> m_WaypointCache = new Dictionary<WaypointAnchorCacheKey, WaypointAnchorCacheEntry>();
         private readonly List<StationKey> m_Stations = new List<StationKey>();
 
+        internal int StationCount => m_Stations.Count;
+
         internal void Clear()
         {
             m_IndexBySak.Clear();
@@ -20,24 +22,12 @@ namespace RapidTransitMod.PassengerFlow
 
         internal bool TryRegister(StationDwellAnchor anchor, out StationKey key)
         {
-            key = default;
-            string sak = anchor.StationAnchorId;
-            if (string.IsNullOrWhiteSpace(sak) || !RapidTransitMod.Stops.IsKey(sak))
-                return false;
-
-            if (!m_IndexBySak.TryGetValue(sak, out int index))
-            {
-                index = m_Stations.Count;
-                m_IndexBySak[sak] = index;
-                m_Stations.Add(new StationKey(index, sak, anchor.AnchorEntity, anchor.StopEntity, anchor.BuildingEntity, string.Empty));
-            }
-            else
-            {
-                m_Stations[index] = m_Stations[index].WithEntities(anchor.AnchorEntity, anchor.StopEntity, anchor.BuildingEntity);
-            }
-
-            key = m_Stations[index];
-            return true;
+            return TryRegisterSak(
+                anchor.StationAnchorId,
+                anchor.AnchorEntity,
+                anchor.StopEntity,
+                anchor.BuildingEntity,
+                out key);
         }
 
         internal bool TryRegisterSak(string sak, Entity anchorEntity, Entity stopEntity, Entity buildingEntity, out StationKey key)
@@ -71,12 +61,9 @@ namespace RapidTransitMod.PassengerFlow
                 return false;
             }
 
-            if (m_WaypointCache.TryGetValue(cacheKey, out WaypointAnchorCacheEntry cached)
-                && cached.Waypoint == waypoint
-                && TryGetCachedStation(cached, out key))
-            {
+            bool hadCached = m_WaypointCache.TryGetValue(cacheKey, out WaypointAnchorCacheEntry cached);
+            if (hadCached && cached.Waypoint == waypoint && TryGetCachedStation(cached, out key))
                 return true;
-            }
 
             if (!port.TryDwellAnchor(line, waypointIndex, out StationDwellAnchor anchor)
                 || !TryRegister(anchor, out key))
@@ -182,6 +169,7 @@ namespace RapidTransitMod.PassengerFlow
                     station.stationName);
                 m_IndexBySak[station.stationId] = index;
             }
+
         }
 
         private static string ResolveStationName(Port port, StationKey station)

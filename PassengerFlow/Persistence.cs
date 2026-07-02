@@ -15,39 +15,127 @@ namespace RapidTransitMod.PassengerFlow
         internal static void SaveToCity(EntityManager entityManager, Entity city)
         {
             if (city == Entity.Null)
+            {
+                Diagnostics.Log("PassengerFlowPersistSave", "result=skip reason=cityNull");
                 return;
+            }
 
             if (!entityManager.HasBuffer<PassengerFlowStateElement>(city))
+            {
                 entityManager.AddBuffer<PassengerFlowStateElement>(city);
+                Diagnostics.Log("PassengerFlowPersistSave", "action=createBuffer city=" + Diagnostics.DescribeEntity(city));
+            }
 
             DynamicBuffer<PassengerFlowStateElement> buffer = entityManager.GetBuffer<PassengerFlowStateElement>(city);
             PassengerFlowPersistentState state = Capture();
             if (state == null)
             {
                 buffer.Clear();
+                Diagnostics.Log("PassengerFlowPersistSave", "result=cleared reason=captureNull city=" + Diagnostics.DescribeEntity(city));
                 return;
             }
 
             string payload = Workbenches.Json.Write(state);
-            Write(buffer, Workbenches.Buffer.Split(payload));
+            List<string> chunks = Workbenches.Buffer.Split(payload);
+            Write(buffer, chunks);
+            if (Diagnostics.Enabled)
+            {
+                Diagnostics.Log(
+                    "PassengerFlowPersistSave",
+                    "result=saved city=" + Diagnostics.DescribeEntity(city)
+                    + " payloadLength=" + (payload != null ? payload.Length : 0).ToString()
+                    + " chunkCount=" + (chunks != null ? chunks.Count : 0).ToString()
+                    + " " + DescribePersistedState(state)
+                    + " " + DescribeRuntimeState(SamplingSystem.CurrentState));
+            }
         }
 
         internal static bool RestoreFromCity(EntityManager entityManager, Entity city)
         {
             if (city == Entity.Null || !entityManager.HasBuffer<PassengerFlowStateElement>(city))
+            {
+                if (RtLog.VerboseEnabled)
+                {
+                    Diagnostics.Log(
+                        "PassengerFlowPersistRestore",
+                        "result=skip reason=" + (city == Entity.Null ? "cityNull" : "bufferMissing")
+                        + " city=" + Diagnostics.DescribeEntity(city));
+                }
                 return false;
+            }
 
             DynamicBuffer<PassengerFlowStateElement> buffer = entityManager.GetBuffer<PassengerFlowStateElement>(city, true);
             if (buffer.Length == 0)
+            {
+                if (RtLog.VerboseEnabled)
+                {
+                    Diagnostics.Log(
+                        "PassengerFlowPersistRestore",
+                        "result=skip reason=bufferEmpty city=" + Diagnostics.DescribeEntity(city));
+                }
                 return false;
+            }
 
             string payload = Read(buffer);
             if (string.IsNullOrEmpty(payload))
+            {
+                if (RtLog.VerboseEnabled)
+                {
+                    Diagnostics.Log(
+                        "PassengerFlowPersistRestore",
+                        "result=skip reason=payloadEmpty city=" + Diagnostics.DescribeEntity(city)
+                        + " bufferLength=" + buffer.Length.ToString());
+                }
                 return false;
+            }
 
-            PassengerFlowPersistentState persisted = Workbenches.Json.Read<PassengerFlowPersistentState>(payload);
-            Restore(persisted);
-            return IsSupported(persisted);
+            PassengerFlowPersistentState persisted;
+            try
+            {
+                persisted = Workbenches.Json.Read<PassengerFlowPersistentState>(payload);
+            }
+            catch (Exception ex)
+            {
+                if (RtLog.VerboseEnabled)
+                {
+                    Diagnostics.Log(
+                        "PassengerFlowPersistRestore",
+                        "result=error reason=deserializeException city=" + Diagnostics.DescribeEntity(city)
+                        + " payloadLength=" + payload.Length.ToString()
+                        + " exception=" + ex.GetType().Name
+                        + " message=" + ex.Message);
+                }
+                throw;
+            }
+
+            string failureReason = Restore(persisted);
+            if (string.IsNullOrEmpty(failureReason))
+            {
+                if (RtLog.VerboseEnabled)
+                {
+                    Diagnostics.Log(
+                        "PassengerFlowPersistRestore",
+                        "result=restored city=" + Diagnostics.DescribeEntity(city)
+                        + " payloadLength=" + payload.Length.ToString()
+                        + " bufferLength=" + buffer.Length.ToString()
+                        + " " + DescribePersistedState(persisted)
+                        + " " + DescribeRuntimeState(SamplingSystem.CurrentState));
+                }
+                return true;
+            }
+
+            if (RtLog.VerboseEnabled)
+            {
+                Diagnostics.Log(
+                    "PassengerFlowPersistRestore",
+                    "result=rejected city=" + Diagnostics.DescribeEntity(city)
+                    + " reason=" + failureReason
+                    + " payloadLength=" + payload.Length.ToString()
+                    + " bufferLength=" + buffer.Length.ToString()
+                    + " " + DescribePersistedState(persisted)
+                    + " " + DescribeRuntimeState(SamplingSystem.CurrentState));
+            }
+            return false;
         }
 
         internal static PassengerFlowPersistentState Capture()
@@ -74,19 +162,30 @@ namespace RapidTransitMod.PassengerFlow
             };
         }
 
-        internal static void Restore(PassengerFlowPersistentState persisted)
+        internal static string Restore(PassengerFlowPersistentState persisted)
         {
             State state = SamplingSystem.CurrentState;
             if (state == null)
-                return;
+                return "runtimeStateNull";
 
             state.Clear();
-            if (!IsSupported(persisted))
-                return;
+            if (TryGetSupportFailureReason(persisted, out string failureReason))
+                return failureReason;
 
             int currentAbsoluteBucket = ResolveCurrentAbsoluteBucket(persisted);
             int minAbsoluteBucket = Math.Max(0, currentAbsoluteBucket - (BucketsPerWindow - 1));
             PassengerFlowPersistentState trimmed = Trim(persisted, minAbsoluteBucket, currentAbsoluteBucket);
+            if (Diagnostics.Enabled)
+            {
+                Diagnostics.Log(
+                    "PassengerFlowPersistRestoreApply",
+                    "currentAbsoluteBucket=" + currentAbsoluteBucket.ToString()
+                    + " minAbsoluteBucket=" + minAbsoluteBucket.ToString()
+                    + " trimmedStationVolumes=" + Diagnostics.DescribeCount(trimmed.stationVolumes)
+                    + " trimmedSectionVolumes=" + Diagnostics.DescribeCount(trimmed.sectionVolumes)
+                    + " trimmedOdFlows=" + Diagnostics.DescribeCount(trimmed.odFlows)
+                    + " trimmedWarnings=" + Diagnostics.DescribeCount(trimmed.warnings));
+            }
 
             state.ServiceDayIndex = Math.Max(0, persisted.serviceDayIndex);
             state.LastDayMinute = persisted.lastDayMinute;
@@ -105,6 +204,7 @@ namespace RapidTransitMod.PassengerFlow
                 state.RollingWindow.Add(SamplingSystem.BucketFromAbsoluteIndex(absoluteBucket));
 
             SamplingSystem.TrimRollingWindowForRestore(state);
+            return string.Empty;
         }
 
         private static int ResolveCurrentAbsoluteBucket(PassengerFlowPersistentState persisted)
@@ -122,25 +222,63 @@ namespace RapidTransitMod.PassengerFlow
 
         private static bool IsSupported(PassengerFlowPersistentState persisted)
         {
-            if (persisted == null || persisted.schemaVersion != SchemaVersion)
-                return false;
+            return !TryGetSupportFailureReason(persisted, out _);
+        }
+
+        private static bool TryGetSupportFailureReason(PassengerFlowPersistentState persisted, out string failureReason)
+        {
+            failureReason = string.Empty;
+            if (persisted == null)
+            {
+                failureReason = "persistedNull";
+                return true;
+            }
+
+            if (persisted.schemaVersion != SchemaVersion)
+            {
+                failureReason = "schemaVersionMismatch(expected=" + SchemaVersion.ToString()
+                    + ",actual=" + persisted.schemaVersion.ToString() + ")";
+                return true;
+            }
 
             if (persisted.bucketMinutes != Snapshot.BucketMinutes)
-                return false;
-
-            if (persisted.serviceDayIndex < 0
-                || persisted.lastDayMinute < -1
-                || persisted.lastDayMinute >= 1440
-                || !IsValidBucket(persisted.currentBucketServiceDayIndex, persisted.currentBucketStartMinute))
             {
-                return false;
+                failureReason = "bucketMinutesMismatch(expected=" + Snapshot.BucketMinutes.ToString()
+                    + ",actual=" + persisted.bucketMinutes.ToString() + ")";
+                return true;
+            }
+
+            if (persisted.serviceDayIndex < 0)
+            {
+                failureReason = "serviceDayIndexInvalid(" + persisted.serviceDayIndex.ToString() + ")";
+                return true;
+            }
+
+            if (persisted.lastDayMinute < -1 || persisted.lastDayMinute >= 1440)
+            {
+                failureReason = "lastDayMinuteInvalid(" + persisted.lastDayMinute.ToString() + ")";
+                return true;
+            }
+
+            if (!IsValidBucket(persisted.currentBucketServiceDayIndex, persisted.currentBucketStartMinute))
+            {
+                failureReason = "currentBucketInvalid(day=" + persisted.currentBucketServiceDayIndex.ToString()
+                    + ",minute=" + persisted.currentBucketStartMinute.ToString() + ")";
+                return true;
             }
 
             int computedAbsoluteBucket = SamplingSystem.AbsoluteBucketIndex(new TimeBucketKey(
                 persisted.currentBucketServiceDayIndex,
                 persisted.currentBucketStartMinute));
-            return persisted.currentAbsoluteBucketIndex <= 0
-                || persisted.currentAbsoluteBucketIndex == computedAbsoluteBucket;
+            if (persisted.currentAbsoluteBucketIndex > 0
+                && persisted.currentAbsoluteBucketIndex != computedAbsoluteBucket)
+            {
+                failureReason = "absoluteBucketMismatch(expected=" + computedAbsoluteBucket.ToString()
+                    + ",actual=" + persisted.currentAbsoluteBucketIndex.ToString() + ")";
+                return true;
+            }
+
+            return false;
         }
 
         private static bool IsValidBucket(int serviceDayIndex, int bucketStartMinute)
@@ -222,6 +360,49 @@ namespace RapidTransitMod.PassengerFlow
                     m_PayloadChunk = new FixedString4096Bytes(chunks[i] ?? string.Empty)
                 });
             }
+        }
+
+        private static string DescribePersistedState(PassengerFlowPersistentState persisted)
+        {
+            if (persisted == null)
+                return "persistedState=null";
+
+            return "persistedState="
+                + "schemaVersion:" + persisted.schemaVersion.ToString()
+                + ",bucketMinutes:" + persisted.bucketMinutes.ToString()
+                + ",serviceDayIndex:" + persisted.serviceDayIndex.ToString()
+                + ",lastDayMinute:" + persisted.lastDayMinute.ToString()
+                + ",currentAbsoluteBucketIndex:" + persisted.currentAbsoluteBucketIndex.ToString()
+                + ",currentBucket:" + persisted.currentBucketServiceDayIndex.ToString()
+                + ":" + persisted.currentBucketStartMinute.ToString()
+                + ",stationCatalog:" + Diagnostics.DescribeCount(persisted.stationCatalog)
+                + ",stationVolumes:" + Diagnostics.DescribeCount(persisted.stationVolumes)
+                + ",sectionVolumes:" + Diagnostics.DescribeCount(persisted.sectionVolumes)
+                + ",odFlows:" + Diagnostics.DescribeCount(persisted.odFlows)
+                + ",warnings:" + Diagnostics.DescribeCount(persisted.warnings);
+        }
+
+        private static string DescribeRuntimeState(State state)
+        {
+            if (state == null)
+                return "runtimeState=null";
+
+            return "runtimeState="
+                + "serviceDayIndex:" + state.ServiceDayIndex.ToString()
+                + ",lastDayMinute:" + state.LastDayMinute.ToString()
+                + ",currentBucket:" + Diagnostics.DescribeBucket(state.CurrentBucket)
+                + ",currentAbsoluteBucketIndex:" + state.CurrentAbsoluteBucketIndex.ToString()
+                + ",anchors:" + state.Anchors.StationCount.ToString()
+                + ",openStops:" + state.OpenStops.Count.ToString()
+                + ",pendingSamples:" + state.PendingSamples.Count.ToString()
+                + ",baselines:" + state.Baselines.Count.ToString()
+                + ",activeTrips:" + state.Trips.ActiveTripCount.ToString()
+                + ",pendingTransfers:" + state.Trips.PendingTransferCount.ToString()
+                + ",stationVolumes:" + state.Aggregates.StationVolumeCount.ToString()
+                + ",sectionVolumes:" + state.Aggregates.SectionVolumeCount.ToString()
+                + ",odFlows:" + state.Aggregates.OdFlowCount.ToString()
+                + ",warnings:" + state.Aggregates.WarningCount.ToString()
+                + ",rollingWindow:" + state.RollingWindow.Count.ToString();
         }
     }
 

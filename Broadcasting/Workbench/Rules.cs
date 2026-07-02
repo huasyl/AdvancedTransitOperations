@@ -214,9 +214,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             continue;
                         }
 
-                        if (!Catalog.Any(asset => string.Equals(asset?.name, assetName, StringComparison.OrdinalIgnoreCase)))
+                        if (!m_Ctx.Assets.HasUsableAsset(assetName))
                         {
-                            throw new InvalidOperationException("Selected asset was not found.");
+                            throw new InvalidOperationException(
+                                m_Ctx.Assets.HasCatalogAsset(assetName)
+                                    ? "Selected asset file was not found."
+                                    : "Selected asset was not found.");
                         }
                     }
                 }

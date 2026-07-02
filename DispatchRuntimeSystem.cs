@@ -222,6 +222,7 @@ namespace RapidTransitMod
         internal NativeHashMap<Entity, uint> m_StopSessionBoardingChangeCount;
         internal NativeHashMap<Entity, uint> m_DeparturePendingSinceFrame;
         internal NativeHashMap<Entity, int> m_CachedWpIdx;
+        internal NativeHashSet<Entity> m_InvalidatedMidStopRecoveryPending;
         internal NativeHashSet<Entity> m_BVMisfire;
         internal NativeHashMap<Entity, uint> m_BVMisfireStartFrame;
         internal NativeHashMap<Entity, uint> m_ForcedMidStopBoardingGraceUntil;
@@ -502,6 +503,7 @@ namespace RapidTransitMod
                 if (m_StopSessionBoardingChangeCount.IsCreated) m_StopSessionBoardingChangeCount.Dispose();
                 if (m_DeparturePendingSinceFrame.IsCreated) m_DeparturePendingSinceFrame.Dispose();
                 if (m_CachedWpIdx.IsCreated) m_CachedWpIdx.Dispose();
+                if (m_InvalidatedMidStopRecoveryPending.IsCreated) m_InvalidatedMidStopRecoveryPending.Dispose();
                 if (m_BVMisfire.IsCreated) m_BVMisfire.Dispose();
                 if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
                 if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();

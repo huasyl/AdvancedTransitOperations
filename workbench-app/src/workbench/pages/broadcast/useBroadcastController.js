@@ -125,6 +125,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const selectedLineIdRef = useRef(selectedLineId);
   const broadcastContentLineIdRef = useRef(selectedLineId);
   const activeTransportModeRef = useRef(activeTransportMode);
+  const pendingDeleteAllAssetsByModeRef = useRef({});
   const platformRuleTitleMemoryRef = useRef({});
   const platformRuleIdMemoryRef = useRef({});
   const dirtyPlatformStationIdsRef = useRef([]);
@@ -137,16 +138,20 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     () => catalogAssetLibrary.filter((asset) => asset?.name && !pendingAssetDeletionLookup[asset.name]),
     [catalogAssetLibrary, pendingAssetDeletionLookup],
   );
-  const mappingAssetColumns = useMemo(() => splitIntoColumns(availableAssetLibrary), [availableAssetLibrary]);
+  const bindableAssetLibrary = useMemo(
+    () => availableAssetLibrary.filter((asset) => !asset?.missing),
+    [availableAssetLibrary],
+  );
+  const mappingAssetColumns = useMemo(() => splitIntoColumns(bindableAssetLibrary), [bindableAssetLibrary]);
   const mappingAssetOrderByName = useMemo(() => {
     const next = new Map();
-    availableAssetLibrary.forEach((asset, index) => {
+    bindableAssetLibrary.forEach((asset, index) => {
       if (asset?.name) {
         next.set(asset.name, index);
       }
     });
     return next;
-  }, [availableAssetLibrary]);
+  }, [bindableAssetLibrary]);
   const currentExternalFolders = Array.isArray(externalAssetBrowser?.folders) ? externalAssetBrowser.folders : [];
   const currentExternalFiles = Array.isArray(externalAssetBrowser?.files) ? externalAssetBrowser.files : [];
   const currentExternalAllowedExtensions =
@@ -243,7 +248,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     [effectiveBindingSlotHints, broadcastLabels, turnbackPoints],
   );
   const platformTurnbackVariables = useMemo(() => variableLibrary.filter((variable) => variable?.nameKey === "broadcast.variable.turnback"), [variableLibrary]);
-  const trayAssetLibrary = useMemo(() => buildBroadcastTrayAssetLibrary(availableAssetLibrary, stations), [availableAssetLibrary, stations]);
+  const trayAssetLibrary = useMemo(() => buildBroadcastTrayAssetLibrary(bindableAssetLibrary, stations), [bindableAssetLibrary, stations]);
   const variableColumns = useMemo(() => splitIntoColumns(variableLibrary), [variableLibrary]);
   const broadcastVariableMappingIssue = useMemo(() => buildBroadcastVariableMappingIssue(rules, stations), [rules, stations]);
   const globalBroadcastVariableMappingIssue = useMemo(() => {
@@ -283,7 +288,16 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     return Object.keys(getPendingAssetDeletionLookup(mode));
   }
 
-  function queuePendingAssetDeletions(assetNames, mode = activeTransportMode) {
+  function hasPendingAssetDeletions(mode = activeTransportMode) {
+    return getPendingAssetDeletionNames(mode).length > 0
+      || isDeleteAllAssetsPending(mode);
+  }
+
+  function isDeleteAllAssetsPending(mode = activeTransportMode) {
+    return Boolean(pendingDeleteAllAssetsByModeRef.current[normalizeBroadcastMode(mode)]);
+  }
+
+  function queuePendingAssetDeletions(assetNames, options = {}, mode = activeTransportMode) {
     const normalizedNames = Array.from(
       new Set(
         (Array.isArray(assetNames) ? assetNames : [])
@@ -296,6 +310,12 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     }
 
     const modeKey = normalizeBroadcastMode(mode);
+    if (options?.deleteAll) {
+      pendingDeleteAllAssetsByModeRef.current = {
+        ...pendingDeleteAllAssetsByModeRef.current,
+        [modeKey]: true,
+      };
+    }
     setPendingAssetDeletionNamesByMode((current) => {
       const nextModeEntries = { ...(current[modeKey] || {}) };
       let changed = false;
@@ -318,6 +338,11 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
   function clearPendingAssetDeletions(assetNames = null, mode = activeTransportMode) {
     const modeKey = normalizeBroadcastMode(mode);
+    if (assetNames == null) {
+      const nextDeleteAllModes = { ...pendingDeleteAllAssetsByModeRef.current };
+      delete nextDeleteAllModes[modeKey];
+      pendingDeleteAllAssetsByModeRef.current = nextDeleteAllModes;
+    }
     setPendingAssetDeletionNamesByMode((current) => {
       const currentModeEntries = current[modeKey] || {};
       if (assetNames == null) {
@@ -348,6 +373,9 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
         next[modeKey] = nextModeEntries;
       } else {
         delete next[modeKey];
+        const nextDeleteAllModes = { ...pendingDeleteAllAssetsByModeRef.current };
+        delete nextDeleteAllModes[modeKey];
+        pendingDeleteAllAssetsByModeRef.current = nextDeleteAllModes;
       }
       return next;
     });
@@ -360,6 +388,141 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
   function isCurrentBroadcastMode(mode) {
     return normalizeBroadcastMode(activeTransportModeRef.current) === normalizeBroadcastMode(mode);
+  }
+
+  function lineMatchesBroadcastMode(lineId, mode = activeTransportMode) {
+    const modeKey = normalizeBroadcastMode(mode);
+    const normalizedLineId = String(lineId || "");
+    if (!normalizedLineId) {
+      return false;
+    }
+
+    if (normalizedLineId.includes(":")) {
+      return normalizedLineId.toLowerCase().startsWith(`${modeKey}:`);
+    }
+
+    return modeKey === "train";
+  }
+
+  function removeModeScopedLineState(current, mode = activeTransportMode) {
+    const next = {};
+    Object.entries(current || {}).forEach(([lineId, value]) => {
+      if (!lineMatchesBroadcastMode(lineId, mode)) {
+        next[lineId] = value;
+      }
+    });
+    return next;
+  }
+
+  function clearTransientBroadcastUiEffects() {
+    removeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    removeTimersRef.current = [];
+
+    if (mappingBindFeedbackTimerRef.current) {
+      window.clearTimeout(mappingBindFeedbackTimerRef.current);
+      mappingBindFeedbackTimerRef.current = null;
+    }
+    if (mappingBindScrollFrameRef.current) {
+      window.cancelAnimationFrame(mappingBindScrollFrameRef.current);
+      mappingBindScrollFrameRef.current = 0;
+    }
+    if (mappingBindTransformCleanupRef.current) {
+      window.clearTimeout(mappingBindTransformCleanupRef.current);
+      mappingBindTransformCleanupRef.current = null;
+    }
+    if (bodyPadRef.current) {
+      bodyPadRef.current.style.transition = "";
+      bodyPadRef.current.style.transform = "";
+    }
+  }
+
+  function clearBroadcastFrontendState(mode = activeTransportMode) {
+    clearTransientBroadcastUiEffects();
+    const dirtyLineIds = draftStore.getDirtyLineIds(mode);
+    if (dirtyLineIds.length > 0) {
+      draftStore.clearLineDrafts(dirtyLineIds);
+    }
+    draftStore.clearVolumeDraft(null, mode);
+    clearPendingAssetDeletions(null, mode);
+    dirtyPlatformStationIdsRef.current = [];
+    broadcastApplyOperation.resetApplyState();
+    setStationBindingDraftsByLine((current) => removeModeScopedLineState(current, mode));
+    setBindingLangDraftsByLine((current) => removeModeScopedLineState(current, mode));
+    setDisambiguationNamesByLine((current) => removeModeScopedLineState(current, mode));
+    setMappingBindFeedback(null);
+    setTrayContext(null);
+    setMappingTray(null);
+    setIsCreatingRule(false);
+    setNewRuleTitle("");
+    setRemovingRuleIds({});
+    setRemovingNodeIds({});
+    setPreviewingAssetName("");
+    setPreviewingRuleId("");
+    setSelectedExternalFiles([]);
+    setCurrentExternalPath("");
+    setExternalAssetBrowser(createEmptyExternalAssetBrowserState());
+    setIsAssetExplorerOpen(false);
+    setShouldRenderAssetExplorer(false);
+    setAssetExplorerStage("closed");
+    setBroadcastLineDraftDirty(false);
+    setBroadcastLocalDraftDirty(false);
+    setBroadcastVolumeDirty(false);
+  }
+
+  async function stopBroadcastPreviewsForRestore(mode = activeTransportMode) {
+    const stopPromises = [
+      workbenchApi.stopBroadcastAssetPreview?.({ assetName: previewingAssetName || "", mode }),
+      workbenchApi.stopBroadcastRulePreview?.({ ruleId: previewingRuleId || "", mode }),
+    ].filter(Boolean);
+
+    if (stopPromises.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(stopPromises);
+    results.forEach((result) => {
+      if (result.status === "rejected") {
+        console.error("[RT Broadcast Workbench] stop preview during restore failed", result.reason);
+      }
+    });
+  }
+
+  async function restoreBroadcastFrontendStateFromBackend(mode = activeTransportMode, applyError = "") {
+    let snapshot = null;
+    let refreshError = null;
+
+    await stopBroadcastPreviewsForRestore(mode);
+
+    try {
+      snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
+    } catch (error) {
+      refreshError = error;
+    }
+
+    if (!snapshot) {
+      try {
+        snapshot = await workbenchApi.loadBroadcastSnapshot?.(selectedLineIdRef.current || "");
+      } catch (error) {
+        refreshError = refreshError || error;
+      }
+    }
+
+    if (snapshot && matchesBroadcastMode(snapshot, mode) && isCurrentBroadcastMode(mode)) {
+      clearBroadcastFrontendState(mode);
+      applyBroadcastSnapshot(snapshot);
+      setIsApplyingBroadcastConfig(false);
+      setBroadcastApplyPhase("");
+      setBroadcastApplyError(applyError || "");
+      return true;
+    }
+
+    setIsApplyingBroadcastConfig(false);
+    setBroadcastApplyPhase("");
+    setBroadcastApplyError(
+      applyError
+        || (refreshError instanceof Error ? refreshError.message : t("broadcast.footer.applyFailedFallback")),
+    );
+    return false;
   }
 
   function cloneBroadcastStationsForDraft(source) {
@@ -556,14 +719,12 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
           .filter((asset) => asset && typeof asset.name === "string" && asset.name)
           .map((asset) => ({
             name: asset.name,
-            desc: asset.desc || asset.extension || "",
+            desc: asset.missing ? `${asset.desc || asset.extension || ""} [Missing file]` : asset.desc || asset.extension || "",
             length: asset.length || "",
+            missing: Boolean(asset.missing || !asset.path),
           }))
       : [];
     setCatalogAssetLibrary(nextCatalogAssetLibrary);
-    if (!draftStore.hasDirty(activeTransportMode)) {
-      clearPendingAssetDeletions(null, activeTransportMode);
-    }
 
     if (preserveLocalDraft) {
       applyBroadcastLocalDraft(nextSelectedLineId);
@@ -735,6 +896,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     deleteAllAssetsKey,
     showAssetDeleteBlocked,
   } = useBroadcastAssets({
+    activeTransportMode,
     workbenchApi,
     isAssetExplorerOpen,
     shouldRenderAssetExplorer,
@@ -746,6 +908,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     previewingAssetName,
     previewingRuleId,
     availableAssetLibrary,
+    bindableAssetLibrary,
     selectedLineIdRef,
     rules,
     stations,
@@ -1300,7 +1463,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   async function flushPendingAssetDeletions(mode = activeTransportMode) {
     const pendingAssetNames = getPendingAssetDeletionNames(mode);
     if (pendingAssetNames.length === 0) {
-      return { deletedAssetNames: [], blockedAssetNames: [] };
+      return { deletedAssetNames: [], blockedAssetNames: [], error: "" };
     }
 
     const pendingAssetNameSet = new Set(pendingAssetNames);
@@ -1312,20 +1475,55 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       }
     }
 
+    if (isDeleteAllAssetsPending(mode)) {
+      try {
+        const result = await workbenchApi.deleteAllBroadcastAssets?.({ mode });
+        if (result?.success) {
+          setCatalogAssetLibrary((current) =>
+            current.filter((asset) => !pendingAssetNameSet.has(asset?.name)),
+          );
+          setPreviewingAssetName((current) => (pendingAssetNameSet.has(current) ? "" : current));
+          clearPendingAssetDeletions(null, mode);
+          return { deletedAssetNames: pendingAssetNames, blockedAssetNames: [], error: "" };
+        }
+
+        const errorMessage = result?.error === "broadcast-asset-in-use"
+          ? "Some assets are still referenced."
+          : result?.error || "Delete all assets failed.";
+        showAssetDeleteBlocked("", mode);
+        return { deletedAssetNames: [], blockedAssetNames: pendingAssetNames, error: errorMessage };
+      } catch (error) {
+        console.error("[RT Broadcast Workbench] apply-time delete all assets failed", error);
+        showAssetDeleteBlocked("", mode);
+        return {
+          deletedAssetNames: [],
+          blockedAssetNames: pendingAssetNames,
+          error: error instanceof Error ? error.message : "Delete all assets failed.",
+        };
+      }
+    }
+
     const deletedAssetNames = [];
     const blockedAssetNames = [];
+    const blockedErrors = [];
     for (let index = 0; index < pendingAssetNames.length; index += 1) {
       const assetName = pendingAssetNames[index];
       try {
-        const result = await workbenchApi.deleteBroadcastAsset?.(assetName);
+        const result = await workbenchApi.deleteBroadcastAsset?.({ assetName, mode });
         if (result?.success) {
           deletedAssetNames.push(assetName);
         } else {
           blockedAssetNames.push(assetName);
+          blockedErrors.push(
+            result?.error === "broadcast-asset-in-use"
+              ? "Some assets are still referenced."
+              : result?.error || `Delete failed: ${assetName}`,
+          );
         }
       } catch (error) {
         console.error("[RT Broadcast Workbench] apply-time asset delete failed", error);
         blockedAssetNames.push(assetName);
+        blockedErrors.push(error instanceof Error ? error.message : `Delete failed: ${assetName}`);
       }
     }
 
@@ -1334,11 +1532,17 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       setCatalogAssetLibrary((current) => current.filter((asset) => !deletedAssetNameSet.has(asset?.name)));
       setPreviewingAssetName((current) => (deletedAssetNameSet.has(current) ? "" : current));
     }
+    if (deletedAssetNames.length > 0) {
+      clearPendingAssetDeletions(deletedAssetNames, mode);
+    }
     blockedAssetNames.forEach((assetName) => {
-      showAssetDeleteBlocked(assetName);
+      showAssetDeleteBlocked(assetName, mode);
     });
-    clearPendingAssetDeletions(pendingAssetNames, mode);
-    return { deletedAssetNames, blockedAssetNames };
+    return {
+      deletedAssetNames,
+      blockedAssetNames,
+      error: blockedErrors[0] || "",
+    };
   }
 
   function buildBroadcastApplyOperationRequest(mode = activeTransportMode) {
@@ -1348,8 +1552,8 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   async function handleApplyBroadcastConfig() {
     if (
       isApplyingBroadcastConfig ||
-      !draftStore.hasDirty(activeTransportMode) ||
-      globalBroadcastVariableMappingIssue
+      (!draftStore.hasDirty(activeTransportMode) && !hasPendingAssetDeletions(activeTransportMode)) ||
+      (draftStore.hasDirty(activeTransportMode) && globalBroadcastVariableMappingIssue)
     ) {
       return;
     }
@@ -1367,6 +1571,23 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     setBroadcastApplyError("");
 
     try {
+      if (!draftStore.hasDirty(requestMode) && hasPendingAssetDeletions(requestMode)) {
+        const deletionResult = await flushPendingAssetDeletions(requestMode);
+        if (!isCurrentBroadcastMode(requestMode)) {
+          return;
+        }
+
+        if (deletionResult.error) {
+          await restoreBroadcastFrontendStateFromBackend(requestMode, deletionResult.error);
+          return;
+        }
+
+        setIsApplyingBroadcastConfig(false);
+        setBroadcastApplyPhase("");
+        setBroadcastApplyError("");
+        return;
+      }
+
       const outcome = await broadcastApplyOperation.apply(applyRequest, requestMode, isCurrentBroadcastMode);
       const result = outcome?.result;
       if (outcome?.interrupted && !result?.success) {
@@ -1383,9 +1604,14 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
         if (result.volumeApplied) {
           draftStore.clearVolumeDraft(appliedVolumeGeneration, requestMode);
         }
-        await flushPendingAssetDeletions(requestMode);
+        const deletionResult = await flushPendingAssetDeletions(requestMode);
 
         if (!isCurrentBroadcastMode(requestMode)) {
+          return;
+        }
+
+        if (deletionResult.error) {
+          await restoreBroadcastFrontendStateFromBackend(requestMode, deletionResult.error);
           return;
         }
 
@@ -1401,6 +1627,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
         setBroadcastWarnings(Array.isArray(result.warnings) ? result.warnings : []);
         setIsApplyingBroadcastConfig(false);
         setBroadcastApplyPhase("");
+        setBroadcastApplyError(deletionResult.error || "");
         return;
       }
 
@@ -1408,17 +1635,19 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
         return;
       }
 
-      setIsApplyingBroadcastConfig(false);
-      setBroadcastApplyPhase("");
-      setBroadcastApplyError(result?.error || t("broadcast.footer.applyFailedFallback"));
+      await restoreBroadcastFrontendStateFromBackend(
+        requestMode,
+        result?.error || t("broadcast.footer.applyFailedFallback"),
+      );
     } catch (error) {
       if (!isCurrentBroadcastMode(requestMode)) {
         return;
       }
 
-      setIsApplyingBroadcastConfig(false);
-      setBroadcastApplyPhase("");
-      setBroadcastApplyError(error instanceof Error ? error.message : t("broadcast.footer.applyFailedFallback"));
+      await restoreBroadcastFrontendStateFromBackend(
+        requestMode,
+        error instanceof Error ? error.message : t("broadcast.footer.applyFailedFallback"),
+      );
     }
   }
 
@@ -1438,7 +1667,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   }
 
   const broadcastOperationError = broadcastApplyOperation.applyState.phase === "error" ? broadcastApplyOperation.applyState.error : "";
-  const broadcastDraftDirty = draftStore.hasDirty(activeTransportMode);
+  const broadcastDraftDirty = draftStore.hasDirty(activeTransportMode) || hasPendingAssetDeletions(activeTransportMode);
   const isBroadcastLineContentReady = Boolean(selectedLineId && broadcastContentLineId === selectedLineId);
   const isBroadcastConfigApplied = !broadcastDraftDirty;
   const broadcastFooterTone = broadcastApplyError || broadcastOperationError

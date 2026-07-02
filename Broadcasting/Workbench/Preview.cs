@@ -453,6 +453,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     int playbackToken = unchecked(++m_RuleToken);
                     m_RuleId = ruleId;
                     NotifyRule(modeToken, ruleId, "started", string.Empty);
+                    bool playedAnyClip = false;
+                    bool skippedMissingAsset = false;
 
                     for (int nodeIndex = 0; nodeIndex < rule.nodes.Length; nodeIndex++)
                     {
@@ -493,9 +495,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                         if (clip == null)
                         {
+                            skippedMissingAsset = true;
                             continue;
                         }
 
+                        playedAnyClip = true;
                         RuleSource();
                         ReleaseRule();
                         m_RuleClip = clip;
@@ -510,6 +514,13 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     if (playbackToken != m_RuleToken)
                     {
+                        return;
+                    }
+
+                    if (skippedMissingAsset)
+                    {
+                        StopRule(ruleId, notify: false);
+                        NotifyRule(modeToken, ruleId, "error", "Selected rule references missing asset files.");
                         return;
                     }
 

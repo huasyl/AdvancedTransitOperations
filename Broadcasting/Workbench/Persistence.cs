@@ -327,10 +327,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
 
                     string candidatePath = IoPath.Combine(managedAssetDirectory, asset.name);
-                    if (!File.Exists(candidatePath))
-                    {
-                        continue;
-                    }
+                    string resolvedPath = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Path(candidatePath);
 
                     Catalog.Add(new BroadcastWorkbenchAssetDto
                     {
@@ -339,10 +336,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             ? asset.desc
                             : (asset.extension ?? string.Empty).TrimStart('.').ToUpperInvariant(),
                         length = asset.length ?? string.Empty,
-                        path = RapidTransitMod.Broadcasting.WorkbenchBackend.Assets.Path(candidatePath),
+                        path = resolvedPath,
                         extension = !string.IsNullOrEmpty(asset.extension)
                             ? asset.extension
-                            : (IoPath.GetExtension(candidatePath) ?? string.Empty)
+                            : (IoPath.GetExtension(candidatePath) ?? string.Empty),
+                        missing = string.IsNullOrEmpty(resolvedPath)
                     });
                 }
             }

@@ -147,6 +147,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         success = false,
                         error = string.Empty
                     };
+                    List<BroadcastWorkbenchAssetDto> catalogSnapshot = null;
 
                     try
                     {
@@ -154,6 +155,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "deleteBroadcastAsset");
                         using (UseScope(scope))
                         {
+                        catalogSnapshot = Catalog.Select(CloneAsset).ToList();
                         string normalizedAssetName = Workbenches.ModeRequest.ReadAssetName(requestJson)?.Trim() ?? string.Empty;
                         if (string.IsNullOrEmpty(normalizedAssetName))
                         {
@@ -184,6 +186,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
                     catch (Exception ex)
                     {
+                        RestoreCatalogSnapshot(catalogSnapshot);
                         result.error = ex.Message ?? string.Empty;
                         LogException("DeleteBroadcastAssetJson", ex);
                     }
@@ -198,6 +201,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         success = false,
                         error = string.Empty
                     };
+                    List<BroadcastWorkbenchAssetDto> catalogSnapshot = null;
 
                     try
                     {
@@ -205,6 +209,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         using (UseScope(scope))
                         {
                         LoadWorkbench();
+                        catalogSnapshot = Catalog.Select(CloneAsset).ToList();
                         if (HasAnyAppliedRefs(scope))
                         {
                             result.error = "broadcast-asset-in-use";
@@ -223,6 +228,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     }
                     catch (Exception ex)
                     {
+                        RestoreCatalogSnapshot(catalogSnapshot);
                         result.error = ex.Message ?? string.Empty;
                         LogException("DeleteAllBroadcastAssetsJson", ex);
                     }
@@ -427,8 +433,38 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     using (UseScope(scope))
                     {
                         AssetFolder = normalizedDirectory;
+                        Dictionary<string, BroadcastWorkbenchAssetDto> scannedByName = Scan(normalizedDirectory)
+                            .Where(asset => asset != null && !string.IsNullOrWhiteSpace(asset.name))
+                            .GroupBy(asset => asset.name, StringComparer.OrdinalIgnoreCase)
+                            .ToDictionary(group => group.Key, group => CloneAsset(group.First()), StringComparer.OrdinalIgnoreCase);
+                        List<BroadcastWorkbenchAssetDto> refreshedCatalog = new List<BroadcastWorkbenchAssetDto>();
+                        for (int i = 0; i < Catalog.Count; i++)
+                        {
+                            BroadcastWorkbenchAssetDto current = Catalog[i];
+                            if (current == null || string.IsNullOrWhiteSpace(current.name))
+                            {
+                                continue;
+                            }
+
+                            if (scannedByName.TryGetValue(current.name, out BroadcastWorkbenchAssetDto scanned))
+                            {
+                                refreshedCatalog.Add(CloneAsset(scanned));
+                                continue;
+                            }
+
+                            refreshedCatalog.Add(new BroadcastWorkbenchAssetDto
+                            {
+                                name = current.name ?? string.Empty,
+                                desc = current.desc ?? string.Empty,
+                                length = current.length ?? string.Empty,
+                                path = string.Empty,
+                                extension = current.extension ?? string.Empty,
+                                missing = true
+                            });
+                        }
+
                         Catalog.Clear();
-                        Catalog.AddRange(Scan(normalizedDirectory));
+                        Catalog.AddRange(refreshedCatalog.OrderBy(asset => asset?.name, StringComparer.OrdinalIgnoreCase));
 
                         global::RapidTransitMod.Workbenches.UiEvents.Push(
                             m_Ctx.Snapshot.Build(scope, string.Empty));
@@ -633,7 +669,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         desc = extension.TrimStart('.').ToUpperInvariant(),
                         length = Length(normalizedFilePath, extension),
                         path = normalizedFilePath,
-                        extension = extension ?? string.Empty
+                        extension = extension ?? string.Empty,
+                        missing = string.IsNullOrEmpty(normalizedFilePath)
                     };
                 }
 
@@ -699,11 +736,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             continue;
                         }
 
-                        string assetPath = Path(asset?.path);
-                        if (!string.IsNullOrEmpty(assetPath) && File.Exists(assetPath))
-                        {
-                            File.Delete(assetPath);
-                        }
+                        // Keep broadcast source files on disk for now; deletion only mutates save state.
 
                         Catalog.RemoveAt(i);
                         removed = true;
@@ -724,19 +757,43 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     MainThreadDispatcher.RunOnMainThread(() =>
                         m_Ctx.Preview.StopAsset(string.Empty, notify: true, modeToken: scope.Token));
 
-                    for (int i = 0; i < Catalog.Count; i++)
-                    {
-                        string assetPath = Path(Catalog[i]?.path);
-                        if (string.IsNullOrEmpty(assetPath) || !File.Exists(assetPath))
-                        {
-                            continue;
-                        }
+                    // Keep broadcast source files on disk for now; deletion only mutates save state.
+                    Catalog.Clear();
+                    MainThreadDispatcher.RunOnMainThread(() => m_Announcements.RemoveAllAssets(scope));
+                }
 
-                        File.Delete(assetPath);
+                private void RestoreCatalogSnapshot(List<BroadcastWorkbenchAssetDto> snapshot)
+                {
+                    if (snapshot == null)
+                    {
+                        return;
                     }
 
                     Catalog.Clear();
-                    MainThreadDispatcher.RunOnMainThread(() => m_Announcements.RemoveAllAssets(scope));
+                    Catalog.AddRange(snapshot.Select(CloneAsset));
+                }
+
+                internal bool HasCatalogAsset(string assetName)
+                {
+                    if (string.IsNullOrWhiteSpace(assetName))
+                    {
+                        return false;
+                    }
+
+                    return Catalog.Any(asset =>
+                        string.Equals(asset?.name, assetName, StringComparison.OrdinalIgnoreCase));
+                }
+
+                internal bool HasUsableAsset(string assetName)
+                {
+                    if (string.IsNullOrWhiteSpace(assetName))
+                    {
+                        return false;
+                    }
+
+                    return Catalog.Any(asset =>
+                        string.Equals(asset?.name, assetName, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrEmpty(Path(asset?.path)));
                 }
 
                 private bool HasAnyAppliedRefs(ModeScope scope)
@@ -919,7 +976,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         desc = asset.desc ?? string.Empty,
                         length = asset.length ?? string.Empty,
                         path = asset.path ?? string.Empty,
-                        extension = asset.extension ?? string.Empty
+                        extension = asset.extension ?? string.Empty,
+                        missing = asset.missing
                     };
                 }
     }

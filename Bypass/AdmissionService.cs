@@ -37,7 +37,7 @@ namespace RapidTransitMod.Bypass
         private const float SAME_DIRECTION_AHEAD_MARGIN_ATOMS = 0.75f;
         internal const float TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES = 1f;
         internal const float LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS = 8f;
-        private const int MAX_CONFLICT_CORRIDOR_GAP_ATOMS = 6;
+        private const int MAX_CONFLICT_CORRIDOR_GAP_ATOMS = 8;
         private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
         private const double SIM_FRAMES_PER_MINUTE = 182.044;
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;

@@ -62,14 +62,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 if (!m_Runtime.m_StartupRuntimeStateCleared)
                 {
                     ClearTracking();
-                    try
-                    {
-                        PassengerFlow.Persistence.RestoreFromCity(m_Runtime.EntityManager, m_Runtime.m_CitySystem.City);
-                    }
-                    catch (Exception ex)
-                    {
-                        m_Runtime.log.Info("[PassengerFlowPersistence] Restore failed -> " + ex.GetType().Name + ": " + ex.Message);
-                    }
                     m_Runtime.m_StartupRuntimeStateCleared = true;
                 }
 
@@ -160,6 +152,18 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void Loaded(Context serializationContext)
         {
             PassengerFlow.SamplingSystem.ClearState();
+            try
+            {
+                PassengerFlow.Persistence.RestoreFromCity(m_Runtime.EntityManager, m_Runtime.m_CitySystem.City);
+            }
+            catch (Exception ex)
+            {
+                m_Runtime.log.Info("[PassengerFlowPersistence] Restore failed -> " + ex.GetType().Name + ": " + ex.Message);
+            }
+            m_Runtime.m_SystemReady = false;
+            m_Runtime.m_StartupRuntimeStateCleared = false;
+            m_Runtime.m_StableFrameCount = 0;
+            m_Runtime.m_LastVehicleCount = -1;
             m_Runtime.m_AnnouncementWorkbench.Reset();
             m_Runtime.m_OverviewFeatureSettingsPersist.Reset();
             m_Runtime.m_OverviewFeatureSettingsPersist.Restore();
@@ -269,7 +273,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearTracking()
         {
-            PassengerFlow.SamplingSystem.ClearState();
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_ObsPersist.ClearLaps();

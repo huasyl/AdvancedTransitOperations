@@ -50,6 +50,7 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
         {assets.availableAssetLibrary.map((asset, index) => (
           (() => {
             const deleteBlocked = Boolean(assets.assetDeleteBlockedNames?.[asset.name]);
+            const previewDisabled = Boolean(asset.missing);
             return (
           <div
             key={asset.name}
@@ -59,7 +60,12 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
             <button
               type="button"
               className={`dw-bc-asset-play ${preview.previewingAssetName === asset.name ? "is-previewing" : ""}`}
-              onClick={() => actions.handleAssetPreviewToggle(asset.name)}
+              onClick={() => {
+                if (!previewDisabled) {
+                  actions.handleAssetPreviewToggle(asset.name);
+                }
+              }}
+              disabled={previewDisabled}
             >
               <span className="dw-bc-asset-play-icon-shell">
                 {preview.previewingAssetName === asset.name ? (
@@ -79,8 +85,13 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
               <button
                 type="button"
                 className="dw-bc-asset-copy-button"
-                onClick={() => actions.handleAssetPreviewToggle(asset.name)}
+                onClick={() => {
+                  if (!previewDisabled) {
+                    actions.handleAssetPreviewToggle(asset.name);
+                  }
+                }}
                 aria-label={asset.name}
+                disabled={previewDisabled}
               />
             </div>
             <div className="dw-bc-asset-meta">

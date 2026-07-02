@@ -259,6 +259,11 @@ namespace RapidTransitMod.PassengerFlow
         private readonly Dictionary<WarningKey, WarningAggregate> m_Warnings =
             new Dictionary<WarningKey, WarningAggregate>();
 
+        internal int StationVolumeCount => m_StationVolumes.Count;
+        internal int SectionVolumeCount => m_SectionVolumes.Count;
+        internal int OdFlowCount => m_OdFlows.Count;
+        internal int WarningCount => m_Warnings.Count;
+
         internal void Clear()
         {
             m_StationVolumes.Clear();

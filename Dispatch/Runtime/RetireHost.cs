@@ -44,6 +44,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly NativeHashMap<Entity, uint> m_StopSessionBoardingChangeCount;
         private readonly NativeHashMap<Entity, uint> m_DeparturePendingSinceFrame;
         private readonly NativeHashMap<Entity, int> m_CachedWaypoint;
+        private readonly NativeHashSet<Entity> m_InvalidatedMidStopRecoveryPending;
         private readonly NativeHashSet<Entity> m_Misfire;
         private readonly NativeHashMap<Entity, uint> m_MisfireStartFrame;
         private readonly NativeHashMap<Entity, uint> m_LastRetireFixLogFrame;
@@ -84,6 +85,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_StopSessionBoardingChangeCount = runtime.m_StopSessionBoardingChangeCount;
             m_DeparturePendingSinceFrame = runtime.m_DeparturePendingSinceFrame;
             m_CachedWaypoint = runtime.m_CachedWpIdx;
+            m_InvalidatedMidStopRecoveryPending = runtime.m_InvalidatedMidStopRecoveryPending;
             m_Misfire = runtime.m_BVMisfire;
             m_MisfireStartFrame = runtime.m_BVMisfireStartFrame;
             m_LastRetireFixLogFrame = runtime.m_LastRetireFixLogFrame;
@@ -411,6 +413,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_StopSessionBoardingChangeCount.Remove(vehicle);
             m_DeparturePendingSinceFrame.Remove(vehicle);
             m_CachedWaypoint.Remove(vehicle);
+            m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
             m_ClearTrackProjectionVehicle(vehicle);
             m_UICache.Remove(vehicle);
             m_ClearVehicleLabel(vehicle);
