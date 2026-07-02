@@ -2,6 +2,7 @@ import {
   formatBroadcastAssetDisplayName,
   extractBroadcastLanguageHint,
 } from "../broadcast-assets";
+import { sortBroadcastConflictAssets } from "../broadcast-bindings";
 import { AnimatedInlinePanel } from "./BroadcastAnimatedPanels";
 import { CloseIcon, SpeakerIcon } from "./BroadcastIcons";
 
@@ -66,6 +67,14 @@ export default function BroadcastMappingPanel({
         const isConflict = station.status === "conflict";
         const isReady = station.status === "ready";
         const isMappingTrayVisible = mappingTray === station.id;
+        const orderedConflictAssets = isConflict
+          ? sortBroadcastConflictAssets(
+              station.conflictAssets,
+              station.name,
+              fallbackLanguageKey,
+              labels,
+            )
+          : [];
         return (
           <div key={station.id}>
             <div
@@ -219,7 +228,7 @@ export default function BroadcastMappingPanel({
                         </div>
                       </div>
                     ) : null}
-                    {station.conflictAssets.map((entry, conflictIndex) => (
+                    {orderedConflictAssets.map((entry, conflictIndex) => (
                       <div
                         key={`${station.id}:${entry.assetName}`}
                         className="dw-bc-map-disambiguation-item anim-stagger-slide-up"

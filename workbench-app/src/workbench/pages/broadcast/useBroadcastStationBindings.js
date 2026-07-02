@@ -244,9 +244,15 @@ export default function useBroadcastStationBindings(context) {
       return;
     }
 
+    const orderedConflictAssets = sortBroadcastConflictAssets(
+      targetStation.conflictAssets,
+      targetStation.name,
+      fallbackLanguageKey,
+      broadcastLabels,
+    );
     const existingAudios = Array.isArray(targetStation.audios) ? targetStation.audios.filter((entry) => entry && entry.assetName) : [];
     const existingAssetNames = new Set(existingAudios.map((entry) => entry.assetName));
-    const resolvedAudios = targetStation.conflictAssets
+    const resolvedAudios = orderedConflictAssets
       .filter((entry) => entry && entry.assetName && !existingAssetNames.has(entry.assetName))
       .map((entry) => ({
         lang:

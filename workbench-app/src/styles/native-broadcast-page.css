@@ -2061,6 +2061,12 @@
   min-height: 39rem;
 }
 
+.dw-native-schedule-root[data-native-schedule-script="latin"] .dw-bc-map-button.is-conflict {
+  width: auto;
+  max-width: none;
+  flex: 0 0 auto;
+}
+
 .dw-bc-ready {
   color: #81b581;
   font-size: 14rem;

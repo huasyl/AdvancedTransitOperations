@@ -6,6 +6,10 @@ import { deriveBroadcastStationStatus } from "./broadcast-bindings";
 const ASSET_DELETE_BLOCKED_MS = 5000;
 const DELETE_ALL_ASSETS_KEY = "__all__";
 
+function normalizeAssetReferenceKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
 function getBroadcastMatchKey(value) {
   const source = String(value || "")
     .trim()
@@ -156,14 +160,14 @@ export default function useBroadcastAssets(context) {
     return (Array.isArray(nodes) ? nodes : []).some((node) =>
       node
       && node.type === "asset"
-      && assetNames.has(String(node.name || "").trim()),
+      && assetNames.has(normalizeAssetReferenceKey(node.name)),
     );
   }
 
   function hasAssetReferenceInStations(stationsForUi, assetNames) {
     return (Array.isArray(stationsForUi) ? stationsForUi : []).some((station) => {
       const audios = Array.isArray(station?.audios) ? station.audios : [];
-      return audios.some((entry) => assetNames.has(String(entry?.assetName || "").trim()));
+      return audios.some((entry) => assetNames.has(normalizeAssetReferenceKey(entry?.assetName)));
     });
   }
 
@@ -174,7 +178,7 @@ export default function useBroadcastAssets(context) {
 
     return hasAssetReferenceInStations(draft.stationsForUi, assetNames)
       || (Array.isArray(draft.stationBindings) ? draft.stationBindings : []).some((binding) =>
-        assetNames.has(String(binding?.assetName || "").trim()),
+        assetNames.has(normalizeAssetReferenceKey(binding?.assetName)),
       )
       || (Array.isArray(draft.rules) ? draft.rules : []).some((rule) => hasAssetReferenceInNodes(rule?.nodes, assetNames))
       || (Array.isArray(draft.platformAnnouncements) ? draft.platformAnnouncements : []).some((announcement) =>
@@ -185,7 +189,7 @@ export default function useBroadcastAssets(context) {
   function hasFrontendAssetReferences(assetNames) {
     const normalizedAssetNames = new Set(
       (Array.isArray(assetNames) ? assetNames : [])
-        .map((assetName) => String(assetName || "").trim())
+        .map((assetName) => normalizeAssetReferenceKey(assetName))
         .filter((assetName) => assetName),
     );
     if (normalizedAssetNames.size === 0) {
