@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using Game.Buildings;
 using Game.Common;
 using Game.Pathfind;
@@ -208,29 +209,77 @@ namespace RapidTransitMod
 
         public bool SetBypass(Entity entity, bool enabled)
         {
+            Entity cityBeforeEnsure = m_Port.City.City;
+            bool hasBufferBeforeEnsure = cityBeforeEnsure != Entity.Null && EntityManager.HasBuffer<BypassStationSettingElement>(cityBeforeEnsure);
             Entity building = m_Port.ResolveBypassBuilding(entity);
             if (building == Entity.Null)
+            {
+                log.Info("[BypassTrace][Resolve] "
+                    + "entity=" + FormatEntity(entity)
+                    + " desiredEnabled=" + (enabled ? 1 : 0)
+                    + " resolvedBuilding=null"
+                    + " entityShape=" + DescribeEntityShape(entity)
+                    + " ownerPath=" + DescribeOwnerPath(entity)
+                    + " city=" + FormatEntity(cityBeforeEnsure)
+                    + " hasBufferBeforeEnsure=" + BoolFlag(hasBufferBeforeEnsure)
+                    + " result=resolve-null");
                 return false;
+            }
 
             m_Port.EnsureBypassBuffer();
             Entity city = m_Port.City.City;
-            if (city == Entity.Null || !EntityManager.HasBuffer<BypassStationSettingElement>(city))
+            bool hasBufferAfterEnsure = city != Entity.Null && EntityManager.HasBuffer<BypassStationSettingElement>(city);
+            if (!hasBufferAfterEnsure)
+            {
+                log.Info("[BypassTrace][Resolve] "
+                    + "entity=" + FormatEntity(entity)
+                    + " desiredEnabled=" + (enabled ? 1 : 0)
+                    + " resolvedBuilding=" + FormatEntity(building)
+                    + " entityShape=" + DescribeEntityShape(entity)
+                    + " buildingShape=" + DescribeEntityShape(building)
+                    + " ownerPath=" + DescribeOwnerPath(entity)
+                    + " city=" + FormatEntity(city)
+                    + " hasBufferBeforeEnsure=" + BoolFlag(hasBufferBeforeEnsure)
+                    + " hasBufferAfterEnsure=" + BoolFlag(hasBufferAfterEnsure)
+                    + " result=buffer-missing");
                 return false;
+            }
 
             DynamicBuffer<BypassStationSettingElement> buf = EntityManager.GetBuffer<BypassStationSettingElement>(city);
+            log.Info("[BypassTrace][Resolve] "
+                + "entity=" + FormatEntity(entity)
+                + " desiredEnabled=" + (enabled ? 1 : 0)
+                + " resolvedBuilding=" + FormatEntity(building)
+                + " entityShape=" + DescribeEntityShape(entity)
+                + " buildingShape=" + DescribeEntityShape(building)
+                + " ownerPath=" + DescribeOwnerPath(entity)
+                + " city=" + FormatEntity(city)
+                + " hasBufferBeforeEnsure=" + BoolFlag(hasBufferBeforeEnsure)
+                + " hasBufferAfterEnsure=" + BoolFlag(hasBufferAfterEnsure)
+                + " bufferLenBefore=" + buf.Length
+                + " result=resolved");
             for (int i = 0; i < buf.Length; i++)
             {
                 if (buf[i].m_BuildingEntity != building)
                     continue;
 
-                bool previousEnabled = false;
-                if (RtLog.CacheInvalidationDiagnosticsEnabled)
-                    previousEnabled = buf[i].m_IsBypassStation != 0;
+                bool previousEnabled = buf[i].m_IsBypassStation != 0;
                 buf[i] = new BypassStationSettingElement
                 {
                     m_BuildingEntity = building,
                     m_IsBypassStation = enabled ? (byte)1 : (byte)0
                 };
+                log.Info("[BypassTrace][Write] "
+                    + "entity=" + FormatEntity(entity)
+                    + " building=" + FormatEntity(building)
+                    + " city=" + FormatEntity(city)
+                    + " old=" + (previousEnabled ? 1 : 0)
+                    + " new=" + (enabled ? 1 : 0)
+                    + " mode=update"
+                    + " bufferIndex=" + i
+                    + " bufferLen=" + buf.Length
+                    + " invalidateBypassModel=1"
+                    + " result=1");
                 if (RtLog.CacheInvalidationDiagnosticsEnabled)
                 {
                     log.Info("[BypassStationToggle] building=" + building.Index
@@ -251,6 +300,17 @@ namespace RapidTransitMod
                 m_BuildingEntity = building,
                 m_IsBypassStation = enabled ? (byte)1 : (byte)0
             });
+            log.Info("[BypassTrace][Write] "
+                + "entity=" + FormatEntity(entity)
+                + " building=" + FormatEntity(building)
+                + " city=" + FormatEntity(city)
+                + " old=-1"
+                + " new=" + (enabled ? 1 : 0)
+                + " mode=add"
+                + " bufferIndex=" + (buf.Length - 1)
+                + " bufferLen=" + buf.Length
+                + " invalidateBypassModel=1"
+                + " result=1");
             if (RtLog.CacheInvalidationDiagnosticsEnabled)
             {
                 log.Info("[BypassStationToggle] building=" + building.Index
@@ -264,6 +324,63 @@ namespace RapidTransitMod
             m_Port.InvalidateBypassModel?.Invoke();
             Invalidate();
             return true;
+        }
+
+        private string DescribeEntityShape(Entity entity)
+        {
+            if (entity == Entity.Null || !EntityManager.Exists(entity))
+                return "null";
+
+            return "building=" + BoolFlag(EntityManager.HasComponent<Building>(entity))
+                + ",stop=" + BoolFlag(EntityManager.HasComponent<Game.Routes.TransportStop>(entity))
+                + ",route=" + BoolFlag(EntityManager.HasComponent<TransportLine>(entity))
+                + ",vehicle=" + BoolFlag(EntityManager.HasComponent<Game.Vehicles.PublicTransport>(entity))
+                + ",owner=" + BoolFlag(EntityManager.HasComponent<Owner>(entity));
+        }
+
+        private string DescribeOwnerPath(Entity entity)
+        {
+            if (entity == Entity.Null || !EntityManager.Exists(entity))
+                return "null";
+
+            StringBuilder sb = new StringBuilder(96);
+            Entity current = entity;
+            for (int i = 0; i < 8 && current != Entity.Null && EntityManager.Exists(current); i++)
+            {
+                if (i > 0)
+                    sb.Append("->");
+
+                sb.Append(current.Index);
+                if (EntityManager.HasComponent<Building>(current))
+                    sb.Append("[B]");
+                if (EntityManager.HasComponent<Game.Routes.TransportStop>(current))
+                    sb.Append("[S]");
+                if (EntityManager.HasComponent<TransportLine>(current))
+                    sb.Append("[L]");
+                if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(current))
+                    sb.Append("[V]");
+
+                if (!EntityManager.HasComponent<Owner>(current))
+                    break;
+
+                Entity owner = EntityManager.GetComponentData<Owner>(current).m_Owner;
+                if (owner == Entity.Null || owner == current)
+                    break;
+
+                current = owner;
+            }
+
+            return sb.ToString();
+        }
+
+        private static string BoolFlag(bool value)
+        {
+            return value ? "1" : "0";
+        }
+
+        private static string FormatEntity(Entity entity)
+        {
+            return entity == Entity.Null ? "null" : entity.Index.ToString();
         }
 
         public ulong PanelDataVersion => m_PanelDataVersion;

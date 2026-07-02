@@ -5,7 +5,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public sealed class RetireHandoffDispatchGuardSystem : GameSystemBase
+    public sealed partial class RetireHandoffDispatchGuardSystem : GameSystemBase
     {
         private SimulationSystem m_SimulationSystem;
 

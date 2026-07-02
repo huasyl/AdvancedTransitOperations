@@ -18,7 +18,7 @@ using UnityEngine.Scripting;
 
 namespace RapidTransitMod
 {
-    public class DevSightTooltipSystem : TooltipSystemBase
+    public partial class DevSightTooltipSystem : TooltipSystemBase
     {
         private static Type s_MoveItMitType;
         private static Type s_MoveItHoverManagerType;

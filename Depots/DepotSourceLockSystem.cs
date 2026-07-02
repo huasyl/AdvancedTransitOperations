@@ -15,7 +15,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public sealed class DepotSourceLockSystem : GameSystemBase
+    public sealed partial class DepotSourceLockSystem : GameSystemBase
     {
         private EntityQuery m_RtSpawnPermitRequestQuery;
         private EntityQuery m_ConfiguredDispatchRequestQuery;

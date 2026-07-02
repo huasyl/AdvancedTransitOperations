@@ -160,6 +160,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 m_Runtime.log.Info("[PassengerFlowPersistence] Restore failed -> " + ex.GetType().Name + ": " + ex.Message);
             }
+            ResetCityBufferReadyFlags();
             m_Runtime.m_SystemReady = false;
             m_Runtime.m_StartupRuntimeStateCleared = false;
             m_Runtime.m_StableFrameCount = 0;
@@ -239,6 +240,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastScheduleDiagnosticLogFrame.Clear();
             m_Runtime.m_LineTimes.Clear();
             m_Runtime.m_LineProfile.ClearStability();
+            ResetCityBufferReadyFlags();
             m_Runtime.m_Observation.ClearDwellDeadlineCache();
             m_Runtime.m_ObsPersist.ClearDwell();
             m_Runtime.m_DwellObservationBufferReady = false;
@@ -301,6 +303,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LastScheduleDiagnosticLogFrame.Clear();
             m_Runtime.m_LineTimes.Clear();
             m_Runtime.m_LineProfile.ClearStability();
+            ResetCityBufferReadyFlags();
             m_Runtime.m_Observation.ClearDwellDeadlineCache();
             m_Runtime.m_ObsPersist.ClearDwell();
             m_Runtime.m_DwellObservationBufferReady = false;
@@ -362,6 +365,15 @@ namespace RapidTransitMod.Dispatch.Runtime
         public int Minute()
         {
             return (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
+        }
+
+        private void ResetCityBufferReadyFlags()
+        {
+            m_Runtime.m_LapCacheBufferReady = false;
+            m_Runtime.m_VehicleCacheBufferReady = false;
+            m_Runtime.m_DispatchCacheBufferReady = false;
+            m_Runtime.m_BypassStationBufferReady = false;
+            m_Runtime.m_LineMileageBufferReady = false;
         }
 
         private void DrainDisabledLineLateSpawnRetireQueue(EntityCommandBuffer commandBuffer)

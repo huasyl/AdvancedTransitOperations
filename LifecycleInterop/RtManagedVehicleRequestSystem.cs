@@ -8,7 +8,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public sealed class RtManagedVehicleRequestSystem : GameSystemBase
+    public sealed partial class RtManagedVehicleRequestSystem : GameSystemBase
     {
         private EntityQuery m_LineQuery;
         private EntityQuery m_SpawnPermitQuery;

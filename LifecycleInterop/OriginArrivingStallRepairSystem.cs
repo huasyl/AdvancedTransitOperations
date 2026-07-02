@@ -13,7 +13,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public sealed class OriginArrivingStallRepairSystem : GameSystemBase
+    public sealed partial class OriginArrivingStallRepairSystem : GameSystemBase
     {
         private const uint CandidateSettleFrames = 16;
         private const uint RepairAckTimeoutFrames = 32;

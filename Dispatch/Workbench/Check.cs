@@ -239,8 +239,10 @@ namespace RapidTransitMod.Dispatch.Workbench
                 }
             }
 
+            Dictionary<string, List<DispatchWorkbenchStagedRowDto>> requestLineDraftRowsByKey =
+                buildRequestLineDraftRowsByDraftKey(request, getDraftKey(request.selectedLineId));
             List<DispatchWorkbenchStagedRowDto> requestLineDraftRows =
-                buildRequestLineDraftRowsByDraftKey(request, getDraftKey(request.selectedLineId))
+                requestLineDraftRowsByKey
                     .Values
                     .SelectMany(group => group)
                     .ToList();
@@ -298,13 +300,18 @@ namespace RapidTransitMod.Dispatch.Workbench
 
                 if (validateApplyOnlyConstraints)
                 {
-                    foreach (string lineId in localIds.Concat(expressIds).Distinct(StringComparer.Ordinal))
+                    foreach (KeyValuePair<string, List<DispatchWorkbenchStagedRowDto>> entry in requestLineDraftRowsByKey)
                     {
-                        if (runtimeLineById.TryGetValue(lineId, out var runtimeLine)
+                        if (entry.Value == null || entry.Value.Count == 0)
+                        {
+                            continue;
+                        }
+
+                        if (runtimeLineById.TryGetValue(entry.Key, out var runtimeLine)
                             && runtimeLine != null
                             && !runtimeLine.DispatchSupported)
                         {
-                            errors.Add($"line-unsupported:{lineId}:{runtimeLine.UnsupportedReason}");
+                            errors.Add($"line-unsupported:{entry.Key}:{runtimeLine.UnsupportedReason}");
                         }
                     }
 

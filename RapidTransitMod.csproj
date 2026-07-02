@@ -10,7 +10,7 @@
     <OutputPath>bin\$(Configuration)\net6.0\</OutputPath>
     <RapidTransitDeployDir>$(UserProfile)\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\RapidTransitMod</RapidTransitDeployDir>
     <PublishConfigurationPath>Properties\PublishConfiguration.xml</PublishConfigurationPath>
-    <EnableOfficialToolchain>false</EnableOfficialToolchain>
+    <EnableOfficialToolchain>true</EnableOfficialToolchain>
     <OfficialToolPath>$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))</OfficialToolPath>
     <OfficialToolPath Condition="'$(OfficialToolPath)'==''">D:\steam\steamapps\common\Cities Skylines II\Cities2_Data\Content\Game\.ModdingToolchain</OfficialToolPath>
   </PropertyGroup>
@@ -31,17 +31,13 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>RapidTransitMod.mjs</TargetPath>
     </None>
-    <None Include="UI\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>UI\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
-    </None>
     <None Include="workbench-app\workbench-dist\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>UI\workbench\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
-    <None Include="workbench-app\workbench-dist\**\*">
+    <None Include="workbench-app\dist\locales\**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>UI\workbench-app\dist\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+      <TargetPath>UI\workbench\locales\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </None>
     <None Include="Locales\**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -59,6 +55,7 @@
     </Reference>
     <Reference Include="Colossal.Core">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Core.dll</HintPath>
+      <Private>False</Private>
     </Reference>
     <Reference Include="Colossal.AssetPipeline">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.AssetPipeline.dll</HintPath>
@@ -70,6 +67,7 @@
     </Reference>
     <Reference Include="Colossal.Logging">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.Logging.dll</HintPath>
+      <Private>False</Private>
     </Reference>
     <Reference Include="Colossal.ATL">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Colossal.ATL.dll</HintPath>
@@ -117,6 +115,7 @@
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.AudioModule">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
@@ -124,6 +123,7 @@
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.UnityWebRequestModule">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\UnityEngine.UnityWebRequestModule.dll</HintPath>

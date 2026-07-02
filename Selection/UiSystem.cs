@@ -10,7 +10,7 @@ using UnityEngine.Scripting;
 
 namespace RapidTransitMod
 {
-    public class RapidTransitPanelUISystem : UISystemBase
+    public partial class RapidTransitPanelUISystem : UISystemBase
     {
         private const string kGroup = "RapidTransitPanel";
         private const int SelectionSettleFrames = 2;
@@ -31,6 +31,7 @@ namespace RapidTransitMod
         private ulong m_LastSnapshotVersion;
         private int m_LastPushFrame = -1;
         private SelectPanel.Snapshot m_LastSnapshot;
+        private BypassTraceState m_LastBypassTrace;
 
         public override GameMode gameMode => GameMode.Game;
 
@@ -60,6 +61,7 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestDumpStationAnchorObservation", RequestDumpStationAnchorObservation));
             AddBinding(new TriggerBinding(kGroup, "requestWorkbenchApiRebind", RequestWorkbenchApiRebind));
 #endif
+            AddBinding(new TriggerBinding<string>(kGroup, "traceBypassStationClick", TraceBypassStationClick));
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
@@ -154,6 +156,7 @@ namespace RapidTransitMod
             m_LastRoute = selectedRoute;
             m_LastSnapshotVersion = panel.PanelDataVersion;
             m_LastPushFrame = currentFrame;
+            LogBypassSnapshot(dirtyReason, entity, selectedRoute, currentFrame);
             SetVisibleIfNeeded();
             return true;
         }
@@ -316,6 +319,7 @@ namespace RapidTransitMod
             m_LastRoute = Entity.Null;
             m_LastSnapshotVersion = 0;
             m_LastPushFrame = -1;
+            m_LastBypassTrace = default;
 
             if (clearSnapshot)
                 ClearPanelData();
@@ -455,13 +459,119 @@ namespace RapidTransitMod
         private void SetBypassStation(bool enabled)
         {
             if (DispatchRuntimeSystem.Instance == null)
+            {
+                LogBypassRequest(enabled, Entity.Null, Entity.Null, false, "runtime-null");
                 return;
+            }
 
             Entity selectedEntity = m_SelectedInfoUISystem.selectedEntity;
-            if (selectedEntity != Entity.Null && DispatchRuntimeSystem.Instance.m_SelectPanel.SetBypass(selectedEntity, enabled))
+            Entity selectedRoute = m_SelectedInfoUISystem.selectedRoute;
+            if (selectedEntity == Entity.Null)
             {
-                m_LastVehicle = Entity.Null;
-                m_LastSnapshotVersion = 0;
+                LogBypassRequest(enabled, selectedEntity, selectedRoute, false, "selected-entity-null");
+                return;
+            }
+
+            bool result = DispatchRuntimeSystem.Instance.m_SelectPanel.SetBypass(selectedEntity, enabled);
+            LogBypassRequest(enabled, selectedEntity, selectedRoute, result, result ? "ok" : "setbypass-false");
+            if (!result)
+                return;
+
+            m_LastVehicle = Entity.Null;
+            m_LastSnapshotVersion = 0;
+        }
+
+        private void TraceBypassStationClick(string payload)
+        {
+            m_LastBypassTrace = BypassTraceState.Parse(payload, UnityEngine.Time.frameCount);
+            Mod.log.Info("[BypassTrace][UiClick] "
+                + "attemptId=" + SafeTraceValue(m_LastBypassTrace.AttemptId)
+                + " desiredEnabled=" + (m_LastBypassTrace.DesiredEnabled ? 1 : 0)
+                + " panelMode=" + SafeTraceValue(m_LastBypassTrace.PanelMode)
+                + " panelEntityId=" + SafeTraceValue(m_LastBypassTrace.PanelEntityId)
+                + " panelChecked=" + (m_LastBypassTrace.PanelChecked ? 1 : 0)
+                + " frame=" + m_LastBypassTrace.Frame);
+        }
+
+        private void LogBypassRequest(bool enabled, Entity selectedEntity, Entity selectedRoute, bool result, string reason)
+        {
+            Mod.log.Info("[BypassTrace][Request] "
+                + "attemptId=" + SafeTraceValue(m_LastBypassTrace.AttemptId)
+                + " desiredEnabled=" + (enabled ? 1 : 0)
+                + " selectedEntity=" + FormatEntity(selectedEntity)
+                + " selectedRoute=" + FormatEntity(selectedRoute)
+                + " lastSnapshotMode=" + SafeTraceValue(m_LastSnapshot.Mode)
+                + " lastSnapshotEntityId=" + SafeTraceValue(m_LastSnapshot.EntityId)
+                + " lastSnapshotChecked=" + (m_LastSnapshot.BypassStationChecked ? 1 : 0)
+                + " lastSnapshotShowToggle=" + (m_LastSnapshot.ShowBypassStationToggle ? 1 : 0)
+                + " panelOpen=" + (m_PanelOpen ? 1 : 0)
+                + " result=" + (result ? 1 : 0)
+                + " reason=" + reason
+                + " traceAgeFrames=" + TraceAgeFrames());
+        }
+
+        private void LogBypassSnapshot(string dirtyReason, Entity selectedEntity, Entity selectedRoute, int currentFrame)
+        {
+            if (!m_LastSnapshot.ShowBypassStationToggle && string.IsNullOrEmpty(m_LastBypassTrace.AttemptId))
+                return;
+
+            Mod.log.Info("[BypassTrace][Snapshot] "
+                + "attemptId=" + SafeTraceValue(m_LastBypassTrace.AttemptId)
+                + " dirtyReason=" + dirtyReason
+                + " mode=" + SafeTraceValue(m_LastSnapshot.Mode)
+                + " entityId=" + SafeTraceValue(m_LastSnapshot.EntityId)
+                + " showToggle=" + (m_LastSnapshot.ShowBypassStationToggle ? 1 : 0)
+                + " checked=" + (m_LastSnapshot.BypassStationChecked ? 1 : 0)
+                + " selectedEntity=" + FormatEntity(selectedEntity)
+                + " selectedRoute=" + FormatEntity(selectedRoute)
+                + " panelVersion=" + m_LastSnapshotVersion
+                + " frame=" + currentFrame
+                + " traceAgeFrames=" + TraceAgeFrames());
+        }
+
+        private int TraceAgeFrames()
+        {
+            return string.IsNullOrEmpty(m_LastBypassTrace.AttemptId)
+                ? -1
+                : UnityEngine.Time.frameCount - m_LastBypassTrace.Frame;
+        }
+
+        private static string SafeTraceValue(string value)
+        {
+            return string.IsNullOrEmpty(value) ? "-" : value;
+        }
+
+        private static string FormatEntity(Entity entity)
+        {
+            return entity == Entity.Null ? "null" : entity.Index.ToString();
+        }
+
+        private struct BypassTraceState
+        {
+            public string AttemptId;
+            public bool DesiredEnabled;
+            public string PanelMode;
+            public string PanelEntityId;
+            public bool PanelChecked;
+            public int Frame;
+
+            public static BypassTraceState Parse(string payload, int frame)
+            {
+                string[] parts = (payload ?? string.Empty).Split(new[] { '\t' }, System.StringSplitOptions.None);
+                return new BypassTraceState
+                {
+                    AttemptId = Read(parts, 0),
+                    DesiredEnabled = Read(parts, 1) == "1",
+                    PanelMode = Read(parts, 2),
+                    PanelEntityId = Read(parts, 3),
+                    PanelChecked = Read(parts, 4) == "1",
+                    Frame = frame
+                };
+            }
+
+            private static string Read(string[] parts, int index)
+            {
+                return index >= 0 && index < parts.Length ? parts[index] ?? string.Empty : string.Empty;
             }
         }
     }

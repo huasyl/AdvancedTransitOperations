@@ -9,7 +9,7 @@ using UnityEngine.Scripting;
 
 namespace RapidTransitMod
 {
-    public class DevSightRaycastCollectorSystem : GameSystemBase
+    public partial class DevSightRaycastCollectorSystem : GameSystemBase
     {
         private RaycastSystem m_RaycastSystem = null!;
         private CameraUpdateSystem m_CameraUpdateSystem = null!;

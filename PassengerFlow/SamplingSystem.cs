@@ -10,7 +10,7 @@ using Unity.Jobs;
 
 namespace RapidTransitMod.PassengerFlow
 {
-    internal sealed class SamplingSystem : GameSystemBase, IPreSerialize
+    internal sealed partial class SamplingSystem : GameSystemBase, IPreSerialize
     {
         private const int BucketsPerWindow = 96;
         internal const uint DepartureSampleDelayFrames = 30;

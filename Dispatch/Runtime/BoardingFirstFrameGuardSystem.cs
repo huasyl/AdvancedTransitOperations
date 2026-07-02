@@ -6,7 +6,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Runtime
 {
-    internal sealed class BoardingFirstFrameGuardSystem : GameSystemBase
+    internal sealed partial class BoardingFirstFrameGuardSystem : GameSystemBase
     {
         private const uint GuardFrames = 5;
 

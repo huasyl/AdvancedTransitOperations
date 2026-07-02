@@ -64,7 +64,7 @@ namespace RapidTransitMod
         Retiring = 5,
     }
 
-    public class DispatchRuntimeSystem : GameSystemBase, IPreSerialize
+    public partial class DispatchRuntimeSystem : GameSystemBase, IPreSerialize
     {
         internal const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 3f;
         internal CameraUpdateSystem m_CameraUpdateSystem;
