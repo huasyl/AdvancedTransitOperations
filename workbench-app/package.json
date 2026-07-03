@@ -1,0 +1,23 @@
+{
+  "name": "rt-dispatch-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "author": "huasyl",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build:workbench": "vite build --config vite.workbench.config.js",
+    "build": "npm run build:workbench"
+  },
+  "dependencies": {
+    "d3-array": "^3.2.4",
+    "d3-chord": "^3.0.1",
+    "d3-shape": "^3.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

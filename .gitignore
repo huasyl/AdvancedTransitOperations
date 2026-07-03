@@ -1,0 +1,16 @@
+bin/
+obj/
+node_modules/
+dist/
+workbench-dist/
+Library/
+.vs/
+.vscode/
+.env
+*.user
+*.suo
+*.log
+.tmp*/
+.dotnet*/
+.nuget/
+
