@@ -2,6 +2,10 @@
 
 Source code for the Cities: Skylines II mod Advanced Transit Operations.
 
+## Player Guide
+
+- [简体中文游玩指引](docs/player-guide.zh-CN.md)
+
 ## Structure
 
 - C# mod runtime: `Dispatch/`, `Bypass/`, `TrackModel/`, `TrackProjection/`, `PassengerFlow/`, `Broadcasting/`, and related directories.
