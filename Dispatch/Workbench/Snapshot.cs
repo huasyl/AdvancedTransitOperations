@@ -13,7 +13,6 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Action<string> m_SetPreferredLineId;
         private readonly Func<string> m_GetPreferredLineId;
         private readonly Action<DispatchWorkbenchDraftState, List<WorkbenchLineRuntime>, WorkbenchLineRuntime> m_EnsureView;
-        private readonly Action<string, HashSet<string>, List<DispatchWorkbenchManualRowDto>, List<DispatchWorkbenchAutoRuleDto>, HashSet<string>, HashSet<string>> m_CollectDraftRules;
         private readonly Func<DispatchWorkbenchStagedRowDto, DispatchWorkbenchStagedRowDto> m_CopyRow;
         private readonly Func<Entity, int> m_GetOriginHoldLimitMinutes;
         private readonly Func<Entity, int> m_GetMaxStationDwellMinutes;
@@ -47,7 +46,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_SetPreferredLineId = drafts.SetPreferred;
             m_GetPreferredLineId = drafts.Preferred;
             m_EnsureView = drafts.EnsureView;
-            m_CollectDraftRules = drafts.Collect;
             m_CopyRow = cloneStagedRow ?? throw new ArgumentNullException(nameof(cloneStagedRow));
             m_GetOriginHoldLimitMinutes = getOriginHoldLimitMinutes ?? throw new ArgumentNullException(nameof(getOriginHoldLimitMinutes));
             m_GetMaxStationDwellMinutes = getMaxStationDwellMinutes ?? throw new ArgumentNullException(nameof(getMaxStationDwellMinutes));
@@ -79,12 +77,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_Query.ResolveActiveLine(runtimeLines, preferredLineId, m_Drafts.ResolvePreferredLineId(mode), mode);
             string draftKey = DraftStore.GetKey(activeRuntime?.Id);
             DispatchWorkbenchDraftState draft = m_GetOrCreateDraft(draftKey);
-            List<DispatchWorkbenchManualRowDto> mergedManualRows =
-                new List<DispatchWorkbenchManualRowDto>();
-            List<DispatchWorkbenchAutoRuleDto> mergedAutoRules =
-                new List<DispatchWorkbenchAutoRuleDto>();
-            HashSet<string> mergedManualRowIds = new HashSet<string>(StringComparer.Ordinal);
-            HashSet<string> mergedAutoRuleIds = new HashSet<string>(StringComparer.Ordinal);
             HashSet<string> validRuntimeLineIds = m_Query.BuildValidLineIds(runtimeLines, mode);
             List<DispatchWorkbenchStationDto> stations = m_Query.GetStations(activeRuntime);
 
@@ -99,65 +91,46 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             m_EnsureView(draft, runtimeLines, activeRuntime);
-            m_CollectDraftRules(
-                draftKey,
-                validRuntimeLineIds,
-                mergedManualRows,
-                mergedAutoRules,
-                mergedManualRowIds,
-                mergedAutoRuleIds);
-            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in
-                m_Drafts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                if (string.Equals(entry.Key, draftKey, StringComparison.Ordinal))
-                    continue;
-
-                m_CollectDraftRules(
-                    entry.Key,
-                    validRuntimeLineIds,
-                    mergedManualRows,
-                    mergedAutoRules,
-                    mergedManualRowIds,
-                    mergedAutoRuleIds);
-            }
-
-            List<DispatchWorkbenchTripDto> trips =
-                m_Query.GetTrips(activeRuntime, stations, draft);
             List<DispatchWorkbenchDepotDto> depots = GetDepotsForLines(runtimeLines);
             DispatchWorkbenchLineDraftRowsDto[] lineDraftRowsByLineId =
                 m_Query.GetDraftRows(validRuntimeLineIds);
-            DispatchWorkbenchStagedRowDto[] canonicalCombinedDraftRows =
-                lineDraftRowsByLineId
-                    .SelectMany(block => block?.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>())
-                    .Select(m_CopyRow)
-                    .ToArray();
-            DispatchWorkbenchStagedRowDto[] canonicalActiveLineDraftRows =
-                lineDraftRowsByLineId
-                    .FirstOrDefault(block => string.Equals(block?.lineId, activeRuntime?.Id ?? string.Empty, StringComparison.Ordinal))
-                    ?.lineDraftRows
-                    ?.Select(m_CopyRow)
-                    .ToArray()
-                ?? Array.Empty<DispatchWorkbenchStagedRowDto>();
-            List<DispatchWorkbenchStagedRowDto> activeLineDraftRowsForReport =
-                canonicalActiveLineDraftRows.ToList();
-            List<DispatchWorkbenchStagedRowDto> combinedDraftRowsForReport =
-                canonicalCombinedDraftRows.ToList();
+            if (RtLog.VerboseEnabled)
+            {
+                DispatchWorkbenchStagedRowDto[] canonicalCombinedDraftRows =
+                    lineDraftRowsByLineId
+                        .SelectMany(block => block?.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>())
+                        .Select(m_CopyRow)
+                        .ToArray();
+                DispatchWorkbenchStagedRowDto[] canonicalActiveLineDraftRows =
+                    lineDraftRowsByLineId
+                        .FirstOrDefault(block => string.Equals(block?.lineId, activeRuntime?.Id ?? string.Empty, StringComparison.Ordinal))
+                        ?.lineDraftRows
+                        ?.Select(m_CopyRow)
+                        .ToArray()
+                    ?? Array.Empty<DispatchWorkbenchStagedRowDto>();
+                List<DispatchWorkbenchTripDto> trips =
+                    m_Query.GetTrips(activeRuntime, stations, draft);
+                List<DispatchWorkbenchStagedRowDto> activeLineDraftRowsForReport =
+                    canonicalActiveLineDraftRows.ToList();
+                List<DispatchWorkbenchStagedRowDto> combinedDraftRowsForReport =
+                    canonicalCombinedDraftRows.ToList();
 
-            m_LogSnapshot(
-                activeRuntime,
-                stations,
-                trips,
-                draft,
-                activeLineDraftRowsForReport,
-                combinedDraftRowsForReport);
-            m_WriteReport(
-                "snapshot",
-                activeRuntime,
-                draftKey,
-                draft,
-                runtimeLines,
-                activeLineDraftRowsForReport,
-                combinedDraftRowsForReport);
+                m_LogSnapshot(
+                    activeRuntime,
+                    stations,
+                    trips,
+                    draft,
+                    activeLineDraftRowsForReport,
+                    combinedDraftRowsForReport);
+                m_WriteReport(
+                    "snapshot",
+                    activeRuntime,
+                    draftKey,
+                    draft,
+                    runtimeLines,
+                    activeLineDraftRowsForReport,
+                    combinedDraftRowsForReport);
+            }
 
             DispatchWorkbenchSnapshot snapshot = new DispatchWorkbenchSnapshot
             {
@@ -172,17 +145,10 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_GetAllowedDepotId),
                 depots = depots.ToArray(),
                 stations = stations.ToArray(),
-                trips = trips.ToArray(),
-                manualRows = mergedManualRows.ToArray(),
-                autoRules = mergedAutoRules.ToArray(),
-                lineDraftRows = canonicalActiveLineDraftRows,
                 lineDraftRowsByLineId = lineDraftRowsByLineId,
-                combinedDraftRows = canonicalCombinedDraftRows,
                 appliedRows = m_Query.BuildAppliedRows(mode),
-                planRefs = m_Query.BuildPlanRefs(mode),
                 version = snapshotVersion.ToString(),
                 sourceMode = sourceMode ?? string.Empty,
-                rulesApplied = draft.RulesApplied,
                 draftApplied = draft.DraftApplied,
                 featureSettings = m_Features(),
                 cleanupInfo = m_ConsumeCleanupInfo()
@@ -221,17 +187,10 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_GetAllowedDepotId),
                 depots = depots.ToArray(),
                 stations = Array.Empty<DispatchWorkbenchStationDto>(),
-                trips = Array.Empty<DispatchWorkbenchTripDto>(),
-                manualRows = Array.Empty<DispatchWorkbenchManualRowDto>(),
-                autoRules = Array.Empty<DispatchWorkbenchAutoRuleDto>(),
-                lineDraftRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
                 lineDraftRowsByLineId = Array.Empty<DispatchWorkbenchLineDraftRowsDto>(),
-                combinedDraftRows = Array.Empty<DispatchWorkbenchStagedRowDto>(),
                 appliedRows = m_Query.BuildAppliedRows(mode),
-                planRefs = m_Query.BuildPlanRefs(mode),
                 version = snapshotVersion.ToString(),
                 sourceMode = sourceMode ?? string.Empty,
-                rulesApplied = false,
                 draftApplied = false,
                 featureSettings = m_Features(),
                 cleanupInfo = m_ConsumeCleanupInfo()

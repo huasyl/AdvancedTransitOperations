@@ -689,10 +689,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 selectedLineId = draft?.SelectedLineId ?? string.Empty,
                 selectedEditLine = draft?.SelectedEditLine ?? string.Empty,
                 mergedView = CloneMergedViewForPersistence(draft?.MergedView),
-                manualRows = draft?.ManualRows?.Select(m_CopyManual).ToArray() ?? Array.Empty<DispatchWorkbenchManualRowDto>(),
-                autoRules = draft?.AutoRules?.Select(m_CopyRule).ToArray() ?? Array.Empty<DispatchWorkbenchAutoRuleDto>(),
-                lineDraftRows = draft?.StagedRows?.Select(m_CopyRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
-                rulesApplied = draft?.RulesApplied == true,
+                manualRows = null,
+                autoRules = null,
+                lineDraftRows = null,
+                stagedRows = draft?.StagedRows?.Select(m_CopyRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                rulesApplied = false,
                 draftApplied = draft?.DraftApplied == true,
                 plannerImportContract = m_CopyPlan(draft?.PlannerImportContract)
             };
@@ -709,12 +710,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ? dto.selectedEditLine
                     : (lineKey == "__default__" ? string.Empty : lineKey),
                 MergedView = CloneMergedView(dto.mergedView),
-                ManualRows = dto.manualRows?.Select(m_CopyManual).ToList() ?? new List<DispatchWorkbenchManualRowDto>(),
-                AutoRules = dto.autoRules?.Select(m_CopyRule).ToList() ?? new List<DispatchWorkbenchAutoRuleDto>(),
+                ManualRows = new List<DispatchWorkbenchManualRowDto>(),
+                AutoRules = new List<DispatchWorkbenchAutoRuleDto>(),
                 StagedRows = m_LastById(
-                    dto.lineDraftRows?.Select(m_CopyRow).ToList()
+                    (dto.stagedRows ?? dto.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>())
+                        .Select(m_CopyRow).ToList()
                     ?? new List<DispatchWorkbenchStagedRowDto>()),
-                RulesApplied = dto.rulesApplied,
+                RulesApplied = false,
                 DraftApplied = dto.draftApplied,
                 PlannerImportContract = m_CopyPlan(dto.plannerImportContract)
             };
@@ -775,6 +777,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     || HasLegacyRestoredMergedView(draft.mergedView)
                     || HasLegacyRestoredRows(draft.manualRows)
                     || HasLegacyRestoredRules(draft.autoRules)
+                    || HasLegacyRestoredRows(draft.stagedRows)
                     || HasLegacyRestoredRows(draft.lineDraftRows)
                     || HasLegacyRestoredPlanContract(draft.plannerImportContract));
         }

@@ -754,8 +754,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 AddSavedWorkbenchLineIds(lineIds, mergedView.expressLineIds);
             }
 
-            AddSavedWorkbenchLineIds(lineIds, draft.ManualRows?.Select(row => row?.lineId));
-            AddSavedWorkbenchLineIds(lineIds, draft.AutoRules?.Select(rule => rule?.lineId));
             AddSavedWorkbenchLineIds(lineIds, draft.StagedRows?.Select(row => row?.lineId));
 
             DispatchWorkbenchPlannerImportContractDto contract = draft.PlannerImportContract;
