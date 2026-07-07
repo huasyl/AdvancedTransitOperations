@@ -60,11 +60,17 @@ namespace RapidTransitMod.Dispatch.Workbench
 
                 if (!appliedKeys.Contains(entry.Key))
                 {
-                    if (draft.DraftApplied || draft.RulesApplied)
+                    bool hadLegacyDraftState =
+                        (draft.ManualRows?.Count ?? 0) > 0
+                        || (draft.AutoRules?.Count ?? 0) > 0
+                        || draft.RulesApplied;
+                    if (draft.DraftApplied || hadLegacyDraftState)
                     {
                         changed = true;
                     }
 
+                    draft.ManualRows.Clear();
+                    draft.AutoRules.Clear();
                     draft.DraftApplied = false;
                     draft.RulesApplied = false;
                 }
@@ -85,8 +91,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (!existed)
                 {
                     draft = m_NewDraft(lineKey);
-                    draft.ManualRows.Clear();
-                    draft.AutoRules.Clear();
                     m_Drafts[lineKey] = draft;
                     changed = true;
                 }
@@ -109,6 +113,18 @@ namespace RapidTransitMod.Dispatch.Workbench
                     changed = true;
                 }
 
+                if ((draft.ManualRows?.Count ?? 0) > 0)
+                {
+                    draft.ManualRows.Clear();
+                    changed = true;
+                }
+
+                if ((draft.AutoRules?.Count ?? 0) > 0)
+                {
+                    draft.AutoRules.Clear();
+                    changed = true;
+                }
+
                 if (canRefresh)
                 {
                     MatchKind(draft, lineKey, applied);
@@ -120,9 +136,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                     changed = true;
                 }
 
-                if (draft.RulesApplied != canRefresh)
+                if (draft.RulesApplied)
                 {
-                    draft.RulesApplied = canRefresh;
+                    draft.RulesApplied = false;
                     changed = true;
                 }
 

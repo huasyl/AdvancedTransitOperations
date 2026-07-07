@@ -14,8 +14,6 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Query m_Query;
         private readonly Snapshot m_Snap;
         private readonly Persist m_Persist;
-        private readonly Func<DispatchWorkbenchManualRowDto, DispatchWorkbenchManualRowDto> m_CopyManual;
-        private readonly Func<DispatchWorkbenchAutoRuleDto, DispatchWorkbenchAutoRuleDto> m_CopyRule;
         private readonly Func<DispatchWorkbenchStagedRowDto, DispatchWorkbenchStagedRowDto> m_CopyRow;
         private readonly Func<List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> m_LastById;
         private readonly Func<DispatchWorkbenchCleanupInfoDto> m_ConsumeCleanupInfo;
@@ -33,8 +31,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Query = query ?? throw new ArgumentNullException(nameof(query));
             m_Snap = snap ?? throw new ArgumentNullException(nameof(snap));
             m_Persist = persist ?? throw new ArgumentNullException(nameof(persist));
-            m_CopyManual = Rows.CopyManual;
-            m_CopyRule = Rows.CopyRule;
             m_CopyRow = Rows.CopyRow;
             m_LastById = Rows.LastById;
             m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
@@ -137,12 +133,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             string lineKey = DraftStore.GetKey(request?.selectedLineId);
             Dictionary<string, List<DispatchWorkbenchStagedRowDto>> nextLineDraftRowsByKey =
                 RowsByDraft(request, lineKey);
-            List<DispatchWorkbenchManualRowDto> nextManualRows = request.manualRows != null
-                ? request.manualRows.Select(m_CopyManual).ToList()
-                : new List<DispatchWorkbenchManualRowDto>();
-            List<DispatchWorkbenchAutoRuleDto> nextAutoRules = request.autoRules != null
-                ? request.autoRules.Select(m_CopyRule).ToList()
-                : new List<DispatchWorkbenchAutoRuleDto>();
             HashSet<string> clearedAppliedLineIds = ClearedAppliedLineIds(request?.applyDraft == true, nextLineDraftRowsByKey);
             Dictionary<string, string> requestedCleanupReasons = CleanupReasons(
                 Array.Empty<string>(),
@@ -156,9 +146,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 StripInvalidatedRequestLines(
                     request,
                     nextLineDraftRowsByKey,
-                    invalidatedLineIds,
-                    ref nextManualRows,
-                    ref nextAutoRules);
+                    invalidatedLineIds);
                 prepared.LineSettingsChanged = request?.lineSettings != null
                     && !m_Run.SameLineCfg(prepared.Scope, request.lineSettings);
                 lineKey = ResolveLineKeyAfterCleanup(lineKey, invalidatedLineIds, requestedCleanupReasons, runtimeLines);
@@ -200,9 +188,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             string requestedSelectedEditLine = RequestedSelectedEditLine(request, lineKey, runtimeLines);
             bool hasAdditionalLineDraftTargets = nextLineDraftRowsByKey.Keys
                 .Any(key => !string.Equals(key, lineKey, StringComparison.Ordinal));
-            bool rulesChanged = !Rows.SameManual(state.ManualRows, nextManualRows)
-                || !Rows.SameRules(state.AutoRules, nextAutoRules)
-                || !Rows.SameRows(state.StagedRows, nextStagedRows);
+            bool rulesChanged = !Rows.SameRows(state.StagedRows, nextStagedRows);
             DispatchWorkbenchPlannerImportContractDto nextPlanRef = PlanRef(
                 lineKey,
                 state.PlannerImportContract,
@@ -211,15 +197,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                 nextStagedRows.Count > 0);
 
             if (!request.applyDraft
-                && !request.markRulesApplied
                 && !autoCleanupChanged
                 && !requestedCleanupChanged
                 && !hasAdditionalLineDraftTargets
                 && string.Equals(state.SelectedLineId ?? string.Empty, requestedSelectedLineId, StringComparison.Ordinal)
                 && string.Equals(state.SelectedEditLine ?? string.Empty, requestedSelectedEditLine, StringComparison.Ordinal)
                 && Rows.SameView(state.MergedView, request.mergedView)
-                && Rows.SameManual(state.ManualRows, nextManualRows)
-                && Rows.SameRules(state.AutoRules, nextAutoRules)
                 && Rows.SameRows(state.StagedRows, nextStagedRows)
                 && Rows.SamePlan(state.PlannerImportContract, nextPlanRef)
                 && m_Run.SameLineCfg(prepared.Scope, request.lineSettings))
@@ -238,8 +221,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             state.SelectedLineId = requestedSelectedLineId;
             state.SelectedEditLine = requestedSelectedEditLine;
             state.MergedView = request.mergedView ?? state.MergedView;
-            state.ManualRows = nextManualRows;
-            state.AutoRules = nextAutoRules;
+            state.ManualRows = new List<DispatchWorkbenchManualRowDto>();
+            state.AutoRules = new List<DispatchWorkbenchAutoRuleDto>();
             state.StagedRows = nextStagedRows;
             state.PlannerImportContract = nextPlanRef;
             bool additionalDraftRowsChanged = ApplyMore(
@@ -254,8 +237,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             HashSet<string> cleanupLineIds = TouchLines(
                 state.SelectedLineId,
                 state.SelectedEditLine,
-                nextManualRows,
-                nextAutoRules,
                 nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList());
             foreach (string draftTargetKey in nextLineDraftRowsByKey.Keys)
             {
@@ -272,12 +253,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             if (rulesChanged)
             {
-                state.RulesApplied = false;
                 state.DraftApplied = false;
-            }
-            if (request.markRulesApplied)
-            {
-                state.RulesApplied = true;
             }
 
             if (request.applyDraft && nextLineDraftRowsByKey.ContainsKey(lineKey))
@@ -358,8 +334,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             request.selectedLineId = NormalizeLineId(scope, request.selectedLineId, "selectedLineId", errors);
             request.selectedEditLine = NormalizeSelectedEditLine(scope, request.selectedEditLine, errors);
             NormalizeMergedView(scope, request.mergedView, errors);
-            NormalizeManualRows(scope, request.manualRows, errors);
-            NormalizeAutoRules(scope, request.autoRules, errors);
             NormalizeStagedRows(scope, request.lineDraftRows, "lineDraftRows", errors);
             NormalizeLineDraftRowBlocks(scope, request.lineDraftRowsByLineId, errors);
             NormalizeLineSettings(scope, request.lineSettings, errors);
@@ -383,40 +357,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             view.expressLineId = NormalizeLineId(scope, view.expressLineId, "mergedView.expressLineId", errors);
             view.localLineIds = NormalizeLineIds(scope, view.localLineIds, "mergedView.localLineIds", errors);
             view.expressLineIds = NormalizeLineIds(scope, view.expressLineIds, "mergedView.expressLineIds", errors);
-        }
-
-        private static void NormalizeManualRows(
-            ModeScope scope,
-            DispatchWorkbenchManualRowDto[] rows,
-            List<string> errors)
-        {
-            if (rows == null)
-                return;
-
-            for (int i = 0; i < rows.Length; i++)
-            {
-                if (rows[i] == null)
-                    continue;
-
-                rows[i].lineId = NormalizeLineId(scope, rows[i].lineId, "manualRows[" + i + "].lineId", errors);
-            }
-        }
-
-        private static void NormalizeAutoRules(
-            ModeScope scope,
-            DispatchWorkbenchAutoRuleDto[] rules,
-            List<string> errors)
-        {
-            if (rules == null)
-                return;
-
-            for (int i = 0; i < rules.Length; i++)
-            {
-                if (rules[i] == null)
-                    continue;
-
-                rules[i].lineId = NormalizeLineId(scope, rules[i].lineId, "autoRules[" + i + "].lineId", errors);
-            }
         }
 
         private static void NormalizeStagedRows(
@@ -694,8 +634,9 @@ namespace RapidTransitMod.Dispatch.Workbench
 
                 draft.SelectedLineId = draftKey;
                 draft.SelectedEditLine = draftKey == "__default__" ? string.Empty : draftKey;
+                draft.ManualRows = new List<DispatchWorkbenchManualRowDto>();
+                draft.AutoRules = new List<DispatchWorkbenchAutoRuleDto>();
                 draft.StagedRows = nextRows;
-                draft.RulesApplied = markDraftApplied;
                 draft.DraftApplied = markDraftApplied;
                 draft.AppliedDepartureMinutesCache.Clear();
                 draft.PlannerImportContract = nextRef;
@@ -719,23 +660,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (draft == null)
                     continue;
 
-                int manualBefore = draft.ManualRows?.Count ?? 0;
-                int autoBefore = draft.AutoRules?.Count ?? 0;
                 int stagedBefore = draft.StagedRows?.Count ?? 0;
-
-                if (draft.ManualRows != null)
-                {
-                    draft.ManualRows = draft.ManualRows
-                        .Where(row => row == null || string.IsNullOrEmpty(row.lineId) || !lineIds.Contains(row.lineId))
-                        .ToList();
-                }
-
-                if (draft.AutoRules != null)
-                {
-                    draft.AutoRules = draft.AutoRules
-                        .Where(rule => rule == null || string.IsNullOrEmpty(rule.lineId) || !lineIds.Contains(rule.lineId))
-                        .ToList();
-                }
+                bool clearedLegacyDraftState =
+                    (draft.ManualRows?.Count ?? 0) > 0
+                    || (draft.AutoRules?.Count ?? 0) > 0
+                    || draft.RulesApplied;
 
                 if (draft.StagedRows != null)
                 {
@@ -744,14 +673,16 @@ namespace RapidTransitMod.Dispatch.Workbench
                         .ToList();
                 }
 
-                bool changed = manualBefore != (draft.ManualRows?.Count ?? 0)
-                    || autoBefore != (draft.AutoRules?.Count ?? 0)
+                draft.ManualRows = new List<DispatchWorkbenchManualRowDto>();
+                draft.AutoRules = new List<DispatchWorkbenchAutoRuleDto>();
+                draft.RulesApplied = false;
+
+                bool changed = clearedLegacyDraftState
                     || stagedBefore != (draft.StagedRows?.Count ?? 0);
 
                 if (!changed)
                     continue;
 
-                draft.RulesApplied = false;
                 draft.DraftApplied = false;
                 draft.PlannerImportContract = null;
                 draft.AppliedDepartureMinutesCache.Clear();
@@ -848,25 +779,12 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static void StripInvalidatedRequestLines(
             DispatchWorkbenchSaveRequest request,
             Dictionary<string, List<DispatchWorkbenchStagedRowDto>> rowsByDraftKey,
-            HashSet<string> invalidatedLineIds,
-            ref List<DispatchWorkbenchManualRowDto> manualRows,
-            ref List<DispatchWorkbenchAutoRuleDto> autoRules)
+            HashSet<string> invalidatedLineIds)
         {
             if (invalidatedLineIds == null || invalidatedLineIds.Count == 0)
             {
                 return;
             }
-
-            manualRows = (manualRows ?? new List<DispatchWorkbenchManualRowDto>())
-                .Where(row => row == null
-                    || string.IsNullOrEmpty(row.lineId)
-                    || !invalidatedLineIds.Contains(DraftStore.GetKey(row.lineId)))
-                .ToList();
-            autoRules = (autoRules ?? new List<DispatchWorkbenchAutoRuleDto>())
-                .Where(rule => rule == null
-                    || string.IsNullOrEmpty(rule.lineId)
-                    || !invalidatedLineIds.Contains(DraftStore.GetKey(rule.lineId)))
-                .ToList();
 
             if (rowsByDraftKey != null)
             {
@@ -1270,8 +1188,6 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static HashSet<string> TouchLines(
             string selectedLineId,
             string selectedEditLine,
-            List<DispatchWorkbenchManualRowDto> manualRows,
-            List<DispatchWorkbenchAutoRuleDto> autoRules,
             List<DispatchWorkbenchStagedRowDto> stagedRows)
         {
             HashSet<string> lineIds = new HashSet<string>(StringComparer.Ordinal);
@@ -1280,24 +1196,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 lineIds.Add(selectedLineId);
             if (!string.IsNullOrEmpty(selectedEditLine))
                 lineIds.Add(selectedEditLine);
-
-            if (manualRows != null)
-            {
-                foreach (DispatchWorkbenchManualRowDto row in manualRows)
-                {
-                    if (!string.IsNullOrEmpty(row?.lineId))
-                        lineIds.Add(row.lineId);
-                }
-            }
-
-            if (autoRules != null)
-            {
-                foreach (DispatchWorkbenchAutoRuleDto rule in autoRules)
-                {
-                    if (!string.IsNullOrEmpty(rule?.lineId))
-                        lineIds.Add(rule.lineId);
-                }
-            }
 
             if (stagedRows != null)
             {

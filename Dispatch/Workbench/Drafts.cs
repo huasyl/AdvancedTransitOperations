@@ -55,38 +55,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             if (!Store.TryGetValue(lineKey, out DispatchWorkbenchDraftState draft))
             {
                 draft = New(lineKey);
-                draft.ManualRows.Add(new DispatchWorkbenchManualRowDto
-                {
-                    id = "m1",
-                    lineId = draft.SelectedEditLine,
-                    time = "06:00",
-                    kind = "local",
-                    offsetMode = "none",
-                    offsetMinutes = string.Empty
-                });
-                draft.ManualRows.Add(new DispatchWorkbenchManualRowDto
-                {
-                    id = "m2",
-                    lineId = draft.SelectedEditLine,
-                    time = "06:10",
-                    kind = "express",
-                    offsetMode = "none",
-                    offsetMinutes = string.Empty
-                });
-                draft.AutoRules.Add(new DispatchWorkbenchAutoRuleDto
-                {
-                    id = "r1",
-                    lineId = draft.SelectedEditLine,
-                    enabled = true,
-                    start = "06:00",
-                    end = "07:00",
-                    kind = "local",
-                    departuresPerHour = 6,
-                    localPerHour = 6,
-                    expressPerHour = 0,
-                    expressOffsetMode = "after",
-                    expressOffsetMinutes = 0
-                });
                 Store[lineKey] = draft;
             }
 

@@ -525,28 +525,51 @@ namespace RapidTransitMod.Dispatch.Observation
             foreach (KeyValuePair<string, DispatchWorkbenchPlannerImportContractDto> entry in m_Runtime.Applied().Refs.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 DispatchWorkbenchPlannerImportContractDto contract = entry.Value;
-                if (contract?.plan == null)
+                if (contract == null)
                     continue;
 
-                ChangeDto[] changedRows = (contract.plan.changedWindows ?? Array.Empty<DispatchPlannerChangedWindowDto>())
-                    .SelectMany(window => window?.rowDiffs ?? Array.Empty<DispatchPlannerChangedRowDto>())
+                DispatchPlannerChangedRowDto[] sourceChangedRows =
+                    contract.changedRows
+                    ?? Array.Empty<DispatchPlannerChangedRowDto>();
+                DispatchPlannerScheduleActionDto[] sourceActions =
+                    contract.structuredActions
+                    ?? Array.Empty<DispatchPlannerScheduleActionDto>();
+                DispatchPlannerRiskItemDto[] sourceRiskItems =
+                    contract.riskItems
+                    ?? Array.Empty<DispatchPlannerRiskItemDto>();
+                DispatchPlannerLineRoleSummaryDto sourceLineRoleSummary =
+                    contract.lineRoleSummary;
+                string[] sourceSelectedBypassStationIds =
+                    contract.selectedBypassStationIds
+                    ?? Array.Empty<string>();
+
+                if (sourceChangedRows.Length == 0
+                    && sourceActions.Length == 0
+                    && sourceRiskItems.Length == 0
+                    && sourceLineRoleSummary == null
+                    && sourceSelectedBypassStationIds.Length == 0)
+                {
+                    continue;
+                }
+
+                ChangeDto[] changedRows = sourceChangedRows
                     .Select(CopyChange)
                     .ToArray();
                 contracts.Add(new ContractDto
                 {
                     draftKey = entry.Key,
                     importedFrom = contract.importedFrom ?? string.Empty,
-                    importedPlanId = contract.importedPlanId ?? contract.plan.planId ?? string.Empty,
-                    importedObjectiveId = contract.importedObjectiveId ?? contract.plan.objectiveId ?? string.Empty,
+                    importedPlanId = contract.importedPlanId ?? string.Empty,
+                    importedObjectiveId = contract.importedObjectiveId ?? string.Empty,
                     importedLineIds = contract.importedLineIds ?? Array.Empty<string>(),
                     requestEcho = CopyEcho(contract.requestEcho),
-                    lineRoleSummary = CopyRoleSummary(contract.plan.lineRoleSummary),
-                    selectedBypassStationIds = contract.plan.selectedBypassStationIds ?? Array.Empty<string>(),
+                    lineRoleSummary = CopyRoleSummary(sourceLineRoleSummary),
+                    selectedBypassStationIds = sourceSelectedBypassStationIds,
                     changedRows = changedRows,
-                    structuredActions = (contract.plan.structuredScheduleActions ?? Array.Empty<DispatchPlannerScheduleActionDto>())
+                    structuredActions = sourceActions
                         .Select(CopyAction)
                         .ToArray(),
-                    riskItems = (contract.plan.riskItems ?? Array.Empty<DispatchPlannerRiskItemDto>())
+                    riskItems = sourceRiskItems
                         .Select(CopyRisk)
                         .ToArray()
                 });

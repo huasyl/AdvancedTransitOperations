@@ -1074,9 +1074,7 @@ namespace RapidTransitMod.Planner
                     selectedLineId = draft.SelectedLineId ?? string.Empty,
                     selectedEditLine = draft.SelectedEditLine ?? string.Empty,
                     mergedView = draft.MergedView,
-                    manualRows = draft.ManualRows != null ? draft.ManualRows.Select(CopyManual).ToArray() : Array.Empty<DispatchWorkbenchManualRowDto>(),
-                    lineDraftRows = draft.StagedRows != null ? draft.StagedRows.ToArray() : Array.Empty<DispatchWorkbenchStagedRowDto>(),
-                    autoRules = draft.AutoRules != null ? draft.AutoRules.Select(CopyRule).ToArray() : Array.Empty<DispatchWorkbenchAutoRuleDto>(),
+                    stagedRows = draft.StagedRows != null ? draft.StagedRows.ToArray() : Array.Empty<DispatchWorkbenchStagedRowDto>(),
                     trips = trips.ToArray()
                 });
             }
@@ -1110,11 +1108,8 @@ namespace RapidTransitMod.Planner
                             windowStart = sourceDraft.MergedView.windowStart,
                             windowEnd = sourceDraft.MergedView.windowEnd
                         },
-                    ManualRows = sourceDraft.ManualRows != null ? sourceDraft.ManualRows.Select(CopyManual).ToList() : new List<DispatchWorkbenchManualRowDto>(),
                     StagedRows = sourceDraft.StagedRows != null ? sourceDraft.StagedRows.Select(CopyRow).ToList() : new List<DispatchWorkbenchStagedRowDto>(),
-                    AutoRules = sourceDraft.AutoRules != null ? sourceDraft.AutoRules.Select(CopyRule).ToList() : new List<DispatchWorkbenchAutoRuleDto>(),
-                    DraftApplied = sourceDraft.DraftApplied,
-                    RulesApplied = sourceDraft.RulesApplied
+                    DraftApplied = sourceDraft.DraftApplied
                 }
                 : DraftStore().New(draftKey);
 
@@ -1198,17 +1193,9 @@ namespace RapidTransitMod.Planner
                 draft.MergedView.expressLineIds = NormalizePlannerExportLineIds(scope, draft.MergedView.expressLineIds, runtimeLineIds);
             }
 
-            draft.ManualRows = (draft.ManualRows ?? new List<DispatchWorkbenchManualRowDto>())
-                .Select(row => NormalizePlannerExportManualRow(scope, row, runtimeLineIds))
-                .Where(row => row != null)
-                .ToList();
             draft.StagedRows = (draft.StagedRows ?? new List<DispatchWorkbenchStagedRowDto>())
                 .Select(row => NormalizePlannerExportStagedRow(scope, row, runtimeLineIds))
                 .Where(row => row != null)
-                .ToList();
-            draft.AutoRules = (draft.AutoRules ?? new List<DispatchWorkbenchAutoRuleDto>())
-                .Select(rule => NormalizePlannerExportAutoRule(scope, rule, runtimeLineIds))
-                .Where(rule => rule != null)
                 .ToList();
         }
 
@@ -1238,18 +1225,6 @@ namespace RapidTransitMod.Planner
                 : string.Empty;
         }
 
-        private static DispatchWorkbenchManualRowDto NormalizePlannerExportManualRow(
-            ModeScope scope,
-            DispatchWorkbenchManualRowDto row,
-            HashSet<string> runtimeLineIds)
-        {
-            if (row == null)
-                return null;
-
-            row.lineId = NormalizePlannerExportLineId(scope, row.lineId, runtimeLineIds);
-            return string.IsNullOrEmpty(row.lineId) ? null : row;
-        }
-
         private static DispatchWorkbenchStagedRowDto NormalizePlannerExportStagedRow(
             ModeScope scope,
             DispatchWorkbenchStagedRowDto row,
@@ -1260,18 +1235,6 @@ namespace RapidTransitMod.Planner
 
             row.lineId = NormalizePlannerExportLineId(scope, row.lineId, runtimeLineIds);
             return string.IsNullOrEmpty(row.lineId) ? null : row;
-        }
-
-        private static DispatchWorkbenchAutoRuleDto NormalizePlannerExportAutoRule(
-            ModeScope scope,
-            DispatchWorkbenchAutoRuleDto rule,
-            HashSet<string> runtimeLineIds)
-        {
-            if (rule == null)
-                return null;
-
-            rule.lineId = NormalizePlannerExportLineId(scope, rule.lineId, runtimeLineIds);
-            return string.IsNullOrEmpty(rule.lineId) ? null : rule;
         }
 
         private bool TryResolvePlannerWaypointPosition(Entity waypoint, out float3 position) => R.m_MileageStore.TryWaypointPosition(waypoint, out position);

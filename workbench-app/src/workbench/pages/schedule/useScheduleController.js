@@ -36,12 +36,10 @@ import {
 import { buildSummaryRowsWithConflicts, getSummaryRowKey, getSummaryRowsSignature } from "./schedule-conflicts";
 import {
   createNativeMergedViewForSave,
+  flattenSnapshotLineDraftRowsByLineId,
   mapSnapshotSummaryRows,
-  serializeNativeAutoRules,
   serializeNativeLineDraftRowsByLineId,
   serializeNativeLineSettings,
-  serializeNativeManualRows,
-  serializePlanRefs,
   serializeRemovedLineIds
 } from "./schedule-serialization";
 import { runNativeSaveOperation } from "./schedule-save-operation";
@@ -120,7 +118,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const [summaryEntries, setSummaryEntries] = useState(() => normalizeSummaryEntries([], t));
   const [autoRules, setAutoRules] = useState([]);
   const [manualDrafts, setManualDrafts] = useState([]);
-  const [planRefsByLine, setPlanRefsByLine] = useState({});
   const [pendingRemovedLineIds, setPendingRemovedLineIds] = useState([]);
   const [manualInput, setManualInput] = useState("12:00");
   const [editorStart, setEditorStart] = useState("08:00");
@@ -416,7 +413,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const removedLineIdSet = new Set(nextLineIds);
     clearPanelMessage();
     setPendingRemovedLineIds((current) => (current || []).filter((lineId) => !removedLineIdSet.has(lineId)));
-    dropPlanRefs(nextLineIds);
     setAppliedSummaryRowKeys((current) => {
       const nextRowKeys = filterAppliedSummaryRowKeys(current, removedLineIdSet);
       setAppliedSummarySignature(getSummarySignatureFromRowKeys(nextRowKeys));
@@ -466,12 +462,19 @@ export default function useScheduleController({ registerHostActions, activeTrans
       runtimeCatalog.lineOptions[0] ??
       DEFAULT_LINE_OPTIONS[0];
 
+    const restoredDraftRows = flattenSnapshotLineDraftRowsByLineId(snapshot?.lineDraftRowsByLineId);
     const nextSummaryEntries = normalizeSummaryEntries(
+      restoredDraftRows.length > 0
+        ? restoredDraftRows
+        : mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
+      t
+    );
+    const appliedSummaryEntries = normalizeSummaryEntries(
       mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
       t
     );
-    const nextSummarySignature = getSummaryRowsSignature(nextSummaryEntries);
-    const currentSummaryRowKeys = nextSummaryEntries.map((row) => getSummaryRowKey(row));
+    const nextSummarySignature = getSummaryRowsSignature(appliedSummaryEntries);
+    const currentSummaryRowKeys = appliedSummaryEntries.map((row) => getSummaryRowKey(row));
     logBackendCleanup(snapshot?.cleanupInfo, "snapshot");
 
     setActiveRightTab((current) => (current === "manual" ? "manual" : "auto"));
@@ -484,7 +487,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setSummaryEntries(nextSummaryEntries);
     setAutoRules([]);
     setManualDrafts([]);
-    setPlanRefsByLine({});
     if (!preservePendingRemovedLineIds) {
       setPendingRemovedLineIds([]);
     }
@@ -579,7 +581,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setSummaryEntries([]);
     setAutoRules([]);
     setManualDrafts([]);
-    setPlanRefsByLine({});
     setPendingRemovedLineIds([]);
     setAppliedSummarySignature("");
     setAppliedSummaryRowKeys([]);
@@ -753,8 +754,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
       latestDraftSaveOperationRunIdRef.current += 1;
     }
 
-    const currentManualRows = manualDrafts.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
-    const currentAutoRows = autoRules.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const lineDraftRowsByLineId = serializeNativeLineDraftRowsByLineId(summaryEntries);
     if (applyDraft && selectedLineId && !lineDraftRowsByLineId.some((block) => block?.lineId === selectedLineId)) {
       lineDraftRowsByLineId.push({ lineId: selectedLineId, lineDraftRows: [] });
@@ -764,10 +763,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       selectedLineId,
       selectedEditLine: selectedLineId,
       mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
-      manualRows: serializeNativeManualRows(currentManualRows),
-      autoRules: serializeNativeAutoRules(currentAutoRows),
       lineDraftRowsByLineId,
-      planRefs: serializePlanRefs(planRefsByLine),
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
       clientRequestSequence: requestSequence,
       applyDraft,
@@ -845,25 +841,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setPanelMessage(null);
   }
 
-  function dropPlanRefs(lineIds) {
-    const ids = [...new Set((Array.isArray(lineIds) ? lineIds : [lineIds]).filter(Boolean))];
-    if (ids.length === 0) {
-      return;
-    }
-
-    setPlanRefsByLine((current) => {
-      let changed = false;
-      const next = { ...(current || {}) };
-      ids.forEach((lineId) => {
-        if (Object.prototype.hasOwnProperty.call(next, lineId)) {
-          delete next[lineId];
-          changed = true;
-        }
-      });
-      return changed ? next : current;
-    });
-  }
-
   function markLocalDataDirty() {
     clearPanelMessage();
   }
@@ -905,7 +882,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     updateRuntimeLineOption(selectedLine.id, { kind: nextType });
     setSelectedLineType(nextType);
     setManualDrafts((current) => sortManualDraftRows(
@@ -1069,15 +1045,12 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   function removeSummaryRow(rowId) {
-    const target = summaryEntries.find((row) => row.id === rowId);
     markLocalDataDirty();
-    dropPlanRefs(target?.lineId || target?.serviceId || "");
     setSummaryEntries((current) => current.filter((row) => row.id !== rowId));
   }
 
   function clearSummaryTable() {
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => {
       if (summaryFilter === "current") {
         return current.filter((row) => row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
@@ -1166,7 +1139,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
     setPanelMessage({
       scope: "manual",
@@ -1237,7 +1209,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
     setAutoRules((current) => current.filter((rule) => (
       rule?.lineId !== selectedLine.id && rule?.serviceId !== selectedLine.id

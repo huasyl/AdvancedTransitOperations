@@ -20,27 +20,13 @@ namespace RapidTransitMod
         [DataMember]
         public DispatchWorkbenchStationDto[] stations;
         [DataMember]
-        public DispatchWorkbenchTripDto[] trips;
-        [DataMember]
-        public DispatchWorkbenchManualRowDto[] manualRows;
-        [DataMember]
-        public DispatchWorkbenchAutoRuleDto[] autoRules;
-        [DataMember]
-        public DispatchWorkbenchStagedRowDto[] lineDraftRows;
-        [DataMember]
         public DispatchWorkbenchLineDraftRowsDto[] lineDraftRowsByLineId;
         [DataMember]
-        public DispatchWorkbenchStagedRowDto[] combinedDraftRows;
-        [DataMember]
         public DispatchWorkbenchStagedRowDto[] appliedRows;
-        [DataMember]
-        public DispatchWorkbenchPlanRefDto[] planRefs;
         [DataMember]
         public string version;
         [DataMember]
         public string sourceMode;
-        [DataMember]
-        public bool rulesApplied;
         [DataMember]
         public bool draftApplied;
         [DataMember]
@@ -318,8 +304,16 @@ namespace RapidTransitMod
         public string[] importedLineIds;
         [DataMember]
         public DispatchPlannerRequestEchoDto requestEcho;
-        [DataMember]
-        public DispatchPlannerPlanDetailDto plan;
+        [DataMember(EmitDefaultValue = false)]
+        public DispatchPlannerLineRoleSummaryDto lineRoleSummary;
+        [DataMember(EmitDefaultValue = false)]
+        public string[] selectedBypassStationIds;
+        [DataMember(EmitDefaultValue = false)]
+        public DispatchPlannerChangedRowDto[] changedRows;
+        [DataMember(EmitDefaultValue = false)]
+        public DispatchPlannerScheduleActionDto[] structuredActions;
+        [DataMember(EmitDefaultValue = false)]
+        public DispatchPlannerRiskItemDto[] riskItems;
     }
 
     [DataContract]
@@ -333,13 +327,15 @@ namespace RapidTransitMod
         public string selectedEditLine;
         [DataMember]
         public DispatchWorkbenchMergedView mergedView;
-        [DataMember]
+        [DataMember(EmitDefaultValue = false)]
         public DispatchWorkbenchManualRowDto[] manualRows;
-        [DataMember]
+        [DataMember(EmitDefaultValue = false)]
         public DispatchWorkbenchAutoRuleDto[] autoRules;
-        [DataMember]
+        [DataMember(EmitDefaultValue = false)]
         public DispatchWorkbenchStagedRowDto[] lineDraftRows;
         [DataMember]
+        public DispatchWorkbenchStagedRowDto[] stagedRows;
+        [DataMember(EmitDefaultValue = false)]
         public bool rulesApplied;
         [DataMember]
         public bool draftApplied;
