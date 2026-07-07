@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Game.Buildings;
 using Game.Common;
 using Game.Objects;
@@ -167,6 +168,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 OriginStatus = originStatus,
                 OriginMessageKey = originMessageKey
             };
+            runtimeLine.StableSignature = StableRuntimeSignature(runtimeLine);
             return true;
         }
 
@@ -404,6 +406,28 @@ namespace RapidTransitMod.Dispatch.Workbench
             return m_Sak(anchor) ?? string.Empty;
         }
 
+        internal string StableRuntimeSignature(WorkbenchLineRuntime runtimeLine)
+        {
+            if (runtimeLine == null
+                || runtimeLine.Entity == Entity.Null
+                || !m_EntityManager.Exists(runtimeLine.Entity))
+            {
+                return string.Empty;
+            }
+
+            StringBuilder sb = new StringBuilder(256);
+            sb.Append("entity=").Append(runtimeLine.Entity.Index);
+            sb.Append("|route=").Append(runtimeLine.RouteNumber);
+            sb.Append("|transport=").Append(runtimeLine.TransportType ?? string.Empty);
+            sb.Append("|origin=").Append(runtimeLine.OriginStationId ?? string.Empty);
+            sb.Append("|supported=").Append(runtimeLine.DispatchSupported ? '1' : '0');
+            sb.Append("|reason=").Append(runtimeLine.UnsupportedReason ?? string.Empty);
+            sb.Append("|stations=").Append(runtimeLine.StationCount);
+            sb.Append("|stops=");
+            AppendStopOrderSignature(runtimeLine.Entity, sb);
+            return sb.ToString();
+        }
+
         internal static string StationId(int order)
         {
             return "station-" + order.ToString();
@@ -497,6 +521,53 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             return seenStopEntities.Count;
+        }
+
+        private void AppendStopOrderSignature(Entity line, StringBuilder sb)
+        {
+            if (!m_EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                sb.Append("none");
+                return;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = m_EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            Entity lastStopEntity = Entity.Null;
+            bool appended = false;
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity stopEntity = Stop(waypoints[i].m_Waypoint);
+                if (stopEntity == Entity.Null || stopEntity == lastStopEntity)
+                {
+                    continue;
+                }
+
+                lastStopEntity = stopEntity;
+                if (appended)
+                {
+                    sb.Append('>');
+                }
+
+                sb.Append("s:").Append(stopEntity.Index);
+                sb.Append("|o:").Append(Stops.OriginId(stopEntity) ?? string.Empty);
+                Entity anchor = Anchor(stopEntity);
+                if (anchor != Entity.Null && anchor != stopEntity)
+                {
+                    sb.Append("|b:").Append(anchor.Index);
+                    string sak = Sak(anchor);
+                    if (!string.IsNullOrEmpty(sak))
+                    {
+                        sb.Append("|sak:").Append(sak);
+                    }
+                }
+
+                appended = true;
+            }
+
+            if (!appended)
+            {
+                sb.Append("empty");
+            }
         }
     }
 }

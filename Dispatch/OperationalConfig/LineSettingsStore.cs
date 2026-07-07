@@ -66,6 +66,19 @@ namespace RapidTransitMod
             m_Lines[key] = normalized;
         }
 
+        public bool Clear(LineKey lineKey)
+        {
+            LineKey key = RuntimeConfigStoreDefaults.NormalizeLineKey(lineKey);
+            if (key.IsEmpty)
+                return false;
+
+            if (!m_Lines.Remove(key))
+                return false;
+
+            m_Version++;
+            return true;
+        }
+
         public void Clear()
         {
             if (m_Lines.Count == 0)

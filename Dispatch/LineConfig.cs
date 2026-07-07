@@ -43,6 +43,30 @@ namespace RapidTransitMod.Dispatch
             m_Store.Clear();
         }
 
+        internal bool Clear(string lineId)
+        {
+            return m_Store.Clear(Key(lineId));
+        }
+
+        internal string[] Clear(IEnumerable<string> lineIds)
+        {
+            if (lineIds == null)
+                return Array.Empty<string>();
+
+            List<string> removed = new List<string>();
+            foreach (string lineId in lineIds
+                .Where(id => !string.IsNullOrEmpty(id))
+                .Distinct(StringComparer.Ordinal))
+            {
+                if (m_Store.Clear(Key(lineId)))
+                {
+                    removed.Add(lineId);
+                }
+            }
+
+            return removed.ToArray();
+        }
+
         internal void Apply(IEnumerable<DispatchWorkbenchLineSettingDto> settings)
         {
             if (settings == null)

@@ -45,6 +45,7 @@ export function createEmptySnapshot(overrides = {}) {
     planRefs: [],
     version: "empty",
     sourceMode: "backend-fallback",
+    clientRequestSequence: 0,
     featureSettings: { ...emptyFeatureSettings },
     ...overrides
   };

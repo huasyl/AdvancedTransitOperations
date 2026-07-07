@@ -50,6 +50,7 @@ const CALLS = {
 const EVENTS = {
   snapshotChanged: "suhua::rt.workbench.onSnapshotChanged",
   catalog: "suhua::rt.workbench.onCatalog",
+  lineInvalidated: "suhua::rt.workbench.onLineInvalidated",
   broadcastSnapshotChanged: "suhua::rt.workbench.onBroadcastSnapshotChanged",
   broadcastAssetPreviewStateChanged: "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged",
   broadcastRulePreviewStateChanged: "suhua::rt.workbench.onBroadcastRulePreviewStateChanged"
@@ -632,6 +633,25 @@ function createLiveApi() {
       return () => {
         if (typeof window.engine.off === "function") {
           window.engine.off(EVENTS.catalog, handler);
+        }
+      };
+    },
+    onLineInvalidated(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const event = parsePayload(payload, null);
+        if (event) {
+          callback(event);
+        }
+      };
+
+      window.engine.on(EVENTS.lineInvalidated, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.lineInvalidated, handler);
         }
       };
     },

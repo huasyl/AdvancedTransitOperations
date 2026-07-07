@@ -164,6 +164,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Catalog(),
                 Workbenches.UiEvents.Push,
                 Workbenches.UiEvents.Push,
+                Workbenches.UiEvents.Push,
+                reasons => Run().CleanupConfirmedInvalidatedLines(reasons),
+                runtimeLines =>
+                {
+                    Persist().Load();
+                    return Run().CollectRuntimeMissingLineReasons(runtimeLines);
+                },
                 () => m_Version,
                 () => HostState().IsParked,
                 () => Snapshot().Build(
@@ -252,6 +259,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Rows.Note,
                     Rows.Times,
                     Save,
+                    () => Applied().Save(),
                     Sync().Sync,
                     lineId => m_Runtime.m_Observation.Seed(
                         !string.IsNullOrEmpty(Drafts().Preferred())
@@ -268,7 +276,19 @@ namespace RapidTransitMod.Dispatch.Workbench
                     lineId => m_Drafts.TryGetValue(lineId, out DispatchWorkbenchDraftState draft)
                         ? draft?.PlannerImportContract
                         : null,
-                    waypoint => m_Runtime.m_Resolve.Stop(waypoint)));
+                    waypoint => m_Runtime.m_Resolve.Stop(waypoint),
+                    lineIds =>
+                    {
+                        string[] removed = LineCfg().Clear(lineIds);
+                        if (removed.Length > 0)
+                        {
+                            Depots().Clear();
+                            m_Runtime.m_LineView.Clear();
+                            CatalogCache().MarkDirty();
+                        }
+
+                        return removed;
+                    }));
             return m_Applied;
         }
 
@@ -391,6 +411,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 line => m_Runtime.m_LineView.Hold(line),
                 line => m_Runtime.m_LineView.Dwell(line),
                 line => m_Runtime.m_LineView.DepotId(line),
+                () => Applied().CleanupDeletedOrReplacedAppliedLines(saveChanges: true),
+                () => Applied().ConsumeCleanupInfo(),
                 LogSnapshot,
                 WriteIntegrity,
                 () => m_Runtime.m_Features.Dto());
@@ -440,7 +462,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Drafts(),
                 Query(),
                 Snapshot(),
-                Persist());
+                Persist(),
+                () => Applied().ConsumeCleanupInfo());
             return m_Commands;
         }
 
@@ -688,6 +711,104 @@ namespace RapidTransitMod.Dispatch.Workbench
         private List<DispatchWorkbenchDepotDto> DepotDtos()
         {
             return CatalogCache().Depots();
+        }
+
+        private IEnumerable<string> CollectSavedWorkbenchLineIds()
+        {
+            Persist().Load();
+
+            HashSet<string> lineIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string lineId in LineCfg().Keys())
+            {
+                AddSavedWorkbenchLineId(lineIds, lineId);
+            }
+
+            AddSavedWorkbenchLineId(lineIds, m_Drafts.GetPreferredLineId());
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_Drafts)
+            {
+                AddSavedWorkbenchLineId(lineIds, entry.Key);
+                CollectSavedWorkbenchLineIds(lineIds, entry.Value);
+            }
+
+            return lineIds;
+        }
+
+        private static void CollectSavedWorkbenchLineIds(
+            HashSet<string> lineIds,
+            DispatchWorkbenchDraftState draft)
+        {
+            if (lineIds == null || draft == null)
+            {
+                return;
+            }
+
+            AddSavedWorkbenchLineId(lineIds, draft.SelectedLineId);
+            AddSavedWorkbenchLineId(lineIds, draft.SelectedEditLine);
+
+            DispatchWorkbenchMergedView mergedView = draft.MergedView;
+            if (mergedView != null)
+            {
+                AddSavedWorkbenchLineId(lineIds, mergedView.localLineId);
+                AddSavedWorkbenchLineId(lineIds, mergedView.expressLineId);
+                AddSavedWorkbenchLineIds(lineIds, mergedView.localLineIds);
+                AddSavedWorkbenchLineIds(lineIds, mergedView.expressLineIds);
+            }
+
+            AddSavedWorkbenchLineIds(lineIds, draft.ManualRows?.Select(row => row?.lineId));
+            AddSavedWorkbenchLineIds(lineIds, draft.AutoRules?.Select(rule => rule?.lineId));
+            AddSavedWorkbenchLineIds(lineIds, draft.StagedRows?.Select(row => row?.lineId));
+
+            DispatchWorkbenchPlannerImportContractDto contract = draft.PlannerImportContract;
+            if (contract == null)
+            {
+                return;
+            }
+
+            AddSavedWorkbenchLineId(lineIds, contract.draftKey);
+            AddSavedWorkbenchLineIds(lineIds, contract.importedLineIds);
+
+            DispatchPlannerRequestEchoDto echo = contract.requestEcho;
+            if (echo == null)
+            {
+                return;
+            }
+
+            AddSavedWorkbenchLineId(lineIds, echo.draftKey);
+            AddSavedWorkbenchLineId(lineIds, echo.expressLineId);
+            AddSavedWorkbenchLineId(lineIds, echo.virtualExpressBaseLineId);
+            AddSavedWorkbenchLineIds(lineIds, echo.localLineIds);
+            AddSavedWorkbenchLineIds(lineIds, echo.adjustableLineIds);
+        }
+
+        private static void AddSavedWorkbenchLineIds(
+            HashSet<string> lineIds,
+            IEnumerable<string> sourceLineIds)
+        {
+            foreach (string lineId in sourceLineIds ?? Array.Empty<string>())
+            {
+                AddSavedWorkbenchLineId(lineIds, lineId);
+            }
+        }
+
+        private static void AddSavedWorkbenchLineId(
+            HashSet<string> lineIds,
+            string lineId)
+        {
+            if (lineIds == null)
+            {
+                return;
+            }
+
+            string normalized = DraftStore.GetKey(lineId);
+            if (string.IsNullOrEmpty(normalized)
+                || string.Equals(normalized, "__default__", StringComparison.Ordinal)
+                || string.Equals(normalized, "local", StringComparison.Ordinal)
+                || string.Equals(normalized, "express", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lineIds.Add(normalized);
         }
 
         private void LogSnapshot(

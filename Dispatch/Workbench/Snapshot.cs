@@ -18,6 +18,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<Entity, int> m_GetOriginHoldLimitMinutes;
         private readonly Func<Entity, int> m_GetMaxStationDwellMinutes;
         private readonly Func<Entity, string> m_GetAllowedDepotId;
+        private readonly Func<bool> m_CleanupInvalidApplied;
+        private readonly Func<DispatchWorkbenchCleanupInfoDto> m_ConsumeCleanupInfo;
         private readonly Action<WorkbenchLineRuntime, List<DispatchWorkbenchStationDto>, List<DispatchWorkbenchTripDto>, DispatchWorkbenchDraftState, List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> m_LogSnapshot;
         private readonly Action<string, WorkbenchLineRuntime, string, DispatchWorkbenchDraftState, List<WorkbenchLineRuntime>, List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> m_WriteReport;
         private readonly Func<RuntimeFeatureSettingsDto> m_Features;
@@ -29,6 +31,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<Entity, int> getOriginHoldLimitMinutes,
             Func<Entity, int> getMaxStationDwellMinutes,
             Func<Entity, string> getAllowedDepotId,
+            Func<bool> cleanupInvalidApplied,
+            Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo,
             Action<WorkbenchLineRuntime, List<DispatchWorkbenchStationDto>, List<DispatchWorkbenchTripDto>, DispatchWorkbenchDraftState, List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> logSnapshot,
             Action<string, WorkbenchLineRuntime, string, DispatchWorkbenchDraftState, List<WorkbenchLineRuntime>, List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> writeReport,
             Func<RuntimeFeatureSettingsDto> features)
@@ -48,6 +52,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_GetOriginHoldLimitMinutes = getOriginHoldLimitMinutes ?? throw new ArgumentNullException(nameof(getOriginHoldLimitMinutes));
             m_GetMaxStationDwellMinutes = getMaxStationDwellMinutes ?? throw new ArgumentNullException(nameof(getMaxStationDwellMinutes));
             m_GetAllowedDepotId = getAllowedDepotId ?? throw new ArgumentNullException(nameof(getAllowedDepotId));
+            m_CleanupInvalidApplied = cleanupInvalidApplied ?? throw new ArgumentNullException(nameof(cleanupInvalidApplied));
+            m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
             m_LogSnapshot = logSnapshot ?? throw new ArgumentNullException(nameof(logSnapshot));
             m_WriteReport = writeReport ?? throw new ArgumentNullException(nameof(writeReport));
             m_Features = features ?? throw new ArgumentNullException(nameof(features));
@@ -67,6 +73,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             ulong snapshotVersion,
             string sourceMode)
         {
+            m_CleanupInvalidApplied();
             List<WorkbenchLineRuntime> runtimeLines = m_Query.GetLines(mode);
             WorkbenchLineRuntime activeRuntime =
                 m_Query.ResolveActiveLine(runtimeLines, preferredLineId, m_Drafts.ResolvePreferredLineId(mode), mode);
@@ -177,7 +184,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 sourceMode = sourceMode ?? string.Empty,
                 rulesApplied = draft.RulesApplied,
                 draftApplied = draft.DraftApplied,
-                featureSettings = m_Features()
+                featureSettings = m_Features(),
+                cleanupInfo = m_ConsumeCleanupInfo()
             };
             return snapshot;
         }
@@ -196,6 +204,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             ulong snapshotVersion,
             string sourceMode)
         {
+            m_CleanupInvalidApplied();
             List<WorkbenchLineRuntime> runtimeLines = m_Query.GetLines(mode);
             List<DispatchWorkbenchDepotDto> depots = GetDepotsForLines(runtimeLines);
 
@@ -224,7 +233,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 sourceMode = sourceMode ?? string.Empty,
                 rulesApplied = false,
                 draftApplied = false,
-                featureSettings = m_Features()
+                featureSettings = m_Features(),
+                cleanupInfo = m_ConsumeCleanupInfo()
             };
             return snapshot;
         }

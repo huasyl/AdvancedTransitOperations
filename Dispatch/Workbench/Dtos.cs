@@ -45,6 +45,10 @@ namespace RapidTransitMod
         public bool draftApplied;
         [DataMember]
         public RuntimeFeatureSettingsDto featureSettings;
+        [DataMember]
+        public DispatchWorkbenchCleanupInfoDto cleanupInfo;
+        [DataMember]
+        public int clientRequestSequence;
     }
 
     [DataContract]
@@ -54,6 +58,19 @@ namespace RapidTransitMod
         public string mode;
         [DataMember]
         public string version;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchLineInvalidationEvent
+    {
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public string version;
+        [DataMember]
+        public string[] lineIds;
+        [DataMember]
+        public DispatchWorkbenchCleanupReasonDto[] reasons;
     }
 
     [DataContract]
@@ -143,6 +160,12 @@ namespace RapidTransitMod
         public DispatchWorkbenchPlanRefDto[] planRefs;
         [DataMember]
         public DispatchWorkbenchPlannerImportContractDto plannerImportContract;
+        [DataMember]
+        public string[] removedLineIds;
+        [DataMember]
+        public DispatchWorkbenchLineRuntimeRefDto[] lineRuntimeRefs;
+        [DataMember]
+        public int clientRequestSequence;
     }
 
     [DataContract]
@@ -164,6 +187,15 @@ namespace RapidTransitMod
     }
 
     [DataContract]
+    public class DispatchWorkbenchLineRuntimeRefDto
+    {
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string sourceLineId;
+    }
+
+    [DataContract]
     public class DispatchWorkbenchSaveResult
     {
         [DataMember]
@@ -180,6 +212,30 @@ namespace RapidTransitMod
         public string[] appliedLineIds;
         [DataMember]
         public DispatchWorkbenchSnapshot snapshot;
+        [DataMember]
+        public DispatchWorkbenchCleanupInfoDto cleanupInfo;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchCleanupInfoDto
+    {
+        [DataMember]
+        public string[] removedAppliedLineIds;
+        [DataMember]
+        public string[] removedDraftLineIds;
+        [DataMember]
+        public string[] removedLineSettingIds;
+        [DataMember]
+        public DispatchWorkbenchCleanupReasonDto[] reasons;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchCleanupReasonDto
+    {
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string reason;
     }
 
     [DataContract]

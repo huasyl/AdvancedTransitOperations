@@ -65,6 +65,8 @@ namespace RapidTransitMod
             TryEnableCohtmlDebugger();
 #endif
             updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<RailTravel.QuerySystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<RailTravel.QuerySystem, PathfindSetupSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<Dispatch.Runtime.BoardingFirstFrameGuardSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Dispatch.Runtime.BoardingFirstFrameGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<PassengerFlow.SamplingSystem>(SystemUpdatePhase.GameSimulation);

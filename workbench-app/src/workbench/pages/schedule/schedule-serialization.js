@@ -172,6 +172,23 @@ export function serializePlanRefs(planRefsByLine = {}) {
     }));
 }
 
+export function serializeRemovedLineIds(lineIds = []) {
+  return [...new Set((Array.isArray(lineIds) ? lineIds : []).filter((lineId) => typeof lineId === "string" && lineId.length > 0))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function serializeRuntimeLineRefs(lines = LINE_OPTIONS) {
+  return (Array.isArray(lines) ? lines : [])
+    .filter((line) => line && typeof line === "object" && line.id)
+    .map((line) => ({
+      lineId: line.id,
+      sourceLineId: typeof line.sourceLineId === "string"
+        ? line.sourceLineId
+        : (typeof line.corridorId === "string" ? line.corridorId : "")
+    }))
+    .sort((left, right) => left.lineId.localeCompare(right.lineId));
+}
+
 export function mapSnapshotManualRows(rows = [], fallbackLineId = "") {
   return (Array.isArray(rows) ? rows : []).map((row, index) => ({
     id: row?.id || `manual-${index + 1}`,

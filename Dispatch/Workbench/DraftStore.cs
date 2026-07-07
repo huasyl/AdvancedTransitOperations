@@ -52,6 +52,31 @@ namespace RapidTransitMod.Dispatch.Workbench
             return m_Drafts.TryGetValue(lineKey, out draft);
         }
 
+        public bool Remove(string lineKey)
+        {
+            if (string.IsNullOrEmpty(lineKey))
+                return false;
+
+            bool removed = m_Drafts.Remove(lineKey);
+            if (!removed)
+                return false;
+
+            if (string.Equals(m_PreferredLineId, lineKey, StringComparison.Ordinal))
+            {
+                m_PreferredLineId = string.Empty;
+            }
+
+            foreach (TransitMode mode in m_PreferredLineIdsByMode
+                .Where(entry => string.Equals(entry.Value, lineKey, StringComparison.Ordinal))
+                .Select(entry => entry.Key)
+                .ToArray())
+            {
+                m_PreferredLineIdsByMode.Remove(mode);
+            }
+
+            return true;
+        }
+
         public string GetPreferredLineId()
         {
             return m_PreferredLineId;

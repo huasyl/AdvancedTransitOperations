@@ -69,7 +69,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 errors = new[] { LegacyReadonlyMessage },
                 warnings = Array.Empty<string>(),
                 version = snapshot?.version ?? string.Empty,
-                snapshot = snapshot
+                snapshot = snapshot,
+                cleanupInfo = snapshot?.cleanupInfo
             };
             return Json.Write(result);
         }
