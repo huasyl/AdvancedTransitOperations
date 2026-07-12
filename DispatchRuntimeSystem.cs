@@ -234,10 +234,7 @@ namespace RapidTransitMod
         /// 发车冷却：发车后屏蔽 boarding 变化检测的截止帧。
         /// 防止车辆物理上尚未离开始发站时原生系统触发的假进站 / 假 BV 误写。
         /// </summary>
-        internal NativeHashMap<Entity, uint> m_LastRetireFixLogFrame;
-        internal NativeHashMap<Entity, uint> m_RetireFixCooldownUntil;
         internal NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
-        internal NativeHashMap<Entity, byte> m_RetireFixCount;
         private const bool ENABLE_TRACK_WAYPOINT_ANCHORING = true;
         internal static bool IsTraversalSliceObservationPersistenceEnabled() => true;
         internal static bool IsDwellObservationPersistenceEnabled() => false;
@@ -334,12 +331,8 @@ namespace RapidTransitMod
         internal const uint OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES = 1800;
         internal const uint SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES = 1800;
         internal const uint SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES = 1800;
-        private const uint RETIREFIX_LOG_COOLDOWN_FRAMES = 1800;
-        private const uint RETIREFIX_REPATH_COOLDOWN_FRAMES = 120;
-        internal const uint RETIRE_HANDOFF_RETRY_INTERVAL_FRAMES = 30;
         internal const uint RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES = 180;
         internal const uint ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES = 1800;
-        internal const byte RETIRE_HANDOFF_MAX_ATTEMPTS = 12;
         internal const uint PREPARINGFIX_REPATH_COOLDOWN_FRAMES = 120;
         private const uint BV_WAYPOINT_MISMATCH_LOG_COOLDOWN_FRAMES = 120;
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
@@ -348,7 +341,6 @@ namespace RapidTransitMod
         private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 6;
         private const uint BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES = 60;
         private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
-        private const byte RETIREFIX_DELETE_THRESHOLD = 3;
         internal const float DISPATCH_ESTIMATE_MIN_MINUTES = 2f;
         internal const float DISPATCH_ESTIMATE_MAX_MINUTES = 20f;
         internal const float DISPATCH_FALLBACK_SPEED_M_PER_MIN = 450f;
@@ -507,10 +499,7 @@ namespace RapidTransitMod
                 if (m_BVMisfire.IsCreated) m_BVMisfire.Dispose();
                 if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
                 if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();
-                if (m_LastRetireFixLogFrame.IsCreated) m_LastRetireFixLogFrame.Dispose();
-                if (m_RetireFixCooldownUntil.IsCreated) m_RetireFixCooldownUntil.Dispose();
                 if (m_PreparingFixCooldownUntil.IsCreated) m_PreparingFixCooldownUntil.Dispose();
-                if (m_RetireFixCount.IsCreated) m_RetireFixCount.Dispose();
                 if (m_SpawningLines.IsCreated) m_SpawningLines.Dispose();
                 if (m_LastSpawnBlockedLogFrame.IsCreated) m_LastSpawnBlockedLogFrame.Dispose();
                 if (m_LastScheduleDiagnosticLogFrame.IsCreated) m_LastScheduleDiagnosticLogFrame.Dispose();

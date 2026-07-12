@@ -52,7 +52,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             if (Input.GetKeyDown(KeyCode.F7))
             {
-                m_Runtime.m_CommandApplier.ForceRetireOne(m_Runtime.m_EndFrameBarrier.CreateCommandBuffer());
+                m_Runtime.m_CommandApplier.ForceRetireOne();
                 return;
             }
 #endif
@@ -110,6 +110,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             m_Runtime.m_LineStructureInvalidator.Drain();
 
+            m_Runtime.m_CommandApplier.ReconcileRetireDispatchLocksOnReady();
+
             bool runFullRegisterSweep = nowMin != m_Runtime.m_LastRegisterSweepMinute;
             try
             {
@@ -161,6 +163,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.log.Info("[PassengerFlowPersistence] Restore failed -> " + ex.GetType().Name + ": " + ex.Message);
             }
             ResetCityBufferReadyFlags();
+            m_Runtime.m_CommandApplier.ResetRetireDispatchLockStages();
+            m_Runtime.m_CommandApplier.ProjectRetireDispatchLocksImmediatelyOnLoad();
             m_Runtime.m_SystemReady = false;
             m_Runtime.m_StartupRuntimeStateCleared = false;
             m_Runtime.m_StableFrameCount = 0;
@@ -230,10 +234,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_BVMisfireStartFrame.Clear();
             m_Runtime.m_ForcedMidStopBoardingGraceUntil.Clear();
             m_Runtime.m_CommandApplier.ClearRetireHandoffState();
-            m_Runtime.m_LastRetireFixLogFrame.Clear();
-            m_Runtime.m_RetireFixCooldownUntil.Clear();
             m_Runtime.m_PreparingFixCooldownUntil.Clear();
-            m_Runtime.m_RetireFixCount.Clear();
             m_Runtime.m_SpawningLines.Clear();
             m_Runtime.m_LineSpawnRequestFrame.Clear();
             m_Runtime.m_LastSpawnBlockedLogFrame.Clear();
@@ -293,10 +294,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_BVMisfireStartFrame.Clear();
             m_Runtime.m_ForcedMidStopBoardingGraceUntil.Clear();
             m_Runtime.m_CommandApplier.ClearRetireHandoffState();
-            m_Runtime.m_LastRetireFixLogFrame.Clear();
-            m_Runtime.m_RetireFixCooldownUntil.Clear();
             m_Runtime.m_PreparingFixCooldownUntil.Clear();
-            m_Runtime.m_RetireFixCount.Clear();
             m_Runtime.m_SpawningLines.Clear();
             m_Runtime.m_LineSpawnRequestFrame.Clear();
             m_Runtime.m_LastSpawnBlockedLogFrame.Clear();
@@ -389,6 +387,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                     Entity vehicle = queue[i];
                     if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
                         continue;
+                    if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
+                    {
+                        continue;
+                    }
                     if (m_Runtime.EntityManager.HasComponent<Deleted>(vehicle)
                         || m_Runtime.EntityManager.HasComponent<ParkedTrain>(vehicle))
                     {

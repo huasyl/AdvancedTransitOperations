@@ -72,13 +72,9 @@ namespace RapidTransitMod
             updateSystem.UpdateAt<PassengerFlow.SamplingSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<PassengerFlow.SamplingSystem, DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<PreSerialize<PassengerFlow.SamplingSystem>>(SystemUpdatePhase.Serialize);
-            updateSystem.UpdateAt<RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportLineSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateAt<RetireHandoffDispatchGuardSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, TrainNavigationSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateBefore<RetireHandoffDispatchGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RetireDispatchPreTrainAiQuarantineSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RetireDispatchPostTrainAiRearmSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<OriginArrivingStallRepairSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<OriginArrivingStallRepairSystem, TrainNavigationSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<OriginArrivingStallRepairSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);

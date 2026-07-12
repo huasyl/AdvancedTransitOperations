@@ -49,7 +49,7 @@ namespace RapidTransitMod.Dispatch.Commands
             CommitPublicTransport(vehicle, publicTransport, ecb);
         }
 
-        private static void ForceOfficialBoardingClose(ref PublicTransport publicTransport, uint nowFrame)
+        internal static void ForceOfficialBoardingClose(ref PublicTransport publicTransport, uint nowFrame)
         {
             publicTransport.m_DepartureFrame = nowFrame > DispatchRuntimeSystem.OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
                 ? nowFrame - DispatchRuntimeSystem.OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES

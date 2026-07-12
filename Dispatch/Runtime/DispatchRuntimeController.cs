@@ -339,6 +339,32 @@ namespace RapidTransitMod
             m_Vehicles.ClearBoardingGrace(vehicle);
         }
 
+        internal void CaptureRetireSpawnTarget(
+            Entity line,
+            out int preActive,
+            out bool hadSpawnTarget,
+            out int oldSpawnTarget)
+        {
+            m_LineSpawnControl.CaptureRetireTarget(
+                line,
+                out preActive,
+                out hadSpawnTarget,
+                out oldSpawnTarget);
+        }
+
+        internal void ApplyRetireSpawnTarget(
+            Entity line,
+            int preActive,
+            bool hadSpawnTarget,
+            int oldSpawnTarget)
+        {
+            m_LineSpawnControl.ApplyRetireTarget(
+                line,
+                preActive,
+                hadSpawnTarget,
+                oldSpawnTarget);
+        }
+
         public void Hold(Entity vehicle, uint readyFrame)
         {
             m_Vehicles.SetState(vehicle, VehicleState.Holding);
@@ -571,11 +597,11 @@ namespace RapidTransitMod
         {
             TickVehicles(ecb, nowMin);
             m_Runtime.m_Announcements.Tick(m_Runtime.m_SimulationSystem.frameIndex);
-            m_Runtime.m_CommandApplier.ReleaseCompletedRetireHandoffs();
+            m_Runtime.m_CommandApplier.FinalizeRetireDispatchLockTerminals();
             m_RuntimeVehicleCleanup.Tick();
             TickLineControls(nowMin);
             m_SchedulerApply.Tick(ecb, nowMin);
-            m_Runtime.m_CommandApplier.TickRetireHandoffWatch(ecb, m_Runtime.m_SimulationSystem.frameIndex);
+            m_Runtime.m_CommandApplier.TickRetireHandoffStages(m_Runtime.m_SimulationSystem.frameIndex);
         }
 
         private void TickVehicles(EntityCommandBuffer ecb, int nowMin)

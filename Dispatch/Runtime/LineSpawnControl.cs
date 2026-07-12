@@ -43,6 +43,45 @@ namespace RapidTransitMod
             }
         }
 
+        public void CaptureRetireTarget(
+            Entity line,
+            out int preActive,
+            out bool hadSpawnTarget,
+            out int oldSpawnTarget)
+        {
+            preActive = 0;
+            hadSpawnTarget = false;
+            oldSpawnTarget = 0;
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return;
+
+            BufferLookup<RouteVehicle> routeVehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
+            preActive = m_Runtime.m_LineVehicles.Count(line, routeVehicles);
+            hadSpawnTarget = m_Runtime.m_SpawningLines.TryGetValue(line, out oldSpawnTarget);
+        }
+
+        public void ApplyRetireTarget(
+            Entity line,
+            int preActive,
+            bool hadSpawnTarget,
+            int oldSpawnTarget)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return;
+
+            BufferLookup<RouteVehicle> routeVehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
+            BufferLookup<RouteModifier> modifiers = m_Runtime.GetBufferLookup<RouteModifier>(false);
+            BufferLookup<RouteWaypoint> waypoints = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
+            int postActive = m_Runtime.m_LineVehicles.Count(line, routeVehicles);
+            if (hadSpawnTarget && m_Runtime.m_SpawningLines.ContainsKey(line))
+            {
+                int plannedAdditional = math.max(0, oldSpawnTarget - preActive);
+                m_Runtime.m_SpawningLines[line] = postActive + plannedAdditional;
+            }
+
+            ApplyPuppetMasterControlForLine(line, routeVehicles, modifiers, waypoints);
+        }
+
         private void PuppetMasterControl(int nowMin)
         {
             NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
