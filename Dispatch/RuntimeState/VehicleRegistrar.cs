@@ -110,6 +110,10 @@ namespace RapidTransitMod
                 if (!m_Runtime.EntityManager.Exists(v)) continue;
                 if (!seenVehicles.Add(v)) continue;
                 if (m_Runtime.m_VehicleView.Contains(v)) continue;
+                if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(v))
+                {
+                    continue;
+                }
 
                         Game.Vehicles.PublicTransport pt0 =
                             m_Runtime.EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v);
@@ -248,6 +252,10 @@ namespace RapidTransitMod
                     if (!m_Runtime.EntityManager.Exists(vehicle)) continue;
                     if (!seenVehicles.Add(vehicle)) continue;
                     if (m_Runtime.m_VehicleView.Contains(vehicle)) continue;
+                    if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
+                    {
+                        continue;
+                    }
                     if (m_Runtime.EntityManager.HasComponent<Deleted>(vehicle)
                         || m_Runtime.EntityManager.HasComponent<ParkedTrain>(vehicle))
                     {

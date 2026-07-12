@@ -201,10 +201,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             runtime.m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            runtime.m_LastRetireFixLogFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            runtime.m_RetireFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_PreparingFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            runtime.m_RetireFixCount = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
             runtime.m_SpawningLines = new NativeHashMap<Entity, int>(64, Allocator.Persistent);
             runtime.m_LastSpawnBlockedLogFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
             runtime.m_LastScheduleDiagnosticLogFrame = new NativeHashMap<ulong, uint>(256, Allocator.Persistent);
@@ -216,7 +213,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             LifecyclePort.Bind(new LifecyclePort(
                 new ManagedRequestPort(runtime),
-                new RetireGuardPort(runtime.m_CommandApplier.GuardRetireHandoffInputs),
                 new OriginRepairPort(
                     runtime.IsRuntimeReadyForOriginArrivingRepair,
                     runtime.TryGetRuntimeVehicleState,

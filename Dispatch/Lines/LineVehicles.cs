@@ -20,6 +20,10 @@ namespace RapidTransitMod.Dispatch.Lines
             {
                 Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(vehicles[i].m_Vehicle);
                 if (!m_Runtime.EntityManager.Exists(vehicle)) continue;
+                if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
+                {
+                    continue;
+                }
                 if (m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
                     && state == VehicleState.Retiring)
                 {

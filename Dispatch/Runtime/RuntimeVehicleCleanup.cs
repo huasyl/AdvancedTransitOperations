@@ -86,11 +86,8 @@ namespace RapidTransitMod
                 m_Runtime.Bypass.ClearVehicle(dead);
                 m_Runtime.TrackProjection.ClearVehicleProgressSuspect(dead, "vehicle-removed");
                 m_Runtime.m_Observation.ClearForcedMidStop(dead);
-                m_Runtime.m_LastRetireFixLogFrame.Remove(dead);
-                m_Runtime.m_RetireFixCooldownUntil.Remove(dead);
                 m_Runtime.m_CommandApplier.RemoveRetireHandoff(dead);
                 m_Runtime.m_PreparingFixCooldownUntil.Remove(dead);
-                m_Runtime.m_RetireFixCount.Remove(dead);
                 m_ClearAssistLaunchPending(dead);
                 m_Runtime.m_Observation.ClearDwellDeadlineCache(dead);
                 m_Runtime.m_ObsPersist.ClearDwell(dead);

@@ -8,16 +8,13 @@ namespace RapidTransitMod
         public static LifecyclePort Current { get; private set; } = null!;
 
         public ManagedRequestPort ManagedRequests { get; }
-        public RetireGuardPort RetireGuard { get; }
         public OriginRepairPort OriginRepair { get; }
 
         public LifecyclePort(
             ManagedRequestPort managedRequests,
-            RetireGuardPort retireGuard,
             OriginRepairPort originRepair)
         {
             ManagedRequests = managedRequests;
-            RetireGuard = retireGuard;
             OriginRepair = originRepair;
         }
 

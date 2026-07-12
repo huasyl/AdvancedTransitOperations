@@ -67,7 +67,10 @@ namespace RapidTransitMod
                         }
 
                         if (EntityManager.HasComponent<RtSpawnPermitRequest>(request))
+                        {
+                            ReconcileSpawnPermit(managedRequests, request, line, ref transportLine);
                             continue;
+                        }
 
                         if (ShouldReplaceUnauthorizedPendingRequest(request, line))
                         {
@@ -244,6 +247,34 @@ namespace RapidTransitMod
 
             if (!EntityManager.HasComponent<RequestGroup>(request))
                 EntityManager.AddComponentData(request, new RequestGroup(8u));
+        }
+
+        private void ReconcileSpawnPermit(
+            ManagedRequestPort managedRequests,
+            Entity request,
+            Entity line,
+            ref TransportLine transportLine)
+        {
+            bool committed = EntityManager.HasComponent<PathInformation>(request)
+                || EntityManager.HasComponent<Dispatched>(request);
+            bool stillRequired = managedRequests.TryGetSpawnTarget(line, out int targetCount)
+                && targetCount > managedRequests.CountActiveVehicles(line);
+            if (committed || stillRequired)
+            {
+                if ((transportLine.m_Flags & TransportLineFlags.RequireVehicles) == 0)
+                {
+                    transportLine.m_Flags |= TransportLineFlags.RequireVehicles;
+                    EntityManager.SetComponentData(line, transportLine);
+                }
+                return;
+            }
+
+            if (!EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
+                EntityManager.AddComponent<RtVehicleRequestSentinel>(request);
+            NormalizeParkedSentinel(request, line);
+            transportLine.m_Flags &= ~TransportLineFlags.RequireVehicles;
+            transportLine.m_VehicleRequest = request;
+            EntityManager.SetComponentData(line, transportLine);
         }
 
         private bool ShouldReplaceUnauthorizedPendingRequest(Entity request, Entity line)
