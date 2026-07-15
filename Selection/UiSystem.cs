@@ -370,6 +370,7 @@ namespace RapidTransitMod
                 sb.Append("\"predictorGeneration\":").Append(status.Generation).Append(',');
                 AppendJsonBool(sb, "incomplete", status.Incomplete);
                 AppendJsonString(sb, "comparisonSummary", status.ComparisonSummary);
+                if (sb[sb.Length - 1] == ',') sb.Length--;
                 sb.Append('}');
                 payload = sb.ToString();
             }
