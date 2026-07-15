@@ -52,7 +52,9 @@ export function RapidTransitPanel() {
       etaSnapshotStatus = JSON.parse(etaSnapshotStatusJson);
       if (etaSnapshotStatus && etaSnapshotStatus.comparisonSummary) {
         const comparisonStatus = JSON.parse(etaSnapshotStatus.comparisonSummary);
-        etaSnapshotStatus = { ...etaSnapshotStatus, ...comparisonStatus };
+        const selectedVehicleMatches = panelData?.mode === "vehicle"
+          && String(panelData.entityId) === String(comparisonStatus.comparisonVehicleIndex);
+        etaSnapshotStatus = selectedVehicleMatches ? { ...etaSnapshotStatus, ...comparisonStatus } : null;
       }
     } catch (error) {
       console.error("RapidTransit ETA snapshot status JSON parse failed", error);

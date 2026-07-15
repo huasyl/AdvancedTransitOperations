@@ -47,6 +47,7 @@ export interface EtaSnapshotStatusData {
   comparisonValid?: boolean;
   comparisonInvalidReason?: string;
   comparisonVehicleId?: string;
+  comparisonVehicleIndex?: number;
   comparisonPredictedArrival?: number;
   comparisonActualArrival?: number;
   comparisonFinishDelta?: number;
