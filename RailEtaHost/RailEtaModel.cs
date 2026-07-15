@@ -27,6 +27,8 @@ namespace RapidTransitMod.RailEtaHost
         public string State { get; internal set; } = "Idle";
         public string Failure { get; internal set; } = string.Empty;
         public string Detail { get; internal set; } = string.Empty;
+        public long TargetVehicle { get; internal set; }
+        public long TargetWaypoint { get; internal set; }
         public uint EtaFrame { get; internal set; }
         public string Source { get; internal set; } = string.Empty;
         public string Build { get; internal set; } = string.Empty;

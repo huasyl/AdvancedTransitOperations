@@ -28,15 +28,23 @@ namespace RapidTransitMod.RailEtaHost
         {
             if (IsDisposed || WorkerLost) return default;
             RailEtaPublicTicket ticket = new RailEtaPublicTicket(Interlocked.Increment(ref m_NextTicket));
-            var status = new RailEtaPublicStatus { Ticket = ticket, State = m_HotRuntime?.Current == null ? "Unavailable" : "Queued", Generation = m_Generation };
+            RailEtaHotRuntime.Selection selection = m_HotRuntime?.Current;
+            var status = new RailEtaPublicStatus
+            {
+                Ticket = ticket,
+                State = selection == null ? "Unavailable" : "Queued",
+                TargetVehicle = ((long)(uint)descriptor.VehicleIndex << 32) | (uint)descriptor.VehicleVersion,
+                TargetWaypoint = descriptor.TargetCheckpointId,
+                Generation = selection?.Generation ?? 0
+            };
             m_Status[ticket.Value] = status;
-            if (m_HotRuntime?.Current == null)
+            if (selection == null)
             {
                 status.Failure = "HotModuleUnavailable";
                 status.Detail = "Rail ETA hot module is not loaded.";
                 return ticket;
             }
-            m_HotRuntime.Submit(new RailEtaHotCommand(ticket.Value, m_Generation, descriptor.VehicleIndex, descriptor.VehicleVersion, descriptor.TargetCheckpointId));
+            m_HotRuntime.Submit(new RailEtaHotCommand(ticket.Value, checked((int)selection.Generation), descriptor.VehicleIndex, descriptor.VehicleVersion, descriptor.TargetCheckpointId));
             return ticket;
         }
 
@@ -69,6 +77,8 @@ namespace RapidTransitMod.RailEtaHost
             status.State = result.State ?? string.Empty;
             status.Failure = result.Failure ?? string.Empty;
             status.Detail = result.Detail ?? string.Empty;
+            status.TargetVehicle = result.TargetVehicle;
+            status.TargetWaypoint = result.TargetWaypoint;
             status.EtaFrame = result.EtaFrame;
             status.Source = result.Source ?? string.Empty;
             status.Build = result.Build ?? string.Empty;
