@@ -77,7 +77,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RailEtaHotRuntime.Attach(new RailEtaHost.RailEtaHotContext(
                 runtime.World,
                 () => runtime.m_SimulationSystem.frameIndex,
-                runtime.World.GetExistingSystemManaged<RailTravel.QuerySystem>(),
+                runtime.World.GetOrCreateSystemManaged<RailTravel.QuerySystem>(),
                 new RailEtaHost.RailEtaRuntimeReadPort
                 {
                     LineDwellMinutes = line => runtime.m_LineView.Dwell(line),
