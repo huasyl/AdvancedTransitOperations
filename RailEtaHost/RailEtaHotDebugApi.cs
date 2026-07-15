@@ -17,7 +17,7 @@ namespace RapidTransitMod.RailEtaHost
         public static Task<uint> InvokeRailEtaSmokeAsync()
             => Runtime?.SmokeAsync() ?? Task.FromResult(0u);
 
-        public static bool EtaWorkerLost => RailEtaService.Current?.WorkerLost ?? false;
+        public static bool EtaWorkerLost => RailEtaBridgeService.Current?.WorkerLost ?? false;
         public static bool WorkerLost => EtaWorkerLost;
         public static bool Available => Runtime != null;
 
@@ -36,8 +36,8 @@ namespace RapidTransitMod.RailEtaHost
 
         public static bool RollbackRailEta() => Runtime?.Rollback() ?? false;
 
-        public static Task<string> ExportRailEtaDebugAsync(RailEtaTicket ticket, string filePath = null)
-            => RailEtaService.Current?.ExportDebugAsync(ticket, filePath) ?? Task.FromException<string>(new InvalidOperationException("Rail ETA service is unavailable."));
+        public static Task<string> ExportRailEtaDebugAsync(RailEtaPublicTicket ticket, string filePath = null)
+            => Task.FromException<string>(new InvalidOperationException("Detailed ETA diagnostics are owned by the hot module."));
 
         public static string StatusJson()
         {
@@ -51,7 +51,7 @@ namespace RapidTransitMod.RailEtaHost
             StringBuilder sb = new StringBuilder(288);
             sb.Append('{');
             Append(sb, "busy", status.Busy ? "true" : "false", false);
-            Append(sb, "currentSource", String.IsNullOrEmpty(status.CurrentBuildId) ? "built-in" : "hot", true);
+            Append(sb, "currentSource", String.IsNullOrEmpty(status.CurrentBuildId) ? "unavailable" : "hot", true);
             Append(sb, "currentBuildId", status.CurrentBuildId, true);
             Append(sb, "generation", status.Generation.ToString(CultureInfo.InvariantCulture), false);
             Append(sb, "lastAction", status.LastAction, true);

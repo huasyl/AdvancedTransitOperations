@@ -611,11 +611,6 @@ namespace RapidTransitMod
             var targetLookup = m_Runtime.GetComponentLookup<Target>(true);
             var currentRouteLookup = m_Runtime.GetComponentLookup<CurrentRoute>(true);
             var vehicles = m_Runtime.m_VehicleView.Keys(Allocator.Temp);
-            uint railEtaFrame = m_Runtime.m_SimulationSystem.frameIndex;
-            bool captureRailEtaHolds = m_Runtime.ShouldPublishRailEtaControlledHolds();
-            Dictionary<Entity, RapidTransitMod.RailEta.Contracts.RailControlledHoldSnapshot> railEtaHolds = captureRailEtaHolds
-                ? new Dictionary<Entity, RapidTransitMod.RailEta.Contracts.RailControlledHoldSnapshot>()
-                : null;
 
             try
             {
@@ -624,11 +619,6 @@ namespace RapidTransitMod
                     if (!EntityManager.Exists(v)) continue;
                     if (!m_Runtime.m_VehicleView.TryGetState(v, out var state)) continue;
                     int targetMin = m_Runtime.m_VehicleView.TryGetTarget(v, out int tm) ? tm : -1;
-                    if (captureRailEtaHolds)
-                    {
-                        RapidTransitMod.RailEta.Contracts.RailControlledHoldSnapshot railEtaHold = m_Runtime.BuildRailEtaControlledHold(v, state, targetMin, railEtaFrame, nowMin);
-                        if (railEtaHold != null) railEtaHolds[v] = railEtaHold;
-                    }
                     Entity line = m_Runtime.m_VehicleView.TryGetLine(v, out Entity mappedLine)
                         ? mappedLine
                         : Entity.Null;
@@ -1959,8 +1949,6 @@ namespace RapidTransitMod
             }
             finally
             {
-                if (captureRailEtaHolds)
-                    m_Runtime.PublishRailEtaControlledHolds(railEtaFrame, railEtaHolds);
                 vehicles.Dispose();
             }
         }

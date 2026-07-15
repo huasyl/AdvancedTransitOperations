@@ -56,11 +56,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="Core\RailEta.Contracts\RapidTransitMod.RailEta.Contracts.csproj" />
-    <ProjectReference Include="Core\RailEta.Engine\RapidTransitMod.RailEta.Engine.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Reference Include="AssetDatabase.TestScenarios">
       <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\AssetDatabase.TestScenarios.dll</HintPath>
       <Private>False</Private>
@@ -158,8 +153,6 @@
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.mjs" />
       <RapidTransitDeployFiles Include="$(OutputPath)THIRD_PARTY_NOTICES.txt" />
       <RapidTransitDeployFiles Include="$(OutputPath)mod.json" />
-      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.RailEta.Contracts.dll" />
-      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.RailEta.Engine.dll" />
     </ItemGroup>
     <ItemGroup>
       <RapidTransitDeployUiFiles Include="$(OutputPath)UI\**\*" />

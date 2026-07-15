@@ -70,10 +70,17 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
             runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
             RailEtaHost.RailEtaWorker railEtaWorker = new RailEtaHost.RailEtaWorker();
-            runtime.m_RailEtaService = new RailEtaHost.RailEtaService(railEtaWorker, new RailEtaHost.SnapshotGeometryProvider());
-            RailEtaHost.RailEtaService.Bind(runtime.m_RailEtaService);
+            runtime.m_RailEtaService = new RailEtaHost.RailEtaBridgeService(railEtaWorker);
+            RailEtaHost.RailEtaBridgeService.Bind(runtime.m_RailEtaService);
 #if RT_DEBUG_TOOLS
             runtime.m_RailEtaHotRuntime = new RailEtaHost.RailEtaHotRuntime(railEtaWorker);
+            runtime.m_RailEtaHotRuntime.Attach(new RailEtaHost.RailEtaHotContext(
+                runtime.World,
+                () => runtime.m_SimulationSystem.frameIndex,
+                runtime.World.GetExistingSystemManaged<RailTravel.QuerySystem>(),
+                railEtaWorker,
+                result => runtime.PublishRailEtaPublicResult(result),
+                message => runtime.log.Info(message)));
             runtime.m_RailEtaService.SetHotRuntime(runtime.m_RailEtaHotRuntime);
 #endif
             runtime.m_RuntimeShell = new RuntimeShell(runtime);

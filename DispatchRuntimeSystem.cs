@@ -205,7 +205,7 @@ namespace RapidTransitMod
         internal RuntimeLog m_RuntimeLog = null!;
         internal RuntimeHotPathProbe m_RuntimeHotPathProbe = null!;
         internal RuntimeShell m_RuntimeShell = null!;
-        internal RailEtaHost.RailEtaService m_RailEtaService = null!;
+        internal RailEtaHost.RailEtaBridgeService m_RailEtaService = null!;
 #if RT_DEBUG_TOOLS
         internal RailEtaHost.RailEtaHotRuntime m_RailEtaHotRuntime = null!;
 #endif
@@ -462,6 +462,7 @@ namespace RapidTransitMod
 
         protected override void OnUpdate()
         {
+            Dependency = m_RailEtaService?.TickHot(m_SimulationSystem.frameIndex, Dependency) ?? Dependency;
             m_RuntimeShell.Tick();
         }
 

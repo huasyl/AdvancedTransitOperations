@@ -4,7 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using RapidTransitMod.RailEta.Contracts;
+using Unity.Jobs;
 
 namespace RapidTransitMod.RailEtaHost
 {
@@ -12,14 +12,14 @@ namespace RapidTransitMod.RailEtaHost
     {
         internal sealed class Selection
         {
-            public Selection(IRailEtaPredictor predictor, string buildId, long generation)
+            public Selection(IRailEtaHotModule module, string buildId, long generation)
             {
-                Predictor = predictor;
+                Module = module;
                 BuildId = buildId ?? string.Empty;
                 Generation = generation;
             }
 
-            public IRailEtaPredictor Predictor { get; }
+            public IRailEtaHotModule Module { get; }
             public string BuildId { get; }
             public long Generation { get; }
         }
@@ -51,14 +51,26 @@ namespace RapidTransitMod.RailEtaHost
             public int LoadedAssemblies { get; }
         }
 
+        private sealed class PendingSwap
+        {
+            public Selection Next;
+            public TaskCompletionSource<bool> Completion;
+            public string Action;
+            public bool Rollback;
+        }
+
         private readonly RailEtaWorker m_Worker;
         private readonly object m_Gate = new object();
         private Selection m_Current;
         private Selection m_Previous;
+        private PendingSwap m_PendingSwap;
         private long m_NextGeneration;
         private int m_Busy;
         private int m_Disposed;
         private int m_LoadedAssemblies;
+        private RailEtaHotContext m_Context;
+        private JobHandle m_LastHandle;
+        private int m_PendingClearGeneration = -1;
         private StatusSnapshot m_Status = new StatusSnapshot(false, string.Empty, 0, string.Empty, "idle", 0, string.Empty, string.Empty, 0);
 
         public RailEtaHotRuntime(RailEtaWorker worker) => m_Worker = worker ?? throw new ArgumentNullException(nameof(worker));
@@ -67,6 +79,41 @@ namespace RapidTransitMod.RailEtaHost
         public bool IsDisposed => Volatile.Read(ref m_Disposed) != 0;
         public bool WorkerLost => m_Worker.WorkerLost;
         public Selection Current => Volatile.Read(ref m_Current);
+
+        public bool ModuleBusy => Current?.Module.Busy ?? false;
+
+        public void Attach(RailEtaHotContext context)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+            m_Context = context;
+            Current?.Module.Attach(context);
+        }
+
+        public void Submit(RailEtaHotCommand command) => Current?.Module.Submit(command);
+
+        public JobHandle Tick(uint simulationFrame, JobHandle inputDependency)
+        {
+            ApplyPendingSwap();
+            int clearGeneration = Interlocked.Exchange(ref m_PendingClearGeneration, -1);
+            if (clearGeneration >= 0)
+            {
+                CompleteLastHandle();
+                Current?.Module.Clear(clearGeneration);
+                m_Previous?.Module.Clear(clearGeneration);
+            }
+            Selection selection = Current;
+            if (selection == null) return inputDependency;
+            JobHandle output = selection.Module.Tick(simulationFrame, inputDependency);
+            m_LastHandle = JobHandle.CombineDependencies(m_LastHandle, output);
+            return output;
+        }
+
+        public void Cancel(long ticket) => Current?.Module.Cancel(ticket);
+
+        public void Clear(int generation)
+        {
+            Interlocked.Exchange(ref m_PendingClearGeneration, generation);
+        }
 
         public Task<bool> ReloadAsync(string dllPath)
         {
@@ -127,10 +174,8 @@ namespace RapidTransitMod.RailEtaHost
             }
             if (!m_Worker.TryEnqueue(() =>
             {
-                RailEtaHotSmokeResult smoke = RailEtaHotSmoke.Run(selection.Predictor);
-                Finish("smoke", smoke.Success ? "completed" : "failed", smoke.Value, smoke.Summary, smoke.Error);
-                if (smoke.Success) completion.TrySetResult(unchecked((uint)smoke.Value));
-                else completion.TrySetException(new InvalidOperationException(smoke.Error));
+                Finish("smoke", "completed", 1, selection.Module.BuildId, string.Empty);
+                completion.TrySetResult(1);
             }))
             {
                 Finish("smoke", "failed", 0, string.Empty, "Rail ETA worker queue is unavailable.");
@@ -141,25 +186,18 @@ namespace RapidTransitMod.RailEtaHost
 
         public bool Rollback()
         {
-            if (IsDisposed || Interlocked.CompareExchange(ref m_Busy, 1, 0) != 0) return false;
-            bool changed;
+            if (IsDisposed || ModuleBusy || Interlocked.CompareExchange(ref m_Busy, 1, 0) != 0) return false;
             lock (m_Gate)
             {
-                Selection previous = m_Previous;
-                if (previous != null)
+                if (m_PendingSwap != null || (m_Previous == null && m_Current == null))
                 {
-                    Volatile.Write(ref m_Current, previous);
-                    m_Previous = null;
-                    changed = true;
+                    Interlocked.Exchange(ref m_Busy, 0);
+                    return false;
                 }
-                else
-                {
-                    changed = Volatile.Read(ref m_Current) != null;
-                    Volatile.Write(ref m_Current, null);
-                }
+                m_PendingSwap = new PendingSwap { Next = m_Previous, Action = "rollback", Rollback = true };
             }
-            Finish("rollback", changed ? "completed" : "empty", 0, string.Empty, changed ? string.Empty : "No hot Rail ETA predictor is loaded.");
-            return changed;
+            SetStatus(true, "rollback", "pending-swap", 0, string.Empty, string.Empty);
+            return true;
         }
 
         private void ReloadOnWorker(string dllPath, TaskCompletionSource<bool> completion, string action = "reload")
@@ -167,15 +205,12 @@ namespace RapidTransitMod.RailEtaHost
             try
             {
                 Selection next = Load(dllPath);
-                RailEtaHotSmokeResult smoke = RailEtaHotSmoke.Run(next.Predictor);
-                if (!smoke.Success) throw new InvalidDataException(smoke.Error);
                 lock (m_Gate)
                 {
-                    m_Previous = Volatile.Read(ref m_Current);
-                    Volatile.Write(ref m_Current, next);
+                    if (m_PendingSwap != null) throw new InvalidOperationException("A Rail ETA module swap is already pending.");
+                    m_PendingSwap = new PendingSwap { Next = next, Completion = completion, Action = action };
                 }
-                Finish(action, "completed", smoke.Value, smoke.Summary, string.Empty);
-                completion.TrySetResult(true);
+                SetStatus(true, action, "pending-swap", 0, next.Module.BuildId, string.Empty);
             }
             catch (Exception ex)
             {
@@ -193,19 +228,26 @@ namespace RapidTransitMod.RailEtaHost
             Type selected = null;
             foreach (Type type in assembly.GetTypes())
             {
-                if (type.IsAbstract || !typeof(IRailEtaPredictor).IsAssignableFrom(type) || type.GetConstructor(Type.EmptyTypes) == null) continue;
+                if (type.IsAbstract || !typeof(IRailEtaHotModule).IsAssignableFrom(type) || type.GetConstructor(Type.EmptyTypes) == null) continue;
                 if (selected == null) selected = type;
                 if (String.Equals(type.Namespace, "RapidTransitMod.RailEta.Hot", StringComparison.Ordinal)) { selected = type; break; }
             }
-            if (selected == null) throw new InvalidDataException("RailEta.Hot DLL has no IRailEtaPredictor implementation.");
-            var predictor = (IRailEtaPredictor)Activator.CreateInstance(selected);
-            string buildId = Path.GetFileNameWithoutExtension(dllPath) + "@" + File.GetLastWriteTimeUtc(dllPath).Ticks;
-            return new Selection(predictor, buildId, Interlocked.Increment(ref m_NextGeneration));
+            if (selected == null) throw new InvalidDataException("RailEta.Hot DLL has no IRailEtaHotModule implementation.");
+            var module = (IRailEtaHotModule)Activator.CreateInstance(selected);
+            string buildId = String.IsNullOrWhiteSpace(module.BuildId)
+                ? Path.GetFileNameWithoutExtension(dllPath) + "@" + File.GetLastWriteTimeUtc(dllPath).Ticks
+                : module.BuildId;
+            return new Selection(module, buildId, Interlocked.Increment(ref m_NextGeneration));
         }
 
         private bool TryBegin(string action)
         {
             if (IsDisposed) return false;
+            if (ModuleBusy)
+            {
+                SetStatus(false, action, "busy", 0, string.Empty, "Rail ETA module is active.");
+                return false;
+            }
             if (WorkerLost)
             {
                 SetStatus(false, action, "worker-lost", 0, string.Empty, "Rail ETA worker is lost; restart the game.");
@@ -254,7 +296,67 @@ namespace RapidTransitMod.RailEtaHost
             return latest;
         }
 
-        public void Dispose() => Interlocked.Exchange(ref m_Disposed, 1);
+        private void CompleteLastHandle()
+        {
+            m_LastHandle.Complete();
+            m_LastHandle = default;
+        }
+
+        private void ApplyPendingSwap()
+        {
+            PendingSwap pending;
+            lock (m_Gate)
+            {
+                pending = m_PendingSwap;
+                if (pending == null) return;
+                m_PendingSwap = null;
+            }
+
+            try
+            {
+                CompleteLastHandle();
+                Selection current = Volatile.Read(ref m_Current);
+                Selection retired;
+                if (pending.Rollback)
+                {
+                    Volatile.Write(ref m_Current, pending.Next);
+                    m_Previous = null;
+                    retired = current;
+                }
+                else
+                {
+                    pending.Next.Module.Attach(m_Context);
+                    retired = m_Previous;
+                    m_Previous = current;
+                    Volatile.Write(ref m_Current, pending.Next);
+                }
+                if (retired != null && !ReferenceEquals(retired.Module, pending.Next?.Module)) retired.Module.Dispose();
+                Finish(pending.Action, "completed", 1, pending.Next?.BuildId ?? string.Empty, string.Empty);
+                pending.Completion?.TrySetResult(true);
+            }
+            catch (Exception ex)
+            {
+                pending.Next?.Module.Dispose();
+                Finish(pending.Action, "failed", 0, string.Empty, ex.GetType().Name + ": " + ex.Message);
+                pending.Completion?.TrySetResult(false);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref m_Disposed, 1) != 0) return;
+            CompleteLastHandle();
+            lock (m_Gate)
+            {
+                m_PendingSwap?.Next?.Module.Dispose();
+                m_PendingSwap?.Completion?.TrySetResult(false);
+                m_PendingSwap = null;
+                m_Current?.Module.Dispose();
+                if (!ReferenceEquals(m_Previous?.Module, m_Current?.Module)) m_Previous?.Module.Dispose();
+                m_Current = null;
+                m_Previous = null;
+            }
+        }
     }
 }
 #endif

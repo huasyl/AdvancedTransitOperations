@@ -26,7 +26,7 @@ namespace RapidTransitMod
         private ValueBinding<string> m_EtaHotStatusJsonBinding = null!;
         private ValueBinding<string> m_EtaSnapshotStatusJsonBinding = null!;
 #if RT_DEBUG_TOOLS
-        private RailEtaHost.RailEtaTicket m_EtaSnapshotTicket;
+        private RailEtaHost.RailEtaPublicTicket m_EtaSnapshotTicket;
 #endif
 
         private bool m_PanelOpen;
@@ -356,74 +356,20 @@ namespace RapidTransitMod
         {
 #if RT_DEBUG_TOOLS
             string payload = string.Empty;
-            if (m_EtaSnapshotTicket.IsValid && RailEtaHost.RailEtaDebugApi.TryGetState(m_EtaSnapshotTicket, out RailEtaHost.RailEtaTicketStatus status))
+            if (m_EtaSnapshotTicket.IsValid && RailEtaHost.RailEtaDebugApi.TryGetState(m_EtaSnapshotTicket, out RailEtaHost.RailEtaPublicStatus status))
             {
-                int vehicleCount = 0;
-                int resourceCount = 0;
-                RailEta.Contracts.RailEtaPrediction prediction = null;
-                if (RailEtaHost.RailEtaDebugApi.TryGetSnapshot(m_EtaSnapshotTicket, out RailEta.Contracts.RailEtaWorldSnapshot snapshot))
-                {
-                    vehicleCount = snapshot.Vehicles?.Length ?? 0;
-                    resourceCount = snapshot.Resources?.Length ?? 0;
-                }
-                RailEtaHost.RailEtaDebugApi.TryGetPrediction(m_EtaSnapshotTicket, out prediction);
                 StringBuilder sb = new StringBuilder(192);
                 sb.Append('{');
                 AppendJsonString(sb, "ticket", status.Ticket.Value.ToString());
-                AppendJsonString(sb, "state", status.State.ToString());
-                AppendJsonString(sb, "failure", status.Failure.ToString());
+                AppendJsonString(sb, "state", status.State);
+                AppendJsonString(sb, "failure", status.Failure);
                 AppendJsonString(sb, "detail", status.Detail ?? string.Empty);
-                sb.Append("\"vehicles\":").Append(vehicleCount);
-                sb.Append(",\"resources\":").Append(resourceCount);
-                if (prediction != null)
-                {
-                    sb.Append(',');
-                    AppendJsonString(sb, "predictorSource", prediction.PredictorSource);
-                    AppendJsonString(sb, "predictorBuildId", prediction.PredictorBuildId);
-                    sb.Append("\"predictorGeneration\":").Append(prediction.PredictorGeneration).Append(',');
-                    sb.Append("\"arrival\":").Append(prediction.PredictedArrivalFrame).Append(',');
-                    sb.Append("\"freeRun\":").Append(prediction.Delay?.FreeRunFrames ?? 0).Append(',');
-                    sb.Append("\"following\":").Append(prediction.Delay?.FollowingDelayFrames ?? 0).Append(',');
-                    sb.Append("\"reservation\":").Append(prediction.Delay?.ReservationDelayFrames ?? 0).Append(',');
-                    AppendJsonString(sb, "confidence", prediction.Confidence.ToString());
-                    AppendJsonString(sb, "predictionFailure", prediction.Failure.ToString());
-                    sb.Append("\"eventCount\":").Append(prediction.EventCount).Append(',');
-                    sb.Append("\"workerMs\":").Append(prediction.WorkerMilliseconds.ToString("F2", CultureInfo.InvariantCulture));
-                }
-                Entity comparisonSelection = m_SelectedInfoUISystem.selectedEntity;
-                if (comparisonSelection != Entity.Null && EntityManager.HasComponent<Controller>(comparisonSelection))
-                    comparisonSelection = EntityManager.GetComponentData<Controller>(comparisonSelection).m_Controller;
-                if (comparisonSelection != Entity.Null
-                    && RailEtaHost.RailEtaComparisonDebugApi.TryGetStatus(out RailEtaHost.RailEtaComparisonStatus comparison)
-                    && comparison.VehicleId == RailEtaHost.RailEtaEntityId.Pack(comparisonSelection))
-                {
-                    sb.Append(',');
-                    AppendJsonString(sb, "comparisonState", comparison.State);
-                    AppendJsonBool(sb, "comparisonValid", comparison.ComparisonValid);
-                    AppendJsonString(sb, "comparisonInvalidReason", comparison.InvalidReason);
-                    sb.Append("\"comparisonVehicleId\":\"").Append(comparison.VehicleId).Append("\",");
-                    sb.Append("\"comparisonPredictedArrival\":").Append(comparison.PredictedArrivalFrame).Append(',');
-                    sb.Append("\"comparisonActualArrival\":").Append(comparison.ActualArrivalFrame).Append(',');
-                    sb.Append("\"comparisonFinishDelta\":").Append(comparison.ActualStopMinusPredictionFinishedFrames).Append(',');
-                    sb.Append("\"comparisonPublishDelta\":").Append(comparison.ActualStopMinusPublishedFrames).Append(',');
-                    sb.Append("\"comparisonOriginDelta\":").Append(comparison.ActualStopMinusOriginFrames).Append(',');
-                    sb.Append("\"comparisonPredictionDelta\":").Append(comparison.ActualStopMinusPredictedArrivalFrames).Append(',');
-                    sb.Append("\"comparisonFramesToOrPastPrediction\":").Append(comparison.FramesToOrPastPrediction).Append(',');
-                    AppendJsonString(sb, "comparisonCurrentState", comparison.CurrentState);
-                    AppendJsonString(sb, "comparisonRecentPredicted", comparison.RecentPredictedEvent);
-                    AppendJsonString(sb, "comparisonRecentActual", comparison.RecentActualEvent);
-                    sb.Append("\"comparisonMatched\":").Append(comparison.MatchedCount).Append(',');
-                    sb.Append("\"comparisonMissed\":").Append(comparison.MissedCount).Append(',');
-                    sb.Append("\"comparisonPending\":").Append(comparison.PendingCount).Append(',');
-                    sb.Append("\"comparisonUnobservable\":").Append(comparison.UnobservableCount).Append(',');
-                    sb.Append("\"comparisonExtra\":").Append(comparison.ExtraCount).Append(',');
-                    sb.Append("\"comparisonExcluded\":").Append(comparison.ExcludedCount).Append(',');
-                    AppendJsonString(sb, "comparisonExportState", comparison.ExportState);
-                    AppendJsonString(sb, "comparisonExportPath", comparison.ExportPath);
-                    AppendJsonString(sb, "comparisonExportError", comparison.ExportError);
-                    AppendJsonBool(sb, "comparisonCanStop", comparison.CanStop);
-                    sb.Append("\"comparisonCanExport\":").Append(comparison.CanExport ? "true" : "false");
-                }
+                sb.Append("\"arrival\":").Append(status.EtaFrame).Append(',');
+                AppendJsonString(sb, "predictorSource", status.Source);
+                AppendJsonString(sb, "predictorBuildId", status.Build);
+                sb.Append("\"predictorGeneration\":").Append(status.Generation).Append(',');
+                AppendJsonBool(sb, "incomplete", status.Incomplete);
+                AppendJsonString(sb, "comparisonSummary", status.ComparisonSummary);
                 sb.Append('}');
                 payload = sb.ToString();
             }
@@ -591,23 +537,17 @@ namespace RapidTransitMod
             if (selected == Entity.Null) return;
             EntityManager entityManager = World.EntityManager;
             if (entityManager.HasComponent<Controller>(selected)) selected = entityManager.GetComponentData<Controller>(selected).m_Controller;
-            RailEtaHost.RailEtaTicket ticket = RailEtaHost.RailEtaDebugApi.RequestSnapshot(selected.Index, selected.Version);
+            RailEtaHost.RailEtaPublicTicket ticket = RailEtaHost.RailEtaDebugApi.RequestSnapshot(selected.Index, selected.Version);
             if (ticket.IsValid) m_EtaSnapshotTicket = ticket;
 #endif
         }
 
         private void RequestEtaComparisonExport()
         {
-#if RT_DEBUG_TOOLS
-            RailEtaHost.RailEtaComparisonDebugApi.Export();
-#endif
         }
 
         private void RequestEtaComparisonStop()
         {
-#if RT_DEBUG_TOOLS
-            RailEtaHost.RailEtaComparisonDebugApi.Stop();
-#endif
         }
 
         private void SetBypassStation(bool enabled)
