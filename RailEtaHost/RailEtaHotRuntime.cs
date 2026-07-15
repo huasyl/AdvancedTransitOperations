@@ -1,5 +1,6 @@
 #if RT_DEBUG_TOOLS
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -61,6 +62,7 @@ namespace RapidTransitMod.RailEtaHost
 
         private readonly RailEtaWorker m_Worker;
         private readonly object m_Gate = new object();
+        private readonly ConcurrentDictionary<long, string> m_ComparisonSummaries = new ConcurrentDictionary<long, string>();
         private Selection m_Current;
         private Selection m_Previous;
         private PendingSwap m_PendingSwap;
@@ -89,7 +91,18 @@ namespace RapidTransitMod.RailEtaHost
             Current?.Module.Attach(context);
         }
 
-        public void Submit(RailEtaHotCommand command) => Current?.Module.Submit(command);
+        public bool Submit(RailEtaHotCommand command)
+        {
+            if (IsDisposed || Volatile.Read(ref m_Busy) != 0) return false;
+            lock (m_Gate)
+            {
+                if (Volatile.Read(ref m_Busy) != 0 || m_PendingSwap != null) return false;
+                Selection selection = Current;
+                if (selection == null || selection.Generation != command.Generation) return false;
+                selection.Module.Submit(command);
+                return true;
+            }
+        }
 
         public JobHandle Tick(uint simulationFrame, JobHandle inputDependency)
         {
@@ -113,13 +126,13 @@ namespace RapidTransitMod.RailEtaHost
         public bool TryGetComparisonSummary(long ticket, out string summary)
         {
             Selection selection = Current;
-            if (selection != null) return selection.Module.TryGetComparisonSummary(ticket, out summary);
-            summary = string.Empty;
-            return false;
+            if (selection != null && selection.Module.TryGetComparisonSummary(ticket, out summary)) return true;
+            return m_ComparisonSummaries.TryGetValue(ticket, out summary);
         }
 
         public void Clear(int generation)
         {
+            m_ComparisonSummaries.Clear();
             Interlocked.Exchange(ref m_PendingClearGeneration, generation);
         }
 
@@ -197,7 +210,7 @@ namespace RapidTransitMod.RailEtaHost
             if (IsDisposed || ModuleBusy || Interlocked.CompareExchange(ref m_Busy, 1, 0) != 0) return false;
             lock (m_Gate)
             {
-                if (m_PendingSwap != null || (m_Previous == null && m_Current == null))
+                if (m_PendingSwap != null || m_Previous == null)
                 {
                     Interlocked.Exchange(ref m_Busy, 0);
                     return false;
@@ -210,18 +223,30 @@ namespace RapidTransitMod.RailEtaHost
 
         private void ReloadOnWorker(string dllPath, TaskCompletionSource<bool> completion, string action = "reload")
         {
+            Selection next = null;
             try
             {
-                Selection next = Load(dllPath);
+                next = Load(dllPath);
+                bool disposed;
                 lock (m_Gate)
                 {
-                    if (m_PendingSwap != null) throw new InvalidOperationException("A Rail ETA module swap is already pending.");
-                    m_PendingSwap = new PendingSwap { Next = next, Completion = completion, Action = action };
+                    disposed = IsDisposed;
+                    if (!disposed)
+                    {
+                        if (m_PendingSwap != null) throw new InvalidOperationException("A Rail ETA module swap is already pending.");
+                        m_PendingSwap = new PendingSwap { Next = next, Completion = completion, Action = action };
+                        SetStatus(true, action, "pending-swap", 0, next.Module.BuildId, string.Empty);
+                    }
                 }
-                SetStatus(true, action, "pending-swap", 0, next.Module.BuildId, string.Empty);
+                if (!disposed) return;
+                DisposeRejected(next.Module, action);
+                next = null;
+                Finish(action, "failed", 0, string.Empty, "Rail ETA hot runtime is disposed.");
+                completion.TrySetResult(false);
             }
             catch (Exception ex)
             {
+                DisposeRejected(next?.Module, action);
                 Finish(action, "failed", 0, string.Empty, ex.GetType().Name + ": " + ex.Message);
                 completion.TrySetResult(false);
             }
@@ -241,11 +266,20 @@ namespace RapidTransitMod.RailEtaHost
                 if (String.Equals(type.Namespace, "RapidTransitMod.RailEta.Hot", StringComparison.Ordinal)) { selected = type; break; }
             }
             if (selected == null) throw new InvalidDataException("RailEta.Hot DLL has no IRailEtaHotModule implementation.");
-            var module = (IRailEtaHotModule)Activator.CreateInstance(selected);
-            string buildId = String.IsNullOrWhiteSpace(module.BuildId)
-                ? Path.GetFileNameWithoutExtension(dllPath) + "@" + File.GetLastWriteTimeUtc(dllPath).Ticks
-                : module.BuildId;
-            return new Selection(module, buildId, Interlocked.Increment(ref m_NextGeneration));
+            IRailEtaHotModule module = null;
+            try
+            {
+                module = (IRailEtaHotModule)Activator.CreateInstance(selected);
+                string buildId = String.IsNullOrWhiteSpace(module.BuildId)
+                    ? Path.GetFileNameWithoutExtension(dllPath) + "@" + File.GetLastWriteTimeUtc(dllPath).Ticks
+                    : module.BuildId;
+                return new Selection(module, buildId, Interlocked.Increment(ref m_NextGeneration));
+            }
+            catch
+            {
+                DisposeRejected(module, "load");
+                throw;
+            }
         }
 
         private bool TryBegin(string action)
@@ -320,11 +354,35 @@ namespace RapidTransitMod.RailEtaHost
                 m_PendingSwap = null;
             }
 
+            Selection current;
             try
             {
                 CompleteLastHandle();
-                Selection current = Volatile.Read(ref m_Current);
-                Selection retired;
+                current = Volatile.Read(ref m_Current);
+            }
+            catch (Exception ex)
+            {
+                if (!pending.Rollback) DisposeRejected(pending.Next?.Module, pending.Action);
+                Finish(pending.Action, "failed", 0, string.Empty, ex.GetType().Name + ": " + ex.Message);
+                pending.Completion?.TrySetResult(false);
+                return;
+            }
+            if (current?.Module.Busy == true)
+            {
+                if (!pending.Rollback) DisposeRejected(pending.Next?.Module, pending.Action);
+                Finish(pending.Action, "busy", 0, string.Empty, "ModuleBusy");
+                pending.Completion?.TrySetResult(false);
+                return;
+            }
+
+            Selection retired;
+            try
+            {
+                if (current != null && current.Module.PrepareForReload(out long ticket, out string summary)
+                    && ticket != 0 && !String.IsNullOrEmpty(summary))
+                    m_ComparisonSummaries[ticket] = summary;
+                if (!pending.Rollback) pending.Next.Module.Attach(m_Context);
+
                 if (pending.Rollback)
                 {
                     Volatile.Write(ref m_Current, pending.Next);
@@ -333,21 +391,35 @@ namespace RapidTransitMod.RailEtaHost
                 }
                 else
                 {
-                    pending.Next.Module.Attach(m_Context);
                     retired = m_Previous;
                     m_Previous = current;
                     Volatile.Write(ref m_Current, pending.Next);
                 }
-                if (retired != null && !ReferenceEquals(retired.Module, pending.Next?.Module)) retired.Module.Dispose();
-                Finish(pending.Action, "completed", 1, pending.Next?.BuildId ?? string.Empty, string.Empty);
-                pending.Completion?.TrySetResult(true);
             }
             catch (Exception ex)
             {
-                pending.Next?.Module.Dispose();
+                if (!pending.Rollback) DisposeRejected(pending.Next?.Module, pending.Action);
                 Finish(pending.Action, "failed", 0, string.Empty, ex.GetType().Name + ": " + ex.Message);
                 pending.Completion?.TrySetResult(false);
+                return;
             }
+
+            if (retired != null && !ReferenceEquals(retired.Module, pending.Next?.Module)) DisposeRetired(retired.Module, pending.Action);
+            Finish(pending.Action, "completed", 1, pending.Next?.BuildId ?? string.Empty, string.Empty);
+            pending.Completion?.TrySetResult(true);
+        }
+
+        private void DisposeRejected(IRailEtaHotModule module, string action)
+        {
+            if (module == null) return;
+            try { module.Dispose(); }
+            catch (Exception ex) { m_Context?.Log("[RailEtaHotRuntime] " + action + " rejected module dispose failed: " + ex.GetType().Name + ": " + ex.Message); }
+        }
+
+        private void DisposeRetired(IRailEtaHotModule module, string action)
+        {
+            try { module.Dispose(); }
+            catch (Exception ex) { m_Context?.Log("[RailEtaHotRuntime] " + action + " retired module dispose failed: " + ex.GetType().Name + ": " + ex.Message); }
         }
 
         public void Dispose()

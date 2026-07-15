@@ -11,6 +11,8 @@ namespace RapidTransitMod.RailEtaHost
         private readonly ConcurrentDictionary<long, RailEtaPublicStatus> m_Status = new ConcurrentDictionary<long, RailEtaPublicStatus>();
         private readonly RailEtaWorker m_Worker;
         private RailEtaHotRuntime m_HotRuntime;
+        private RailEtaPublicResult m_LastAppliedResult;
+        private long m_LastTerminalTicket;
         private long m_NextTicket;
         private int m_Generation = 1;
         private int m_Disposed;
@@ -22,7 +24,23 @@ namespace RapidTransitMod.RailEtaHost
         public bool WorkerLost => m_Worker.WorkerLost;
 
         internal void SetHotRuntime(RailEtaHotRuntime runtime) => m_HotRuntime = runtime;
-        internal JobHandle TickHot(uint frame, JobHandle dependency) => m_HotRuntime == null ? dependency : m_HotRuntime.Tick(frame, dependency);
+        internal JobHandle TickHot(uint frame, JobHandle dependency)
+        {
+            if (m_HotRuntime == null) return dependency;
+            JobHandle output = m_HotRuntime.Tick(frame, dependency);
+            RailEtaPublicResult result = DispatchRuntimeSystem.Instance?.LastRailEtaPublicResult;
+            if (result != null && !ReferenceEquals(result, m_LastAppliedResult))
+            {
+                m_LastAppliedResult = result;
+                if (m_Status.TryGetValue(result.Ticket, out RailEtaPublicStatus publishedStatus)) Apply(publishedStatus, result);
+                if (IsTerminal(result.State)) m_LastTerminalTicket = result.Ticket;
+            }
+            long terminalTicket = Volatile.Read(ref m_LastTerminalTicket);
+            if (terminalTicket != 0 && m_Status.TryGetValue(terminalTicket, out RailEtaPublicStatus terminalStatus)
+                && m_HotRuntime.TryGetComparisonSummary(terminalTicket, out string summary))
+                terminalStatus.ComparisonSummary = summary;
+            return output;
+        }
 
         public RailEtaPublicTicket RequestEta(RailEtaPublicRequest descriptor)
         {
@@ -44,7 +62,12 @@ namespace RapidTransitMod.RailEtaHost
                 status.Detail = "Rail ETA hot module is not loaded.";
                 return ticket;
             }
-            m_HotRuntime.Submit(new RailEtaHotCommand(ticket.Value, checked((int)selection.Generation), descriptor.VehicleIndex, descriptor.VehicleVersion, descriptor.TargetCheckpointId));
+            if (!m_HotRuntime.Submit(new RailEtaHotCommand(ticket.Value, checked((int)selection.Generation), descriptor.VehicleIndex, descriptor.VehicleVersion, descriptor.TargetCheckpointId)))
+            {
+                status.State = "Busy";
+                status.Failure = "Busy";
+                status.Detail = "Rail ETA hot reload is active.";
+            }
             return ticket;
         }
 
@@ -71,6 +94,7 @@ namespace RapidTransitMod.RailEtaHost
         {
             int generation = Interlocked.Increment(ref m_Generation);
             m_Status.Clear();
+            Interlocked.Exchange(ref m_LastTerminalTicket, 0);
             m_HotRuntime?.Clear(generation);
         }
 
@@ -87,6 +111,12 @@ namespace RapidTransitMod.RailEtaHost
             status.Generation = result.Generation;
             status.Incomplete = result.Incomplete;
             if (!String.IsNullOrEmpty(result.ComparisonSummary)) status.ComparisonSummary = result.ComparisonSummary;
+        }
+
+        private static bool IsTerminal(string state)
+        {
+            return state == "Completed" || state == "Incomplete" || state == "Failed" || state == "Cancelled"
+                || state == "NotConverged" || state == "Unavailable" || state == "Busy";
         }
 
         public void Dispose()

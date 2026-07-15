@@ -11,6 +11,7 @@ namespace RapidTransitMod.RailEtaHost
         void Attach(RailEtaHotContext context);
         void Submit(RailEtaHotCommand command);
         JobHandle Tick(uint simulationFrame, JobHandle inputDependency);
+        bool PrepareForReload(out long ticket, out string summary);
         bool TryGetComparisonSummary(long ticket, out string summary);
         void Cancel(long ticket);
         void Clear(int generation);
