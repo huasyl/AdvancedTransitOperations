@@ -110,6 +110,14 @@ namespace RapidTransitMod.RailEtaHost
 
         public void Cancel(long ticket) => Current?.Module.Cancel(ticket);
 
+        public bool TryGetComparisonSummary(long ticket, out string summary)
+        {
+            Selection selection = Current;
+            if (selection != null) return selection.Module.TryGetComparisonSummary(ticket, out summary);
+            summary = string.Empty;
+            return false;
+        }
+
         public void Clear(int generation)
         {
             Interlocked.Exchange(ref m_PendingClearGeneration, generation);

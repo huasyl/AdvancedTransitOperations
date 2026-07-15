@@ -53,6 +53,8 @@ namespace RapidTransitMod.RailEtaHost
             if (!m_Status.TryGetValue(ticket.Value, out status)) return false;
             RailEtaPublicResult result = DispatchRuntimeSystem.Instance?.LastRailEtaPublicResult;
             if (result != null && result.Ticket == ticket.Value) Apply(status, result);
+            if (m_HotRuntime != null && m_HotRuntime.TryGetComparisonSummary(ticket.Value, out string summary))
+                status.ComparisonSummary = summary;
             return true;
         }
 
@@ -84,7 +86,7 @@ namespace RapidTransitMod.RailEtaHost
             status.Build = result.Build ?? string.Empty;
             status.Generation = result.Generation;
             status.Incomplete = result.Incomplete;
-            status.ComparisonSummary = result.ComparisonSummary ?? string.Empty;
+            if (!String.IsNullOrEmpty(result.ComparisonSummary)) status.ComparisonSummary = result.ComparisonSummary;
         }
 
         public void Dispose()
