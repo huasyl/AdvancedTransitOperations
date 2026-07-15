@@ -41,6 +41,7 @@ namespace RapidTransitMod
         private const int CohtmlDebuggerPort = 9444;
         private static readonly ILog s_RawLog = LogManager.GetLogger(nameof(RapidTransitMod)).SetShowsErrorsInUI(false);
         public static TimedLogger log = new TimedLogger(s_RawLog);
+        internal static string RootPath { get; private set; } = string.Empty;
 
         internal static string PrefixWithGameTime(string message)
         {
@@ -65,6 +66,10 @@ namespace RapidTransitMod
             TryEnableCohtmlDebugger();
 #endif
             updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<RailEtaHost.RailEtaSnapshotSystem>(SystemUpdatePhase.GameSimulation);
+#if RT_DEBUG_TOOLS
+            updateSystem.UpdateAfter<RailEtaHost.RailEtaComparisonSystem, RailEtaHost.RailEtaSnapshotSystem>(SystemUpdatePhase.GameSimulation);
+#endif
             updateSystem.UpdateAt<RailTravel.QuerySystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<RailTravel.QuerySystem, PathfindSetupSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<Dispatch.Runtime.BoardingFirstFrameGuardSystem>(SystemUpdatePhase.GameSimulation);
@@ -94,6 +99,7 @@ namespace RapidTransitMod
             {
                 log.Info("Module path: " + ((AssetData)asset).path);
                 string modRootPath = Path.GetDirectoryName(((AssetData)asset).path);
+                RootPath = modRootPath ?? string.Empty;
                 I18n.LoadAll(Path.Combine(modRootPath, "Locales"));
                 Workbenches.ApiHost.Init(modRootPath);
             }

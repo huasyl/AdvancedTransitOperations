@@ -153,6 +153,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void Loaded(Context serializationContext)
         {
+            m_Runtime.m_RailEtaService?.ResetCity();
             PassengerFlow.SamplingSystem.ClearState();
             try
             {
@@ -207,6 +208,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearAll()
         {
+            m_Runtime.m_RailEtaService?.ResetCity();
             PassengerFlow.SamplingSystem.ClearState();
             EntityCommandBuffer commandBuffer = m_Runtime.m_EndFrameBarrier.CreateCommandBuffer();
             NativeArray<Entity> entities = m_Runtime.m_AllPublicTransportQuery.ToEntityArray(Allocator.Temp);
@@ -276,6 +278,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearTracking()
         {
+            m_Runtime.m_RailEtaService?.ResetCity();
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_ObsPersist.ClearLaps();

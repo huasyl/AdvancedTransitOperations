@@ -205,6 +205,10 @@ namespace RapidTransitMod
         internal RuntimeLog m_RuntimeLog = null!;
         internal RuntimeHotPathProbe m_RuntimeHotPathProbe = null!;
         internal RuntimeShell m_RuntimeShell = null!;
+        internal RailEtaHost.RailEtaService m_RailEtaService = null!;
+#if RT_DEBUG_TOOLS
+        internal RailEtaHost.RailEtaHotRuntime m_RailEtaHotRuntime = null!;
+#endif
         internal LineTimes m_LineTimes = null!;
         internal LineMileage m_LineMileage = null!;
         internal LineVehicles m_LineVehicles = null!;

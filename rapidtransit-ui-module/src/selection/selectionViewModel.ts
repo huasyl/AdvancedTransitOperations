@@ -8,6 +8,65 @@ export interface DevSightData {
   summaryText?: string;
 }
 
+export interface EtaHotStatusData {
+  busy?: boolean;
+  currentSource?: string;
+  currentBuildId?: string;
+  generation?: number;
+  lastAction?: string;
+  status?: string;
+  lastSmokeValue?: number;
+  lastError?: string;
+  hotBackendWorkerLost?: boolean;
+  etaWorkerLost?: boolean;
+  workerLost?: boolean;
+}
+
+export interface EtaSnapshotStatusData {
+  ticket?: string;
+  state?: string;
+  failure?: string;
+  detail?: string;
+  vehicles?: number;
+  resources?: number;
+  predictorSource?: string;
+  predictorBuildId?: string;
+  predictorGeneration?: number;
+  arrival?: number;
+  freeRun?: number;
+  following?: number;
+  reservation?: number;
+  confidence?: string;
+  predictionFailure?: string;
+  eventCount?: number;
+  workerMs?: number;
+  comparisonState?: string;
+  comparisonValid?: boolean;
+  comparisonInvalidReason?: string;
+  comparisonVehicleId?: string;
+  comparisonPredictedArrival?: number;
+  comparisonActualArrival?: number;
+  comparisonFinishDelta?: number;
+  comparisonPublishDelta?: number;
+  comparisonOriginDelta?: number;
+  comparisonPredictionDelta?: number;
+  comparisonFramesToOrPastPrediction?: number;
+  comparisonCurrentState?: string;
+  comparisonRecentPredicted?: string;
+  comparisonRecentActual?: string;
+  comparisonMatched?: number;
+  comparisonMissed?: number;
+  comparisonPending?: number;
+  comparisonUnobservable?: number;
+  comparisonExtra?: number;
+  comparisonExcluded?: number;
+  comparisonExportState?: string;
+  comparisonExportPath?: string;
+  comparisonExportError?: string;
+  comparisonCanStop?: boolean;
+  comparisonCanExport?: boolean;
+}
+
 export interface PanelData {
   entityId?: string | number;
   mode?: string;

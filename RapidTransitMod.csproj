@@ -27,6 +27,9 @@
   <ItemGroup>
     <Compile Remove="references\**\*.cs" />
     <Compile Remove="tools\**\*.cs" />
+    <Compile Remove="Core\RailEta.Contracts\**\*.cs" />
+    <Compile Remove="Core\RailEta.Engine\**\*.cs" />
+    <Compile Remove="hot\**\*.cs" />
     <None Include="references\**\*.cs" />
     <None Include="rapidtransit-ui-module\dist\RapidTransitMod.mjs">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -50,6 +53,11 @@
     <None Include="mod.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Core\RailEta.Contracts\RapidTransitMod.RailEta.Contracts.csproj" />
+    <ProjectReference Include="Core\RailEta.Engine\RapidTransitMod.RailEta.Engine.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -150,6 +158,8 @@
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.mjs" />
       <RapidTransitDeployFiles Include="$(OutputPath)THIRD_PARTY_NOTICES.txt" />
       <RapidTransitDeployFiles Include="$(OutputPath)mod.json" />
+      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.RailEta.Contracts.dll" />
+      <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.RailEta.Engine.dll" />
     </ItemGroup>
     <ItemGroup>
       <RapidTransitDeployUiFiles Include="$(OutputPath)UI\**\*" />
@@ -159,6 +169,12 @@
     <Copy SourceFiles="@(RapidTransitDeployFiles)" DestinationFolder="$(RapidTransitDeployDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(RapidTransitDeployUiFiles)" DestinationFiles="@(RapidTransitDeployUiFiles->'$(RapidTransitDeployDir)\UI\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(RapidTransitDeployLocaleFiles)" DestinationFiles="@(RapidTransitDeployLocaleFiles->'$(RapidTransitDeployDir)\Locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="DeployRailEtaHotDebug" AfterTargets="DeployRapidTransitMod" Condition="'$(Configuration)'=='Debug'">
+    <MSBuild Projects="hot\RailEta.Hot\RapidTransitMod.RailEta.Hot.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);RailEtaHotDeployDir=$(RapidTransitDeployDir)\Hot" />
   </Target>
 
   <Target Name="StripSymbolsFromPackage" AfterTargets="RunModPostProcessor" BeforeTargets="DeployWIP" Condition="'$(StripSymbolsForPackage)'=='true'">

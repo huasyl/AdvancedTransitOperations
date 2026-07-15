@@ -69,6 +69,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineProfile = new LineProfile(runtime);
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
             runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
+            RailEtaHost.RailEtaWorker railEtaWorker = new RailEtaHost.RailEtaWorker();
+            runtime.m_RailEtaService = new RailEtaHost.RailEtaService(railEtaWorker, new RailEtaHost.SnapshotGeometryProvider());
+            RailEtaHost.RailEtaService.Bind(runtime.m_RailEtaService);
+#if RT_DEBUG_TOOLS
+            runtime.m_RailEtaHotRuntime = new RailEtaHost.RailEtaHotRuntime(railEtaWorker);
+            runtime.m_RailEtaService.SetHotRuntime(runtime.m_RailEtaHotRuntime);
+#endif
             runtime.m_RuntimeShell = new RuntimeShell(runtime);
             runtime.m_LineStructureInvalidator = new LineStructureInvalidator(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
@@ -225,6 +232,12 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public static void Clear(DispatchRuntimeSystem runtime)
         {
+#if RT_DEBUG_TOOLS
+            runtime.m_RailEtaHotRuntime?.Dispose();
+            runtime.m_RailEtaHotRuntime = null!;
+#endif
+            runtime.m_RailEtaService?.Dispose();
+            runtime.m_RailEtaService = null!;
             PassengerFlow.SamplingSystem.ClearState();
             PassengerFlow.Runtime.Clear();
             LifecyclePort.Clear();
