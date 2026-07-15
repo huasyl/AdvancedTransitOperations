@@ -21,6 +21,7 @@ namespace RapidTransitMod.RailEtaHost
             World world,
             Func<uint> simulationFrame,
             object railTravel,
+            RailEtaRuntimeReadPort runtimeReadPort,
             RailEtaWorker worker,
             Action<RailEtaPublicResult> publishResult,
             Action<string> log)
@@ -28,6 +29,7 @@ namespace RapidTransitMod.RailEtaHost
             World = world ?? throw new ArgumentNullException(nameof(world));
             SimulationFrame = simulationFrame ?? throw new ArgumentNullException(nameof(simulationFrame));
             RailTravel = railTravel ?? throw new ArgumentNullException(nameof(railTravel));
+            RuntimeReadPort = runtimeReadPort ?? throw new ArgumentNullException(nameof(runtimeReadPort));
             Worker = worker ?? throw new ArgumentNullException(nameof(worker));
             PublishResult = publishResult ?? throw new ArgumentNullException(nameof(publishResult));
             Log = log ?? (_ => { });
@@ -36,9 +38,49 @@ namespace RapidTransitMod.RailEtaHost
         public World World { get; }
         public Func<uint> SimulationFrame { get; }
         public object RailTravel { get; }
+        public RailEtaRuntimeReadPort RuntimeReadPort { get; }
         public RailEtaWorker Worker { get; }
         public Action<RailEtaPublicResult> PublishResult { get; }
         public Action<string> Log { get; }
+    }
+
+    public sealed class RailEtaRuntimeReadPort
+    {
+        public Func<Entity, int> LineDwellMinutes { get; set; }
+        public TryReadRailEtaHold TryReadHold { get; set; }
+        public TryReadRailEtaTrackChain TryReadTrackChain { get; set; }
+    }
+
+    public delegate bool TryReadRailEtaHold(Entity vehicle, uint frame, out RailEtaRuntimeHoldFact fact);
+    public delegate bool TryReadRailEtaTrackChain(Entity line, out RailEtaRuntimeTrackChainFact fact);
+
+    public struct RailEtaRuntimeHoldFact
+    {
+        public Entity ReleaseVehicle;
+        public Entity ReleaseLine;
+        public float ReleaseCoordinate;
+        public int IntervalStartAtomIndex;
+        public int IntervalEndAtomIndexExclusive;
+        public ulong ExpectedChainSignature;
+    }
+
+    public sealed class RailEtaRuntimeTrackChainFact
+    {
+        public Entity Line { get; set; }
+        public ulong Signature { get; set; }
+        public RailEtaRuntimeTrackAtomFact[] Atoms { get; set; } = Array.Empty<RailEtaRuntimeTrackAtomFact>();
+    }
+
+    public struct RailEtaRuntimeTrackAtomFact
+    {
+        public Entity PhysicalLane;
+        public Entity PreviousTarget;
+        public Entity NextTarget;
+        public float Start;
+        public float End;
+        public uint SourceFlags;
+        public byte AtomClass;
+        public sbyte Direction;
     }
 
     public readonly struct RailEtaHotCommand

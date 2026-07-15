@@ -78,6 +78,41 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.World,
                 () => runtime.m_SimulationSystem.frameIndex,
                 runtime.World.GetExistingSystemManaged<RailTravel.QuerySystem>(),
+                new RailEtaHost.RailEtaRuntimeReadPort
+                {
+                    LineDwellMinutes = line => runtime.m_LineView.Dwell(line),
+                    TryReadHold = (Entity vehicle, uint frame, out RailEtaHost.RailEtaRuntimeHoldFact fact) =>
+                    {
+                        fact = default;
+                        if (!runtime.m_Bypass.TryGetHoldCadence(vehicle, out RapidTransitMod.Bypass.BypassHoldCadenceSnapshot cadence)
+                            || !cadence.ShouldHold || cadence.EvaluatedFrame > frame
+                            || !runtime.m_Bypass.TryGetConflictEpisode(vehicle, out RapidTransitMod.Bypass.BypassConflictEpisode episode)
+                            || episode.AcquiredFrame > frame || !episode.HasLatchedBlockerProjection || !episode.LatchedBlockerProjection.Available) return false;
+                        RapidTransitMod.Bypass.BypassLatchedBlockerProjection projection = episode.LatchedBlockerProjection;
+                        fact = new RailEtaHost.RailEtaRuntimeHoldFact { ReleaseVehicle = episode.BlockerVehicle, ReleaseLine = projection.ExpressLine,
+                            ReleaseCoordinate = projection.ExpressReleaseCoordinate, ExpectedChainSignature = projection.ExpressChainSignature,
+                            IntervalStartAtomIndex = projection.ExpressProtectedInterval.StartAtomIndex,
+                            IntervalEndAtomIndexExclusive = projection.ExpressProtectedInterval.EndAtomIndexExclusive };
+                        return true;
+                    },
+                    TryReadTrackChain = (Entity line, out RailEtaHost.RailEtaRuntimeTrackChainFact fact) =>
+                    {
+                        fact = null;
+                        if (line == Entity.Null || !runtime.EntityManager.HasBuffer<Game.Routes.RouteWaypoint>(line)) return false;
+                        DynamicBuffer<Game.Routes.RouteWaypoint> waypoints = runtime.EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
+                        if (!runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)) return false;
+                        var atoms = new RailEtaHost.RailEtaRuntimeTrackAtomFact[chain.TrackAtoms.Count];
+                        for (int atomIndex = 0; atomIndex < atoms.Length; atomIndex++)
+                        {
+                            TrackAtom atom = chain.TrackAtoms[atomIndex];
+                            atoms[atomIndex] = new RailEtaHost.RailEtaRuntimeTrackAtomFact { PhysicalLane = atom.Key.PhysicalLaneKey,
+                                PreviousTarget = atom.Key.PreviousTarget, NextTarget = atom.Key.NextTarget, Start = atom.TargetDelta.x, End = atom.TargetDelta.y,
+                                SourceFlags = (uint)atom.SourceFlags, AtomClass = (byte)atom.AtomClass, Direction = (sbyte)atom.TraversalDir };
+                        }
+                        fact = new RailEtaHost.RailEtaRuntimeTrackChainFact { Line = line, Signature = chain.Signature, Atoms = atoms };
+                        return true;
+                    }
+                },
                 railEtaWorker,
                 result => runtime.PublishRailEtaPublicResult(result),
                 message => runtime.log.Info(message)));
