@@ -40,6 +40,9 @@ export interface EtaSnapshotStatusData {
   predictionFailure?: string;
   eventCount?: number;
   workerMs?: number;
+  comparisonSummary?: string;
+  etaGameMinutes?: number;
+  comparisonOriginFrame?: number;
   comparisonState?: string;
   comparisonValid?: boolean;
   comparisonInvalidReason?: string;

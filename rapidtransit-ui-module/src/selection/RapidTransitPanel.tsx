@@ -50,6 +50,10 @@ export function RapidTransitPanel() {
   if (etaHotAvailable && etaSnapshotStatusJson) {
     try {
       etaSnapshotStatus = JSON.parse(etaSnapshotStatusJson);
+      if (etaSnapshotStatus && etaSnapshotStatus.comparisonSummary) {
+        const comparisonStatus = JSON.parse(etaSnapshotStatus.comparisonSummary);
+        etaSnapshotStatus = { ...etaSnapshotStatus, ...comparisonStatus };
+      }
     } catch (error) {
       console.error("RapidTransit ETA snapshot status JSON parse failed", error);
     }
@@ -256,7 +260,7 @@ export function RapidTransitPanel() {
                 </div>
                 {etaSnapshotStatus?.ticket ? (
                   <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.muted }}>
-                    {`#${etaSnapshotStatus.ticket} · ${etaSnapshotStatus.vehicles || 0} ${t("etaSnapshotVehicles")} · ${etaSnapshotStatus.resources || 0} ${t("etaSnapshotResources")}`}
+                    {`#${etaSnapshotStatus.ticket}${typeof etaSnapshotStatus.vehicles === "number" && typeof etaSnapshotStatus.resources === "number" ? ` · ${etaSnapshotStatus.vehicles} ${t("etaSnapshotVehicles")} · ${etaSnapshotStatus.resources} ${t("etaSnapshotResources")}` : ""}`}
                   </div>
                 ) : null}
                 {etaSnapshotStatus?.predictorSource ? (
@@ -265,11 +269,20 @@ export function RapidTransitPanel() {
                       {`${etaSnapshotStatus.predictorSource}/${etaSnapshotStatus.predictorBuildId || "-"} · gen ${etaSnapshotStatus.predictorGeneration || 0}`}
                     </div>
                     <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>
-                      {`arrival ${etaSnapshotStatus.arrival || 0} · free ${etaSnapshotStatus.freeRun || 0} · following ${etaSnapshotStatus.following || 0} · reservation ${etaSnapshotStatus.reservation || 0}`}
+                      {typeof etaSnapshotStatus.etaGameMinutes === "number"
+                        ? `ETA ≈ ${etaSnapshotStatus.etaGameMinutes.toFixed(2)} game min · arrival ${etaSnapshotStatus.arrival || 0}`
+                        : `arrival ${etaSnapshotStatus.arrival || 0}`}
                     </div>
-                    <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>
-                      {`${etaSnapshotStatus.confidence || "Unknown"} / ${etaSnapshotStatus.predictionFailure || "None"} · events ${etaSnapshotStatus.eventCount || 0} · worker ${etaSnapshotStatus.workerMs || 0}ms`}
-                    </div>
+                    {typeof etaSnapshotStatus.freeRun === "number" || typeof etaSnapshotStatus.following === "number" || typeof etaSnapshotStatus.reservation === "number" ? (
+                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>
+                        {`free ${etaSnapshotStatus.freeRun || 0} · following ${etaSnapshotStatus.following || 0} · reservation ${etaSnapshotStatus.reservation || 0}`}
+                      </div>
+                    ) : null}
+                    {etaSnapshotStatus.confidence || etaSnapshotStatus.predictionFailure || typeof etaSnapshotStatus.eventCount === "number" || typeof etaSnapshotStatus.workerMs === "number" ? (
+                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>
+                        {`${etaSnapshotStatus.confidence || "Unknown"} / ${etaSnapshotStatus.predictionFailure || "None"} · events ${etaSnapshotStatus.eventCount || 0} · worker ${etaSnapshotStatus.workerMs || 0}ms`}
+                      </div>
+                    ) : null}
                   </>
                 ) : null}
                 {etaSnapshotStatus?.detail ? (
