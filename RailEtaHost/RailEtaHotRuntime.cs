@@ -246,6 +246,7 @@ namespace RapidTransitMod.RailEtaHost
             }
             catch (Exception ex)
             {
+                LogFailure(action, ex);
                 DisposeRejected(next?.Module, action);
                 Finish(action, "failed", 0, string.Empty, ex.GetType().Name + ": " + ex.Message);
                 completion.TrySetResult(false);
@@ -362,6 +363,7 @@ namespace RapidTransitMod.RailEtaHost
             }
             catch (Exception ex)
             {
+                LogFailure(pending.Action, ex);
                 if (!pending.Rollback) DisposeRejected(pending.Next?.Module, pending.Action);
                 Finish(pending.Action, "failed", 0, string.Empty, ex.GetType().Name + ": " + ex.Message);
                 pending.Completion?.TrySetResult(false);
@@ -378,10 +380,10 @@ namespace RapidTransitMod.RailEtaHost
             Selection retired;
             try
             {
+                if (!pending.Rollback) pending.Next.Module.Attach(m_Context);
                 if (current != null && current.Module.PrepareForReload(out long ticket, out string summary)
                     && ticket != 0 && !String.IsNullOrEmpty(summary))
                     m_ComparisonSummaries[ticket] = summary;
-                if (!pending.Rollback) pending.Next.Module.Attach(m_Context);
 
                 if (pending.Rollback)
                 {
@@ -398,6 +400,7 @@ namespace RapidTransitMod.RailEtaHost
             }
             catch (Exception ex)
             {
+                LogFailure(pending.Action, ex);
                 if (!pending.Rollback) DisposeRejected(pending.Next?.Module, pending.Action);
                 Finish(pending.Action, "failed", 0, string.Empty, ex.GetType().Name + ": " + ex.Message);
                 pending.Completion?.TrySetResult(false);
@@ -408,6 +411,9 @@ namespace RapidTransitMod.RailEtaHost
             Finish(pending.Action, "completed", 1, pending.Next?.BuildId ?? string.Empty, string.Empty);
             pending.Completion?.TrySetResult(true);
         }
+
+        private void LogFailure(string action, Exception exception) =>
+            m_Context?.Log("[RailEtaHotRuntime] " + action + " failed: " + exception);
 
         private void DisposeRejected(IRailEtaHotModule module, string action)
         {

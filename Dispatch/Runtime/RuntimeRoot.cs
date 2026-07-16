@@ -81,6 +81,25 @@ namespace RapidTransitMod.Dispatch.Runtime
                 new RailEtaHost.RailEtaRuntimeReadPort
                 {
                     LineDwellMinutes = line => runtime.m_LineView.Dwell(line),
+                    TryReadOriginScheduledHold = (Entity vehicle, uint frame, out uint earliestReleaseFrame) =>
+                    {
+                        earliestReleaseFrame = 0u;
+                        if (!runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
+                            || state != VehicleState.Holding
+                            || !runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMin)
+                            || targetMin < 0) return false;
+                        int nowMin = (int)(runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
+                        if (RapidTransitMod.Dispatch.Scheduling.ScheduleClock.Reached(nowMin, targetMin)
+                            || RapidTransitMod.Dispatch.Scheduling.ScheduleClock.CanLate(nowMin, targetMin))
+                        {
+                            earliestReleaseFrame = frame;
+                            return true;
+                        }
+                        double deltaDay = targetMin / 1440.0 - runtime.m_TimeSystem.normalizedTime;
+                        if (deltaDay <= 0.0) deltaDay += 1.0;
+                        earliestReleaseFrame = unchecked(frame + (uint)Math.Ceiling(deltaDay * 262144.0));
+                        return true;
+                    },
                     TryReadHold = (Entity vehicle, uint frame, out RailEtaHost.RailEtaRuntimeHoldFact fact) =>
                     {
                         fact = default;

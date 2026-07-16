@@ -49,10 +49,12 @@ namespace RapidTransitMod.RailEtaHost
     public sealed class RailEtaRuntimeReadPort
     {
         public Func<Entity, int> LineDwellMinutes { get; set; }
+        public TryReadRailEtaOriginScheduledHold TryReadOriginScheduledHold { get; set; }
         public TryReadRailEtaHold TryReadHold { get; set; }
         public TryReadRailEtaTrackChain TryReadTrackChain { get; set; }
     }
 
+    public delegate bool TryReadRailEtaOriginScheduledHold(Entity vehicle, uint frame, out uint earliestReleaseFrame);
     public delegate bool TryReadRailEtaHold(Entity vehicle, uint frame, out RailEtaRuntimeHoldFact fact);
     public delegate bool TryReadRailEtaTrackChain(Entity line, out RailEtaRuntimeTrackChainFact fact);
 
