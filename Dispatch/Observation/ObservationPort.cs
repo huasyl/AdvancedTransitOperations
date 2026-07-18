@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using Game.Common;
 using Game.Objects;
+using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Workbench;
@@ -22,6 +23,13 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly Capture m_Capture;
         private readonly Dictionary<Entity, DwellDeadlineCacheEntry> m_DwellDeadlineCache =
             new Dictionary<Entity, DwellDeadlineCacheEntry>();
+        private readonly Dictionary<Entity, DispatchEtaRequest> m_DispatchEtaRequests =
+            new Dictionary<Entity, DispatchEtaRequest>();
+
+        private sealed class DispatchEtaRequest
+        {
+            public uint DispatchFrame;
+        }
 
         private readonly struct DwellDeadlineCacheEntry
         {
@@ -395,6 +403,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 m_Runtime.m_VehicleRegistry.ClearPreparing(vehicle);
                 m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
+                ClearDispatchEta(vehicle);
                 return;
             }
 
@@ -413,6 +422,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             m_Runtime.m_VehicleRegistry.ClearPreparing(vehicle);
             m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
+            m_DispatchEtaRequests.Remove(vehicle);
             if (!hasSample || frames == 0)
                 return;
 
@@ -443,6 +453,76 @@ namespace RapidTransitMod.Dispatch.Observation
             int nowMin = (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
             m_Runtime.m_SelectPanel.RecordLineDispatchSampleSummary(line, nowMin, vehicle, sampleMinutes);
             m_Runtime.m_DispatchCache.Update(line, vehicle, frames);
+        }
+
+        public void BeginDispatchEta(Entity vehicle, Entity line, uint dispatchFrame)
+        {
+            if (vehicle == Entity.Null || m_DispatchEtaRequests.ContainsKey(vehicle))
+                return;
+            m_DispatchEtaRequests[vehicle] = new DispatchEtaRequest
+            {
+                DispatchFrame = dispatchFrame
+            };
+        }
+
+        public void TryRequestDispatchEta(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame)
+        {
+            if (!m_DispatchEtaRequests.TryGetValue(vehicle, out DispatchEtaRequest request))
+                return;
+            if (!m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out _))
+                return;
+            if (vehicle == Entity.Null || line == Entity.Null || waypoints.Length == 0 || !m_Runtime.EntityManager.Exists(vehicle))
+                return;
+            if (!m_Runtime.EntityManager.HasComponent<Target>(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<PathOwner>(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<PathInformation>(vehicle)
+                || !m_Runtime.EntityManager.HasBuffer<PathElement>(vehicle)
+                || !m_Runtime.EntityManager.HasBuffer<LayoutElement>(vehicle))
+                return;
+
+            CurrentRoute route = m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle);
+            Target target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
+            if (route.m_Route != line)
+                return;
+            if (target.m_Target != waypoints[0].m_Waypoint)
+                return;
+
+            PathOwner pathOwner = m_Runtime.EntityManager.GetComponentData<PathOwner>(vehicle);
+            if ((pathOwner.m_State & (PathFlags.Pending | PathFlags.Failed | PathFlags.Stuck | PathFlags.Obsolete | PathFlags.Updated)) != 0)
+                return;
+            PathInformation pathInformation = m_Runtime.EntityManager.GetComponentData<PathInformation>(vehicle);
+            if (pathInformation.m_Destination != waypoints[0].m_Waypoint)
+                return;
+
+            DynamicBuffer<PathElement> path = m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true);
+            if (path.Length == 0)
+                return;
+
+            DynamicBuffer<LayoutElement> layout = m_Runtime.EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+            if (layout.Length == 0
+                || layout[0].m_Vehicle == Entity.Null
+                || !m_Runtime.EntityManager.HasComponent<Train>(layout[0].m_Vehicle))
+                return;
+
+            // Per-vehicle PathOccupants ETA and its diagnostic log are intentionally paused.
+            // Keep only the real spawn-to-path-ready preparation sample used by spawn-lead theory.
+            m_Runtime.m_DispatchCache.RecordPrep(line, unchecked(nowFrame - request.DispatchFrame));
+            m_DispatchEtaRequests.Remove(vehicle);
+        }
+
+        public void ClearDispatchEta(Entity vehicle)
+        {
+            m_DispatchEtaRequests.Remove(vehicle);
+        }
+
+        public void ClearDispatchEta()
+        {
+            m_DispatchEtaRequests.Clear();
         }
 
         public string Json()

@@ -75,8 +75,6 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestEtaHotSmoke", RequestEtaHotSmoke));
             AddBinding(new TriggerBinding(kGroup, "requestEtaHotRollback", RequestEtaHotRollback));
             AddBinding(new TriggerBinding(kGroup, "requestEtaSnapshot", RequestEtaSnapshot));
-            AddBinding(new TriggerBinding(kGroup, "requestEtaComparisonExport", RequestEtaComparisonExport));
-            AddBinding(new TriggerBinding(kGroup, "requestEtaComparisonStop", RequestEtaComparisonStop));
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
@@ -541,14 +539,6 @@ namespace RapidTransitMod
             RailEtaHost.RailEtaPublicTicket ticket = RailEtaHost.RailEtaDebugApi.RequestSnapshot(selected.Index, selected.Version);
             if (ticket.IsValid) m_EtaSnapshotTicket = ticket;
 #endif
-        }
-
-        private void RequestEtaComparisonExport()
-        {
-        }
-
-        private void RequestEtaComparisonStop()
-        {
         }
 
         private void SetBypassStation(bool enabled)

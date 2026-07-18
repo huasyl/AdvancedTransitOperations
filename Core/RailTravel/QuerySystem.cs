@@ -60,6 +60,16 @@ namespace RapidTransitMod.RailTravel
 
         internal bool TryGetResult(string id, out QueryResult result, bool cleanupOwner = true)
         {
+            return TryGetResult(id, false, out result, cleanupOwner);
+        }
+
+        internal bool TryGetTheoryDepotResult(string id, out QueryResult result, bool cleanupOwner = true)
+        {
+            return TryGetResult(id, true, out result, cleanupOwner);
+        }
+
+        private bool TryGetResult(string id, bool theoryDepot, out QueryResult result, bool cleanupOwner)
+        {
             result = default;
             if (string.IsNullOrWhiteSpace(id) || !m_Requests.TryGetValue(id, out State state))
                 return false;
@@ -80,15 +90,30 @@ namespace RapidTransitMod.RailTravel
 
             Path path = null;
             string error = string.Empty;
-            bool success = new PathQuery(EntityManager).TryBuild(state.Owner, out path);
-            if (!success)
-                error = "rail-travel-query-path-empty";
+            bool rawSuccess = info.m_Origin != Entity.Null
+                && info.m_Destination != Entity.Null
+                && !float.IsNaN(info.m_TotalCost)
+                && !float.IsInfinity(info.m_TotalCost)
+                && info.m_TotalCost >= 0f
+                && EntityManager.HasBuffer<PathElement>(state.Owner)
+                && EntityManager.GetBuffer<PathElement>(state.Owner, true).Length != 0;
+            bool projectionSuccess = theoryDepot
+                ? new PathQuery(EntityManager).TryBuildTheoryDepot(state.Owner, out path)
+                : new PathQuery(EntityManager).TryBuild(state.Owner, out path);
+            bool success = theoryDepot ? rawSuccess : projectionSuccess;
+            if (theoryDepot && !rawSuccess)
+                error = "rail-travel-query-no-path";
+            else if (!projectionSuccess)
+                error = theoryDepot
+                    ? "rail-travel-query-theory-depot-projection-failed"
+                    : "rail-travel-query-path-empty";
 
             result = new QueryResult
             {
                 Id = id,
                 State = success ? "completed" : "failed",
                 Success = success,
+                ProjectionSuccess = projectionSuccess,
                 Error = error,
                 Owner = state.Owner,
                 Information = info,
@@ -182,6 +207,7 @@ namespace RapidTransitMod.RailTravel
         public string Id { get; set; }
         public string State { get; set; }
         public bool Success { get; set; }
+        public bool ProjectionSuccess { get; set; }
         public string Error { get; set; }
         public Entity Owner { get; set; }
         public PathInformation Information { get; set; }

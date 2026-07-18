@@ -27,19 +27,10 @@ export interface EtaSnapshotStatusData {
   state?: string;
   failure?: string;
   detail?: string;
-  vehicles?: number;
-  resources?: number;
   predictorSource?: string;
   predictorBuildId?: string;
   predictorGeneration?: number;
   arrival?: number;
-  freeRun?: number;
-  following?: number;
-  reservation?: number;
-  confidence?: string;
-  predictionFailure?: string;
-  eventCount?: number;
-  workerMs?: number;
   comparisonSummary?: string;
   etaGameMinutes?: number;
   comparisonOriginFrame?: number;
@@ -55,20 +46,6 @@ export interface EtaSnapshotStatusData {
   comparisonOriginDelta?: number;
   comparisonPredictionDelta?: number;
   comparisonFramesToOrPastPrediction?: number;
-  comparisonCurrentState?: string;
-  comparisonRecentPredicted?: string;
-  comparisonRecentActual?: string;
-  comparisonMatched?: number;
-  comparisonMissed?: number;
-  comparisonPending?: number;
-  comparisonUnobservable?: number;
-  comparisonExtra?: number;
-  comparisonExcluded?: number;
-  comparisonExportState?: string;
-  comparisonExportPath?: string;
-  comparisonExportError?: string;
-  comparisonCanStop?: boolean;
-  comparisonCanExport?: boolean;
 }
 
 export interface PanelData {

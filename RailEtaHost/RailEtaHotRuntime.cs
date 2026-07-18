@@ -1,10 +1,13 @@
-#if RT_DEBUG_TOOLS
 using System;
+#if RT_DEBUG_TOOLS
 using System.Collections.Concurrent;
 using System.IO;
 using System.Reflection;
+#endif
 using System.Threading;
+#if RT_DEBUG_TOOLS
 using System.Threading.Tasks;
+#endif
 using Unity.Jobs;
 
 namespace RapidTransitMod.RailEtaHost
@@ -25,6 +28,7 @@ namespace RapidTransitMod.RailEtaHost
             public long Generation { get; }
         }
 
+#if RT_DEBUG_TOOLS
         internal sealed class StatusSnapshot
         {
             public StatusSnapshot(bool busy, string currentBuildId, long generation, string lastAction, string status,
@@ -59,25 +63,39 @@ namespace RapidTransitMod.RailEtaHost
             public string Action;
             public bool Rollback;
         }
+#endif
 
         private readonly RailEtaWorker m_Worker;
+        private Selection m_Current;
+        private int m_Disposed;
+        private RailEtaHotContext m_Context;
+        private JobHandle m_LastHandle;
+        private int m_PendingClearGeneration = -1;
+#if RT_DEBUG_TOOLS
         private readonly object m_Gate = new object();
         private readonly ConcurrentDictionary<long, string> m_ComparisonSummaries = new ConcurrentDictionary<long, string>();
-        private Selection m_Current;
         private Selection m_Previous;
         private PendingSwap m_PendingSwap;
         private long m_NextGeneration;
         private int m_Busy;
-        private int m_Disposed;
         private int m_LoadedAssemblies;
-        private RailEtaHotContext m_Context;
-        private JobHandle m_LastHandle;
-        private int m_PendingClearGeneration = -1;
         private StatusSnapshot m_Status = new StatusSnapshot(false, string.Empty, 0, string.Empty, "idle", 0, string.Empty, string.Empty, 0);
+#endif
 
-        public RailEtaHotRuntime(RailEtaWorker worker) => m_Worker = worker ?? throw new ArgumentNullException(nameof(worker));
+        public RailEtaHotRuntime(RailEtaWorker worker, IRailEtaHotModule builtIn)
+        {
+            m_Worker = worker ?? throw new ArgumentNullException(nameof(worker));
+            if (builtIn == null) throw new ArgumentNullException(nameof(builtIn));
+            m_Current = new Selection(builtIn, builtIn.BuildId, 1);
+#if RT_DEBUG_TOOLS
+            m_NextGeneration = 1;
+            m_Status = new StatusSnapshot(false, m_Current.BuildId, m_Current.Generation, string.Empty, "idle", 0, string.Empty, string.Empty, 0);
+#endif
+        }
 
+#if RT_DEBUG_TOOLS
         public StatusSnapshot Status => Volatile.Read(ref m_Status);
+#endif
         public bool IsDisposed => Volatile.Read(ref m_Disposed) != 0;
         public bool WorkerLost => m_Worker.WorkerLost;
         public Selection Current => Volatile.Read(ref m_Current);
@@ -93,6 +111,7 @@ namespace RapidTransitMod.RailEtaHost
 
         public bool Submit(RailEtaHotCommand command)
         {
+#if RT_DEBUG_TOOLS
             if (IsDisposed || Volatile.Read(ref m_Busy) != 0) return false;
             lock (m_Gate)
             {
@@ -102,17 +121,27 @@ namespace RapidTransitMod.RailEtaHost
                 selection.Module.Submit(command);
                 return true;
             }
+#else
+            Selection selection = Current;
+            if (IsDisposed || selection == null || selection.Generation != command.Generation) return false;
+            selection.Module.Submit(command);
+            return true;
+#endif
         }
 
         public JobHandle Tick(uint simulationFrame, JobHandle inputDependency)
         {
+#if RT_DEBUG_TOOLS
             ApplyPendingSwap();
+#endif
             int clearGeneration = Interlocked.Exchange(ref m_PendingClearGeneration, -1);
             if (clearGeneration >= 0)
             {
                 CompleteLastHandle();
                 Current?.Module.Clear(clearGeneration);
+#if RT_DEBUG_TOOLS
                 m_Previous?.Module.Clear(clearGeneration);
+#endif
             }
             Selection selection = Current;
             if (selection == null) return inputDependency;
@@ -125,17 +154,31 @@ namespace RapidTransitMod.RailEtaHost
 
         public bool TryGetComparisonSummary(long ticket, out string summary)
         {
+#if RT_DEBUG_TOOLS
             Selection selection = Current;
             if (selection != null && selection.Module.TryGetComparisonSummary(ticket, out summary)) return true;
             return m_ComparisonSummaries.TryGetValue(ticket, out summary);
+#else
+            summary = string.Empty;
+            return false;
+#endif
         }
 
         public void Clear(int generation)
         {
+#if RT_DEBUG_TOOLS
             m_ComparisonSummaries.Clear();
+#endif
             Interlocked.Exchange(ref m_PendingClearGeneration, generation);
         }
 
+        private void CompleteLastHandle()
+        {
+            m_LastHandle.Complete();
+            m_LastHandle = default;
+        }
+
+#if RT_DEBUG_TOOLS
         public Task<bool> ReloadAsync(string dllPath)
         {
             var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -339,12 +382,6 @@ namespace RapidTransitMod.RailEtaHost
             return latest;
         }
 
-        private void CompleteLastHandle()
-        {
-            m_LastHandle.Complete();
-            m_LastHandle = default;
-        }
-
         private void ApplyPendingSwap()
         {
             PendingSwap pending;
@@ -427,11 +464,13 @@ namespace RapidTransitMod.RailEtaHost
             try { module.Dispose(); }
             catch (Exception ex) { m_Context?.Log("[RailEtaHotRuntime] " + action + " retired module dispose failed: " + ex.GetType().Name + ": " + ex.Message); }
         }
+#endif
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref m_Disposed, 1) != 0) return;
             CompleteLastHandle();
+#if RT_DEBUG_TOOLS
             lock (m_Gate)
             {
                 m_PendingSwap?.Next?.Module.Dispose();
@@ -442,7 +481,10 @@ namespace RapidTransitMod.RailEtaHost
                 m_Current = null;
                 m_Previous = null;
             }
+#else
+            m_Current?.Module.Dispose();
+            m_Current = null;
+#endif
         }
     }
 }
-#endif

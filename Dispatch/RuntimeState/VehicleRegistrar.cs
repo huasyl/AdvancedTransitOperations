@@ -141,6 +141,9 @@ namespace RapidTransitMod
                         }
 
                         m_Runtime.m_RuntimeController.Adopt(v, line, initState, m_Runtime.m_SimulationSystem.frameIndex, dispatchFrame);
+                        string spawnIntent = dispatchFrame.HasValue
+                            ? m_Runtime.m_SpawnIntentTrace.Bind(line, v, dispatchFrame.Value, m_Runtime.m_SimulationSystem.frameIndex)
+                            : string.Empty;
                         m_Runtime.m_ObsPersist.SetLapDistance(v, -1f);
                         byte boardingByte = boarding0 ? (byte)1 : (byte)0;
                         m_Runtime.m_LastEffectiveBoardingState[v] = boardingByte;
@@ -222,7 +225,8 @@ namespace RapidTransitMod
                                     + " state=" + finalState
                                     + " targetMin=" + finalTarget
                                     + " initReason=" + initReason
-                                    + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v));
+                                    + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v)
+                                    + spawnIntent);
                             }
                         }
                         if (!adoptExistingVehicles)

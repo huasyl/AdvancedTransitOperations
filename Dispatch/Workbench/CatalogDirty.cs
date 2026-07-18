@@ -68,6 +68,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_DepotDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
             {
                 All = new[] { ComponentType.ReadOnly<Game.Buildings.TransportDepot>() },
+                None = new[] { ComponentType.ReadOnly<Temp>() },
                 Any = DirtyMarkers(includeBatchesUpdated: true)
             });
             m_ConnectedDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
@@ -106,6 +107,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ComponentType.ReadOnly<CustomName>(),
                     ComponentType.ReadOnly<Game.Buildings.TransportDepot>()
                 },
+                None = new[] { ComponentType.ReadOnly<Temp>() },
                 Any = DirtyMarkers(includeBatchesUpdated: true)
             });
             m_BuildingNameDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
@@ -133,6 +135,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             });
             m_DepotCountQuery = entityManager.CreateEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.Exclude<Temp>(),
                 ComponentType.Exclude<Deleted>());
             ResetCountGuard(0);
         }

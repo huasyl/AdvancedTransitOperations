@@ -7,7 +7,9 @@ using RapidTransitMod.Dispatch.Diagnostics;
 using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
+using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Dispatch.Workbench;
+using RapidTransitMod.RailEta.BuiltIn;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -68,12 +70,12 @@ namespace RapidTransitMod.Dispatch.Runtime
                 action => MainThreadDispatcher.RunOnMainThread(action));
             runtime.m_LineProfile = new LineProfile(runtime);
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
+            runtime.m_SpawnIntentTrace = new SpawnIntentTrace(runtime);
             runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
             RailEtaHost.RailEtaWorker railEtaWorker = new RailEtaHost.RailEtaWorker();
             runtime.m_RailEtaService = new RailEtaHost.RailEtaBridgeService(railEtaWorker);
             RailEtaHost.RailEtaBridgeService.Bind(runtime.m_RailEtaService);
-#if RT_DEBUG_TOOLS
-            runtime.m_RailEtaHotRuntime = new RailEtaHost.RailEtaHotRuntime(railEtaWorker);
+            runtime.m_RailEtaHotRuntime = new RailEtaHost.RailEtaHotRuntime(railEtaWorker, new RailEtaHotModule());
             runtime.m_RailEtaHotRuntime.Attach(new RailEtaHost.RailEtaHotContext(
                 runtime.World,
                 () => runtime.m_SimulationSystem.frameIndex,
@@ -136,7 +138,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 result => runtime.PublishRailEtaPublicResult(result),
                 message => runtime.log.Info(message)));
             runtime.m_RailEtaService.SetHotRuntime(runtime.m_RailEtaHotRuntime);
-#endif
+            runtime.m_SpawnLeadTheory = new SpawnLeadTheory(runtime);
             runtime.m_RuntimeShell = new RuntimeShell(runtime);
             runtime.m_LineStructureInvalidator = new LineStructureInvalidator(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
@@ -293,10 +295,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public static void Clear(DispatchRuntimeSystem runtime)
         {
-#if RT_DEBUG_TOOLS
+            runtime.m_SpawnLeadTheory?.Clear();
             runtime.m_RailEtaHotRuntime?.Dispose();
             runtime.m_RailEtaHotRuntime = null!;
-#endif
             runtime.m_RailEtaService?.Dispose();
             runtime.m_RailEtaService = null!;
             PassengerFlow.SamplingSystem.ClearState();
@@ -304,6 +305,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             LifecyclePort.Clear();
             runtime.m_CommandApplier = null!;
             runtime.m_DispatchScheduler = null!;
+            runtime.m_SpawnLeadTheory = null!;
             runtime.m_VehicleRegistrar = null!;
             runtime.m_VehicleLabels = null!;
             runtime.m_SelectPanel = null!;

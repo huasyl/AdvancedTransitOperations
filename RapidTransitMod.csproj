@@ -7,8 +7,9 @@
     <Nullable>disable</Nullable>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <OutputPath>bin\$(Configuration)\net6.0\</OutputPath>
     <RapidTransitDeployDir>$(UserProfile)\AppData\LocalLow\Colossal Order\Cities Skylines II\Mods\RapidTransitMod</RapidTransitDeployDir>
+    <OutputPath Condition="'$(Configuration)'=='Debug'">$(RapidTransitDeployDir)\</OutputPath>
+    <OutputPath Condition="'$(Configuration)'!='Debug'">bin\$(Configuration)\net6.0\</OutputPath>
     <PublishConfigurationPath>Properties\PublishConfiguration.xml</PublishConfigurationPath>
     <EnableOfficialToolchain>true</EnableOfficialToolchain>
     <StripSymbolsForPackage>false</StripSymbolsForPackage>
@@ -27,9 +28,8 @@
   <ItemGroup>
     <Compile Remove="references\**\*.cs" />
     <Compile Remove="tools\**\*.cs" />
-    <Compile Remove="Core\RailEta.Contracts\**\*.cs" />
-    <Compile Remove="Core\RailEta.Engine\**\*.cs" />
     <Compile Remove="hot\**\*.cs" />
+    <!-- Core/RailEta 由主 DLL 默认编译为 BuiltIn 命名空间；热模块链接同源代码并编译为 Hot。 -->
     <None Include="references\**\*.cs" />
     <None Include="rapidtransit-ui-module\dist\RapidTransitMod.mjs">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -53,6 +53,13 @@
     <None Include="mod.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)'=='Debug'">
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\..\steam\steamapps\common\Cities Skylines II\Cities2_Data\Managed\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -147,27 +154,27 @@
   <Target Name="DeployRapidTransitMod" AfterTargets="Build">
     <Delete Files="$(OutputPath)0Harmony.dll" ContinueOnError="true" />
     <Delete Files="$(RapidTransitDeployDir)\0Harmony.dll" ContinueOnError="true" />
-    <ItemGroup>
+    <ItemGroup Condition="'$(Configuration)'!='Debug'">
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.dll" />
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.pdb" Condition="Exists('$(OutputPath)RapidTransitMod.pdb')" />
       <RapidTransitDeployFiles Include="$(OutputPath)RapidTransitMod.mjs" />
       <RapidTransitDeployFiles Include="$(OutputPath)THIRD_PARTY_NOTICES.txt" />
       <RapidTransitDeployFiles Include="$(OutputPath)mod.json" />
     </ItemGroup>
-    <ItemGroup>
+    <ItemGroup Condition="'$(Configuration)'!='Debug'">
       <RapidTransitDeployUiFiles Include="$(OutputPath)UI\**\*" />
       <RapidTransitDeployLocaleFiles Include="$(OutputPath)Locales\**\*.json" />
     </ItemGroup>
     <MakeDir Directories="$(RapidTransitDeployDir)" />
-    <Copy SourceFiles="@(RapidTransitDeployFiles)" DestinationFolder="$(RapidTransitDeployDir)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitDeployUiFiles)" DestinationFiles="@(RapidTransitDeployUiFiles->'$(RapidTransitDeployDir)\UI\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(RapidTransitDeployLocaleFiles)" DestinationFiles="@(RapidTransitDeployLocaleFiles->'$(RapidTransitDeployDir)\Locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy Condition="'$(Configuration)'!='Debug'" SourceFiles="@(RapidTransitDeployFiles)" DestinationFolder="$(RapidTransitDeployDir)" SkipUnchangedFiles="true" />
+    <Copy Condition="'$(Configuration)'!='Debug'" SourceFiles="@(RapidTransitDeployUiFiles)" DestinationFiles="@(RapidTransitDeployUiFiles->'$(RapidTransitDeployDir)\UI\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy Condition="'$(Configuration)'!='Debug'" SourceFiles="@(RapidTransitDeployLocaleFiles)" DestinationFiles="@(RapidTransitDeployLocaleFiles->'$(RapidTransitDeployDir)\Locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="DeployRailEtaHotDebug" AfterTargets="DeployRapidTransitMod" Condition="'$(Configuration)'=='Debug'">
     <MSBuild Projects="hot\RailEta.Hot\RapidTransitMod.RailEta.Hot.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);RailEtaHotDeployDir=$(RapidTransitDeployDir)\Hot" />
+             Targets="Restore;Build"
+             Properties="Configuration=$(Configuration);RapidTransitDeployDir=$(RapidTransitDeployDir)" />
   </Target>
 
   <Target Name="StripSymbolsFromPackage" AfterTargets="RunModPostProcessor" BeforeTargets="DeployWIP" Condition="'$(StripSymbolsForPackage)'=='true'">

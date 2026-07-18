@@ -6,6 +6,7 @@ using Game.Pathfind;
 using Game.Routes;
 using Game.Simulation;
 using Game.Vehicles;
+using RapidTransitMod.Dispatch.Diagnostics;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -29,6 +30,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly VehicleView m_VehicleView;
         private readonly VehicleRegistry m_VehicleRegistry;
         private readonly VehicleStateStore.MapRef<VehicleState> m_VehicleStates;
+        private readonly SpawnIntentTrace m_SpawnIntentTrace;
         private readonly Action<Entity> m_RetireRuntime;
         private readonly CaptureRetireSpawnTargetDelegate m_CaptureRetireSpawnTarget;
         private readonly Action<Entity, int, bool, int> m_ApplyRetireSpawnTarget;
@@ -69,6 +71,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_VehicleView = runtime.m_VehicleView;
             m_VehicleRegistry = runtime.m_VehicleRegistry;
             m_VehicleStates = runtime.m_VehicleStateStore.State;
+            m_SpawnIntentTrace = runtime.m_SpawnIntentTrace;
             m_RetireRuntime = runtime.m_RuntimeController.Retire;
             m_CaptureRetireSpawnTarget = runtime.m_RuntimeController.CaptureRetireSpawnTarget;
             m_ApplyRetireSpawnTarget = runtime.m_RuntimeController.ApplyRetireSpawnTarget;
@@ -97,6 +100,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_MisfireStartFrame = runtime.m_BVMisfireStartFrame;
             m_PreparingFixCooldownUntil = runtime.m_PreparingFixCooldownUntil;
         }
+
+        public string RetireIntent(Entity vehicle) => m_SpawnIntentTrace.Retire(vehicle, Frame);
 
         public EntityManager EntityManager => m_EntityManager;
         public TimedLogger Log => m_Log;

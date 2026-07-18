@@ -193,6 +193,7 @@ namespace RapidTransitMod
         internal LapStore m_Laps = null!;
         internal DispatchCommandApplier m_CommandApplier = null!;
         internal DispatchScheduler m_DispatchScheduler = null!;
+        internal SpawnLeadTheory m_SpawnLeadTheory = null!;
         internal DwellStore m_Dwell = null!;
         internal SliceStore m_Slices = null!;
         internal TraceStore m_Obs = null!;
@@ -203,12 +204,11 @@ namespace RapidTransitMod
         internal LineRange m_LineRange = null!;
         internal LineProfile m_LineProfile = null!;
         internal RuntimeLog m_RuntimeLog = null!;
+        internal SpawnIntentTrace m_SpawnIntentTrace = null!;
         internal RuntimeHotPathProbe m_RuntimeHotPathProbe = null!;
         internal RuntimeShell m_RuntimeShell = null!;
         internal RailEtaHost.RailEtaBridgeService m_RailEtaService = null!;
-#if RT_DEBUG_TOOLS
         internal RailEtaHost.RailEtaHotRuntime m_RailEtaHotRuntime = null!;
-#endif
         internal LineTimes m_LineTimes = null!;
         internal LineMileage m_LineMileage = null!;
         internal LineVehicles m_LineVehicles = null!;

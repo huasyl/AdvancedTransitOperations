@@ -97,6 +97,8 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         public float SpawnLead(Entity line, float lineDurationFrames)
         {
+            if (m_Runtime.m_SpawnLeadTheory != null && m_Runtime.m_SpawnLeadTheory.TryRead(line, out float theoryFrames))
+                return theoryFrames;
             float cachedFrames = m_ReadDispatchCache(line);
             if (cachedFrames > 0f)
                 return cachedFrames;
@@ -112,6 +114,13 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES,
                 DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_MINUTES);
             return estimateMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+        }
+
+        public string SpawnLeadSource(Entity line)
+        {
+            if (m_Runtime.m_SpawnLeadTheory != null && m_Runtime.m_SpawnLeadTheory.TryRead(line, out _))
+                return "rail-eta-theory";
+            return m_ReadDispatchCache(line) > 0f ? "legacy-dispatch-cache" : "lap-duration-fallback";
         }
 
         public float SpawnBuffer(float spawnLeadFrames)

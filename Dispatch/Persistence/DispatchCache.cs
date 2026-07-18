@@ -41,6 +41,8 @@ namespace RapidTransitMod.Dispatch.Persistence
                 m_Runtime.EntityManager.AddBuffer<LineDispatchDepotCacheElement>(city);
             if (!m_Runtime.EntityManager.HasBuffer<LineDispatchDepotHistoryElement>(city))
                 m_Runtime.EntityManager.AddBuffer<LineDispatchDepotHistoryElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city))
+                m_Runtime.EntityManager.AddBuffer<LineDispatchPrepHistoryElement>(city);
             m_Runtime.m_DispatchCacheBufferReady = true;
         }
 
@@ -61,6 +63,51 @@ namespace RapidTransitMod.Dispatch.Persistence
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null) return;
             UpdateDepot(city, line, vehicle, sampleFrames);
+        }
+
+        public uint ReadPrep(Entity line)
+        {
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (!m_Runtime.m_DispatchCacheBufferReady || city == Entity.Null
+                || !m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city)) return 360u;
+            FixedString128Bytes lineId = m_LineId(line);
+            FixedString128Bytes depotId = m_DepotId(m_Depot(line));
+            DynamicBuffer<LineDispatchPrepHistoryElement> buffer = m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city, true);
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                LineDispatchPrepHistoryElement value = buffer[i];
+                if (value.m_LineId != lineId || value.m_DepotId != depotId) continue;
+                uint maximum = 0u;
+                List<uint> samples = ReadPrepSamples(value);
+                for (int sample = 0; sample < samples.Count; sample++) maximum = math.max(maximum, samples[sample]);
+                return maximum > 0u ? maximum : 360u;
+            }
+            return 360u;
+        }
+
+        public void RecordPrep(Entity line, uint rawFrames)
+        {
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (!m_Runtime.m_DispatchCacheBufferReady || city == Entity.Null || line == Entity.Null
+                || !m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city)) return;
+            FixedString128Bytes lineId = m_LineId(line);
+            FixedString128Bytes depotId = m_DepotId(m_Depot(line));
+            if (lineId.IsEmpty || depotId.IsEmpty) return;
+            uint saved = math.min(rawFrames, 360u);
+            DynamicBuffer<LineDispatchPrepHistoryElement> buffer = m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city);
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                LineDispatchPrepHistoryElement value = buffer[i];
+                if (value.m_LineId != lineId || value.m_DepotId != depotId) continue;
+                AppendPrep(ref value, saved);
+                buffer[i] = value;
+                LogPrep(line, rawFrames, saved, value.m_SampleCount);
+                return;
+            }
+            LineDispatchPrepHistoryElement created = new LineDispatchPrepHistoryElement { m_LineId = lineId, m_DepotId = depotId };
+            AppendPrep(ref created, saved);
+            buffer.Add(created);
+            LogPrep(line, rawFrames, saved, created.m_SampleCount);
         }
 
         private float ReadDepot(Entity city, string lineId, string depotId)
@@ -190,6 +237,47 @@ namespace RapidTransitMod.Dispatch.Persistence
                         depotHistoryBuf.RemoveAt(i);
                 }
             }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchPrepHistoryElement> prep = m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city);
+                for (int i = prep.Length - 1; i >= 0; i--)
+                    if (prep[i].m_LineId == lineKey) prep.RemoveAt(i);
+            }
+        }
+
+        private static List<uint> ReadPrepSamples(LineDispatchPrepHistoryElement value)
+        {
+            var samples = new List<uint>(HistoryLimit);
+            Add(samples, value.m_Sample0); Add(samples, value.m_Sample1);
+            Add(samples, value.m_Sample2); Add(samples, value.m_Sample3);
+            Add(samples, value.m_Sample4); Add(samples, value.m_Sample5);
+            Add(samples, value.m_Sample6); Add(samples, value.m_Sample7);
+            if (samples.Count > value.m_SampleCount)
+                samples.RemoveRange(value.m_SampleCount, samples.Count - value.m_SampleCount);
+            return samples;
+        }
+
+        private static void AppendPrep(ref LineDispatchPrepHistoryElement value, uint sample)
+        {
+            List<uint> samples = ReadPrepSamples(value);
+            samples.Add(sample);
+            if (samples.Count > HistoryLimit) samples.RemoveAt(0);
+            value.m_SampleCount = (byte)samples.Count;
+            value.m_Sample0 = samples.Count > 0 ? samples[0] : 0u;
+            value.m_Sample1 = samples.Count > 1 ? samples[1] : 0u;
+            value.m_Sample2 = samples.Count > 2 ? samples[2] : 0u;
+            value.m_Sample3 = samples.Count > 3 ? samples[3] : 0u;
+            value.m_Sample4 = samples.Count > 4 ? samples[4] : 0u;
+            value.m_Sample5 = samples.Count > 5 ? samples[5] : 0u;
+            value.m_Sample6 = samples.Count > 6 ? samples[6] : 0u;
+            value.m_Sample7 = samples.Count > 7 ? samples[7] : 0u;
+        }
+
+        private void LogPrep(Entity line, uint raw, uint saved, byte count)
+        {
+            m_Runtime.log.Info("[SpawnLeadPrep] line=" + line.Index + " rawFrames=" + raw
+                + " usedFrames=" + saved + " samples=" + count);
         }
 
         private static LineDispatchDepotHistoryElement GetDepotHistory(

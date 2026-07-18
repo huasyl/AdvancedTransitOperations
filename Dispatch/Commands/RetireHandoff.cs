@@ -107,6 +107,7 @@ namespace RapidTransitMod.Dispatch.Commands
                     out oldSpawnTarget);
             }
 
+            string spawnIntent = m_RetireHost.RetireIntent(vehicle);
             ResetShadow(vehicle);
             m_RetireHost.RetireRuntimeVehicle(vehicle);
             m_RetireHost.ClearRetireRequestState(vehicle);
@@ -118,7 +119,8 @@ namespace RapidTransitMod.Dispatch.Commands
                 : "线路?";
             m_RetireHost.SetRetireLabel(vehicle, reason);
             Log.Info("[回库] " + lineTag + " 车辆" + vehicle.Index
-                + (reason.Length > 0 ? " 原因:" + reason : "") + " -> 车库");
+                + (reason.Length > 0 ? " 原因:" + reason : "") + " -> 车库"
+                + spawnIntent);
             RecordShadow(vehicle, "retire-request");
             PublicTransport requestPublicTransport = EntityManager.HasComponent<PublicTransport>(vehicle)
                 ? EntityManager.GetComponentData<PublicTransport>(vehicle)

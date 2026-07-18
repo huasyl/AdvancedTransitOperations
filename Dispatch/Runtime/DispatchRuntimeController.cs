@@ -320,7 +320,10 @@ namespace RapidTransitMod
                 m_Vehicles.ClearPreparing(vehicle);
 
             if (dispatchFrame.HasValue)
+            {
                 m_Vehicles.SetDispatch(vehicle, dispatchFrame.Value);
+                m_Runtime.m_Observation.BeginDispatchEta(vehicle, line, dispatchFrame.Value);
+            }
             else
                 m_Vehicles.ClearDispatch(vehicle);
         }
@@ -1013,6 +1016,7 @@ namespace RapidTransitMod
                     {
                         case VehicleState.Preparing:
                             m_Runtime.m_Announcements.Preparing(v, routeEnt, wps, atA, nowFrame);
+                            m_Runtime.m_Observation.TryRequestDispatchEta(v, lineEnt, wps, nowFrame);
 
                             if (targetMin >= 0 && ScheduleClock.SoftExpired(nowMin, targetMin) && !ScheduleClock.CanLate(nowMin, targetMin))
                             {
@@ -1382,6 +1386,7 @@ namespace RapidTransitMod
                                 if (RtLog.VerboseEnabled)
                                     log.Info("[LaunchHeadCheck] " + lineTag + " vehicle" + v.Index + headDiagnostic);
                                 SetRunningSlotVehicleLabel(v, isLateDispatch, targetMin, vTag);
+                                string spawnIntent = m_Runtime.m_SpawnIntentTrace.Launch(v, targetMin, nowFrame);
                                 if (isLateDispatch)
                                 {
                                     if (RtLog.VerboseEnabled)
@@ -1393,7 +1398,8 @@ namespace RapidTransitMod
                                             "[补发] " + lineTag + " 车辆" + v.Index
                                                 + " 于 " + DispatchRuntimeSystem.SlotStr(nowMin) + " 补发（班次 " + DispatchRuntimeSystem.SlotStr(targetMin) + "）"
                                                 + " 已过期" + overdue + "分钟"
-                                                + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES));
+                                                + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES)
+                                                + spawnIntent);
                                     }
                                 }
                                 else
@@ -1402,7 +1408,8 @@ namespace RapidTransitMod
                                     {
                                         log.Info("[发车] " + lineTag + " 车辆" + v.Index
                                             + " 于 " + DispatchRuntimeSystem.SlotStr(nowMin) + " 发车（班次 " + DispatchRuntimeSystem.SlotStr(targetMin) + "）"
-                                            + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES));
+                                            + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES)
+                                            + spawnIntent);
                                     }
                                 }
                             }

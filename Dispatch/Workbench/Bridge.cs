@@ -874,6 +874,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             return m_Runtime.EntityManager.CreateEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.Exclude<Game.Tools.Temp>(),
                 ComponentType.Exclude<Deleted>());
         }
 

@@ -90,6 +90,8 @@ namespace RapidTransitMod
                 m_Runtime.m_PreparingFixCooldownUntil.Remove(dead);
                 m_ClearAssistLaunchPending(dead);
                 m_Runtime.m_Observation.ClearDwellDeadlineCache(dead);
+                m_Runtime.m_Observation.ClearDispatchEta(dead);
+                m_Runtime.m_SpawnIntentTrace?.Remove(dead);
                 m_Runtime.m_ObsPersist.ClearDwell(dead);
                 m_Runtime.m_ObsPersist.ClearVehicleSlices(dead);
                 m_Runtime.m_Observation.ClearDebug(dead);

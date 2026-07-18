@@ -22,6 +22,9 @@ namespace RapidTransitMod.RailEtaHost
         public static void Bind(RailEtaBridgeService service) => Volatile.Write(ref s_Current, service);
         public bool IsDisposed => Volatile.Read(ref m_Disposed) != 0;
         public bool WorkerLost => m_Worker.WorkerLost;
+        internal bool CanSubmit => !IsDisposed && !WorkerLost && m_HotRuntime?.Current != null && !m_HotRuntime.ModuleBusy;
+        internal long HotGeneration => m_HotRuntime?.Current?.Generation ?? 0;
+        internal string HotBuildId => m_HotRuntime?.Current?.BuildId ?? string.Empty;
 
         internal void SetHotRuntime(RailEtaHotRuntime runtime) => m_HotRuntime = runtime;
         internal JobHandle TickHot(uint frame, JobHandle dependency)
@@ -53,6 +56,7 @@ namespace RapidTransitMod.RailEtaHost
                 State = selection == null ? "Unavailable" : "Queued",
                 TargetVehicle = ((long)(uint)descriptor.VehicleIndex << 32) | (uint)descriptor.VehicleVersion,
                 TargetWaypoint = descriptor.TargetCheckpointId,
+                Mode = descriptor.Mode,
                 Generation = selection?.Generation ?? 0
             };
             m_Status[ticket.Value] = status;
@@ -62,7 +66,10 @@ namespace RapidTransitMod.RailEtaHost
                 status.Detail = "Rail ETA hot module is not loaded.";
                 return ticket;
             }
-            if (!m_HotRuntime.Submit(new RailEtaHotCommand(ticket.Value, checked((int)selection.Generation), descriptor.VehicleIndex, descriptor.VehicleVersion, descriptor.TargetCheckpointId)))
+            if (!m_HotRuntime.Submit(new RailEtaHotCommand(ticket.Value, checked((int)selection.Generation), descriptor.VehicleIndex,
+                descriptor.VehicleVersion, descriptor.TargetCheckpointId, descriptor.Mode, descriptor.DepotIndex,
+                descriptor.DepotVersion, descriptor.ModelIndex, descriptor.ModelVersion,
+                descriptor.SecondaryModelIndex, descriptor.SecondaryModelVersion)))
             {
                 status.State = "Busy";
                 status.Failure = "Busy";
@@ -106,10 +113,12 @@ namespace RapidTransitMod.RailEtaHost
             status.TargetVehicle = result.TargetVehicle;
             status.TargetWaypoint = result.TargetWaypoint;
             status.EtaFrame = result.EtaFrame;
+            status.OriginFrame = result.OriginFrame;
             status.Source = result.Source ?? string.Empty;
             status.Build = result.Build ?? string.Empty;
             status.Generation = result.Generation;
             status.Incomplete = result.Incomplete;
+            status.Mode = result.Mode;
             if (!String.IsNullOrEmpty(result.ComparisonSummary)) status.ComparisonSummary = result.ComparisonSummary;
         }
 
@@ -131,6 +140,8 @@ namespace RapidTransitMod.RailEtaHost
 #if RT_DEBUG_TOOLS
     internal static class RailEtaDebugApi
     {
+        // Selection UI deliberately stays on the default Full mode. Compact modes are backend
+        // call-site choices (for example depot diagnostics), not user-facing UI state.
         public static RailEtaPublicTicket RequestSnapshot(int vehicleIndex, int vehicleVersion, long checkpointId = 0)
             => RailEtaBridgeService.Current?.RequestEta(new RailEtaPublicRequest(vehicleIndex, vehicleVersion, checkpointId)) ?? default;
 

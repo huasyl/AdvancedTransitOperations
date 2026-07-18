@@ -91,12 +91,8 @@ const KEYS = {
   etaWorkerLost: "RapidTransit.EtaWorkerLostRestartRequired",
   etaHotNone: "RapidTransit.EtaHotNone",
   etaSnapshotStatus: "RapidTransit.EtaSnapshotStatus",
-  etaSnapshotVehicles: "RapidTransit.EtaSnapshotVehicles",
-  etaSnapshotResources: "RapidTransit.EtaSnapshotResources",
   etaSnapshotRequest: "RapidTransit.EtaSnapshotRequest",
   etaComparisonTitle: "RapidTransit.EtaComparisonTitle",
-  etaComparisonExport: "RapidTransit.EtaComparisonExport",
-  etaComparisonStop: "RapidTransit.EtaComparisonStop",
   etaComparisonPredicted: "RapidTransit.EtaComparisonPredicted",
   etaComparisonActual: "RapidTransit.EtaComparisonActual",
   etaComparisonRemaining: "RapidTransit.EtaComparisonRemaining",
@@ -104,19 +100,7 @@ const KEYS = {
   etaComparisonFinishDelta: "RapidTransit.EtaComparisonFinishDelta",
   etaComparisonPublishDelta: "RapidTransit.EtaComparisonPublishDelta",
   etaComparisonOriginDelta: "RapidTransit.EtaComparisonOriginDelta",
-  etaComparisonPredictionDelta: "RapidTransit.EtaComparisonPredictionDelta",
-  etaComparisonMatched: "RapidTransit.EtaComparisonMatched",
-  etaComparisonMissed: "RapidTransit.EtaComparisonMissed",
-  etaComparisonPending: "RapidTransit.EtaComparisonPending",
-  etaComparisonUnobservable: "RapidTransit.EtaComparisonUnobservable",
-  etaComparisonExtra: "RapidTransit.EtaComparisonExtra",
-  etaComparisonExcluded: "RapidTransit.EtaComparisonExcluded",
-  etaComparisonPredictedEvent: "RapidTransit.EtaComparisonPredictedEvent",
-  etaComparisonActualEvent: "RapidTransit.EtaComparisonActualEvent",
-  etaComparisonExportState: "RapidTransit.EtaComparisonExportState",
-  etaComparisonExporting: "RapidTransit.EtaComparisonExporting",
-  etaComparisonExportCompleted: "RapidTransit.EtaComparisonExportCompleted",
-  etaComparisonExportFailed: "RapidTransit.EtaComparisonExportFailed"
+  etaComparisonPredictionDelta: "RapidTransit.EtaComparisonPredictionDelta"
 } as const;
 
 function formatFallbackLabel(value: string) {

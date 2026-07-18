@@ -153,7 +153,13 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void Loaded(Context serializationContext)
         {
+            m_Runtime.m_SpawnIntentTrace?.Clear();
+            m_Runtime.m_SpawnLeadTheory?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
+#if RT_DEBUG_TOOLS
+            RailEtaHost.RailEtaHotDebugApi.RequestReloadLatest();
+#endif
+            m_Runtime.m_Observation.ClearDispatchEta();
             PassengerFlow.SamplingSystem.ClearState();
             try
             {
@@ -208,7 +214,10 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearAll()
         {
+            m_Runtime.m_SpawnIntentTrace?.Clear();
+            m_Runtime.m_SpawnLeadTheory?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
+            m_Runtime.m_Observation.ClearDispatchEta();
             PassengerFlow.SamplingSystem.ClearState();
             EntityCommandBuffer commandBuffer = m_Runtime.m_EndFrameBarrier.CreateCommandBuffer();
             NativeArray<Entity> entities = m_Runtime.m_AllPublicTransportQuery.ToEntityArray(Allocator.Temp);
@@ -278,7 +287,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearTracking()
         {
+            m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
+            m_Runtime.m_Observation.ClearDispatchEta();
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_ObsPersist.ClearLaps();

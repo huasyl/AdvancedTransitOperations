@@ -262,7 +262,7 @@ export function RapidTransitPanel() {
                 </div>
                 {etaSnapshotStatus?.ticket ? (
                   <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.muted }}>
-                    {`#${etaSnapshotStatus.ticket}${typeof etaSnapshotStatus.vehicles === "number" && typeof etaSnapshotStatus.resources === "number" ? ` · ${etaSnapshotStatus.vehicles} ${t("etaSnapshotVehicles")} · ${etaSnapshotStatus.resources} ${t("etaSnapshotResources")}` : ""}`}
+                    {`#${etaSnapshotStatus.ticket}`}
                   </div>
                 ) : null}
                 {etaSnapshotStatus?.predictorSource ? (
@@ -275,16 +275,6 @@ export function RapidTransitPanel() {
                         ? `ETA ≈ ${etaSnapshotStatus.etaGameMinutes.toFixed(2)} game min · arrival ${etaSnapshotStatus.arrival || 0}`
                         : `arrival ${etaSnapshotStatus.arrival || 0}`}
                     </div>
-                    {typeof etaSnapshotStatus.freeRun === "number" || typeof etaSnapshotStatus.following === "number" || typeof etaSnapshotStatus.reservation === "number" ? (
-                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>
-                        {`free ${etaSnapshotStatus.freeRun || 0} · following ${etaSnapshotStatus.following || 0} · reservation ${etaSnapshotStatus.reservation || 0}`}
-                      </div>
-                    ) : null}
-                    {etaSnapshotStatus.confidence || etaSnapshotStatus.predictionFailure || typeof etaSnapshotStatus.eventCount === "number" || typeof etaSnapshotStatus.workerMs === "number" ? (
-                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>
-                        {`${etaSnapshotStatus.confidence || "Unknown"} / ${etaSnapshotStatus.predictionFailure || "None"} · events ${etaSnapshotStatus.eventCount || 0} · worker ${etaSnapshotStatus.workerMs || 0}ms`}
-                      </div>
-                    ) : null}
                   </>
                 ) : null}
                 {etaSnapshotStatus?.detail ? (
@@ -313,27 +303,6 @@ export function RapidTransitPanel() {
                         <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>{`${t("etaComparisonPredictionDelta")}: ${etaSnapshotStatus.comparisonPredictionDelta || 0}`}</div>
                       </>
                     ) : null}
-                    <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.text }}>
-                      {`${etaSnapshotStatus.comparisonCurrentState || "-"} · ${t("etaComparisonMatched")} ${etaSnapshotStatus.comparisonMatched || 0} / ${t("etaComparisonMissed")} ${etaSnapshotStatus.comparisonMissed || 0} / ${t("etaComparisonPending")} ${etaSnapshotStatus.comparisonPending || 0} / ${t("etaComparisonUnobservable")} ${etaSnapshotStatus.comparisonUnobservable || 0} / ${t("etaComparisonExtra")} ${etaSnapshotStatus.comparisonExtra || 0} / ${t("etaComparisonExcluded")} ${etaSnapshotStatus.comparisonExcluded || 0}`}
-                    </div>
-                    {etaSnapshotStatus.comparisonRecentPredicted ? (
-                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.muted }}>{`${t("etaComparisonPredictedEvent")}: ${etaSnapshotStatus.comparisonRecentPredicted}`}</div>
-                    ) : null}
-                    {etaSnapshotStatus.comparisonRecentActual ? (
-                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.muted }}>{`${t("etaComparisonActualEvent")}: ${etaSnapshotStatus.comparisonRecentActual}`}</div>
-                    ) : null}
-                    {etaSnapshotStatus.comparisonExportState ? (
-                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: COLORS.muted }}>
-                        {`${t("etaComparisonExportState")}: ${etaSnapshotStatus.comparisonExportState === "Exporting" ? t("etaComparisonExporting") : etaSnapshotStatus.comparisonExportState === "Completed" ? t("etaComparisonExportCompleted") : etaSnapshotStatus.comparisonExportState === "Failed" ? t("etaComparisonExportFailed") : etaSnapshotStatus.comparisonExportState}`}
-                      </div>
-                    ) : null}
-                    {etaSnapshotStatus.comparisonExportError ? (
-                      <div style={{ fontSize: "12rem", lineHeight: "18rem", color: "#ffd6d1" }}>{etaSnapshotStatus.comparisonExportError}</div>
-                    ) : null}
-                    <div style={{ display: "flex", flexDirection: "row", alignItems: "center" }}>
-                      <ActionButton action="requestEtaComparisonExport" label={t("etaComparisonExport")} disabled={!etaSnapshotStatus.comparisonCanExport} />
-                      <ActionButton action="requestEtaComparisonStop" label={t("etaComparisonStop")} marginLeft="12rem" disabled={!etaSnapshotStatus.comparisonCanStop} />
-                    </div>
                   </div>
                 ) : null}
                 <div style={{ display: "flex", flexDirection: "row", alignItems: "center" }}>

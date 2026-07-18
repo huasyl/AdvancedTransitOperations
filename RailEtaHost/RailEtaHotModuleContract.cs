@@ -4,6 +4,16 @@ using Unity.Jobs;
 
 namespace RapidTransitMod.RailEtaHost
 {
+    public enum RailEtaMode : byte
+    {
+        // Existing authoritative closure: related lines, blockers, reservations, signals and overlaps.
+        Full = 0,
+        // Request-frame target path plus trains currently occupying the same physical lanes.
+        PathOccupants = 1,
+        // Target train and path physics only; all blocking and dispatch facts are intentionally absent.
+        Theory = 2
+    }
+
     public interface IRailEtaHotModule : IDisposable
     {
         string BuildId { get; }
@@ -89,13 +99,22 @@ namespace RapidTransitMod.RailEtaHost
 
     public readonly struct RailEtaHotCommand
     {
-        public RailEtaHotCommand(long ticket, int generation, int vehicleIndex, int vehicleVersion, long targetWaypoint)
+        public RailEtaHotCommand(long ticket, int generation, int vehicleIndex, int vehicleVersion, long targetWaypoint, RailEtaMode mode,
+            int depotIndex = 0, int depotVersion = 0, int modelIndex = 0, int modelVersion = 0,
+            int secondaryModelIndex = 0, int secondaryModelVersion = 0)
         {
             Ticket = ticket;
             Generation = generation;
             VehicleIndex = vehicleIndex;
             VehicleVersion = vehicleVersion;
             TargetWaypoint = targetWaypoint;
+            Mode = mode;
+            DepotIndex = depotIndex;
+            DepotVersion = depotVersion;
+            ModelIndex = modelIndex;
+            ModelVersion = modelVersion;
+            SecondaryModelIndex = secondaryModelIndex;
+            SecondaryModelVersion = secondaryModelVersion;
         }
 
         public long Ticket { get; }
@@ -103,6 +122,13 @@ namespace RapidTransitMod.RailEtaHost
         public int VehicleIndex { get; }
         public int VehicleVersion { get; }
         public long TargetWaypoint { get; }
+        public RailEtaMode Mode { get; }
+        public int DepotIndex { get; }
+        public int DepotVersion { get; }
+        public int ModelIndex { get; }
+        public int ModelVersion { get; }
+        public int SecondaryModelIndex { get; }
+        public int SecondaryModelVersion { get; }
     }
 
     public sealed class RailEtaPublicResult
@@ -114,10 +140,12 @@ namespace RapidTransitMod.RailEtaHost
         public long TargetVehicle { get; set; }
         public long TargetWaypoint { get; set; }
         public uint EtaFrame { get; set; }
+        public uint OriginFrame { get; set; }
         public string Source { get; set; } = "hot";
         public string Build { get; set; } = string.Empty;
         public long Generation { get; set; }
         public bool Incomplete { get; set; }
+        public RailEtaMode Mode { get; set; }
         public string ComparisonSummary { get; set; } = string.Empty;
     }
 }

@@ -979,6 +979,17 @@ namespace RapidTransitMod
             return Entity.Null;
         }
 
+        internal bool TryTheorySource(Entity line, Entity configuredDepot, out Entity source)
+        {
+            if (!IsDepotCompatibleWithLine(configuredDepot, line))
+            {
+                source = Entity.Null;
+                return false;
+            }
+            source = configuredDepot;
+            return source != Entity.Null && EntityManager.Exists(source);
+        }
+
         private Entity ResolveTransportVehicleController(Entity vehicle)
         {
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))

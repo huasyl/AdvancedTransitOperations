@@ -97,9 +97,23 @@ namespace RapidTransitMod.Dispatch.Workbench
                 .GroupBy(line => line.Id, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal)
                 ?? new Dictionary<string, WorkbenchLineRuntime>(StringComparer.Ordinal);
-            Dictionary<string, DispatchWorkbenchDepotDto> depotById = (depots ?? buildWorkbenchDepots())
+            List<IGrouping<string, DispatchWorkbenchDepotDto>> depotGroups = (depots ?? buildWorkbenchDepots())
                 .Where(depot => depot != null && !string.IsNullOrEmpty(depot.id))
-                .ToDictionary(depot => depot.id, depot => depot, StringComparer.Ordinal);
+                .GroupBy(depot => depot.id, StringComparer.Ordinal)
+                .ToList();
+            foreach (IGrouping<string, DispatchWorkbenchDepotDto> group in depotGroups.Where(group => group.Count() > 1))
+            {
+                string entries = string.Join(
+                    ", ",
+                    group.Select(depot => (depot.name ?? string.Empty) + "[" + (depot.transportType ?? string.Empty) + "]"));
+                Mod.log.Info(
+                    "[WorkbenchDepotDuplicate] id=" + group.Key
+                    + " count=" + group.Count().ToString()
+                    + " entries=[" + entries + "]");
+                errors.Add("Depot catalog contains duplicate id " + group.Key + ".");
+            }
+            Dictionary<string, DispatchWorkbenchDepotDto> depotById = depotGroups
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
             if (request.lineSettings != null)
             {

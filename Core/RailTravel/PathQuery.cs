@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using Game.Net;
+using Game.Objects;
 using Game.Pathfind;
+using Game.Routes;
 using RapidTransitMod.TrackModel;
 using Unity.Entities;
 
@@ -17,6 +19,16 @@ namespace RapidTransitMod.RailTravel
 
         public bool TryBuild(Entity pathOwner, out Path path)
         {
+            return TryBuild(pathOwner, false, out path);
+        }
+
+        internal bool TryBuildTheoryDepot(Entity pathOwner, out Path path)
+        {
+            return TryBuild(pathOwner, true, out path);
+        }
+
+        private bool TryBuild(Entity pathOwner, bool theoryDepot, out Path path)
+        {
             path = null;
             if (pathOwner == Entity.Null
                 || !m_EntityManager.Exists(pathOwner)
@@ -28,6 +40,16 @@ namespace RapidTransitMod.RailTravel
             DynamicBuffer<PathElement> elements = m_EntityManager.GetBuffer<PathElement>(pathOwner, true);
             if (elements.Length == 0)
                 return false;
+
+            int firstCurve = elements.Length;
+            int lastCurve = -1;
+            for (int i = 0; i < elements.Length; i++)
+            {
+                if (!m_EntityManager.HasComponent<Curve>(elements[i].m_Target))
+                    continue;
+                firstCurve = System.Math.Min(firstCurve, i);
+                lastCurve = i;
+            }
 
             var segments = new List<Segment>(elements.Length);
             int skipped = 0;
@@ -50,6 +72,11 @@ namespace RapidTransitMod.RailTravel
                 }
                 if (!m_EntityManager.HasComponent<Curve>(element.m_Target))
                 {
+                    if (theoryDepot && IsTheoryDepotEndpoint(element.m_Target, i, firstCurve, lastCurve, pathOwner))
+                    {
+                        skipped++;
+                        continue;
+                    }
                     nonNoiseSkipped++;
                     continue;
                 }
@@ -100,6 +127,22 @@ namespace RapidTransitMod.RailTravel
 
             path = new Path(pathOwner, segments.ToArray(), elements.Length, skipped);
             return true;
+        }
+
+        private bool IsTheoryDepotEndpoint(Entity target, int index, int firstCurve, int lastCurve, Entity pathOwner)
+        {
+            if (index >= firstCurve && index <= lastCurve)
+                return false;
+            if (m_EntityManager.HasComponent<SpawnLocation>(target)
+                || m_EntityManager.HasComponent<AccessLane>(target)
+                || m_EntityManager.HasComponent<RouteLane>(target))
+            {
+                return true;
+            }
+            if (!m_EntityManager.HasComponent<PathInformation>(pathOwner))
+                return false;
+            PathInformation info = m_EntityManager.GetComponentData<PathInformation>(pathOwner);
+            return target == info.m_Origin || target == info.m_Destination;
         }
     }
 }

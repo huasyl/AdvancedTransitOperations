@@ -98,6 +98,7 @@ namespace RapidTransitMod
 
         public void Tick(int nowMin)
         {
+            m_Runtime.m_SpawnLeadTheory?.Tick();
             m_SlotClaims.Clear();
             m_RetireDecisions.Clear();
             NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
@@ -130,6 +131,8 @@ namespace RapidTransitMod
                         : null;
                     if (useManagedTimes && (appliedTargets == null || appliedTargets.Length == 0))
                         continue;
+                    if (useManagedTimes)
+                        m_Runtime.m_SpawnLeadTheory?.Ensure(line, wps);
 
                     int originHoldLimitMinutes = useManagedTimes
                         ? m_Hold(line)
@@ -456,12 +459,25 @@ namespace RapidTransitMod
                                 int actualCount = m_Runtime.m_LineVehicles.Count(line, rvBuffers);
                                 m_Runtime.m_SpawningLines[line] = actualCount + 1;
                                 m_Runtime.m_LineSpawnRequestFrame[line] = nowFrame;
+                                string spawnIntent = m_Runtime.m_SpawnIntentTrace.Create(
+                                    line,
+                                    slot,
+                                    nowFrame,
+                                    spawnLeadFrames,
+                                    m_Policy.SpawnLeadSource(line),
+                                    originHoldLimitMinutes,
+                                    actualCount,
+                                    pick.NearVehicle,
+                                    pick.NearState,
+                                    pick.NearEta,
+                                    pick.NearReason);
                                 m_RecordLineSpawnTriggerSummary(line, nowMin, slot, actualCount);
                                 if (RtLog.VerboseEnabled)
                                 {
                                     m_Runtime.log.Info("[调度] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
                                         + " 无候选，触发产车+1 (当前=" + actualCount
-                                        + " 圈时=" + (lineDurationFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟)");
+                                        + " 圈时=" + (lineDurationFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟)"
+                                        + spawnIntent);
                                 }
                             }
                         }
@@ -473,6 +489,7 @@ namespace RapidTransitMod
             finally
             {
                 lines.Dispose();
+                m_Runtime.m_SpawnLeadTheory?.Tick();
             }
         }
 
