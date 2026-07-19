@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Game.Common;
 using Game.Vehicles;
+using RapidTransitMod.Core;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -18,14 +19,15 @@ namespace RapidTransitMod
         private EntityManager EntityManager => m_Runtime.EntityManager;
         private TimedLogger log => m_Runtime.log;
 
-        public void Tick(EntityCommandBuffer ecb, int nowMin)
+        public void Tick(EntityCommandBuffer ecb, ClockSnapshot clockSnapshot)
         {
-            if (nowMin != m_Runtime.m_LastSchedulerTickMinute)
+            int nowMinute = clockSnapshot.NowMinute;
+            if (nowMinute != m_Runtime.m_LastSchedulerTickMinute)
             {
                 try
                 {
-                    Apply(ecb, nowMin);
-                    m_Runtime.m_LastSchedulerTickMinute = nowMin;
+                    Apply(ecb, clockSnapshot);
+                    m_Runtime.m_LastSchedulerTickMinute = nowMinute;
                 }
                 catch (Exception ex)
                 {
@@ -35,9 +37,9 @@ namespace RapidTransitMod
             }
         }
 
-        private void Apply(EntityCommandBuffer ecb, int nowMin)
+        private void Apply(EntityCommandBuffer ecb, ClockSnapshot clockSnapshot)
         {
-            m_Runtime.m_DispatchScheduler.Tick(nowMin);
+            m_Runtime.m_DispatchScheduler.Tick(clockSnapshot);
 
             IReadOnlyList<DispatchScheduler.RetireDecision> retireDecisions = m_Runtime.m_DispatchScheduler.RetireDecisions;
             for (int i = 0; i < retireDecisions.Count; i++)

@@ -7,6 +7,7 @@ using Game.Objects;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
@@ -18,6 +19,7 @@ namespace RapidTransitMod.Dispatch.Observation
     internal sealed class ObservationPort
     {
         private const float DispatchSampleOutlierFactor = 1.5f;
+        private const uint DISPATCH_SAMPLE_MIN_FRAMES = 365u;
 
         private readonly DispatchRuntimeSystem m_Runtime;
         private readonly Capture m_Capture;
@@ -61,6 +63,14 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             m_Runtime = runtime;
             m_Capture = capture;
+            m_Runtime.m_SimClock.ClockChanged += OnClockChanged;
+        }
+
+        private void OnClockChanged(ClockSnapshot oldClockSnapshot, ClockSnapshot newClockSnapshot)
+        {
+            _ = oldClockSnapshot;
+            _ = newClockSnapshot;
+            m_DwellDeadlineCache.Clear();
         }
 
         public void Record(Entity vehicle, string reason)
@@ -280,7 +290,8 @@ namespace RapidTransitMod.Dispatch.Observation
             uint dwellSinceFrame,
             int maxDwellMinutes)
         {
-            float configuredFrames = math.max(0f, maxDwellMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float configuredFrames = clockSnapshot.ToFramesCeil(maxDwellMinutes);
             float earlyCloseFrames = 0f;
 
             if (line != Entity.Null
@@ -290,7 +301,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     observationFrames - configuredFrames,
-                    DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);
@@ -343,7 +354,8 @@ namespace RapidTransitMod.Dispatch.Observation
             if (maxStationDwellMinutes <= 0)
                 return false;
 
-            float configuredFrames = maxStationDwellMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float configuredFrames = clockSnapshot.ToFramesCeil(maxStationDwellMinutes);
             remainingFrames = math.max(0f, configuredFrames - elapsedFrames);
             return remainingFrames > 0f;
         }
@@ -407,27 +419,28 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             }
 
-            uint frames = 0;
+            uint sampleFrames = 0;
             bool hasSample = false;
             if (m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out uint dispatchRequestStart))
             {
-                frames = nowFrame - dispatchRequestStart;
+                sampleFrames = nowFrame - dispatchRequestStart;
                 hasSample = true;
             }
             else if (m_Runtime.m_VehicleView.TryGetPreparing(vehicle, out uint prepStart))
             {
-                frames = nowFrame - prepStart;
+                sampleFrames = nowFrame - prepStart;
                 hasSample = true;
             }
 
             m_Runtime.m_VehicleRegistry.ClearPreparing(vehicle);
             m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
             m_DispatchEtaRequests.Remove(vehicle);
-            if (!hasSample || frames == 0)
+            if (!hasSample || sampleFrames == 0)
                 return;
 
-            float sampleMinutes = frames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-            if (sampleMinutes < DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES)
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float sampleMinutes = (float)clockSnapshot.ToMinutes(sampleFrames);
+            if (sampleFrames < DISPATCH_SAMPLE_MIN_FRAMES)
             {
                 if (RtLog.VerboseEnabled)
                 {
@@ -438,11 +451,11 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             float cachedFrames = m_Runtime.m_DispatchCache.Read(line);
-            if (cachedFrames > 0f && frames > cachedFrames * DispatchSampleOutlierFactor)
+            if (cachedFrames > 0f && sampleFrames > cachedFrames * DispatchSampleOutlierFactor)
             {
                 if (RtLog.VerboseEnabled)
                 {
-                    float cachedMinutes = cachedFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+                    float cachedMinutes = (float)clockSnapshot.ToMinutes(cachedFrames);
                     m_Runtime.log.Info("[DispatchSample] line" + line.Index + " vehicle" + vehicle.Index
                         + " sample=" + sampleMinutes.ToString("F1") + "min"
                         + " cached=" + cachedMinutes.ToString("F1") + "min high-outlier skip");
@@ -450,9 +463,9 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             }
 
-            int nowMin = (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
-            m_Runtime.m_SelectPanel.RecordLineDispatchSampleSummary(line, nowMin, vehicle, sampleMinutes);
-            m_Runtime.m_DispatchCache.Update(line, vehicle, frames);
+            int nowMinute = clockSnapshot.NowMinute;
+            m_Runtime.m_SelectPanel.RecordLineDispatchSampleSummary(line, nowMinute, vehicle, sampleMinutes);
+            m_Runtime.m_DispatchCache.Update(line, vehicle, sampleFrames);
         }
 
         public void BeginDispatchEta(Entity vehicle, Entity line, uint dispatchFrame)
@@ -698,13 +711,13 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_ObsRecorder?.Release(vehicle, blocker, nowFrame, releaseReason);
         }
 
-        public int TargetMin(Entity vehicle)
+        public int TargetMinute(Entity vehicle)
         {
             if (vehicle == Entity.Null)
                 return -1;
-            if (m_Runtime.m_VehicleStateStore.CurrentSlot.IsCreated && m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlot))
-                return currentSlot;
-            if (m_Runtime.m_VehicleStateStore.TargetMin.IsCreated && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
+            if (m_Runtime.m_VehicleStateStore.CurrentSlotMinute.IsCreated && m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute))
+                return currentSlotMinute;
+            if (m_Runtime.m_VehicleStateStore.TargetMinute.IsCreated && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
                 return targetMinute;
             return -1;
         }
@@ -767,7 +780,8 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private uint ComputeDeadline(Entity line, int waypointIndex, uint dwellSinceFrame, int maxDwellMinutes)
         {
-            float configuredFrames = math.max(0f, maxDwellMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float configuredFrames = clockSnapshot.ToFramesCeil(maxDwellMinutes);
             float earlyCloseFrames = 0f;
 
             if (line != Entity.Null
@@ -777,7 +791,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     observationFrames - configuredFrames,
-                    DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             if (!(earlyCloseFrames > 0f)
@@ -787,7 +801,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     anchoredFrames - configuredFrames,
-                    DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);

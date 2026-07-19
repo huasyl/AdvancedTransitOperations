@@ -6,6 +6,7 @@ using Game.Common;
 using Game.Routes;
 using Game.SceneFlow;
 using Game.Vehicles;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 using UnityEngine;
@@ -91,7 +92,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
 
             EntityCommandBuffer commandBuffer = m_Runtime.m_EndFrameBarrier.CreateCommandBuffer();
-            int nowMin = Minute();
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            int nowMinute = clockSnapshot.NowMinute;
 
             m_Runtime.m_LapCache.Ensure();
             m_Runtime.m_VehicleCache.Ensure();
@@ -112,12 +114,12 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             m_Runtime.m_CommandApplier.ReconcileRetireDispatchLocksOnReady();
 
-            bool runFullRegisterSweep = nowMin != m_Runtime.m_LastRegisterSweepMinute;
+            bool runFullRegisterSweep = nowMinute != m_Runtime.m_LastRegisterSweepMinute;
             try
             {
                 m_Runtime.m_VehicleRegistrar.Register(runFullRegisterSweep);
                 if (runFullRegisterSweep)
-                    m_Runtime.m_LastRegisterSweepMinute = nowMin;
+                    m_Runtime.m_LastRegisterSweepMinute = nowMinute;
             }
             catch (Exception ex)
             {
@@ -129,7 +131,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             try
             {
-                m_Runtime.m_RuntimeController.Tick(commandBuffer, nowMin);
+                m_Runtime.m_RuntimeController.Tick(commandBuffer, clockSnapshot);
             }
             catch (Exception ex)
             {
@@ -486,7 +488,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public int Minute()
         {
-            return (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
+            return m_Runtime.m_SimClock.NowMinute;
         }
 
         private void ResetCityBufferReadyFlags()

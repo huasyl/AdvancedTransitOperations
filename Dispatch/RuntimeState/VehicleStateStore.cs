@@ -7,8 +7,8 @@ namespace RapidTransitMod
     internal sealed class VehicleStateStore
     {
         private NativeHashMap<Entity, VehicleState> m_State;
-        private NativeHashMap<Entity, int> m_TargetMin;
-        private NativeHashMap<Entity, int> m_CurrentSlot;
+        private NativeHashMap<Entity, int> m_TargetMinute;
+        private NativeHashMap<Entity, int> m_CurrentSlotMinute;
         private NativeHashMap<Entity, Entity> m_Line;
         private NativeHashMap<Entity, uint> m_IdleStartFrame;
         private NativeHashMap<Entity, uint> m_PreparingStartFrame;
@@ -17,14 +17,14 @@ namespace RapidTransitMod
         private NativeHashMap<Entity, uint> m_DispatchRequestStartFrame;
         private NativeHashSet<Entity> m_NearingTerminus;
         private NativeHashMap<Entity, uint> m_OriginArrivalCandidateSinceFrame;
-        private NativeHashMap<Entity, uint> m_ForcedOriginReadyFrame;
+        private NativeHashMap<Entity, ReadyClockState> m_ForcedOriginReadyFrame;
         private NativeHashMap<Entity, uint> m_ForcedOriginBoardingGraceUntil;
 
         public VehicleStateStore()
         {
             State = new MapRef<VehicleState>(() => m_State);
-            TargetMin = new MapRef<int>(() => m_TargetMin);
-            CurrentSlot = new MapRef<int>(() => m_CurrentSlot);
+            TargetMinute = new MapRef<int>(() => m_TargetMinute);
+            CurrentSlotMinute = new MapRef<int>(() => m_CurrentSlotMinute);
             Line = new MapRef<Entity>(() => m_Line);
             IdleStartFrame = new MapRef<uint>(() => m_IdleStartFrame);
             PreparingStartFrame = new MapRef<uint>(() => m_PreparingStartFrame);
@@ -33,13 +33,13 @@ namespace RapidTransitMod
             DispatchRequestStartFrame = new MapRef<uint>(() => m_DispatchRequestStartFrame);
             NearingTerminus = new SetRef(() => m_NearingTerminus);
             OriginArrivalCandidateSinceFrame = new MapRef<uint>(() => m_OriginArrivalCandidateSinceFrame);
-            ForcedOriginReadyFrame = new MapRef<uint>(() => m_ForcedOriginReadyFrame);
+            ForcedOriginReadyFrame = new MapRef<ReadyClockState>(() => m_ForcedOriginReadyFrame);
             ForcedOriginBoardingGraceUntil = new MapRef<uint>(() => m_ForcedOriginBoardingGraceUntil);
         }
 
         public MapRef<VehicleState> State { get; }
-        public MapRef<int> TargetMin { get; }
-        public MapRef<int> CurrentSlot { get; }
+        public MapRef<int> TargetMinute { get; }
+        public MapRef<int> CurrentSlotMinute { get; }
         public MapRef<Entity> Line { get; }
         public MapRef<uint> IdleStartFrame { get; }
         public MapRef<uint> PreparingStartFrame { get; }
@@ -48,7 +48,7 @@ namespace RapidTransitMod
         public MapRef<uint> DispatchRequestStartFrame { get; }
         public SetRef NearingTerminus { get; }
         public MapRef<uint> OriginArrivalCandidateSinceFrame { get; }
-        public MapRef<uint> ForcedOriginReadyFrame { get; }
+        public MapRef<ReadyClockState> ForcedOriginReadyFrame { get; }
         public MapRef<uint> ForcedOriginBoardingGraceUntil { get; }
 
         public void Init()
@@ -57,8 +57,8 @@ namespace RapidTransitMod
                 return;
 
             m_State = new NativeHashMap<Entity, VehicleState>(1024, Allocator.Persistent);
-            m_TargetMin = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            m_CurrentSlot = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
+            m_TargetMinute = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
+            m_CurrentSlotMinute = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
             m_Line = new NativeHashMap<Entity, Entity>(1024, Allocator.Persistent);
             m_IdleStartFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             m_PreparingStartFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
@@ -67,15 +67,15 @@ namespace RapidTransitMod
             m_DispatchRequestStartFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
             m_NearingTerminus = new NativeHashSet<Entity>(64, Allocator.Persistent);
             m_OriginArrivalCandidateSinceFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
-            m_ForcedOriginReadyFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
+            m_ForcedOriginReadyFrame = new NativeHashMap<Entity, ReadyClockState>(256, Allocator.Persistent);
             m_ForcedOriginBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
         }
 
         public void Dispose()
         {
             if (m_State.IsCreated) m_State.Dispose();
-            if (m_TargetMin.IsCreated) m_TargetMin.Dispose();
-            if (m_CurrentSlot.IsCreated) m_CurrentSlot.Dispose();
+            if (m_TargetMinute.IsCreated) m_TargetMinute.Dispose();
+            if (m_CurrentSlotMinute.IsCreated) m_CurrentSlotMinute.Dispose();
             if (m_Line.IsCreated) m_Line.Dispose();
             if (m_IdleStartFrame.IsCreated) m_IdleStartFrame.Dispose();
             if (m_PreparingStartFrame.IsCreated) m_PreparingStartFrame.Dispose();
@@ -91,8 +91,8 @@ namespace RapidTransitMod
         public void Clear()
         {
             if (m_State.IsCreated) m_State.Clear();
-            if (m_TargetMin.IsCreated) m_TargetMin.Clear();
-            if (m_CurrentSlot.IsCreated) m_CurrentSlot.Clear();
+            if (m_TargetMinute.IsCreated) m_TargetMinute.Clear();
+            if (m_CurrentSlotMinute.IsCreated) m_CurrentSlotMinute.Clear();
             if (m_Line.IsCreated) m_Line.Clear();
             if (m_IdleStartFrame.IsCreated) m_IdleStartFrame.Clear();
             if (m_PreparingStartFrame.IsCreated) m_PreparingStartFrame.Clear();
@@ -111,8 +111,8 @@ namespace RapidTransitMod
                 return;
 
             m_State.Remove(vehicle);
-            m_TargetMin.Remove(vehicle);
-            m_CurrentSlot.Remove(vehicle);
+            m_TargetMinute.Remove(vehicle);
+            m_CurrentSlotMinute.Remove(vehicle);
             m_Line.Remove(vehicle);
             m_IdleStartFrame.Remove(vehicle);
             m_PreparingStartFrame.Remove(vehicle);

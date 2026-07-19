@@ -1,90 +1,91 @@
 using Unity.Mathematics;
+using RapidTransitMod.Core;
 
 namespace RapidTransitMod.Dispatch.Scheduling
 {
     internal static class ScheduleClock
     {
-        public static int NextSlot(int nowMin)
+        public static int NextSlot(int nowMinute)
         {
-            return ((nowMin / DispatchRuntimeSystem.SLOT_INTERVAL) + 1) * DispatchRuntimeSystem.SLOT_INTERVAL % 1440;
+            return ((nowMinute / DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) + 1) * DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES % 1440;
         }
 
-        public static int MinutesUntil(int nowMin, int targetMin)
+        public static int MinutesUntil(int nowMinute, int targetMinute)
         {
-            int diff = targetMin - nowMin;
+            int diff = targetMinute - nowMinute;
             if (diff <= 0)
                 diff += 1440;
             return diff;
         }
 
-        public static bool Reached(int nowMin, int targetMin)
+        public static bool Reached(int nowMinute, int targetMinute)
         {
-            return ((nowMin - targetMin + 1440) % 1440) <= DispatchRuntimeSystem.SLOT_GRACE_MIN;
+            return ((nowMinute - targetMinute + 1440) % 1440) <= DispatchRuntimeSystem.SLOT_GRACE_MINUTES;
         }
 
-        public static int PreviousSlot(int nowMin)
+        public static int PreviousSlot(int nowMinute)
         {
-            return ((nowMin / DispatchRuntimeSystem.SLOT_INTERVAL) * DispatchRuntimeSystem.SLOT_INTERVAL) % 1440;
+            return ((nowMinute / DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) * DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
         }
 
-        public static bool CurrentOrRecent(int nowMin, int targetMin)
+        public static bool CurrentOrRecent(int nowMinute, int targetMinute)
         {
-            return Reached(nowMin, targetMin) || CanLate(nowMin, targetMin);
+            return Reached(nowMinute, targetMinute) || CanLate(nowMinute, targetMinute);
         }
 
-        public static int Overdue(int nowMin, int targetMin)
+        public static int Overdue(int nowMinute, int targetMinute)
         {
-            return (nowMin - targetMin + 1440) % 1440;
+            return (nowMinute - targetMinute + 1440) % 1440;
         }
 
-        public static bool CanLate(int nowMin, int targetMin)
+        public static bool CanLate(int nowMinute, int targetMinute)
         {
             if (!LateEnabled())
                 return false;
 
-            int overdue = Overdue(nowMin, targetMin);
+            int overdueMinutes = Overdue(nowMinute, targetMinute);
             int lateWindow = LateWindow();
-            return overdue > DispatchRuntimeSystem.SLOT_GRACE_MIN && overdue <= lateWindow;
+            return overdueMinutes > DispatchRuntimeSystem.SLOT_GRACE_MINUTES && overdueMinutes <= lateWindow;
         }
 
-        public static bool SoftExpired(int nowMin, int targetMin)
+        public static bool SoftExpired(int nowMinute, int targetMinute)
         {
-            int overdue = Overdue(nowMin, targetMin);
-            int releaseAfter = math.max(DispatchRuntimeSystem.SLOT_GRACE_MIN, LateWindow());
-            return overdue > releaseAfter && overdue <= DispatchRuntimeSystem.SLOT_INTERVAL;
+            int overdueMinutes = Overdue(nowMinute, targetMinute);
+            int releaseAfter = math.max(DispatchRuntimeSystem.SLOT_GRACE_MINUTES, LateWindow());
+            return overdueMinutes > releaseAfter && overdueMinutes <= DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES;
         }
 
-        public static bool HardExpired(int nowMin, int targetMin)
+        public static bool HardExpired(int nowMinute, int targetMinute)
         {
-            int overdue = Overdue(nowMin, targetMin);
-            return overdue > DispatchRuntimeSystem.SLOT_INTERVAL
-                && overdue <= DispatchRuntimeSystem.SPAWN_LEAD_MIN + DispatchRuntimeSystem.SLOT_GRACE_MIN;
+            int overdueMinutes = Overdue(nowMinute, targetMinute);
+            return overdueMinutes > DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES
+                && overdueMinutes <= DispatchRuntimeSystem.SPAWN_LEAD_MINUTES + DispatchRuntimeSystem.SLOT_GRACE_MINUTES;
         }
 
-        public static bool Expired(int nowMin, int targetMin)
+        public static bool Expired(int nowMinute, int targetMinute)
         {
-            int overdue = Overdue(nowMin, targetMin);
-            return overdue > DispatchRuntimeSystem.SLOT_GRACE_MIN
-                && overdue <= DispatchRuntimeSystem.SPAWN_LEAD_MIN + DispatchRuntimeSystem.SLOT_GRACE_MIN;
+            int overdueMinutes = Overdue(nowMinute, targetMinute);
+            return overdueMinutes > DispatchRuntimeSystem.SLOT_GRACE_MINUTES
+                && overdueMinutes <= DispatchRuntimeSystem.SPAWN_LEAD_MINUTES + DispatchRuntimeSystem.SLOT_GRACE_MINUTES;
         }
 
-        public static int Lead(int nowMin, int targetMin)
+        public static int Lead(int nowMinute, int targetMinute)
         {
-            int overdue = Overdue(nowMin, targetMin);
-            if (overdue <= DispatchRuntimeSystem.SLOT_GRACE_MIN)
+            int overdueMinutes = Overdue(nowMinute, targetMinute);
+            if (overdueMinutes <= DispatchRuntimeSystem.SLOT_GRACE_MINUTES)
                 return 0;
 
-            return MinutesUntil(nowMin, targetMin);
+            return MinutesUntil(nowMinute, targetMinute);
         }
 
-        public static float ReachFrames(int nowMin, int targetMin)
+        public static uint ReachFrames(ClockSnapshot clockSnapshot, int targetMinute)
         {
-            return Lead(nowMin, targetMin) * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+            return clockSnapshot.ToFramesCeil(Lead(clockSnapshot.NowMinute, targetMinute));
         }
 
         private static int LateWindow()
         {
-            return math.clamp(DispatchRuntimeSystem.LATE_DISPATCH_WINDOW_MINUTES, 0, DispatchRuntimeSystem.SLOT_INTERVAL);
+            return math.clamp(DispatchRuntimeSystem.LATE_DISPATCH_WINDOW_MINUTES, 0, DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES);
         }
 
         private static bool LateEnabled()

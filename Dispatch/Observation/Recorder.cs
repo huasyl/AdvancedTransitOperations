@@ -1141,7 +1141,7 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             if (vehicle == Entity.Null)
                 return -1;
-            return m_Port.TargetMin(vehicle);
+            return m_Port.TargetMinute(vehicle);
         }
 
         private static string SlotKey(Entity line, int targetMinute)

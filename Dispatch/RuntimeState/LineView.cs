@@ -344,7 +344,7 @@ namespace RapidTransitMod
             return true;
         }
 
-        public void Log(Entity line, int nowMin, int nextSlot)
+        public void Log(Entity line, int nowMinute, int nextSlotMinute)
         {
             if (!RtLog.CacheInvalidationDiagnosticsEnabled)
                 return;
@@ -374,9 +374,9 @@ namespace RapidTransitMod
             string key =
                 info.Id
                 + "|"
-                + nowMin.ToString()
+                + nowMinute.ToString()
                 + "|"
-                + nextSlot.ToString()
+                + nextSlotMinute.ToString()
                 + "|"
                 + staged
                 + "|"
@@ -389,9 +389,9 @@ namespace RapidTransitMod
                 "[AppliedLineInspect] line="
                 + info.Id
                 + " now="
-                + m_SlotText(nowMin)
+                + m_SlotText(nowMinute)
                 + " next="
-                + (nextSlot >= 0 ? m_SlotText(nextSlot) : "-")
+                + (nextSlotMinute >= 0 ? m_SlotText(nextSlotMinute) : "-")
                 + " cache=["
                 + cache
                 + "] staged=["

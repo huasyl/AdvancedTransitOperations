@@ -16,7 +16,8 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Func<Entity, float> Speed;
         internal Func<Entity, float> Range;
         internal Func<uint> Frame;
-        internal Func<int> FramesPerMinute;
+        internal Func<double, uint> ToFramesCeil;
+        internal Func<double, double> ToMinutes;
         internal Func<Entity, string> LineId;
         internal Func<Entity, string> Name;
         internal Func<Entity, Entity> LineOf;

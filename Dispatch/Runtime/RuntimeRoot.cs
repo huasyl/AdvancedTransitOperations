@@ -28,6 +28,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_VehicleStateStore.Init();
             runtime.m_VehicleRegistry = new VehicleRegistry(runtime.m_VehicleStateStore);
             runtime.m_VehicleView = new VehicleView(runtime.m_VehicleStateStore);
+            runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
+                runtime.m_VehicleRegistry.ReprojectReady(
+                    runtime.m_SimulationSystem.frameIndex,
+                    oldClockSnapshot,
+                    newClockSnapshot);
             runtime.m_RuntimeController = new DispatchRuntimeController(runtime.m_VehicleRegistry, runtime);
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
@@ -93,18 +98,20 @@ namespace RapidTransitMod.Dispatch.Runtime
                         earliestReleaseFrame = 0u;
                         if (!runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
                             || state != VehicleState.Holding
-                            || !runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMin)
-                            || targetMin < 0) return false;
-                        int nowMin = (int)(runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
-                        if (RapidTransitMod.Dispatch.Scheduling.ScheduleClock.Reached(nowMin, targetMin)
-                            || RapidTransitMod.Dispatch.Scheduling.ScheduleClock.CanLate(nowMin, targetMin))
+                            || !runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute)
+                            || targetMinute < 0) return false;
+                        ClockSnapshot clockSnapshot = runtime.m_SimClock.Snapshot;
+                        int nowMinute = clockSnapshot.NowMinute;
+                        if (RapidTransitMod.Dispatch.Scheduling.ScheduleClock.Reached(nowMinute, targetMinute)
+                            || RapidTransitMod.Dispatch.Scheduling.ScheduleClock.CanLate(nowMinute, targetMinute))
                         {
                             earliestReleaseFrame = frame;
                             return true;
                         }
-                        double deltaDay = targetMin / 1440.0 - runtime.m_TimeSystem.normalizedTime;
-                        if (deltaDay <= 0.0) deltaDay += 1.0;
-                        earliestReleaseFrame = unchecked(frame + (uint)Math.Ceiling(deltaDay * 262144.0));
+                        double deltaDayFraction = targetMinute / 1440.0 - runtime.m_TimeSystem.normalizedTime;
+                        if (deltaDayFraction <= 0.0) deltaDayFraction += 1.0;
+                        earliestReleaseFrame = unchecked(
+                            frame + (uint)Math.Ceiling(clockSnapshot.DayFractionToFrames(deltaDayFraction)));
                         return true;
                     },
                     TryReadHold = (Entity vehicle, uint frame, out RailEtaHost.RailEtaRuntimeHoldFact fact) =>

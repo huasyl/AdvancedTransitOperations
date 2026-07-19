@@ -139,13 +139,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 {
                     EntityManager = runtime.EntityManager,
                     MixSignature = runtime.m_LineProfile.MixSignature,
-                    FramesPerMinute = (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE,
+                    ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                     ProfileStopStartBufferMinutes = DispatchRuntimeSystem.PROFILE_STOP_START_BUFFER_MINUTES,
                     EtaScaleMin = DispatchRuntimeSystem.ETA_SCALE_MIN,
                     EtaScaleMax = DispatchRuntimeSystem.ETA_SCALE_MAX,
-                    DispatchFallbackSpeedMetersPerMinute = DispatchRuntimeSystem.DISPATCH_FALLBACK_SPEED_M_PER_MIN,
-                    DispatchEstimateMinMinutes = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES,
-                    DispatchEstimateMaxMinutes = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_MINUTES,
+                    DispatchFallbackFramesPerMeter = DispatchRuntimeSystem.DISPATCH_FALLBACK_FRAMES_PER_METER,
+                    DispatchEstimateMinFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
+                    DispatchEstimateDefaultFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES,
+                    DispatchEstimateMaxFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_FRAMES,
                     ReadLapFrames = runtime.m_LapCache.Read,
                     ReadDispatchFrames = runtime.m_DispatchCache.Read,
                     DwellMinutes = line => runtime.m_LineView.Dwell(line),
@@ -263,7 +264,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Speed = entity => math.length(runtime.EntityManager.GetComponentData<Game.Objects.Moving>(entity).m_Velocity),
                 Range = runtime.VehicleMaintenanceRange,
                 Frame = () => runtime.m_SimulationSystem.frameIndex,
-                FramesPerMinute = () => (int)math.round((float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE),
+                ToFramesCeil = gameMinutes => runtime.m_SimClock.Snapshot.ToFramesCeil(gameMinutes),
+                ToMinutes = runtime.m_SimClock.ToMinutes,
                 LineId = runtime.LineStableId,
                 Name = runtime.EntityName,
                 LineOf = entity => runtime.m_VehicleView.TryGetLine(entity, out Entity line) ? line : Entity.Null,
@@ -293,7 +295,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 Store = runtime.m_Obs,
                 Frame = () => runtime.m_SimulationSystem != null ? runtime.m_SimulationSystem.frameIndex : 0,
-                Date = () => runtime.m_TimeSystem != null ? runtime.m_TimeSystem.GetCurrentDateTime().Date : DateTime.MinValue.Date,
+                Date = () => runtime.m_SimClock != null ? runtime.m_SimClock.NowDate : DateTime.MinValue.Date,
                 LoadApplied = runtime.LoadApplied,
                 Lines = () => runtime.m_Observation.Lines(),
                 Contracts = () => runtime.m_Observation.Contracts(),
@@ -311,13 +313,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Stop = runtime.m_Resolve.Stop,
                 HasWaypoints = line => line != Entity.Null && runtime.EntityManager.HasBuffer<RouteWaypoint>(line),
                 Waypoints = line => runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true),
-                TargetMin = entity => runtime.m_Observation.TargetMin(entity),
+                TargetMinute = entity => runtime.m_Observation.TargetMinute(entity),
                 LineOf = runtime.m_Resolve.Line,
                 Parse = RapidTransitMod.Dispatch.Workbench.Time.Parse,
                 Slot = RapidTransitMod.Dispatch.Workbench.Time.Slot,
                 Json = Workbenches.Json.Write,
                 Log = message => runtime.log.Info(message),
-                FramesPerMinute = DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE
+                ClockSnapshot = () => runtime.m_SimClock.Snapshot
             };
         }
     }

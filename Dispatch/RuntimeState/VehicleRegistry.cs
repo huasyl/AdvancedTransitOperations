@@ -1,3 +1,6 @@
+using System;
+using RapidTransitMod.Core;
+using Unity.Collections;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -27,12 +30,12 @@ namespace RapidTransitMod
             m_Store.State[vehicle] = state;
         }
 
-        public void SetTarget(Entity vehicle, int targetMin)
+        public void SetTarget(Entity vehicle, int targetMinute)
         {
             if (vehicle == Entity.Null)
                 return;
 
-            m_Store.TargetMin[vehicle] = targetMin;
+            m_Store.TargetMinute[vehicle] = targetMinute;
         }
 
         public void ClearTarget(Entity vehicle)
@@ -40,15 +43,15 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null)
                 return;
 
-            m_Store.TargetMin[vehicle] = -1;
+            m_Store.TargetMinute[vehicle] = -1;
         }
 
-        public void SetSlot(Entity vehicle, int slot)
+        public void SetSlot(Entity vehicle, int slotMinute)
         {
             if (vehicle == Entity.Null)
                 return;
 
-            m_Store.CurrentSlot[vehicle] = slot;
+            m_Store.CurrentSlotMinute[vehicle] = slotMinute;
         }
 
         public void ClearSlot(Entity vehicle)
@@ -56,7 +59,7 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null)
                 return;
 
-            m_Store.CurrentSlot.Remove(vehicle);
+            m_Store.CurrentSlotMinute.Remove(vehicle);
         }
 
         public void SetIdle(Entity vehicle, uint frame)
@@ -171,12 +174,45 @@ namespace RapidTransitMod
             m_Store.OriginArrivalCandidateSinceFrame.Remove(vehicle);
         }
 
-        public void SetReady(Entity vehicle, uint frame)
+        public void SetReady(
+            Entity vehicle,
+            uint startFrame,
+            double waitMinutes,
+            ClockSnapshot clockSnapshot)
         {
             if (vehicle == Entity.Null)
                 return;
 
-            m_Store.ForcedOriginReadyFrame[vehicle] = frame;
+            uint readyFrame = unchecked(startFrame + clockSnapshot.ToFramesCeil(waitMinutes));
+            m_Store.ForcedOriginReadyFrame[vehicle] = new ReadyClockState(startFrame, waitMinutes, readyFrame);
+        }
+
+        public void ReprojectReady(
+            uint nowFrame,
+            ClockSnapshot oldClockSnapshot,
+            ClockSnapshot newClockSnapshot)
+        {
+            NativeArray<Entity> vehicles = m_Store.ForcedOriginReadyFrame.GetKeyArray(Allocator.Temp);
+            try
+            {
+                for (int vehicleIndex = 0; vehicleIndex < vehicles.Length; vehicleIndex++)
+                {
+                    Entity vehicle = vehicles[vehicleIndex];
+                    if (!m_Store.ForcedOriginReadyFrame.TryGetValue(vehicle, out ReadyClockState readyState))
+                        continue;
+
+                    uint elapsedFrames = unchecked(nowFrame - readyState.StartFrame);
+                    double elapsedMinutes = oldClockSnapshot.ToMinutes(elapsedFrames);
+                    double remainingMinutes = Math.Max(0d, readyState.WaitMinutes - elapsedMinutes);
+                    uint readyFrame = unchecked(nowFrame + newClockSnapshot.ToFramesCeil(remainingMinutes));
+                    m_Store.ForcedOriginReadyFrame[vehicle] =
+                        new ReadyClockState(nowFrame, remainingMinutes, readyFrame);
+                }
+            }
+            finally
+            {
+                vehicles.Dispose();
+            }
         }
 
         public void ClearReady(Entity vehicle)

@@ -13,7 +13,7 @@ namespace RapidTransitMod.Dispatch.Persistence
         private const float OutlierFactor = 1.5f;
         private const float FastMargin = 0.98f;
         private const float SlowBlend = 0.5f;
-        private const float SlowStepMin = 4f;
+        private const float SLOW_STEP_MAX_FRAMES = 728f;
 
         private readonly DispatchRuntimeSystem m_Runtime;
         private readonly Func<Entity, string> m_LineId;
@@ -638,7 +638,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (sampleValue <= oldValue)
                 return (uint)math.round(sampleValue);
 
-            float maxStepFrames = SlowStepMin * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+            float maxStepFrames = SLOW_STEP_MAX_FRAMES;
             float blended = oldValue + (sampleValue - oldValue) * SlowBlend;
             float capped = math.min(blended, oldValue + maxStepFrames);
             return (uint)math.round(capped);

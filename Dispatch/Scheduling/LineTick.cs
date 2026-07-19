@@ -9,32 +9,32 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public readonly Entity Line;
         public readonly DynamicBuffer<RouteWaypoint> Ways;
         public readonly IReadOnlyList<Entity> Vehicles;
-        public readonly int Now;
-        public readonly uint Frame;
+        public readonly int NowMinute;
+        public readonly uint NowFrame;
         public readonly IReadOnlyList<int> Targets;
-        public readonly int Hold;
-        public readonly float Lap;
+        public readonly int HoldMinutes;
+        public readonly float LapFrames;
         public readonly bool Run;
 
         public LineTick(
             Entity line,
             DynamicBuffer<RouteWaypoint> ways,
             IReadOnlyList<Entity> vehicles,
-            int now,
-            uint frame,
+            int nowMinute,
+            uint nowFrame,
             IReadOnlyList<int> targets,
-            int hold,
-            float lap,
+            int holdMinutes,
+            float lapFrames,
             bool run)
         {
             Line = line;
             Ways = ways;
             Vehicles = vehicles;
-            Now = now;
-            Frame = frame;
+            NowMinute = nowMinute;
+            NowFrame = nowFrame;
             Targets = targets;
-            Hold = hold;
-            Lap = lap;
+            HoldMinutes = holdMinutes;
+            LapFrames = lapFrames;
             Run = run;
         }
     }

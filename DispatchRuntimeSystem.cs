@@ -1,8 +1,8 @@
-// fix: IsSlotExpired 无法覆盖大幅过期班次，Holding 车卡死；调度器未过滤过期槽；Running->Idle 未清 targetMin；新线路不产车；UI 标签残留；关闭线路无效；始发站压队
-// - IsSlotExpired 上限由 SLOT_INTERVAL(30) 改为 SPAWN_LEAD_MIN + SLOT_GRACE_MIN(64)，覆盖所有真过期场景
-// - Holding 过期处理细分：overdue > SLOT_INTERVAL 直接回库，否则释放槽等重新分配
+// fix: IsSlotExpired 无法覆盖大幅过期班次，Holding 车卡死；调度器未过滤过期槽；Running->Idle 未清 targetMinute；新线路不产车；UI 标签残留；关闭线路无效；始发站压队
+// - IsSlotExpired 上限由 SLOT_INTERVAL_MINUTES(30) 改为 SPAWN_LEAD_MINUTES + SLOT_GRACE_MINUTES(64)，覆盖所有真过期场景
+// - Holding 过期处理细分：overdue > SLOT_INTERVAL_MINUTES 直接回库，否则释放槽等重新分配
 // - 调度器槽扫描入口加 IsSlotExpired 检查，过期槽直接跳过不参与分配
-// - Running->Idle 时清理旧的 targetMin，防止旧槽值残留导致下帧直接 Idle->Holding 绕过调度保护
+// - Running->Idle 时清理旧的 targetMinute，防止旧槽值残留导致下帧直接 Idle->Holding 绕过调度保护
 // - PuppetMaster：D=0 时改用 iDefault 兜底；每帧清理 m_SpawningLines 中已不存在的线路 Entity 记录
 // - 注册新车时清理 m_UICache，防止旧线路缓存导致 SetUILabel 去重跳过、UI 标签不刷新
 // - m_LineQuery 加 Disabled 过滤，关闭线路后调度器停止处理，现有车跑完当前圈自然 Idle 超时回库
@@ -319,15 +319,15 @@ namespace RapidTransitMod
         internal EntityQuery m_VehicleQuery;
         internal EntityQuery m_AllPublicTransportQuery;
         internal EntityQuery m_LineQuery;
-        internal const int SLOT_INTERVAL = 30;
-        internal const int SPAWN_LEAD_MIN = 60;
+        internal const int SLOT_INTERVAL_MINUTES = 30;
+        internal const int SPAWN_LEAD_MINUTES = 60;
         internal const float MAINTENANCE_THRESHOLD = 0.9f;
-        internal const int IDLE_TIMEOUT_MIN = 2;
+        internal const int IDLE_TIMEOUT_MINUTES = 2;
         internal const double SIM_FRAMES_PER_MINUTE = 182.044;
         internal const float EARLY_STOP_DWELL_CLOSE_MAX_MINUTES = 3f;
         internal const float AT_STOP_MAX_DIST = 300f;
         /// <summary>班次宽限分钟数：发车窗口和过期判断共用同一阈值。</summary>
-        internal const int SLOT_GRACE_MIN = 4;
+        internal const int SLOT_GRACE_MINUTES = 4;
         /// <summary>BV 误写超时 6000 帧（约 33 秒现实时间），给足自愈窗口。</summary>
         internal const uint BV_MISFIRE_TIMEOUT = 6000;
         /// <summary>暂时只观察 BV 误写，不再冻结车辆或回库；保留日志追踪后续是否能自愈。</summary>
@@ -348,9 +348,12 @@ namespace RapidTransitMod
         private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 6;
         private const uint BYPASS_TRACKMODEL_DETAIL_LOG_COOLDOWN_FRAMES = 60;
         private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
-        internal const float DISPATCH_ESTIMATE_MIN_MINUTES = 2f;
-        internal const float DISPATCH_ESTIMATE_MAX_MINUTES = 20f;
-        internal const float DISPATCH_FALLBACK_SPEED_M_PER_MIN = 450f;
+        internal const float DISPATCH_ESTIMATE_MIN_FRAMES = 364.088f;
+        internal const float DISPATCH_ESTIMATE_DEFAULT_FRAMES = 1092.264f;
+        internal const float DISPATCH_ESTIMATE_MAX_FRAMES = 3640.88f;
+        internal const float DISPATCH_FALLBACK_SPEED_METERS_PER_MINUTE = 450f;
+        internal const float DISPATCH_FALLBACK_FRAMES_PER_METER =
+            (float)SIM_FRAMES_PER_MINUTE / DISPATCH_FALLBACK_SPEED_METERS_PER_MINUTE;
         internal const float PROFILE_STOP_START_BUFFER_MINUTES = 3f;
         internal const float ORIGIN_CONGESTION_RADIUS_METERS = 450f;
         internal const float ORIGIN_FORCE_IDLE_RADIUS_METERS = 180f;
@@ -370,14 +373,13 @@ namespace RapidTransitMod
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
         internal const uint RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES = 30;
         internal const int RETIRE_SHADOW_HISTORY_LIMIT = 4;
-        internal static readonly uint RETIRE_HANDOFF_MAX_AGE_FRAMES = (uint)math.round(
-            3f * (float)SIM_FRAMES_PER_MINUTE);
+        internal const uint RETIRE_HANDOFF_MAX_AGE_FRAMES = 546;
         private const float ORIGIN_ARRIVAL_HOLD_MINUTES = 2f;
-        internal static readonly uint FORCED_ORIGIN_MIN_DWELL_FRAMES = (uint)math.round(3f * (float)SIM_FRAMES_PER_MINUTE);
-        internal static readonly uint PREPARING_ORIGIN_SETTLE_FRAMES = (uint)math.max(1f, math.round(2f * (float)SIM_FRAMES_PER_MINUTE));
-        internal const float SPAWN_TRIGGER_BUFFER_SHORT_MINUTES = 10f;
-        internal const float SPAWN_TRIGGER_BUFFER_LONG_MINUTES = 15f;
-        internal const float SPAWN_TRIGGER_BUFFER_THRESHOLD_MINUTES = 20f;
+        internal const double FORCED_ORIGIN_MIN_DWELL_MINUTES = 3d;
+        internal const double PREPARING_ORIGIN_SETTLE_MINUTES = 2d;
+        internal const float SPAWN_TRIGGER_BUFFER_SHORT_FRAMES = 1820.44f;
+        internal const float SPAWN_TRIGGER_BUFFER_LONG_FRAMES = 2730.66f;
+        internal const float SPAWN_TRIGGER_BUFFER_THRESHOLD_FRAMES = 3640.88f;
         private const uint TRAVERSAL_SLICE_SAMPLE_INTERVAL_MEDIUM_FRAMES = 20;
         private const uint TRAVERSAL_SLICE_SAMPLE_INTERVAL_LOW_FRAMES = 60;
         private const float TRAVERSAL_SLICE_SAMPLE_HIGH_THRESHOLD = 0.03f;
