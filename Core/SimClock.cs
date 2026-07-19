@@ -78,6 +78,7 @@ namespace RapidTransitMod.Core
         private readonly TimeSystem m_GameClockSystem;
         private FieldInfo m_ProviderTicksPerDayField;
         private bool m_ProviderReflectionResolved;
+        private bool m_ProviderAssemblyRescanUsed;
         private bool m_HasProbeFrame;
         private uint m_LastProbeFrame;
 
@@ -115,6 +116,9 @@ namespace RapidTransitMod.Core
 
         public void RefreshIfDue(uint simulationFrame)
         {
+            if (m_ProviderTicksPerDayField == null)
+                return;
+
             if (m_HasProbeFrame && unchecked(simulationFrame - m_LastProbeFrame) < PROBE_CADENCE_FRAMES)
                 return;
 
@@ -123,6 +127,14 @@ namespace RapidTransitMod.Core
 
         public void ForceRefresh(uint simulationFrame)
         {
+            if (m_ProviderReflectionResolved
+                && m_ProviderTicksPerDayField == null
+                && !m_ProviderAssemblyRescanUsed)
+            {
+                m_ProviderAssemblyRescanUsed = true;
+                m_ProviderReflectionResolved = false;
+            }
+
             Refresh(simulationFrame);
         }
 
@@ -175,10 +187,11 @@ namespace RapidTransitMod.Core
                 FramesPerMinute,
                 ClockEpoch);
 
-            Mod.log.Info("[SimClock] ticksPerDay changed old=" + oldSnapshot.TicksPerDay
-                + " new=" + newSnapshot.TicksPerDay
-                + " framesPerMinute=" + newSnapshot.FramesPerMinute.ToString("0.########")
-                + " epoch=" + newSnapshot.ClockEpoch);
+            Mod.log.Info("[SimClock] day length changed oldTicksPerDay=" + oldSnapshot.TicksPerDay
+                + " newTicksPerDay=" + newSnapshot.TicksPerDay
+                + " oldFramesPerMinute=" + oldSnapshot.FramesPerMinute.ToString("0.########")
+                + " newFramesPerMinute=" + newSnapshot.FramesPerMinute.ToString("0.########")
+                + " clockEpoch=" + newSnapshot.ClockEpoch);
             ClockChanged?.Invoke(oldSnapshot, newSnapshot);
         }
 
