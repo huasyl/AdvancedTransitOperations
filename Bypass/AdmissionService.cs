@@ -6027,12 +6027,12 @@ namespace RapidTransitMod.Bypass
             return frames;
         }
 
-        internal static string FormatEtaFrames(float frames)
+        internal string FormatEtaFrames(float frames)
         {
             if (frames == float.MaxValue)
                 return "?";
 
-            return (frames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("0.0") + "m";
+            return m_Runtime.ClockSnapshot.ToMinutes(frames).ToString("0.0") + "m";
         }
 
         private bool TryGetBypassProtectedSharedContext(

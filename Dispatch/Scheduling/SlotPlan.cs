@@ -75,7 +75,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slotMinute)
                     + " 选择车辆" + pick.Vehicle.Index
                     + " state=" + bestState
-                    + " eta=" + (pick.EtaFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                    + " eta=" + m_Runtime.m_SimClock.ToMinutes(pick.EtaFrames).ToString("F1") + "分钟"
                     + " prevTarget=" + (pick.PreviousTargetMinute >= 0 ? DispatchRuntimeSystem.SlotStr(pick.PreviousTargetMinute) : "-"));
             }
             return Status.Claimed;

@@ -295,8 +295,10 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 Ticket = Ticket.Value,
                 VehicleId = VehicleId,
                 OriginFrame = Snapshot.OriginFrame,
-                EtaGameMinutes = ForwardDelta(Snapshot.OriginFrame, Prediction.PredictedArrivalFrame)
-                    / RailPredictionSolver.SimulationFramesPerGameMinute,
+                EtaGameMinutes = FrozenWorld?.RuntimeFacts != null && FrozenWorld.RuntimeFacts.FramesPerMinute > 0d
+                    ? (float)(ForwardDelta(Snapshot.OriginFrame, Prediction.PredictedArrivalFrame)
+                        / FrozenWorld.RuntimeFacts.FramesPerMinute)
+                    : 0f,
                 State = m_State,
                 ComparisonValid = ComparisonValid,
                 InvalidReason = m_InvalidReason,

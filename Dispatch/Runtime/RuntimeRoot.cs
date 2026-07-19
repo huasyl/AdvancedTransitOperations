@@ -83,7 +83,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SpawnIntentTrace = new SpawnIntentTrace(runtime);
             runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
             RailEtaHost.RailEtaWorker railEtaWorker = new RailEtaHost.RailEtaWorker();
-            runtime.m_RailEtaService = new RailEtaHost.RailEtaBridgeService(railEtaWorker);
+            runtime.m_RailEtaService = new RailEtaHost.RailEtaBridgeService(railEtaWorker, () => runtime.m_SimClock.Snapshot);
+            runtime.m_SimClock.ClockChanged += runtime.m_RailEtaService.OnClockChanged;
             RailEtaHost.RailEtaBridgeService.Bind(runtime.m_RailEtaService);
             runtime.m_RailEtaHotRuntime = new RailEtaHost.RailEtaHotRuntime(railEtaWorker, new RailEtaHotModule());
             runtime.m_RailEtaHotRuntime.Attach(new RailEtaHost.RailEtaHotContext(
@@ -92,6 +93,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.World.GetOrCreateSystemManaged<RailTravel.QuerySystem>(),
                 new RailEtaHost.RailEtaRuntimeReadPort
                 {
+                    ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                     LineDwellMinutes = line => runtime.m_LineView.Dwell(line),
                     TryReadOriginScheduledHold = (Entity vehicle, uint frame, out uint earliestReleaseFrame) =>
                     {
@@ -187,6 +189,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 EntityMgr = () => runtime.EntityManager,
                 Log = runtime.log,
                 Frame = () => runtime.m_SimulationSystem.frameIndex,
+                ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                 VehicleCount = () => runtime.m_VehicleView.Count,
                 AppliedLines = () => runtime.m_WorkbenchBridge.AppliedLines,
                 LineQuery = runtime.m_LineQuery,

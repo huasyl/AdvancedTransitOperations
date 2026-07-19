@@ -1,4 +1,5 @@
 using System;
+using RapidTransitMod.Core;
 using Unity.Entities;
 using Unity.Jobs;
 
@@ -58,6 +59,7 @@ namespace RapidTransitMod.RailEtaHost
 
     public sealed class RailEtaRuntimeReadPort
     {
+        public Func<ClockSnapshot> ClockSnapshot { get; set; }
         public Func<Entity, int> LineDwellMinutes { get; set; }
         public TryReadRailEtaOriginScheduledHold TryReadOriginScheduledHold { get; set; }
         public TryReadRailEtaHold TryReadHold { get; set; }

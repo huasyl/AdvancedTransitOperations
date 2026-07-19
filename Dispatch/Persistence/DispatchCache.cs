@@ -663,10 +663,10 @@ namespace RapidTransitMod.Dispatch.Persistence
             {
                 m_Runtime.log.Info("[出库缓存] 线路" + line.Index
                     + " depot=" + depotId
-                    + " 样本=" + (sampleFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
+                    + " 样本=" + m_Runtime.m_SimClock.ToMinutes(sampleFrames).ToString("F1") + "分钟"
                     + " 最近" + sampleCount + "条"
-                    + " ETA=" + (newFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
-                    + (oldFrames > 0 ? " 旧值" + (oldFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟" : "")
+                    + " ETA=" + m_Runtime.m_SimClock.ToMinutes(newFrames).ToString("F1") + "分钟"
+                    + (oldFrames > 0 ? " 旧值" + m_Runtime.m_SimClock.ToMinutes(oldFrames).ToString("F1") + "分钟" : "")
                     + " mode=" + mode);
             }
         }

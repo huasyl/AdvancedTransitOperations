@@ -1,4 +1,5 @@
 using System;
+using RapidTransitMod.Core;
 using Game;
 using Game.Common;
 using Game.Routes;
@@ -26,6 +27,7 @@ namespace RapidTransitMod
         internal TimedLogger Log;
         internal TimeSystem Time;
         internal SimulationSystem Sim;
+        internal Func<ClockSnapshot> ClockSnapshot;
         internal NameSystem Names;
         internal CitySystem City;
         internal EndFrameBarrier Barrier;

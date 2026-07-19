@@ -55,7 +55,7 @@ namespace RapidTransitMod
                     () => m_Runtime.m_StationAnchorDiagTotalSuspiciousLongDwell,
                     () => m_Runtime.m_LastStationStopDwellLegacyRestoredCount,
                     () => m_Runtime.m_LastStationStopDwellAnchorRestoredCount,
-                    (int)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    () => m_Runtime.m_SimClock.Snapshot);
             }
 
             return m_StationAnchorDiag;

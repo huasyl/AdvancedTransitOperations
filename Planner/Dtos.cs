@@ -1317,6 +1317,8 @@ namespace RapidTransitMod
         [DataMember]
         public double simFramesPerMinute;
         [DataMember]
+        public long clockEpoch;
+        [DataMember]
         public int defaultOriginHoldLimitMinutes;
         [DataMember]
         public int defaultMaxStationDwellMinutes;

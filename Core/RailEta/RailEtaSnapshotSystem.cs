@@ -16,6 +16,7 @@ using Game.Vehicles;
 using RapidTransitMod.RailEta.Contracts;
 using RapidTransitMod.RailEtaHost;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Collections;
 using Unity.Entities;
@@ -574,11 +575,17 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private RailEtaRequestFrameFacts CaptureRuntimeFactsAtRequestFrame(uint frame, RailEtaMode mode, List<Entity> selectedControllers)
         {
-            if (mode == RailEtaMode.Theory) return new RailEtaRequestFrameFacts();
             RailEtaRuntimeReadPort port = m_RuntimeReadPort;
-            if (port?.LineDwellMinutes == null || port.TryReadOriginScheduledHold == null
+            if (port?.ClockSnapshot == null) return null;
+            ClockSnapshot clockSnapshot = port.ClockSnapshot();
+            var result = new RailEtaRequestFrameFacts
+            {
+                FramesPerMinute = clockSnapshot.FramesPerMinute,
+                ClockEpoch = clockSnapshot.ClockEpoch
+            };
+            if (mode == RailEtaMode.Theory) return result;
+            if (port.LineDwellMinutes == null || port.TryReadOriginScheduledHold == null
                 || port.TryReadHold == null || port.TryReadTrackChain == null) return null;
-            var result = new RailEtaRequestFrameFacts();
             List<Entity> controllers = selectedControllers;
             if (controllers == null)
             {

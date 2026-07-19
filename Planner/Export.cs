@@ -31,7 +31,6 @@ namespace RapidTransitMod.Planner
         private RuntimeFacade m_Bypass => R.Bypass;
         private Game.Simulation.SimulationSystem m_SimulationSystem => R.m_SimulationSystem;
         private RapidTransitMod.Dispatch.Workbench.Bridge m_WorkbenchBridge => R.m_WorkbenchBridge;
-        private const double SIM_FRAMES_PER_MINUTE = DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
         private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = DispatchRuntimeSystem.LOCAL_BYPASS_EXIT_RELEASE_ATOMS;
 
         private List<WorkbenchLineRuntime> Lines() => R.Lines();
@@ -895,7 +894,7 @@ namespace RapidTransitMod.Planner
                     sliceIndex = sample.SliceIndex,
                     enterFrame = sample.EnterFrame,
                     exitFrame = sample.ExitFrame,
-                    durationMinutes = durationFrames / (float)SIM_FRAMES_PER_MINUTE,
+                    durationMinutes = (float)R.m_SimClock.ToMinutes(durationFrames),
                     enterAtomIndex = sample.EnterAtomIndex,
                     enterAtomPosition01 = sample.EnterAtomPosition01,
                     exitAtomIndex = sample.ExitAtomIndex,
@@ -1007,7 +1006,8 @@ namespace RapidTransitMod.Planner
         {
             return new DispatchPlannerRuntimeParamsDto
             {
-                simFramesPerMinute = SIM_FRAMES_PER_MINUTE,
+                simFramesPerMinute = R.m_SimClock.Snapshot.FramesPerMinute,
+                clockEpoch = R.m_SimClock.Snapshot.ClockEpoch,
                 defaultOriginHoldLimitMinutes = RuntimeConfigStoreDefaults.DefaultOriginHoldLimitMinutes,
                 defaultMaxStationDwellMinutes = RuntimeConfigStoreDefaults.DefaultMaxStationDwellMinutes,
                 trackModelEntryClearSafetyGapMinutes = AdmissionService.TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES,
@@ -1288,12 +1288,12 @@ namespace RapidTransitMod.Planner
             return (lineId ?? string.Empty) + ":station-" + order.ToString();
         }
 
-        private static float RoundPlannerMinutes(float frames)
+        private float RoundPlannerMinutes(float frames)
         {
             if (!(frames > 0f))
                 return 0f;
 
-            return (float)Math.Round(frames / (float)SIM_FRAMES_PER_MINUTE, 2);
+            return (float)Math.Round(R.m_SimClock.ToMinutes(frames), 2);
         }
 
         private DispatchPlannerOutsideEndpointDto[] BuildOutsideEndpoints(Entity line, DynamicBuffer<RouteWaypoint> waypoints)

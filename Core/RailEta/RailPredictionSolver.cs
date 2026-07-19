@@ -27,8 +27,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
     /// </summary>
     internal sealed class RailPredictionSolver
     {
-        private const string BuildId = "eta-vanilla-step3-consist-path-extension";
-        internal const float SimulationFramesPerGameMinute = 182.044f;
+        private const string BuildId = "eta-vanilla-step4-clock-snapshot";
         internal const uint MaximumPredictionFrames = 54613u;
         internal string Version => BuildId;
 
@@ -39,6 +38,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 return Failure(request, RailEtaFailure.InvalidInput, "null-frozen-input");
             if (!snapshot.ClosureValidated || world.OriginFrame != snapshot.OriginFrame)
                 return Failure(request, RailEtaFailure.SnapshotUnstable, "frozen-world-mismatch");
+            if (world.RuntimeFacts == null || world.RuntimeFacts.FramesPerMinute <= 0d)
+                return Failure(request, RailEtaFailure.InvalidInput, "request-clock-snapshot-missing");
             if (cancellation.IsCancellationRequested)
                 return Failure(request, RailEtaFailure.Cancelled, "cancelled");
             if (world.Vehicles.Length > workspace.MaxVehicles)
@@ -1304,11 +1305,11 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private static uint DwellFrames(SimulationState state, VehicleState vehicle)
         {
-            int minutes = 10;
+            int dwellMinutes = 10;
             RailEtaRequestFrameFacts facts = state.World.RuntimeFacts;
             if (facts != null && facts.LineMaxDwellMinutes.TryGetValue(vehicle.Route, out int configured) && configured > 0)
-                minutes = configured;
-            return (uint)math.max(1, Mathf.RoundToInt(minutes * SimulationFramesPerGameMinute));
+                dwellMinutes = configured;
+            return (uint)math.max(1, Mathf.RoundToInt((float)(dwellMinutes * facts.FramesPerMinute)));
         }
 
         private static bool FrameReached(uint frame, uint deadline) => unchecked(frame - deadline) < 0x80000000u;

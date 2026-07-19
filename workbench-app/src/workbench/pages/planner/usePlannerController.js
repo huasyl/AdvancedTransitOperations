@@ -391,9 +391,26 @@ export default function usePlannerController({ pageEnterSequence = 0, activeTran
     setPlannerResult(null);
     await waitForUiPaint();
     try {
+      let currentPlannerInput = scopedPlannerInput;
+      const refreshedPlannerInput = await workbenchApi.loadPlannerContext?.({ mode: requestMode });
+      if (!isCurrentPlannerRun(runId, requestMode)) {
+        return;
+      }
+      if (refreshedPlannerInput?.mode && refreshedPlannerInput.mode !== requestMode) {
+        return;
+      }
+      if (refreshedPlannerInput) {
+        const currentClockEpoch = Number(currentPlannerInput?.runtimeParams?.clockEpoch || 0);
+        const refreshedClockEpoch = Number(refreshedPlannerInput?.runtimeParams?.clockEpoch || 0);
+        if (currentClockEpoch !== refreshedClockEpoch) {
+          setPlannerInput(refreshedPlannerInput);
+          setPlannerInitialized(false);
+        }
+        currentPlannerInput = refreshedPlannerInput;
+      }
       const request = buildPlannerRequest({
         mode: requestMode,
-        plannerInput: scopedPlannerInput,
+        plannerInput: currentPlannerInput,
         analysisStart,
         analysisEnd,
         adjustableLines,

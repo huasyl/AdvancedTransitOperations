@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Game.Prefabs;
 using Game.Routes;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -12,6 +13,7 @@ namespace RapidTransitMod.TrackModel
         EntityManager EntityManager { get; }
         TimedLogger Log { get; }
         uint FrameIndex { get; }
+        ClockSnapshot ClockSnapshot { get; }
         int ManagedVehicleCount { get; }
 
         NativeArray<Entity> GetLineEntities(Allocator allocator);

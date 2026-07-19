@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using RapidTransitMod.Core;
 using Game.Routes;
 using RapidTransitMod.RailEtaHost;
 using RapidTransitMod.TrackModel;
@@ -32,6 +33,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
         internal SpawnLeadTheory(DispatchRuntimeSystem runtime)
         {
             m_Runtime = runtime;
+            m_Runtime.m_SimClock.ClockChanged += OnClockChanged;
         }
 
         internal void Ensure(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
@@ -126,6 +128,11 @@ namespace RapidTransitMod.Dispatch.Scheduling
             m_ActiveLine = Entity.Null;
             m_ActiveTicket = default;
             if (!m_Entries.TryGetValue(line, out Entry entry)) return;
+            if (status.State == "ClockChanged")
+            {
+                Enqueue(line);
+                return;
+            }
             if (status.State != "Completed" || status.EtaFrame == 0u
                 || unchecked(status.EtaFrame - status.OriginFrame) >= 0x80000000u)
             {
@@ -230,7 +237,20 @@ namespace RapidTransitMod.Dispatch.Scheduling
         private static bool Terminal(string state)
         {
             return state == "Completed" || state == "Failed" || state == "Cancelled" || state == "Busy"
-                || state == "WorkerLost" || state == "Unavailable" || state == "NotConverged";
+                || state == "WorkerLost" || state == "Unavailable" || state == "NotConverged"
+                || state == "ClockChanged";
+        }
+
+        private void OnClockChanged(ClockSnapshot oldClockSnapshot, ClockSnapshot newClockSnapshot)
+        {
+            _ = oldClockSnapshot;
+            _ = newClockSnapshot;
+            if (m_ActiveLine == Entity.Null || !m_ActiveTicket.IsValid) return;
+            Entity line = m_ActiveLine;
+            m_Runtime.m_RailEtaService?.Cancel(m_ActiveTicket);
+            m_ActiveLine = Entity.Null;
+            m_ActiveTicket = default;
+            if (m_Entries.TryGetValue(line, out Entry entry) && !entry.Ready) Enqueue(line);
         }
 
         private static long Pack(Entity value) => ((long)(uint)value.Index << 32) | (uint)value.Version;

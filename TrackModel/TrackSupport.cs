@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Game.Routes;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -17,6 +18,7 @@ namespace RapidTransitMod.TrackModel
         internal EntityManager EntityManager => m_Runtime.EntityManager;
         internal TimedLogger Log => m_Runtime.Log;
         internal uint FrameIndex => m_Runtime.FrameIndex;
+        internal ClockSnapshot ClockSnapshot => m_Runtime.ClockSnapshot;
         internal int ManagedVehicleCount => m_Runtime.ManagedVehicleCount;
         internal IEnumerable<KeyValuePair<string, AppliedLine>> AppliedLines => m_Runtime.AppliedLines;
 

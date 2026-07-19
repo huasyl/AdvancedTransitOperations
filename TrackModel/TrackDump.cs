@@ -100,7 +100,6 @@ namespace RapidTransitMod.TrackModel
 
         private const float STATION_ANCHOR_MERGE_DISTANCE = 12f;
         private const float STATION_VEHICLE_ATTACH_DISTANCE = 1.25f;
-        private const double SimFramesPerMinute = 182.044;
 
         private readonly struct SharedPhysicalCorridorAuditEntry
         {
@@ -558,7 +557,7 @@ namespace RapidTransitMod.TrackModel
             List<Entity> targetLines = CollectReplayDumpTargetLines(allLines);
             StringBuilder sb = new StringBuilder(32768);
             sb.Append("[TrackModelReplayDump]").AppendLine();
-            sb.Append("time=").Append(SlotStr((int)(m_Support.FrameIndex / (uint)SimFramesPerMinute) % 1440))
+            sb.Append("time=").Append(SlotStr(m_Support.ClockSnapshot.NowMinute))
               .Append(" lines=").Append(targetLines.Count)
               .Append(" managedVehicles=").Append(m_Support.ManagedVehicleCount)
               .AppendLine();
@@ -1683,12 +1682,12 @@ namespace RapidTransitMod.TrackModel
             return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
         }
 
-        private static string FormatEtaFrames(float frames)
+        private string FormatEtaFrames(float frames)
         {
             if (frames == float.MaxValue)
                 return "?";
 
-            return (frames / 182.044f).ToString("0.0") + "m";
+            return m_Support.ClockSnapshot.ToMinutes(frames).ToString("0.0") + "m";
         }
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Threading;
+using RapidTransitMod.Core;
 using Unity.Jobs;
 
 namespace RapidTransitMod.RailEtaHost
@@ -10,6 +11,7 @@ namespace RapidTransitMod.RailEtaHost
         private static RailEtaBridgeService s_Current;
         private readonly ConcurrentDictionary<long, RailEtaPublicStatus> m_Status = new ConcurrentDictionary<long, RailEtaPublicStatus>();
         private readonly RailEtaWorker m_Worker;
+        private readonly Func<ClockSnapshot> m_ClockSnapshot;
         private RailEtaHotRuntime m_HotRuntime;
         private RailEtaPublicResult m_LastAppliedResult;
         private long m_LastTerminalTicket;
@@ -17,7 +19,11 @@ namespace RapidTransitMod.RailEtaHost
         private int m_Generation = 1;
         private int m_Disposed;
 
-        public RailEtaBridgeService(RailEtaWorker worker) => m_Worker = worker ?? throw new ArgumentNullException(nameof(worker));
+        public RailEtaBridgeService(RailEtaWorker worker, Func<ClockSnapshot> clockSnapshot)
+        {
+            m_Worker = worker ?? throw new ArgumentNullException(nameof(worker));
+            m_ClockSnapshot = clockSnapshot ?? throw new ArgumentNullException(nameof(clockSnapshot));
+        }
         public static RailEtaBridgeService Current => Volatile.Read(ref s_Current);
         public static void Bind(RailEtaBridgeService service) => Volatile.Write(ref s_Current, service);
         public bool IsDisposed => Volatile.Read(ref m_Disposed) != 0;
@@ -35,8 +41,14 @@ namespace RapidTransitMod.RailEtaHost
             if (result != null && !ReferenceEquals(result, m_LastAppliedResult))
             {
                 m_LastAppliedResult = result;
-                if (m_Status.TryGetValue(result.Ticket, out RailEtaPublicStatus publishedStatus)) Apply(publishedStatus, result);
-                if (IsTerminal(result.State)) m_LastTerminalTicket = result.Ticket;
+                bool accepted = false;
+                if (m_Status.TryGetValue(result.Ticket, out RailEtaPublicStatus publishedStatus)
+                    && publishedStatus.ClockEpoch == m_ClockSnapshot().ClockEpoch)
+                {
+                    Apply(publishedStatus, result);
+                    accepted = true;
+                }
+                if (accepted && IsTerminal(result.State)) m_LastTerminalTicket = result.Ticket;
             }
             long terminalTicket = Volatile.Read(ref m_LastTerminalTicket);
             if (terminalTicket != 0 && m_Status.TryGetValue(terminalTicket, out RailEtaPublicStatus terminalStatus)
@@ -57,7 +69,8 @@ namespace RapidTransitMod.RailEtaHost
                 TargetVehicle = ((long)(uint)descriptor.VehicleIndex << 32) | (uint)descriptor.VehicleVersion,
                 TargetWaypoint = descriptor.TargetCheckpointId,
                 Mode = descriptor.Mode,
-                Generation = selection?.Generation ?? 0
+                Generation = selection?.Generation ?? 0,
+                ClockEpoch = m_ClockSnapshot().ClockEpoch
             };
             m_Status[ticket.Value] = status;
             if (selection == null)
@@ -82,7 +95,8 @@ namespace RapidTransitMod.RailEtaHost
         {
             if (!m_Status.TryGetValue(ticket.Value, out status)) return false;
             RailEtaPublicResult result = DispatchRuntimeSystem.Instance?.LastRailEtaPublicResult;
-            if (result != null && result.Ticket == ticket.Value) Apply(status, result);
+            if (result != null && result.Ticket == ticket.Value
+                && status.ClockEpoch == m_ClockSnapshot().ClockEpoch) Apply(status, result);
             if (m_HotRuntime != null && m_HotRuntime.TryGetComparisonSummary(ticket.Value, out string summary))
                 status.ComparisonSummary = summary;
             return true;
@@ -105,6 +119,18 @@ namespace RapidTransitMod.RailEtaHost
             m_HotRuntime?.Clear(generation);
         }
 
+        internal void OnClockChanged(ClockSnapshot oldClockSnapshot, ClockSnapshot newClockSnapshot)
+        {
+            foreach (RailEtaPublicStatus status in m_Status.Values)
+            {
+                if (status.ClockEpoch != oldClockSnapshot.ClockEpoch || IsTerminal(status.State)) continue;
+                m_HotRuntime?.Cancel(status.Ticket.Value);
+                status.State = "ClockChanged";
+                status.Failure = "ClockChanged";
+                status.Detail = "Rail ETA request clock epoch changed before completion.";
+            }
+        }
+
         private static void Apply(RailEtaPublicStatus status, RailEtaPublicResult result)
         {
             status.State = result.State ?? string.Empty;
@@ -125,7 +151,8 @@ namespace RapidTransitMod.RailEtaHost
         private static bool IsTerminal(string state)
         {
             return state == "Completed" || state == "Incomplete" || state == "Failed" || state == "Cancelled"
-                || state == "NotConverged" || state == "Unavailable" || state == "Busy";
+                || state == "NotConverged" || state == "Unavailable" || state == "Busy"
+                || state == "ClockChanged";
         }
 
         public void Dispose()

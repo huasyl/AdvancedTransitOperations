@@ -913,6 +913,7 @@ export function normalizePlannerInput(rawInput = {}) {
     version: rawInput.version || "",
     runtimeParams: {
       simFramesPerMinute: clampNumber(rawInput?.runtimeParams?.simFramesPerMinute, 182.044),
+      clockEpoch: clampNumber(rawInput?.runtimeParams?.clockEpoch, 0),
       trackModelEntryClearSafetyGapMinutes: clampNumber(
         rawInput?.runtimeParams?.trackModelEntryClearSafetyGapMinutes,
         1

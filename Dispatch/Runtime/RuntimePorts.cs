@@ -50,6 +50,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Log = runtime.log,
                 Time = runtime.m_TimeSystem,
                 Sim = runtime.m_SimulationSystem,
+                ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                 Names = runtime.m_NameSystem,
                 City = runtime.m_CitySystem,
                 Barrier = runtime.m_EndFrameBarrier,

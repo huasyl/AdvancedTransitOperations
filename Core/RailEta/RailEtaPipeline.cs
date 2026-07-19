@@ -180,6 +180,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
     internal sealed class RailEtaRequestFrameFacts
     {
+        public double FramesPerMinute;
+        public long ClockEpoch;
         public readonly Dictionary<Entity, RailControlledHoldSnapshot> ControlledHolds = new Dictionary<Entity, RailControlledHoldSnapshot>();
         public readonly Dictionary<Entity, int> LineMaxDwellMinutes = new Dictionary<Entity, int>();
         public readonly Dictionary<Entity, RailEtaFrozenTrackChain> TrackChains = new Dictionary<Entity, RailEtaFrozenTrackChain>();
