@@ -6,6 +6,7 @@ using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -16,6 +17,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly EntityManager m_EntityManager;
         private readonly TimedLogger m_Log;
         private readonly Func<uint> m_Frame;
+        private readonly Func<ClockSnapshot> m_ClockSnapshot;
         private readonly Func<IEnumerable<KeyValuePair<string, AppliedLine>>> m_AppliedLines;
         private readonly TrackModelService m_TrackModel;
         private readonly Func<TrackProjectionService> m_TrackProjection;
@@ -40,6 +42,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             EntityManager entityManager,
             TimedLogger log,
             Func<uint> frame,
+            Func<ClockSnapshot> clockSnapshot,
             Func<IEnumerable<KeyValuePair<string, AppliedLine>>> appliedLines,
             TrackModelService trackModel,
             Func<TrackProjectionService> trackProjection,
@@ -63,6 +66,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_EntityManager = entityManager;
             m_Log = log;
             m_Frame = frame;
+            m_ClockSnapshot = clockSnapshot;
             m_AppliedLines = appliedLines;
             m_TrackModel = trackModel;
             m_TrackProjection = trackProjection;
@@ -91,6 +95,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         EntityManager IBypassAdmissionRuntimeContext.EntityManager => m_EntityManager;
         TimedLogger IBypassAdmissionRuntimeContext.Log => m_Log;
         uint IBypassAdmissionRuntimeContext.Frame => m_Frame();
+        ClockSnapshot IBypassAdmissionRuntimeContext.ClockSnapshot => m_ClockSnapshot();
         IEnumerable<KeyValuePair<string, AppliedLine>> IBypassAdmissionRuntimeContext.AppliedLines => m_AppliedLines();
         TrackModelService IBypassAdmissionRuntimeContext.TrackModel => m_TrackModel;
         TrackProjectionService IBypassAdmissionRuntimeContext.TrackProjection => m_TrackProjection();

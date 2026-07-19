@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Colossal.Core;
 using Game;
@@ -7,6 +8,7 @@ using Game.Routes;
 using Game.Simulation;
 using Game.UI.InGame;
 using RapidTransitMod.Broadcasting;
+using RapidTransitMod.Core;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -67,6 +69,9 @@ namespace RapidTransitMod
             internal override VehicleView VehicleView => m_Host.m_VehicleView;
             internal override SelectPanel SelectionPanel => m_Host.m_SelectPanel;
             internal override NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.m_CachedWpIdx;
+            internal override ClockSnapshot ClockSnapshot => m_Host.m_SimClock.Snapshot;
+            internal override void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler)
+                => m_Host.m_SimClock.ClockChanged += handler;
 
             internal override bool TryRelation(
                 LineTrackChain chain,

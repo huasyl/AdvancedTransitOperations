@@ -71,16 +71,17 @@ function addTrendValue(map, key, entry, passengers) {
     existing.passengers += passengers;
     return;
   }
+  const serviceDayKey = Number(entry?.serviceDayKey ?? entry?.serviceDayIndex ?? 0);
   map.set(key, {
     hour: bucketLabel(entry),
-    serviceDayIndex: Number(entry?.serviceDayIndex || 0),
+    serviceDayKey: Number.isFinite(serviceDayKey) ? serviceDayKey : 0,
     bucketStartMinute: Number(entry?.bucketStartMinute || 0),
     passengers
   });
 }
 
 function sortByBucket(left, right) {
-  const dayDelta = Number(left?.serviceDayIndex || 0) - Number(right?.serviceDayIndex || 0);
+  const dayDelta = Number(left?.serviceDayKey || 0) - Number(right?.serviceDayKey || 0);
   if (dayDelta !== 0) {
     return dayDelta;
   }
@@ -172,7 +173,8 @@ function buildTrends(stationVolumes) {
 
   stationVolumes.forEach((entry) => {
     const passengers = Number(entry?.inflow || 0) + Number(entry?.outflow || 0);
-    const bucketKey = `${Number(entry?.serviceDayIndex || 0)}:${Number(entry?.bucketStartMinute || 0)}`;
+    const serviceDayKey = Number(entry?.serviceDayKey ?? entry?.serviceDayIndex ?? 0);
+    const bucketKey = `${Number.isFinite(serviceDayKey) ? serviceDayKey : 0}:${Number(entry?.bucketStartMinute || 0)}`;
     addTrendValue(systemMap, bucketKey, entry, passengers);
 
     const lineId = String(entry?.lineId || "");

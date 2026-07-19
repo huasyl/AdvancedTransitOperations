@@ -1,6 +1,8 @@
 using Game.Routes;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
+using RapidTransitMod.Core;
+using System;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -18,8 +20,23 @@ namespace RapidTransitMod.PassengerFlow
         internal uint Frame()
             => m_Runtime.m_SimulationSystem != null ? m_Runtime.m_SimulationSystem.frameIndex : 0u;
 
-        internal int FramesPerMinute()
-            => (int)Unity.Mathematics.math.round((float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+        internal int NowMinute()
+            => m_Runtime.m_SimClock.Snapshot.NowMinute;
+
+        internal DateTime NowDate()
+            => m_Runtime.m_SimClock.Snapshot.NowDate;
+
+        internal uint ToFramesCeil(double gameMinutes)
+            => m_Runtime.m_SimClock.Snapshot.ToFramesCeil(gameMinutes);
+
+        internal long ClockEpoch()
+            => m_Runtime.m_SimClock.Snapshot.ClockEpoch;
+
+        internal double FramesPerMinute()
+            => m_Runtime.m_SimClock.Snapshot.FramesPerMinute;
+
+        internal void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler)
+            => m_Runtime.m_SimClock.ClockChanged += handler;
 
         internal NativeArray<Entity> Vehicles(Allocator allocator)
             => m_Runtime.m_VehicleView.Keys(allocator);

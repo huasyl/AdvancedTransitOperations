@@ -303,7 +303,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_RouteProgress.TryOriginArrivalRepair)));
 
             RuntimePorts.Build(runtime);
-            PassengerFlow.Runtime.Bind(new PassengerFlow.Port(runtime));
+            PassengerFlow.Port passengerFlowPort = new PassengerFlow.Port(runtime);
+            PassengerFlow.Runtime.Bind(passengerFlowPort);
+            passengerFlowPort.SubscribeClockChanged((oldClockSnapshot, newClockSnapshot) =>
+                PassengerFlow.SamplingSystem.ClockChanged(passengerFlowPort));
         }
 
         /// <summary>

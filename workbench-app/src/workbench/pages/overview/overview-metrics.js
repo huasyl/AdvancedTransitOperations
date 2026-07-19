@@ -44,7 +44,8 @@ export function buildOverviewMetrics(passengerSnapshot = {}) {
       stationTotals.set(stationId, currentStation);
     }
 
-    const bucketKey = `${Number(entry?.serviceDayIndex || 0)}:${Number(entry?.bucketStartMinute || 0)}`;
+    const serviceDayKey = Number(entry?.serviceDayKey ?? entry?.serviceDayIndex ?? 0);
+    const bucketKey = `${Number.isFinite(serviceDayKey) ? serviceDayKey : 0}:${Number(entry?.bucketStartMinute || 0)}`;
     bucketTotals.set(bucketKey, Number(bucketTotals.get(bucketKey) || 0) + total);
   });
 

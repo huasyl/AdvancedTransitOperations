@@ -8,23 +8,23 @@ namespace RapidTransitMod.PassengerFlow
 {
     internal readonly struct TimeBucketKey : IEquatable<TimeBucketKey>
     {
-        internal readonly int ServiceDayIndex;
+        internal readonly int ServiceDayKey;
         internal readonly int BucketStartMinute;
 
-        internal TimeBucketKey(int serviceDayIndex, int bucketStartMinute)
+        internal TimeBucketKey(int serviceDayKey, int bucketStartMinute)
         {
-            ServiceDayIndex = serviceDayIndex;
+            ServiceDayKey = serviceDayKey;
             BucketStartMinute = bucketStartMinute;
         }
 
         public bool Equals(TimeBucketKey other)
-            => ServiceDayIndex == other.ServiceDayIndex && BucketStartMinute == other.BucketStartMinute;
+            => ServiceDayKey == other.ServiceDayKey && BucketStartMinute == other.BucketStartMinute;
 
         public override bool Equals(object obj)
             => obj is TimeBucketKey other && Equals(other);
 
         public override int GetHashCode()
-            => (ServiceDayIndex * 397) ^ BucketStartMinute;
+            => (ServiceDayKey * 397) ^ BucketStartMinute;
     }
 
     internal readonly struct StationVolumeKey : IEquatable<StationVolumeKey>
@@ -280,7 +280,7 @@ namespace RapidTransitMod.PassengerFlow
                     mode = TransitModeCodec.Format(pair.Key.Mode),
                     lineId = pair.Key.LineId,
                     stationSakIndex = pair.Key.StationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     boardings = pair.Value.Boardings,
                     alightings = pair.Value.Alightings,
@@ -301,7 +301,7 @@ namespace RapidTransitMod.PassengerFlow
                     lineId = pair.Key.LineId,
                     fromStationSakIndex = pair.Key.FromStationSakIndex,
                     toStationSakIndex = pair.Key.ToStationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     loadPassengersSum = pair.Value.LoadPassengersSum,
                     sampleCount = pair.Value.SampleCount,
@@ -320,7 +320,7 @@ namespace RapidTransitMod.PassengerFlow
                     lastLineId = pair.Key.LastLineId,
                     originStationSakIndex = pair.Key.OriginStationSakIndex,
                     destinationStationSakIndex = pair.Key.DestinationStationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     completedCount = pair.Value.CompletedCount,
                     lastUpdatedFrame = pair.Value.LastUpdatedFrame
@@ -337,7 +337,7 @@ namespace RapidTransitMod.PassengerFlow
                     code = pair.Key.Code,
                     lineId = pair.Key.LineId,
                     stationSakIndex = pair.Key.StationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     count = pair.Value.Count,
                     lastFrame = pair.Value.LastFrame
@@ -368,7 +368,7 @@ namespace RapidTransitMod.PassengerFlow
                         mode,
                         row.lineId,
                         row.stationSakIndex,
-                        new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                        new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                         new StationVolumeAggregate
                         {
                             Boardings = row.boardings,
@@ -394,7 +394,7 @@ namespace RapidTransitMod.PassengerFlow
                         row.lineId,
                         row.fromStationSakIndex,
                         row.toStationSakIndex,
-                        new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                        new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                         new SectionVolumeAggregate
                         {
                             LoadPassengersSum = row.loadPassengersSum,
@@ -418,7 +418,7 @@ namespace RapidTransitMod.PassengerFlow
                         row.lastLineId,
                         row.originStationSakIndex,
                         row.destinationStationSakIndex,
-                        new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                        new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                         new OdFlowAggregate
                         {
                             CompletedCount = row.completedCount,
@@ -441,7 +441,7 @@ namespace RapidTransitMod.PassengerFlow
                     row.code,
                     row.lineId,
                     row.stationSakIndex,
-                    new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                    new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                     new WarningAggregate
                     {
                         Count = row.count,
@@ -706,7 +706,7 @@ namespace RapidTransitMod.PassengerFlow
                 targetOccupied ? MigrationResult.TargetOccupied : MigrationResult.Migrated);
         }
 
-        internal void TrimBefore(int minServiceDayIndex, int minBucketStartMinute)
+        internal void TrimBefore(int minServiceDayKey, int minBucketStartMinute)
         {
             bool hasAny = m_StationVolumes.Count != 0
                 || m_SectionVolumes.Count != 0
@@ -718,7 +718,7 @@ namespace RapidTransitMod.PassengerFlow
             List<StationVolumeKey> removeStationKeys = null;
             foreach (StationVolumeKey key in m_StationVolumes.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeStationKeys == null)
                         removeStationKeys = new List<StationVolumeKey>();
@@ -735,7 +735,7 @@ namespace RapidTransitMod.PassengerFlow
             List<SectionVolumeKey> removeSectionKeys = null;
             foreach (SectionVolumeKey key in m_SectionVolumes.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeSectionKeys == null)
                         removeSectionKeys = new List<SectionVolumeKey>();
@@ -752,7 +752,7 @@ namespace RapidTransitMod.PassengerFlow
             List<OdFlowKey> removeOdKeys = null;
             foreach (OdFlowKey key in m_OdFlows.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeOdKeys == null)
                         removeOdKeys = new List<OdFlowKey>();
@@ -769,7 +769,7 @@ namespace RapidTransitMod.PassengerFlow
             List<WarningKey> removeKeys = null;
             foreach (WarningKey key in m_Warnings.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeKeys == null)
                         removeKeys = new List<WarningKey>();
@@ -784,10 +784,10 @@ namespace RapidTransitMod.PassengerFlow
                 m_Warnings.Remove(removeKeys[i]);
         }
 
-        private static bool IsBefore(TimeBucketKey bucket, int minServiceDayIndex, int minBucketStartMinute)
+        private static bool IsBefore(TimeBucketKey bucket, int minServiceDayKey, int minBucketStartMinute)
         {
-            return bucket.ServiceDayIndex < minServiceDayIndex
-                || (bucket.ServiceDayIndex == minServiceDayIndex
+            return bucket.ServiceDayKey < minServiceDayKey
+                || (bucket.ServiceDayKey == minServiceDayKey
                     && bucket.BucketStartMinute < minBucketStartMinute);
         }
 
@@ -816,7 +816,7 @@ namespace RapidTransitMod.PassengerFlow
                         alightings = pair.Value.Alightings,
                         waitingPassengers = pair.Value.WaitingPassengersSnapshot,
                         throughPassengers = throughPassengers,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })
@@ -843,7 +843,7 @@ namespace RapidTransitMod.PassengerFlow
                             ? pair.Value.LoadPassengersSum / pair.Value.SampleCount
                             : 0,
                         sampleCount = pair.Value.SampleCount,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })
@@ -869,7 +869,7 @@ namespace RapidTransitMod.PassengerFlow
                         originStationId = originStationId,
                         destinationStationId = destinationStationId,
                         completedCount = pair.Value.CompletedCount,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })
@@ -890,7 +890,7 @@ namespace RapidTransitMod.PassengerFlow
                         stationId = stationId,
                         count = pair.Value.Count,
                         lastFrame = pair.Value.LastFrame,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })

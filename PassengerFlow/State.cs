@@ -15,14 +15,18 @@ namespace RapidTransitMod.PassengerFlow
         internal readonly Sections Sections = new Sections();
         internal readonly HashSet<TimeBucketKey> RollingWindow = new HashSet<TimeBucketKey>();
 
-        internal int ServiceDayIndex;
-        internal int LastDayMinute = -1;
-        internal int LastBucketUpdateDayMinute = -1;
-        internal TimeBucketKey CurrentBucket = new TimeBucketKey(0, 0);
+        internal int ServiceDayKey;
+        internal int LastMinute = -1;
+        internal int LastBucketUpdateMinute = -1;
+        internal TimeBucketKey CurrentBucket = new TimeBucketKey(19700101, 0);
         internal int CurrentAbsoluteBucketIndex;
         internal uint LastPendingCleanupFrame;
         internal uint LastProbeScanFrame;
         internal uint LastSnapshotSummaryLogFrame;
+        internal PassengerFlowPersistedStationVolume[] LegacyStationVolumes = System.Array.Empty<PassengerFlowPersistedStationVolume>();
+        internal PassengerFlowPersistedSectionVolume[] LegacySectionVolumes = System.Array.Empty<PassengerFlowPersistedSectionVolume>();
+        internal PassengerFlowPersistedOdFlow[] LegacyOdFlows = System.Array.Empty<PassengerFlowPersistedOdFlow>();
+        internal PassengerFlowPersistedWarning[] LegacyWarnings = System.Array.Empty<PassengerFlowPersistedWarning>();
 
         internal void Clear()
         {
@@ -35,14 +39,18 @@ namespace RapidTransitMod.PassengerFlow
             Anchors.Clear();
             Sections.Clear();
             RollingWindow.Clear();
-            ServiceDayIndex = 0;
-            LastDayMinute = -1;
-            LastBucketUpdateDayMinute = -1;
-            CurrentBucket = new TimeBucketKey(0, 0);
+            ServiceDayKey = 0;
+            LastMinute = -1;
+            LastBucketUpdateMinute = -1;
+            CurrentBucket = new TimeBucketKey(19700101, 0);
             CurrentAbsoluteBucketIndex = 0;
             LastPendingCleanupFrame = 0;
             LastProbeScanFrame = 0;
             LastSnapshotSummaryLogFrame = 0;
+            LegacyStationVolumes = System.Array.Empty<PassengerFlowPersistedStationVolume>();
+            LegacySectionVolumes = System.Array.Empty<PassengerFlowPersistedSectionVolume>();
+            LegacyOdFlows = System.Array.Empty<PassengerFlowPersistedOdFlow>();
+            LegacyWarnings = System.Array.Empty<PassengerFlowPersistedWarning>();
         }
     }
 

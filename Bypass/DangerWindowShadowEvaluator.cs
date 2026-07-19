@@ -15,7 +15,6 @@ namespace RapidTransitMod.Bypass
     internal sealed class DangerWindowShadowEvaluator
     {
         private const uint LOG_INTERVAL_FRAMES = 3600;
-        private const float SIM_FRAMES_PER_MINUTE = 182.044f;
         private const float TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES = 1f;
         private const int MAX_CONFLICT_CORRIDOR_GAP_ATOMS = 6;
         private const int MAX_MISMATCH_SAMPLES = 5;
@@ -1088,7 +1087,8 @@ namespace RapidTransitMod.Bypass
                 relation.ExpressProtectedInterval.StartAtomIndex,
                 relation.ExpressProtectedInterval.EndAtomIndexExclusive);
 
-            float safeEntryDeadlineFrames = localClearFrames - (TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES * SIM_FRAMES_PER_MINUTE);
+            float safeEntryDeadlineFrames = localClearFrames
+                - m_Runtime.ClockSnapshot.ToFramesCeil(TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES);
             int dangerEndAtomIndexExclusive = math.min(expressCorridor.EndAtomIndexExclusive, phaseScope.PhaseEndAtomIndexExclusive);
             if (dangerEndAtomIndexExclusive <= expressCorridor.StartAtomIndex)
             {
@@ -1914,7 +1914,7 @@ namespace RapidTransitMod.Bypass
             if (frames == float.MaxValue)
                 return "?";
 
-            return (frames / SIM_FRAMES_PER_MINUTE).ToString("0.0") + "m";
+            return (frames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("0.0") + "m";
         }
     }
 }
