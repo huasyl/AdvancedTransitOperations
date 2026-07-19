@@ -667,13 +667,15 @@ namespace RapidTransitMod.PassengerFlow
             }
         }
 
-        private static string PromoteLineId(
-            string lineId, string domain, LineAnchorCatalog catalog, MigrationReport report)
+        internal static string PromoteLineId(
+            string lineId, string domain, LineAnchorCatalog catalog, MigrationReport report, TransitMode mode = TransitMode.Unknown)
         {
             if (string.IsNullOrWhiteSpace(lineId))
                 return lineId;
 
-            LineKey key = LineIdentityService.GetKey(lineId);
+            LineKey key = mode == TransitMode.Unknown
+                ? LineIdentityService.GetKey(lineId)
+                : LineIdentityService.GetKey(lineId, mode);
             if (key.IsEmpty || LineKey.IsStableGuidKey(key))
                 return lineId;
 
@@ -693,13 +695,15 @@ namespace RapidTransitMod.PassengerFlow
             return lineId;
         }
 
-        private static void RecordFieldMigration(
-            string domain, string oldLineId, string newLineId, bool targetOccupied, MigrationReport report)
+        internal static void RecordFieldMigration(
+            string domain, string oldLineId, string newLineId, bool targetOccupied, MigrationReport report, TransitMode mode = TransitMode.Unknown)
         {
             if (string.Equals(oldLineId, newLineId, StringComparison.Ordinal))
                 return;
 
-            LineKey legacyKey = LineIdentityService.GetKey(oldLineId);
+            LineKey legacyKey = mode == TransitMode.Unknown
+                ? LineIdentityService.GetKey(oldLineId)
+                : LineIdentityService.GetKey(oldLineId, mode);
             LineKey stableKey = LineIdentityService.GetKey(newLineId);
             report.Record(
                 domain, legacyKey, stableKey,
