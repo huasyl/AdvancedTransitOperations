@@ -93,7 +93,7 @@ export function createSummaryEntry({
     lineId: resolvedLineId,
     serviceId: resolvedLineId,
     lineNameKey: lineOption?.nameKey || "",
-    lineName: lineOption ? getLocalizedLineName(lineOption, t) : (resolvedLineId || "(missing lineId)"),
+    lineName: lineOption ? getLocalizedLineName(lineOption, t) : "(missing lineId)",
     lineColor: lineOption?.color || "#9ca3af",
     time,
     kind: resolvedKind,

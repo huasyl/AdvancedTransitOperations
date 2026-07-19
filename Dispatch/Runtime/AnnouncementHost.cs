@@ -173,7 +173,7 @@ namespace RapidTransitMod
             internal override bool TryTurnbacks(LineTrackChain chain, List<TrackTurnbackStationBoundary> stationBoundaries) => Turnbacks.TryCollectTurnbackStationBoundaries(chain, stationBoundaries);
             internal override bool TryWaypointIndex(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineWaypointIndexLookup lookup) => m_Host.m_WaypointIndex.TryLookup(line, waypoints, out lookup);
             internal override string DraftKey(string lineId) => RapidTransitMod.Dispatch.Workbench.Drafts.Key(lineId);
-            internal override string LineId(Entity line) => m_Host.LineId(line);
+            internal override string LineId(Entity line) => m_Host.LineStableId(line);
             internal override bool TryTurnback(LineTrackChain chain, TurnbackBoundary boundary, out TrackTurnbackStationBoundary stationBoundary) => Turnbacks.TryResolveTurnbackStationBoundary(chain, boundary, out stationBoundary);
 
             internal override float EstimatePreparing(

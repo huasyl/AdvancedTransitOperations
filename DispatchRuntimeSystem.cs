@@ -36,6 +36,7 @@ using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.Dispatch.Workbench;
+using RapidTransitMod.Core;
 using RapidTransitMod.Planner;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
@@ -77,6 +78,7 @@ namespace RapidTransitMod
         internal SharedCorridorSupport m_SharedCorridor = null!;
         internal CatalogCache m_WorkbenchCatalogCache = null!;
         internal CatalogDirty m_WorkbenchCatalogDirty = null!;
+        internal LineAnchorCatalog m_LineAnchorCatalog = null!;
 
         internal IReadOnlyDictionary<string, AppliedLine> AppliedLines => m_WorkbenchBridge.AppliedLines;
 
@@ -122,8 +124,8 @@ namespace RapidTransitMod
         internal void SaveWorkbench()
             => m_WorkbenchBridge.Save();
 
-        internal string LineId(Entity line)
-            => m_WorkbenchBridge.Ids().Get(line);
+        internal string LineStableId(Entity line)
+            => m_WorkbenchBridge.Ids().StableId(line);
 
         internal string EntityName(Entity entity)
             => m_WorkbenchBridge.Name(entity);
@@ -160,6 +162,7 @@ namespace RapidTransitMod
         internal TimedLogger log = Mod.log;
         internal SimulationSystem m_SimulationSystem = null!;
         internal TimeSystem m_TimeSystem = null!;
+        internal SimClock m_SimClock = null!;
         internal NameSystem m_NameSystem = null!;
         internal EndFrameBarrier m_EndFrameBarrier = null!;
 
@@ -462,7 +465,9 @@ namespace RapidTransitMod
 
         protected override void OnUpdate()
         {
-            Dependency = m_RailEtaService?.TickHot(m_SimulationSystem.frameIndex, Dependency) ?? Dependency;
+            uint simulationFrame = m_SimulationSystem.frameIndex;
+            m_SimClock.RefreshIfDue(simulationFrame);
+            Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
             m_RuntimeShell.Tick();
         }
 

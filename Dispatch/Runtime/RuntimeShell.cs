@@ -153,6 +153,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void Loaded(Context serializationContext)
         {
+            m_Runtime.m_SimClock.ForceRefresh(m_Runtime.m_SimulationSystem.frameIndex);
+
+            // 阶段 B（前半，Reset 类）——保持原位，不动迁移语义。
             m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_SpawnLeadTheory?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
@@ -161,14 +164,24 @@ namespace RapidTransitMod.Dispatch.Runtime
 #endif
             m_Runtime.m_Observation.ClearDispatchEta();
             PassengerFlow.SamplingSystem.ClearState();
+
+            // 阶段 A: ScanLineAnchors（在任何 Applied/draft 恢复前完成）。Scan 后映射冻结。
             try
             {
-                PassengerFlow.Persistence.RestoreFromCity(m_Runtime.EntityManager, m_Runtime.m_CitySystem.City);
+                if (RuntimeRoot.ScanLineAnchors(m_Runtime))
+                {
+                    m_Runtime.m_WorkbenchCatalogCache?.MarkDirty();
+                    m_Runtime.m_LineView?.Clear();
+                }
             }
             catch (Exception ex)
             {
-                m_Runtime.log.Info("[PassengerFlowPersistence] Restore failed -> " + ex.GetType().Name + ": " + ex.Message);
+                m_Runtime.log.Info("[LineAnchorCatalog] Initial scan failed -> "
+                    + ex.GetType().Name + ": " + ex.Message);
+                throw;
             }
+
+            // 阶段 B（后半，Reset 类）——保持原位，不动迁移语义。
             ResetCityBufferReadyFlags();
             m_Runtime.m_CommandApplier.ResetRetireDispatchLockStages();
             m_Runtime.m_CommandApplier.ProjectRetireDispatchLocksImmediatelyOnLoad();
@@ -180,12 +193,105 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_OverviewFeatureSettingsPersist.Reset();
             m_Runtime.m_OverviewFeatureSettingsPersist.Restore();
             m_Runtime.m_WorkbenchBridge.Reset();
-            m_Runtime.m_WorkbenchBridge.Restore();
-            m_Runtime.m_WorkbenchBridge.Applied().Load();
+
+            // 阶段 C: Applied buffer 恢复 vs 字符串 draft，按 buffer 是否存在分流。
+            Entity city = m_Runtime.m_CitySystem.City;
+            bool hasAppliedBuffer = city != Entity.Null
+                && (m_Runtime.EntityManager.HasBuffer<AppliedWorkbenchLineStateElement>(city)
+                    || m_Runtime.EntityManager.HasBuffer<AppliedWorkbenchStagedRowElement>(city));
+            if (hasAppliedBuffer)
+            {
+                try
+                {
+                    m_Runtime.m_WorkbenchBridge.Applied().Load();
+                }
+                catch (Exception ex)
+                {
+                    m_Runtime.log.Info("[Loaded] Applied.Load (buffer path) failed -> "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
+                try
+                {
+                    m_Runtime.m_WorkbenchBridge.Restore();
+                }
+                catch (Exception ex)
+                {
+                    m_Runtime.log.Info("[Loaded] Restore (buffer path) failed -> "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
+            }
+            else
+            {
+                try
+                {
+                    m_Runtime.m_WorkbenchBridge.Restore();
+                }
+                catch (Exception ex)
+                {
+                    m_Runtime.log.Info("[Loaded] Restore (no-buffer path) failed -> "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
+                try
+                {
+                    m_Runtime.m_WorkbenchBridge.Applied().Load();
+                }
+                catch (Exception ex)
+                {
+                    m_Runtime.log.Info("[Loaded] Applied.Load (no-buffer path, Backfill) failed -> "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
+            }
+
+            // 阶段 D: store 迁移（Applied/LineConfig）。
+            MigrationReport report = new MigrationReport();
+            try
+            {
+                report = LineKeyMigration.MigrateStores(
+                    m_Runtime.m_LineAnchorCatalog,
+                    m_Runtime.m_WorkbenchBridge.AppliedStore,
+                    m_Runtime.m_WorkbenchBridge.LineStore);
+            }
+            catch (Exception ex)
+            {
+                m_Runtime.log.Info("[Loaded] MigrateStores failed -> "
+                    + ex.GetType().Name + ": " + ex.Message);
+            }
+
+            // 阶段 E: 先恢复 PassengerFlow 持久化聚合，再运行各字符串域迁移。
+            try
+            {
+                PassengerFlow.Persistence.RestoreFromCity(m_Runtime.EntityManager, m_Runtime.m_CitySystem.City);
+            }
+            catch (Exception ex)
+            {
+                m_Runtime.log.Info("[PassengerFlowPersistence] Restore failed -> "
+                    + ex.GetType().Name + ": " + ex.Message);
+            }
+            try
+            {
+                LineKeyMigration.RunDomainMigrations(m_Runtime.m_LineAnchorCatalog, report);
+            }
+            catch (Exception ex)
+            {
+                m_Runtime.log.Info("[Loaded] RunDomainMigrations failed -> "
+                    + ex.GetType().Name + ": " + ex.Message);
+            }
+
+            // 阶段 F: 恢复 Applied 配置（LineConfigStore 已迁移到 stable）。
+            try
+            {
+                m_Runtime.m_WorkbenchBridge.Applied().RefreshCfg();
+            }
+            catch (Exception ex)
+            {
+                m_Runtime.log.Info("[Loaded] Applied.RefreshCfg failed -> "
+                    + ex.GetType().Name + ": " + ex.Message);
+            }
+
+            // 阶段 G: 清理 + 发布 + 保存。
             m_Runtime.m_Bypass.WarmStaticSceneIndex();
             if (RtLog.CacheInvalidationDiagnosticsEnabled)
             {
-                Entity city = m_Runtime.m_CitySystem.City;
                 int CountBuffer<T>() where T : unmanaged, IBufferElementData
                 {
                     return city != Entity.Null && m_Runtime.EntityManager.HasBuffer<T>(city)
@@ -210,6 +316,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 m_Runtime.m_WorkbenchBridge.Ui().Fault("OnGameLoaded.NotifyWorkbenchSnapshotChanged", ex);
             }
+
+            // 阶段 H: 迁移汇总。
+            report.LogDetails(message => m_Runtime.log.Info(message));
+            m_Runtime.log.Info("[LineKeyMigration] summary: " + report.Summary());
         }
 
         public void ClearAll()

@@ -19,17 +19,20 @@ namespace RapidTransitMod.Dispatch.Persistence
         private readonly Func<Entity, string> m_LineId;
         private readonly Func<Entity, Entity> m_Depot;
         private readonly Func<Entity, string> m_DepotId;
+        private readonly LineAnchorCatalog m_Catalog;
 
         public DispatchCache(
             DispatchRuntimeSystem runtime,
             Func<Entity, string> lineId,
             Func<Entity, Entity> depot,
-            Func<Entity, string> depotId)
+            Func<Entity, string> depotId,
+            LineAnchorCatalog catalog)
         {
             m_Runtime = runtime;
             m_LineId = lineId;
             m_Depot = depot;
             m_DepotId = depotId;
+            m_Catalog = catalog;
         }
 
         public void Ensure()
@@ -43,7 +46,224 @@ namespace RapidTransitMod.Dispatch.Persistence
                 m_Runtime.EntityManager.AddBuffer<LineDispatchDepotHistoryElement>(city);
             if (!m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city))
                 m_Runtime.EntityManager.AddBuffer<LineDispatchPrepHistoryElement>(city);
+            MigrateLegacyLineIds(city);
+            LogOrphanLineIds(city);
             m_Runtime.m_DispatchCacheBufferReady = true;
+        }
+
+        private bool LineIdMatches(FixedString128Bytes bufferLineId, string stableLineId)
+        {
+            if (string.IsNullOrEmpty(stableLineId) || bufferLineId.IsEmpty)
+                return false;
+
+            string rawStr = bufferLineId.ToString();
+            if (string.Equals(rawStr, stableLineId, StringComparison.Ordinal))
+                return true;
+
+            LineKey bufferKey = LineIdentityService.GetKey(rawStr);
+            if (bufferKey.IsEmpty || LineKey.IsStableGuidKey(bufferKey))
+                return false;
+
+            if (!LineKey.IsLegacyNumericKey(bufferKey))
+                return false;
+
+            if (m_Catalog == null || m_Catalog.IsLegacyConflict(bufferKey))
+                return false;
+
+            if (!m_Catalog.TryLegacy(bufferKey, out LineKey stable))
+                return false;
+
+            return string.Equals(LineIdentityService.GetId(stable), stableLineId, StringComparison.Ordinal);
+        }
+
+        private void LogOrphanLineIds(Entity city)
+        {
+            if (m_Catalog == null) return;
+            HashSet<string> orphans = new HashSet<string>(StringComparer.Ordinal);
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
+            {
+                DynamicBuffer<LineDispatchDepotCacheElement> buf =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city, true);
+                for (int i = 0; i < buf.Length; i++)
+                    CollectOrphanIfAny(buf[i].m_LineId, orphans);
+            }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchDepotHistoryElement> buf =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchDepotHistoryElement>(city, true);
+                for (int i = 0; i < buf.Length; i++)
+                    CollectOrphanIfAny(buf[i].m_LineId, orphans);
+            }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchPrepHistoryElement> buf =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city, true);
+                for (int i = 0; i < buf.Length; i++)
+                    CollectOrphanIfAny(buf[i].m_LineId, orphans);
+            }
+
+            if (orphans.Count > 0)
+                m_Runtime.log.Info("[DispatchCache] orphan legacy lineIds preserved (not migrated): "
+                    + string.Join(", ", orphans));
+        }
+
+        private void MigrateLegacyLineIds(Entity city)
+        {
+            if (m_Catalog == null) return;
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city)
+                && m_Runtime.EntityManager.HasBuffer<LineDispatchDepotHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchDepotCacheElement> cacheBuf =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city);
+                DynamicBuffer<LineDispatchDepotHistoryElement> historyBuf =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchDepotHistoryElement>(city);
+
+                HashSet<string> stableCachePresent = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = 0; i < cacheBuf.Length; i++)
+                    AddStableTarget(cacheBuf[i].m_LineId, cacheBuf[i].m_DepotId, stableCachePresent);
+                HashSet<string> stableHistoryPresent = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = 0; i < historyBuf.Length; i++)
+                    AddStableTarget(historyBuf[i].m_LineId, historyBuf[i].m_DepotId, stableHistoryPresent);
+
+                for (int i = 0; i < cacheBuf.Length; i++)
+                {
+                    if (TryMigrateEntry("dispatch-depot-cache", cacheBuf[i].m_LineId, cacheBuf[i].m_DepotId, stableCachePresent, out FixedString128Bytes stableLineId))
+                    {
+                        LineDispatchDepotCacheElement elem = cacheBuf[i];
+                        elem.m_LineId = stableLineId;
+                        cacheBuf[i] = elem;
+                    }
+                }
+                for (int i = 0; i < historyBuf.Length; i++)
+                {
+                    if (TryMigrateEntry("dispatch-depot-history", historyBuf[i].m_LineId, historyBuf[i].m_DepotId, stableHistoryPresent, out FixedString128Bytes stableLineId))
+                    {
+                        LineDispatchDepotHistoryElement elem = historyBuf[i];
+                        elem.m_LineId = stableLineId;
+                        historyBuf[i] = elem;
+                    }
+                }
+            }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchPrepHistoryElement> prepBuf =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city);
+                HashSet<string> stablePresent = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = 0; i < prepBuf.Length; i++)
+                    AddStableTarget(prepBuf[i].m_LineId, prepBuf[i].m_DepotId, stablePresent);
+                for (int i = 0; i < prepBuf.Length; i++)
+                {
+                    if (TryMigrateEntry("dispatch-prep-history", prepBuf[i].m_LineId, prepBuf[i].m_DepotId, stablePresent, out FixedString128Bytes stableLineId))
+                    {
+                        LineDispatchPrepHistoryElement elem = prepBuf[i];
+                        elem.m_LineId = stableLineId;
+                        prepBuf[i] = elem;
+                    }
+                }
+            }
+        }
+
+        private static void AddStableTarget(
+            FixedString128Bytes raw,
+            FixedString128Bytes depotId,
+            HashSet<string> stablePresent)
+        {
+            if (raw.IsEmpty) return;
+            string rawStr = raw.ToString();
+            if (string.IsNullOrEmpty(rawStr)) return;
+            if (LineKey.IsStableGuidKey(LineIdentityService.GetKey(rawStr)))
+                stablePresent.Add(CacheTarget(rawStr, depotId));
+        }
+
+        private bool TryMigrateEntry(
+            string domain,
+            FixedString128Bytes raw,
+            FixedString128Bytes depotId,
+            HashSet<string> stablePresent,
+            out FixedString128Bytes stableLineId)
+        {
+            stableLineId = default;
+            if (raw.IsEmpty) return false;
+            string rawStr = raw.ToString();
+            if (string.IsNullOrEmpty(rawStr)) return false;
+
+            LineKey legacyKey = LineIdentityService.GetKey(rawStr);
+            if (LineKey.IsStableGuidKey(legacyKey)) return false;
+            if (!LineKey.IsLegacyNumericKey(legacyKey))
+            {
+                LogCacheMigration(domain, legacyKey, LineKey.Empty, depotId, "Rejected", "invalid-legacy-key");
+                return false;
+            }
+            if (m_Catalog.IsLegacyConflict(legacyKey))
+            {
+                LogCacheMigration(domain, legacyKey, LineKey.Empty, depotId, "LegacyConflict", "duplicate-route-number");
+                return false;
+            }
+            if (!m_Catalog.TryLegacy(legacyKey, out LineKey stable))
+            {
+                LogCacheMigration(domain, legacyKey, LineKey.Empty, depotId, "ZeroMatch", "no-live-line-match");
+                return false;
+            }
+
+            string stableId = LineIdentityService.GetId(stable);
+            string target = CacheTarget(stableId, depotId);
+            if (stablePresent.Contains(target))
+            {
+                LogCacheMigration(domain, legacyKey, stable, depotId, "TargetOccupied", "stable-target-occupied");
+                return false;
+            }
+
+            stablePresent.Add(target);
+            stableLineId = stableId;
+            LogCacheMigration(domain, legacyKey, stable, depotId, "Migrated", "ok");
+            return true;
+        }
+
+        private void LogCacheMigration(
+            string domain,
+            LineKey legacy,
+            LineKey stable,
+            FixedString128Bytes depotId,
+            string result,
+            string reason)
+        {
+            m_Runtime.log.Info("[LineKeyMigration] domain=" + domain
+                + " mode=" + TransitModeCodec.Format(legacy.Mode)
+                + " routeNumber=" + (LineKey.IsLegacyNumericKey(legacy) ? legacy.Id : "-")
+                + " newGuid=" + (LineKey.IsStableGuidKey(stable) ? stable.Id : "-")
+                + " depot=" + (depotId.IsEmpty ? "-" : depotId.ToString())
+                + " result=" + result
+                + " reason=" + reason);
+        }
+
+        private static string CacheTarget(string lineId, FixedString128Bytes depotId)
+        {
+            return (lineId ?? string.Empty) + "\n" + depotId.ToString();
+        }
+
+        private void CollectOrphanIfAny(FixedString128Bytes raw, HashSet<string> orphans)
+        {
+            if (raw.IsEmpty) return;
+            string rawStr = raw.ToString();
+            if (string.IsNullOrEmpty(rawStr)) return;
+
+            LineKey key = LineIdentityService.GetKey(rawStr);
+            if (key.IsEmpty || LineKey.IsStableGuidKey(key))
+                return;
+
+            if (!LineKey.IsLegacyNumericKey(key))
+            {
+                orphans.Add(rawStr);
+                return;
+            }
+
+            if (m_Catalog.IsLegacyConflict(key) || !m_Catalog.TryLegacy(key, out _))
+                orphans.Add(rawStr);
         }
 
         public float Read(Entity line)
@@ -70,13 +290,13 @@ namespace RapidTransitMod.Dispatch.Persistence
             Entity city = m_Runtime.m_CitySystem.City;
             if (!m_Runtime.m_DispatchCacheBufferReady || city == Entity.Null
                 || !m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city)) return 360u;
-            FixedString128Bytes lineId = m_LineId(line);
+            string lineId = m_LineId(line);
             FixedString128Bytes depotId = m_DepotId(m_Depot(line));
             DynamicBuffer<LineDispatchPrepHistoryElement> buffer = m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city, true);
-            for (int i = 0; i < buffer.Length; i++)
+            int index = FindPrep(buffer, lineId, depotId);
+            if (index >= 0)
             {
-                LineDispatchPrepHistoryElement value = buffer[i];
-                if (value.m_LineId != lineId || value.m_DepotId != depotId) continue;
+                LineDispatchPrepHistoryElement value = buffer[index];
                 uint maximum = 0u;
                 List<uint> samples = ReadPrepSamples(value);
                 for (int sample = 0; sample < samples.Count; sample++) maximum = math.max(maximum, samples[sample]);
@@ -90,17 +310,19 @@ namespace RapidTransitMod.Dispatch.Persistence
             Entity city = m_Runtime.m_CitySystem.City;
             if (!m_Runtime.m_DispatchCacheBufferReady || city == Entity.Null || line == Entity.Null
                 || !m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city)) return;
-            FixedString128Bytes lineId = m_LineId(line);
+            string lineIdStr = m_LineId(line);
+            FixedString128Bytes lineId = lineIdStr;
             FixedString128Bytes depotId = m_DepotId(m_Depot(line));
             if (lineId.IsEmpty || depotId.IsEmpty) return;
             uint saved = math.min(rawFrames, 360u);
             DynamicBuffer<LineDispatchPrepHistoryElement> buffer = m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city);
-            for (int i = 0; i < buffer.Length; i++)
+            int index = FindPrep(buffer, lineIdStr, depotId);
+            if (index >= 0)
             {
-                LineDispatchPrepHistoryElement value = buffer[i];
-                if (value.m_LineId != lineId || value.m_DepotId != depotId) continue;
+                LineDispatchPrepHistoryElement value = buffer[index];
                 AppendPrep(ref value, saved);
-                buffer[i] = value;
+                value.m_LineId = lineId;
+                buffer[index] = value;
                 LogPrep(line, rawFrames, saved, value.m_SampleCount);
                 return;
             }
@@ -117,15 +339,10 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (!m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
                 return 0f;
 
-            FixedString128Bytes lineKey = lineId;
             FixedString128Bytes depotKey = depotId;
             DynamicBuffer<LineDispatchDepotCacheElement> buf = m_Runtime.EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city, true);
-            for (int i = 0; i < buf.Length; i++)
-            {
-                if (buf[i].m_LineId == lineKey && buf[i].m_DepotId == depotKey)
-                    return buf[i].m_DepotToOriginFrames;
-            }
-            return 0f;
+            int index = FindDepot(buf, lineId, depotKey);
+            return index >= 0 ? buf[index].m_DepotToOriginFrames : 0f;
         }
 
         private bool UpdateDepot(Entity city, Entity line, Entity vehicle, uint sampleFrames)
@@ -150,21 +367,26 @@ namespace RapidTransitMod.Dispatch.Persistence
             FixedString128Bytes depotKey = depotId;
             DynamicBuffer<LineDispatchDepotCacheElement> buf = m_Runtime.EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city);
             DynamicBuffer<LineDispatchDepotHistoryElement> historyBuf = m_Runtime.EntityManager.GetBuffer<LineDispatchDepotHistoryElement>(city);
-            for (int i = 0; i < buf.Length; i++)
+            int index = FindDepot(buf, lineId, depotKey);
+            if (index >= 0)
             {
-                if (buf[i].m_LineId != lineKey || buf[i].m_DepotId != depotKey)
-                    continue;
-
-                uint oldFrames = buf[i].m_DepotToOriginFrames;
-                LineDispatchDepotHistoryElement history = GetDepotHistory(historyBuf, lineKey, depotKey);
+                uint oldFrames = buf[index].m_DepotToOriginFrames;
+                FixedString128Bytes legacyLineId = buf[index].m_LineId;
+                FixedString128Bytes historyLineId = HasDepotHistory(historyBuf, lineKey, depotKey)
+                    ? lineKey
+                    : legacyLineId;
+                LineDispatchDepotHistoryElement history = GetDepotHistory(historyBuf, historyLineId, depotKey);
+                history.m_LineId = lineKey;
                 LineDispatchDepotHistoryElement updatedHistory = AppendDepot(history, sampleFrames);
                 uint newFrames = Adaptive(oldFrames, sampleFrames);
-                buf[i] = new LineDispatchDepotCacheElement
+                buf[index] = new LineDispatchDepotCacheElement
                 {
                     m_LineId = lineKey,
                     m_DepotId = depotKey,
                     m_DepotToOriginFrames = newFrames
                 };
+                if (!historyLineId.Equals(lineKey))
+                    RemoveDepotHistory(historyBuf, legacyLineId, depotKey);
                 UpsertDepot(historyBuf, updatedHistory);
                 LogDepot(line, depotId, sampleFrames, oldFrames, newFrames, updatedHistory.m_SampleCount);
                 return true;
@@ -184,6 +406,45 @@ namespace RapidTransitMod.Dispatch.Persistence
             UpsertDepot(historyBuf, createdHistory);
             LogDepot(line, depotId, sampleFrames, 0, sampleFrames, createdHistory.m_SampleCount);
             return true;
+        }
+
+        private int FindDepot(
+            DynamicBuffer<LineDispatchDepotCacheElement> buffer,
+            string lineId,
+            FixedString128Bytes depotId)
+        {
+            for (int i = 0; i < buffer.Length; i++)
+                if (buffer[i].m_LineId.Equals((FixedString128Bytes)lineId) && buffer[i].m_DepotId == depotId)
+                    return i;
+            for (int i = 0; i < buffer.Length; i++)
+                if (buffer[i].m_DepotId == depotId && LineIdMatches(buffer[i].m_LineId, lineId))
+                    return i;
+            return -1;
+        }
+
+        private int FindPrep(
+            DynamicBuffer<LineDispatchPrepHistoryElement> buffer,
+            string lineId,
+            FixedString128Bytes depotId)
+        {
+            for (int i = 0; i < buffer.Length; i++)
+                if (buffer[i].m_LineId.Equals((FixedString128Bytes)lineId) && buffer[i].m_DepotId == depotId)
+                    return i;
+            for (int i = 0; i < buffer.Length; i++)
+                if (buffer[i].m_DepotId == depotId && LineIdMatches(buffer[i].m_LineId, lineId))
+                    return i;
+            return -1;
+        }
+
+        private static bool HasDepotHistory(
+            DynamicBuffer<LineDispatchDepotHistoryElement> buffer,
+            FixedString128Bytes lineId,
+            FixedString128Bytes depotId)
+        {
+            for (int i = 0; i < buffer.Length; i++)
+                if (buffer[i].m_LineId == lineId && buffer[i].m_DepotId == depotId)
+                    return true;
+            return false;
         }
 
         public void RemoveLine(Entity line)
@@ -217,13 +478,12 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (string.IsNullOrEmpty(lineId))
                 return;
 
-            FixedString128Bytes lineKey = lineId;
             if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
             {
                 DynamicBuffer<LineDispatchDepotCacheElement> depotBuf = m_Runtime.EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city);
                 for (int i = depotBuf.Length - 1; i >= 0; i--)
                 {
-                    if (depotBuf[i].m_LineId == lineKey)
+                    if (LineIdMatches(depotBuf[i].m_LineId, lineId))
                         depotBuf.RemoveAt(i);
                 }
             }
@@ -233,7 +493,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                 DynamicBuffer<LineDispatchDepotHistoryElement> depotHistoryBuf = m_Runtime.EntityManager.GetBuffer<LineDispatchDepotHistoryElement>(city);
                 for (int i = depotHistoryBuf.Length - 1; i >= 0; i--)
                 {
-                    if (depotHistoryBuf[i].m_LineId == lineKey)
+                    if (LineIdMatches(depotHistoryBuf[i].m_LineId, lineId))
                         depotHistoryBuf.RemoveAt(i);
                 }
             }
@@ -242,7 +502,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             {
                 DynamicBuffer<LineDispatchPrepHistoryElement> prep = m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city);
                 for (int i = prep.Length - 1; i >= 0; i--)
-                    if (prep[i].m_LineId == lineKey) prep.RemoveAt(i);
+                    if (LineIdMatches(prep[i].m_LineId, lineId)) prep.RemoveAt(i);
             }
         }
 
@@ -309,6 +569,18 @@ namespace RapidTransitMod.Dispatch.Persistence
                 return;
             }
             historyBuf.Add(history);
+        }
+
+        private static void RemoveDepotHistory(
+            DynamicBuffer<LineDispatchDepotHistoryElement> historyBuf,
+            FixedString128Bytes lineId,
+            FixedString128Bytes depotId)
+        {
+            for (int i = historyBuf.Length - 1; i >= 0; i--)
+            {
+                if (historyBuf[i].m_LineId == lineId && historyBuf[i].m_DepotId == depotId)
+                    historyBuf.RemoveAt(i);
+            }
         }
 
         private static LineDispatchDepotHistoryElement AppendDepot(

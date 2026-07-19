@@ -24,7 +24,7 @@ function buildLineMap(lines) {
   return new Map((Array.isArray(lines) ? lines : []).map((line, index) => [
     line?.id || "",
     {
-      label: String(line?.shortName || line?.name || line?.code || line?.id || "").trim(),
+      label: String(line?.shortName || line?.name || line?.code || "--").trim(),
       color: line?.color || FALLBACK_COLORS[index % FALLBACK_COLORS.length]
     }
   ]));
@@ -55,7 +55,7 @@ function buildStackedSections(sections, lines) {
     section.total += total;
     const existing = section.segments.get(lineId) || {
       lineId,
-      label: lineMap.get(lineId)?.label || lineId,
+      label: lineMap.get(lineId)?.label || "--",
       color: lineMap.get(lineId)?.color || FALLBACK_COLORS[section.segments.size % FALLBACK_COLORS.length],
       total: 0
     };

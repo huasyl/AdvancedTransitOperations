@@ -52,7 +52,7 @@ namespace RapidTransitMod.Planner
         private bool IsBypassStationSetting(Entity entity) => R.IsBypassStationSetting(entity);
         private bool TryResolveStationStopDwellAnchor(Entity line, int waypointIndex, out StationDwellAnchor anchor) => R.m_Observation.DwellAnchor(line, waypointIndex, out anchor);
         private string MakeStationDwellObservationKey(Entity line, string stationAnchorId) => R.m_Observation.DwellKey(line, stationAnchorId);
-        private string LineId(Entity line) => R.LineId(line);
+        private string LineId(Entity line) => R.LineStableId(line);
 
         internal DispatchPlannerExportSnapshot Load(ModeScope scope)
         {
@@ -950,7 +950,7 @@ namespace RapidTransitMod.Planner
                 return string.Empty;
 
             return string.IsNullOrWhiteSpace(lineId)
-                ? LineIdentityService.GetId(LineIdentityService.GetKey(scope.Mode, int.MaxValue, line))
+                ? string.Empty
                 : scope.NormalizeLineId(lineId);
         }
 

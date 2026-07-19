@@ -13,11 +13,6 @@ function hashText(text) {
   return hash;
 }
 
-function lineCode(lineId) {
-  const parts = String(lineId || "").split(":");
-  return parts[parts.length - 1] || String(lineId || "");
-}
-
 function lineColor(lineId) {
   return LINE_COLORS[hashText(lineId) % LINE_COLORS.length];
 }
@@ -29,12 +24,13 @@ function buildLineCatalog(metadataSnapshot) {
     if (!id) {
       return;
     }
-    const code = lineCode(id);
+    const code = String(line?.displayCode || line?.routeNumber || "").trim();
+    const name = String(line?.name || "").trim();
     map.set(id, {
       id,
       code,
-      name: line?.name || code,
-      shortName: line?.name || "",
+      name: name || code || "--",
+      shortName: name,
       color: line?.color || lineColor(id)
     });
   });
@@ -149,11 +145,10 @@ function addLine(lineMap, lineCatalog, lineId) {
     lineMap.set(id, lineCatalog.get(id));
     return;
   }
-  const code = lineCode(id);
   lineMap.set(id, {
     id,
-    code,
-    name: code,
+    code: "",
+    name: "--",
     shortName: "",
     color: lineColor(id)
   });

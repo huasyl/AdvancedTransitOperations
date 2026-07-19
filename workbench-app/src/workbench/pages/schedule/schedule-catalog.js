@@ -94,8 +94,7 @@ export function buildNativeLineOptions(snapshotLines = [], t, { allowDefaultFall
   }
 
   return snapshotLines.map((line, index) => {
-    const fallbackKey = line?.sourceLineId || line?.id || String(index + 1);
-    const fallbackName = (line?.kind === "express" ? "Rapid " : "Local ") + fallbackKey;
+    const fallbackName = "--";
     const dispatchSupported = line?.dispatchSupported !== false;
     const originFallback = dispatchSupported ? `origin-${index + 1}` : "";
     const originNameFallback = dispatchSupported ? `Origin ${index + 1}` : "";

@@ -9,6 +9,7 @@ using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Dispatch.Workbench;
+using RapidTransitMod.Core;
 using RapidTransitMod.RailEta.BuiltIn;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
@@ -21,6 +22,8 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         public static void Build(DispatchRuntimeSystem runtime)
         {
+            runtime.m_SimClock = new SimClock(runtime.m_TimeSystem);
+            runtime.m_SimClock.ForceRefresh(runtime.m_SimulationSystem.frameIndex);
             runtime.m_VehicleStateStore = new VehicleStateStore();
             runtime.m_VehicleStateStore.Init();
             runtime.m_VehicleRegistry = new VehicleRegistry(runtime.m_VehicleStateStore);
@@ -28,6 +31,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RuntimeController = new DispatchRuntimeController(runtime.m_VehicleRegistry, runtime);
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
+            runtime.m_LineAnchorCatalog = new LineAnchorCatalog(runtime.EntityManager);
             runtime.m_Resolve = new RuntimeResolve(runtime);
             runtime.m_SharedCorridor = new SharedCorridorSupport(runtime.m_Resolve, runtime.IsBypassStationSetting);
             runtime.m_StationAnchorDiagnostics = new StationAnchorDiagnostics(runtime);
@@ -40,8 +44,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_WorkbenchCatalogCache.MarkDirty();
                     if (runtime.m_LineView != null)
                         runtime.m_LineView.Clear();
-                });
-            runtime.m_DispatchCache = new DispatchCache(runtime, runtime.LineId, runtime.GetDepot, runtime.DepotId);
+                },
+                () => ScanLineAnchors(runtime));
+            runtime.m_DispatchCache = new DispatchCache(runtime, runtime.LineStableId, runtime.GetDepot, runtime.DepotId, runtime.m_LineAnchorCatalog);
             runtime.m_LapCache = new LapCache(runtime);
             runtime.m_RouteProgress = new RouteProgress(runtime);
             runtime.m_VehicleCache = new VehicleCache(runtime, runtime.m_LapCache.Read, runtime.m_LapCache.Distance, runtime.m_RouteProgress.Try);
@@ -214,10 +219,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                 waypoint => runtime.m_Resolve.Stop(waypoint),
                 entity => entity != Entity.Null && runtime.EntityManager.Exists(entity),
                 () => runtime.m_SimulationSystem.frameIndex,
-                runtime.m_WorkbenchBridge.Ids().Get,
+                runtime.m_WorkbenchBridge.Ids().StableId,
                 RapidTransitMod.Dispatch.Workbench.Drafts.Key,
                 runtime.m_WorkbenchBridge.Ids().Key,
-                runtime.m_WorkbenchBridge.Ids().Key,
+                runtime.m_WorkbenchBridge.StableEntityKey,
                 runtime.m_WorkbenchBridge.AppliedStore,
                 () => runtime.m_WorkbenchBridge.AppliedLines,
                 runtime.m_WorkbenchBridge.LineCfg(),
@@ -227,7 +232,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_Bypass.ClearAll();
                 },
                 RapidTransitMod.Dispatch.Workbench.Time.Slot,
-                message => Mod.log.Info(message));
+                message => Mod.log.Info(message),
+                runtime.m_WorkbenchBridge.Ids().StableKey);
 
             runtime.m_UICache = new NativeHashMap<Entity, FixedString64Bytes>(1024, Allocator.Persistent);
             runtime.m_LastEffectiveBoardingState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
@@ -265,7 +271,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                         out VehicleTrackCursor cursor)
                     ? (VehicleTrackCursor?)cursor
                     : null,
-                runtime.LineId,
+                runtime.LineStableId,
                 RapidTransitMod.Dispatch.Workbench.Drafts.Key,
                 runtime.m_CachedWpIdx);
             runtime.m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
@@ -293,6 +299,27 @@ namespace RapidTransitMod.Dispatch.Runtime
             PassengerFlow.Runtime.Bind(new PassengerFlow.Port(runtime));
         }
 
+        /// <summary>
+        /// Full line-anchor scan from the live line query snapshot.
+        /// Clears only in-memory catalog ownership on <see cref="Clear"/>; never removes entity Lak.
+        /// </summary>
+        internal static bool ScanLineAnchors(DispatchRuntimeSystem runtime)
+        {
+            if (runtime == null || runtime.m_LineAnchorCatalog == null)
+                return false;
+
+            NativeArray<Entity> lines = runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                return runtime.m_LineAnchorCatalog.Scan(lines);
+            }
+            finally
+            {
+                if (lines.IsCreated)
+                    lines.Dispose();
+            }
+        }
+
         public static void Clear(DispatchRuntimeSystem runtime)
         {
             runtime.m_SpawnLeadTheory?.Clear();
@@ -316,6 +343,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_WorkbenchCatalogDirty = null!;
             runtime.m_WorkbenchCatalogCache = null!;
             runtime.m_WorkbenchBridge = null!;
+            runtime.m_LineAnchorCatalog = null!;
+            runtime.m_SimClock = null!;
             runtime.m_PlannerApi = null!;
             runtime.m_PlannerJobs = null!;
             runtime.m_PlannerExport = null!;

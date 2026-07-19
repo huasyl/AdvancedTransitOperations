@@ -417,7 +417,8 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             StringBuilder sb = new StringBuilder(256);
             sb.Append("entity=").Append(runtimeLine.Entity.Index);
-            sb.Append("|route=").Append(runtimeLine.RouteNumber);
+            // RouteNumber is mutable display metadata. XTM may change it or allow duplicates;
+            // the Lak-backed line id remains the identity and must keep timetable state.
             sb.Append("|transport=").Append(runtimeLine.TransportType ?? string.Empty);
             sb.Append("|origin=").Append(runtimeLine.OriginStationId ?? string.Empty);
             sb.Append("|supported=").Append(runtimeLine.DispatchSupported ? '1' : '0');

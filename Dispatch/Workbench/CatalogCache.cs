@@ -565,21 +565,21 @@ namespace RapidTransitMod.Dispatch.Workbench
                     continue;
                 }
 
+                if (hasCurrent)
+                {
+                    // Existing structure owners handle structural edits. Workbench only preserves
+                    // business state while the same stable Lak remains in the live catalog.
+                    m_LineInvalidationCandidates.Remove(lineId);
+                    nextConfirmedBaseline[lineId] = currentSignature;
+                    continue;
+                }
+
                 if (m_LineInvalidationCandidates.TryGetValue(lineId, out string pendingSignature)
                     && string.Equals(pendingSignature, candidateSignature, StringComparison.Ordinal))
                 {
-                    confirmed[lineId] = hasCurrent
-                        ? "line-replaced-under-same-lineId"
-                        : "runtime-line-missing";
+                    confirmed[lineId] = "runtime-line-missing";
                     m_LineInvalidationCandidates.Remove(lineId);
-                    if (hasCurrent)
-                    {
-                        nextConfirmedBaseline[lineId] = currentSignature;
-                    }
-                    else
-                    {
-                        nextConfirmedBaseline.Remove(lineId);
-                    }
+                    nextConfirmedBaseline.Remove(lineId);
 
                     continue;
                 }

@@ -4,7 +4,7 @@ function extractBackendLineOptions(snapshot) {
     .filter((line) => line && typeof line.id === "string" && line.id)
     .map((line) => ({
       id: line.id,
-      label: typeof line.name === "string" && line.name ? line.name : line.id,
+      label: typeof line.name === "string" && line.name ? line.name : "--",
     }));
 }
 

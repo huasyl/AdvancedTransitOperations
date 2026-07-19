@@ -1,5 +1,3 @@
-using System.Globalization;
-using Game.Routes;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -27,38 +25,18 @@ namespace RapidTransitMod
                 : LineKey.Empty;
         }
 
-        public static LineKey GetKey(TransitMode mode, int routeNumber, Entity line)
+        /// <summary>Stable identity from LineAnchorCatalog (mode:guid32). Getter only; never writes.</summary>
+        internal static LineKey StableKey(LineAnchorCatalog catalog, Entity line)
         {
-            if (routeNumber >= 0 && routeNumber != int.MaxValue)
-                return new LineKey(mode, routeNumber.ToString(CultureInfo.InvariantCulture));
-
-            // Entity.Index is only a runtime fallback when route numbering is unavailable.
-            if (line != Entity.Null)
-                return new LineKey(mode, "entity-" + line.Index.ToString(CultureInfo.InvariantCulture));
-
-            return LineKey.Empty;
-        }
-
-        public static LineKey GetKey(EntityManager entityManager, Entity line)
-        {
-            if (line == Entity.Null || !entityManager.Exists(line))
+            if (catalog == null || line == Entity.Null)
                 return LineKey.Empty;
 
-            int routeNumber = int.MaxValue;
-            if (entityManager.HasComponent<RouteNumber>(line))
-                routeNumber = entityManager.GetComponentData<RouteNumber>(line).m_Number;
-
-            TransitMode mode = TransportModeResolver.Resolve(entityManager, line);
-            return GetKey(mode, routeNumber, line);
+            return catalog.StableKey(line);
         }
 
-        public static LineKey GetKey(EntityManager entityManager, Entity line, string fallbackLineId)
+        internal static string StableId(LineAnchorCatalog catalog, Entity line)
         {
-            LineKey key = GetKey(entityManager, line);
-            if (!key.IsEmpty)
-                return key;
-
-            return GetKey(fallbackLineId);
+            return GetId(StableKey(catalog, line));
         }
 
         public static string GetId(LineKey lineKey)

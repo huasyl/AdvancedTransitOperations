@@ -532,6 +532,180 @@ namespace RapidTransitMod.PassengerFlow
             m_OdFlows[key] = aggregate;
         }
 
+        internal void MigrateLineIds(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (catalog == null || report == null)
+                return;
+
+            MigrateStationVolumes(catalog, report);
+            MigrateSectionVolumes(catalog, report);
+            MigrateOdFlows(catalog, report);
+            MigrateWarnings(catalog, report);
+        }
+
+        private void MigrateStationVolumes(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_StationVolumes.Count == 0)
+                return;
+
+            const string domain = "passengerflow-station-volume";
+            List<KeyValuePair<StationVolumeKey, StationVolumeAggregate>> snapshot =
+                new List<KeyValuePair<StationVolumeKey, StationVolumeAggregate>>(m_StationVolumes);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                StationVolumeKey key = snapshot[i].Key;
+                StationVolumeAggregate value = snapshot[i].Value;
+                string promoted = PromoteLineId(key.LineId, domain, catalog, report);
+                if (string.Equals(promoted, key.LineId, StringComparison.Ordinal))
+                    continue;
+
+                StationVolumeKey newKey = new StationVolumeKey(key.Mode, promoted, key.StationSakIndex, key.Bucket);
+                if (m_StationVolumes.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.LineId, promoted, true, report);
+                    continue;
+                }
+
+                m_StationVolumes.Remove(key);
+                m_StationVolumes[newKey] = value;
+                RecordFieldMigration(domain, key.LineId, promoted, false, report);
+            }
+        }
+
+        private void MigrateSectionVolumes(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_SectionVolumes.Count == 0)
+                return;
+
+            const string domain = "passengerflow-section-volume";
+            List<KeyValuePair<SectionVolumeKey, SectionVolumeAggregate>> snapshot =
+                new List<KeyValuePair<SectionVolumeKey, SectionVolumeAggregate>>(m_SectionVolumes);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                SectionVolumeKey key = snapshot[i].Key;
+                SectionVolumeAggregate value = snapshot[i].Value;
+                string promoted = PromoteLineId(key.LineId, domain, catalog, report);
+                if (string.Equals(promoted, key.LineId, StringComparison.Ordinal))
+                    continue;
+
+                SectionVolumeKey newKey = new SectionVolumeKey(
+                    key.Mode, promoted, key.FromStationSakIndex, key.ToStationSakIndex, key.Bucket);
+                if (m_SectionVolumes.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.LineId, promoted, true, report);
+                    continue;
+                }
+
+                m_SectionVolumes.Remove(key);
+                m_SectionVolumes[newKey] = value;
+                RecordFieldMigration(domain, key.LineId, promoted, false, report);
+            }
+        }
+
+        private void MigrateOdFlows(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_OdFlows.Count == 0)
+                return;
+
+            const string domain = "passengerflow-od-flow";
+            List<KeyValuePair<OdFlowKey, OdFlowAggregate>> snapshot =
+                new List<KeyValuePair<OdFlowKey, OdFlowAggregate>>(m_OdFlows);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                OdFlowKey key = snapshot[i].Key;
+                OdFlowAggregate value = snapshot[i].Value;
+                string promotedFirst = PromoteLineId(key.FirstLineId, domain, catalog, report);
+                string promotedLast = PromoteLineId(key.LastLineId, domain, catalog, report);
+                bool firstChanged = !string.Equals(promotedFirst, key.FirstLineId, StringComparison.Ordinal);
+                bool lastChanged = !string.Equals(promotedLast, key.LastLineId, StringComparison.Ordinal);
+                if (!firstChanged && !lastChanged)
+                    continue;
+
+                OdFlowKey newKey = new OdFlowKey(
+                    key.Mode, promotedFirst, promotedLast,
+                    key.OriginStationSakIndex, key.DestinationStationSakIndex, key.Bucket);
+                if (m_OdFlows.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.FirstLineId, promotedFirst, true, report);
+                    RecordFieldMigration(domain, key.LastLineId, promotedLast, true, report);
+                    continue;
+                }
+
+                m_OdFlows.Remove(key);
+                m_OdFlows[newKey] = value;
+                RecordFieldMigration(domain, key.FirstLineId, promotedFirst, false, report);
+                RecordFieldMigration(domain, key.LastLineId, promotedLast, false, report);
+            }
+        }
+
+        private void MigrateWarnings(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_Warnings.Count == 0)
+                return;
+
+            const string domain = "passengerflow-warning";
+            List<KeyValuePair<WarningKey, WarningAggregate>> snapshot =
+                new List<KeyValuePair<WarningKey, WarningAggregate>>(m_Warnings);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                WarningKey key = snapshot[i].Key;
+                WarningAggregate value = snapshot[i].Value;
+                string promoted = PromoteLineId(key.LineId, domain, catalog, report);
+                if (string.Equals(promoted, key.LineId, StringComparison.Ordinal))
+                    continue;
+
+                WarningKey newKey = new WarningKey(key.Mode, key.Code, promoted, key.StationSakIndex, key.Bucket);
+                if (m_Warnings.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.LineId, promoted, true, report);
+                    continue;
+                }
+
+                m_Warnings.Remove(key);
+                m_Warnings[newKey] = value;
+                RecordFieldMigration(domain, key.LineId, promoted, false, report);
+            }
+        }
+
+        private static string PromoteLineId(
+            string lineId, string domain, LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+                return lineId;
+
+            LineKey key = LineIdentityService.GetKey(lineId);
+            if (key.IsEmpty || LineKey.IsStableGuidKey(key))
+                return lineId;
+
+            if (!LineKey.IsLegacyNumericKey(key))
+                return lineId;
+
+            if (catalog.IsLegacyConflict(key))
+            {
+                report.Record(domain, key, LineKey.Empty, MigrationResult.LegacyConflict);
+                return lineId;
+            }
+
+            if (catalog.TryLegacy(key, out LineKey stable))
+                return LineIdentityService.GetId(stable);
+
+            report.Record(domain, key, LineKey.Empty, MigrationResult.ZeroMatch);
+            return lineId;
+        }
+
+        private static void RecordFieldMigration(
+            string domain, string oldLineId, string newLineId, bool targetOccupied, MigrationReport report)
+        {
+            if (string.Equals(oldLineId, newLineId, StringComparison.Ordinal))
+                return;
+
+            LineKey legacyKey = LineIdentityService.GetKey(oldLineId);
+            LineKey stableKey = LineIdentityService.GetKey(newLineId);
+            report.Record(
+                domain, legacyKey, stableKey,
+                targetOccupied ? MigrationResult.TargetOccupied : MigrationResult.Migrated);
+        }
+
         internal void TrimBefore(int minServiceDayIndex, int minBucketStartMinute)
         {
             bool hasAny = m_StationVolumes.Count != 0

@@ -34,7 +34,7 @@ namespace RapidTransitMod
                     m_Runtime.m_SimulationSystem,
                     m_Runtime.m_CitySystem,
                     message => m_Runtime.log.Info(message),
-                    m_Runtime.LineId,
+                    m_Runtime.LineStableId,
                     m_Runtime.m_Resolve.Stop,
                     m_Runtime.m_Resolve.StationName,
                     Keys.WaypointDwell,

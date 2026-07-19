@@ -29,6 +29,8 @@ namespace RapidTransitMod.Dispatch
         private readonly Func<string, DispatchWorkbenchPlannerImportContractDto> m_PlanFromDraft;
         private readonly Func<Entity, Entity> m_Stop;
         private readonly Func<IEnumerable<string>, string[]> m_RemoveLineCfg;
+        private readonly Func<Entity, string> m_StableId;
+        private readonly Func<Entity, LineKey> m_StableKey;
 
         internal AppliedPort(
             Func<Entity, string> lineId,
@@ -50,7 +52,9 @@ namespace RapidTransitMod.Dispatch
             Func<DispatchWorkbenchPlannerImportContractDto, DispatchWorkbenchPlannerImportContractDto> clonePlan,
             Func<string, DispatchWorkbenchPlannerImportContractDto> planFromDraft,
             Func<Entity, Entity> stop,
-            Func<IEnumerable<string>, string[]> removeLineCfg)
+            Func<IEnumerable<string>, string[]> removeLineCfg,
+            Func<Entity, string> stableId,
+            Func<Entity, LineKey> stableKey)
         {
             m_LineId = lineId ?? throw new ArgumentNullException(nameof(lineId));
             m_DraftKey = draftKey ?? throw new ArgumentNullException(nameof(draftKey));
@@ -72,6 +76,8 @@ namespace RapidTransitMod.Dispatch
             m_PlanFromDraft = planFromDraft ?? throw new ArgumentNullException(nameof(planFromDraft));
             m_Stop = stop ?? throw new ArgumentNullException(nameof(stop));
             m_RemoveLineCfg = removeLineCfg ?? throw new ArgumentNullException(nameof(removeLineCfg));
+            m_StableId = stableId ?? throw new ArgumentNullException(nameof(stableId));
+            m_StableKey = stableKey ?? throw new ArgumentNullException(nameof(stableKey));
         }
 
         internal string LineId(Entity line) => m_LineId(line);
@@ -94,6 +100,9 @@ namespace RapidTransitMod.Dispatch
         internal DispatchWorkbenchPlannerImportContractDto PlanFromDraft(string key) => m_PlanFromDraft(key);
         internal Entity Stop(Entity waypoint) => m_Stop(waypoint);
         internal string[] RemoveLineCfg(IEnumerable<string> lineIds) => m_RemoveLineCfg(lineIds);
+        internal string StableId(Entity line) => m_StableId(line) ?? string.Empty;
+
+        internal LineKey StableKey(Entity line) => m_StableKey(line);
     }
 
     internal sealed class AppliedTimetable
@@ -117,6 +126,8 @@ namespace RapidTransitMod.Dispatch
             new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_CleanupReasons =
             new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> m_RestoreOrphans =
+            new Dictionary<string, string>(StringComparer.Ordinal);
 
         internal AppliedTimetable(
             EntityManager entityManager,
@@ -138,6 +149,7 @@ namespace RapidTransitMod.Dispatch
 
         internal IReadOnlyDictionary<string, AppliedLine> Lines => m_Lines;
         internal IReadOnlyDictionary<string, DispatchWorkbenchPlannerImportContractDto> Refs => m_PlanRefs;
+        internal IReadOnlyDictionary<string, string> RestoreOrphans => m_RestoreOrphans;
         internal bool Loaded { get; private set; }
 
         internal void Reset()
@@ -146,6 +158,7 @@ namespace RapidTransitMod.Dispatch
             m_Lines.Clear();
             m_PlanRefs.Clear();
             m_Store.Clear();
+            m_RestoreOrphans.Clear();
             ClearCleanupInfo();
         }
 
@@ -193,9 +206,13 @@ namespace RapidTransitMod.Dispatch
 
             m_Lines.Clear();
             m_Store.Clear();
+            m_RestoreOrphans.Clear();
 
             bool filteredAny = false;
             HashSet<Entity> unsupportedLines = new HashSet<Entity>();
+            HashSet<Entity> orphanedEntities = new HashSet<Entity>();
+            HashSet<string> conflictedStables = new HashSet<string>(StringComparer.Ordinal);
+            Dictionary<string, Entity> boundByStable = new Dictionary<string, Entity>(StringComparer.Ordinal);
             try
             {
                 if (m_EntityManager.HasBuffer<AppliedWorkbenchLineStateElement>(city))
@@ -207,6 +224,7 @@ namespace RapidTransitMod.Dispatch
                         if (entry.m_LineEntity == Entity.Null || !m_EntityManager.Exists(entry.m_LineEntity))
                         {
                             filteredAny = true;
+                            RecordOrphan("entity-missing", "entity-missing");
                             continue;
                         }
 
@@ -216,16 +234,34 @@ namespace RapidTransitMod.Dispatch
                         {
                             unsupportedLines.Add(entry.m_LineEntity);
                             filteredAny = true;
+                            RecordOrphan(OrphanMark(entry.m_LineEntity), "unsupported");
                             continue;
                         }
 
-                        string lineId = m_Host.LineId(entry.m_LineEntity);
-                        string key = m_Host.DraftKey(lineId);
+                        if (!TryResolveStableId(entry.m_LineEntity, out string key, out string orphanReason))
+                        {
+                            orphanedEntities.Add(entry.m_LineEntity);
+                            filteredAny = true;
+                            RecordOrphan(OrphanMark(entry.m_LineEntity), orphanReason);
+                            continue;
+                        }
+
+                        if (!TryBindStable(
+                            boundByStable,
+                            conflictedStables,
+                            key,
+                            entry.m_LineEntity,
+                            orphanedEntities))
+                        {
+                            filteredAny = true;
+                            continue;
+                        }
+
                         m_Lines[key] = new AppliedLine
                         {
                             LineEntity = entry.m_LineEntity,
                             OriginHoldLimitMinutes = RuntimeConfigStoreDefaults.Hold(entry.m_OriginHoldLimitMinutes),
-                            MaxStationDwellMinutes = m_Host.Dwell(key)
+                            MaxStationDwellMinutes = RuntimeConfigStoreDefaults.DefaultMaxStationDwellMinutes
                         };
                     }
                 }
@@ -242,7 +278,8 @@ namespace RapidTransitMod.Dispatch
                             continue;
                         }
 
-                        if (unsupportedLines.Contains(row.m_LineEntity))
+                        if (unsupportedLines.Contains(row.m_LineEntity)
+                            || orphanedEntities.Contains(row.m_LineEntity))
                         {
                             filteredAny = true;
                             continue;
@@ -254,18 +291,36 @@ namespace RapidTransitMod.Dispatch
                         {
                             unsupportedLines.Add(row.m_LineEntity);
                             filteredAny = true;
+                            RecordOrphan(OrphanMark(row.m_LineEntity), "unsupported");
                             continue;
                         }
 
-                        string lineId = m_Host.LineId(row.m_LineEntity);
-                        string key = m_Host.DraftKey(lineId);
+                        if (!TryResolveStableId(row.m_LineEntity, out string key, out string orphanReason))
+                        {
+                            orphanedEntities.Add(row.m_LineEntity);
+                            filteredAny = true;
+                            RecordOrphan(OrphanMark(row.m_LineEntity), orphanReason);
+                            continue;
+                        }
+
+                        if (!TryBindStable(
+                            boundByStable,
+                            conflictedStables,
+                            key,
+                            row.m_LineEntity,
+                            orphanedEntities))
+                        {
+                            filteredAny = true;
+                            continue;
+                        }
+
                         if (!m_Lines.TryGetValue(key, out AppliedLine line))
                         {
                             line = new AppliedLine
                             {
                                 LineEntity = row.m_LineEntity,
-                                OriginHoldLimitMinutes = m_Host.Hold(key),
-                                MaxStationDwellMinutes = m_Host.Dwell(key)
+                                OriginHoldLimitMinutes = RuntimeConfigStoreDefaults.DefaultOriginHoldLimitMinutes,
+                                MaxStationDwellMinutes = RuntimeConfigStoreDefaults.DefaultMaxStationDwellMinutes
                             };
                             m_Lines[key] = line;
                         }
@@ -282,9 +337,10 @@ namespace RapidTransitMod.Dispatch
                     }
                 }
 
-                foreach (AppliedLine line in m_Lines.Values)
+                foreach (KeyValuePair<string, AppliedLine> entry in m_Lines)
                 {
-                    string lineId = m_Host.DraftKey(m_Host.LineId(line.LineEntity));
+                    AppliedLine line = entry.Value;
+                    string lineId = entry.Key;
                     line.StagedRows = line.StagedRows
                         .OrderBy(row => m_Host.Minutes(row.time))
                         .ThenBy(row => row.id, StringComparer.Ordinal)
@@ -304,7 +360,8 @@ namespace RapidTransitMod.Dispatch
                     m_Host.Seed(firstLine);
                 }
 
-                m_Host.Log("[AppliedRestore] lines=" + m_Lines.Count);
+                m_Host.Log("[AppliedRestore] lines=" + m_Lines.Count
+                    + " orphans=" + m_RestoreOrphans.Count);
                 Loaded = true;
                 if (filteredAny)
                     m_Host.Log("[AppliedRestore] filtered unsupported lines during load; persistence deferred");
@@ -360,21 +417,37 @@ namespace RapidTransitMod.Dispatch
                         continue;
                     }
 
-                    List<DispatchWorkbenchStagedRowDto> rows = group.Select(m_Host.CopyRow).ToList();
+                    if (!TryResolveStableId(runtime.Entity, out string stableKey, out _))
+                    {
+                        filteredAny = true;
+                        continue;
+                    }
+
+                    List<DispatchWorkbenchStagedRowDto> rows = group
+                        .Select(row =>
+                        {
+                            DispatchWorkbenchStagedRowDto copy = m_Host.CopyRow(row);
+                            if (copy != null)
+                                copy.lineId = stableKey;
+                            return copy;
+                        })
+                        .Where(row => row != null)
+                        .ToList();
                     if (rows.Count == 0)
                     {
                         continue;
                     }
 
+                    // LineConfigStore has migrated to stable keys; read hold/dwell under stableKey.
                     AppliedLine line = new AppliedLine
                     {
                         LineEntity = runtime.Entity,
-                        OriginHoldLimitMinutes = m_Host.Hold(key),
-                        MaxStationDwellMinutes = m_Host.Dwell(key),
+                        OriginHoldLimitMinutes = m_Host.Hold(stableKey),
+                        MaxStationDwellMinutes = m_Host.Dwell(stableKey),
                         StagedRows = rows
                     };
-                    line.DepartureMinutesCache = m_Host.BuildMinutes(line.StagedRows, key);
-                    m_Lines[key] = line;
+                    line.DepartureMinutesCache = m_Host.BuildMinutes(line.StagedRows, stableKey);
+                    m_Lines[stableKey] = line;
                 }
             }
 
@@ -401,15 +474,14 @@ namespace RapidTransitMod.Dispatch
                     continue;
                 }
 
-                List<DispatchWorkbenchStagedRowDto> rows = draft.StagedRows
+                List<DispatchWorkbenchStagedRowDto> draftRows = draft.StagedRows
                     .Where(row => row != null
                         && !string.IsNullOrEmpty(row.lineId)
                         && string.Equals(m_Host.DraftKey(row.lineId), key, StringComparison.Ordinal))
-                    .Select(m_Host.CopyRow)
                     .ToList();
-                if (rows.Count == 0 || !runtimeById.TryGetValue(key, out WorkbenchLineRuntime runtime) || runtime == null)
+                if (draftRows.Count == 0 || !runtimeById.TryGetValue(key, out WorkbenchLineRuntime runtime) || runtime == null)
                 {
-                    m_Lines.Remove(key);
+                    RemoveAppliedByDraftOrStable(key, Entity.Null);
                     continue;
                 }
 
@@ -421,19 +493,44 @@ namespace RapidTransitMod.Dispatch
                         ? runtime.UnsupportedReason
                         : support.Reason;
                     m_Host.Log($"Line {key} removed from applied timetable: {reason}");
-                    m_Lines.Remove(key);
+                    RemoveAppliedByDraftOrStable(key, runtime.Entity);
                     continue;
                 }
 
+                if (!TryResolveStableId(runtime.Entity, out string stableKey, out string orphanReason))
+                {
+                    m_Host.Log($"Line {key} skipped apply: {orphanReason}");
+                    RemoveAppliedByDraftOrStable(key, runtime.Entity);
+                    continue;
+                }
+
+                List<DispatchWorkbenchStagedRowDto> rows = draftRows
+                    .Select(row =>
+                    {
+                        DispatchWorkbenchStagedRowDto copy = m_Host.CopyRow(row);
+                        if (copy != null)
+                            copy.lineId = stableKey;
+                        return copy;
+                    })
+                    .Where(row => row != null)
+                    .ToList();
+                if (rows.Count == 0)
+                {
+                    RemoveAppliedByDraftOrStable(key, runtime.Entity);
+                    continue;
+                }
+
+                // LineConfigStore has migrated to stable keys; read hold/dwell under stableKey.
                 AppliedLine line = new AppliedLine
                 {
                     LineEntity = runtime.Entity,
-                    OriginHoldLimitMinutes = m_Host.Hold(key),
-                    MaxStationDwellMinutes = m_Host.Dwell(key),
+                    OriginHoldLimitMinutes = m_Host.Hold(stableKey),
+                    MaxStationDwellMinutes = m_Host.Dwell(stableKey),
                     StagedRows = rows
                 };
-                line.DepartureMinutesCache = m_Host.BuildMinutes(line.StagedRows, key);
-                m_Lines[key] = line;
+                line.DepartureMinutesCache = m_Host.BuildMinutes(line.StagedRows, stableKey);
+                m_Lines.Remove(key);
+                m_Lines[stableKey] = line;
             }
 
             Sync(saveDrafts: false);
@@ -582,7 +679,7 @@ namespace RapidTransitMod.Dispatch
                     continue;
                 }
 
-                string lineId = m_Host.DraftKey(m_Host.LineId(line.LineEntity));
+                string lineId = entry.Key;
                 if (string.IsNullOrEmpty(lineId)
                     || !rowsByLineAndKey.TryGetValue(lineId, out Dictionary<string, Queue<DispatchWorkbenchStagedRowDto>> rowQueues))
                 {
@@ -667,9 +764,7 @@ namespace RapidTransitMod.Dispatch
             {
                 AppliedLine line = entry.Value;
                 if (line == null)
-                {
                     continue;
-                }
 
                 line.OriginHoldLimitMinutes = m_Host.Hold(entry.Key);
                 line.MaxStationDwellMinutes = m_Host.Dwell(entry.Key);
@@ -770,7 +865,20 @@ namespace RapidTransitMod.Dispatch
         {
             Dictionary<string, string> reasons =
                 new Dictionary<string, string>(StringComparer.Ordinal);
-            HashSet<string> appliedKeys = new HashSet<string>(m_Lines.Keys, StringComparer.Ordinal);
+            Dictionary<Entity, WorkbenchLineRuntime> runtimeByEntity =
+                BuildRuntimeEntityIndex(runtimeById);
+            HashSet<Entity> appliedEntities = new HashSet<Entity>();
+
+            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines)
+            {
+                AppliedLine applied = entry.Value;
+                if (applied != null
+                    && applied.LineEntity != Entity.Null
+                    && m_EntityManager.Exists(applied.LineEntity))
+                {
+                    appliedEntities.Add(applied.LineEntity);
+                }
+            }
 
             foreach (KeyValuePair<string, AppliedLine> entry in m_Lines)
             {
@@ -781,22 +889,17 @@ namespace RapidTransitMod.Dispatch
                     continue;
                 }
 
-                if (!runtimeById.TryGetValue(lineId, out WorkbenchLineRuntime runtime) || runtime == null)
-                {
-                    if (includeRuntimeMissingReasons)
-                    {
-                        reasons[lineId] = "runtime-line-missing";
-                    }
-                    continue;
-                }
-
+                // Applied store keys are stable mode:guid32; match runtime by Entity, not string Id.
                 if (applied == null || applied.LineEntity == Entity.Null || !m_EntityManager.Exists(applied.LineEntity))
                 {
                     reasons[lineId] = "applied-runtime-entity-missing";
                     continue;
                 }
 
-                if (runtime.Entity == Entity.Null || !m_EntityManager.Exists(runtime.Entity))
+                if (!runtimeByEntity.TryGetValue(applied.LineEntity, out WorkbenchLineRuntime runtime)
+                    || runtime == null
+                    || runtime.Entity == Entity.Null
+                    || !m_EntityManager.Exists(runtime.Entity))
                 {
                     if (includeRuntimeMissingReasons)
                     {
@@ -823,7 +926,9 @@ namespace RapidTransitMod.Dispatch
                     continue;
                 }
 
-                if (!runtimeById.ContainsKey(draftKey))
+                // Draft keys remain legacy mode:number until Workbench migrates.
+                if (!runtimeById.TryGetValue(draftKey, out WorkbenchLineRuntime draftRuntime)
+                    || draftRuntime == null)
                 {
                     if (includeRuntimeMissingReasons)
                     {
@@ -832,7 +937,16 @@ namespace RapidTransitMod.Dispatch
                     continue;
                 }
 
-                if (draft.DraftApplied && !appliedKeys.Contains(draftKey))
+                if (!draft.DraftApplied)
+                {
+                    continue;
+                }
+
+                Entity draftEntity = draftRuntime.Entity;
+                bool hasAppliedForEntity = draftEntity != Entity.Null
+                    && appliedEntities.Contains(draftEntity);
+                bool hasAppliedByKey = m_Lines.ContainsKey(draftKey);
+                if (!hasAppliedForEntity && !hasAppliedByKey)
                 {
                     reasons[draftKey] = "applied-runtime-entity-missing";
                 }
@@ -1314,6 +1428,26 @@ namespace RapidTransitMod.Dispatch
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         }
 
+        private static Dictionary<Entity, WorkbenchLineRuntime> BuildRuntimeEntityIndex(
+            Dictionary<string, WorkbenchLineRuntime> runtimeById)
+        {
+            Dictionary<Entity, WorkbenchLineRuntime> byEntity = new Dictionary<Entity, WorkbenchLineRuntime>();
+            if (runtimeById == null)
+                return byEntity;
+
+            foreach (KeyValuePair<string, WorkbenchLineRuntime> entry in runtimeById)
+            {
+                WorkbenchLineRuntime runtime = entry.Value;
+                if (runtime == null || runtime.Entity == Entity.Null)
+                    continue;
+
+                if (!byEntity.ContainsKey(runtime.Entity))
+                    byEntity[runtime.Entity] = runtime;
+            }
+
+            return byEntity;
+        }
+
         private void EnsureBuffers(Entity city)
         {
             if (!m_EntityManager.HasBuffer<AppliedWorkbenchLineStateElement>(city))
@@ -1324,6 +1458,98 @@ namespace RapidTransitMod.Dispatch
             if (!m_EntityManager.HasBuffer<AppliedWorkbenchStagedRowElement>(city))
             {
                 m_EntityManager.AddBuffer<AppliedWorkbenchStagedRowElement>(city);
+            }
+        }
+
+        private bool TryResolveStableId(Entity line, out string stableId, out string reason)
+        {
+            stableId = string.Empty;
+            reason = string.Empty;
+            if (line == Entity.Null || !m_EntityManager.Exists(line))
+            {
+                reason = "entity-missing";
+                return false;
+            }
+
+            // Catalog resolver is the sole stable-identity path. Empty = isolated/missing.
+            LineKey key = m_Host.StableKey(line);
+            if (LineKey.IsStableGuidKey(key))
+            {
+                stableId = LineIdentityService.GetId(key);
+                return !string.IsNullOrEmpty(stableId);
+            }
+
+            string id = m_Host.StableId(line);
+            if (!string.IsNullOrEmpty(id) && LineKey.IsStableGuidId(id))
+            {
+                stableId = id;
+                return true;
+            }
+
+            reason = string.IsNullOrEmpty(id) && key.IsEmpty ? "missing-lak" : "invalid-lak";
+            return false;
+        }
+
+        private bool TryBindStable(
+            Dictionary<string, Entity> boundByStable,
+            HashSet<string> conflictedStables,
+            string stableId,
+            Entity line,
+            HashSet<Entity> orphanedEntities)
+        {
+            if (string.IsNullOrEmpty(stableId) || line == Entity.Null)
+                return false;
+
+            if (conflictedStables.Contains(stableId))
+            {
+                orphanedEntities.Add(line);
+                return false;
+            }
+
+            if (boundByStable.TryGetValue(stableId, out Entity existing))
+            {
+                if (existing == line)
+                    return true;
+
+                m_Lines.Remove(stableId);
+                boundByStable.Remove(stableId);
+                conflictedStables.Add(stableId);
+                orphanedEntities.Add(existing);
+                orphanedEntities.Add(line);
+                RecordOrphan(stableId, "duplicate-lak");
+                return false;
+            }
+
+            boundByStable[stableId] = line;
+            return true;
+        }
+
+        private void RecordOrphan(string mark, string reason)
+        {
+            if (string.IsNullOrEmpty(mark) || string.IsNullOrEmpty(reason))
+                return;
+
+            if (!m_RestoreOrphans.ContainsKey(mark))
+                m_RestoreOrphans[mark] = reason;
+        }
+
+        private static string OrphanMark(Entity line)
+        {
+            return line == Entity.Null
+                ? "entity-missing"
+                : "entity-" + line.Index.ToString();
+        }
+
+        private void RemoveAppliedByDraftOrStable(string draftKey, Entity line)
+        {
+            if (!string.IsNullOrEmpty(draftKey))
+                m_Lines.Remove(draftKey);
+
+            if (line != Entity.Null
+                && TryResolveStableId(line, out string stableKey, out _)
+                && !string.IsNullOrEmpty(stableKey))
+            {
+                m_Lines.Remove(stableKey);
             }
         }
 

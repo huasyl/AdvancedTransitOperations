@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 namespace RapidTransitMod
 {
@@ -126,6 +127,43 @@ namespace RapidTransitMod
         public static bool operator !=(LineKey left, LineKey right)
         {
             return !left.Equals(right);
+        }
+
+        public static bool IsStableGuidId(string id)
+        {
+            if (id == null || id.Length != 32)
+                return false;
+
+            for (int i = 0; i < 32; i++)
+            {
+                char c = id[i];
+                if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))
+                    continue;
+
+                return false;
+            }
+
+            return true;
+        }
+
+        public static bool IsStableGuidKey(LineKey key)
+        {
+            return !key.IsEmpty
+                && key.Mode != TransitMode.Unknown
+                && IsStableGuidId(key.Id);
+        }
+
+        public static bool IsLegacyNumericKey(LineKey key)
+        {
+            if (key.IsEmpty || string.IsNullOrEmpty(key.Id))
+                return false;
+
+            string id = key.Id;
+            if (id.StartsWith("entity-", StringComparison.Ordinal) || IsStableGuidId(id))
+                return false;
+
+            return int.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n)
+                && n >= 0;
         }
     }
 }

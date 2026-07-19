@@ -34,6 +34,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             m_Context.Conflicts = Conflicts;
             m_Context.Apply = Apply;
             m_Context.SaveOperations = SaveOperations;
+            LineMigration.Attach(m_Context.State);
         }
 
         internal State State => m_Context.State;

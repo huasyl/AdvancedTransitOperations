@@ -89,13 +89,21 @@ namespace RapidTransitMod.PassengerFlow
             if (!LineExists(line))
                 return false;
 
-            LineKey key = LineIdentityService.GetKey(m_Runtime.EntityManager, line);
-            if (key.IsEmpty)
+            mode = TransportModeResolver.Resolve(m_Runtime.EntityManager, line);
+            if (mode == TransitMode.Unknown)
                 return false;
 
-            mode = key.Mode;
-            lineId = LineIdentityService.GetId(key);
-            return true;
+            LineAnchorCatalog catalog = m_Runtime.m_LineAnchorCatalog;
+            if (catalog != null)
+            {
+                LineKey stableKey = catalog.StableKey(line);
+                if (!stableKey.IsEmpty)
+                {
+                    lineId = LineIdentityService.GetId(stableKey);
+                    return true;
+                }
+            }
+            return false;
         }
 
         internal string Name(Entity entity)

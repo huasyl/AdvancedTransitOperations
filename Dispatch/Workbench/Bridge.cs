@@ -56,13 +56,25 @@ namespace RapidTransitMod.Dispatch.Workbench
         }
 
         internal AppliedTimetableStore AppliedStore => m_AppliedStore;
+        internal LineConfigStore LineConfigStore => m_LineStore;
+        internal LineConfigStore LineStore => m_LineStore;
         internal IReadOnlyDictionary<string, AppliedLine> AppliedLines => Applied().Lines;
         internal DraftStore DraftStore => m_Drafts;
         internal ulong Version => m_Version;
 
         internal LineIds Ids()
         {
-            return m_LineIds ?? (m_LineIds = new LineIds(m_Runtime.EntityManager));
+            if (m_LineIds != null)
+                return m_LineIds;
+
+            LineAnchorCatalog catalog = m_Runtime.m_LineAnchorCatalog
+                ?? throw new InvalidOperationException("LineAnchorCatalog is not ready.");
+            return m_LineIds = new LineIds(m_Runtime.EntityManager, catalog);
+        }
+
+        internal LineKey StableEntityKey(Entity line, string fallbackLineId)
+        {
+            return Ids().StableKey(line);
         }
 
         internal Names NameSvc()
@@ -88,7 +100,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_LineStore,
                 m_Validator,
                 Ids().Key,
-                Ids().Key,
+                StableEntityKey,
                 Ids().Id,
                 RuntimeConfigStoreDefaults.Hold,
                 RuntimeConfigStoreDefaults.Dwell,
@@ -108,12 +120,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_LineCfg = new LineConfig(
                 m_LineStore,
                 Ids().Key,
-                Ids().Key,
+                StableEntityKey,
                 Ids().Id,
                 RuntimeConfigStoreDefaults.Hold,
                 RuntimeConfigStoreDefaults.Dwell,
                 NormDepot,
-                RuntimeConfigStoreDefaults.NormalizeConfiguredServiceKind);
+                RuntimeConfigStoreDefaults.NormalizeConfiguredServiceKind,
+                Ids().StableKey);
             return m_LineCfg;
         }
 
@@ -127,7 +140,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 () => m_Runtime.m_SimulationSystem.frameIndex,
                 DepotById,
                 DepotId,
-                Ids().Get,
+                Ids().StableId,
                 lineId => m_Runtime.m_LineView.DepotId(lineId),
                 () => m_Runtime.m_LineView.CfgVersion(),
                 message => Mod.log.Info(message));
@@ -148,7 +161,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 StopSvc().Anchor,
                 StopSvc().Key,
                 StopSvc().StationName,
-                Ids().Key,
+                Ids().StableKey,
                 Ids().Id,
                 Ids().Type,
                 CanonDepot);
@@ -203,7 +216,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Clock().Now,
                     () => m_Runtime.m_SimulationSystem.frameIndex,
                     StopSvc().Name,
-                    Ids().Get,
+                    Ids().StableId,
                     line => m_Runtime.m_LineView.Kind(line, null),
                     m_Runtime.m_Observation.Stop,
                     DispatchRuntimeSystem.IsTripTraceLoggingEnabled,
@@ -222,7 +235,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_Runtime.m_Obs.Vehicles,
                     StopSvc().Stop,
                     StopSvc().Station,
-                    Ids().Get,
+                    Ids().StableId,
                     line => m_Runtime.m_LineView.Kind(line, null),
                     Time.Parse,
                     Clock().Now,
@@ -249,7 +262,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Config(),
                 AppliedRuntimeLines,
                 new AppliedPort(
-                    Ids().Get,
+                    Ids().StableId,
                     RapidTransitMod.Dispatch.Workbench.Drafts.Key,
                     lineId => m_Runtime.m_LineView.Hold(lineId),
                     lineId => m_Runtime.m_LineView.Dwell(lineId),
@@ -288,7 +301,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                         }
 
                         return removed;
-                    }));
+                    },
+                    Ids().StableId,
+                    Ids().StableKey));
             return m_Applied;
         }
 
@@ -447,7 +462,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                 LastById,
                 KeepManual,
                 KeepRules,
-                KeepRows);
+                KeepRows,
+                m_LineStore,
+                m_Runtime.m_LineAnchorCatalog);
             return m_Persist;
         }
 
