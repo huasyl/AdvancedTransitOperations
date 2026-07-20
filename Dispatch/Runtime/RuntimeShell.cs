@@ -320,8 +320,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
 
             // 阶段 H: 迁移汇总。
+#if RT_VERBOSE_LOGS
             report.LogDetails(message => m_Runtime.log.Info(message));
-            m_Runtime.log.Info("[LineKeyMigration] summary: " + report.Summary());
+#endif
+            if (report.Count > 0)
+            {
+                m_Runtime.log.Info("[LineKeyMigration] summary: " + report.Summary());
+            }
         }
 
         public void ClearAll()
