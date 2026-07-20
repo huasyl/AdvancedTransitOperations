@@ -4,6 +4,7 @@ using Game.Vehicles;
 using RapidTransitMod.Dispatch.Observation;
 using System;
 using System.Collections.Generic;
+using RapidTransitMod.Core;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -12,10 +13,10 @@ namespace RapidTransitMod
     {
         public Entity SelectedEntity;
         public Entity Line;
-        public int NowMin;
+        public int NowMinute;
         public bool IsManagedLine;
         public bool IsChineseLocale;
-        public int NextSlot;
+        public int NextSlotMinute;
         public float RouteDurationFrames;
         public float LapCacheFrames;
         public float DispatchCacheFrames;
@@ -56,15 +57,15 @@ namespace RapidTransitMod
     {
         public Entity Vehicle;
         public Entity Line;
-        public int NowMin;
+        public int NowMinute;
         public bool IsManagedVehicle;
         public bool IsChineseLocale;
         public PublicTransportFlags NativeFlags;
         public string NativeStateText;
         public string ManagedText;
         public string StateText;
-        public int TargetMin;
-        public int CurrentMin;
+        public int TargetMinute;
+        public int CurrentMinute;
         public string TargetText;
         public string CurrentText;
         public string ProgressValue;
@@ -80,7 +81,6 @@ namespace RapidTransitMod
     internal sealed class SelectQuery
     {
         private readonly EntityManager m_EntityManager;
-        private readonly TimeSystem m_TimeSystem;
         private readonly Game.Simulation.SimulationSystem m_SimulationSystem;
         private readonly VehicleView m_VehicleView;
         private readonly Query m_ObsQuery;
@@ -115,12 +115,12 @@ namespace RapidTransitMod
         private readonly Func<string> m_DispatchCacheLabel;
         private readonly Func<string> m_OfficialDispatchValue;
         private readonly Func<bool> m_IsChineseLocale;
-        private readonly int m_FramesPerMinute;
+        private readonly Func<ClockSnapshot> m_ClockSnapshot;
 
         public SelectQuery(
             EntityManager entityManager,
-            TimeSystem timeSystem,
             SimulationSystem simulationSystem,
+            Func<ClockSnapshot> clockSnapshot,
             VehicleView vehicleView,
             Query obsQuery,
             Unity.Collections.NativeHashMap<Entity, int> spawningLines,
@@ -153,12 +153,11 @@ namespace RapidTransitMod
             Func<string> nextSlotCoverageLabel,
             Func<string> dispatchCacheLabel,
             Func<string> officialDispatchValue,
-            Func<bool> isChineseLocale,
-            int framesPerMinute)
+            Func<bool> isChineseLocale)
         {
             m_EntityManager = entityManager;
-            m_TimeSystem = timeSystem;
             m_SimulationSystem = simulationSystem;
+            m_ClockSnapshot = clockSnapshot;
             m_VehicleView = vehicleView;
             m_ObsQuery = obsQuery;
             m_SpawningLines = spawningLines;
@@ -192,7 +191,6 @@ namespace RapidTransitMod
             m_DispatchCacheLabel = dispatchCacheLabel;
             m_OfficialDispatchValue = officialDispatchValue;
             m_IsChineseLocale = isChineseLocale;
-            m_FramesPerMinute = framesPerMinute;
         }
 
         public bool TryLine(Entity selectedEntity, Entity preferredRoute, out LineSelectData data)
@@ -202,12 +200,12 @@ namespace RapidTransitMod
             if (line == Entity.Null)
                 return false;
 
-            int nowMin = GetNowMinutes();
+            int nowMinute = GetNowMinute();
             bool isManagedLine = m_IsManagedLine(line);
             bool isChineseLocale = m_IsChineseLocale();
-            int nextSlot = isManagedLine ? m_GetNextSlot(line, nowMin) : -1;
+            int nextSlotMinute = isManagedLine ? m_GetNextSlot(line, nowMinute) : -1;
             if (isManagedLine)
-                m_LogLineState(line, nowMin, nextSlot);
+                m_LogLineState(line, nowMinute, nextSlotMinute);
 
             float routeDurationFrames = isManagedLine ? m_ReadLineDuration(line) : 0f;
             float lapCacheFrames = isManagedLine ? m_ReadLineLapCache(line) : 0f;
@@ -221,10 +219,10 @@ namespace RapidTransitMod
             {
                 SelectedEntity = selectedEntity,
                 Line = line,
-                NowMin = nowMin,
+                NowMinute = nowMinute,
                 IsManagedLine = isManagedLine,
                 IsChineseLocale = isChineseLocale,
-                NextSlot = nextSlot,
+                NextSlotMinute = nextSlotMinute,
                 RouteDurationFrames = routeDurationFrames,
                 LapCacheFrames = lapCacheFrames,
                 DispatchCacheFrames = dispatchCacheFrames,
@@ -238,8 +236,8 @@ namespace RapidTransitMod
                 NextSlotCoverageLabel = m_NextSlotCoverageLabel(),
                 DispatchCacheLabel = m_DispatchCacheLabel(),
                 OfficialDispatchValue = officialDispatchValue,
-                NowText = m_SlotText(nowMin),
-                NextSlotText = isManagedLine ? m_SlotText(nextSlot) : officialDispatchValue,
+                NowText = m_SlotText(nowMinute),
+                NextSlotText = isManagedLine ? m_SlotText(nextSlotMinute) : officialDispatchValue,
                 LineDisplayName = m_GetLineDisplayName(line),
                 RouteDurationText = FormatMinutes(routeDurationFrames),
                 LapCacheText = FormatMinutes(lapCacheFrames),
@@ -262,9 +260,9 @@ namespace RapidTransitMod
                     data.Total++;
                     if (m_VehicleView.IsInbound(vehicle))
                         data.NearingTerminus++;
-                    if (isManagedLine && m_VehicleView.TryGetTarget(vehicle, out int targetSlot) && targetSlot == nextSlot)
+                    if (isManagedLine && m_VehicleView.TryGetTarget(vehicle, out int targetSlotMinute) && targetSlotMinute == nextSlotMinute)
                         data.TargetingNextSlot++;
-                    if (isManagedLine && m_VehicleView.TryGetSlot(vehicle, out int currentSlot) && currentSlot == nextSlot)
+                    if (isManagedLine && m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute) && currentSlotMinute == nextSlotMinute)
                         data.OccupyingNextSlot++;
 
                     if (!m_VehicleView.TryGetState(vehicle, out VehicleState state))
@@ -317,7 +315,7 @@ namespace RapidTransitMod
             if (vehicle == Entity.Null)
                 return false;
 
-            int nowMin = GetNowMinutes();
+            int nowMinute = GetNowMinute();
             bool isChineseLocale = m_IsChineseLocale();
             VehicleState vehicleState = default;
             bool isManagedVehicle = m_VehicleView.TryGetState(vehicle, out vehicleState);
@@ -326,15 +324,15 @@ namespace RapidTransitMod
                 : 0;
             string nativeStateText = SelectPanel.NativeState(nativeFlags);
             Entity line = m_ResolveVehicleLine(vehicle);
-            int targetMin = m_VehicleView.TryGetTarget(vehicle, out int targetSlot) ? targetSlot : -1;
-            int currentMin = m_VehicleView.TryGetSlot(vehicle, out int currentSlot) ? currentSlot : -1;
+            int targetMinute = m_VehicleView.TryGetTarget(vehicle, out int targetSlotMinute) ? targetSlotMinute : -1;
+            int currentMinute = m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute) ? currentSlotMinute : -1;
             (string currentStationName, string nextPhysicalStationName, string nextStopStationName) = m_GetStationContext(vehicle, line);
 
             data = new VehicleSelectData
             {
                 Vehicle = vehicle,
                 Line = line,
-                NowMin = nowMin,
+                NowMinute = nowMinute,
                 IsManagedVehicle = isManagedVehicle,
                 IsChineseLocale = isChineseLocale,
                 NativeFlags = nativeFlags,
@@ -343,10 +341,10 @@ namespace RapidTransitMod
                 StateText = isManagedVehicle
                     ? m_GetManagedVehicleStateText(vehicle, vehicleState)
                     : nativeStateText,
-                TargetMin = targetMin,
-                CurrentMin = currentMin,
-                TargetText = targetMin >= 0 ? m_SlotText(targetMin) : "-",
-                CurrentText = currentMin >= 0 ? m_SlotText(currentMin) : "-",
+                TargetMinute = targetMinute,
+                CurrentMinute = currentMinute,
+                TargetText = targetMinute >= 0 ? m_SlotText(targetMinute) : "-",
+                CurrentText = currentMinute >= 0 ? m_SlotText(currentMinute) : "-",
                 ProgressValue = m_BuildTraversalProgress(vehicle),
                 EtaValue = m_BuildEta(vehicle, line, vehicleState),
                 StopDwellValue = BuildStopDwellValue(vehicle),
@@ -355,20 +353,20 @@ namespace RapidTransitMod
                 NextPhysicalStationName = nextPhysicalStationName ?? string.Empty,
                 NextStopStationName = nextStopStationName ?? string.Empty,
                 AlertText = isManagedVehicle
-                    ? m_BuildVehicleAlert(vehicle, line, nowMin, targetMin)
+                    ? m_BuildVehicleAlert(vehicle, line, nowMinute, targetMinute)
                     : (line != Entity.Null ? "using-native-fallback" : "vehicle-not-tracked")
             };
             return true;
         }
 
-        private int GetNowMinutes()
+        private int GetNowMinute()
         {
-            return (int)(m_TimeSystem.normalizedTime * 1440f) % 1440;
+            return m_ClockSnapshot().NowMinute;
         }
 
         private string FormatMinutes(float frames)
         {
-            return frames > 0f ? (frames / (float)m_FramesPerMinute).ToString("F1") + " min" : "-";
+            return frames > 0f ? m_ClockSnapshot().ToMinutes(frames).ToString("F1") + " min" : "-";
         }
 
         private string BuildStopDwellValue(Entity vehicle)
@@ -380,18 +378,29 @@ namespace RapidTransitMod
             uint elapsedFrames = nowFrame > dwellSinceFrame
                 ? nowFrame - dwellSinceFrame
                 : 0u;
-            return (elapsedFrames / (float)m_FramesPerMinute).ToString("F1") + " min";
+            return m_ClockSnapshot().ToMinutes(elapsedFrames).ToString("F1") + " min";
         }
 
         private string BuildInboundTimeValue(Entity vehicle)
         {
             if (m_VehicleView.TryGetPreparing(vehicle, out uint prepStartFrame))
-                return m_SlotText((int)(prepStartFrame / (uint)m_FramesPerMinute) % 1440);
+                return BuildStartMinuteText(prepStartFrame);
 
             if (m_VehicleView.TryGetOrigin(vehicle, out uint originSinceFrame))
-                return m_SlotText((int)(originSinceFrame / (uint)m_FramesPerMinute) % 1440);
+                return BuildStartMinuteText(originSinceFrame);
 
             return "-";
+        }
+
+        private string BuildStartMinuteText(uint startFrame)
+        {
+            uint currentFrame = m_SimulationSystem.frameIndex;
+            uint elapsedFrames = unchecked(currentFrame - startFrame);
+            if (elapsedFrames >= 0x80000000u)
+                elapsedFrames = 0u;
+            ClockSnapshot clockSnapshot = m_ClockSnapshot();
+            int startMinute = (int)Math.Floor(clockSnapshot.NowMinute - clockSnapshot.ToMinutes(elapsedFrames));
+            return m_SlotText(((startMinute % 1440) + 1440) % 1440);
         }
 
         private static string LookupSummary(Dictionary<Entity, string> summaries, Entity line)

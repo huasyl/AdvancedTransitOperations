@@ -40,7 +40,7 @@ namespace RapidTransitMod.Workbenches
             List<WorkbenchLineRuntime> runtimeLines = runtime.m_WorkbenchCatalogCache.RuntimeLines()
                 .Where(line => line != null && scope.MatchesLineId(line.Id))
                 .ToList();
-            LineIds lineIds = new LineIds(runtime.EntityManager);
+            LineIds lineIds = runtime.m_WorkbenchBridge.Ids();
             DispatchWorkbenchLineDto[] lines = runtimeLines
                 .Select(line => ToLineDto(runtime, lineIds, line))
                 .Where(line => line != null)

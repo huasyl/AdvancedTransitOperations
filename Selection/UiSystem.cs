@@ -1,9 +1,11 @@
 using System.Text;
+using System.Globalization;
 using Colossal.UI.Binding;
 using Game;
 using Game.SceneFlow;
 using Game.UI;
 using Game.UI.InGame;
+using Game.Vehicles;
 using Unity.Entities;
 using UnityEngine;
 using UnityEngine.Scripting;
@@ -20,6 +22,12 @@ namespace RapidTransitMod
         private ValueBinding<string> m_PanelDataJsonBinding = null!;
         private ValueBinding<bool> m_DevSightVisibleBinding = null!;
         private ValueBinding<string> m_DevSightJsonBinding = null!;
+        private ValueBinding<bool> m_EtaHotAvailableBinding = null!;
+        private ValueBinding<string> m_EtaHotStatusJsonBinding = null!;
+        private ValueBinding<string> m_EtaSnapshotStatusJsonBinding = null!;
+#if RT_DEBUG_TOOLS
+        private RailEtaHost.RailEtaPublicTicket m_EtaSnapshotTicket;
+#endif
 
         private bool m_PanelOpen;
         private bool m_LastVisible;
@@ -48,6 +56,9 @@ namespace RapidTransitMod
             AddBinding(m_PanelDataJsonBinding = new ValueBinding<string>(kGroup, "panelDataJson", string.Empty));
             AddBinding(m_DevSightVisibleBinding = new ValueBinding<bool>(kGroup, "devSightVisible", initialValue: false));
             AddBinding(m_DevSightJsonBinding = new ValueBinding<string>(kGroup, "devSightJson", string.Empty));
+            AddBinding(m_EtaHotAvailableBinding = new ValueBinding<bool>(kGroup, "etaHotAvailable", initialValue: false));
+            AddBinding(m_EtaHotStatusJsonBinding = new ValueBinding<string>(kGroup, "etaHotStatusJson", string.Empty));
+            AddBinding(m_EtaSnapshotStatusJsonBinding = new ValueBinding<string>(kGroup, "etaSnapshotStatusJson", string.Empty));
             AddBinding(new TriggerBinding<bool>(kGroup, "setPanelOpen", SetPanelOpen));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleRetire", RequestVehicleRetire));
             AddBinding(new TriggerBinding(kGroup, "requestVehicleForceDepart", RequestVehicleForceDepart));
@@ -60,6 +71,10 @@ namespace RapidTransitMod
             AddBinding(new TriggerBinding(kGroup, "requestDumpStationAnchorObservation", RequestDumpStationAnchorObservation));
             AddBinding(new TriggerBinding(kGroup, "requestWorkbenchApiRebind", RequestWorkbenchApiRebind));
 #endif
+            AddBinding(new TriggerBinding(kGroup, "requestEtaHotReloadLatest", RequestEtaHotReloadLatest));
+            AddBinding(new TriggerBinding(kGroup, "requestEtaHotSmoke", RequestEtaHotSmoke));
+            AddBinding(new TriggerBinding(kGroup, "requestEtaHotRollback", RequestEtaHotRollback));
+            AddBinding(new TriggerBinding(kGroup, "requestEtaSnapshot", RequestEtaSnapshot));
             AddBinding(new TriggerBinding<bool>(kGroup, "setBypassStation", SetBypassStation));
         }
 
@@ -72,6 +87,8 @@ namespace RapidTransitMod
             try
             {
                 UpdateDevSightBindings();
+                UpdateEtaHotBindings();
+                UpdateEtaSnapshotBindings();
             }
             catch (System.Exception ex)
             {
@@ -321,6 +338,44 @@ namespace RapidTransitMod
                 ClearPanelData();
         }
 
+        private void UpdateEtaHotBindings()
+        {
+#if RT_DEBUG_TOOLS
+            bool available = RailEtaHost.RailEtaHotDebugApi.Available;
+            if (m_EtaHotAvailableBinding.value != available)
+                m_EtaHotAvailableBinding.Update(available);
+            string payload = available ? RailEtaHost.RailEtaHotDebugApi.StatusJson() : string.Empty;
+            if (m_EtaHotStatusJsonBinding.value != payload)
+                m_EtaHotStatusJsonBinding.Update(payload);
+#endif
+        }
+
+        private void UpdateEtaSnapshotBindings()
+        {
+#if RT_DEBUG_TOOLS
+            string payload = string.Empty;
+            if (m_EtaSnapshotTicket.IsValid && RailEtaHost.RailEtaDebugApi.TryGetState(m_EtaSnapshotTicket, out RailEtaHost.RailEtaPublicStatus status))
+            {
+                StringBuilder sb = new StringBuilder(192);
+                sb.Append('{');
+                AppendJsonString(sb, "ticket", status.Ticket.Value.ToString());
+                AppendJsonString(sb, "state", status.State);
+                AppendJsonString(sb, "failure", status.Failure);
+                AppendJsonString(sb, "detail", status.Detail ?? string.Empty);
+                sb.Append("\"arrival\":").Append(status.EtaFrame).Append(',');
+                AppendJsonString(sb, "predictorSource", status.Source);
+                AppendJsonString(sb, "predictorBuildId", status.Build);
+                sb.Append("\"predictorGeneration\":").Append(status.Generation).Append(',');
+                AppendJsonBool(sb, "incomplete", status.Incomplete);
+                AppendJsonString(sb, "comparisonSummary", status.ComparisonSummary);
+                if (sb[sb.Length - 1] == ',') sb.Length--;
+                sb.Append('}');
+                payload = sb.ToString();
+            }
+            if (m_EtaSnapshotStatusJsonBinding.value != payload) m_EtaSnapshotStatusJsonBinding.Update(payload);
+#endif
+        }
+
         private void SetVisibleIfNeeded()
         {
             if (m_LastVisible)
@@ -450,7 +505,41 @@ namespace RapidTransitMod
         {
             Workbenches.ApiHost.RebindNow();
         }
+
 #endif
+
+        private void RequestEtaHotReloadLatest()
+        {
+#if RT_DEBUG_TOOLS
+            RailEtaHost.RailEtaHotDebugApi.RequestReloadLatest();
+#endif
+        }
+
+        private void RequestEtaHotSmoke()
+        {
+#if RT_DEBUG_TOOLS
+            RailEtaHost.RailEtaHotDebugApi.RequestSmoke();
+#endif
+        }
+
+        private void RequestEtaHotRollback()
+        {
+#if RT_DEBUG_TOOLS
+            RailEtaHost.RailEtaHotDebugApi.RollbackRailEta();
+#endif
+        }
+
+        private void RequestEtaSnapshot()
+        {
+#if RT_DEBUG_TOOLS
+            Entity selected = m_SelectedInfoUISystem.selectedEntity;
+            if (selected == Entity.Null) return;
+            EntityManager entityManager = World.EntityManager;
+            if (entityManager.HasComponent<Controller>(selected)) selected = entityManager.GetComponentData<Controller>(selected).m_Controller;
+            RailEtaHost.RailEtaPublicTicket ticket = RailEtaHost.RailEtaDebugApi.RequestSnapshot(selected.Index, selected.Version);
+            if (ticket.IsValid) m_EtaSnapshotTicket = ticket;
+#endif
+        }
 
         private void SetBypassStation(bool enabled)
         {

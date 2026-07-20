@@ -52,7 +52,7 @@ function buildOverviewSystems(featureSettings, t) {
 }
 
 function getLineName(line, index, t) {
-  return line?.name || line?.displayName || line?.id || t("nativeWorkbench.overview.fallback.lineName", { index: index + 1 });
+  return line?.name || line?.displayName || t("nativeWorkbench.overview.fallback.lineName", { index: index + 1 });
 }
 
 function getLineCode(line, index) {

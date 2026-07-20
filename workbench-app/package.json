@@ -2,11 +2,12 @@
   "name": "rt-dispatch-workbench",
   "private": true,
   "version": "0.1.0",
-  "author": "huasyl",
-  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "dev:planner-lab": "vite --config vite.planner-lab.config.js",
     "build:workbench": "vite build --config vite.workbench.config.js",
+    "dev:transit-diagram": "vite --config vite.transit-diagram.config.js",
+    "build:transit-diagram": "vite build --config vite.transit-diagram.config.js",
     "build": "npm run build:workbench"
   },
   "dependencies": {

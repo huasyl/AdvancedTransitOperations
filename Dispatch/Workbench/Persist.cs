@@ -31,6 +31,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<List<DispatchWorkbenchManualRowDto>, List<DispatchWorkbenchManualRowDto>> m_KeepManual;
         private readonly Func<List<DispatchWorkbenchAutoRuleDto>, List<DispatchWorkbenchAutoRuleDto>> m_KeepRules;
         private readonly Func<List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> m_KeepRows;
+        private readonly LineConfigStore m_LineStore;
+        private readonly LineAnchorCatalog m_Catalog;
         private bool m_Loaded;
 
         internal Persist(
@@ -55,7 +57,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> deduplicateRowsByIdLast,
             Func<List<DispatchWorkbenchManualRowDto>, List<DispatchWorkbenchManualRowDto>> deduplicateManualRowsForMigration,
             Func<List<DispatchWorkbenchAutoRuleDto>, List<DispatchWorkbenchAutoRuleDto>> deduplicateAutoRulesForMigration,
-            Func<List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> deduplicateStagedRowsForMigration)
+            Func<List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> deduplicateStagedRowsForMigration,
+            LineConfigStore lineStore,
+            LineAnchorCatalog catalog)
         {
             m_Host = host ?? throw new ArgumentNullException(nameof(host));
             m_Run = host.Run;
@@ -80,6 +84,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_KeepManual = deduplicateManualRowsForMigration ?? throw new ArgumentNullException(nameof(deduplicateManualRowsForMigration));
             m_KeepRules = deduplicateAutoRulesForMigration ?? throw new ArgumentNullException(nameof(deduplicateAutoRulesForMigration));
             m_KeepRows = deduplicateStagedRowsForMigration ?? throw new ArgumentNullException(nameof(deduplicateStagedRowsForMigration));
+            m_LineStore = lineStore ?? throw new ArgumentNullException(nameof(lineStore));
+            m_Catalog = catalog;
+            LineMigration.Attach(m_Drafts);
         }
 
         internal void Reset()
@@ -204,7 +211,6 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal bool Restore(DispatchWorkbenchPersistentState persisted)
         {
             m_Drafts.Clear();
-            m_Run.ClearLineCfg();
             m_Run.DropDepotCache();
             if (persisted?.featureSettings != null)
             {
@@ -232,14 +238,28 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
             m_RestoreCompatState(persisted);
 
-            if (persisted?.lineSettings != null)
+            MigrationReport migrationReport = new MigrationReport();
+            if (persisted?.lineSettings != null && persisted.lineSettings.Length > 0)
             {
-                m_Run.LineCfg(NormalizeLegacyLineSettings(persisted.lineSettings));
+                DispatchWorkbenchLineSettingDto[] normalized = NormalizeLegacyLineSettings(persisted.lineSettings);
+                if (m_Catalog != null)
+                {
+                    normalized = LineMigration.PromoteLineSettings(normalized, m_Catalog, migrationReport);
+                }
+                m_Run.LineCfg(normalized);
+                RestoreLegacySettings(normalized);
             }
 
             if (persisted?.drafts == null)
             {
-                return migratedLegacyFeatureSettings || normalizedLegacy;
+                if (migrationReport.Count > 0)
+                {
+#if RT_VERBOSE_LOGS
+                    migrationReport.LogDetails(message => Mod.log.Info(message));
+#endif
+                    Mod.log.Info("[WorkbenchLineMigration] summary: " + migrationReport.Summary());
+                }
+                return migratedLegacyFeatureSettings || normalizedLegacy || HasMigrated(migrationReport);
             }
 
             for (int i = 0; i < persisted.drafts.Length; i++)
@@ -259,8 +279,21 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_Drafts[lineKey] = draft;
             }
 
-            bool migrated = Migrate();
-            return migrated || normalizedLegacy || migratedLegacyFeatureSettings;
+            HashSet<string> occupiedDrafts = new HashSet<string>(StringComparer.Ordinal);
+            if (m_Catalog != null)
+            {
+                occupiedDrafts = LineMigration.MigrateDrafts(m_Drafts, m_Catalog, migrationReport);
+            }
+            if (migrationReport.Count > 0)
+            {
+#if RT_VERBOSE_LOGS
+                migrationReport.LogDetails(message => Mod.log.Info(message));
+#endif
+                Mod.log.Info("[WorkbenchLineMigration] summary: " + migrationReport.Summary());
+            }
+
+            bool migrated = Migrate(occupiedDrafts);
+            return migrated || normalizedLegacy || migratedLegacyFeatureSettings || HasMigrated(migrationReport);
         }
 
         internal WorkbenchSavePersistencePayload Capture()
@@ -292,7 +325,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 prepared?.AppliedRowElements);
         }
 
-        private bool Migrate()
+        private bool Migrate(HashSet<string> preservedDrafts)
         {
             if (m_Drafts.Count == 0)
             {
@@ -310,7 +343,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 string sourceKey = restoredDrafts[draftIndex].Key;
                 DispatchWorkbenchDraftState sourceDraft = restoredDrafts[draftIndex].Value;
-                if (sourceDraft == null)
+                if (sourceDraft == null || preservedDrafts.Contains(sourceKey))
                 {
                     continue;
                 }
@@ -369,6 +402,30 @@ namespace RapidTransitMod.Dispatch.Workbench
                     + createdDrafts);
             }
             return true;
+        }
+
+        private void RestoreLegacySettings(DispatchWorkbenchLineSettingDto[] settings)
+        {
+            for (int i = 0; i < settings.Length; i++)
+            {
+                DispatchWorkbenchLineSettingDto setting = settings[i];
+                LineKey key = LineIdentityService.GetKey(setting?.lineId);
+                if (!LineKey.IsLegacyNumericKey(key))
+                    continue;
+
+                m_LineStore.RestoreLegacy(key, new LineConfigState
+                {
+                    OriginHoldLimitMinutes = setting.originHoldLimitMinutes,
+                    MaxStationDwellMinutes = setting.maxStationDwellMinutes,
+                    AllowedDepotId = setting.allowedDepotId,
+                    ConfiguredServiceKind = setting.serviceKind
+                });
+            }
+        }
+
+        private static bool HasMigrated(MigrationReport report)
+        {
+            return report.Entries.Any(entry => entry.Result == MigrationResult.Migrated);
         }
 
         private int MigrateManualRows(
@@ -689,10 +746,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 selectedLineId = draft?.SelectedLineId ?? string.Empty,
                 selectedEditLine = draft?.SelectedEditLine ?? string.Empty,
                 mergedView = CloneMergedViewForPersistence(draft?.MergedView),
-                manualRows = draft?.ManualRows?.Select(m_CopyManual).ToArray() ?? Array.Empty<DispatchWorkbenchManualRowDto>(),
-                autoRules = draft?.AutoRules?.Select(m_CopyRule).ToArray() ?? Array.Empty<DispatchWorkbenchAutoRuleDto>(),
-                lineDraftRows = draft?.StagedRows?.Select(m_CopyRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
-                rulesApplied = draft?.RulesApplied == true,
+                manualRows = null,
+                autoRules = null,
+                lineDraftRows = null,
+                stagedRows = draft?.StagedRows?.Select(m_CopyRow).ToArray() ?? Array.Empty<DispatchWorkbenchStagedRowDto>(),
+                rulesApplied = false,
                 draftApplied = draft?.DraftApplied == true,
                 plannerImportContract = m_CopyPlan(draft?.PlannerImportContract)
             };
@@ -709,12 +767,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ? dto.selectedEditLine
                     : (lineKey == "__default__" ? string.Empty : lineKey),
                 MergedView = CloneMergedView(dto.mergedView),
-                ManualRows = dto.manualRows?.Select(m_CopyManual).ToList() ?? new List<DispatchWorkbenchManualRowDto>(),
-                AutoRules = dto.autoRules?.Select(m_CopyRule).ToList() ?? new List<DispatchWorkbenchAutoRuleDto>(),
+                ManualRows = new List<DispatchWorkbenchManualRowDto>(),
+                AutoRules = new List<DispatchWorkbenchAutoRuleDto>(),
                 StagedRows = m_LastById(
-                    dto.lineDraftRows?.Select(m_CopyRow).ToList()
+                    (dto.stagedRows ?? dto.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>())
+                        .Select(m_CopyRow).ToList()
                     ?? new List<DispatchWorkbenchStagedRowDto>()),
-                RulesApplied = dto.rulesApplied,
+                RulesApplied = false,
                 DraftApplied = dto.draftApplied,
                 PlannerImportContract = m_CopyPlan(dto.plannerImportContract)
             };
@@ -775,6 +834,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     || HasLegacyRestoredMergedView(draft.mergedView)
                     || HasLegacyRestoredRows(draft.manualRows)
                     || HasLegacyRestoredRules(draft.autoRules)
+                    || HasLegacyRestoredRows(draft.stagedRows)
                     || HasLegacyRestoredRows(draft.lineDraftRows)
                     || HasLegacyRestoredPlanContract(draft.plannerImportContract));
         }

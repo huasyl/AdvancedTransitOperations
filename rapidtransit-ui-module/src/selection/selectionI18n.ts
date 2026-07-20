@@ -77,7 +77,30 @@ const KEYS = {
   alertYieldProtected: "RapidTransit.AlertYieldProtected",
   alertYieldingFor: "RapidTransit.AlertYieldingFor",
   alertSpawnPending: "RapidTransit.AlertSpawnPending",
-  alertYieldGuard: "RapidTransit.AlertYieldGuard"
+  alertYieldGuard: "RapidTransit.AlertYieldGuard",
+  etaHotTitle: "RapidTransit.EtaHotTitle",
+  etaHotBuild: "RapidTransit.EtaHotBuild",
+  etaHotGeneration: "RapidTransit.EtaHotGeneration",
+  etaHotStatus: "RapidTransit.EtaHotStatus",
+  etaHotSmokeValue: "RapidTransit.EtaHotSmokeValue",
+  etaHotReloadLatest: "RapidTransit.EtaHotReloadLatest",
+  etaHotRunSmoke: "RapidTransit.EtaHotRunSmoke",
+  etaHotRollback: "RapidTransit.EtaHotRollback",
+  etaHotBusy: "RapidTransit.EtaHotBusy",
+  etaHotWorkerLost: "RapidTransit.EtaHotWorkerLost",
+  etaWorkerLost: "RapidTransit.EtaWorkerLostRestartRequired",
+  etaHotNone: "RapidTransit.EtaHotNone",
+  etaSnapshotStatus: "RapidTransit.EtaSnapshotStatus",
+  etaSnapshotRequest: "RapidTransit.EtaSnapshotRequest",
+  etaComparisonTitle: "RapidTransit.EtaComparisonTitle",
+  etaComparisonPredicted: "RapidTransit.EtaComparisonPredicted",
+  etaComparisonActual: "RapidTransit.EtaComparisonActual",
+  etaComparisonRemaining: "RapidTransit.EtaComparisonRemaining",
+  etaComparisonPast: "RapidTransit.EtaComparisonPast",
+  etaComparisonFinishDelta: "RapidTransit.EtaComparisonFinishDelta",
+  etaComparisonPublishDelta: "RapidTransit.EtaComparisonPublishDelta",
+  etaComparisonOriginDelta: "RapidTransit.EtaComparisonOriginDelta",
+  etaComparisonPredictionDelta: "RapidTransit.EtaComparisonPredictionDelta"
 } as const;
 
 function formatFallbackLabel(value: string) {

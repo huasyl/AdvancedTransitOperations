@@ -25,7 +25,7 @@ namespace RapidTransitMod.PassengerFlow
 
         internal static string DescribeBucket(TimeBucketKey bucket)
         {
-            return bucket.ServiceDayIndex.ToString() + ":" + bucket.BucketStartMinute.ToString();
+            return bucket.ServiceDayKey.ToString() + ":" + bucket.BucketStartMinute.ToString();
         }
 
         internal static string DescribeCount<T>(T[] rows)

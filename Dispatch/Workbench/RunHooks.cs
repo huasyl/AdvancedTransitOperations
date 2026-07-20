@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace RapidTransitMod.Dispatch.Workbench
 {
@@ -64,7 +66,37 @@ namespace RapidTransitMod.Dispatch.Workbench
                 lineId => m_LineView.Kind(lineId),
                 () => m_Applied().RefreshCfg(),
                 (draftKeys, runtimeLines) => m_Applied().ApplyDraft(draftKeys, runtimeLines),
+                () => m_Applied().CleanupDeletedOrReplacedAppliedLines(saveChanges: false),
+                runtimeLines => CollectRuntimeMissingLineReasons(runtimeLines),
+                lineIds => m_Applied().RemoveDeletedLines(lineIds, saveChanges: false),
+                reasons => m_Applied().CleanupRequestedLines(reasons, saveChanges: false),
+                reasons => m_Applied().CleanupRequestedLines(reasons, saveChanges: true),
+                () => m_Applied().ConsumeCleanupInfo(),
                 () => m_LineView.Dirty());
+        }
+
+        private IReadOnlyDictionary<string, string> CollectRuntimeMissingLineReasons(
+            IEnumerable<WorkbenchLineRuntime> runtimeLines)
+        {
+            Dictionary<string, string> reasons =
+                m_Applied().CollectRuntimeMissingLineReasons(runtimeLines);
+            HashSet<string> runtimeLineIds = new HashSet<string>(
+                (runtimeLines ?? Enumerable.Empty<WorkbenchLineRuntime>())
+                    .Select(line => DraftStore.GetKey(line?.Id))
+                    .Where(lineId => !string.IsNullOrEmpty(lineId) && !string.Equals(lineId, "__default__", StringComparison.Ordinal)),
+                StringComparer.Ordinal);
+
+            foreach (string lineId in m_LineCfg().Keys()
+                .Select(DraftStore.GetKey)
+                .Where(lineId => !string.IsNullOrEmpty(lineId) && !string.Equals(lineId, "__default__", StringComparison.Ordinal)))
+            {
+                if (!runtimeLineIds.Contains(lineId) && !reasons.ContainsKey(lineId))
+                {
+                    reasons[lineId] = "runtime-line-missing";
+                }
+            }
+
+            return reasons;
         }
     }
 }

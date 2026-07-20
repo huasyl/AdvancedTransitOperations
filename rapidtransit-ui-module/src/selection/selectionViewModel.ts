@@ -8,6 +8,46 @@ export interface DevSightData {
   summaryText?: string;
 }
 
+export interface EtaHotStatusData {
+  busy?: boolean;
+  currentSource?: string;
+  currentBuildId?: string;
+  generation?: number;
+  lastAction?: string;
+  status?: string;
+  lastSmokeValue?: number;
+  lastError?: string;
+  hotBackendWorkerLost?: boolean;
+  etaWorkerLost?: boolean;
+  workerLost?: boolean;
+}
+
+export interface EtaSnapshotStatusData {
+  ticket?: string;
+  state?: string;
+  failure?: string;
+  detail?: string;
+  predictorSource?: string;
+  predictorBuildId?: string;
+  predictorGeneration?: number;
+  arrival?: number;
+  comparisonSummary?: string;
+  etaGameMinutes?: number;
+  comparisonOriginFrame?: number;
+  comparisonState?: string;
+  comparisonValid?: boolean;
+  comparisonInvalidReason?: string;
+  comparisonVehicleId?: string;
+  comparisonVehicleIndex?: number;
+  comparisonPredictedArrival?: number;
+  comparisonActualArrival?: number;
+  comparisonFinishDelta?: number;
+  comparisonPublishDelta?: number;
+  comparisonOriginDelta?: number;
+  comparisonPredictionDelta?: number;
+  comparisonFramesToOrPastPrediction?: number;
+}
+
 export interface PanelData {
   entityId?: string | number;
   mode?: string;

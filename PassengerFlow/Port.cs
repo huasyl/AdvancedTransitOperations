@@ -1,6 +1,8 @@
 using Game.Routes;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
+using RapidTransitMod.Core;
+using System;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -18,8 +20,23 @@ namespace RapidTransitMod.PassengerFlow
         internal uint Frame()
             => m_Runtime.m_SimulationSystem != null ? m_Runtime.m_SimulationSystem.frameIndex : 0u;
 
-        internal int FramesPerMinute()
-            => (int)Unity.Mathematics.math.round((float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+        internal int NowMinute()
+            => m_Runtime.m_SimClock.Snapshot.NowMinute;
+
+        internal DateTime NowDate()
+            => m_Runtime.m_SimClock.Snapshot.NowDate;
+
+        internal uint ToFramesCeil(double gameMinutes)
+            => m_Runtime.m_SimClock.Snapshot.ToFramesCeil(gameMinutes);
+
+        internal long ClockEpoch()
+            => m_Runtime.m_SimClock.Snapshot.ClockEpoch;
+
+        internal double FramesPerMinute()
+            => m_Runtime.m_SimClock.Snapshot.FramesPerMinute;
+
+        internal void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler)
+            => m_Runtime.m_SimClock.ClockChanged += handler;
 
         internal NativeArray<Entity> Vehicles(Allocator allocator)
             => m_Runtime.m_VehicleView.Keys(allocator);
@@ -89,13 +106,21 @@ namespace RapidTransitMod.PassengerFlow
             if (!LineExists(line))
                 return false;
 
-            LineKey key = LineIdentityService.GetKey(m_Runtime.EntityManager, line);
-            if (key.IsEmpty)
+            mode = TransportModeResolver.Resolve(m_Runtime.EntityManager, line);
+            if (mode == TransitMode.Unknown)
                 return false;
 
-            mode = key.Mode;
-            lineId = LineIdentityService.GetId(key);
-            return true;
+            LineAnchorCatalog catalog = m_Runtime.m_LineAnchorCatalog;
+            if (catalog != null)
+            {
+                LineKey stableKey = catalog.StableKey(line);
+                if (!stableKey.IsEmpty)
+                {
+                    lineId = LineIdentityService.GetId(stableKey);
+                    return true;
+                }
+            }
+            return false;
         }
 
         internal string Name(Entity entity)

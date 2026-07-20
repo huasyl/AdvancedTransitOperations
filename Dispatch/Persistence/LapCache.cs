@@ -63,7 +63,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                         if (RtLog.VerboseEnabled)
                         {
                             m_Runtime.log.Info("[缓存写入] 线路" + line.Index
-                                + " 圈时=" + (bestFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟");
+                                + " 圈时=" + m_Runtime.m_SimClock.ToMinutes(bestFrames).ToString("F1") + "游戏分钟");
                         }
                     }
                     return;
@@ -79,7 +79,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (RtLog.VerboseEnabled)
             {
                 m_Runtime.log.Info("[缓存新增] 线路" + line.Index
-                    + " 圈时=" + (bestFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "游戏分钟");
+                    + " 圈时=" + m_Runtime.m_SimClock.ToMinutes(bestFrames).ToString("F1") + "游戏分钟");
             }
         }
 

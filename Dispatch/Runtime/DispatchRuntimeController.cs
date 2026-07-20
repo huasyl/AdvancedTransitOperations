@@ -8,6 +8,7 @@ using Game.Simulation;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Scheduling;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -27,12 +28,12 @@ namespace RapidTransitMod
         private readonly struct AssistLaunchPendingRecord
         {
             public readonly Entity Line;
-            public readonly int TargetMin;
+            public readonly int TargetMinute;
 
-            public AssistLaunchPendingRecord(Entity line, int targetMin)
+            public AssistLaunchPendingRecord(Entity line, int targetMinute)
             {
                 Line = line;
-                TargetMin = targetMin;
+                TargetMinute = targetMinute;
             }
         }
 
@@ -51,15 +52,12 @@ namespace RapidTransitMod
         private const uint BV_MISFIRE_TIMEOUT = DispatchRuntimeSystem.BV_MISFIRE_TIMEOUT;
         private const bool ENABLE_MIDSTOP_TIMEOUT_GATE_LOGS = DispatchRuntimeSystem.ENABLE_MIDSTOP_TIMEOUT_GATE_LOGS;
         private const uint FORCED_MIDSTOP_BV_GRACE_FRAMES = DispatchRuntimeSystem.FORCED_MIDSTOP_BV_GRACE_FRAMES;
-        private const int IDLE_TIMEOUT_MIN = DispatchRuntimeSystem.IDLE_TIMEOUT_MIN;
+        private const int IDLE_TIMEOUT_MINUTES = DispatchRuntimeSystem.IDLE_TIMEOUT_MINUTES;
         private const uint LAUNCH_COOLDOWN_FRAMES = DispatchRuntimeSystem.LAUNCH_COOLDOWN_FRAMES;
         private const uint PREPARING_WAYPOINT_LIVE_REFRESH_FRAMES = 16;
         private const float ORIGIN_CONGESTION_RADIUS_METERS = DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS;
         private const float ORIGIN_FORCE_IDLE_RADIUS_METERS = DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS;
-        private const double SIM_FRAMES_PER_MINUTE = DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
         private const float DEPARTURE_MOVING_SPEED_SQ = 0.01f;
-        private static uint FORCED_ORIGIN_MIN_DWELL_FRAMES => DispatchRuntimeSystem.FORCED_ORIGIN_MIN_DWELL_FRAMES;
-        private static uint PREPARING_ORIGIN_SETTLE_FRAMES => DispatchRuntimeSystem.PREPARING_ORIGIN_SETTLE_FRAMES;
 
         private static byte BoardingByte(bool boarding) => boarding ? (byte)1 : (byte)0;
 
@@ -73,15 +71,15 @@ namespace RapidTransitMod
             m_Runtime.m_VehicleLabels.SetPrefixedLocalized(vehicle, key, fallback, prefix, suffix);
         }
 
-        private void SetHoldingVehicleLabel(Entity vehicle, int targetMin, string tag, bool late = false, bool includeHoldingInWaiting = true)
+        private void SetHoldingVehicleLabel(Entity vehicle, int targetMinute, string tag, bool late = false, bool includeHoldingInWaiting = true)
         {
-            if (targetMin >= 0)
+            if (targetMinute >= 0)
             {
                 SetLocalizedVehicleLabel(
                     vehicle,
                     late ? "HoldingLate" : "Holding",
                     late ? "候车 补发" : "候车",
-                    " " + DispatchRuntimeSystem.SlotStr(targetMin) + tag);
+                    " " + DispatchRuntimeSystem.SlotStr(targetMinute) + tag);
                 return;
             }
 
@@ -92,13 +90,13 @@ namespace RapidTransitMod
                 tag);
         }
 
-        private void SetRunningSlotVehicleLabel(Entity vehicle, bool late, int targetMin, string tag)
+        private void SetRunningSlotVehicleLabel(Entity vehicle, bool late, int targetMinute, string tag)
         {
             SetLocalizedVehicleLabel(
                 vehicle,
                 late ? "RunningLate" : "Running",
                 late ? "运行中 补发" : "运行中",
-                " " + DispatchRuntimeSystem.SlotStr(targetMin) + tag);
+                " " + DispatchRuntimeSystem.SlotStr(targetMinute) + tag);
         }
 
         private bool HasOpenStopSession(Entity vehicle)
@@ -137,6 +135,22 @@ namespace RapidTransitMod
         private void CancelDeparturePending(Entity vehicle)
         {
             m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
+        }
+
+        public void ForceManualDepart(
+            Entity vehicle,
+            ref Game.Vehicles.PublicTransport publicTransport,
+            uint nowFrame,
+            EntityCommandBuffer ecb)
+        {
+            Entity blocker = m_Runtime.Bypass.TryGetLatchedBlocker(vehicle, out Entity latchedBlocker)
+                ? latchedBlocker
+                : Entity.Null;
+            m_Runtime.Bypass.ClearVehicle(vehicle, "UI强制发车");
+            m_Runtime.Bypass.MarkBypassHoldSkipped(vehicle, blocker);
+            m_Runtime.m_ForcedMidStopBoardingGraceUntil[vehicle] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
+            m_Runtime.m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, ecb);
+            StartDeparturePending(vehicle, nowFrame);
         }
 
         private bool TryRecoverInvalidatedMidStopSession(
@@ -209,6 +223,7 @@ namespace RapidTransitMod
             int waypointIndex,
             int waypointCount,
             uint nowFrame,
+            int nowMinute,
             string lineTag)
         {
             if (vehicle == Entity.Null
@@ -270,7 +285,7 @@ namespace RapidTransitMod
                     nextStopName = "stop#" + nextStop.Index;
                 }
 
-                string departureKey = DispatchRuntimeSystem.SlotStr((int)(nowFrame / (uint)SIM_FRAMES_PER_MINUTE) % 1440)
+                string departureKey = DispatchRuntimeSystem.SlotStr(nowMinute)
                     + "|wp=" + waypointIndex.ToString()
                     + "|next=" + nextWaypointIndex.ToString();
                 if (RtLog.VerboseEnabled)
@@ -320,7 +335,10 @@ namespace RapidTransitMod
                 m_Vehicles.ClearPreparing(vehicle);
 
             if (dispatchFrame.HasValue)
+            {
                 m_Vehicles.SetDispatch(vehicle, dispatchFrame.Value);
+                m_Runtime.m_Observation.BeginDispatchEta(vehicle, line, dispatchFrame.Value);
+            }
             else
                 m_Vehicles.ClearDispatch(vehicle);
         }
@@ -339,10 +357,40 @@ namespace RapidTransitMod
             m_Vehicles.ClearBoardingGrace(vehicle);
         }
 
-        public void Hold(Entity vehicle, uint readyFrame)
+        internal void CaptureRetireSpawnTarget(
+            Entity line,
+            out int preActive,
+            out bool hadSpawnTarget,
+            out int oldSpawnTarget)
+        {
+            m_LineSpawnControl.CaptureRetireTarget(
+                line,
+                out preActive,
+                out hadSpawnTarget,
+                out oldSpawnTarget);
+        }
+
+        internal void ApplyRetireSpawnTarget(
+            Entity line,
+            int preActive,
+            bool hadSpawnTarget,
+            int oldSpawnTarget)
+        {
+            m_LineSpawnControl.ApplyRetireTarget(
+                line,
+                preActive,
+                hadSpawnTarget,
+                oldSpawnTarget);
+        }
+
+        public void Hold(Entity vehicle, uint startFrame, ClockSnapshot clockSnapshot)
         {
             m_Vehicles.SetState(vehicle, VehicleState.Holding);
-            m_Vehicles.SetReady(vehicle, readyFrame);
+            m_Vehicles.SetReady(
+                vehicle,
+                startFrame,
+                DispatchRuntimeSystem.PREPARING_ORIGIN_SETTLE_MINUTES,
+                clockSnapshot);
         }
 
         public void HoldFromIdle(Entity vehicle)
@@ -384,10 +432,10 @@ namespace RapidTransitMod
             m_Vehicles.ClearReady(vehicle);
         }
 
-        public void RestoreHold(Entity vehicle, int targetMin)
+        public void RestoreHold(Entity vehicle, int targetMinute)
         {
             m_Vehicles.SetState(vehicle, VehicleState.Holding);
-            m_Vehicles.SetTarget(vehicle, targetMin);
+            m_Vehicles.SetTarget(vehicle, targetMinute);
             m_Vehicles.ClearSlot(vehicle);
             m_Vehicles.ClearLaunch(vehicle);
             m_Vehicles.ClearCooldown(vehicle);
@@ -434,9 +482,9 @@ namespace RapidTransitMod
             m_Vehicles.ClearIdle(vehicle);
         }
 
-        public void Target(Entity vehicle, int targetMin)
+        public void Target(Entity vehicle, int targetMinute)
         {
-            m_Vehicles.SetTarget(vehicle, targetMin);
+            m_Vehicles.SetTarget(vehicle, targetMinute);
         }
 
         public void ReleaseTarget(Entity vehicle)
@@ -469,9 +517,13 @@ namespace RapidTransitMod
             m_Vehicles.ClearDispatch(vehicle);
         }
 
-        public void SetReady(Entity vehicle, uint frame)
+        public void SetReady(Entity vehicle, uint startFrame, ClockSnapshot clockSnapshot)
         {
-            m_Vehicles.SetReady(vehicle, frame);
+            m_Vehicles.SetReady(
+                vehicle,
+                startFrame,
+                DispatchRuntimeSystem.FORCED_ORIGIN_MIN_DWELL_MINUTES,
+                clockSnapshot);
         }
 
         public void ClearReady(Entity vehicle)
@@ -499,12 +551,12 @@ namespace RapidTransitMod
             m_Vehicles.ClearBoardingGrace(vehicle);
         }
 
-        public void ArmAssistLaunchPending(Entity vehicle, Entity line, int targetMin)
+        public void ArmAssistLaunchPending(Entity vehicle, Entity line, int targetMinute)
         {
-            if (vehicle == Entity.Null || line == Entity.Null || targetMin < 0)
+            if (vehicle == Entity.Null || line == Entity.Null || targetMinute < 0)
                 return;
 
-            m_AssistLaunchPendingByVehicle[vehicle] = new AssistLaunchPendingRecord(line, targetMin);
+            m_AssistLaunchPendingByVehicle[vehicle] = new AssistLaunchPendingRecord(line, targetMinute);
         }
 
         public void ClearAssistLaunchPending(Entity vehicle)
@@ -525,14 +577,14 @@ namespace RapidTransitMod
         private bool TryGetAssistLaunchPending(
             Entity vehicle,
             Entity line,
-            int targetMin,
+            int targetMinute,
             out AssistLaunchPendingRecord pending)
         {
             if (vehicle != Entity.Null
                 && m_AssistLaunchPendingByVehicle.TryGetValue(vehicle, out pending)
                 && pending.Line == line
-                && pending.TargetMin >= 0
-                && targetMin == pending.TargetMin)
+                && pending.TargetMinute >= 0
+                && targetMinute == pending.TargetMinute)
             {
                 return true;
             }
@@ -544,16 +596,16 @@ namespace RapidTransitMod
         public bool TryGetAssistPendingTarget(
             Entity vehicle,
             Entity line,
-            int targetMin,
-            out int assistTargetMin)
+            int targetMinute,
+            out int assistTargetMinute)
         {
-            if (TryGetAssistLaunchPending(vehicle, line, targetMin, out AssistLaunchPendingRecord pending))
+            if (TryGetAssistLaunchPending(vehicle, line, targetMinute, out AssistLaunchPendingRecord pending))
             {
-                assistTargetMin = pending.TargetMin;
+                assistTargetMinute = pending.TargetMinute;
                 return true;
             }
 
-            assistTargetMin = -1;
+            assistTargetMinute = -1;
             return false;
         }
 
@@ -567,18 +619,19 @@ namespace RapidTransitMod
             m_Vehicles.ClearIdle(vehicle);
         }
 
-        public void Tick(EntityCommandBuffer ecb, int nowMin)
+        public void Tick(EntityCommandBuffer ecb, ClockSnapshot clockSnapshot)
         {
-            TickVehicles(ecb, nowMin);
+            int nowMinute = clockSnapshot.NowMinute;
+            TickVehicles(ecb, nowMinute, clockSnapshot);
             m_Runtime.m_Announcements.Tick(m_Runtime.m_SimulationSystem.frameIndex);
-            m_Runtime.m_CommandApplier.ReleaseCompletedRetireHandoffs();
+            m_Runtime.m_CommandApplier.FinalizeRetireDispatchLockTerminals();
             m_RuntimeVehicleCleanup.Tick();
-            TickLineControls(nowMin);
-            m_SchedulerApply.Tick(ecb, nowMin);
-            m_Runtime.m_CommandApplier.TickRetireHandoffWatch(ecb, m_Runtime.m_SimulationSystem.frameIndex);
+            TickLineControls(nowMinute);
+            m_SchedulerApply.Tick(ecb, clockSnapshot);
+            m_Runtime.m_CommandApplier.TickRetireHandoffStages(m_Runtime.m_SimulationSystem.frameIndex);
         }
 
-        private void TickVehicles(EntityCommandBuffer ecb, int nowMin)
+        private void TickVehicles(EntityCommandBuffer ecb, int nowMinute, ClockSnapshot clockSnapshot)
         {
             var wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
             var publicTransportLookup = m_Runtime.GetComponentLookup<Game.Vehicles.PublicTransport>(true);
@@ -591,31 +644,31 @@ namespace RapidTransitMod
                 foreach (var v in vehicles)
                 {
                     if (!EntityManager.Exists(v)) continue;
+                    if (!m_Runtime.m_VehicleView.TryGetState(v, out var state)) continue;
+                    int targetMinute = m_Runtime.m_VehicleView.TryGetTarget(v, out int tm) ? tm : -1;
                     Entity line = m_Runtime.m_VehicleView.TryGetLine(v, out Entity mappedLine)
                         ? mappedLine
                         : Entity.Null;
                     if (line == Entity.Null) continue;
-                    if (!m_Runtime.m_VehicleView.TryGetState(v, out var state)) continue;
-                    int targetMin = m_Runtime.m_VehicleView.TryGetTarget(v, out int tm) ? tm : -1;
                     if (!publicTransportLookup.HasComponent(v)
                         || !targetLookup.HasComponent(v)
                         || !currentRouteLookup.HasComponent(v))
                     {
                         if (RtLog.VerboseEnabled
-                            && (targetMin >= 0 || state == VehicleState.Holding || state == VehicleState.Preparing))
+                            && (targetMinute >= 0 || state == VehicleState.Holding || state == VehicleState.Preparing))
                         {
                             m_Runtime.m_RuntimeLog.Once(
                                 m_Runtime.m_RuntimeLog.m_OriginDispatchTraceLogCache,
                                 v,
                                 "runtime-skip-core|state=" + state
-                                    + "|target=" + targetMin
+                                    + "|target=" + targetMinute
                                     + "|pt=" + (publicTransportLookup.HasComponent(v) ? "1" : "0")
                                     + "|tgt=" + (targetLookup.HasComponent(v) ? "1" : "0")
                                     + "|route=" + (currentRouteLookup.HasComponent(v) ? "1" : "0"),
                                 "[OriginDispatchTrace] reason=runtime-skip-core line=" + line.Index
                                     + " vehicle=" + v.Index
                                     + " state=" + state
-                                    + " target=" + Dispatch.Diagnostics.RuntimeLog.Slot(targetMin)
+                                    + " target=" + Dispatch.Diagnostics.RuntimeLog.Slot(targetMinute)
                                     + " hasPublicTransport=" + (publicTransportLookup.HasComponent(v) ? "1" : "0")
                                     + " hasTarget=" + (targetLookup.HasComponent(v) ? "1" : "0")
                                     + " hasCurrentRoute=" + (currentRouteLookup.HasComponent(v) ? "1" : "0"));
@@ -631,7 +684,7 @@ namespace RapidTransitMod
                     if (!wpBuffers.TryGetBuffer(routeEnt, out var wps) || wps.Length < 2)
                     {
                         if (RtLog.VerboseEnabled
-                            && (targetMin >= 0 || state == VehicleState.Holding || state == VehicleState.Preparing))
+                            && (targetMinute >= 0 || state == VehicleState.Holding || state == VehicleState.Preparing))
                         {
                             m_Runtime.m_RuntimeLog.Once(
                                 m_Runtime.m_RuntimeLog.m_OriginDispatchTraceLogCache,
@@ -641,7 +694,7 @@ namespace RapidTransitMod
                                     + " route=" + routeEnt.Index
                                     + " vehicle=" + v.Index
                                     + " state=" + state
-                                    + " target=" + Dispatch.Diagnostics.RuntimeLog.Slot(targetMin)
+                                    + " target=" + Dispatch.Diagnostics.RuntimeLog.Slot(targetMinute)
                                     + " hasWpBuffer=" + (wpBuffers.TryGetBuffer(routeEnt, out _) ? "1" : "0"));
                         }
                         continue;
@@ -681,7 +734,7 @@ namespace RapidTransitMod
                     if (m_Runtime.m_BVMisfire.Contains(v))
                     {
                         allowOriginHoldingBoardingGhost = state == VehicleState.Holding
-                            && targetMin >= 0
+                            && targetMinute >= 0
                             && m_Runtime.m_LineProfile.IsWithinOriginDistance(v, wps, ORIGIN_FORCE_IDLE_RADIUS_METERS);
                         if (allowOriginHoldingBoardingGhost)
                         {
@@ -698,10 +751,10 @@ namespace RapidTransitMod
                         if (m_Runtime.m_BVMisfireStartFrame.TryGetValue(v, out uint misfireStart)
                             && (nowFrame - misfireStart) > BV_MISFIRE_TIMEOUT)
                         {
-                            if (targetMin >= 0)
+                            if (targetMinute >= 0)
                             {
                                 log.Info("[BVMisfire] " + lineTag + " 车辆" + v.Index
-                                    + " 超时，释放班次" + DispatchRuntimeSystem.SlotStr(targetMin) + " 并回库");
+                                    + " 超时，释放班次" + DispatchRuntimeSystem.SlotStr(targetMinute) + " 并回库");
                                 this.ReleaseTarget(v);
                             }
                             else
@@ -726,8 +779,8 @@ namespace RapidTransitMod
                                 routeEnt,
                                 wps,
                                 state,
-                                targetMin,
-                                nowMin,
+                                targetMinute,
+                                nowMinute,
                                 misfireCurWpIdx,
                                 misfireAtA,
                                 boarding,
@@ -918,6 +971,7 @@ namespace RapidTransitMod
                             departureWaypointIndex,
                             waypointCount,
                             nowFrame,
+                            nowMinute,
                             lineTag);
                         curWpIdx = -1;
                         previousCachedWpIdx = -1;
@@ -947,7 +1001,7 @@ namespace RapidTransitMod
 
                     if (state != VehicleState.Running)
                     {
-                        if (m_Runtime.m_ObsPersist.DropSlice(v, out int droppedSliceIndex))
+                        if (m_Runtime.m_Observation.DropSlice(v, out int droppedSliceIndex))
                             m_Runtime.m_Observation.DebugDrop(v, droppedSliceIndex);
                     }
 
@@ -961,7 +1015,7 @@ namespace RapidTransitMod
                             && m_Runtime.m_CachedWpIdx.TryGetValue(v, out int broadcastCachedWpIdx)
                             && broadcastCachedWpIdx == 0);
                     if (state == VehicleState.Preparing)
-                        m_Runtime.m_RuntimeLog.PreparingTargetDrift(lineEnt, v, routeEnt, wps[0].m_Waypoint, tgt.m_Target, targetMin, curWpIdx, boarding, atA);
+                        m_Runtime.m_RuntimeLog.PreparingTargetDrift(lineEnt, v, routeEnt, wps[0].m_Waypoint, tgt.m_Target, targetMinute, curWpIdx, boarding, atA);
                     bool midStopBoarding = state == VehicleState.Running
                         && boarding
                         && curWpIdx > 0;
@@ -987,56 +1041,57 @@ namespace RapidTransitMod
                     {
                         case VehicleState.Preparing:
                             m_Runtime.m_Announcements.Preparing(v, routeEnt, wps, atA, nowFrame);
+                            m_Runtime.m_Observation.TryRequestDispatchEta(v, lineEnt, wps, nowFrame);
 
-                            if (targetMin >= 0 && ScheduleClock.SoftExpired(nowMin, targetMin) && !ScheduleClock.CanLate(nowMin, targetMin))
+                            if (targetMinute >= 0 && ScheduleClock.SoftExpired(nowMinute, targetMinute) && !ScheduleClock.CanLate(nowMinute, targetMinute))
                             {
-                                int overdue = ScheduleClock.Overdue(nowMin, targetMin);
+                                int overdueMinutes = ScheduleClock.Overdue(nowMinute, targetMinute);
                                 if (RtLog.VerboseEnabled)
                                 {
                                     m_Runtime.m_RuntimeLog.Once(
                                         m_Runtime.m_RuntimeLog.m_PreparingSlotLogCache,
                                         v,
-                                        "PreparingSlot|" + targetMin + "|" + overdue,
+                                        "PreparingSlot|" + targetMinute + "|" + overdueMinutes,
                                         "[PreparingSlot] " + lineTag + " 车辆" + v.Index
-                                            + " 班次" + DispatchRuntimeSystem.SlotStr(targetMin) + " 已过期(" + overdue + "分钟)，释放重新调度");
+                                            + " 班次" + DispatchRuntimeSystem.SlotStr(targetMinute) + " 已过期(" + overdueMinutes + "分钟)，释放重新调度");
                                 }
                                 this.ReleaseTarget(v);
-                                targetMin = -1;
+                                targetMinute = -1;
                             }
 
                             if (atA)
                             {
-                                int preparingAssignedTarget = -1;
-                                if (targetMin < 0 && m_Runtime.m_DispatchScheduler.Plan.TryAssignUpcomingTarget(
+                                int preparingAssignedTargetMinute = -1;
+                                if (targetMinute < 0 && m_Runtime.m_DispatchScheduler.Plan.TryAssignUpcomingTarget(
                                     routeEnt,
                                     v,
-                                    nowMin,
+                                    nowMinute,
                                     lineTag,
                                     "Preparing",
-                                    out preparingAssignedTarget))
+                                    out preparingAssignedTargetMinute))
                                 {
-                                    Target(v, preparingAssignedTarget);
-                                    targetMin = preparingAssignedTarget;
+                                    Target(v, preparingAssignedTargetMinute);
+                                    targetMinute = preparingAssignedTargetMinute;
                                 }
 
-                                if (m_Runtime.m_DispatchScheduler.Policy.ShouldRetire(routeEnt, nowMin, targetMin))
+                                if (m_Runtime.m_DispatchScheduler.Policy.ShouldRetire(routeEnt, nowMinute, targetMinute))
                                 {
-                                    m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMin, targetMin));
+                                    m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMinute, targetMinute));
                                     break;
                                 }
-                                this.Hold(v, nowFrame + PREPARING_ORIGIN_SETTLE_FRAMES);
+                                this.Hold(v, nowFrame, clockSnapshot);
                                 m_Runtime.m_Observation.Seed(v, lineEnt, nowFrame);
-                                m_Runtime.m_SelectPanel.RecordLineHoldingSummary(lineEnt, nowMin, v, targetMin);
-                                if (targetMin >= 0)
+                                m_Runtime.m_SelectPanel.RecordLineHoldingSummary(lineEnt, nowMinute, v, targetMinute);
+                                if (targetMinute >= 0)
                                 {
-                                    m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMin, nowFrame, "preparing-holding-assign");
+                                    m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMinute, nowFrame, "preparing-holding-assign");
                                 }
                                 m_Runtime.m_CommandApplier.HoldDeparture(v, ref pt, nowFrame, ecb);
-                                if (targetMin >= 0)
+                                if (targetMinute >= 0)
                                 {
-                                    SetHoldingVehicleLabel(v, targetMin, vTag);
+                                    SetHoldingVehicleLabel(v, targetMinute, vTag);
                                     if (RtLog.VerboseEnabled)
-                                        log.Info("[Preparing->Holding] " + lineTag + " 车辆" + v.Index + " 到站，预分配 " + DispatchRuntimeSystem.SlotStr(targetMin));
+                                        log.Info("[Preparing->Holding] " + lineTag + " 车辆" + v.Index + " 到站，预分配 " + DispatchRuntimeSystem.SlotStr(targetMinute));
                                 }
                                 else
                                 {
@@ -1048,7 +1103,7 @@ namespace RapidTransitMod
                             else
                             {
                                 m_Runtime.m_CommandApplier.EnsurePreparingRoute(v, ref pt, ref tgt, wps, curWpIdx, boarding, ecb);
-                                SetLocalizedVehicleLabel(v, "GoingOrigin", "前往始发站", (targetMin >= 0 ? " " + DispatchRuntimeSystem.SlotStr(targetMin) : "") + vTag);
+                                SetLocalizedVehicleLabel(v, "GoingOrigin", "前往始发站", (targetMinute >= 0 ? " " + DispatchRuntimeSystem.SlotStr(targetMinute) : "") + vTag);
                             }
                             break;
 
@@ -1057,11 +1112,11 @@ namespace RapidTransitMod
 
                             if (!atA)
                             {
-                                if (TryGetAssistLaunchPending(v, routeEnt, targetMin, out AssistLaunchPendingRecord assistPending))
+                                if (TryGetAssistLaunchPending(v, routeEnt, targetMinute, out AssistLaunchPendingRecord assistPending))
                                 {
-                                    int assistedTargetMin = assistPending.TargetMin;
-                                    bool isLateAssistLaunch = ScheduleClock.CanLate(nowMin, assistedTargetMin);
-                                    this.Launch(v, assistedTargetMin, nowFrame, nowFrame + LAUNCH_COOLDOWN_FRAMES);
+                                    int assistedTargetMinute = assistPending.TargetMinute;
+                                    bool isLateAssistLaunch = ScheduleClock.CanLate(nowMinute, assistedTargetMinute);
+                                    this.Launch(v, assistedTargetMinute, nowFrame, nowFrame + LAUNCH_COOLDOWN_FRAMES);
                                     m_Runtime.Bypass.RequestLineOrderedRuntimeForceRefresh(routeEnt, "origin-assist-launch-sync");
                                     m_Runtime.m_JustLaunched.Add(v);
                                     m_Runtime.m_Observation.Record(v, isLateAssistLaunch ? "协助补发确认" : "协助发车确认");
@@ -1070,17 +1125,17 @@ namespace RapidTransitMod
                                     m_Runtime.m_CachedWpIdx[v] = -1;
                                     m_Runtime.m_BVMisfire.Remove(v);
                                     m_Runtime.m_BVMisfireStartFrame.Remove(v);
-                                    m_Runtime.m_Observation.Launch(routeEnt, v, assistedTargetMin, nowMin, nowFrame, isLateAssistLaunch);
+                                    m_Runtime.m_Observation.Launch(routeEnt, v, assistedTargetMinute, nowMinute, nowFrame, isLateAssistLaunch);
                                     ClearAssistLaunchPending(v);
                                     pt.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
                                     pt.m_State &= ~PublicTransportFlags.Boarding;
                                     m_Runtime.m_CommandApplier.CommitPublicTransport(v, pt, ecb);
-                                    SetRunningSlotVehicleLabel(v, isLateAssistLaunch, assistedTargetMin, vTag);
+                                    SetRunningSlotVehicleLabel(v, isLateAssistLaunch, assistedTargetMinute, vTag);
                                     if (RtLog.VerboseEnabled)
                                     {
                                         log.Info("[AssistLaunchSync] " + lineTag + " 车辆" + v.Index
-                                            + " 在始发发车协助后已离站，补记班次" + DispatchRuntimeSystem.SlotStr(assistedTargetMin)
-                                            + " 于 " + DispatchRuntimeSystem.SlotStr(nowMin)
+                                            + " 在始发发车协助后已离站，补记班次" + DispatchRuntimeSystem.SlotStr(assistedTargetMinute)
+                                            + " 于 " + DispatchRuntimeSystem.SlotStr(nowMinute)
                                             + (isLateAssistLaunch ? " late=1" : " late=0"));
                                     }
                                     break;
@@ -1096,8 +1151,8 @@ namespace RapidTransitMod
                                             routeEnt,
                                             wps,
                                             state,
-                                            targetMin,
-                                            nowMin,
+                                            targetMinute,
+                                            nowMinute,
                                             curWpIdx,
                                             atA,
                                             boarding,
@@ -1105,7 +1160,7 @@ namespace RapidTransitMod
                                             nowFrame);
                                     }
                                     m_Runtime.m_CommandApplier.HoldDeparture(v, ref pt, nowFrame, ecb);
-                                    SetHoldingVehicleLabel(v, targetMin, vTag);
+                                    SetHoldingVehicleLabel(v, targetMinute, vTag);
                                     break;
                                 }
                                 if (RtLog.VerboseEnabled)
@@ -1117,8 +1172,8 @@ namespace RapidTransitMod
                                         routeEnt,
                                         wps,
                                         state,
-                                        targetMin,
-                                        nowMin,
+                                        targetMinute,
+                                        nowMinute,
                                         curWpIdx,
                                         atA,
                                         boarding,
@@ -1132,9 +1187,9 @@ namespace RapidTransitMod
                                 log.Info("[异常] " + lineTag + " 车辆" + v.Index + " Holding 时意外离站");
                                 break;
                             }
-                            if (targetMin < 0)
+                            if (targetMinute < 0)
                             {
-                                int lateSlot = -1;
+                                int lateSlotMinute = -1;
                                 int[] appliedTargets = m_Runtime.m_LineView.Times(routeEnt);
                                 Entity releasedVehicle = Entity.Null;
                                 bool assigned;
@@ -1143,43 +1198,43 @@ namespace RapidTransitMod
                                     assigned = m_Runtime.m_DispatchScheduler.Plan.TryAssignCurrentOrLateScheduledTarget(
                                         routeEnt,
                                         v,
-                                        nowMin,
+                                        nowMinute,
                                         lineTag,
                                         "Holding",
                                         appliedTargets,
                                         out releasedVehicle,
-                                        out lateSlot);
+                                        out lateSlotMinute);
                                 }
                                 else
                                 {
                                     assigned = m_Runtime.m_DispatchScheduler.Plan.TryAssignCurrentOrLateSlot(
                                         routeEnt,
                                         v,
-                                        nowMin,
+                                        nowMinute,
                                         lineTag,
                                         "Holding",
                                         out releasedVehicle,
-                                        out lateSlot);
+                                        out lateSlotMinute);
                                 }
                                 if (assigned)
                                 {
                                     if (releasedVehicle != Entity.Null)
                                         ReleaseTarget(releasedVehicle);
-                                    Target(v, lateSlot);
-                                    targetMin = lateSlot;
-                                    m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMin, nowFrame, "holding-assigned");
+                                    Target(v, lateSlotMinute);
+                                    targetMinute = lateSlotMinute;
+                                    m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMinute, nowFrame, "holding-assigned");
                                 }
                                 else if (m_Runtime.m_DispatchScheduler.Plan.TryAssignUpcomingTarget(
                                     routeEnt,
                                     v,
-                                    nowMin,
+                                    nowMinute,
                                     lineTag,
                                     "Holding",
-                                    out int upcomingTarget))
+                                    out int upcomingTargetMinute))
                                 {
-                                    Target(v, upcomingTarget);
-                                    targetMin = upcomingTarget;
-                                    m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMin, nowFrame, "holding-upcoming-assigned");
+                                    Target(v, upcomingTargetMinute);
+                                    targetMinute = upcomingTargetMinute;
+                                    m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMinute, nowFrame, "holding-upcoming-assigned");
                                 }
                                 else
                                 {
@@ -1192,8 +1247,8 @@ namespace RapidTransitMod
                                             routeEnt,
                                             wps,
                                             state,
-                                            targetMin,
-                                            nowMin,
+                                            targetMinute,
+                                            nowMinute,
                                             curWpIdx,
                                             atA,
                                             boarding,
@@ -1207,7 +1262,7 @@ namespace RapidTransitMod
                                 }
                             }
 
-                            if (m_Runtime.m_DispatchScheduler.Policy.ShouldRetire(routeEnt, nowMin, targetMin))
+                            if (m_Runtime.m_DispatchScheduler.Policy.ShouldRetire(routeEnt, nowMinute, targetMinute))
                             {
                                 if (RtLog.VerboseEnabled)
                                 {
@@ -1218,23 +1273,23 @@ namespace RapidTransitMod
                                         routeEnt,
                                         wps,
                                         state,
-                                        targetMin,
-                                        nowMin,
+                                        targetMinute,
+                                        nowMinute,
                                         curWpIdx,
                                         atA,
                                         boarding,
                                         lastBoarding,
                                         nowFrame);
                                 }
-                                m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMin, targetMin));
+                                m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMinute, targetMinute));
                                 m_Runtime.Bypass.ClearVehicle(v);
                                 break;
                             }
 
-                            if (ScheduleClock.Reached(nowMin, targetMin) || ScheduleClock.CanLate(nowMin, targetMin))
+                            if (ScheduleClock.Reached(nowMinute, targetMinute) || ScheduleClock.CanLate(nowMinute, targetMinute))
                             {
                                 m_Runtime.Bypass.ClearVehicle(v, "始发候车不参与待避");
-                                if (m_Runtime.m_DispatchScheduler.Policy.IsOccupied(routeEnt, v, targetMin))
+                                if (m_Runtime.m_DispatchScheduler.Policy.IsOccupied(routeEnt, v, targetMinute))
                                 {
                                     if (RtLog.VerboseEnabled)
                                     {
@@ -1245,8 +1300,8 @@ namespace RapidTransitMod
                                             routeEnt,
                                             wps,
                                             state,
-                                            targetMin,
-                                            nowMin,
+                                            targetMinute,
+                                            nowMinute,
                                             curWpIdx,
                                             atA,
                                             boarding,
@@ -1261,9 +1316,9 @@ namespace RapidTransitMod
                                         m_Runtime.m_RuntimeLog.Once(
                                             m_Runtime.m_RuntimeLog.m_HoldingSkipLogCache,
                                             v,
-                                            "HoldingSkip|" + targetMin,
+                                            "HoldingSkip|" + targetMinute,
                                             "[HoldingSkip] " + lineTag + " 车辆" + v.Index
-                                                + " 班次" + DispatchRuntimeSystem.SlotStr(targetMin) + " 已被其他车辆占用，释放重调度");
+                                                + " 班次" + DispatchRuntimeSystem.SlotStr(targetMinute) + " 已被其他车辆占用，释放重调度");
                                     }
                                     break;
                                 }
@@ -1279,8 +1334,8 @@ namespace RapidTransitMod
                                             routeEnt,
                                             wps,
                                             state,
-                                            targetMin,
-                                            nowMin,
+                                            targetMinute,
+                                            nowMinute,
                                             curWpIdx,
                                             atA,
                                             boarding,
@@ -1288,7 +1343,7 @@ namespace RapidTransitMod
                                             nowFrame);
                                     }
                                     m_Runtime.m_CommandApplier.HoldDeparture(v, ref pt, nowFrame, ecb);
-                                    SetHoldingVehicleLabel(v, targetMin, vTag, ScheduleClock.CanLate(nowMin, targetMin));
+                                    SetHoldingVehicleLabel(v, targetMinute, vTag, ScheduleClock.CanLate(nowMinute, targetMinute));
                                     break;
                                 }
                                 if (boarding)
@@ -1302,11 +1357,11 @@ namespace RapidTransitMod
                                         if (RtLog.VerboseEnabled)
                                         {
                                             log.Info("[始发发车协助] " + lineTag + " 车辆" + v.Index
-                                                + " 班次" + DispatchRuntimeSystem.SlotStr(targetMin)
+                                                + " 班次" + DispatchRuntimeSystem.SlotStr(targetMinute)
                                                 + " wp=" + curWpIdx);
                                         }
                                     }
-                                    ArmAssistLaunchPending(v, routeEnt, targetMin);
+                                    ArmAssistLaunchPending(v, routeEnt, targetMinute);
                                     if (RtLog.VerboseEnabled)
                                     {
                                         m_Runtime.m_RuntimeLog.OriginDispatchTrace(
@@ -1316,8 +1371,8 @@ namespace RapidTransitMod
                                             routeEnt,
                                             wps,
                                             state,
-                                            targetMin,
-                                            nowMin,
+                                            targetMinute,
+                                            nowMinute,
                                             curWpIdx,
                                             atA,
                                             boarding,
@@ -1325,17 +1380,17 @@ namespace RapidTransitMod
                                             nowFrame,
                                             "assistRefreshed=" + (shouldRefreshOriginAssist ? "1" : "0"));
                                     }
-                                    SetLocalizedVehicleLabel(v, "BoardingEnd", "结束上客", " " + DispatchRuntimeSystem.SlotStr(targetMin) + vTag);
+                                    SetLocalizedVehicleLabel(v, "BoardingEnd", "结束上客", " " + DispatchRuntimeSystem.SlotStr(targetMinute) + vTag);
                                     break;
                                 }
-                                bool isLateDispatch = ScheduleClock.CanLate(nowMin, targetMin);
-                                int overdue = isLateDispatch ? ScheduleClock.Overdue(nowMin, targetMin) : 0;
+                                bool isLateDispatch = ScheduleClock.CanLate(nowMinute, targetMinute);
+                                int overdueMinutes = isLateDispatch ? ScheduleClock.Overdue(nowMinute, targetMinute) : 0;
                                 bool hasLaunchHeadSnapshot = m_Runtime.m_Observation.Head(v, curWpIdx, out TrainHeadSnapshot currentLaunchHeadSnapshot);
                                 string headDiagnostic = RtLog.VerboseEnabled
                                     ? m_Runtime.m_RuntimeLog.TrainHeadLaunch(v, hasLaunchHeadSnapshot, currentLaunchHeadSnapshot)
                                     : string.Empty;
                                 m_Runtime.m_CommandApplier.Launch(v, pt, tgt, wps, ecb);
-                                this.Launch(v, targetMin, nowFrame, nowFrame + LAUNCH_COOLDOWN_FRAMES);
+                                this.Launch(v, targetMinute, nowFrame, nowFrame + LAUNCH_COOLDOWN_FRAMES);
                                 m_Runtime.Bypass.RequestLineOrderedRuntimeForceRefresh(routeEnt, "origin-launch");
                                 m_Runtime.m_JustLaunched.Add(v);
                                 if (RtLog.VerboseEnabled)
@@ -1351,11 +1406,12 @@ namespace RapidTransitMod
                                 m_Runtime.m_CachedWpIdx[v] = -1;
                                 m_Runtime.m_BVMisfire.Remove(v);
                                 m_Runtime.m_BVMisfireStartFrame.Remove(v);
-                                m_Runtime.m_Observation.Launch(routeEnt, v, targetMin, nowMin, nowFrame, isLateDispatch);
+                                m_Runtime.m_Observation.Launch(routeEnt, v, targetMinute, nowMinute, nowFrame, isLateDispatch);
                                 m_Runtime.m_WorkbenchBridge.ObservationStops().Start(v, lineEnt, wps);
                                 if (RtLog.VerboseEnabled)
                                     log.Info("[LaunchHeadCheck] " + lineTag + " vehicle" + v.Index + headDiagnostic);
-                                SetRunningSlotVehicleLabel(v, isLateDispatch, targetMin, vTag);
+                                SetRunningSlotVehicleLabel(v, isLateDispatch, targetMinute, vTag);
+                                string spawnIntent = m_Runtime.m_SpawnIntentTrace.Launch(v, targetMinute, nowFrame);
                                 if (isLateDispatch)
                                 {
                                     if (RtLog.VerboseEnabled)
@@ -1363,11 +1419,12 @@ namespace RapidTransitMod
                                         m_Runtime.m_RuntimeLog.Once(
                                             m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                                             v,
-                                            "LateDispatchLaunch|" + targetMin,
+                                            "LateDispatchLaunch|" + targetMinute,
                                             "[补发] " + lineTag + " 车辆" + v.Index
-                                                + " 于 " + DispatchRuntimeSystem.SlotStr(nowMin) + " 补发（班次 " + DispatchRuntimeSystem.SlotStr(targetMin) + "）"
-                                                + " 已过期" + overdue + "分钟"
-                                                + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES));
+                                                + " 于 " + DispatchRuntimeSystem.SlotStr(nowMinute) + " 补发（班次 " + DispatchRuntimeSystem.SlotStr(targetMinute) + "）"
+                                                + " 已过期" + overdueMinutes + "分钟"
+                                                + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES)
+                                                + spawnIntent);
                                     }
                                 }
                                 else
@@ -1375,30 +1432,31 @@ namespace RapidTransitMod
                                     if (RtLog.VerboseEnabled)
                                     {
                                         log.Info("[发车] " + lineTag + " 车辆" + v.Index
-                                            + " 于 " + DispatchRuntimeSystem.SlotStr(nowMin) + " 发车（班次 " + DispatchRuntimeSystem.SlotStr(targetMin) + "）"
-                                            + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES));
+                                            + " 于 " + DispatchRuntimeSystem.SlotStr(nowMinute) + " 发车（班次 " + DispatchRuntimeSystem.SlotStr(targetMinute) + "）"
+                                            + " 冷却至帧" + (nowFrame + LAUNCH_COOLDOWN_FRAMES)
+                                            + spawnIntent);
                                     }
                                 }
                             }
-                            else if (ScheduleClock.HardExpired(nowMin, targetMin))
+                            else if (ScheduleClock.HardExpired(nowMinute, targetMinute))
                             {
                                 m_Runtime.Bypass.ClearVehicle(v);
-                                int overdue = ScheduleClock.Overdue(nowMin, targetMin);
+                                int overdueMinutes = ScheduleClock.Overdue(nowMinute, targetMinute);
                                 if (RtLog.VerboseEnabled)
                                 {
                                     log.Info("[Holding] " + lineTag + " 车辆" + v.Index
-                                        + " 班次" + DispatchRuntimeSystem.SlotStr(targetMin) + " 大幅过期(" + overdue + "分钟)，直接回库");
+                                        + " 班次" + DispatchRuntimeSystem.SlotStr(targetMinute) + " 大幅过期(" + overdueMinutes + "分钟)，直接回库");
                                 }
-                                m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, "班次大幅过期" + overdue + "分钟");
+                                m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, "班次大幅过期" + overdueMinutes + "分钟");
                             }
-                            else if (ScheduleClock.SoftExpired(nowMin, targetMin))
+                            else if (ScheduleClock.SoftExpired(nowMinute, targetMinute))
                             {
                                 m_Runtime.Bypass.ClearVehicle(v);
-                                int overdue = ScheduleClock.Overdue(nowMin, targetMin);
+                                int overdueMinutes = ScheduleClock.Overdue(nowMinute, targetMinute);
                                 if (RtLog.VerboseEnabled)
                                 {
                                     log.Info("[Holding] " + lineTag + " 车辆" + v.Index
-                                        + " 班次" + DispatchRuntimeSystem.SlotStr(targetMin) + " 已过期(" + overdue + "分钟)，释放重新调度");
+                                        + " 班次" + DispatchRuntimeSystem.SlotStr(targetMinute) + " 已过期(" + overdueMinutes + "分钟)，释放重新调度");
                                 }
                                 this.ReleaseTarget(v);
                                 m_Runtime.m_CommandApplier.HoldDeparture(v, ref pt, nowFrame, ecb);
@@ -1415,8 +1473,8 @@ namespace RapidTransitMod
                                         routeEnt,
                                         wps,
                                         state,
-                                        targetMin,
-                                        nowMin,
+                                        targetMinute,
+                                        nowMinute,
                                         curWpIdx,
                                         atA,
                                         boarding,
@@ -1425,7 +1483,7 @@ namespace RapidTransitMod
                                 }
                                 m_Runtime.Bypass.ClearVehicle(v);
                                 m_Runtime.m_CommandApplier.HoldDeparture(v, ref pt, nowFrame, ecb);
-                                SetHoldingVehicleLabel(v, targetMin, vTag, ScheduleClock.CanLate(nowMin, targetMin));
+                                SetHoldingVehicleLabel(v, targetMinute, vTag, ScheduleClock.CanLate(nowMinute, targetMinute));
                             }
                             break;
 
@@ -1523,6 +1581,7 @@ namespace RapidTransitMod
                                 if (shouldRefreshTimeoutAssist)
                                 {
                                     m_Runtime.m_CommandApplier.ForceDepart(v, ref pt, nowFrame, ecb);
+                                    m_Runtime.m_ForcedMidStopBoardingGraceUntil[v] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
                                     if (RtLog.VerboseEnabled)
                                     {
                                         string timeoutLogKey = midStopDwellSinceFrame.ToString();
@@ -1542,6 +1601,7 @@ namespace RapidTransitMod
                                     ? runningBypass.ReleaseReason
                                     : "timeout-close:no-bypass-release-reason";
                                 m_Runtime.Bypass.ClearVehiclePreservingBypassHoldSkipped(v, timeoutBypassReleaseReason);
+                                m_Runtime.Bypass.MarkBypassHoldSkipped(v, runningBypassBlocker);
                                 SetLocalizedVehicleLabel(v, "StopTimeout", "停站超时", vTag);
                                 if (ENABLE_MIDSTOP_TIMEOUT_GATE_LOGS && !shouldRefreshTimeoutAssist)
                                 {
@@ -1593,7 +1653,7 @@ namespace RapidTransitMod
                             bool hasOriginSettleSignal = atA
                                 || boarding
                                 || lastBoarding
-                                || targetMin >= 0
+                                || targetMinute >= 0
                                 || m_Runtime.m_VehicleStateStore.OriginArrivalCandidateSinceFrame.ContainsKey(v)
                                 || m_Runtime.m_VehicleView.IsInbound(v);
                             bool shouldEvaluateOriginSettle = !inCooldown
@@ -1604,7 +1664,7 @@ namespace RapidTransitMod
                                     atA,
                                     boarding,
                                     lastBoarding,
-                                    targetMin);
+                                    targetMinute);
                             bool settleAtOrigin = shouldEvaluateOriginSettle
                                 && m_Runtime.m_LineProfile.ShouldSettleAtOrigin(
                                     v,
@@ -1613,7 +1673,7 @@ namespace RapidTransitMod
                                     atA,
                                     boarding,
                                     lastBoarding,
-                                    targetMin);
+                                    targetMinute);
                             bool forcedAtOrigin = settleAtOrigin && !atA;
                             if ((atA || forcedAtOrigin) && !inCooldown)
                             {
@@ -1637,13 +1697,13 @@ namespace RapidTransitMod
                                     m_Runtime.m_CachedWpIdx[v] = 0;
                                     pt.m_DepartureFrame = nowFrame + 9999;
                                     m_Runtime.m_CommandApplier.CommitPublicTransport(v, pt, ecb);
-                                    SetHoldingVehicleLabel(v, targetMin, vTag, includeHoldingInWaiting: false);
+                                    SetHoldingVehicleLabel(v, targetMinute, vTag, includeHoldingInWaiting: false);
                                     log.Info("[恢复兜底] " + lineTag + " 车辆" + v.Index
                                         + " Running圈起点无效，回站后转Idle"
                                         + " lapStartFrame=" + lapStartFrame
                                         + " lapStartValid=" + lapStartValid
                                         + " lapStartRaw=" + (hasLapStartOdo ? ls.ToString("F1") : "?")
-                                        + " target=" + (targetMin >= 0 ? DispatchRuntimeSystem.SlotStr(targetMin) : "-")
+                                        + " target=" + (targetMinute >= 0 ? DispatchRuntimeSystem.SlotStr(targetMinute) : "-")
                                         + " nowOdo=" + (nowOdo >= 0f ? nowOdo.ToString("F1") : "?"));
                                     break;
                                 }
@@ -1654,7 +1714,7 @@ namespace RapidTransitMod
                                         uint originSinceFrame = m_Runtime.m_VehicleView.TryGetOrigin(v, out uint sinceFrame)
                                             ? sinceFrame
                                             : nowFrame;
-                                        bool keepAssignedTarget = targetMin >= 0 && ScheduleClock.CurrentOrRecent(nowMin, targetMin);
+                                        bool keepAssignedTarget = targetMinute >= 0 && ScheduleClock.CurrentOrRecent(nowMinute, targetMinute);
                                         bool recoverToHolding = keepAssignedTarget;
 
                                         if (recoverToHolding)
@@ -1670,11 +1730,11 @@ namespace RapidTransitMod
 
                                         if (recoverToHolding)
                                         {
-                                            bool isLateRecoveredTarget = ScheduleClock.CanLate(nowMin, targetMin);
-                                            SetHoldingVehicleLabel(v, targetMin, vTag, isLateRecoveredTarget);
+                                            bool isLateRecoveredTarget = ScheduleClock.CanLate(nowMinute, targetMinute);
+                                            SetHoldingVehicleLabel(v, targetMinute, vTag, isLateRecoveredTarget);
                                             log.Info("[Running->Holding兜底] " + lineTag + " 车辆" + v.Index
                                                 + " 到达始发站后长时间静止，回收为候车"
-                                                + " target=" + DispatchRuntimeSystem.SlotStr(targetMin)
+                                                + " target=" + DispatchRuntimeSystem.SlotStr(targetMinute)
                                                 + " waitedFrames=" + (nowFrame - originSinceFrame)
                                                 + " boarding=" + boarding
                                                 + " lastBoarding=" + lastBoarding
@@ -1700,14 +1760,14 @@ namespace RapidTransitMod
                                         : nowFrame + 9999;
                                     m_Runtime.m_CommandApplier.CommitPublicTransport(v, pt, ecb);
                                     string curSlot1 = m_Runtime.m_VehicleView.TryGetSlot(v, out int cs1) ? DispatchRuntimeSystem.SlotStr(cs1) : "?";
-                                    string nxtSlot1 = targetMin >= 0 ? ("->" + DispatchRuntimeSystem.SlotStr(targetMin)) : "";
+                                    string nxtSlot1 = targetMinute >= 0 ? ("->" + DispatchRuntimeSystem.SlotStr(targetMinute)) : "";
                                     SetLocalizedVehicleLabel(v, "Running", "运行中", curSlot1 + nxtSlot1 + vTag);
                                     if (nowFrame % 1800 == 0)
                                     {
                                         uint lastLaunchFrame = m_Runtime.m_VehicleView.TryGetLaunch(v, out uint llf) ? llf : 0;
                                         uint lapStartFrameDbg = m_Runtime.m_ObsQuery.TryLapStartFrame(v, out uint lsfDbg) ? lsfDbg : 0;
                                         string curSlotDbg = m_Runtime.m_VehicleView.TryGetSlot(v, out int csDbg) ? DispatchRuntimeSystem.SlotStr(csDbg) : "?";
-                                        string targetSlotDbg = targetMin >= 0 ? DispatchRuntimeSystem.SlotStr(targetMin) : "-";
+                                        string targetSlotDbg = targetMinute >= 0 ? DispatchRuntimeSystem.SlotStr(targetMinute) : "-";
                                         int cachedWpDbg = m_Runtime.m_CachedWpIdx.TryGetValue(v, out int cwDbg) ? cwDbg : -1;
                                         log.Info("[心跳-卡站] " + lineTag + " 车辆" + v.Index
                                             + " atA=true hasMoved=false"
@@ -1735,10 +1795,10 @@ namespace RapidTransitMod
                                 m_Runtime.m_Observation.Update(v);
                                 this.ArriveIdle(v);
                                 m_Runtime.Bypass.RequestLineOrderedRuntimeForceRefresh(lineEnt, "origin-return-idle");
-                                if (targetMin >= 0)
+                                if (targetMinute >= 0)
                                 {
-                                    if (ScheduleClock.CurrentOrRecent(nowMin, targetMin))
-                                        this.Target(v, targetMin);
+                                    if (ScheduleClock.CurrentOrRecent(nowMinute, targetMinute))
+                                        this.Target(v, targetMinute);
                                     else
                                         this.ReleaseTarget(v);
                                 }
@@ -1750,7 +1810,7 @@ namespace RapidTransitMod
                                 this.ClearInbound(v);
                                 this.ClearOriginCandidate(v);
                                 if (forcedAtOrigin)
-                                    this.SetReady(v, nowFrame + FORCED_ORIGIN_MIN_DWELL_FRAMES);
+                                    this.SetReady(v, nowFrame, clockSnapshot);
                                 else
                                     this.ClearReady(v);
                                 SetLocalizedVehicleLabel(v, "WaitingDispatch", "等待调度", vTag);
@@ -1760,8 +1820,8 @@ namespace RapidTransitMod
                                         + " nowOdo=" + (nowOdo >= 0f ? nowOdo.ToString("F1") : "?")
                                         + " lapStart=" + (lapStartValid ? lapStart.ToString("F1") : "?")
                                         + " curWpIdx=" + curWpIdx
-                                        + (targetMin >= 0 && ScheduleClock.CurrentOrRecent(nowMin, targetMin)
-                                            ? " keptTarget=" + DispatchRuntimeSystem.SlotStr(targetMin)
+                                        + (targetMinute >= 0 && ScheduleClock.CurrentOrRecent(nowMinute, targetMinute)
+                                            ? " keptTarget=" + DispatchRuntimeSystem.SlotStr(targetMinute)
                                             : "")
                                         + (forcedAtOrigin ? " forcedAtOrigin=true" : ""));
                                 }
@@ -1771,7 +1831,7 @@ namespace RapidTransitMod
                                 if (m_Runtime.m_ObsQuery.NeedsLapStart(v) && !inCooldown)
                                     m_Runtime.m_Observation.Record(v, "Running缺少圈起点自愈");
                                 string curSlot2 = m_Runtime.m_VehicleView.TryGetSlot(v, out int cs2) ? DispatchRuntimeSystem.SlotStr(cs2) : "?";
-                                string nxtSlot2 = targetMin >= 0 ? ("->" + DispatchRuntimeSystem.SlotStr(targetMin)) : "";
+                                string nxtSlot2 = targetMinute >= 0 ? ("->" + DispatchRuntimeSystem.SlotStr(targetMinute)) : "";
                                 SetLocalizedVehicleLabel(v, "Running", "运行中", curSlot2 + nxtSlot2 + vTag);
                             }
                             break;
@@ -1789,7 +1849,7 @@ namespace RapidTransitMod
                                 break;
                             }
 
-                            if (targetMin < 0)
+                            if (targetMinute < 0)
                             {
                                 int[] appliedTargets = m_Runtime.m_LineView.Times(routeEnt);
                                 int lateTarget = -1;
@@ -1800,7 +1860,7 @@ namespace RapidTransitMod
                                     assignedLateTarget = m_Runtime.m_DispatchScheduler.Plan.TryAssignCurrentOrLateScheduledTarget(
                                         routeEnt,
                                         v,
-                                        nowMin,
+                                        nowMinute,
                                         lineTag,
                                         "Idle",
                                         appliedTargets,
@@ -1812,7 +1872,7 @@ namespace RapidTransitMod
                                     assignedLateTarget = m_Runtime.m_DispatchScheduler.Plan.TryAssignCurrentOrLateSlot(
                                         routeEnt,
                                         v,
-                                        nowMin,
+                                        nowMinute,
                                         lineTag,
                                         "Idle",
                                         out releasedVehicle,
@@ -1823,15 +1883,15 @@ namespace RapidTransitMod
                                     if (releasedVehicle != Entity.Null)
                                         ReleaseTarget(releasedVehicle);
                                     Target(v, lateTarget);
-                                    targetMin = lateTarget;
+                                    targetMinute = lateTarget;
                                 }
                             }
 
                             if (m_Runtime.m_LineProfile.HasInboundNearOrigin(routeEnt, wps, v, ORIGIN_CONGESTION_RADIUS_METERS, includePreparingVehicles: false))
                             {
-                                if (m_Runtime.m_DispatchScheduler.Policy.ShouldProtect(routeEnt, v, nowMin, -1))
+                                if (m_Runtime.m_DispatchScheduler.Policy.ShouldProtect(routeEnt, v, nowMinute, -1))
                                 {
-                                    if (m_Runtime.m_VehicleView.TryGetTarget(v, out int ptm) && ptm >= 0 && ScheduleClock.CanLate(nowMin, ptm))
+                                    if (m_Runtime.m_VehicleView.TryGetTarget(v, out int ptm) && ptm >= 0 && ScheduleClock.CanLate(nowMinute, ptm))
                                     {
                                         if (RtLog.VerboseEnabled)
                                         {
@@ -1841,23 +1901,23 @@ namespace RapidTransitMod
                                                 "YieldSkipLate|" + ptm,
                                                 "[YieldSkip] " + lineTag + " 车辆" + v.Index
                                                     + " 班次" + DispatchRuntimeSystem.SlotStr(ptm)
-                                                    + " 已过期" + ScheduleClock.Overdue(nowMin, ptm) + "分钟，保留补发");
+                                                    + " 已过期" + ScheduleClock.Overdue(nowMinute, ptm) + "分钟，保留补发");
                                         }
                                     }
                                     else
                                     {
                                         if (RtLog.VerboseEnabled)
                                         {
-                                            int protectTarget = m_Runtime.m_VehicleView.TryGetTarget(v, out int ptm2) && ptm2 >= 0
+                                            int protectTargetMinute = m_Runtime.m_VehicleView.TryGetTarget(v, out int ptm2) && ptm2 >= 0
                                                 ? ptm2
-                                                : m_Runtime.m_DispatchScheduler.Policy.Fallback(routeEnt, nowMin);
+                                                : m_Runtime.m_DispatchScheduler.Policy.Fallback(routeEnt, nowMinute);
                                             m_Runtime.m_RuntimeLog.Once(
                                                 m_Runtime.m_RuntimeLog.m_YieldSkipLogCache,
                                                 v,
-                                                "YieldSkipProtect|" + protectTarget,
+                                                "YieldSkipProtect|" + protectTargetMinute,
                                                 "[YieldSkip] " + lineTag + " 车辆" + v.Index
-                                                    + " 最近班次" + DispatchRuntimeSystem.SlotStr(protectTarget)
-                                                    + " 仅剩" + ScheduleClock.MinutesUntil(nowMin, protectTarget) + "分钟，保留待避");
+                                                    + " 最近班次" + DispatchRuntimeSystem.SlotStr(protectTargetMinute)
+                                                    + " 仅剩" + ScheduleClock.MinutesUntil(nowMinute, protectTargetMinute) + "分钟，保留待避");
                                         }
                                     }
                                     break;
@@ -1867,30 +1927,30 @@ namespace RapidTransitMod
                                 break;
                             }
 
-                            if (targetMin >= 0)
+                            if (targetMinute >= 0)
                             {
-                                if (m_Runtime.m_DispatchScheduler.Policy.ShouldRetire(routeEnt, nowMin, targetMin))
+                                if (m_Runtime.m_DispatchScheduler.Policy.ShouldRetire(routeEnt, nowMinute, targetMinute))
                                 {
-                                    m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMin, targetMin));
+                                    m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, BuildOriginHoldRetireReason(routeEnt, nowMinute, targetMinute));
                                     break;
                                 }
                                 this.HoldFromIdle(v);
                                 pt.m_DepartureFrame = nowFrame + 9999;
                                 m_Runtime.m_CommandApplier.CommitPublicTransport(v, pt, ecb);
-                                bool isLateTarget = ScheduleClock.CanLate(nowMin, targetMin);
-                                m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMin, nowFrame, isLateTarget ? "idle-late-claim" : "idle-holding-assign");
-                                SetHoldingVehicleLabel(v, targetMin, vTag, isLateTarget);
+                                bool isLateTarget = ScheduleClock.CanLate(nowMinute, targetMinute);
+                                m_Runtime.m_Observation.BindTarget(routeEnt, v, targetMinute, nowFrame, isLateTarget ? "idle-late-claim" : "idle-holding-assign");
+                                SetHoldingVehicleLabel(v, targetMinute, vTag, isLateTarget);
                                 if (RtLog.VerboseEnabled)
                                 {
                                     m_Runtime.m_RuntimeLog.Once(
                                         isLateTarget ? m_Runtime.m_RuntimeLog.m_LateDispatchLogCache : m_Runtime.m_RuntimeLog.m_HoldingSkipLogCache,
                                         v,
-                                        (isLateTarget ? "LateDispatchClaim|" : "IdleHoldingAssign|") + targetMin,
+                                        (isLateTarget ? "LateDispatchClaim|" : "IdleHoldingAssign|") + targetMinute,
                                         (isLateTarget ? "[补发认领] " : "[Idle->Holding] ")
                                             + lineTag + " 车辆" + v.Index
                                             + (isLateTarget
-                                                ? " 认领补发班次" + DispatchRuntimeSystem.SlotStr(targetMin) + " 于 " + DispatchRuntimeSystem.SlotStr(nowMin)
-                                                : " 进入候车班次" + DispatchRuntimeSystem.SlotStr(targetMin)));
+                                                ? " 认领补发班次" + DispatchRuntimeSystem.SlotStr(targetMinute) + " 于 " + DispatchRuntimeSystem.SlotStr(nowMinute)
+                                                : " 进入候车班次" + DispatchRuntimeSystem.SlotStr(targetMinute)));
                                 }
                                 break;
                             }
@@ -1898,13 +1958,19 @@ namespace RapidTransitMod
                             if (!m_Runtime.m_VehicleStateStore.IdleStartFrame.ContainsKey(v))
                                 this.SetIdle(v, nowFrame);
 
-                            if (m_Runtime.m_VehicleView.TryGetIdle(v, out uint idleStart))
+                            if (m_Runtime.m_VehicleView.TryGetIdle(v, out uint idleStartFrame))
                             {
-                                float idleMin = (nowFrame - idleStart) / (float)SIM_FRAMES_PER_MINUTE;
-                                if (idleMin > IDLE_TIMEOUT_MIN)
+                                uint idleFrames = nowFrame - idleStartFrame;
+                                uint idleTimeoutFrames = clockSnapshot.ToFramesCeil(IDLE_TIMEOUT_MINUTES);
+                                if (idleFrames >= idleTimeoutFrames)
                                 {
                                     ClearIdle(v);
-                                    m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, "闲置" + idleMin.ToString("F1") + "分钟");
+                                    m_Runtime.m_CommandApplier.Retire(
+                                        v,
+                                        pt,
+                                        tgt,
+                                        ecb,
+                                        "闲置" + clockSnapshot.ToMinutes(idleFrames).ToString("F1") + "分钟");
                                     break;
                                 }
                             }
@@ -1921,17 +1987,20 @@ namespace RapidTransitMod
                 }
 
             }
-            finally { vehicles.Dispose(); }
+            finally
+            {
+                vehicles.Dispose();
+            }
         }
 
-        private void TickLineControls(int nowMin)
+        private void TickLineControls(int nowMinute)
         {
-            if (nowMin != m_Runtime.m_LastPuppetMasterMinute)
+            if (nowMinute != m_Runtime.m_LastPuppetMasterMinute)
             {
                 try
                 {
-                    m_LineSpawnControl.Tick(nowMin);
-                    m_Runtime.m_LastPuppetMasterMinute = nowMin;
+                    m_LineSpawnControl.Tick(nowMinute);
+                    m_Runtime.m_LastPuppetMasterMinute = nowMinute;
                 }
                 catch (Exception ex)
                 {
@@ -1941,13 +2010,11 @@ namespace RapidTransitMod
             }
         }
 
-        private string BuildOriginHoldRetireReason(Entity line, int nowMin, int targetMin)
+        private string BuildOriginHoldRetireReason(Entity line, int nowMinute, int targetMinute)
         {
-            int waitMinutes = ScheduleClock.MinutesUntil(nowMin, targetMin);
+            int waitMinutes = ScheduleClock.MinutesUntil(nowMinute, targetMinute);
             int holdLimitMinutes = m_Runtime.m_LineView.Hold(line);
             return "下一班仍需等待" + waitMinutes + "分钟，超出候车窗口" + holdLimitMinutes + "分钟";
         }
     }
 }
-
-

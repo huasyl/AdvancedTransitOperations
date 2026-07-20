@@ -1317,6 +1317,8 @@ namespace RapidTransitMod
         [DataMember]
         public double simFramesPerMinute;
         [DataMember]
+        public long clockEpoch;
+        [DataMember]
         public int defaultOriginHoldLimitMinutes;
         [DataMember]
         public int defaultMaxStationDwellMinutes;
@@ -1345,13 +1347,13 @@ namespace RapidTransitMod
         public string selectedEditLine;
         [DataMember]
         public DispatchWorkbenchMergedView mergedView;
-        [DataMember]
-        public DispatchWorkbenchManualRowDto[] manualRows;
-        [DataMember]
-        public DispatchWorkbenchStagedRowDto[] lineDraftRows;
         [DataMember(EmitDefaultValue = false)]
-        public DispatchWorkbenchStagedRowDto[] stagedRows;
+        public DispatchWorkbenchManualRowDto[] manualRows;
+        [DataMember(EmitDefaultValue = false)]
+        public DispatchWorkbenchStagedRowDto[] lineDraftRows;
         [DataMember]
+        public DispatchWorkbenchStagedRowDto[] stagedRows;
+        [DataMember(EmitDefaultValue = false)]
         public DispatchWorkbenchAutoRuleDto[] autoRules;
         [DataMember]
         public DispatchWorkbenchTripDto[] trips;

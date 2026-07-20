@@ -196,7 +196,7 @@ namespace RapidTransitMod
             if (m_LastLogFrame != 0 && (nowFrame - m_LastLogFrame) < LogFrames)
                 return;
 
-            if (m_Calls > 0)
+            if (m_Calls > 0 && RtLog.VerboseEnabled)
             {
                 m_Log?.Invoke(
                     "[ConfiguredDepotCache] intervalFrames=" + LogFrames

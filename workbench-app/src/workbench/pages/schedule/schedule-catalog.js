@@ -22,6 +22,7 @@ export const DEFAULT_LINE_OPTIONS = [
   {
     id: "line-local",
     corridorId: "industrial-corridor",
+    sourceLineId: "line-local",
     nameKey: "nativeSchedule.data.line.local",
     kind: "local",
     transportType: "",
@@ -35,6 +36,7 @@ export const DEFAULT_LINE_OPTIONS = [
   {
     id: "line-express",
     corridorId: "industrial-corridor",
+    sourceLineId: "line-express",
     nameKey: "nativeSchedule.data.line.express",
     kind: "express",
     transportType: "",
@@ -74,9 +76,9 @@ export function clampPositiveMinutes(value, fallbackValue) {
   return Math.max(MIN_LINE_SETTING_MINUTES, Math.min(120, Math.round(numeric)));
 }
 
-export function buildNativeDepotOptions(snapshotDepots = []) {
+export function buildNativeDepotOptions(snapshotDepots = [], { allowDefaultFallback = true } = {}) {
   if (!Array.isArray(snapshotDepots) || snapshotDepots.length === 0) {
-    return cloneOptions(DEFAULT_DEPOT_OPTIONS);
+    return allowDefaultFallback ? cloneOptions(DEFAULT_DEPOT_OPTIONS) : [];
   }
 
   return snapshotDepots.map((depot, index) => ({
@@ -86,14 +88,13 @@ export function buildNativeDepotOptions(snapshotDepots = []) {
   }));
 }
 
-export function buildNativeLineOptions(snapshotLines = [], t) {
+export function buildNativeLineOptions(snapshotLines = [], t, { allowDefaultFallback = true } = {}) {
   if (!Array.isArray(snapshotLines) || snapshotLines.length === 0) {
-    return cloneOptions(DEFAULT_LINE_OPTIONS);
+    return allowDefaultFallback ? cloneOptions(DEFAULT_LINE_OPTIONS) : [];
   }
 
   return snapshotLines.map((line, index) => {
-    const fallbackKey = line?.sourceLineId || line?.id || String(index + 1);
-    const fallbackName = (line?.kind === "express" ? "Rapid " : "Local ") + fallbackKey;
+    const fallbackName = "--";
     const dispatchSupported = line?.dispatchSupported !== false;
     const originFallback = dispatchSupported ? `origin-${index + 1}` : "";
     const originNameFallback = dispatchSupported ? `Origin ${index + 1}` : "";
@@ -101,6 +102,7 @@ export function buildNativeLineOptions(snapshotLines = [], t) {
     return {
       id: line?.id || `line-${index + 1}`,
       corridorId: line?.sourceLineId || line?.id || `corridor-${index + 1}`,
+      sourceLineId: line?.sourceLineId || line?.id || `source-line-${index + 1}`,
       name: line?.name || fallbackName,
       nameKey: "",
       kind: line?.kind === "express" ? "express" : "local",
@@ -120,7 +122,7 @@ export function buildNativeLineOptions(snapshotLines = [], t) {
   });
 }
 
-export function buildNativeOriginOptions(lineOptions = []) {
+export function buildNativeOriginOptions(lineOptions = [], { allowDefaultFallback = true } = {}) {
   const seen = new Set();
   const origins = [];
 
@@ -141,7 +143,7 @@ export function buildNativeOriginOptions(lineOptions = []) {
     });
   });
 
-  return origins.length > 0 ? origins : cloneOptions(DEFAULT_ORIGIN_OPTIONS);
+  return origins.length > 0 ? origins : (allowDefaultFallback ? cloneOptions(DEFAULT_ORIGIN_OPTIONS) : []);
 }
 
 export function overlayPersistedLineSettings(lineOptions = [], persistedLineSettings = []) {
@@ -186,10 +188,20 @@ export function buildRuntimeCatalog(snapshot, metadataSnapshot, persistedState, 
   };
 }
 
-export function buildCatalog(metadataSnapshot, t) {
-  const lineOptions = buildNativeLineOptions(metadataSnapshot?.lines, t);
-  const depotOptions = buildNativeDepotOptions(metadataSnapshot?.depots);
-  const originOptions = buildNativeOriginOptions(lineOptions);
+export function buildCatalog(metadataSnapshot, t, { allowDefaultFallback = true } = {}) {
+  const lineOptions = buildNativeLineOptions(
+    metadataSnapshot?.lines,
+    t,
+    { allowDefaultFallback }
+  );
+  const depotOptions = buildNativeDepotOptions(
+    metadataSnapshot?.depots,
+    { allowDefaultFallback }
+  );
+  const originOptions = buildNativeOriginOptions(
+    lineOptions,
+    { allowDefaultFallback }
+  );
 
   return {
     lineOptions,

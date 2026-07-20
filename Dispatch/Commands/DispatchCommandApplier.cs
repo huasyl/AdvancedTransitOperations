@@ -67,7 +67,7 @@ namespace RapidTransitMod
             EntityCommandBuffer ecb,
             string reason = "")
         {
-            m_RetireHandoff.Retire(vehicle, publicTransport, target, ecb, reason);
+            m_RetireHandoff.Retire(vehicle, publicTransport, target, reason);
         }
 
         internal void Launch(
@@ -108,24 +108,19 @@ namespace RapidTransitMod
             m_RouteWriter.Repath(vehicle, publicTransport, target, ecb);
         }
 
-        internal void ForceRetireOne(EntityCommandBuffer ecb)
+        internal void ForceRetireOne()
         {
-            m_RetireHandoff.ForceRetireOne(ecb);
+            m_RetireHandoff.ForceRetireOne();
         }
 
-        internal void GuardRetireHandoffInputs(uint nowFrame)
+        internal void TickRetireHandoffStages(uint nowFrame)
         {
-            m_RetireHandoff.GuardRetireHandoffInputs(nowFrame);
+            m_RetireHandoff.TickRetireHandoffStages(nowFrame);
         }
 
-        internal void TickRetireHandoffWatch(EntityCommandBuffer ecb, uint nowFrame)
+        internal void FinalizeRetireDispatchLockTerminals()
         {
-            m_RetireHandoff.TickRetireHandoffWatch(ecb, nowFrame);
-        }
-
-        internal void ReleaseCompletedRetireHandoffs()
-        {
-            m_RetireHandoff.ReleaseCompletedRetireHandoffs();
+            m_RetireHandoff.FinalizeRetireDispatchLockTerminals();
         }
 
         internal void RemoveRetireHandoff(Entity vehicle)
@@ -136,6 +131,21 @@ namespace RapidTransitMod
         internal void ClearRetireHandoffState()
         {
             m_RetireHandoff.ClearRetireHandoffState();
+        }
+
+        internal void ResetRetireDispatchLockStages()
+        {
+            m_RetireHandoff.ResetRetireDispatchLockStages();
+        }
+
+        internal void ProjectRetireDispatchLocksImmediatelyOnLoad()
+        {
+            m_RetireHandoff.ProjectRetireDispatchLocksImmediatelyOnLoad();
+        }
+
+        internal void ReconcileRetireDispatchLocksOnReady()
+        {
+            m_RetireHandoff.ReconcileRetireDispatchLocksOnReady();
         }
 
         internal string DescribeRetireShadowTargetKind(Entity entity)

@@ -66,6 +66,28 @@ namespace RapidTransitMod
             m_Lines[key] = normalized;
         }
 
+        public bool Clear(LineKey lineKey)
+        {
+            LineKey key = RuntimeConfigStoreDefaults.NormalizeLineKey(lineKey);
+            if (key.IsEmpty)
+                return false;
+
+            if (!m_Lines.Remove(key))
+                return false;
+
+            m_Version++;
+            return true;
+        }
+
+        internal bool RestoreLegacy(LineKey lineKey, LineConfigState state)
+        {
+            if (!LineKey.IsLegacyNumericKey(lineKey) || state == null)
+                return false;
+
+            Set(lineKey, state);
+            return true;
+        }
+
         public void Clear()
         {
             if (m_Lines.Count == 0)
@@ -146,6 +168,36 @@ namespace RapidTransitMod
             m_Lines[targetKey] = Normalize(state, m_Version);
             m_Lines.Remove(legacyKey);
             return true;
+        }
+
+        /// <summary>
+        /// Explicit one-shot move from a legacy numeric key (mode:n) to mode:guid32.
+        /// Preserves hold/dwell/depot/kind via Normalize; does not invent mappings.
+        /// </summary>
+        public LineKeyMigrateResult Migrate(LineKey legacy, LineKey stable)
+        {
+            if (!LineKey.IsStableGuidKey(stable) || !LineKey.IsLegacyNumericKey(legacy))
+                return LineKeyMigrateResult.Rejected;
+
+            if (legacy.Mode == TransitMode.Unknown)
+                return LineKeyMigrateResult.Rejected;
+
+            if (legacy.Mode != stable.Mode)
+                return LineKeyMigrateResult.ModeMismatch;
+
+            if (legacy.Equals(stable))
+                return LineKeyMigrateResult.SameKey;
+
+            if (!m_Lines.TryGetValue(legacy, out LineConfigState state) || state == null)
+                return LineKeyMigrateResult.MissingLegacy;
+
+            if (m_Lines.ContainsKey(stable))
+                return LineKeyMigrateResult.TargetOccupied;
+
+            m_Version++;
+            m_Lines[stable] = Normalize(state, m_Version);
+            m_Lines.Remove(legacy);
+            return LineKeyMigrateResult.Migrated;
         }
 
         private static LineConfigState Normalize(LineConfigState state, ulong version)

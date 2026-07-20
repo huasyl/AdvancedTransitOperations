@@ -9,7 +9,7 @@ namespace RapidTransitMod.PassengerFlow
 {
     internal static class Persistence
     {
-        private const int SchemaVersion = 1;
+        private const int SchemaVersion = 2;
         private const int BucketsPerWindow = 96;
 
         internal static void SaveToCity(EntityManager entityManager, Entity city)
@@ -149,16 +149,20 @@ namespace RapidTransitMod.PassengerFlow
             {
                 schemaVersion = SchemaVersion,
                 bucketMinutes = Snapshot.BucketMinutes,
-                serviceDayIndex = state.ServiceDayIndex,
-                lastDayMinute = state.LastDayMinute,
+                serviceDayKey = state.ServiceDayKey,
+                lastMinute = state.LastMinute,
                 currentAbsoluteBucketIndex = SamplingSystem.AbsoluteBucketIndex(state.CurrentBucket),
-                currentBucketServiceDayIndex = state.CurrentBucket.ServiceDayIndex,
+                currentBucketServiceDayKey = state.CurrentBucket.ServiceDayKey,
                 currentBucketStartMinute = state.CurrentBucket.BucketStartMinute,
                 stationCatalog = state.Anchors.ExportCatalog(port),
                 stationVolumes = state.Aggregates.ExportStationVolumes(),
                 sectionVolumes = state.Aggregates.ExportSectionVolumes(),
                 odFlows = state.Aggregates.ExportOdFlows(),
-                warnings = state.Aggregates.ExportWarnings()
+                warnings = state.Aggregates.ExportWarnings(),
+                legacyStationVolumes = state.LegacyStationVolumes,
+                legacySectionVolumes = state.LegacySectionVolumes,
+                legacyOdFlows = state.LegacyOdFlows,
+                legacyWarnings = state.LegacyWarnings
             };
         }
 
@@ -168,9 +172,11 @@ namespace RapidTransitMod.PassengerFlow
             if (state == null)
                 return "runtimeStateNull";
 
-            state.Clear();
             if (TryGetSupportFailureReason(persisted, out string failureReason))
                 return failureReason;
+
+            persisted = Migrate(persisted);
+            state.Clear();
 
             int currentAbsoluteBucket = ResolveCurrentAbsoluteBucket(persisted);
             int minAbsoluteBucket = Math.Max(0, currentAbsoluteBucket - (BucketsPerWindow - 1));
@@ -187,10 +193,10 @@ namespace RapidTransitMod.PassengerFlow
                     + " trimmedWarnings=" + Diagnostics.DescribeCount(trimmed.warnings));
             }
 
-            state.ServiceDayIndex = Math.Max(0, persisted.serviceDayIndex);
-            state.LastDayMinute = persisted.lastDayMinute;
+            state.ServiceDayKey = persisted.serviceDayKey;
+            state.LastMinute = persisted.lastMinute;
             state.CurrentBucket = new TimeBucketKey(
-                persisted.currentBucketServiceDayIndex,
+                persisted.currentBucketServiceDayKey,
                 persisted.currentBucketStartMinute);
             state.CurrentAbsoluteBucketIndex = currentAbsoluteBucket;
             state.Anchors.RestoreCatalog(trimmed.stationCatalog);
@@ -199,6 +205,10 @@ namespace RapidTransitMod.PassengerFlow
                 trimmed.sectionVolumes,
                 trimmed.odFlows,
                 trimmed.warnings);
+            state.LegacyStationVolumes = persisted.legacyStationVolumes ?? Array.Empty<PassengerFlowPersistedStationVolume>();
+            state.LegacySectionVolumes = persisted.legacySectionVolumes ?? Array.Empty<PassengerFlowPersistedSectionVolume>();
+            state.LegacyOdFlows = persisted.legacyOdFlows ?? Array.Empty<PassengerFlowPersistedOdFlow>();
+            state.LegacyWarnings = persisted.legacyWarnings ?? Array.Empty<PassengerFlowPersistedWarning>();
 
             for (int absoluteBucket = minAbsoluteBucket; absoluteBucket <= currentAbsoluteBucket; absoluteBucket++)
                 state.RollingWindow.Add(SamplingSystem.BucketFromAbsoluteIndex(absoluteBucket));
@@ -216,13 +226,93 @@ namespace RapidTransitMod.PassengerFlow
                 return persisted.currentAbsoluteBucketIndex;
 
             return SamplingSystem.AbsoluteBucketIndex(new TimeBucketKey(
-                persisted.currentBucketServiceDayIndex,
+                persisted.currentBucketServiceDayKey,
                 persisted.currentBucketStartMinute));
         }
 
         private static bool IsSupported(PassengerFlowPersistentState persisted)
         {
             return !TryGetSupportFailureReason(persisted, out _);
+        }
+
+        private static PassengerFlowPersistentState Migrate(PassengerFlowPersistentState persisted)
+        {
+            if (persisted.schemaVersion == SchemaVersion)
+                return persisted;
+
+            Port port = Runtime.Current;
+            DateTime nowDate = port != null ? port.NowDate() : DateTime.Today;
+            int currentLegacyDayIndex = persisted.currentBucketServiceDayIndex;
+            bool legacyClockCompatible = port == null
+                || Math.Abs(port.FramesPerMinute() - DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE) < 0.001d;
+            PassengerFlowPersistentState migrated = new PassengerFlowPersistentState
+            {
+                schemaVersion = SchemaVersion,
+                bucketMinutes = persisted.bucketMinutes,
+                serviceDayKey = SamplingSystem.ServiceDayKey(nowDate),
+                lastMinute = persisted.lastDayMinute,
+                currentBucketServiceDayKey = SamplingSystem.ServiceDayKey(nowDate),
+                currentBucketStartMinute = persisted.currentBucketStartMinute,
+                stationCatalog = persisted.stationCatalog ?? Array.Empty<PassengerFlowPersistedStationCatalog>(),
+                stationVolumes = legacyClockCompatible ? MigrateRows(persisted.stationVolumes, currentLegacyDayIndex, nowDate) : Array.Empty<PassengerFlowPersistedStationVolume>(),
+                sectionVolumes = legacyClockCompatible ? MigrateRows(persisted.sectionVolumes, currentLegacyDayIndex, nowDate) : Array.Empty<PassengerFlowPersistedSectionVolume>(),
+                odFlows = legacyClockCompatible ? MigrateRows(persisted.odFlows, currentLegacyDayIndex, nowDate) : Array.Empty<PassengerFlowPersistedOdFlow>(),
+                warnings = legacyClockCompatible
+                    ? MigrateRows(persisted.warnings, currentLegacyDayIndex, nowDate)
+                    : new[]
+                    {
+                        new PassengerFlowPersistedWarning
+                        {
+                            mode = TransitModeCodec.Format(TransitMode.Train),
+                            code = "legacy-clock-buckets-excluded",
+                            lineId = string.Empty,
+                            stationSakIndex = -1,
+                            serviceDayKey = SamplingSystem.ServiceDayKey(nowDate),
+                            bucketStartMinute = persisted.currentBucketStartMinute,
+                            count = 1
+                        }
+                    },
+                legacyStationVolumes = legacyClockCompatible ? Array.Empty<PassengerFlowPersistedStationVolume>() : persisted.stationVolumes ?? Array.Empty<PassengerFlowPersistedStationVolume>(),
+                legacySectionVolumes = legacyClockCompatible ? Array.Empty<PassengerFlowPersistedSectionVolume>() : persisted.sectionVolumes ?? Array.Empty<PassengerFlowPersistedSectionVolume>(),
+                legacyOdFlows = legacyClockCompatible ? Array.Empty<PassengerFlowPersistedOdFlow>() : persisted.odFlows ?? Array.Empty<PassengerFlowPersistedOdFlow>(),
+                legacyWarnings = legacyClockCompatible ? Array.Empty<PassengerFlowPersistedWarning>() : persisted.warnings ?? Array.Empty<PassengerFlowPersistedWarning>()
+            };
+            migrated.currentAbsoluteBucketIndex = SamplingSystem.AbsoluteBucketIndex(
+                new TimeBucketKey(migrated.currentBucketServiceDayKey, migrated.currentBucketStartMinute));
+            if (!legacyClockCompatible)
+            {
+                Diagnostics.Log("PassengerFlowLegacyClock", "warning=legacy-clock-buckets-excluded schemaVersion=1");
+            }
+            return migrated;
+        }
+
+        private static T[] MigrateRows<T>(T[] rows, int currentLegacyDayIndex, DateTime nowDate)
+            where T : PassengerFlowPersistedBucketRow
+        {
+            T[] safeRows = rows ?? Array.Empty<T>();
+            for (int rowIndex = 0; rowIndex < safeRows.Length; rowIndex++)
+            {
+                T row = safeRows[rowIndex];
+                if (row == null)
+                    continue;
+                DateTime rowDate = nowDate.AddDays(row.serviceDayIndex - currentLegacyDayIndex);
+                row.serviceDayKey = SamplingSystem.ServiceDayKey(rowDate);
+            }
+            return safeRows;
+        }
+
+        private static bool TryServiceDayDate(int serviceDayKey, out DateTime serviceDayDate)
+        {
+            try
+            {
+                serviceDayDate = SamplingSystem.DateFromServiceDayKey(serviceDayKey);
+                return true;
+            }
+            catch
+            {
+                serviceDayDate = default;
+                return false;
+            }
         }
 
         private static bool TryGetSupportFailureReason(PassengerFlowPersistentState persisted, out string failureReason)
@@ -234,7 +324,7 @@ namespace RapidTransitMod.PassengerFlow
                 return true;
             }
 
-            if (persisted.schemaVersion != SchemaVersion)
+            if (persisted.schemaVersion != 1 && persisted.schemaVersion != SchemaVersion)
             {
                 failureReason = "schemaVersionMismatch(expected=" + SchemaVersion.ToString()
                     + ",actual=" + persisted.schemaVersion.ToString() + ")";
@@ -248,29 +338,27 @@ namespace RapidTransitMod.PassengerFlow
                 return true;
             }
 
-            if (persisted.serviceDayIndex < 0)
+            int persistedMinute = persisted.schemaVersion == 1 ? persisted.lastDayMinute : persisted.lastMinute;
+            if (persistedMinute < -1 || persistedMinute >= 1440)
             {
-                failureReason = "serviceDayIndexInvalid(" + persisted.serviceDayIndex.ToString() + ")";
+                failureReason = "lastMinuteInvalid(" + persistedMinute.ToString() + ")";
                 return true;
             }
 
-            if (persisted.lastDayMinute < -1 || persisted.lastDayMinute >= 1440)
+            int persistedDayKey = persisted.schemaVersion == 1
+                ? persisted.currentBucketServiceDayIndex
+                : persisted.currentBucketServiceDayKey;
+            if (!IsValidBucket(persistedDayKey, persisted.currentBucketStartMinute, persisted.schemaVersion))
             {
-                failureReason = "lastDayMinuteInvalid(" + persisted.lastDayMinute.ToString() + ")";
-                return true;
-            }
-
-            if (!IsValidBucket(persisted.currentBucketServiceDayIndex, persisted.currentBucketStartMinute))
-            {
-                failureReason = "currentBucketInvalid(day=" + persisted.currentBucketServiceDayIndex.ToString()
+                failureReason = "currentBucketInvalid(day=" + persistedDayKey.ToString()
                     + ",minute=" + persisted.currentBucketStartMinute.ToString() + ")";
                 return true;
             }
 
-            int computedAbsoluteBucket = SamplingSystem.AbsoluteBucketIndex(new TimeBucketKey(
-                persisted.currentBucketServiceDayIndex,
-                persisted.currentBucketStartMinute));
-            if (persisted.currentAbsoluteBucketIndex > 0
+            int computedAbsoluteBucket = persisted.schemaVersion == 2
+                ? SamplingSystem.AbsoluteBucketIndex(new TimeBucketKey(persistedDayKey, persisted.currentBucketStartMinute))
+                : persisted.currentAbsoluteBucketIndex;
+            if (persisted.schemaVersion == 2 && persisted.currentAbsoluteBucketIndex > 0
                 && persisted.currentAbsoluteBucketIndex != computedAbsoluteBucket)
             {
                 failureReason = "absoluteBucketMismatch(expected=" + computedAbsoluteBucket.ToString()
@@ -281,9 +369,12 @@ namespace RapidTransitMod.PassengerFlow
             return false;
         }
 
-        private static bool IsValidBucket(int serviceDayIndex, int bucketStartMinute)
+        private static bool IsValidBucket(int serviceDayKey, int bucketStartMinute, int schemaVersion = 2)
         {
-            return serviceDayIndex >= 0
+            bool validDay = schemaVersion == 1
+                ? serviceDayKey >= 0
+                : TryServiceDayDate(serviceDayKey, out _);
+            return validDay
                 && bucketStartMinute >= 0
                 && bucketStartMinute < 1440
                 && bucketStartMinute % Snapshot.BucketMinutes == 0;
@@ -298,10 +389,10 @@ namespace RapidTransitMod.PassengerFlow
             {
                 schemaVersion = persisted.schemaVersion,
                 bucketMinutes = persisted.bucketMinutes,
-                serviceDayIndex = persisted.serviceDayIndex,
-                lastDayMinute = persisted.lastDayMinute,
+                serviceDayKey = persisted.serviceDayKey,
+                lastMinute = persisted.lastMinute,
                 currentAbsoluteBucketIndex = maxAbsoluteBucket,
-                currentBucketServiceDayIndex = persisted.currentBucketServiceDayIndex,
+                currentBucketServiceDayKey = persisted.currentBucketServiceDayKey,
                 currentBucketStartMinute = persisted.currentBucketStartMinute,
                 stationCatalog = persisted.stationCatalog ?? Array.Empty<PassengerFlowPersistedStationCatalog>(),
                 stationVolumes = (persisted.stationVolumes ?? Array.Empty<PassengerFlowPersistedStationVolume>())
@@ -315,7 +406,11 @@ namespace RapidTransitMod.PassengerFlow
                     .ToArray(),
                 warnings = (persisted.warnings ?? Array.Empty<PassengerFlowPersistedWarning>())
                     .Where(row => IsWithinWindow(row, minAbsoluteBucket, maxAbsoluteBucket))
-                    .ToArray()
+                    .ToArray(),
+                legacyStationVolumes = persisted.legacyStationVolumes ?? Array.Empty<PassengerFlowPersistedStationVolume>(),
+                legacySectionVolumes = persisted.legacySectionVolumes ?? Array.Empty<PassengerFlowPersistedSectionVolume>(),
+                legacyOdFlows = persisted.legacyOdFlows ?? Array.Empty<PassengerFlowPersistedOdFlow>(),
+                legacyWarnings = persisted.legacyWarnings ?? Array.Empty<PassengerFlowPersistedWarning>()
             };
         }
 
@@ -324,11 +419,11 @@ namespace RapidTransitMod.PassengerFlow
             if (row == null)
                 return false;
 
-            if (!IsValidBucket(row.serviceDayIndex, row.bucketStartMinute))
+            if (!IsValidBucket(row.serviceDayKey, row.bucketStartMinute))
                 return false;
 
             int absoluteBucket = SamplingSystem.AbsoluteBucketIndex(
-                new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute));
+                new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute));
             return absoluteBucket >= minAbsoluteBucket && absoluteBucket <= maxAbsoluteBucket;
         }
 
@@ -370,10 +465,10 @@ namespace RapidTransitMod.PassengerFlow
             return "persistedState="
                 + "schemaVersion:" + persisted.schemaVersion.ToString()
                 + ",bucketMinutes:" + persisted.bucketMinutes.ToString()
-                + ",serviceDayIndex:" + persisted.serviceDayIndex.ToString()
-                + ",lastDayMinute:" + persisted.lastDayMinute.ToString()
+                + ",serviceDayKey:" + persisted.serviceDayKey.ToString()
+                + ",lastMinute:" + persisted.lastMinute.ToString()
                 + ",currentAbsoluteBucketIndex:" + persisted.currentAbsoluteBucketIndex.ToString()
-                + ",currentBucket:" + persisted.currentBucketServiceDayIndex.ToString()
+                + ",currentBucket:" + persisted.currentBucketServiceDayKey.ToString()
                 + ":" + persisted.currentBucketStartMinute.ToString()
                 + ",stationCatalog:" + Diagnostics.DescribeCount(persisted.stationCatalog)
                 + ",stationVolumes:" + Diagnostics.DescribeCount(persisted.stationVolumes)
@@ -388,8 +483,8 @@ namespace RapidTransitMod.PassengerFlow
                 return "runtimeState=null";
 
             return "runtimeState="
-                + "serviceDayIndex:" + state.ServiceDayIndex.ToString()
-                + ",lastDayMinute:" + state.LastDayMinute.ToString()
+                + "serviceDayKey:" + state.ServiceDayKey.ToString()
+                + ",lastMinute:" + state.LastMinute.ToString()
                 + ",currentBucket:" + Diagnostics.DescribeBucket(state.CurrentBucket)
                 + ",currentAbsoluteBucketIndex:" + state.CurrentAbsoluteBucketIndex.ToString()
                 + ",anchors:" + state.Anchors.StationCount.ToString()
@@ -411,6 +506,9 @@ namespace RapidTransitMod.PassengerFlow
     {
         [DataMember] public int schemaVersion;
         [DataMember] public int bucketMinutes;
+        [DataMember] public int serviceDayKey;
+        [DataMember] public int lastMinute;
+        [DataMember] public int currentBucketServiceDayKey;
         [DataMember] public int serviceDayIndex;
         [DataMember] public int lastDayMinute;
         [DataMember] public int currentAbsoluteBucketIndex;
@@ -421,6 +519,10 @@ namespace RapidTransitMod.PassengerFlow
         [DataMember] public PassengerFlowPersistedSectionVolume[] sectionVolumes;
         [DataMember] public PassengerFlowPersistedOdFlow[] odFlows;
         [DataMember] public PassengerFlowPersistedWarning[] warnings;
+        [DataMember] public PassengerFlowPersistedStationVolume[] legacyStationVolumes;
+        [DataMember] public PassengerFlowPersistedSectionVolume[] legacySectionVolumes;
+        [DataMember] public PassengerFlowPersistedOdFlow[] legacyOdFlows;
+        [DataMember] public PassengerFlowPersistedWarning[] legacyWarnings;
     }
 
     [DataContract]
@@ -435,6 +537,7 @@ namespace RapidTransitMod.PassengerFlow
     public abstract class PassengerFlowPersistedBucketRow
     {
         [DataMember] public string mode;
+        [DataMember] public int serviceDayKey;
         [DataMember] public int serviceDayIndex;
         [DataMember] public int bucketStartMinute;
     }

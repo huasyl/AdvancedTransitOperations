@@ -220,6 +220,8 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private readonly Dictionary<ulong, TraversalSliceObservation> m_Obs =
             new Dictionary<ulong, TraversalSliceObservation>();
+        private readonly Dictionary<Entity, HashSet<ulong>> m_LineObservationKeys =
+            new Dictionary<Entity, HashSet<ulong>>();
         private readonly Dictionary<Entity, VehicleTraversalSliceSession> m_Sessions =
             new Dictionary<Entity, VehicleTraversalSliceSession>();
         private readonly Dictionary<Entity, uint> m_LastSampleFrames =
@@ -256,6 +258,7 @@ namespace RapidTransitMod.Dispatch.Observation
         internal void Clear()
         {
             m_Obs.Clear();
+            m_LineObservationKeys.Clear();
             m_Sessions.Clear();
             m_LastSampleFrames.Clear();
             m_LastPositionFrames.Clear();
@@ -281,8 +284,47 @@ namespace RapidTransitMod.Dispatch.Observation
         internal bool TryObservation(ulong key, out TraversalSliceObservation observation) =>
             m_Obs.TryGetValue(key, out observation);
 
-        internal void Record(ulong key, TraversalSliceObservation observation) =>
+        internal void Record(Entity line, ulong key, TraversalSliceObservation observation)
+        {
             m_Obs[key] = observation;
+            if (!m_LineObservationKeys.TryGetValue(line, out HashSet<ulong> keys))
+            {
+                keys = new HashSet<ulong>();
+                m_LineObservationKeys[line] = keys;
+            }
+            keys.Add(key);
+        }
+
+        internal bool HasLineObservation(Entity line) =>
+            m_LineObservationKeys.TryGetValue(line, out HashSet<ulong> keys) && keys.Count > 0;
+
+        internal void ClearObservations()
+        {
+            m_Obs.Clear();
+            m_LineObservationKeys.Clear();
+        }
+
+        internal void RemoveLine(Entity line)
+        {
+            if (m_LineObservationKeys.TryGetValue(line, out HashSet<ulong> keys))
+            {
+                foreach (ulong key in keys)
+                    m_Obs.Remove(key);
+                m_LineObservationKeys.Remove(line);
+            }
+
+            List<Entity> vehicles = new List<Entity>();
+            foreach (KeyValuePair<Entity, VehicleTraversalSliceSession> pair in m_Sessions)
+                if (pair.Value.Line == line) vehicles.Add(pair.Key);
+            foreach (KeyValuePair<Entity, TraversalSliceSamplingPlanCache> pair in m_Plans)
+                if (pair.Value.Line == line && !vehicles.Contains(pair.Key)) vehicles.Add(pair.Key);
+            for (int i = 0; i < vehicles.Count; i++)
+                Remove(vehicles[i]);
+
+            m_LineEligibility.Remove(line);
+            m_RecentActualSamples.RemoveAll(sample => sample.Line == line);
+            m_RecentPositionSamples.RemoveAll(sample => sample.Line == line);
+        }
 
         internal void RecordActualSample(TraversalSliceActualSample sample)
         {

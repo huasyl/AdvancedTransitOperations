@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Game.Buildings;
 using Game.Common;
 using Game.Objects;
@@ -167,6 +168,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 OriginStatus = originStatus,
                 OriginMessageKey = originMessageKey
             };
+            runtimeLine.StableSignature = StableRuntimeSignature(runtimeLine);
             return true;
         }
 
@@ -404,6 +406,29 @@ namespace RapidTransitMod.Dispatch.Workbench
             return m_Sak(anchor) ?? string.Empty;
         }
 
+        internal string StableRuntimeSignature(WorkbenchLineRuntime runtimeLine)
+        {
+            if (runtimeLine == null
+                || runtimeLine.Entity == Entity.Null
+                || !m_EntityManager.Exists(runtimeLine.Entity))
+            {
+                return string.Empty;
+            }
+
+            StringBuilder sb = new StringBuilder(256);
+            sb.Append("entity=").Append(runtimeLine.Entity.Index);
+            // RouteNumber is mutable display metadata. XTM may change it or allow duplicates;
+            // the Lak-backed line id remains the identity and must keep timetable state.
+            sb.Append("|transport=").Append(runtimeLine.TransportType ?? string.Empty);
+            sb.Append("|origin=").Append(runtimeLine.OriginStationId ?? string.Empty);
+            sb.Append("|supported=").Append(runtimeLine.DispatchSupported ? '1' : '0');
+            sb.Append("|reason=").Append(runtimeLine.UnsupportedReason ?? string.Empty);
+            sb.Append("|stations=").Append(runtimeLine.StationCount);
+            sb.Append("|stops=");
+            AppendStopOrderSignature(runtimeLine.Entity, sb);
+            return sb.ToString();
+        }
+
         internal static string StationId(int order)
         {
             return "station-" + order.ToString();
@@ -455,6 +480,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             if (string.IsNullOrEmpty(depotId))
                 return Entity.Null;
 
+            string fallbackKey = DepotLocationKey(depotId);
+            Entity fallbackDepot = Entity.Null;
+            bool fallbackAmbiguous = false;
             NativeArray<Entity> depotEntities = m_DepotQuery().ToEntityArray(Allocator.Temp);
             try
             {
@@ -462,10 +490,29 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     Entity rawDepot = depotEntities[i];
                     Entity canonicalDepot = m_DepotCanon(rawDepot);
-                    if (string.Equals(DepotId(canonicalDepot), depotId, StringComparison.Ordinal)
-                        || string.Equals(RawDepotId(rawDepot), depotId, StringComparison.Ordinal))
+                    Entity resolvedDepot = canonicalDepot != Entity.Null ? canonicalDepot : rawDepot;
+                    string canonicalId = DepotId(canonicalDepot);
+                    string rawId = RawDepotId(rawDepot);
+                    if (string.Equals(canonicalId, depotId, StringComparison.Ordinal)
+                        || string.Equals(rawId, depotId, StringComparison.Ordinal))
                     {
-                        return canonicalDepot != Entity.Null ? canonicalDepot : rawDepot;
+                        return resolvedDepot;
+                    }
+
+                    if (string.IsNullOrEmpty(fallbackKey)
+                        || (!string.Equals(DepotLocationKey(canonicalId), fallbackKey, StringComparison.Ordinal)
+                            && !string.Equals(DepotLocationKey(rawId), fallbackKey, StringComparison.Ordinal)))
+                    {
+                        continue;
+                    }
+
+                    if (fallbackDepot == Entity.Null)
+                    {
+                        fallbackDepot = resolvedDepot;
+                    }
+                    else if (fallbackDepot != resolvedDepot)
+                    {
+                        fallbackAmbiguous = true;
                     }
                 }
             }
@@ -474,7 +521,33 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (depotEntities.IsCreated) depotEntities.Dispose();
             }
 
-            return Entity.Null;
+            if (fallbackDepot == Entity.Null || fallbackAmbiguous)
+                return Entity.Null;
+
+            return fallbackDepot;
+        }
+
+        private static string DepotLocationKey(string depotId)
+        {
+            if (string.IsNullOrWhiteSpace(depotId))
+                return string.Empty;
+
+            string[] parts = depotId.Split(':');
+            if (parts.Length != 6
+                || !string.Equals(parts[0], "depot", StringComparison.Ordinal)
+                || !parts[2].StartsWith("prefab-", StringComparison.Ordinal)
+                || !parts[3].StartsWith("x", StringComparison.Ordinal)
+                || !parts[4].StartsWith("y", StringComparison.Ordinal)
+                || !parts[5].StartsWith("z", StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+
+            return parts[0]
+                + ":" + parts[1]
+                + ":" + parts[3]
+                + ":" + parts[4]
+                + ":" + parts[5];
         }
 
         private int CountStops(Entity line)
@@ -497,6 +570,53 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             return seenStopEntities.Count;
+        }
+
+        private void AppendStopOrderSignature(Entity line, StringBuilder sb)
+        {
+            if (!m_EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                sb.Append("none");
+                return;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = m_EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            Entity lastStopEntity = Entity.Null;
+            bool appended = false;
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity stopEntity = Stop(waypoints[i].m_Waypoint);
+                if (stopEntity == Entity.Null || stopEntity == lastStopEntity)
+                {
+                    continue;
+                }
+
+                lastStopEntity = stopEntity;
+                if (appended)
+                {
+                    sb.Append('>');
+                }
+
+                sb.Append("s:").Append(stopEntity.Index);
+                sb.Append("|o:").Append(Stops.OriginId(stopEntity) ?? string.Empty);
+                Entity anchor = Anchor(stopEntity);
+                if (anchor != Entity.Null && anchor != stopEntity)
+                {
+                    sb.Append("|b:").Append(anchor.Index);
+                    string sak = Sak(anchor);
+                    if (!string.IsNullOrEmpty(sak))
+                    {
+                        sb.Append("|sak:").Append(sak);
+                    }
+                }
+
+                appended = true;
+            }
+
+            if (!appended)
+            {
+                sb.Append("empty");
+            }
         }
     }
 }

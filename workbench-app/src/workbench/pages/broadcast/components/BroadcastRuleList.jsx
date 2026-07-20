@@ -273,11 +273,11 @@ function PlatformRuleList({ toolbar, rules, refs, actions }) {
               actions.setIsCreatingRule(true);
               actions.setTrayContext(null);
               actions.setMappingTray(null);
-              actions.setNewRuleTriggerId("platform_idle_clear");
+              actions.setNewRuleTriggerId("approach_station");
               actions.setPlatformCreateStationIds((current) => {
                 const availableStations =
                   actions.getAvailablePlatformCreateStations(
-                    "platform_idle_clear",
+                    "approach_station",
                   );
                 const kept = current.filter((stationId) =>
                   availableStations.some((station) => station.id === stationId),

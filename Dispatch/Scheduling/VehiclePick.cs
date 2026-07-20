@@ -1,4 +1,5 @@
 using Unity.Entities;
+using RapidTransitMod.Core;
 
 namespace RapidTransitMod.Dispatch.Scheduling
 {
@@ -8,33 +9,33 @@ namespace RapidTransitMod.Dispatch.Scheduling
         {
             public readonly Entity Vehicle;
             public readonly int Tier;
-            public readonly float Eta;
+            public readonly float EtaFrames;
             public readonly float Range;
-            public readonly int PrevTarget;
+            public readonly int PreviousTargetMinute;
             public readonly Entity NearVehicle;
             public readonly VehicleState NearState;
-            public readonly float NearEta;
+            public readonly float NearestEtaFrames;
             public readonly string NearReason;
 
             public Result(
                 Entity vehicle,
                 int tier,
-                float eta,
+                float etaFrames,
                 float range,
-                int prevTarget,
+                int previousTargetMinute,
                 Entity nearVehicle,
                 VehicleState nearState,
-                float nearEta,
+                float nearestEtaFrames,
                 string nearReason)
             {
                 Vehicle = vehicle;
                 Tier = tier;
-                Eta = eta;
+                EtaFrames = etaFrames;
                 Range = range;
-                PrevTarget = prevTarget;
+                PreviousTargetMinute = previousTargetMinute;
                 NearVehicle = nearVehicle;
                 NearState = nearState;
-                NearEta = nearEta;
+                NearestEtaFrames = nearestEtaFrames;
                 NearReason = nearReason;
             }
         }
@@ -46,16 +47,22 @@ namespace RapidTransitMod.Dispatch.Scheduling
             m_Runtime = runtime;
         }
 
-        public Result Pick(LineTick tick, int slot, int minsToSlot, bool spawnOnlyScan, float slotFramesAway)
+        public Result Pick(
+            LineTick tick,
+            ClockSnapshot clockSnapshot,
+            int slotMinute,
+            int minutesToSlot,
+            bool spawnOnlyScan,
+            float slotFramesAway)
         {
             Entity bestVehicle = Entity.Null;
             int bestTier = 99;
-            float bestEta = float.MaxValue;
+            float bestEtaFrames = float.MaxValue;
             float bestRange = -1f;
-            int bestPrevTarget = -1;
+            int bestPreviousTargetMinute = -1;
             Entity nearestVehicle = Entity.Null;
             VehicleState nearestState = VehicleState.Preparing;
-            float nearestEta = float.MaxValue;
+            float nearestEtaFrames = float.MaxValue;
             string nearestReason = "none";
 
             for (int i = 0; i < tick.Vehicles.Count; i++)
@@ -66,24 +73,24 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 if (state == VehicleState.Retiring || m_Runtime.m_BVMisfire.Contains(vehicle))
                     continue;
 
-                int assignedTarget = -1;
-                if (m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMin) && targetMin >= 0)
+                int assignedTargetMinute = -1;
+                if (m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute) && targetMinute >= 0)
                 {
-                    assignedTarget = targetMin;
-                    if (targetMin != slot)
+                    assignedTargetMinute = targetMinute;
+                    if (targetMinute != slotMinute)
                     {
-                        if (ScheduleClock.CurrentOrRecent(tick.Now, targetMin))
+                        if (ScheduleClock.CurrentOrRecent(tick.NowMinute, targetMinute))
                             continue;
-                        int minsToAssigned = ScheduleClock.MinutesUntil(tick.Now, targetMin);
-                        if (minsToAssigned <= minsToSlot)
+                        int minutesToAssigned = ScheduleClock.MinutesUntil(tick.NowMinute, targetMinute);
+                        if (minutesToAssigned <= minutesToSlot)
                             continue;
                     }
                 }
 
                 if (state == VehicleState.Running
-                    && assignedTarget >= 0
-                    && assignedTarget != slot
-                    && ScheduleClock.CurrentOrRecent(tick.Now, assignedTarget)
+                    && assignedTargetMinute >= 0
+                    && assignedTargetMinute != slotMinute
+                    && ScheduleClock.CurrentOrRecent(tick.NowMinute, assignedTargetMinute)
                     && m_Runtime.m_LineProfile.IsBorderlineOriginArrivalCandidate(vehicle, tick.Ways))
                 {
                     continue;
@@ -93,7 +100,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                     continue;
 
                 int tier = 99;
-                float eta = float.MaxValue;
+                float etaFrames = float.MaxValue;
 
                 if (state == VehicleState.Idle || state == VehicleState.Holding)
                 {
@@ -103,7 +110,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                         {
                             nearestVehicle = vehicle;
                             nearestState = state;
-                            nearestEta = 0f;
+                            nearestEtaFrames = 0f;
                             nearestReason = "outside-origin-hold-window";
                         }
                         continue;
@@ -116,64 +123,70 @@ namespace RapidTransitMod.Dispatch.Scheduling
                         {
                             nearestVehicle = vehicle;
                             nearestState = state;
-                            nearestEta = 0f;
+                            nearestEtaFrames = 0f;
                             nearestReason = "cachedWp=" + cachedWaypointIndex;
                         }
                         continue;
                     }
 
                     tier = 0;
-                    eta = 0f;
+                    etaFrames = 0f;
                 }
                 else if (state == VehicleState.Running)
                 {
-                    float etaFrames = m_Runtime.m_LineTimes.Run(vehicle, tick.Line, tick.Ways, tick.Frame, tick.Lap, tick.Run);
-                    if (etaFrames == float.MaxValue)
+                    float runningEtaFrames = m_Runtime.m_LineTimes.Run(
+                        vehicle,
+                        tick.Line,
+                        tick.Ways,
+                        tick.NowFrame,
+                        tick.LapFrames,
+                        tick.Run);
+                    if (runningEtaFrames == float.MaxValue)
                     {
                         if (nearestVehicle == Entity.Null)
                         {
                             nearestVehicle = vehicle;
                             nearestState = state;
-                            nearestEta = float.MaxValue;
+                            nearestEtaFrames = float.MaxValue;
                             nearestReason = "no-running-eta";
                         }
                         continue;
                     }
 
                     tier = 1;
-                    eta = etaFrames;
+                    etaFrames = runningEtaFrames;
                 }
                 else if (state == VehicleState.Preparing)
                 {
-                    float etaFrames = m_Runtime.m_LineTimes.Prep(vehicle, tick.Line, tick.Ways, tick.Lap);
-                    if (etaFrames == float.MaxValue)
+                    float preparingEtaFrames = m_Runtime.m_LineTimes.Prep(vehicle, tick.Line, tick.Ways, tick.LapFrames);
+                    if (preparingEtaFrames == float.MaxValue)
                     {
                         if (nearestVehicle == Entity.Null)
                         {
                             nearestVehicle = vehicle;
                             nearestState = state;
-                            nearestEta = float.MaxValue;
+                            nearestEtaFrames = float.MaxValue;
                             nearestReason = "no-preparing-eta";
                         }
                         continue;
                     }
 
                     tier = 1;
-                    eta = etaFrames;
+                    etaFrames = preparingEtaFrames;
                 }
                 else
                 {
                     continue;
                 }
 
-                if (eta > slotFramesAway)
+                if (etaFrames > slotFramesAway)
                 {
-                    if (eta < nearestEta || nearestVehicle == Entity.Null)
+                    if (etaFrames < nearestEtaFrames || nearestVehicle == Entity.Null)
                     {
                         nearestVehicle = vehicle;
                         nearestState = state;
-                        nearestEta = eta;
-                        nearestReason = "late-for-slot";
+                        nearestEtaFrames = etaFrames;
+                        nearestReason = "late-for-slotMinute";
                     }
                     continue;
                 }
@@ -181,14 +194,14 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 if (spawnOnlyScan)
                 {
                     float earliestHoldArrivalFrames = slotFramesAway
-                        - tick.Hold * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-                    if (earliestHoldArrivalFrames > 0f && eta < earliestHoldArrivalFrames)
+                        - clockSnapshot.ToFramesCeil(tick.HoldMinutes);
+                    if (earliestHoldArrivalFrames > 0f && etaFrames < earliestHoldArrivalFrames)
                     {
                         if (nearestVehicle == Entity.Null)
                         {
                             nearestVehicle = vehicle;
                             nearestState = state;
-                            nearestEta = eta;
+                            nearestEtaFrames = etaFrames;
                             nearestReason = "before-origin-hold-window";
                         }
                         continue;
@@ -197,27 +210,27 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
                 float range = m_Runtime.m_LineRange.Left(vehicle);
                 bool better = tier < bestTier
-                    || (tier == bestTier && eta < bestEta)
-                    || (tier == bestTier && eta == bestEta && range > bestRange);
+                    || (tier == bestTier && etaFrames < bestEtaFrames)
+                    || (tier == bestTier && etaFrames == bestEtaFrames && range > bestRange);
                 if (better)
                 {
                     bestVehicle = vehicle;
                     bestTier = tier;
-                    bestEta = eta;
+                    bestEtaFrames = etaFrames;
                     bestRange = range;
-                    bestPrevTarget = assignedTarget;
+                    bestPreviousTargetMinute = assignedTargetMinute;
                 }
             }
 
             return new Result(
                 bestVehicle,
                 bestTier,
-                bestEta,
+                bestEtaFrames,
                 bestRange,
-                bestPrevTarget,
+                bestPreviousTargetMinute,
                 nearestVehicle,
                 nearestState,
-                nearestEta,
+                nearestEtaFrames,
                 nearestReason);
         }
     }

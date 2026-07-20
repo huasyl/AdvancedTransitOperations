@@ -1,4 +1,6 @@
 using Game;
+using Game.Common;
+using Game.Routes;
 using Game.Simulation;
 using Game.Vehicles;
 using Unity.Collections;
@@ -59,6 +61,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                         continue;
                     }
 
+                    if (!IsOfficialBoardingAtTargetStop(vehicle))
+                        continue;
+
                     uint protectedUntil = nowFrame + GuardFrames;
                     if (publicTransport.m_DepartureFrame > protectedUntil)
                         continue;
@@ -71,6 +76,22 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 vehicles.Dispose();
             }
+        }
+
+        private bool IsOfficialBoardingAtTargetStop(Entity vehicle)
+        {
+            if (!EntityManager.HasComponent<Target>(vehicle))
+                return false;
+
+            Entity targetWaypoint = EntityManager.GetComponentData<Target>(vehicle).m_Target;
+            if (targetWaypoint == Entity.Null || !EntityManager.HasComponent<Connected>(targetWaypoint))
+                return false;
+
+            Entity targetStop = EntityManager.GetComponentData<Connected>(targetWaypoint).m_Connected;
+            if (targetStop == Entity.Null || !EntityManager.HasComponent<BoardingVehicle>(targetStop))
+                return false;
+
+            return EntityManager.GetComponentData<BoardingVehicle>(targetStop).m_Vehicle == vehicle;
         }
     }
 }

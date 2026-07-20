@@ -130,7 +130,7 @@ function loadNativeWorkbenchBuildFlavor() {
     return Promise.resolve();
   }
 
-  return window.engine.call("huasyl::rt.workbench.getBuildFlavor").then((payload) => {
+  return window.engine.call("suhua::rt.workbench.getBuildFlavor").then((payload) => {
     const buildFlavor = parseNativeWorkbenchBuildFlavor(payload);
     if (!buildFlavor) {
       return;
@@ -689,7 +689,7 @@ function reportNativeWorkbenchHostState(phase) {
     return;
   }
 
-  window.engine.call("huasyl::rt.workbench.setWorkbenchHostState", JSON.stringify({
+  window.engine.call("suhua::rt.workbench.setWorkbenchHostState", JSON.stringify({
     phase: phase || "unknown",
     mode: window.__RT_WORKBENCH_ACTIVE_TRANSPORT_MODE__ || "train",
     activePage: window.__RT_WORKBENCH_ACTIVE_PAGE__ || "",

@@ -67,6 +67,9 @@ export function buildPlannerImportContract(plannerResult, activePlan, importedRo
     return null;
   }
 
+  const changedRows = (Array.isArray(rawPlan.changedWindows) ? rawPlan.changedWindows : [])
+    .flatMap((window) => Array.isArray(window?.rowDiffs) ? window.rowDiffs : []);
+
   return {
     draftKey: String(plannerResult?.requestEcho?.draftKey || ""),
     importedFrom: "planner-ui",
@@ -74,24 +77,12 @@ export function buildPlannerImportContract(plannerResult, activePlan, importedRo
     importedObjectiveId: String(rawPlan.objectiveId || ""),
     importedLineIds: [...new Set((Array.isArray(importedRows) ? importedRows : []).map((row) => row?.lineId).filter(Boolean))],
     requestEcho: plannerResult?.requestEcho || null,
-    plan: rawPlan
+    lineRoleSummary: rawPlan.lineRoleSummary || null,
+    selectedBypassStationIds: Array.isArray(rawPlan.selectedBypassStationIds) ? rawPlan.selectedBypassStationIds : [],
+    changedRows,
+    structuredActions: Array.isArray(rawPlan.structuredScheduleActions) ? rawPlan.structuredScheduleActions : [],
+    riskItems: Array.isArray(rawPlan.riskItems) ? rawPlan.riskItems : []
   };
-}
-
-export function buildPlannerPlanRefs(plannerResult, activePlan, importedRows) {
-  const contract = buildPlannerImportContract(plannerResult, activePlan, importedRows);
-  if (!contract) {
-    return [];
-  }
-
-  return [...new Set((Array.isArray(importedRows) ? importedRows : []).map((row) => row?.lineId).filter(Boolean))]
-    .map((lineId) => ({
-      lineId,
-      contract: {
-        ...contract,
-        draftKey: lineId
-      }
-    }));
 }
 
 export function buildPlannerStagedRowKey(row) {
@@ -120,16 +111,6 @@ export function getSnapshotLineDraftRowsByLineId(snapshot) {
     });
     return rowsByLineId;
   }
-
-  (Array.isArray(snapshot?.lineDraftRows) ? snapshot.lineDraftRows : [])
-    .map((row, index) => normalizePlannerRow(row, index, row?.note || "", "current-draft"))
-    .filter((row) => row.lineId && row.time)
-    .forEach((row) => {
-      if (!rowsByLineId.has(row.lineId)) {
-        rowsByLineId.set(row.lineId, []);
-      }
-      rowsByLineId.get(row.lineId).push(row);
-    });
   return rowsByLineId;
 }
 

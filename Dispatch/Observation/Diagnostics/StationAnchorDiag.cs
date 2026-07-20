@@ -6,6 +6,7 @@ using System.Runtime.Serialization;
 using Game.Routes;
 using Game.Simulation;
 using RapidTransitMod.Dispatch.Observation;
+using RapidTransitMod.Core;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -108,7 +109,7 @@ namespace RapidTransitMod
         private readonly Func<ulong> m_GetTotalSuspiciousLongDwell;
         private readonly Func<int> m_GetLegacyRestoredCount;
         private readonly Func<int> m_GetAnchorRestoredCount;
-        private readonly int m_FramesPerMinute;
+        private readonly Func<ClockSnapshot> m_ClockSnapshot;
 
         public StationAnchorDiag(
             EntityManager entityManager,
@@ -129,7 +130,7 @@ namespace RapidTransitMod
             Func<ulong> getTotalSuspiciousLongDwell,
             Func<int> getLegacyRestoredCount,
             Func<int> getAnchorRestoredCount,
-            int framesPerMinute)
+            Func<ClockSnapshot> clockSnapshot)
         {
             m_EntityManager = entityManager;
             m_LineQuery = lineQuery;
@@ -149,7 +150,7 @@ namespace RapidTransitMod
             m_GetTotalSuspiciousLongDwell = getTotalSuspiciousLongDwell;
             m_GetLegacyRestoredCount = getLegacyRestoredCount;
             m_GetAnchorRestoredCount = getAnchorRestoredCount;
-            m_FramesPerMinute = framesPerMinute;
+            m_ClockSnapshot = clockSnapshot;
         }
 
         public void Dump()
@@ -375,7 +376,7 @@ namespace RapidTransitMod
         private float RoundMinutes(float frames)
         {
             return frames > 0f
-                ? (float)Math.Round(frames / (float)m_FramesPerMinute, 2)
+                ? (float)Math.Round(m_ClockSnapshot().ToMinutes(frames), 2)
                 : 0f;
         }
     }

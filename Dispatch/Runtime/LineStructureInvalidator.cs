@@ -68,7 +68,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             m_Runtime.m_LineTimes.Clear();
             m_Runtime.m_LineMileage.Clear();
-            m_Runtime.m_Slices.Clear();
             m_Runtime.m_LineView.Clear();
             m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots();
             m_Runtime.m_StationContextQuery.Clear();
@@ -82,7 +81,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             Entity line = pending.Line;
             m_Runtime.m_LapCache.RemoveLine(line);
             m_Runtime.m_DispatchCache.RemoveLine(line);
-            m_Runtime.m_ObsBuffers.RemoveSliceLine(line);
+            m_Runtime.m_Observation.InvalidateSliceLine(line);
             m_Runtime.m_LineProfile.RemoveStability(line);
             m_Runtime.m_Bypass.ClearLine(line);
 
@@ -142,7 +141,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_RouteProgress.Remove(vehicle);
             m_Runtime.m_TrackProjection.ClearVehicle(vehicle);
             m_Runtime.m_ObsPersist.ClearLap(vehicle);
-            m_Runtime.m_ObsPersist.ClearVehicleSlices(vehicle);
+            m_Runtime.m_Observation.ClearVehicleSlices(vehicle);
             m_Runtime.m_StopSessionLine.Remove(vehicle);
             m_Runtime.m_StopSessionWaypointIndex.Remove(vehicle);
             m_Runtime.m_StopSessionArrivalFrame.Remove(vehicle);

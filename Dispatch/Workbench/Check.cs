@@ -97,88 +97,23 @@ namespace RapidTransitMod.Dispatch.Workbench
                 .GroupBy(line => line.Id, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal)
                 ?? new Dictionary<string, WorkbenchLineRuntime>(StringComparer.Ordinal);
-            Dictionary<string, DispatchWorkbenchDepotDto> depotById = (depots ?? buildWorkbenchDepots())
+            List<IGrouping<string, DispatchWorkbenchDepotDto>> depotGroups = (depots ?? buildWorkbenchDepots())
                 .Where(depot => depot != null && !string.IsNullOrEmpty(depot.id))
-                .ToDictionary(depot => depot.id, depot => depot, StringComparer.Ordinal);
-
-            if (request.manualRows != null)
+                .GroupBy(depot => depot.id, StringComparer.Ordinal)
+                .ToList();
+            foreach (IGrouping<string, DispatchWorkbenchDepotDto> group in depotGroups.Where(group => group.Count() > 1))
             {
-                Dictionary<string, HashSet<string>> seenByLine = new Dictionary<string, HashSet<string>>();
-                Dictionary<string, int> previousByLine = new Dictionary<string, int>();
-                for (int i = 0; i < request.manualRows.Length; i++)
-                {
-                    DispatchWorkbenchManualRowDto row = request.manualRows[i];
-                    if (string.IsNullOrEmpty(row.lineId))
-                    {
-                        errors.Add("Manual row " + row.id + " is missing lineId.");
-                    }
-
-                    int minutes = parseTimeMinutes(row.time);
-                    if (minutes < 0)
-                    {
-                        errors.Add("Manual row " + row.id + " has invalid time.");
-                        continue;
-                    }
-
-                    string lineId = row.lineId ?? string.Empty;
-                    if (!seenByLine.TryGetValue(lineId, out HashSet<string> seen))
-                    {
-                        seen = new HashSet<string>();
-                        seenByLine[lineId] = seen;
-                    }
-
-                    string key = lineId + "|" + (row.kind ?? "local") + "|" + row.time;
-                    if (!seen.Add(key))
-                    {
-                        errors.Add("Manual row " + row.id + " duplicates an existing departure.");
-                    }
-
-                    int previous = previousByLine.TryGetValue(lineId, out int previousValue) ? previousValue : -1;
-                    if (previous >= 0 && minutes < previous)
-                    {
-                        errors.Add("Manual rows must be sorted ascending by time.");
-                    }
-                    previousByLine[lineId] = minutes;
-                }
+                string entries = string.Join(
+                    ", ",
+                    group.Select(depot => (depot.name ?? string.Empty) + "[" + (depot.transportType ?? string.Empty) + "]"));
+                Mod.log.Info(
+                    "[WorkbenchDepotDuplicate] id=" + group.Key
+                    + " count=" + group.Count().ToString()
+                    + " entries=[" + entries + "]");
+                errors.Add("Depot catalog contains duplicate id " + group.Key + ".");
             }
-
-            if (request.autoRules != null)
-            {
-                for (int i = 0; i < request.autoRules.Length; i++)
-                {
-                    DispatchWorkbenchAutoRuleDto rule = request.autoRules[i];
-                    if (string.IsNullOrEmpty(rule.lineId))
-                    {
-                        errors.Add("Auto rule " + rule.id + " is missing lineId.");
-                    }
-                    int start = parseTimeMinutes(rule.start);
-                    int end = parseTimeMinutes(rule.end);
-                    if (start < 0 || end < 0 || end <= start)
-                    {
-                        errors.Add("Auto rule " + rule.id + " has an invalid time window.");
-                    }
-
-                    double departuresPerHour = rule.departuresPerHour > 0d
-                        ? rule.departuresPerHour
-                        : ("express".Equals(rule.kind, StringComparison.Ordinal)
-                            ? rule.expressPerHour
-                            : rule.localPerHour);
-
-                    if (double.IsNaN(departuresPerHour)
-                        || double.IsInfinity(departuresPerHour)
-                        || departuresPerHour <= 0d
-                        || rule.localPerHour < 0d
-                        || rule.expressPerHour < 0d)
-                    {
-                        errors.Add("Auto rule " + rule.id + " has invalid frequency values.");
-                    }
-
-                    if (rule.expressOffsetMinutes < 0)
-                    {
-                        errors.Add("Auto rule " + rule.id + " has a negative express offset.");
-                    }
-                }
-            }
+            Dictionary<string, DispatchWorkbenchDepotDto> depotById = depotGroups
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
             if (request.lineSettings != null)
             {

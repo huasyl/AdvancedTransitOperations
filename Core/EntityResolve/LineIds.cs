@@ -1,3 +1,4 @@
+using System;
 using Game.Prefabs;
 using Game.Routes;
 using Unity.Entities;
@@ -7,15 +8,12 @@ namespace RapidTransitMod
     internal sealed class LineIds
     {
         private readonly EntityManager m_EntityManager;
+        private readonly LineAnchorCatalog m_Anchors;
 
-        internal LineIds(EntityManager entityManager)
+        internal LineIds(EntityManager entityManager, LineAnchorCatalog anchors)
         {
             m_EntityManager = entityManager;
-        }
-
-        internal string Get(Entity line)
-        {
-            return LineIdentityService.GetId(LineIdentityService.GetKey(m_EntityManager, line));
+            m_Anchors = anchors ?? throw new ArgumentNullException(nameof(anchors));
         }
 
         internal string Id(LineKey key)
@@ -28,15 +26,14 @@ namespace RapidTransitMod
             return LineIdentityService.GetKey(lineId);
         }
 
-        internal LineKey Key(Entity line)
+        internal LineKey StableKey(Entity line)
         {
-            return Key(line, null);
+            return LineIdentityService.StableKey(m_Anchors, line);
         }
 
-        internal LineKey Key(Entity line, string fallbackLineId = null)
+        internal string StableId(Entity line)
         {
-            LineKey key = LineIdentityService.GetKey(m_EntityManager, line);
-            return !key.IsEmpty ? key : LineIdentityService.GetKey(fallbackLineId);
+            return LineIdentityService.GetId(StableKey(line));
         }
 
         internal string Type(Entity line)

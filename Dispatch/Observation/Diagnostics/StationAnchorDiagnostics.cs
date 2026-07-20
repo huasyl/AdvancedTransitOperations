@@ -34,7 +34,7 @@ namespace RapidTransitMod
                     m_Runtime.m_SimulationSystem,
                     m_Runtime.m_CitySystem,
                     message => m_Runtime.log.Info(message),
-                    m_Runtime.LineId,
+                    m_Runtime.LineStableId,
                     m_Runtime.m_Resolve.Stop,
                     m_Runtime.m_Resolve.StationName,
                     Keys.WaypointDwell,
@@ -55,7 +55,7 @@ namespace RapidTransitMod
                     () => m_Runtime.m_StationAnchorDiagTotalSuspiciousLongDwell,
                     () => m_Runtime.m_LastStationStopDwellLegacyRestoredCount,
                     () => m_Runtime.m_LastStationStopDwellAnchorRestoredCount,
-                    (int)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    () => m_Runtime.m_SimClock.Snapshot);
             }
 
             return m_StationAnchorDiag;

@@ -6,11 +6,12 @@ namespace RapidTransitMod.Workbenches
 {
     internal static class UiEvents
     {
-        private const string Snap = "huasyl::rt.workbench.onSnapshotChanged";
-        private const string Catalog = "huasyl::rt.workbench.onCatalog";
-        private const string Broadcast = "huasyl::rt.workbench.onBroadcastSnapshotChanged";
-        private const string Asset = "huasyl::rt.workbench.onBroadcastAssetPreviewStateChanged";
-        private const string Rule = "huasyl::rt.workbench.onBroadcastRulePreviewStateChanged";
+        private const string Snap = "suhua::rt.workbench.onSnapshotChanged";
+        private const string Catalog = "suhua::rt.workbench.onCatalog";
+        private const string LineInvalidated = "suhua::rt.workbench.onLineInvalidated";
+        private const string Broadcast = "suhua::rt.workbench.onBroadcastSnapshotChanged";
+        private const string Asset = "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged";
+        private const string Rule = "suhua::rt.workbench.onBroadcastRulePreviewStateChanged";
 
         internal static void Push(DispatchWorkbenchSnapshot snapshot)
         {
@@ -27,6 +28,12 @@ namespace RapidTransitMod.Workbenches
         {
             string json = payload != null ? Json.Write(payload) : string.Empty;
             Push(Catalog, json, "Workbench catalog event push failed: ");
+        }
+
+        internal static void Push(DispatchWorkbenchLineInvalidationEvent payload)
+        {
+            string json = payload != null ? Json.Write(payload) : string.Empty;
+            Push(LineInvalidated, json, "Workbench line invalidation event push failed: ");
         }
 
         internal static void Push(BroadcastWorkbenchSnapshot snapshot)

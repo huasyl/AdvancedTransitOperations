@@ -6,7 +6,7 @@ export default function PassengerLineTabs({ lines, selectedLineId, onSelect }) {
   function lineLabel(line) {
     const code = String(line?.code || "").trim();
     const name = String(line?.shortName || line?.name || "").trim();
-    return name || code || line?.id || "";
+    return name || code || "--";
   }
 
   return (

@@ -56,13 +56,25 @@ namespace RapidTransitMod.Dispatch.Workbench
         }
 
         internal AppliedTimetableStore AppliedStore => m_AppliedStore;
+        internal LineConfigStore LineConfigStore => m_LineStore;
+        internal LineConfigStore LineStore => m_LineStore;
         internal IReadOnlyDictionary<string, AppliedLine> AppliedLines => Applied().Lines;
         internal DraftStore DraftStore => m_Drafts;
         internal ulong Version => m_Version;
 
         internal LineIds Ids()
         {
-            return m_LineIds ?? (m_LineIds = new LineIds(m_Runtime.EntityManager));
+            if (m_LineIds != null)
+                return m_LineIds;
+
+            LineAnchorCatalog catalog = m_Runtime.m_LineAnchorCatalog
+                ?? throw new InvalidOperationException("LineAnchorCatalog is not ready.");
+            return m_LineIds = new LineIds(m_Runtime.EntityManager, catalog);
+        }
+
+        internal LineKey StableEntityKey(Entity line, string fallbackLineId)
+        {
+            return Ids().StableKey(line);
         }
 
         internal Names NameSvc()
@@ -88,7 +100,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_LineStore,
                 m_Validator,
                 Ids().Key,
-                Ids().Key,
+                StableEntityKey,
                 Ids().Id,
                 RuntimeConfigStoreDefaults.Hold,
                 RuntimeConfigStoreDefaults.Dwell,
@@ -108,12 +120,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_LineCfg = new LineConfig(
                 m_LineStore,
                 Ids().Key,
-                Ids().Key,
+                StableEntityKey,
                 Ids().Id,
                 RuntimeConfigStoreDefaults.Hold,
                 RuntimeConfigStoreDefaults.Dwell,
                 NormDepot,
-                RuntimeConfigStoreDefaults.NormalizeConfiguredServiceKind);
+                RuntimeConfigStoreDefaults.NormalizeConfiguredServiceKind,
+                Ids().StableKey);
             return m_LineCfg;
         }
 
@@ -127,7 +140,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 () => m_Runtime.m_SimulationSystem.frameIndex,
                 DepotById,
                 DepotId,
-                Ids().Get,
+                Ids().StableId,
                 lineId => m_Runtime.m_LineView.DepotId(lineId),
                 () => m_Runtime.m_LineView.CfgVersion(),
                 message => Mod.log.Info(message));
@@ -148,7 +161,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 StopSvc().Anchor,
                 StopSvc().Key,
                 StopSvc().StationName,
-                Ids().Key,
+                Ids().StableKey,
                 Ids().Id,
                 Ids().Type,
                 CanonDepot);
@@ -164,6 +177,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Catalog(),
                 Workbenches.UiEvents.Push,
                 Workbenches.UiEvents.Push,
+                Workbenches.UiEvents.Push,
+                reasons => Run().CleanupConfirmedInvalidatedLines(reasons),
+                runtimeLines =>
+                {
+                    Persist().Load();
+                    return Run().CollectRuntimeMissingLineReasons(runtimeLines);
+                },
                 () => m_Version,
                 () => HostState().IsParked,
                 () => Snapshot().Build(
@@ -196,7 +216,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Clock().Now,
                     () => m_Runtime.m_SimulationSystem.frameIndex,
                     StopSvc().Name,
-                    Ids().Get,
+                    Ids().StableId,
                     line => m_Runtime.m_LineView.Kind(line, null),
                     m_Runtime.m_Observation.Stop,
                     DispatchRuntimeSystem.IsTripTraceLoggingEnabled,
@@ -215,7 +235,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_Runtime.m_Obs.Vehicles,
                     StopSvc().Stop,
                     StopSvc().Station,
-                    Ids().Get,
+                    Ids().StableId,
                     line => m_Runtime.m_LineView.Kind(line, null),
                     Time.Parse,
                     Clock().Now,
@@ -242,7 +262,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Config(),
                 AppliedRuntimeLines,
                 new AppliedPort(
-                    Ids().Get,
+                    Ids().StableId,
                     RapidTransitMod.Dispatch.Workbench.Drafts.Key,
                     lineId => m_Runtime.m_LineView.Hold(lineId),
                     lineId => m_Runtime.m_LineView.Dwell(lineId),
@@ -252,6 +272,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Rows.Note,
                     Rows.Times,
                     Save,
+                    () => Applied().Save(),
                     Sync().Sync,
                     lineId => m_Runtime.m_Observation.Seed(
                         !string.IsNullOrEmpty(Drafts().Preferred())
@@ -268,7 +289,21 @@ namespace RapidTransitMod.Dispatch.Workbench
                     lineId => m_Drafts.TryGetValue(lineId, out DispatchWorkbenchDraftState draft)
                         ? draft?.PlannerImportContract
                         : null,
-                    waypoint => m_Runtime.m_Resolve.Stop(waypoint)));
+                    waypoint => m_Runtime.m_Resolve.Stop(waypoint),
+                    lineIds =>
+                    {
+                        string[] removed = LineCfg().Clear(lineIds);
+                        if (removed.Length > 0)
+                        {
+                            Depots().Clear();
+                            m_Runtime.m_LineView.Clear();
+                            CatalogCache().MarkDirty();
+                        }
+
+                        return removed;
+                    },
+                    Ids().StableId,
+                    Ids().StableKey));
             return m_Applied;
         }
 
@@ -391,6 +426,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 line => m_Runtime.m_LineView.Hold(line),
                 line => m_Runtime.m_LineView.Dwell(line),
                 line => m_Runtime.m_LineView.DepotId(line),
+                () => Applied().CleanupDeletedOrReplacedAppliedLines(saveChanges: true),
+                () => Applied().ConsumeCleanupInfo(),
                 LogSnapshot,
                 WriteIntegrity,
                 () => m_Runtime.m_Features.Dto());
@@ -425,7 +462,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                 LastById,
                 KeepManual,
                 KeepRules,
-                KeepRows);
+                KeepRows,
+                m_LineStore,
+                m_Runtime.m_LineAnchorCatalog);
             return m_Persist;
         }
 
@@ -440,7 +479,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Drafts(),
                 Query(),
                 Snapshot(),
-                Persist());
+                Persist(),
+                () => Applied().ConsumeCleanupInfo());
             return m_Commands;
         }
 
@@ -690,6 +730,102 @@ namespace RapidTransitMod.Dispatch.Workbench
             return CatalogCache().Depots();
         }
 
+        private IEnumerable<string> CollectSavedWorkbenchLineIds()
+        {
+            Persist().Load();
+
+            HashSet<string> lineIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string lineId in LineCfg().Keys())
+            {
+                AddSavedWorkbenchLineId(lineIds, lineId);
+            }
+
+            AddSavedWorkbenchLineId(lineIds, m_Drafts.GetPreferredLineId());
+            foreach (KeyValuePair<string, DispatchWorkbenchDraftState> entry in m_Drafts)
+            {
+                AddSavedWorkbenchLineId(lineIds, entry.Key);
+                CollectSavedWorkbenchLineIds(lineIds, entry.Value);
+            }
+
+            return lineIds;
+        }
+
+        private static void CollectSavedWorkbenchLineIds(
+            HashSet<string> lineIds,
+            DispatchWorkbenchDraftState draft)
+        {
+            if (lineIds == null || draft == null)
+            {
+                return;
+            }
+
+            AddSavedWorkbenchLineId(lineIds, draft.SelectedLineId);
+            AddSavedWorkbenchLineId(lineIds, draft.SelectedEditLine);
+
+            DispatchWorkbenchMergedView mergedView = draft.MergedView;
+            if (mergedView != null)
+            {
+                AddSavedWorkbenchLineId(lineIds, mergedView.localLineId);
+                AddSavedWorkbenchLineId(lineIds, mergedView.expressLineId);
+                AddSavedWorkbenchLineIds(lineIds, mergedView.localLineIds);
+                AddSavedWorkbenchLineIds(lineIds, mergedView.expressLineIds);
+            }
+
+            AddSavedWorkbenchLineIds(lineIds, draft.StagedRows?.Select(row => row?.lineId));
+
+            DispatchWorkbenchPlannerImportContractDto contract = draft.PlannerImportContract;
+            if (contract == null)
+            {
+                return;
+            }
+
+            AddSavedWorkbenchLineId(lineIds, contract.draftKey);
+            AddSavedWorkbenchLineIds(lineIds, contract.importedLineIds);
+
+            DispatchPlannerRequestEchoDto echo = contract.requestEcho;
+            if (echo == null)
+            {
+                return;
+            }
+
+            AddSavedWorkbenchLineId(lineIds, echo.draftKey);
+            AddSavedWorkbenchLineId(lineIds, echo.expressLineId);
+            AddSavedWorkbenchLineId(lineIds, echo.virtualExpressBaseLineId);
+            AddSavedWorkbenchLineIds(lineIds, echo.localLineIds);
+            AddSavedWorkbenchLineIds(lineIds, echo.adjustableLineIds);
+        }
+
+        private static void AddSavedWorkbenchLineIds(
+            HashSet<string> lineIds,
+            IEnumerable<string> sourceLineIds)
+        {
+            foreach (string lineId in sourceLineIds ?? Array.Empty<string>())
+            {
+                AddSavedWorkbenchLineId(lineIds, lineId);
+            }
+        }
+
+        private static void AddSavedWorkbenchLineId(
+            HashSet<string> lineIds,
+            string lineId)
+        {
+            if (lineIds == null)
+            {
+                return;
+            }
+
+            string normalized = DraftStore.GetKey(lineId);
+            if (string.IsNullOrEmpty(normalized)
+                || string.Equals(normalized, "__default__", StringComparison.Ordinal)
+                || string.Equals(normalized, "local", StringComparison.Ordinal)
+                || string.Equals(normalized, "express", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lineIds.Add(normalized);
+        }
+
         private void LogSnapshot(
             WorkbenchLineRuntime activeRuntime,
             List<DispatchWorkbenchStationDto> stations,
@@ -755,6 +891,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             return m_Runtime.EntityManager.CreateEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.Exclude<Game.Tools.Temp>(),
                 ComponentType.Exclude<Deleted>());
         }
 

@@ -35,16 +35,12 @@ export function createEmptySnapshot(overrides = {}) {
     lines: emptyLines,
     depots: emptyDepots,
     stations: emptyStations,
-    trips: emptyTrips,
-    manualRows: emptyManualRows,
-    autoRules: emptyAutoRules,
-    lineDraftRows: emptyLineDraftRows,
     lineDraftRowsByLineId: [],
-    combinedDraftRows: emptyLineDraftRows,
     appliedRows: emptyLineDraftRows,
-    planRefs: [],
     version: "empty",
     sourceMode: "backend-fallback",
+    clientRequestSequence: 0,
+    draftApplied: false,
     featureSettings: { ...emptyFeatureSettings },
     ...overrides
   };

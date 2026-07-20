@@ -30,14 +30,10 @@ namespace RapidTransitMod
 
         public string CurrentGameTimeLabel()
         {
-            if (m_Port.Time == null)
+            if (m_Port.ClockSnapshot == null)
                 return string.Empty;
 
-            int nowMin = (int)(m_Port.Time.normalizedTime * 1440f) % 1440;
-            if (nowMin < 0)
-                nowMin += 1440;
-
-            return "[游戏时间 " + DispatchRuntimeSystem.SlotStr(nowMin) + "]";
+            return "[游戏时间 " + DispatchRuntimeSystem.SlotStr(m_Port.ClockSnapshot().NowMinute) + "]";
         }
 
         public void ClearDebugSummaries()
@@ -48,45 +44,45 @@ namespace RapidTransitMod
             m_LineLastDispatchSampleSummary.Clear();
         }
 
-        public void RecordLineSpawnTriggerSummary(Entity line, int nowMin, int slot, int actualCount)
+        public void RecordLineSpawnTriggerSummary(Entity line, int nowMinute, int slot, int actualCount)
         {
             if (line == Entity.Null)
                 return;
 
-            m_LineLastSpawnTriggerSummary[line] = DispatchRuntimeSystem.SlotStr(nowMin)
+            m_LineLastSpawnTriggerSummary[line] = DispatchRuntimeSystem.SlotStr(nowMinute)
                 + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
                 + " 真实产车命令 当前=" + actualCount;
         }
 
-        public void RecordLineVehicleRegisterSummary(Entity line, int nowMin, Entity vehicle, VehicleState finalState)
+        public void RecordLineVehicleRegisterSummary(Entity line, int nowMinute, Entity vehicle, VehicleState finalState)
         {
             if (line == Entity.Null || vehicle == Entity.Null)
                 return;
 
             string depotSummary = DescribeVehicleOwnerDepot(vehicle);
-            m_LineLastVehicleRegisterSummary[line] = DispatchRuntimeSystem.SlotStr(nowMin)
+            m_LineLastVehicleRegisterSummary[line] = DispatchRuntimeSystem.SlotStr(nowMinute)
                 + " 车辆" + vehicle.Index
                 + " 注册 -> " + finalState
                 + " depot=" + depotSummary;
         }
 
-        public void RecordLineHoldingSummary(Entity line, int nowMin, Entity vehicle, int targetMin)
+        public void RecordLineHoldingSummary(Entity line, int nowMinute, Entity vehicle, int targetMinute)
         {
             if (line == Entity.Null || vehicle == Entity.Null)
                 return;
 
-            m_LineLastHoldingSummary[line] = DispatchRuntimeSystem.SlotStr(nowMin)
+            m_LineLastHoldingSummary[line] = DispatchRuntimeSystem.SlotStr(nowMinute)
                 + " 车辆" + vehicle.Index
                 + " 到站/Holding"
-                + (targetMin >= 0 ? " " + DispatchRuntimeSystem.SlotStr(targetMin) : " 等待调度");
+                + (targetMinute >= 0 ? " " + DispatchRuntimeSystem.SlotStr(targetMinute) : " 等待调度");
         }
 
-        public void RecordLineDispatchSampleSummary(Entity line, int nowMin, Entity vehicle, float sampleMinutes)
+        public void RecordLineDispatchSampleSummary(Entity line, int nowMinute, Entity vehicle, float sampleMinutes)
         {
             if (line == Entity.Null || vehicle == Entity.Null || sampleMinutes <= 0f)
                 return;
 
-            m_LineLastDispatchSampleSummary[line] = DispatchRuntimeSystem.SlotStr(nowMin)
+            m_LineLastDispatchSampleSummary[line] = DispatchRuntimeSystem.SlotStr(nowMinute)
                 + " 车辆" + vehicle.Index
                 + " 出库用时=" + sampleMinutes.ToString("F1") + "分钟";
         }
@@ -294,8 +290,8 @@ namespace RapidTransitMod
             {
                 m_Query = new SelectQuery(
                     EntityManager,
-                    m_Port.Time,
                     m_Port.Sim,
+                    m_Port.ClockSnapshot,
                     m_Port.Vehicles,
                     m_Port.Obs,
                     m_Port.Spawns,
@@ -341,8 +337,7 @@ namespace RapidTransitMod
                     LocalizedNextSlotCoverageLabel,
                     LocalizedDispatchCacheLabel,
                     LocalizedOfficialDispatchValue,
-                    IsChineseLocale,
-                    (int)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    IsChineseLocale);
             }
 
             return m_Query;
@@ -573,8 +568,7 @@ namespace RapidTransitMod
                     : -1;
 
             EntityCommandBuffer commandBuffer = m_Port.Barrier.CreateCommandBuffer();
-            m_Port.Commands.ForceDepart(vehicle, ref pt, m_Port.Sim.frameIndex, commandBuffer);
-            m_Port.ClearBypass(vehicle, "UI强制发车");
+            m_Port.Runtime.ForceManualDepart(vehicle, ref pt, m_Port.Sim.frameIndex, commandBuffer);
             m_Port.Labels.Set(vehicle, "结束上客");
             log.Info("[强制发车协助] 线路" + line.Index + " 车辆" + vehicle.Index
                 + " wp=" + currentWaypointIndex);
@@ -646,7 +640,7 @@ namespace RapidTransitMod
 #endif
         }
 
-        private string BuildVehicleAlertSummary(Entity vehicle, Entity line, int nowMin, int targetMin)
+        private string BuildVehicleAlertSummary(Entity vehicle, Entity line, int nowMinute, int targetMinute)
         {
             if (m_Port.TryBlocker(vehicle, out Entity blockerVehicle) && blockerVehicle != Entity.Null)
                 return "yielding-for:" + blockerVehicle.Index;
@@ -664,12 +658,12 @@ namespace RapidTransitMod
                 alerts = AppendAlert(alerts, "nearing-terminus");
             if (m_Port.Vehicles.TryGetCooldown(vehicle, out uint cooldownUntil) && m_Port.Sim.frameIndex < cooldownUntil)
                 alerts = AppendAlert(alerts, "launch-cooldown");
-            if (targetMin >= 0 && ScheduleClock.Expired(nowMin, targetMin))
+            if (targetMinute >= 0 && ScheduleClock.Expired(nowMinute, targetMinute))
                 alerts = AppendAlert(alerts, "target-expired");
             if (line != Entity.Null
                 && m_Port.Vehicles.TryGetState(vehicle, out var state)
                 && state == VehicleState.Idle
-                && m_Port.Scheduler.Policy.ShouldProtect(line, vehicle, nowMin, -1))
+                && m_Port.Scheduler.Policy.ShouldProtect(line, vehicle, nowMinute, -1))
             {
                 alerts = AppendAlert(alerts, "yield-protected");
             }
@@ -738,7 +732,7 @@ namespace RapidTransitMod
             if (etaFrames == float.MaxValue)
                 return "-";
 
-            float etaMinutes = etaFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+            double etaMinutes = m_Port.ClockSnapshot().ToMinutes(etaFrames);
             return etaMinutes.ToString("F1") + " min";
         }
 
@@ -787,8 +781,8 @@ namespace RapidTransitMod
         {
             string state = m_Port.Vehicles.TryGetState(vehicle, out var st) ? st.ToString() : "Unknown";
             string lineStr = m_Port.Vehicles.TryGetLine(vehicle, out Entity line) ? line.Index.ToString() : "-";
-            string targetStr = m_Port.Vehicles.TryGetTarget(vehicle, out int targetMin) && targetMin >= 0 ? DispatchRuntimeSystem.SlotStr(targetMin) : "-";
-            string currentStr = m_Port.Vehicles.TryGetSlot(vehicle, out int currentSlot) && currentSlot >= 0 ? DispatchRuntimeSystem.SlotStr(currentSlot) : "-";
+            string targetMinuteText = m_Port.Vehicles.TryGetTarget(vehicle, out int targetMinute) && targetMinute >= 0 ? DispatchRuntimeSystem.SlotStr(targetMinute) : "-";
+            string currentMinuteText = m_Port.Vehicles.TryGetSlot(vehicle, out int currentSlotMinute) && currentSlotMinute >= 0 ? DispatchRuntimeSystem.SlotStr(currentSlotMinute) : "-";
             string cachedWp = m_Port.CachedWp.TryGetValue(vehicle, out int wp) ? wp.ToString() : "-";
             string tagged = BoolDebugStr(m_Port.Vehicles.IsInbound(vehicle));
             string cooldown = BoolDebugStr(m_Port.Vehicles.TryGetCooldown(vehicle, out uint cd) && m_Port.Sim.frameIndex < cd);
@@ -802,8 +796,8 @@ namespace RapidTransitMod
             AddDebugItem(list, "车辆", "Vehicle", vehicle.Index.ToString());
             AddDebugItem(list, "状态", "State", state);
             AddDebugItem(list, "线路", "Line", lineStr);
-            AddDebugItem(list, "目标班次", "Target Slot", targetStr);
-            AddDebugItem(list, "当前班次", "Current Slot", currentStr);
+            AddDebugItem(list, "目标班次", "Target Slot", targetMinuteText);
+            AddDebugItem(list, "当前班次", "Current Slot", currentMinuteText);
             AddDebugItem(list, "缓存路点", "Cached Waypoint", cachedWp);
             AddDebugItem(list, "回流标签", "Nearing Terminus", tagged);
             AddDebugItem(list, "发车冷却", "Launch Cooldown", cooldown);
@@ -817,17 +811,17 @@ namespace RapidTransitMod
 
         private void FillLineDebugInfo(Entity line, InfoList list)
         {
-            int nowMin = (int)(m_Port.Time.normalizedTime * 1440f) % 1440;
+            int nowMinute = m_Port.ClockSnapshot().NowMinute;
             bool isManagedLine = m_Port.Lines.Applied(line);
-            int nextSlot = isManagedLine
-                ? m_Port.Scheduler.NextManagedTarget(line, nowMin)
-                : m_Port.Scheduler.NextSlotMin(nowMin);
+            int nextSlotMinute = isManagedLine
+                ? m_Port.Scheduler.NextManagedTarget(line, nowMinute)
+                : m_Port.Scheduler.NextSlotMin(nowMinute);
             float routeDurationFrames = m_Port.ReadLineDuration(line);
             float lapCacheFrames = m_Port.ReadLap(line);
             float dispatchCacheFrames = m_Port.ReadDispatch(line);
-            string routeDuration = routeDurationFrames > 0f ? (routeDurationFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "min" : "-";
-            string lapCache = lapCacheFrames > 0f ? (lapCacheFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "min" : "-";
-            string dispatchCache = dispatchCacheFrames > 0f ? (dispatchCacheFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "min" : "-";
+            string routeDurationMinutesText = routeDurationFrames > 0f ? m_Port.ClockSnapshot().ToMinutes(routeDurationFrames).ToString("F1") + "min" : "-";
+            string lapCacheMinutesText = lapCacheFrames > 0f ? m_Port.ClockSnapshot().ToMinutes(lapCacheFrames).ToString("F1") + "min" : "-";
+            string dispatchCacheMinutesText = dispatchCacheFrames > 0f ? m_Port.ClockSnapshot().ToMinutes(dispatchCacheFrames).ToString("F1") + "min" : "-";
             string spawning = m_Port.Spawns.TryGetValue(line, out int spawnTarget) ? spawnTarget.ToString() : "-";
 
             int preparing = 0;
@@ -864,7 +858,7 @@ namespace RapidTransitMod
             }
 
             AddDebugItem(list, "线路", "Line", line.Index.ToString());
-            AddDebugItem(list, isManagedLine ? LocalizedNextSlotLabel() : "下一班次", "Next Slot", DispatchRuntimeSystem.SlotStr(nextSlot));
+            AddDebugItem(list, isManagedLine ? LocalizedNextSlotLabel() : "下一班次", "Next Slot", DispatchRuntimeSystem.SlotStr(nextSlotMinute));
             AddDebugItem(list, "总车数", "Total Vehicles", total.ToString());
             AddDebugItem(list, "预备数", "Preparing Count", preparing.ToString());
             AddDebugItem(list, "候车数", "Holding Count", holding.ToString());
@@ -873,9 +867,9 @@ namespace RapidTransitMod
             AddDebugItem(list, "回库数", "Retiring Count", retiring.ToString());
             AddDebugItem(list, "回流标签数", "Nearing Terminus Count", tagged.ToString());
             AddDebugItem(list, "产车目标", "Spawn Target", spawning);
-            AddDebugItem(list, "全程用时", "Route Duration", routeDuration);
-            AddDebugItem(list, "圈时缓存", "Lap Cache", lapCache);
-            AddDebugItem(list, "出库缓存", "Dispatch Cache", dispatchCache);
+            AddDebugItem(list, "全程用时", "Route Duration", routeDurationMinutesText);
+            AddDebugItem(list, "圈时缓存", "Lap Cache", lapCacheMinutesText);
+            AddDebugItem(list, "出库缓存", "Dispatch Cache", dispatchCacheMinutesText);
         }
 
     }

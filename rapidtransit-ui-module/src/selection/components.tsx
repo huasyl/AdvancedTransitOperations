@@ -202,7 +202,7 @@ export function DevSightBlock(props: { first?: boolean; source?: string; summary
   );
 }
 
-export function ActionButton(props: { action: string; label: string; marginLeft?: string }) {
+export function ActionButton(props: { action: string; label: string; marginLeft?: string; disabled?: boolean }) {
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
 
@@ -210,12 +210,12 @@ export function ActionButton(props: { action: string; label: string; marginLeft?
   let boxShadow = "inset 0 1px 0 rgba(255,255,255,0.05)";
   let transform = "translateY(0)";
 
-  if (hovered) {
+  if (hovered && !props.disabled) {
     background = "rgba(84,163,186,0.90)";
     boxShadow = "inset 0 1px 0 rgba(255,255,255,0.06)";
   }
 
-  if (pressed) {
+  if (pressed && !props.disabled) {
     background = "rgba(66,136,156,0.92)";
     boxShadow = "inset 0 1px 0 rgba(255,255,255,0.03)";
     transform = "translateY(1px)";
@@ -223,13 +223,13 @@ export function ActionButton(props: { action: string; label: string; marginLeft?
 
   return (
     <button
-      onClick={() => trigger(GROUP, props.action)}
-      onMouseEnter={() => setHovered(true)}
+      onClick={() => { if (!props.disabled) trigger(GROUP, props.action); }}
+      onMouseEnter={() => { if (!props.disabled) setHovered(true); }}
       onMouseLeave={() => {
         setHovered(false);
         setPressed(false);
       }}
-      onMouseDown={() => setPressed(true)}
+      onMouseDown={() => { if (!props.disabled) setPressed(true); }}
       onMouseUp={() => setPressed(false)}
       style={{
         width: "132rem",
@@ -245,7 +245,8 @@ export function ActionButton(props: { action: string; label: string; marginLeft?
         lineHeight: "15rem",
         fontWeight: 600,
         letterSpacing: "0",
-        cursor: "pointer",
+        cursor: props.disabled ? "default" : "pointer",
+        opacity: props.disabled ? 0.55 : 1,
         outline: "none",
         transform,
         transition: "background 0.12s ease, transform 0.08s ease"

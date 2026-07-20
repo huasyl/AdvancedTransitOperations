@@ -77,6 +77,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 Entity = line.Entity,
                 Id = line.Id ?? string.Empty,
+                StableSignature = line.StableSignature ?? string.Empty,
                 Name = line.Name ?? string.Empty,
                 Kind = string.IsNullOrEmpty(line.Kind) ? "local" : line.Kind,
                 TransportType = line.TransportType ?? string.Empty,

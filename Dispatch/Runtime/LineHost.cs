@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Game.Routes;
 using RapidTransitMod.Dispatch.Workbench;
+using RapidTransitMod.Core;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Runtime
@@ -23,13 +24,14 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         public EntityManager EntityManager;
         public Func<ulong, int, ulong> MixSignature = null!;
-        public float FramesPerMinute;
+        public Func<ClockSnapshot> ClockSnapshot = null!;
         public float ProfileStopStartBufferMinutes;
         public float EtaScaleMin;
         public float EtaScaleMax;
-        public float DispatchFallbackSpeedMetersPerMinute;
-        public float DispatchEstimateMinMinutes;
-        public float DispatchEstimateMaxMinutes;
+        public float DispatchFallbackFramesPerMeter;
+        public float DispatchEstimateMinFrames;
+        public float DispatchEstimateDefaultFrames;
+        public float DispatchEstimateMaxFrames;
         public Func<Entity, float> ReadLapFrames = null!;
         public Func<Entity, float> ReadDispatchFrames = null!;
         public Func<Entity, int> DwellMinutes = null!;

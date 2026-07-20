@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Game.Common;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Diagnostics;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
@@ -81,7 +82,7 @@ namespace RapidTransitMod.Dispatch.Lines
             bool atOrigin,
             bool boarding,
             bool lastBoarding,
-            int targetMin)
+            int targetMinute)
         {
             bool probeEnabled = RuntimeHotPathProbe.Enabled();
             if (probeEnabled)
@@ -93,7 +94,7 @@ namespace RapidTransitMod.Dispatch.Lines
             if (atOrigin
                 || boarding
                 || lastBoarding
-                || targetMin >= 0
+                || targetMinute >= 0
                 || m_Runtime.m_VehicleStateStore.OriginArrivalCandidateSinceFrame.ContainsKey(vehicle))
             {
                 if (probeEnabled)
@@ -147,14 +148,14 @@ namespace RapidTransitMod.Dispatch.Lines
             bool atOrigin,
             bool boarding,
             bool lastBoarding,
-            int targetMin)
+            int targetMinute)
         {
             bool waitingAtOrigin = atOrigin
                 && (boarding
                     || lastBoarding
-                    || targetMin >= 0
+                    || targetMinute >= 0
                     || m_Runtime.m_VehicleView.IsInbound(vehicle)
-                    || m_Runtime.m_VehicleStateStore.CurrentSlot.ContainsKey(vehicle));
+                    || m_Runtime.m_VehicleStateStore.CurrentSlotMinute.ContainsKey(vehicle));
 
             if (!waitingAtOrigin)
             {
@@ -202,9 +203,10 @@ namespace RapidTransitMod.Dispatch.Lines
             DynamicBuffer<RouteWaypoint> waypoints,
             float slotFramesAway,
             float lineDurationFrames,
-            bool lineHasHistory)
+            bool lineHasHistory,
+            ClockSnapshot clockSnapshot)
         {
-            float waitFrames = 2f * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+            uint waitFrames = clockSnapshot.ToFramesCeil(2d);
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
                 return false;
@@ -224,8 +226,8 @@ namespace RapidTransitMod.Dispatch.Lines
                 if (!IsBorderlineOriginArrivalCandidate(vehicle, waypoints))
                     continue;
 
-                float eta = m_Runtime.m_LineTimes.Run(vehicle, line, waypoints, nowFrame, lineDurationFrames, lineHasHistory);
-                if (eta != float.MaxValue && eta <= slotFramesAway + waitFrames)
+                float etaFrames = m_Runtime.m_LineTimes.Run(vehicle, line, waypoints, nowFrame, lineDurationFrames, lineHasHistory);
+                if (etaFrames != float.MaxValue && etaFrames <= slotFramesAway + waitFrames)
                     return true;
             }
 
@@ -235,14 +237,15 @@ namespace RapidTransitMod.Dispatch.Lines
         public bool ShouldHoldSpawnForNearestRunningCandidate(
             Entity nearestVehicle,
             VehicleState nearestState,
-            float nearestEta,
-            DynamicBuffer<RouteWaypoint> waypoints)
+            float nearestEtaFrames,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            ClockSnapshot clockSnapshot)
         {
-            if (nearestVehicle == Entity.Null || nearestState != VehicleState.Running || nearestEta == float.MaxValue)
+            if (nearestVehicle == Entity.Null || nearestState != VehicleState.Running || nearestEtaFrames == float.MaxValue)
                 return false;
 
-            float waitFrames = 2f * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-            if (nearestEta > waitFrames)
+            uint waitFrames = clockSnapshot.ToFramesCeil(2d);
+            if (nearestEtaFrames > waitFrames)
                 return false;
 
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;

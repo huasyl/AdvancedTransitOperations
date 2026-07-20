@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Game.Routes;
+using RapidTransitMod.Core;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Observation
@@ -23,12 +24,12 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Func<Entity, Entity> Stop;
         internal Func<Entity, bool> HasWaypoints;
         internal Func<Entity, DynamicBuffer<RouteWaypoint>> Waypoints;
-        internal Func<Entity, int> TargetMin;
+        internal Func<Entity, int> TargetMinute;
         internal Func<Entity, Entity> LineOf;
         internal Func<string, int> Parse;
         internal Func<int, string> Slot;
         internal Func<SnapshotDto, string> Json;
         internal Action<string> Log;
-        internal double FramesPerMinute;
+        internal Func<ClockSnapshot> ClockSnapshot;
     }
 }

@@ -1141,7 +1141,7 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             if (vehicle == Entity.Null)
                 return -1;
-            return m_Port.TargetMin(vehicle);
+            return m_Port.TargetMinute(vehicle);
         }
 
         private static string SlotKey(Entity line, int targetMinute)
@@ -1187,7 +1187,7 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             if (stopEvent == null || stopEvent.ArrivalFrame == 0 || stopEvent.DepartureFrame == 0 || stopEvent.DepartureFrame <= stopEvent.ArrivalFrame)
                 return 0f;
-            return (float)Math.Round((stopEvent.DepartureFrame - stopEvent.ArrivalFrame) / m_Port.FramesPerMinute, 1);
+            return (float)Math.Round(m_Port.ClockSnapshot().ToMinutes(stopEvent.DepartureFrame - stopEvent.ArrivalFrame), 1);
         }
 
         private float HoldMinutes(BypassEvent bypassEvent)
@@ -1201,7 +1201,7 @@ namespace RapidTransitMod.Dispatch.Observation
             if (endFrame <= bypassEvent.HoldStartFrame)
                 return 0f;
 
-            return (float)Math.Round((endFrame - bypassEvent.HoldStartFrame) / m_Port.FramesPerMinute, 1);
+            return (float)Math.Round(m_Port.ClockSnapshot().ToMinutes(endFrame - bypassEvent.HoldStartFrame), 1);
         }
 
         private static int NormalizeMinuteDelta(int delta)

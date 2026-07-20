@@ -54,7 +54,7 @@ namespace RapidTransitMod.PassengerFlow
                 return;
 
             uint frame = port.Frame();
-            UpdateBucketIfNeeded(state, frame, port.FramesPerMinute());
+            UpdateBucketIfNeeded(state, port.NowDate(), port.NowMinute());
             RunPendingCleanup(state, frame);
             ExpirePendingSamples(port, state, frame);
 
@@ -179,27 +179,36 @@ namespace RapidTransitMod.PassengerFlow
             return metadata;
         }
 
-        private static void UpdateBucketIfNeeded(State state, uint frame, int framesPerMinute)
+        internal static void ClockChanged(Port port)
         {
-            int safeFramesPerMinute = framesPerMinute > 0 ? framesPerMinute : 1;
-            int dayMinute = (int)((frame / (uint)safeFramesPerMinute) % 1440u);
-            if (state.LastBucketUpdateDayMinute == dayMinute && state.LastDayMinute == dayMinute)
+            State state = CurrentState;
+            if (port == null || state == null)
                 return;
 
-            UpdateBucket(state, frame, safeFramesPerMinute);
-            state.LastBucketUpdateDayMinute = dayMinute;
+            state.Trips.ClearPending();
+            UpdateBucket(state, port.NowDate(), port.NowMinute());
         }
 
-        private static void UpdateBucket(State state, uint frame, int framesPerMinute)
+        private static void UpdateBucketIfNeeded(State state, DateTime nowDate, int nowMinute)
         {
-            int safeFramesPerMinute = framesPerMinute > 0 ? framesPerMinute : 1;
-            int dayMinute = (int)((frame / (uint)safeFramesPerMinute) % 1440u);
-            if (state.LastDayMinute >= 0 && dayMinute < state.LastDayMinute)
-                state.ServiceDayIndex++;
+            int serviceDayKey = ServiceDayKey(nowDate);
+            if (state.ServiceDayKey == serviceDayKey
+                && state.LastBucketUpdateMinute == nowMinute
+                && state.LastMinute == nowMinute)
+            {
+                return;
+            }
 
-            state.LastDayMinute = dayMinute;
-            int bucketStartMinute = (dayMinute / Snapshot.BucketMinutes) * Snapshot.BucketMinutes;
-            state.CurrentBucket = new TimeBucketKey(state.ServiceDayIndex, bucketStartMinute);
+            UpdateBucket(state, nowDate, nowMinute);
+            state.LastBucketUpdateMinute = nowMinute;
+        }
+
+        private static void UpdateBucket(State state, DateTime nowDate, int nowMinute)
+        {
+            state.ServiceDayKey = ServiceDayKey(nowDate);
+            state.LastMinute = nowMinute;
+            int bucketStartMinute = (nowMinute / Snapshot.BucketMinutes) * Snapshot.BucketMinutes;
+            state.CurrentBucket = new TimeBucketKey(state.ServiceDayKey, bucketStartMinute);
             state.CurrentAbsoluteBucketIndex = AbsoluteBucketIndex(state.CurrentBucket);
             state.RollingWindow.Add(state.CurrentBucket);
             TrimRollingWindow(state);
@@ -212,9 +221,9 @@ namespace RapidTransitMod.PassengerFlow
             if (minAbsoluteBucket < 0)
                 minAbsoluteBucket = 0;
 
-            int minServiceDayIndex = minAbsoluteBucket / BucketsPerWindow;
+            int minServiceDayKey = BucketFromAbsoluteIndex(minAbsoluteBucket).ServiceDayKey;
             int minBucketStartMinute = (minAbsoluteBucket % BucketsPerWindow) * Snapshot.BucketMinutes;
-            state.Aggregates.TrimBefore(minServiceDayIndex, minBucketStartMinute);
+            state.Aggregates.TrimBefore(minServiceDayKey, minBucketStartMinute);
 
             if (state.RollingWindow.Count <= BucketsPerWindow)
                 return;
@@ -222,8 +231,7 @@ namespace RapidTransitMod.PassengerFlow
             System.Collections.Generic.List<TimeBucketKey> removeBuckets = null;
             foreach (TimeBucketKey bucket in state.RollingWindow)
             {
-                int absoluteBucket = bucket.ServiceDayIndex * BucketsPerWindow
-                    + (bucket.BucketStartMinute / Snapshot.BucketMinutes);
+                int absoluteBucket = AbsoluteBucketIndex(bucket);
                 if (absoluteBucket < minAbsoluteBucket)
                 {
                     if (removeBuckets == null)
@@ -241,16 +249,29 @@ namespace RapidTransitMod.PassengerFlow
 
         internal static int AbsoluteBucketIndex(TimeBucketKey bucket)
         {
-            return bucket.ServiceDayIndex * BucketsPerWindow
-                + (bucket.BucketStartMinute / Snapshot.BucketMinutes);
+            DateTime date = DateFromServiceDayKey(bucket.ServiceDayKey);
+            return checked((int)(date.Ticks / TimeSpan.TicksPerDay) * BucketsPerWindow
+                + (bucket.BucketStartMinute / Snapshot.BucketMinutes));
         }
 
         internal static TimeBucketKey BucketFromAbsoluteIndex(int absoluteBucketIndex)
         {
             int safeIndex = absoluteBucketIndex < 0 ? 0 : absoluteBucketIndex;
+            DateTime date = new DateTime((long)(safeIndex / BucketsPerWindow) * TimeSpan.TicksPerDay);
             return new TimeBucketKey(
-                safeIndex / BucketsPerWindow,
+                ServiceDayKey(date),
                 (safeIndex % BucketsPerWindow) * Snapshot.BucketMinutes);
+        }
+
+        internal static int ServiceDayKey(DateTime nowDate)
+            => nowDate.Year * 10000 + nowDate.Month * 100 + nowDate.Day;
+
+        internal static DateTime DateFromServiceDayKey(int serviceDayKey)
+        {
+            int year = serviceDayKey / 10000;
+            int month = (serviceDayKey / 100) % 100;
+            int day = serviceDayKey % 100;
+            return new DateTime(year, month, day);
         }
 
         internal static void TrimRollingWindowForRestore(State state)
@@ -506,8 +527,9 @@ namespace RapidTransitMod.PassengerFlow
             NativeArray<PassengerFlowJobs.VehicleSampleResult> results,
             NativeParallelMultiHashMap<int, Entity> currentPassengers)
         {
-            int framesPerMinute = Runtime.Current != null ? Runtime.Current.FramesPerMinute() : 1;
-            uint transferWindowFrames = (uint)(SameModeTransferWindowMinutes * Math.Max(1, framesPerMinute));
+            uint transferWindowFrames = Runtime.Current != null
+                ? Runtime.Current.ToFramesCeil(SameModeTransferWindowMinutes)
+                : 1u;
             for (int i = 0; i < openStops.Count; i++)
             {
                 OpenStop openStop = openStops[i];

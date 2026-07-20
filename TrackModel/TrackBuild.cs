@@ -36,7 +36,7 @@ namespace RapidTransitMod.TrackModel
 
         private EntityManager EntityManager => m_Support.EntityManager;
 
-        private static ulong MixLineSignature(ulong hash, int value)
+        internal static ulong MixLineTrackChainSignature(ulong hash, int value)
         {
             unchecked
             {
@@ -50,40 +50,40 @@ namespace RapidTransitMod.TrackModel
             DynamicBuffer<RouteSegment> segments)
         {
             ulong hash = 1469598103934665603UL;
-            hash = MixLineSignature(hash, line.Index);
-            hash = MixLineSignature(hash, waypoints.Length);
-            hash = MixLineSignature(hash, segments.Length);
+            hash = MixLineTrackChainSignature(hash, line.Index);
+            hash = MixLineTrackChainSignature(hash, waypoints.Length);
+            hash = MixLineTrackChainSignature(hash, segments.Length);
 
             for (int i = 0; i < waypoints.Length; i++)
             {
                 Entity waypoint = waypoints[i].m_Waypoint;
-                hash = MixLineSignature(hash, waypoint.Index);
+                hash = MixLineTrackChainSignature(hash, waypoint.Index);
 
                 if (EntityManager.HasComponent<RouteLane>(waypoint))
                 {
                     RouteLane routeLane = EntityManager.GetComponentData<RouteLane>(waypoint);
-                    hash = MixLineSignature(hash, routeLane.m_StartLane.Index);
-                    hash = MixLineSignature(hash, routeLane.m_EndLane.Index);
-                    hash = MixLineSignature(hash, (int)math.round(routeLane.m_StartCurvePos * 1000f));
-                    hash = MixLineSignature(hash, (int)math.round(routeLane.m_EndCurvePos * 1000f));
+                    hash = MixLineTrackChainSignature(hash, routeLane.m_StartLane.Index);
+                    hash = MixLineTrackChainSignature(hash, routeLane.m_EndLane.Index);
+                    hash = MixLineTrackChainSignature(hash, (int)math.round(routeLane.m_StartCurvePos * 1000f));
+                    hash = MixLineTrackChainSignature(hash, (int)math.round(routeLane.m_EndCurvePos * 1000f));
                 }
             }
 
             for (int i = 0; i < segments.Length; i++)
             {
                 Entity segmentEntity = segments[i].m_Segment;
-                hash = MixLineSignature(hash, segmentEntity.Index);
+                hash = MixLineTrackChainSignature(hash, segmentEntity.Index);
 
                 if (!EntityManager.HasBuffer<PathElement>(segmentEntity))
                     continue;
 
                 DynamicBuffer<PathElement> pathElements = EntityManager.GetBuffer<PathElement>(segmentEntity, true);
-                hash = MixLineSignature(hash, pathElements.Length);
+                hash = MixLineTrackChainSignature(hash, pathElements.Length);
                 for (int pathIndex = 0; pathIndex < pathElements.Length; pathIndex++)
                 {
                     PathElement pathElement = pathElements[pathIndex];
-                    hash = MixLineSignature(hash, pathElement.m_Target.Index);
-                    hash = MixLineSignature(hash, (int)pathElement.m_Flags);
+                    hash = MixLineTrackChainSignature(hash, pathElement.m_Target.Index);
+                    hash = MixLineTrackChainSignature(hash, (int)pathElement.m_Flags);
                 }
             }
 
@@ -175,7 +175,8 @@ namespace RapidTransitMod.TrackModel
                 waypoints.Length,
                 true,
                 chain));
-            m_NotifyLineTrackChainRebuilt?.Invoke(line, previousSignature, signature, previousAtomCount, chain.TrackAtoms.Count);
+            if (previousChain != null)
+                m_NotifyLineTrackChainRebuilt?.Invoke(line, previousSignature, signature, previousAtomCount, chain.TrackAtoms.Count);
             m_Diag.AddDevSightChain(chain);
             m_MarkSharedDirty?.Invoke();
             return true;
@@ -242,25 +243,28 @@ namespace RapidTransitMod.TrackModel
 
         internal TrackAtomClass ClassifyPathElementTarget(PathElement element)
         {
-            if ((element.m_Flags & (PathElementFlags.Action | PathElementFlags.WaitPosition | PathElementFlags.Hangaround)) != 0)
+            bool hasConnectionLane = EntityManager.HasComponent<ConnectionLane>(element.m_Target);
+            TrackTypes connectionTrackTypes = hasConnectionLane ? EntityManager.GetComponentData<ConnectionLane>(element.m_Target).m_TrackTypes : TrackTypes.None;
+            return ClassifyPathElementTarget(
+                element.m_Flags,
+                EntityManager.HasComponent<TrackLane>(element.m_Target),
+                hasConnectionLane,
+                connectionTrackTypes,
+                EntityManager.HasComponent<EdgeLane>(element.m_Target));
+        }
+
+        internal static TrackAtomClass ClassifyPathElementTarget(PathElementFlags flags, bool hasTrackLane, bool hasConnectionLane, TrackTypes connectionTrackTypes, bool hasEdgeLane)
+        {
+            if ((flags & (PathElementFlags.Action | PathElementFlags.WaitPosition | PathElementFlags.Hangaround)) != 0)
                 return TrackAtomClass.FilteredNoise;
-
-            if (EntityManager.HasComponent<TrackLane>(element.m_Target))
+            if (hasTrackLane)
                 return TrackAtomClass.PrimaryLane;
-
-            if (EntityManager.HasComponent<ConnectionLane>(element.m_Target))
-            {
-                ConnectionLane connectionLane = EntityManager.GetComponentData<ConnectionLane>(element.m_Target);
-                if (connectionLane.m_TrackTypes != TrackTypes.None)
-                    return TrackAtomClass.ConnectionHelper;
-            }
-
-            if (EntityManager.HasComponent<EdgeLane>(element.m_Target))
+            if (hasConnectionLane && connectionTrackTypes != TrackTypes.None)
                 return TrackAtomClass.ConnectionHelper;
-
-            if ((element.m_Flags & (PathElementFlags.Secondary | PathElementFlags.Return | PathElementFlags.Leader)) != 0)
+            if (hasEdgeLane)
                 return TrackAtomClass.ConnectionHelper;
-
+            if ((flags & (PathElementFlags.Secondary | PathElementFlags.Return | PathElementFlags.Leader)) != 0)
+                return TrackAtomClass.ConnectionHelper;
             return TrackAtomClass.PrimaryLane;
         }
 

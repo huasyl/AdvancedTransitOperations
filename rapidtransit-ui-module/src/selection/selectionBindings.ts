@@ -6,6 +6,9 @@ export const visible$ = bindValue<boolean>(GROUP, "visible");
 export const panelDataJson$ = bindValue<string>(GROUP, "panelDataJson");
 export const devSightVisible$ = bindValue<boolean>(GROUP, "devSightVisible");
 export const devSightJson$ = bindValue<string>(GROUP, "devSightJson");
+export const etaHotAvailable$ = bindValue<boolean>(GROUP, "etaHotAvailable");
+export const etaHotStatusJson$ = bindValue<string>(GROUP, "etaHotStatusJson");
+export const etaSnapshotStatusJson$ = bindValue<string>(GROUP, "etaSnapshotStatusJson");
 export const activeLocale$ = bindValue<string>("app", "activeLocale");
 
 let localPanelOpen = false;

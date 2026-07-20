@@ -4,8 +4,10 @@ using System.IO;
 using System.Linq;
 using Game.Common;
 using Game.Objects;
+using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
@@ -17,11 +19,20 @@ namespace RapidTransitMod.Dispatch.Observation
     internal sealed class ObservationPort
     {
         private const float DispatchSampleOutlierFactor = 1.5f;
+        private const uint DISPATCH_SAMPLE_MIN_FRAMES = 365u;
 
         private readonly DispatchRuntimeSystem m_Runtime;
         private readonly Capture m_Capture;
+        private readonly SliceAdmission m_Admission;
         private readonly Dictionary<Entity, DwellDeadlineCacheEntry> m_DwellDeadlineCache =
             new Dictionary<Entity, DwellDeadlineCacheEntry>();
+        private readonly Dictionary<Entity, DispatchEtaRequest> m_DispatchEtaRequests =
+            new Dictionary<Entity, DispatchEtaRequest>();
+
+        private sealed class DispatchEtaRequest
+        {
+            public uint DispatchFrame;
+        }
 
         private readonly struct DwellDeadlineCacheEntry
         {
@@ -49,10 +60,19 @@ namespace RapidTransitMod.Dispatch.Observation
             }
         }
 
-        public ObservationPort(DispatchRuntimeSystem runtime, Capture capture)
+        public ObservationPort(DispatchRuntimeSystem runtime, Capture capture, SliceAdmission admission)
         {
             m_Runtime = runtime;
             m_Capture = capture;
+            m_Admission = admission;
+            m_Runtime.m_SimClock.ClockChanged += OnClockChanged;
+        }
+
+        private void OnClockChanged(ClockSnapshot oldClockSnapshot, ClockSnapshot newClockSnapshot)
+        {
+            _ = oldClockSnapshot;
+            _ = newClockSnapshot;
+            m_DwellDeadlineCache.Clear();
         }
 
         public void Record(Entity vehicle, string reason)
@@ -68,6 +88,27 @@ namespace RapidTransitMod.Dispatch.Observation
         public void Finish(Entity vehicle, uint nowFrame, int exitAtomIndex, float exitAtomPosition01)
         {
             m_Capture.FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame, exitAtomIndex, exitAtomPosition01);
+            m_Admission.End(vehicle);
+        }
+
+        public bool DropSlice(Entity vehicle, out int sliceIndex)
+        {
+            bool dropped = m_Runtime.m_ObsPersist.DropSlice(vehicle, out sliceIndex);
+            m_Admission.End(vehicle);
+            return dropped;
+        }
+
+        public void ClearVehicleSlices(Entity vehicle)
+        {
+            m_Runtime.m_ObsPersist.ClearVehicleSlices(vehicle);
+            m_Admission.End(vehicle);
+        }
+
+        public void InvalidateSliceLine(Entity line)
+        {
+            m_Runtime.m_Slices.RemoveLine(line);
+            m_Admission.InvalidateLine(line);
+            m_Runtime.m_ObsBuffers.RemoveSliceLine(line);
         }
 
         public bool LapTiming(
@@ -272,7 +313,8 @@ namespace RapidTransitMod.Dispatch.Observation
             uint dwellSinceFrame,
             int maxDwellMinutes)
         {
-            float configuredFrames = math.max(0f, maxDwellMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float configuredFrames = clockSnapshot.ToFramesCeil(maxDwellMinutes);
             float earlyCloseFrames = 0f;
 
             if (line != Entity.Null
@@ -282,7 +324,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     observationFrames - configuredFrames,
-                    DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);
@@ -335,7 +377,8 @@ namespace RapidTransitMod.Dispatch.Observation
             if (maxStationDwellMinutes <= 0)
                 return false;
 
-            float configuredFrames = maxStationDwellMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float configuredFrames = clockSnapshot.ToFramesCeil(maxStationDwellMinutes);
             remainingFrames = math.max(0f, configuredFrames - elapsedFrames);
             return remainingFrames > 0f;
         }
@@ -395,29 +438,32 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 m_Runtime.m_VehicleRegistry.ClearPreparing(vehicle);
                 m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
+                ClearDispatchEta(vehicle);
                 return;
             }
 
-            uint frames = 0;
+            uint sampleFrames = 0;
             bool hasSample = false;
             if (m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out uint dispatchRequestStart))
             {
-                frames = nowFrame - dispatchRequestStart;
+                sampleFrames = nowFrame - dispatchRequestStart;
                 hasSample = true;
             }
             else if (m_Runtime.m_VehicleView.TryGetPreparing(vehicle, out uint prepStart))
             {
-                frames = nowFrame - prepStart;
+                sampleFrames = nowFrame - prepStart;
                 hasSample = true;
             }
 
             m_Runtime.m_VehicleRegistry.ClearPreparing(vehicle);
             m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
-            if (!hasSample || frames == 0)
+            m_DispatchEtaRequests.Remove(vehicle);
+            if (!hasSample || sampleFrames == 0)
                 return;
 
-            float sampleMinutes = frames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
-            if (sampleMinutes < DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES)
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float sampleMinutes = (float)clockSnapshot.ToMinutes(sampleFrames);
+            if (sampleFrames < DISPATCH_SAMPLE_MIN_FRAMES)
             {
                 if (RtLog.VerboseEnabled)
                 {
@@ -428,11 +474,11 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             float cachedFrames = m_Runtime.m_DispatchCache.Read(line);
-            if (cachedFrames > 0f && frames > cachedFrames * DispatchSampleOutlierFactor)
+            if (cachedFrames > 0f && sampleFrames > cachedFrames * DispatchSampleOutlierFactor)
             {
                 if (RtLog.VerboseEnabled)
                 {
-                    float cachedMinutes = cachedFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE;
+                    float cachedMinutes = (float)clockSnapshot.ToMinutes(cachedFrames);
                     m_Runtime.log.Info("[DispatchSample] line" + line.Index + " vehicle" + vehicle.Index
                         + " sample=" + sampleMinutes.ToString("F1") + "min"
                         + " cached=" + cachedMinutes.ToString("F1") + "min high-outlier skip");
@@ -440,9 +486,79 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             }
 
-            int nowMin = (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
-            m_Runtime.m_SelectPanel.RecordLineDispatchSampleSummary(line, nowMin, vehicle, sampleMinutes);
-            m_Runtime.m_DispatchCache.Update(line, vehicle, frames);
+            int nowMinute = clockSnapshot.NowMinute;
+            m_Runtime.m_SelectPanel.RecordLineDispatchSampleSummary(line, nowMinute, vehicle, sampleMinutes);
+            m_Runtime.m_DispatchCache.Update(line, vehicle, sampleFrames);
+        }
+
+        public void BeginDispatchEta(Entity vehicle, Entity line, uint dispatchFrame)
+        {
+            if (vehicle == Entity.Null || m_DispatchEtaRequests.ContainsKey(vehicle))
+                return;
+            m_DispatchEtaRequests[vehicle] = new DispatchEtaRequest
+            {
+                DispatchFrame = dispatchFrame
+            };
+        }
+
+        public void TryRequestDispatchEta(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            uint nowFrame)
+        {
+            if (!m_DispatchEtaRequests.TryGetValue(vehicle, out DispatchEtaRequest request))
+                return;
+            if (!m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out _))
+                return;
+            if (vehicle == Entity.Null || line == Entity.Null || waypoints.Length == 0 || !m_Runtime.EntityManager.Exists(vehicle))
+                return;
+            if (!m_Runtime.EntityManager.HasComponent<Target>(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<PathOwner>(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<PathInformation>(vehicle)
+                || !m_Runtime.EntityManager.HasBuffer<PathElement>(vehicle)
+                || !m_Runtime.EntityManager.HasBuffer<LayoutElement>(vehicle))
+                return;
+
+            CurrentRoute route = m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle);
+            Target target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
+            if (route.m_Route != line)
+                return;
+            if (target.m_Target != waypoints[0].m_Waypoint)
+                return;
+
+            PathOwner pathOwner = m_Runtime.EntityManager.GetComponentData<PathOwner>(vehicle);
+            if ((pathOwner.m_State & (PathFlags.Pending | PathFlags.Failed | PathFlags.Stuck | PathFlags.Obsolete | PathFlags.Updated)) != 0)
+                return;
+            PathInformation pathInformation = m_Runtime.EntityManager.GetComponentData<PathInformation>(vehicle);
+            if (pathInformation.m_Destination != waypoints[0].m_Waypoint)
+                return;
+
+            DynamicBuffer<PathElement> path = m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true);
+            if (path.Length == 0)
+                return;
+
+            DynamicBuffer<LayoutElement> layout = m_Runtime.EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+            if (layout.Length == 0
+                || layout[0].m_Vehicle == Entity.Null
+                || !m_Runtime.EntityManager.HasComponent<Train>(layout[0].m_Vehicle))
+                return;
+
+            // Per-vehicle PathOccupants ETA and its diagnostic log are intentionally paused.
+            // Keep only the real spawn-to-path-ready preparation sample used by spawn-lead theory.
+            m_Runtime.m_DispatchCache.RecordPrep(line, unchecked(nowFrame - request.DispatchFrame));
+            m_DispatchEtaRequests.Remove(vehicle);
+        }
+
+        public void ClearDispatchEta(Entity vehicle)
+        {
+            m_DispatchEtaRequests.Remove(vehicle);
+        }
+
+        public void ClearDispatchEta()
+        {
+            m_DispatchEtaRequests.Clear();
         }
 
         public string Json()
@@ -525,28 +641,51 @@ namespace RapidTransitMod.Dispatch.Observation
             foreach (KeyValuePair<string, DispatchWorkbenchPlannerImportContractDto> entry in m_Runtime.Applied().Refs.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 DispatchWorkbenchPlannerImportContractDto contract = entry.Value;
-                if (contract?.plan == null)
+                if (contract == null)
                     continue;
 
-                ChangeDto[] changedRows = (contract.plan.changedWindows ?? Array.Empty<DispatchPlannerChangedWindowDto>())
-                    .SelectMany(window => window?.rowDiffs ?? Array.Empty<DispatchPlannerChangedRowDto>())
+                DispatchPlannerChangedRowDto[] sourceChangedRows =
+                    contract.changedRows
+                    ?? Array.Empty<DispatchPlannerChangedRowDto>();
+                DispatchPlannerScheduleActionDto[] sourceActions =
+                    contract.structuredActions
+                    ?? Array.Empty<DispatchPlannerScheduleActionDto>();
+                DispatchPlannerRiskItemDto[] sourceRiskItems =
+                    contract.riskItems
+                    ?? Array.Empty<DispatchPlannerRiskItemDto>();
+                DispatchPlannerLineRoleSummaryDto sourceLineRoleSummary =
+                    contract.lineRoleSummary;
+                string[] sourceSelectedBypassStationIds =
+                    contract.selectedBypassStationIds
+                    ?? Array.Empty<string>();
+
+                if (sourceChangedRows.Length == 0
+                    && sourceActions.Length == 0
+                    && sourceRiskItems.Length == 0
+                    && sourceLineRoleSummary == null
+                    && sourceSelectedBypassStationIds.Length == 0)
+                {
+                    continue;
+                }
+
+                ChangeDto[] changedRows = sourceChangedRows
                     .Select(CopyChange)
                     .ToArray();
                 contracts.Add(new ContractDto
                 {
                     draftKey = entry.Key,
                     importedFrom = contract.importedFrom ?? string.Empty,
-                    importedPlanId = contract.importedPlanId ?? contract.plan.planId ?? string.Empty,
-                    importedObjectiveId = contract.importedObjectiveId ?? contract.plan.objectiveId ?? string.Empty,
+                    importedPlanId = contract.importedPlanId ?? string.Empty,
+                    importedObjectiveId = contract.importedObjectiveId ?? string.Empty,
                     importedLineIds = contract.importedLineIds ?? Array.Empty<string>(),
                     requestEcho = CopyEcho(contract.requestEcho),
-                    lineRoleSummary = CopyRoleSummary(contract.plan.lineRoleSummary),
-                    selectedBypassStationIds = contract.plan.selectedBypassStationIds ?? Array.Empty<string>(),
+                    lineRoleSummary = CopyRoleSummary(sourceLineRoleSummary),
+                    selectedBypassStationIds = sourceSelectedBypassStationIds,
                     changedRows = changedRows,
-                    structuredActions = (contract.plan.structuredScheduleActions ?? Array.Empty<DispatchPlannerScheduleActionDto>())
+                    structuredActions = sourceActions
                         .Select(CopyAction)
                         .ToArray(),
-                    riskItems = (contract.plan.riskItems ?? Array.Empty<DispatchPlannerRiskItemDto>())
+                    riskItems = sourceRiskItems
                         .Select(CopyRisk)
                         .ToArray()
                 });
@@ -562,6 +701,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void Launch(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)
         {
+            m_Admission.Begin(line, vehicle, targetMinute);
             m_Runtime.m_ObsRecorder?.Launch(line, vehicle, targetMinute, actualMinute, launchFrame, lateDispatch);
         }
 
@@ -595,13 +735,13 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_ObsRecorder?.Release(vehicle, blocker, nowFrame, releaseReason);
         }
 
-        public int TargetMin(Entity vehicle)
+        public int TargetMinute(Entity vehicle)
         {
             if (vehicle == Entity.Null)
                 return -1;
-            if (m_Runtime.m_VehicleStateStore.CurrentSlot.IsCreated && m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlot))
-                return currentSlot;
-            if (m_Runtime.m_VehicleStateStore.TargetMin.IsCreated && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
+            if (m_Runtime.m_VehicleStateStore.CurrentSlotMinute.IsCreated && m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute))
+                return currentSlotMinute;
+            if (m_Runtime.m_VehicleStateStore.TargetMinute.IsCreated && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute))
                 return targetMinute;
             return -1;
         }
@@ -664,7 +804,8 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private uint ComputeDeadline(Entity line, int waypointIndex, uint dwellSinceFrame, int maxDwellMinutes)
         {
-            float configuredFrames = math.max(0f, maxDwellMinutes * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+            ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
+            float configuredFrames = clockSnapshot.ToFramesCeil(maxDwellMinutes);
             float earlyCloseFrames = 0f;
 
             if (line != Entity.Null
@@ -674,7 +815,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     observationFrames - configuredFrames,
-                    DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             if (!(earlyCloseFrames > 0f)
@@ -684,7 +825,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     anchoredFrames - configuredFrames,
-                    DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES * (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE);
+                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Colossal.Core;
 using Game;
@@ -7,6 +8,7 @@ using Game.Routes;
 using Game.Simulation;
 using Game.UI.InGame;
 using RapidTransitMod.Broadcasting;
+using RapidTransitMod.Core;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -67,6 +69,9 @@ namespace RapidTransitMod
             internal override VehicleView VehicleView => m_Host.m_VehicleView;
             internal override SelectPanel SelectionPanel => m_Host.m_SelectPanel;
             internal override NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.m_CachedWpIdx;
+            internal override ClockSnapshot ClockSnapshot => m_Host.m_SimClock.Snapshot;
+            internal override void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler)
+                => m_Host.m_SimClock.ClockChanged += handler;
 
             internal override bool TryRelation(
                 LineTrackChain chain,
@@ -173,7 +178,7 @@ namespace RapidTransitMod
             internal override bool TryTurnbacks(LineTrackChain chain, List<TrackTurnbackStationBoundary> stationBoundaries) => Turnbacks.TryCollectTurnbackStationBoundaries(chain, stationBoundaries);
             internal override bool TryWaypointIndex(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineWaypointIndexLookup lookup) => m_Host.m_WaypointIndex.TryLookup(line, waypoints, out lookup);
             internal override string DraftKey(string lineId) => RapidTransitMod.Dispatch.Workbench.Drafts.Key(lineId);
-            internal override string LineId(Entity line) => m_Host.LineId(line);
+            internal override string LineId(Entity line) => m_Host.LineStableId(line);
             internal override bool TryTurnback(LineTrackChain chain, TurnbackBoundary boundary, out TrackTurnbackStationBoundary stationBoundary) => Turnbacks.TryResolveTurnbackStationBoundary(chain, boundary, out stationBoundary);
 
             internal override float EstimatePreparing(

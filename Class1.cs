@@ -41,6 +41,7 @@ namespace RapidTransitMod
         private const int CohtmlDebuggerPort = 9444;
         private static readonly ILog s_RawLog = LogManager.GetLogger(nameof(RapidTransitMod)).SetShowsErrorsInUI(false);
         public static TimedLogger log = new TimedLogger(s_RawLog);
+        internal static string RootPath { get; private set; } = string.Empty;
 
         internal static string PrefixWithGameTime(string message)
         {
@@ -65,18 +66,16 @@ namespace RapidTransitMod
             TryEnableCohtmlDebugger();
 #endif
             updateSystem.UpdateAt<DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<RailTravel.QuerySystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<RailTravel.QuerySystem, PathfindSetupSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<Dispatch.Runtime.BoardingFirstFrameGuardSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Dispatch.Runtime.BoardingFirstFrameGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<PassengerFlow.SamplingSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<PassengerFlow.SamplingSystem, DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<PreSerialize<PassengerFlow.SamplingSystem>>(SystemUpdatePhase.Serialize);
-            updateSystem.UpdateAt<RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportLineSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateAt<RetireHandoffDispatchGuardSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, DispatchRuntimeSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateAfter<RetireHandoffDispatchGuardSystem, TrainNavigationSystem>(SystemUpdatePhase.GameSimulation);
-            updateSystem.UpdateBefore<RetireHandoffDispatchGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RtManagedVehicleRequestSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RetireDispatchPreTrainAiQuarantineSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateBefore<RetireDispatchPostTrainAiRearmSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<OriginArrivingStallRepairSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<OriginArrivingStallRepairSystem, TrainNavigationSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<OriginArrivingStallRepairSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
@@ -96,6 +95,7 @@ namespace RapidTransitMod
             {
                 log.Info("Module path: " + ((AssetData)asset).path);
                 string modRootPath = Path.GetDirectoryName(((AssetData)asset).path);
+                RootPath = modRootPath ?? string.Empty;
                 I18n.LoadAll(Path.Combine(modRootPath, "Locales"));
                 Workbenches.ApiHost.Init(modRootPath);
             }

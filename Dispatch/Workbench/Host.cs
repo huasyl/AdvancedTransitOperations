@@ -59,6 +59,12 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<string, string> m_Kind;
         private readonly Action m_RefreshApplied;
         private readonly Action<IEnumerable<string>, List<WorkbenchLineRuntime>> m_ApplyDraft;
+        private readonly Func<bool> m_CleanupInvalidApplied;
+        private readonly Func<IEnumerable<WorkbenchLineRuntime>, IReadOnlyDictionary<string, string>> m_CollectRuntimeMissingLineReasons;
+        private readonly Func<IEnumerable<string>, bool> m_RemoveDeletedLines;
+        private readonly Func<IReadOnlyDictionary<string, string>, bool> m_CleanupRequestedLines;
+        private readonly Func<IReadOnlyDictionary<string, string>, bool> m_CleanupConfirmedInvalidatedLines;
+        private readonly Func<DispatchWorkbenchCleanupInfoDto> m_ConsumeCleanupInfo;
         private readonly Action m_Invalidate;
 
         internal RunPort(
@@ -75,6 +81,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<string, string> kind,
             Action refreshApplied,
             Action<IEnumerable<string>, List<WorkbenchLineRuntime>> applyDraft,
+            Func<bool> cleanupInvalidApplied,
+            Func<IEnumerable<WorkbenchLineRuntime>, IReadOnlyDictionary<string, string>> collectRuntimeMissingLineReasons,
+            Func<IEnumerable<string>, bool> removeDeletedLines,
+            Func<IReadOnlyDictionary<string, string>, bool> cleanupRequestedLines,
+            Func<IReadOnlyDictionary<string, string>, bool> cleanupConfirmedInvalidatedLines,
+            Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo,
             Action invalidate)
         {
             m_Features = features ?? throw new ArgumentNullException(nameof(features));
@@ -90,6 +102,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Kind = kind ?? throw new ArgumentNullException(nameof(kind));
             m_RefreshApplied = refreshApplied ?? throw new ArgumentNullException(nameof(refreshApplied));
             m_ApplyDraft = applyDraft ?? throw new ArgumentNullException(nameof(applyDraft));
+            m_CleanupInvalidApplied = cleanupInvalidApplied ?? throw new ArgumentNullException(nameof(cleanupInvalidApplied));
+            m_CollectRuntimeMissingLineReasons = collectRuntimeMissingLineReasons ?? throw new ArgumentNullException(nameof(collectRuntimeMissingLineReasons));
+            m_RemoveDeletedLines = removeDeletedLines ?? throw new ArgumentNullException(nameof(removeDeletedLines));
+            m_CleanupRequestedLines = cleanupRequestedLines ?? throw new ArgumentNullException(nameof(cleanupRequestedLines));
+            m_CleanupConfirmedInvalidatedLines = cleanupConfirmedInvalidatedLines ?? throw new ArgumentNullException(nameof(cleanupConfirmedInvalidatedLines));
+            m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
             m_Invalidate = invalidate ?? throw new ArgumentNullException(nameof(invalidate));
         }
 
@@ -156,6 +174,37 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal void ApplyDraft(IEnumerable<string> lineIds, List<WorkbenchLineRuntime> runtimeLines)
         {
             m_ApplyDraft(lineIds, runtimeLines);
+        }
+
+        internal bool CleanupInvalidApplied()
+        {
+            return m_CleanupInvalidApplied();
+        }
+
+        internal IReadOnlyDictionary<string, string> CollectRuntimeMissingLineReasons(
+            IEnumerable<WorkbenchLineRuntime> runtimeLines)
+        {
+            return m_CollectRuntimeMissingLineReasons(runtimeLines);
+        }
+
+        internal bool RemoveDeletedLines(IEnumerable<string> lineIds)
+        {
+            return m_RemoveDeletedLines(lineIds);
+        }
+
+        internal bool CleanupRequestedLines(IReadOnlyDictionary<string, string> reasons)
+        {
+            return m_CleanupRequestedLines(reasons);
+        }
+
+        internal bool CleanupConfirmedInvalidatedLines(IReadOnlyDictionary<string, string> reasons)
+        {
+            return m_CleanupConfirmedInvalidatedLines(reasons);
+        }
+
+        internal DispatchWorkbenchCleanupInfoDto ConsumeCleanupInfo()
+        {
+            return m_ConsumeCleanupInfo();
         }
 
         internal void Invalidate()

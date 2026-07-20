@@ -1,8 +1,6 @@
 {
   "name": "rapidtransit-ui-module",
   "private": true,
-  "author": "huasyl",
-  "license": "Apache-2.0",
   "scripts": {
     "build": "webpack --mode production",
     "dev": "webpack --mode development --watch",

@@ -233,6 +233,16 @@ namespace RapidTransitMod.Bypass
             return m_Admission.TryGetLatchedBlocker(vehicle, out blocker);
         }
 
+        internal bool TryGetConflictEpisode(Entity vehicle, out BypassConflictEpisode episode)
+        {
+            return m_Admission.Get(vehicle, out episode);
+        }
+
+        internal bool TryGetHoldCadence(Entity vehicle, out BypassHoldCadenceSnapshot cadence)
+        {
+            return m_Admission.Get(vehicle, out cadence);
+        }
+
         internal bool TryGetBypassHoldSkipped(Entity vehicle, out Entity blocker)
         {
             return m_Admission.TryGetBypassHoldSkipped(vehicle, out blocker);

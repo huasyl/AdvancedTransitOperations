@@ -5,6 +5,7 @@ using Game.Routes;
 using Game.UI;
 using Game.UI.InGame;
 using RapidTransitMod.TrackModel;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -34,6 +35,7 @@ namespace RapidTransitMod
             public Func<EntityManager> EntityMgr;
             public TimedLogger Log;
             public Func<uint> Frame;
+            public Func<ClockSnapshot> ClockSnapshot;
             public Func<int> VehicleCount;
             public Func<IEnumerable<KeyValuePair<string, AppliedLine>>> AppliedLines;
             public EntityQuery LineQuery;
@@ -69,6 +71,7 @@ namespace RapidTransitMod
         public EntityManager EntityManager => m_Args.EntityMgr();
         public TimedLogger Log => m_Args.Log;
         public uint FrameIndex => m_Args.Frame();
+        public ClockSnapshot ClockSnapshot => m_Args.ClockSnapshot();
         public int ManagedVehicleCount => m_Args.VehicleCount();
         public IEnumerable<KeyValuePair<string, AppliedLine>> AppliedLines => m_Args.AppliedLines();
 

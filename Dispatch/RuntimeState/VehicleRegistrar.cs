@@ -110,6 +110,10 @@ namespace RapidTransitMod
                 if (!m_Runtime.EntityManager.Exists(v)) continue;
                 if (!seenVehicles.Add(v)) continue;
                 if (m_Runtime.m_VehicleView.Contains(v)) continue;
+                if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(v))
+                {
+                    continue;
+                }
 
                         Game.Vehicles.PublicTransport pt0 =
                             m_Runtime.EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(v);
@@ -137,6 +141,9 @@ namespace RapidTransitMod
                         }
 
                         m_Runtime.m_RuntimeController.Adopt(v, line, initState, m_Runtime.m_SimulationSystem.frameIndex, dispatchFrame);
+                        string spawnIntent = dispatchFrame.HasValue
+                            ? m_Runtime.m_SpawnIntentTrace.Bind(line, v, dispatchFrame.Value, m_Runtime.m_SimulationSystem.frameIndex)
+                            : string.Empty;
                         m_Runtime.m_ObsPersist.SetLapDistance(v, -1f);
                         byte boardingByte = boarding0 ? (byte)1 : (byte)0;
                         m_Runtime.m_LastEffectiveBoardingState[v] = boardingByte;
@@ -218,7 +225,8 @@ namespace RapidTransitMod
                                     + " state=" + finalState
                                     + " targetMin=" + finalTarget
                                     + " initReason=" + initReason
-                                    + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v));
+                                    + " depot=" + m_Runtime.m_SelectPanel.DescribeVehicleOwnerDepot(v)
+                                    + spawnIntent);
                             }
                         }
                         if (!adoptExistingVehicles)
@@ -248,6 +256,10 @@ namespace RapidTransitMod
                     if (!m_Runtime.EntityManager.Exists(vehicle)) continue;
                     if (!seenVehicles.Add(vehicle)) continue;
                     if (m_Runtime.m_VehicleView.Contains(vehicle)) continue;
+                    if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
+                    {
+                        continue;
+                    }
                     if (m_Runtime.EntityManager.HasComponent<Deleted>(vehicle)
                         || m_Runtime.EntityManager.HasComponent<ParkedTrain>(vehicle))
                     {

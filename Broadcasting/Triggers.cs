@@ -7,6 +7,7 @@ using Game.Common;
 using Game.Net;
 using Game.Rendering;
 using Game.Routes;
+using RapidTransitMod.Core;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
@@ -17,7 +18,6 @@ namespace RapidTransitMod.Broadcasting
 {
     internal static class TriggerConstants
     {
-        internal const double FramesPerMinute = 182.044;
         internal const uint AnchorDiagnosticCooldownFrames = 30u;
         internal const int IdleRouteCooldownAfterLeaveSeconds = 3;
         internal const string PlatformIdleTriggerId = "platform_idle_clear";
@@ -1044,6 +1044,15 @@ namespace RapidTransitMod.Broadcasting
             m_Stations = stations ?? throw new ArgumentNullException(nameof(stations));
             m_Playback = playback ?? throw new ArgumentNullException(nameof(playback));
             m_Diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+            m_Access.SubscribeClockChanged(OnClockChanged);
+        }
+
+        private void OnClockChanged(ClockSnapshot oldClockSnapshot, ClockSnapshot newClockSnapshot)
+        {
+            _ = oldClockSnapshot;
+            _ = newClockSnapshot;
+            m_AnnouncementCooldownUntilFrame.Clear();
+            m_StationBusyUntilFrame.Clear();
         }
 
         internal bool HasState => m_AnnouncementCooldownUntilFrame.Count > 0
@@ -1165,7 +1174,8 @@ namespace RapidTransitMod.Broadcasting
             WatchOriginBusy(
                 line,
                 waypoints,
-                atOrigin || etaFrames <= TriggerConstants.PlatformPreparingApproachLeadMinutes * (float)TriggerConstants.FramesPerMinute);
+                atOrigin || etaFrames <= m_Access.ClockSnapshot.ToFramesCeil(
+                    TriggerConstants.PlatformPreparingApproachLeadMinutes));
 
             if (HasApproachAnnouncements(line))
             {
@@ -1234,8 +1244,8 @@ namespace RapidTransitMod.Broadcasting
                             waypoints,
                             stationId);
                         string cooldownKey = runtime.Id + "|" + normalizedIdleStationId + "|" + TriggerConstants.PlatformIdleTriggerId;
-                        if (m_AnnouncementCooldownUntilFrame.TryGetValue(cooldownKey, out uint cooldownUntil)
-                            && nowFrame < cooldownUntil)
+                        if (m_AnnouncementCooldownUntilFrame.TryGetValue(cooldownKey, out uint cooldownUntilFrame)
+                            && nowFrame < cooldownUntilFrame)
                         {
                             continue;
                         }
@@ -1256,7 +1266,8 @@ namespace RapidTransitMod.Broadcasting
                                 TriggerConstants.PlatformIdleTriggerId,
                                 TriggerLabel))
                         {
-                            uint cooldownFrames = (uint)Math.Max(1, announcement.cooldownGameMinutes) * (uint)TriggerConstants.FramesPerMinute;
+                            uint cooldownFrames = m_Access.ClockSnapshot.ToFramesCeil(
+                                Math.Max(1, announcement.cooldownGameMinutes));
                             m_AnnouncementCooldownUntilFrame[cooldownKey] = nowFrame + cooldownFrames;
                         }
 
@@ -1746,7 +1757,8 @@ namespace RapidTransitMod.Broadcasting
             }
 
             string key = StationStateKey(lineId, normalizedStationId);
-            uint busyUntilFrame = nowFrame + TriggerConstants.PlatformIdleBusyGraceMinutes * (uint)TriggerConstants.FramesPerMinute;
+            uint busyUntilFrame = nowFrame + m_Access.ClockSnapshot.ToFramesCeil(
+                TriggerConstants.PlatformIdleBusyGraceMinutes);
             if (!m_StationBusyUntilFrame.TryGetValue(key, out uint existingUntil)
                 || existingUntil < busyUntilFrame)
             {
@@ -1847,7 +1859,8 @@ namespace RapidTransitMod.Broadcasting
                 || waypoints.Length == 0
                 || atOrigin
                 || preparingArrivalFrames == float.MaxValue
-                || preparingArrivalFrames > TriggerConstants.PlatformPreparingApproachLeadMinutes * (float)TriggerConstants.FramesPerMinute
+                || preparingArrivalFrames > m_Access.ClockSnapshot.ToFramesCeil(
+                    TriggerConstants.PlatformPreparingApproachLeadMinutes)
                 || !m_Stations.TryCache(line, waypoints, out LineCache cache)
                 || cache?.Stations == null
                 || cache.Stations.Length == 0)
@@ -2039,7 +2052,8 @@ namespace RapidTransitMod.Broadcasting
                 return false;
             }
 
-            uint quietConfirmFrames = TriggerConstants.PlatformIdleQuietConfirmMinutes * (uint)TriggerConstants.FramesPerMinute;
+            uint quietConfirmFrames = m_Access.ClockSnapshot.ToFramesCeil(
+                TriggerConstants.PlatformIdleQuietConfirmMinutes);
             if (nowFrame < quietSinceFrame + quietConfirmFrames)
             {
                 return false;

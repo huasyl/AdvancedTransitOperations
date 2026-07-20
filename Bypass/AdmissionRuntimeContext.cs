@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Game.Routes;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -12,6 +13,7 @@ namespace RapidTransitMod.Bypass
         EntityManager EntityManager { get; }
         TimedLogger Log { get; }
         uint Frame { get; }
+        ClockSnapshot ClockSnapshot { get; }
         IEnumerable<KeyValuePair<string, AppliedLine>> AppliedLines { get; }
         TrackModelService TrackModel { get; }
         TrackProjectionService TrackProjection { get; }

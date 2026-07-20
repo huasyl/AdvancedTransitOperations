@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
 import { getWorkbenchApi } from "../../shared/workbench-api";
-import { buildPlannerBaselineRows, buildPlannerLineSettingsForSave, buildPlannerPlanRefs, buildPlannerReplacementDraftBlocks, buildPlannerReplacementRows, normalizePlannerMergedViewForSave } from "./planner-import.js";
+import { buildPlannerBaselineRows, buildPlannerImportContract, buildPlannerLineSettingsForSave, buildPlannerReplacementDraftBlocks, buildPlannerReplacementRows, normalizePlannerMergedViewForSave } from "./planner-import.js";
 import { buildPlannerRequest, pickPlannerDraft } from "./planner-request.js";
 import { formatDiagnosticMessage } from "./planner-format.js";
 import { isTerminalPlannerJobState, timeToMinutes, waitForDelay, waitForMinimumDuration, waitForUiPaint } from "./planner-time.js";
@@ -391,9 +391,26 @@ export default function usePlannerController({ pageEnterSequence = 0, activeTran
     setPlannerResult(null);
     await waitForUiPaint();
     try {
+      let currentPlannerInput = scopedPlannerInput;
+      const refreshedPlannerInput = await workbenchApi.loadPlannerContext?.({ mode: requestMode });
+      if (!isCurrentPlannerRun(runId, requestMode)) {
+        return;
+      }
+      if (refreshedPlannerInput?.mode && refreshedPlannerInput.mode !== requestMode) {
+        return;
+      }
+      if (refreshedPlannerInput) {
+        const currentClockEpoch = Number(currentPlannerInput?.runtimeParams?.clockEpoch || 0);
+        const refreshedClockEpoch = Number(refreshedPlannerInput?.runtimeParams?.clockEpoch || 0);
+        if (currentClockEpoch !== refreshedClockEpoch) {
+          setPlannerInput(refreshedPlannerInput);
+          setPlannerInitialized(false);
+        }
+        currentPlannerInput = refreshedPlannerInput;
+      }
       const request = buildPlannerRequest({
         mode: requestMode,
-        plannerInput: scopedPlannerInput,
+        plannerInput: currentPlannerInput,
         analysisStart,
         analysisEnd,
         adjustableLines,
@@ -553,28 +570,16 @@ export default function usePlannerController({ pageEnterSequence = 0, activeTran
       mergedViewForSave.expressLineIds = [...new Set([...(mergedViewForSave.expressLineIds || []), ...importedExpressLineIds])];
       mergedViewForSave.localLineId = mergedViewForSave.localLineIds[0] || mergedViewForSave.localLineId || "";
       mergedViewForSave.expressLineId = mergedViewForSave.expressLineIds[0] || mergedViewForSave.expressLineId || "";
-      const saveScopeLineIds = new Set([
-        fallbackSelectedLineId,
-        snapshot.selectedEditLine || fallbackSelectedLineId,
-        ...(mergedViewForSave.localLineIds || []),
-        ...(mergedViewForSave.expressLineIds || [])
-      ].filter(Boolean));
       const request = {
         mode: requestMode,
         selectedLineId: fallbackSelectedLineId,
         selectedEditLine: snapshot.selectedEditLine || fallbackSelectedLineId,
         mergedView: mergedViewForSave,
-        manualRows: Array.isArray(snapshot.manualRows)
-          ? snapshot.manualRows.filter((row) => saveScopeLineIds.has(row?.lineId))
-          : [],
-        autoRules: Array.isArray(snapshot.autoRules)
-          ? snapshot.autoRules.filter((rule) => saveScopeLineIds.has(rule?.lineId))
-          : [],
         lineDraftRowsByLineId,
         lineSettings: buildPlannerLineSettingsForSave(snapshot.lines),
         applyDraft: false,
         nativeScheduleWriter: true,
-        planRefs: buildPlannerPlanRefs(scopedPlannerResult, activePlan, replacementRows)
+        plannerImportContract: buildPlannerImportContract(scopedPlannerResult, activePlan, replacementRows)
       };
 
       const result = await workbenchApi.saveNativeDraft?.(request);

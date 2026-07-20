@@ -36,12 +36,11 @@ import {
 import { buildSummaryRowsWithConflicts, getSummaryRowKey, getSummaryRowsSignature } from "./schedule-conflicts";
 import {
   createNativeMergedViewForSave,
+  flattenSnapshotLineDraftRowsByLineId,
   mapSnapshotSummaryRows,
-  serializeNativeAutoRules,
   serializeNativeLineDraftRowsByLineId,
   serializeNativeLineSettings,
-  serializeNativeManualRows,
-  serializePlanRefs
+  serializeRemovedLineIds
 } from "./schedule-serialization";
 import { runNativeSaveOperation } from "./schedule-save-operation";
 
@@ -69,6 +68,33 @@ function shouldConsumeSchedulePayload(payload, expectedMode) {
   return normalizeScheduleMode(expectedMode) === DEFAULT_SCHEDULE_MODE;
 }
 
+function isTrustedCatalogPayload(payload, expectedMode) {
+  return shouldConsumeSchedulePayload(payload, expectedMode)
+    && getPayloadMode(payload) === normalizeScheduleMode(expectedMode)
+    && payload?.sourceMode !== "backend-fallback";
+}
+
+function getLineRuntimeToken(line) {
+  if (!line || typeof line !== "object") {
+    return "";
+  }
+
+  if (typeof line.sourceLineId === "string" && line.sourceLineId) {
+    return line.sourceLineId;
+  }
+
+  if (typeof line.corridorId === "string" && line.corridorId) {
+    return line.corridorId;
+  }
+
+  return typeof line.id === "string" ? line.id : "";
+}
+
+function getSnapshotRequestSequence(snapshot) {
+  const numeric = Number(snapshot?.clientRequestSequence ?? 0);
+  return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
+}
+
 export default function useScheduleController({ registerHostActions, activeTransportMode = "train", isActive = false } = {}) {
 
   const { t } = useNativeScheduleI18n();
@@ -92,7 +118,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const [summaryEntries, setSummaryEntries] = useState(() => normalizeSummaryEntries([], t));
   const [autoRules, setAutoRules] = useState([]);
   const [manualDrafts, setManualDrafts] = useState([]);
-  const [planRefsByLine, setPlanRefsByLine] = useState({});
+  const [pendingRemovedLineIds, setPendingRemovedLineIds] = useState([]);
   const [manualInput, setManualInput] = useState("12:00");
   const [editorStart, setEditorStart] = useState("08:00");
   const [editorEnd, setEditorEnd] = useState("10:00");
@@ -110,8 +136,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const frequencyInputRef = useRef(null);
   const hasHydratedRuntimeRef = useRef(false);
   const lastHydratedSnapshotRef = useRef(null);
-  const suppressNextSnapshotRef = useRef(false);
+  const suppressedSnapshotRequestSequenceRef = useRef(0);
   const suppressNextSnapshotModeRef = useRef("");
+  const latestSaveRequestSequenceRef = useRef(0);
+  const ignoredLateSnapshotRequestSequenceRef = useRef(0);
   const latestDraftSaveOperationRunIdRef = useRef(0);
   const latestApplySaveOperationRunIdRef = useRef(0);
   const applyingSaveOperationRef = useRef(false);
@@ -255,7 +283,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     () => new Set(Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []),
     [appliedSummaryRowKeys]
   );
-  const hasAppliedSchedule = currentSummarySignature === appliedSummarySignature;
+  const hasAppliedSchedule = currentSummarySignature === appliedSummarySignature && pendingRemovedLineIds.length === 0;
   const summaryRows = useMemo(
     () => buildSummaryRowsWithConflicts(summaryEntries, t, appliedSummaryRowKeySet),
     [appliedSummaryRowKeySet, summaryEntries, t]
@@ -297,13 +325,13 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
   }
 
-  function suppressNextSnapshotForMode(mode) {
-    suppressNextSnapshotRef.current = true;
+  function suppressNextSnapshotForMode(mode, requestSequence) {
+    suppressedSnapshotRequestSequenceRef.current = Math.max(0, Number(requestSequence) || 0);
     suppressNextSnapshotModeRef.current = normalizeScheduleMode(mode);
   }
 
-  function clearSnapshotSuppression(mode) {
-    if (!suppressNextSnapshotRef.current) {
+  function clearSnapshotSuppression(mode, requestSequence = null) {
+    if (suppressedSnapshotRequestSequenceRef.current <= 0) {
       return;
     }
 
@@ -311,7 +339,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
       return;
     }
 
-    suppressNextSnapshotRef.current = false;
+    if (requestSequence != null && suppressedSnapshotRequestSequenceRef.current !== Math.max(0, Number(requestSequence) || 0)) {
+      return;
+    }
+
+    suppressedSnapshotRequestSequenceRef.current = 0;
     suppressNextSnapshotModeRef.current = "";
   }
 
@@ -320,7 +352,81 @@ export default function useScheduleController({ registerHostActions, activeTrans
       && scheduleModeGenerationRef.current === generation;
   }
 
-  function applyHydratedState(snapshot, metadataSnapshot = null, expectedMode = scheduleMode) {
+  function ignoreLateSnapshotForRequest(requestSequence) {
+    const normalizedSequence = Math.max(0, Number(requestSequence) || 0);
+    if (normalizedSequence <= 0) {
+      return;
+    }
+
+    ignoredLateSnapshotRequestSequenceRef.current = Math.max(
+      ignoredLateSnapshotRequestSequenceRef.current,
+      normalizedSequence
+    );
+  }
+
+  function hasBackendCleanupInfo(cleanupInfo) {
+    return Array.isArray(cleanupInfo?.removedAppliedLineIds) && cleanupInfo.removedAppliedLineIds.length > 0
+      || Array.isArray(cleanupInfo?.removedDraftLineIds) && cleanupInfo.removedDraftLineIds.length > 0
+      || Array.isArray(cleanupInfo?.removedLineSettingIds) && cleanupInfo.removedLineSettingIds.length > 0
+      || Array.isArray(cleanupInfo?.reasons) && cleanupInfo.reasons.length > 0;
+  }
+
+  function logBackendCleanup(cleanupInfo, source) {
+    if (!hasBackendCleanupInfo(cleanupInfo)) {
+      return;
+    }
+
+    let detail = "";
+    try {
+      detail = ` ${JSON.stringify(cleanupInfo)}`;
+    } catch {
+      detail = "";
+    }
+
+    console.info(`[RT Native Schedule] backend cleanup via ${source}${detail}`);
+  }
+
+  function filterAppliedSummaryRowKeys(rowKeys, removedLineIdSet) {
+    return (Array.isArray(rowKeys) ? rowKeys : []).filter((rowKey) => {
+      if (typeof rowKey !== "string" || rowKey.length === 0) {
+        return false;
+      }
+
+      const separatorIndex = rowKey.indexOf("|");
+      const lineId = separatorIndex >= 0 ? rowKey.slice(0, separatorIndex) : rowKey;
+      return !removedLineIdSet.has(lineId);
+    });
+  }
+
+  function getSummarySignatureFromRowKeys(rowKeys) {
+    return [...new Set((Array.isArray(rowKeys) ? rowKeys : []).filter((rowKey) => typeof rowKey === "string" && rowKey.length > 0))]
+      .sort()
+      .join("||");
+  }
+
+  function cleanupInvalidatedLinesLocally(lineIds) {
+    const nextLineIds = serializeRemovedLineIds(lineIds);
+    if (nextLineIds.length === 0) {
+      return;
+    }
+
+    const removedLineIdSet = new Set(nextLineIds);
+    clearPanelMessage();
+    setPendingRemovedLineIds((current) => (current || []).filter((lineId) => !removedLineIdSet.has(lineId)));
+    setAppliedSummaryRowKeys((current) => {
+      const nextRowKeys = filterAppliedSummaryRowKeys(current, removedLineIdSet);
+      setAppliedSummarySignature(getSummarySignatureFromRowKeys(nextRowKeys));
+      return nextRowKeys;
+    });
+    setSummaryEntries((current) => {
+      return current.filter((row) => !removedLineIdSet.has(row?.lineId || row?.serviceId || ""));
+    });
+    setManualDrafts((current) => current.filter((draft) => !removedLineIdSet.has(draft?.lineId || draft?.serviceId || "")));
+    setAutoRules((current) => current.filter((rule) => !removedLineIdSet.has(rule?.lineId || rule?.serviceId || "")));
+  }
+
+  function applyHydratedState(snapshot, metadataSnapshot = null, expectedMode = scheduleMode, options = {}) {
+    const { preservePendingRemovedLineIds = false } = options;
     const targetMode = normalizeScheduleMode(expectedMode);
     if (!shouldConsumeSchedulePayload(snapshot, targetMode)) {
       return false;
@@ -356,12 +462,20 @@ export default function useScheduleController({ registerHostActions, activeTrans
       runtimeCatalog.lineOptions[0] ??
       DEFAULT_LINE_OPTIONS[0];
 
+    const restoredDraftRows = flattenSnapshotLineDraftRowsByLineId(snapshot?.lineDraftRowsByLineId);
     const nextSummaryEntries = normalizeSummaryEntries(
+      restoredDraftRows.length > 0
+        ? restoredDraftRows
+        : mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
+      t
+    );
+    const appliedSummaryEntries = normalizeSummaryEntries(
       mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
       t
     );
-    const nextSummarySignature = getSummaryRowsSignature(nextSummaryEntries);
-    const currentSummaryRowKeys = nextSummaryEntries.map((row) => getSummaryRowKey(row));
+    const nextSummarySignature = getSummaryRowsSignature(appliedSummaryEntries);
+    const currentSummaryRowKeys = appliedSummaryEntries.map((row) => getSummaryRowKey(row));
+    logBackendCleanup(snapshot?.cleanupInfo, "snapshot");
 
     setActiveRightTab((current) => (current === "manual" ? "manual" : "auto"));
     setSelectedLineId(sourceLine.id);
@@ -373,7 +487,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setSummaryEntries(nextSummaryEntries);
     setAutoRules([]);
     setManualDrafts([]);
-    setPlanRefsByLine({});
+    if (!preservePendingRemovedLineIds) {
+      setPendingRemovedLineIds([]);
+    }
     setManualInput("12:00");
     setEditorStart("08:00");
     setEditorEnd("10:00");
@@ -397,11 +513,12 @@ export default function useScheduleController({ registerHostActions, activeTrans
       return;
     }
 
-    if (!shouldConsumeSchedulePayload(metadata, modeAtRequest)) {
+    if (!isTrustedCatalogPayload(metadata, modeAtRequest)) {
       return;
     }
 
-    const runtimeCatalog = buildCatalog(metadata, t);
+    const previousSelectedLine = LINE_OPTIONS.find((line) => line?.id === selectedLineId) ?? null;
+    const runtimeCatalog = buildCatalog(metadata, t, { allowDefaultFallback: false });
     replaceRuntimeCatalog({
       lines: runtimeCatalog.lineOptions,
       depots: runtimeCatalog.depotOptions,
@@ -424,7 +541,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
       return;
     }
 
-    const changedLine = nextLine.id !== selectedLineId;
+    const selectedLineReplaced = !!previousSelectedLine
+      && nextLine.id === selectedLineId
+      && getLineRuntimeToken(nextLine) !== getLineRuntimeToken(previousSelectedLine);
+    const changedLine = nextLine.id !== selectedLineId || selectedLineReplaced;
     if (changedLine) {
       setSelectedLineId(nextLine.id);
       setSelectedLineType(nextLine.kind);
@@ -441,8 +561,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const generation = scheduleModeGenerationRef.current + 1;
     scheduleModeGenerationRef.current = generation;
     hasHydratedRuntimeRef.current = false;
-    suppressNextSnapshotRef.current = false;
+    suppressedSnapshotRequestSequenceRef.current = 0;
     suppressNextSnapshotModeRef.current = "";
+    latestSaveRequestSequenceRef.current = 0;
+    ignoredLateSnapshotRequestSequenceRef.current = 0;
     latestDraftSaveOperationRunIdRef.current += 1;
     latestApplySaveOperationRunIdRef.current += 1;
     applyingSaveOperationRef.current = false;
@@ -459,7 +581,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setSummaryEntries([]);
     setAutoRules([]);
     setManualDrafts([]);
-    setPlanRefsByLine({});
+    setPendingRemovedLineIds([]);
     setAppliedSummarySignature("");
     setAppliedSummaryRowKeys([]);
     setSummaryFilter("all");
@@ -493,8 +615,18 @@ export default function useScheduleController({ registerHostActions, activeTrans
         return;
       }
 
-      if (suppressNextSnapshotRef.current && suppressNextSnapshotModeRef.current === modeAtRequest) {
-        clearSnapshotSuppression(modeAtRequest);
+      const snapshotRequestSequence = getSnapshotRequestSequence(snapshot);
+      if (snapshotRequestSequence > 0) {
+        if (snapshotRequestSequence <= ignoredLateSnapshotRequestSequenceRef.current
+          || snapshotRequestSequence < latestSaveRequestSequenceRef.current) {
+          return;
+        }
+      }
+
+      if (suppressedSnapshotRequestSequenceRef.current > 0
+        && suppressNextSnapshotModeRef.current === modeAtRequest
+        && snapshotRequestSequence === suppressedSnapshotRequestSequenceRef.current) {
+        clearSnapshotSuppression(modeAtRequest, snapshotRequestSequence);
         return;
       }
 
@@ -508,6 +640,36 @@ export default function useScheduleController({ registerHostActions, activeTrans
       unsubscribe?.();
     };
   }, [scheduleMode, t, workbenchApi]);
+
+  useEffect(() => {
+    const unsubscribe = workbenchApi.onLineInvalidated?.((event) => {
+      const modeAtRequest = normalizeScheduleMode(event?.mode || scheduleMode);
+      if (modeAtRequest !== scheduleMode) {
+        return;
+      }
+
+      const lineIds = serializeRemovedLineIds(
+        Array.isArray(event?.lineIds)
+          ? event.lineIds
+          : []
+      );
+      if (lineIds.length === 0) {
+        return;
+      }
+
+      console.info(`[RT Native Schedule] backend line invalidated ${JSON.stringify({
+        mode: modeAtRequest,
+        lineIds,
+        reasons: Array.isArray(event?.reasons) ? event.reasons : []
+      })}`);
+      cleanupInvalidatedLinesLocally(lineIds);
+      refreshCatalog(modeAtRequest);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [scheduleMode, selectedLineId, t, workbenchApi]);
 
   useEffect(() => {
     const unsubscribe = workbenchApi.onCatalogChanged?.((event) => {
@@ -579,7 +741,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const requestGeneration = scheduleModeGenerationRef.current;
     const runRef = applyDraft ? latestApplySaveOperationRunIdRef : latestDraftSaveOperationRunIdRef;
     const runId = runRef.current + 1;
+    const requestSequence = latestSaveRequestSequenceRef.current + 1;
     runRef.current = runId;
+    latestSaveRequestSequenceRef.current = requestSequence;
     if (!isCurrentModeRequest(requestMode, requestGeneration)) {
       return { success: true, errors: [], warnings: [], version: "", snapshot: null, superseded: true };
     }
@@ -590,8 +754,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
       latestDraftSaveOperationRunIdRef.current += 1;
     }
 
-    const currentManualRows = manualDrafts.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
-    const currentAutoRows = autoRules.filter((row) => row?.lineId === selectedLineId || row?.serviceId === selectedLineId);
     const lineDraftRowsByLineId = serializeNativeLineDraftRowsByLineId(summaryEntries);
     if (applyDraft && selectedLineId && !lineDraftRowsByLineId.some((block) => block?.lineId === selectedLineId)) {
       lineDraftRowsByLineId.push({ lineId: selectedLineId, lineDraftRows: [] });
@@ -601,17 +763,15 @@ export default function useScheduleController({ registerHostActions, activeTrans
       selectedLineId,
       selectedEditLine: selectedLineId,
       mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
-      manualRows: serializeNativeManualRows(currentManualRows),
-      autoRules: serializeNativeAutoRules(currentAutoRows),
       lineDraftRowsByLineId,
-      planRefs: serializePlanRefs(planRefsByLine),
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
+      clientRequestSequence: requestSequence,
       applyDraft,
       nativeScheduleWriter: true,
-      returnSnapshot: false
+      returnSnapshot: true
     };
 
-    suppressNextSnapshotForMode(requestMode);
+    suppressNextSnapshotForMode(requestMode, requestSequence);
     try {
       const operationResult = await runNativeSaveOperation(workbenchApi, request, {
         applyDraft,
@@ -620,7 +780,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
       });
 
       if (operationResult.interrupted) {
-        clearSnapshotSuppression(requestMode);
+        ignoreLateSnapshotForRequest(requestSequence);
+        clearSnapshotSuppression(requestMode, requestSequence);
         if (applyDraft) {
           throw new Error("apply-operation-interrupted");
         }
@@ -629,7 +790,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
       }
 
       if (operationResult.superseded) {
-        clearSnapshotSuppression(requestMode);
+        ignoreLateSnapshotForRequest(requestSequence);
+        clearSnapshotSuppression(requestMode, requestSequence);
         if (applyDraft) {
           throw new Error("apply-operation-superseded");
         }
@@ -639,7 +801,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
       const result = operationResult.result;
       if (result && !shouldConsumeSchedulePayload(result, requestMode)) {
-        clearSnapshotSuppression(requestMode);
+        ignoreLateSnapshotForRequest(requestSequence);
+        clearSnapshotSuppression(requestMode, requestSequence);
         if (applyDraft) {
           throw new Error("apply-operation-mode-mismatch");
         }
@@ -649,15 +812,22 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
       if (result?.snapshot) {
         if (isCurrentModeRequest(requestMode, requestGeneration)) {
-          applyHydratedState(result.snapshot, null, requestMode);
+          applyHydratedState(result.snapshot, null, requestMode, {
+            preservePendingRemovedLineIds: result?.success !== true
+          });
         }
       } else {
-        clearSnapshotSuppression(requestMode);
+        clearSnapshotSuppression(requestMode, requestSequence);
+        if (result?.success) {
+          logBackendCleanup(result?.cleanupInfo, "save-result");
+          setPendingRemovedLineIds([]);
+        }
       }
 
       return result;
     } catch (error) {
-      clearSnapshotSuppression(requestMode);
+      ignoreLateSnapshotForRequest(requestSequence);
+      clearSnapshotSuppression(requestMode, requestSequence);
       throw error;
     } finally {
       if (applyDraft && runRef.current === runId) {
@@ -669,25 +839,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function clearPanelMessage() {
     setPanelMessage(null);
-  }
-
-  function dropPlanRefs(lineIds) {
-    const ids = [...new Set((Array.isArray(lineIds) ? lineIds : [lineIds]).filter(Boolean))];
-    if (ids.length === 0) {
-      return;
-    }
-
-    setPlanRefsByLine((current) => {
-      let changed = false;
-      const next = { ...(current || {}) };
-      ids.forEach((lineId) => {
-        if (Object.prototype.hasOwnProperty.call(next, lineId)) {
-          delete next[lineId];
-          changed = true;
-        }
-      });
-      return changed ? next : current;
-    });
   }
 
   function markLocalDataDirty() {
@@ -731,7 +882,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     updateRuntimeLineOption(selectedLine.id, { kind: nextType });
     setSelectedLineType(nextType);
     setManualDrafts((current) => sortManualDraftRows(
@@ -895,15 +1045,12 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   function removeSummaryRow(rowId) {
-    const target = summaryEntries.find((row) => row.id === rowId);
     markLocalDataDirty();
-    dropPlanRefs(target?.lineId || target?.serviceId || "");
     setSummaryEntries((current) => current.filter((row) => row.id !== rowId));
   }
 
   function clearSummaryTable() {
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => {
       if (summaryFilter === "current") {
         return current.filter((row) => row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
@@ -992,7 +1139,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
     setPanelMessage({
       scope: "manual",
@@ -1063,7 +1209,6 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     markLocalDataDirty();
-    dropPlanRefs(selectedLine.id);
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
     setAutoRules((current) => current.filter((rule) => (
       rule?.lineId !== selectedLine.id && rule?.serviceId !== selectedLine.id
@@ -1119,8 +1264,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
       }
 
       setPanelMessage(null);
-      setAppliedSummarySignature(getSummaryRowsSignature(summaryEntries));
-      setAppliedSummaryRowKeys(summaryEntries.map((row) => getSummaryRowKey(row)));
+      if (!result?.snapshot) {
+        setAppliedSummarySignature(getSummaryRowsSignature(summaryEntries));
+        setAppliedSummaryRowKeys(summaryEntries.map((row) => getSummaryRowKey(row)));
+      }
     } catch (error) {
       if (!isCurrentModeRequest(modeAtRequest, generation)) {
         return;

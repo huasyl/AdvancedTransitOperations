@@ -116,7 +116,7 @@ export function buildSummaryRowsWithConflicts(rows, t, appliedRowKeySet = null) 
               ? t("schedule.source.planner")
               : t("schedule.source.manual"),
         note: row.note || t("combined.note.direct"),
-        lineName: row.lineName || (lineOption ? getLocalizedLineName(lineOption, t) : (row.lineId || "(missing lineId)")),
+        lineName: row.lineName || (lineOption ? getLocalizedLineName(lineOption, t) : "(missing lineId)"),
         origin: row.origin || (lineOption ? getLocalizedOriginLabel(row.originId || lineOption.originId, t) : ""),
         isApplied: appliedRowKeySet instanceof Set && appliedRowKeySet.has(getSummaryRowKey(row)),
         isConflict,

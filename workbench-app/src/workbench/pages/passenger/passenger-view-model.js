@@ -13,11 +13,6 @@ function hashText(text) {
   return hash;
 }
 
-function lineCode(lineId) {
-  const parts = String(lineId || "").split(":");
-  return parts[parts.length - 1] || String(lineId || "");
-}
-
 function lineColor(lineId) {
   return LINE_COLORS[hashText(lineId) % LINE_COLORS.length];
 }
@@ -29,12 +24,13 @@ function buildLineCatalog(metadataSnapshot) {
     if (!id) {
       return;
     }
-    const code = lineCode(id);
+    const code = String(line?.displayCode || line?.routeNumber || "").trim();
+    const name = String(line?.name || "").trim();
     map.set(id, {
       id,
       code,
-      name: line?.name || code,
-      shortName: line?.name || "",
+      name: name || code || "--",
+      shortName: name,
       color: line?.color || lineColor(id)
     });
   });
@@ -75,16 +71,17 @@ function addTrendValue(map, key, entry, passengers) {
     existing.passengers += passengers;
     return;
   }
+  const serviceDayKey = Number(entry?.serviceDayKey ?? entry?.serviceDayIndex ?? 0);
   map.set(key, {
     hour: bucketLabel(entry),
-    serviceDayIndex: Number(entry?.serviceDayIndex || 0),
+    serviceDayKey: Number.isFinite(serviceDayKey) ? serviceDayKey : 0,
     bucketStartMinute: Number(entry?.bucketStartMinute || 0),
     passengers
   });
 }
 
 function sortByBucket(left, right) {
-  const dayDelta = Number(left?.serviceDayIndex || 0) - Number(right?.serviceDayIndex || 0);
+  const dayDelta = Number(left?.serviceDayKey || 0) - Number(right?.serviceDayKey || 0);
   if (dayDelta !== 0) {
     return dayDelta;
   }
@@ -149,11 +146,10 @@ function addLine(lineMap, lineCatalog, lineId) {
     lineMap.set(id, lineCatalog.get(id));
     return;
   }
-  const code = lineCode(id);
   lineMap.set(id, {
     id,
-    code,
-    name: code,
+    code: "",
+    name: "--",
     shortName: "",
     color: lineColor(id)
   });
@@ -177,7 +173,8 @@ function buildTrends(stationVolumes) {
 
   stationVolumes.forEach((entry) => {
     const passengers = Number(entry?.inflow || 0) + Number(entry?.outflow || 0);
-    const bucketKey = `${Number(entry?.serviceDayIndex || 0)}:${Number(entry?.bucketStartMinute || 0)}`;
+    const serviceDayKey = Number(entry?.serviceDayKey ?? entry?.serviceDayIndex ?? 0);
+    const bucketKey = `${Number.isFinite(serviceDayKey) ? serviceDayKey : 0}:${Number(entry?.bucketStartMinute || 0)}`;
     addTrendValue(systemMap, bucketKey, entry, passengers);
 
     const lineId = String(entry?.lineId || "");

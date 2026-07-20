@@ -30,6 +30,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly EntityQuery m_LineCountQuery;
         private readonly EntityQuery m_DepotCountQuery;
         private readonly Action m_MarkDirty;
+        private readonly Func<bool> m_ScanLineAnchors;
         private uint m_LastCountGuardFrame;
         private uint m_PostDirtyProbeUntilFrame;
         private uint m_NextPostDirtyProbeFrame;
@@ -40,10 +41,12 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal CatalogDirty(
             EntityManager entityManager,
-            Action markDirty)
+            Action markDirty,
+            Func<bool> scanLineAnchors)
         {
             m_EntityManager = entityManager;
             m_MarkDirty = markDirty ?? throw new ArgumentNullException(nameof(markDirty));
+            m_ScanLineAnchors = scanLineAnchors ?? throw new ArgumentNullException(nameof(scanLineAnchors));
 
             m_LineDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
             {
@@ -68,6 +71,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_DepotDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
             {
                 All = new[] { ComponentType.ReadOnly<Game.Buildings.TransportDepot>() },
+                None = new[] { ComponentType.ReadOnly<Temp>() },
                 Any = DirtyMarkers(includeBatchesUpdated: true)
             });
             m_ConnectedDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
@@ -106,6 +110,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ComponentType.ReadOnly<CustomName>(),
                     ComponentType.ReadOnly<Game.Buildings.TransportDepot>()
                 },
+                None = new[] { ComponentType.ReadOnly<Temp>() },
                 Any = DirtyMarkers(includeBatchesUpdated: true)
             });
             m_BuildingNameDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
@@ -133,6 +138,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             });
             m_DepotCountQuery = entityManager.CreateEntityQuery(
                 ComponentType.ReadOnly<Game.Buildings.TransportDepot>(),
+                ComponentType.Exclude<Temp>(),
                 ComponentType.Exclude<Deleted>());
             ResetCountGuard(0);
         }
@@ -156,6 +162,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                 dirty = true;
             }
 
+            // Only scan on identity-relevant edges (not every frame while dirty markers linger).
+            bool identityScanNeeded = false;
+
             if (dirty)
             {
                 if (!m_WasDirty || countChanged)
@@ -164,6 +173,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     if (lineDirty || lineCountChanged)
                     {
                         ArmPostDirtyProbe(nowFrame);
+                        identityScanNeeded = true;
                     }
                 }
                 m_WasDirty = true;
@@ -174,6 +184,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             if (ProbeLineSignatureChanged(nowFrame))
+            {
+                m_MarkDirty();
+                identityScanNeeded = true;
+            }
+
+            if (identityScanNeeded && m_ScanLineAnchors())
             {
                 m_MarkDirty();
             }
@@ -208,14 +224,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             int depotCount = m_DepotCountQuery.CalculateEntityCount();
             lineCountChanged = lineCount != m_LastLineCount;
             bool depotCountChanged = depotCount != m_LastDepotCount;
-            if (!lineCountChanged && !depotCountChanged)
-            {
-                return false;
-            }
 
             m_LastLineCount = lineCount;
             m_LastDepotCount = depotCount;
-            return true;
+            return lineCountChanged || depotCountChanged;
         }
 
         private void ResetCountGuard(uint nowFrame)
@@ -308,6 +320,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     hash = hash * 31;
                 }
 
+                // RouteNumber is display metadata; detecting it here only refreshes the catalog.
                 hash = hash * 31 + (m_EntityManager.HasComponent<RouteNumber>(line)
                     ? m_EntityManager.GetComponentData<RouteNumber>(line).m_Number
                     : -1);

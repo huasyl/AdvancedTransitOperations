@@ -4,7 +4,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
 {
     internal static class ScheduleTargets
     {
-        public static int Previous(int nowMin, IReadOnlyList<int> targets)
+        public static int Previous(int nowMinute, IReadOnlyList<int> targets)
         {
             if (targets == null || targets.Count == 0)
                 return -1;
@@ -13,7 +13,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
             for (int i = 0; i < targets.Count; i++)
             {
                 int target = targets[i];
-                if (target <= nowMin)
+                if (target <= nowMinute)
                     previous = target;
                 else
                     break;
@@ -22,17 +22,17 @@ namespace RapidTransitMod.Dispatch.Scheduling
             return previous >= 0 ? previous : targets[targets.Count - 1];
         }
 
-        public static int Next(int nowMin, IReadOnlyList<int> targets)
+        public static int Next(int nowMinute, IReadOnlyList<int> targets)
         {
             if (targets == null || targets.Count == 0)
                 return -1;
 
             int bestTarget = targets[0];
-            int bestDistance = ScheduleClock.MinutesUntil(nowMin, bestTarget);
+            int bestDistance = ScheduleClock.MinutesUntil(nowMinute, bestTarget);
             for (int i = 1; i < targets.Count; i++)
             {
                 int target = targets[i];
-                int distance = ScheduleClock.MinutesUntil(nowMin, target);
+                int distance = ScheduleClock.MinutesUntil(nowMinute, target);
                 if (distance < bestDistance)
                 {
                     bestDistance = distance;
@@ -43,14 +43,14 @@ namespace RapidTransitMod.Dispatch.Scheduling
             return bestTarget;
         }
 
-        public static int NextIndex(int nowMin, IReadOnlyList<int> targets)
+        public static int NextIndex(int nowMinute, IReadOnlyList<int> targets)
         {
             if (targets == null || targets.Count == 0)
                 return -1;
 
             for (int i = 0; i < targets.Count; i++)
             {
-                if (targets[i] >= nowMin)
+                if (targets[i] >= nowMinute)
                     return i;
             }
 
@@ -60,7 +60,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public static int Headway(IReadOnlyList<int> targets)
         {
             if (targets == null || targets.Count <= 1)
-                return DispatchRuntimeSystem.SLOT_INTERVAL;
+                return DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES;
 
             int bestGap = 1440;
             for (int i = 0; i < targets.Count; i++)
@@ -74,7 +74,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                     bestGap = gap;
             }
 
-            return bestGap < 1440 ? bestGap : DispatchRuntimeSystem.SLOT_INTERVAL;
+            return bestGap < 1440 ? bestGap : DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES;
         }
     }
 }

@@ -69,6 +69,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_GetSnapshotVersion(),
                     m_DescribeException(ex));
                 result.snapshot = m_BuildSnapshot(scope, null);
+                result.cleanupInfo = result.snapshot?.cleanupInfo;
                 return Workbenches.Json.Write(result);
             }
         }

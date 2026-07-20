@@ -9,7 +9,7 @@ namespace RapidTransitMod.Workbenches
     internal static class ApiHost
     {
         private const string HostKey = "rapidtransitmod";
-        internal const string Prefix = "huasyl::rt.workbench.";
+        internal const string Prefix = "suhua::rt.workbench.";
 
         private static bool Ready;
         private static bool HostReady;

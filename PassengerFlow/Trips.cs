@@ -21,6 +21,12 @@ namespace RapidTransitMod.PassengerFlow
             m_NextGeneration = 0;
         }
 
+        internal void ClearPending()
+        {
+            m_Pending.Clear();
+            m_ExpiryQueue.Clear();
+        }
+
         internal bool HasActiveTrip(Entity passenger)
         {
             return passenger != Entity.Null && m_ActiveTrips.ContainsKey(passenger);

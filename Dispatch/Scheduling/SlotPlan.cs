@@ -40,7 +40,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public Status Build(
             LineTick tick,
             VehiclePick.Result pick,
-            int slot,
+            int slotMinute,
             Entity holder,
             string lineTag,
             int cycleMinutes,
@@ -53,24 +53,30 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 return Status.None;
 
             VehicleState bestState = m_Runtime.m_VehicleView.GetState(pick.Vehicle);
-            m_Runtime.m_RuntimeLog.CrossLineCandidate(tick.Line, pick.Vehicle, bestState, slot, pick.Eta, pick.PrevTarget);
+            m_Runtime.m_RuntimeLog.CrossLineCandidate(
+                tick.Line,
+                pick.Vehicle,
+                bestState,
+                slotMinute,
+                pick.EtaFrames,
+                pick.PreviousTargetMinute);
             if (bestState == VehicleState.Idle || bestState == VehicleState.Holding)
             {
-                if (pick.PrevTarget < 0 && HoldingFull(tick, cycleMinutes))
+                if (pick.PreviousTargetMinute < 0 && HoldingFull(tick, cycleMinutes))
                     return Status.Skip;
 
-                claims.Add(new DispatchScheduler.SlotClaim(pick.Vehicle, slot, holder, commitHold: true, clearIdle: true));
+                claims.Add(new DispatchScheduler.SlotClaim(pick.Vehicle, slotMinute, holder, commitHold: true, clearIdle: true));
                 return Status.Claimed;
             }
 
-            claims.Add(new DispatchScheduler.SlotClaim(pick.Vehicle, slot, holder, commitHold: false, clearIdle: false));
+            claims.Add(new DispatchScheduler.SlotClaim(pick.Vehicle, slotMinute, holder, commitHold: false, clearIdle: false));
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slot)
+                m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slotMinute)
                     + " 选择车辆" + pick.Vehicle.Index
                     + " state=" + bestState
-                    + " eta=" + (pick.Eta / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟"
-                    + " prevTarget=" + (pick.PrevTarget >= 0 ? DispatchRuntimeSystem.SlotStr(pick.PrevTarget) : "-"));
+                    + " eta=" + m_Runtime.m_SimClock.ToMinutes(pick.EtaFrames).ToString("F1") + "分钟"
+                    + " prevTarget=" + (pick.PreviousTargetMinute >= 0 ? DispatchRuntimeSystem.SlotStr(pick.PreviousTargetMinute) : "-"));
             }
             return Status.Claimed;
         }
@@ -78,34 +84,34 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public bool TryAssignCurrentOrLateSlot(
             Entity line,
             Entity vehicle,
-            int nowMin,
+            int nowMinute,
             string lineTag,
             string stateTag,
             out Entity releasedVehicle,
-            out int lateSlot)
+            out int lateSlotMinute)
         {
             releasedVehicle = Entity.Null;
-            lateSlot = -1;
-            int previousSlot = ScheduleClock.PreviousSlot(nowMin);
-            if (!ScheduleClock.CurrentOrRecent(nowMin, previousSlot))
+            lateSlotMinute = -1;
+            int previousSlotMinute = ScheduleClock.PreviousSlot(nowMinute);
+            if (!ScheduleClock.CurrentOrRecent(nowMinute, previousSlotMinute))
                 return false;
-            if (m_Policy.IsOccupied(line, vehicle, previousSlot))
-                return false;
-
-            if (!TryResolveReleasedVehicle(line, vehicle, previousSlot, lineTag, out releasedVehicle))
+            if (m_Policy.IsOccupied(line, vehicle, previousSlotMinute))
                 return false;
 
-            lateSlot = previousSlot;
-            if (ScheduleClock.CanLate(nowMin, previousSlot))
+            if (!TryResolveReleasedVehicle(line, vehicle, previousSlotMinute, lineTag, out releasedVehicle))
+                return false;
+
+            lateSlotMinute = previousSlotMinute;
+            if (ScheduleClock.CanLate(nowMinute, previousSlotMinute))
             {
                 Once(
                     m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                     vehicle,
-                    "LateDispatchCandidate|" + previousSlot + "|" + stateTag,
+                    "LateDispatchCandidate|" + previousSlotMinute + "|" + stateTag,
                     "[补发候选] " + lineTag + " 车辆" + vehicle.Index
                         + " state=" + stateTag
-                        + " 候选补发班次" + DispatchRuntimeSystem.SlotStr(previousSlot)
-                        + " 已过期" + ScheduleClock.Overdue(nowMin, previousSlot) + "分钟");
+                        + " 候选补发班次" + DispatchRuntimeSystem.SlotStr(previousSlotMinute)
+                        + " 已过期" + ScheduleClock.Overdue(nowMinute, previousSlotMinute) + "分钟");
             }
 
             return true;
@@ -114,36 +120,36 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public bool TryAssignUpcomingTarget(
             Entity line,
             Entity vehicle,
-            int nowMin,
+            int nowMinute,
             string lineTag,
             string stateTag,
-            out int assignedTarget)
+            out int assignedTargetMinute)
         {
-            assignedTarget = -1;
+            assignedTargetMinute = -1;
             if (line == Entity.Null || vehicle == Entity.Null || !m_Managed(line))
                 return false;
 
             int[] appliedTargets = m_Times(line);
-            int nextTarget = ScheduleTargets.Next(nowMin, appliedTargets);
-            if (nextTarget < 0 || ScheduleClock.CurrentOrRecent(nowMin, nextTarget))
+            int nextTargetMinute = ScheduleTargets.Next(nowMinute, appliedTargets);
+            if (nextTargetMinute < 0 || ScheduleClock.CurrentOrRecent(nowMinute, nextTargetMinute))
                 return false;
 
-            int waitMinutes = ScheduleClock.MinutesUntil(nowMin, nextTarget);
+            int waitMinutes = ScheduleClock.MinutesUntil(nowMinute, nextTargetMinute);
             if (waitMinutes > m_Hold(line))
                 return false;
-            if (m_Policy.IsOccupied(line, vehicle, nextTarget))
+            if (m_Policy.IsOccupied(line, vehicle, nextTargetMinute))
                 return false;
 
-            assignedTarget = nextTarget;
+            assignedTargetMinute = nextTargetMinute;
             if (RtLog.VerboseEnabled)
             {
                 Once(
                     m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                     vehicle,
-                    "UpcomingTarget|" + nextTarget + "|" + stateTag,
+                    "UpcomingTarget|" + nextTargetMinute + "|" + stateTag,
                     "[预分配] " + lineTag + " 车辆" + vehicle.Index
                         + " state=" + stateTag
-                        + " 预分配未来班次" + DispatchRuntimeSystem.SlotStr(nextTarget)
+                        + " 预分配未来班次" + DispatchRuntimeSystem.SlotStr(nextTargetMinute)
                         + " 距今" + waitMinutes + "分钟");
             }
             return true;
@@ -152,7 +158,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public bool TryAssignCurrentOrLateScheduledTarget(
             Entity line,
             Entity vehicle,
-            int nowMin,
+            int nowMinute,
             string lineTag,
             string stateTag,
             IReadOnlyList<int> targets,
@@ -161,26 +167,26 @@ namespace RapidTransitMod.Dispatch.Scheduling
         {
             releasedVehicle = Entity.Null;
             lateTarget = -1;
-            int previousTarget = ScheduleTargets.Previous(nowMin, targets);
-            if (previousTarget < 0 || !ScheduleClock.CurrentOrRecent(nowMin, previousTarget))
+            int previousTargetMinute = ScheduleTargets.Previous(nowMinute, targets);
+            if (previousTargetMinute < 0 || !ScheduleClock.CurrentOrRecent(nowMinute, previousTargetMinute))
                 return false;
-            if (m_Policy.IsOccupied(line, vehicle, previousTarget))
-                return false;
-
-            if (!TryResolveReleasedVehicle(line, vehicle, previousTarget, lineTag, out releasedVehicle))
+            if (m_Policy.IsOccupied(line, vehicle, previousTargetMinute))
                 return false;
 
-            lateTarget = previousTarget;
-            if (ScheduleClock.CanLate(nowMin, previousTarget))
+            if (!TryResolveReleasedVehicle(line, vehicle, previousTargetMinute, lineTag, out releasedVehicle))
+                return false;
+
+            lateTarget = previousTargetMinute;
+            if (ScheduleClock.CanLate(nowMinute, previousTargetMinute))
             {
                 Once(
                     m_Runtime.m_RuntimeLog.m_LateDispatchLogCache,
                     vehicle,
-                    "LateDispatchCandidate|" + previousTarget + "|" + stateTag,
+                    "LateDispatchCandidate|" + previousTargetMinute + "|" + stateTag,
                     "[补发候选] " + lineTag + " 车辆" + vehicle.Index
                         + " state=" + stateTag
-                        + " 候选补发班次" + DispatchRuntimeSystem.SlotStr(previousTarget)
-                        + " 已过期" + ScheduleClock.Overdue(nowMin, previousTarget) + "分钟");
+                        + " 候选补发班次" + DispatchRuntimeSystem.SlotStr(previousTargetMinute)
+                        + " 已过期" + ScheduleClock.Overdue(nowMinute, previousTargetMinute) + "分钟");
             }
 
             return true;
@@ -200,14 +206,14 @@ namespace RapidTransitMod.Dispatch.Scheduling
                     continue;
                 }
                 if (state == VehicleState.Idle
-                    && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMin)
-                    && targetMin >= 0)
+                    && m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute)
+                    && targetMinute >= 0)
                 {
                     holdingCount++;
                 }
             }
 
-            int holdingCap = Math.Max(1, tick.Hold / cycleMinutes);
+            int holdingCap = Math.Max(1, tick.HoldMinutes / cycleMinutes);
             return holdingCount >= holdingCap;
         }
 

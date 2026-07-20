@@ -22,9 +22,9 @@ namespace RapidTransitMod
 
         public bool TryGetState(Entity vehicle, out VehicleState state) => m_Store.State.TryGetValue(vehicle, out state);
 
-        public bool TryGetTarget(Entity vehicle, out int targetMin) => m_Store.TargetMin.TryGetValue(vehicle, out targetMin);
+        public bool TryGetTarget(Entity vehicle, out int targetMinute) => m_Store.TargetMinute.TryGetValue(vehicle, out targetMinute);
 
-        public bool TryGetSlot(Entity vehicle, out int slot) => m_Store.CurrentSlot.TryGetValue(vehicle, out slot);
+        public bool TryGetSlot(Entity vehicle, out int slotMinute) => m_Store.CurrentSlotMinute.TryGetValue(vehicle, out slotMinute);
 
         public bool TryGetLine(Entity vehicle, out Entity line) => m_Store.Line.TryGetValue(vehicle, out line);
 
@@ -40,7 +40,17 @@ namespace RapidTransitMod
 
         public bool TryGetOrigin(Entity vehicle, out uint frame) => m_Store.OriginArrivalCandidateSinceFrame.TryGetValue(vehicle, out frame);
 
-        public bool TryGetReady(Entity vehicle, out uint frame) => m_Store.ForcedOriginReadyFrame.TryGetValue(vehicle, out frame);
+        public bool TryGetReady(Entity vehicle, out uint readyFrame)
+        {
+            if (m_Store.ForcedOriginReadyFrame.TryGetValue(vehicle, out ReadyClockState readyState))
+            {
+                readyFrame = readyState.ReadyFrame;
+                return true;
+            }
+
+            readyFrame = 0u;
+            return false;
+        }
 
         public bool TryGetBoardingGrace(Entity vehicle, out uint frame) => m_Store.ForcedOriginBoardingGraceUntil.TryGetValue(vehicle, out frame);
 

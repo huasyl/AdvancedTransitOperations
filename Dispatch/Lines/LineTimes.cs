@@ -5,6 +5,7 @@ using Game.Prefabs;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Core;
 using RapidTransitMod.TrackModel;
 using Unity.Collections;
 using Unity.Entities;
@@ -153,16 +154,19 @@ namespace RapidTransitMod.Dispatch.Lines
                 return 0f;
 
             float dwellFrames = 0f;
+            ClockSnapshot clockSnapshot = m_Port.ClockSnapshot();
             if (!m_Port.TryObservedWaypointStopFrames(line, waypointIndex, out dwellFrames))
             {
                 int maxStationDwellMinutes = m_Port.DwellMinutes(line);
                 if (maxStationDwellMinutes > 0)
-                    dwellFrames = maxStationDwellMinutes * m_Port.FramesPerMinute;
+                    dwellFrames = clockSnapshot.ToFramesCeil(maxStationDwellMinutes);
                 else
                     dwellFrames = configuredStopFrames;
             }
 
-            return math.max(0f, dwellFrames + m_Port.ProfileStopStartBufferMinutes * m_Port.FramesPerMinute);
+            return math.max(
+                0f,
+                dwellFrames + clockSnapshot.ToFramesCeil(m_Port.ProfileStopStartBufferMinutes));
         }
 
         public float Depart(Entity line, DynamicBuffer<RouteWaypoint> waypoints, int fromWaypointIndex, int targetWaypointIndex)
@@ -251,6 +255,10 @@ namespace RapidTransitMod.Dispatch.Lines
                 cachedFrames = DispatchFallback(v, line, lineDurationFrames);
             if (cachedFrames <= 0f)
                 return float.MaxValue;
+            cachedFrames = math.clamp(
+                cachedFrames,
+                m_Port.DispatchEstimateMinFrames,
+                m_Port.DispatchEstimateMaxFrames);
 
             if (wps.Length > 0
                 && m_Port.EntityManager.HasComponent<Target>(v)
@@ -407,7 +415,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public float DispatchFallback(Entity v, Entity line, float lineDurationFrames)
         {
-            float estimateMinutes = 0f;
+            float estimateFrames = 0f;
             EntityManager entityManager = m_Port.EntityManager;
             if (entityManager.HasComponent<Transform>(v))
             {
@@ -416,16 +424,18 @@ namespace RapidTransitMod.Dispatch.Lines
                 if (stopA != Entity.Null && entityManager.HasComponent<Transform>(stopA))
                 {
                     float3 stopPos = entityManager.GetComponentData<Transform>(stopA).m_Position;
-                    float distance = math.distance(vehiclePos, stopPos);
-                    estimateMinutes = distance / m_Port.DispatchFallbackSpeedMetersPerMinute;
+                    float distanceMeters = math.distance(vehiclePos, stopPos);
+                    estimateFrames = distanceMeters * m_Port.DispatchFallbackFramesPerMeter;
                 }
             }
-            if (estimateMinutes <= 0f && lineDurationFrames > 0f)
-                estimateMinutes = (lineDurationFrames / m_Port.FramesPerMinute) * 0.2f;
-            if (estimateMinutes <= 0f)
-                estimateMinutes = 6f;
-            estimateMinutes = math.clamp(estimateMinutes, m_Port.DispatchEstimateMinMinutes, m_Port.DispatchEstimateMaxMinutes);
-            return estimateMinutes * m_Port.FramesPerMinute;
+            if (estimateFrames <= 0f && lineDurationFrames > 0f)
+                estimateFrames = lineDurationFrames * 0.2f;
+            if (estimateFrames <= 0f)
+                estimateFrames = m_Port.DispatchEstimateDefaultFrames;
+            return math.clamp(
+                estimateFrames,
+                m_Port.DispatchEstimateMinFrames,
+                m_Port.DispatchEstimateMaxFrames);
         }
 
         public Entity FirstStop(Entity line)
@@ -472,19 +482,19 @@ namespace RapidTransitMod.Dispatch.Lines
                 }
             }
 
-            float duration = 0f;
+            float pathDuration = 0f;
             for (int i = 0; i < waypoints.Length; i++)
             {
                 int wi = (firstWaypoint + i) % waypoints.Length;
                 int wi1 = (wi + 1) % waypoints.Length;
                 Entity segment = segments[wi].m_Segment;
                 if (entityManager.HasComponent<PathInformation>(segment))
-                    duration += entityManager.GetComponentData<PathInformation>(segment).m_Duration;
+                    pathDuration += entityManager.GetComponentData<PathInformation>(segment).m_Duration;
                 if (entityManager.HasComponent<VehicleTiming>(waypoints[wi1].m_Waypoint))
-                    duration += stopDuration;
+                    pathDuration += stopDuration;
             }
 
-            return duration;
+            return pathDuration;
         }
     }
 }

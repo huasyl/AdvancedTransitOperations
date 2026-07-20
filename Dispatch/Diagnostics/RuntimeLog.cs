@@ -318,7 +318,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     + " slot=" + DispatchRuntimeSystem.SlotStr(slot)
                     + " vehicle=" + vehicle.Index
                     + " state=" + state
-                    + " eta=" + (etaFrames == float.MaxValue ? "?" : (etaFrames / (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE).ToString("F1") + "分钟")
+                    + " eta=" + (etaFrames == float.MaxValue ? "?" : m_Runtime.m_SimClock.ToMinutes(etaFrames).ToString("F1") + "分钟")
                     + " prevTarget=" + (previousTarget >= 0 ? DispatchRuntimeSystem.SlotStr(previousTarget) : "-")
                     + " " + VehicleOwnership(observedLine, vehicle, state, targetMin, "candidate"));
         }

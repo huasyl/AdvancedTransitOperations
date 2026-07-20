@@ -40,7 +40,7 @@ export function buildLineCollections(plannerInput) {
     .filter((line) => line && typeof line.id === "string" && line.id)
     .map((line) => ({
       value: line.id,
-      label: typeof line.name === "string" && line.name ? line.name : line.id
+      label: typeof line.name === "string" && line.name ? line.name : "--"
     }));
   const localLineOptions = allLineOptions.filter(({ value }) => {
     const line = lineById.get(value);
@@ -183,7 +183,7 @@ export function buildPlannerResolvers(plannerInput, result, t) {
 
   lines.forEach((line) => {
     if (line && line.id) {
-      lineNameById.set(line.id, line.name || line.id);
+      lineNameById.set(line.id, line.name || "--");
     }
   });
   stations.forEach((station) => {
@@ -210,7 +210,7 @@ export function buildPlannerResolvers(plannerInput, result, t) {
       if (fallbackValue) {
         return fallbackValue;
       }
-      return lineId || "--";
+      return "--";
     },
     resolveStationName(stationId, fallbackValue = "") {
       if (fallbackValue) {

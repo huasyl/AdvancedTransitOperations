@@ -22,6 +22,7 @@ namespace RapidTransitMod
         private readonly Action m_DirtyTrack;
         private readonly Func<int, string> m_SlotText;
         private readonly Action<string> m_Log;
+        private readonly Func<Entity, LineKey> m_StableStoreKey;
         private readonly Dictionary<Entity, LineFrame> m_Frames = new Dictionary<Entity, LineFrame>();
         private readonly Dictionary<Entity, ManagedLineFrame> m_ManagedFrames = new Dictionary<Entity, ManagedLineFrame>();
         private readonly Dictionary<Entity, bool> m_SupportCache = new Dictionary<Entity, bool>();
@@ -57,7 +58,8 @@ namespace RapidTransitMod
             LineConfig cfg,
             Action dirtyTrack,
             Func<int, string> slotText,
-            Action<string> log)
+            Action<string> log,
+            Func<Entity, LineKey> stableStoreKey)
         {
             m_EntityManager = entityManager;
             m_Stop = stop ?? throw new ArgumentNullException(nameof(stop));
@@ -73,6 +75,7 @@ namespace RapidTransitMod
             m_DirtyTrack = dirtyTrack ?? throw new ArgumentNullException(nameof(dirtyTrack));
             m_SlotText = slotText ?? throw new ArgumentNullException(nameof(slotText));
             m_Log = log ?? throw new ArgumentNullException(nameof(log));
+            m_StableStoreKey = stableStoreKey ?? throw new ArgumentNullException(nameof(stableStoreKey));
         }
 
         public bool TryFrame(Entity line, out LineFrame frame)
@@ -90,18 +93,19 @@ namespace RapidTransitMod
             uint nowFrame = m_Frame();
             ulong cfgVersion = m_Cfg.Version;
             ulong appliedVersion = m_AppliedStore.Version;
+            LineKey storeKey = ResolveStoreKey(line);
             if (m_Frames.TryGetValue(line, out frame)
                 && frame.Line == line
                 && frame.Frame == nowFrame
                 && frame.CfgVersion == cfgVersion
-                && frame.AppliedVersion == appliedVersion)
+                && frame.AppliedVersion == appliedVersion
+                && frame.StoreKey.Equals(storeKey))
             {
                 return true;
             }
 
             string lineId = m_LineId(line);
             string lineKey = m_DraftKey(lineId);
-            LineKey storeKey = m_KeyByLine(line, lineId);
             if (m_Frames.TryGetValue(line, out frame)
                 && frame.Line == line
                 && frame.CfgVersion == cfgVersion
@@ -114,14 +118,21 @@ namespace RapidTransitMod
             }
 
             IReadOnlyDictionary<string, AppliedLine> appliedLines = m_AppliedLines();
-            appliedLines.TryGetValue(lineKey, out AppliedLine appliedState);
             bool storeManaged = false;
             string storeAppliedKind = string.Empty;
             bool hasStoreSummary = !storeKey.IsEmpty
                 && m_AppliedStore.TryGetRuntimeSummary(storeKey, out storeManaged, out storeAppliedKind);
+            string stableId = storeKey.IsEmpty ? string.Empty : LineIdentityService.GetId(storeKey);
             bool applied = hasStoreSummary
                 ? storeManaged
-                : appliedLines.ContainsKey(lineKey);
+                : (!string.IsNullOrEmpty(stableId) && appliedLines.ContainsKey(stableId));
+            if (storeKey.IsEmpty)
+                applied = false;
+
+            AppliedLine appliedState = null;
+            if (!hasStoreSummary && !string.IsNullOrEmpty(stableId))
+                appliedLines.TryGetValue(stableId, out appliedState);
+
             string cfgKind = Kind(lineId);
             string appliedKind = applied
                 ? (hasStoreSummary ? storeAppliedKind : AppliedKind(appliedState))
@@ -171,7 +182,7 @@ namespace RapidTransitMod
             bool hasFrame = TryFrame(line, out LineFrame frame);
             string lineId = hasFrame ? frame.Id : m_LineId(line);
             string lineKey = hasFrame ? frame.Key : m_DraftKey(lineId);
-            LineKey storeKey = m_KeyByLine(line, lineId);
+            LineKey storeKey = hasFrame ? frame.StoreKey : ResolveStoreKey(line);
             bool applied = hasFrame && frame.Applied;
             string cfgKind = hasFrame
                 ? frame.CfgKind
@@ -191,9 +202,9 @@ namespace RapidTransitMod
                 cfgKind,
                 appliedKind,
                 kind,
-                Hold(lineId),
-                Dwell(lineId),
-                DepotId(lineId));
+                Hold(line),
+                Dwell(line),
+                DepotId(line));
         }
 
         public int[] Times(Entity line)
@@ -278,10 +289,12 @@ namespace RapidTransitMod
 
             uint nowFrame = m_Frame();
             ulong appliedVersion = m_AppliedStore.Version;
+            LineKey storeKey = ResolveStoreKey(line);
             if (m_Frames.TryGetValue(line, out LineFrame frame)
                 && frame.Line == line
                 && frame.Frame == nowFrame
-                && frame.AppliedVersion == appliedVersion)
+                && frame.AppliedVersion == appliedVersion
+                && frame.StoreKey.Equals(storeKey))
             {
                 return frame.Applied;
             }
@@ -294,17 +307,18 @@ namespace RapidTransitMod
                 return managedFrame.Applied;
             }
 
-            LineKey storeKey = m_KeyByLine(line, null);
             bool storeManaged = false;
             bool hasStoreSummary = !storeKey.IsEmpty
                 && m_AppliedStore.TryGetRuntimeSummary(storeKey, out storeManaged, out _);
             bool applied = hasStoreSummary && storeManaged;
-            if (!hasStoreSummary)
+            if (!hasStoreSummary && !storeKey.IsEmpty)
             {
-                string lineId = m_LineId(line);
-                string lineKey = m_DraftKey(lineId);
-                applied = m_AppliedLines().ContainsKey(lineKey);
+                string stableId = LineIdentityService.GetId(storeKey);
+                applied = !string.IsNullOrEmpty(stableId) && m_AppliedLines().ContainsKey(stableId);
             }
+
+            if (storeKey.IsEmpty)
+                applied = false;
 
             m_ManagedFrames[line] = new ManagedLineFrame(line, nowFrame, appliedVersion, applied);
             return applied;
@@ -330,7 +344,7 @@ namespace RapidTransitMod
             return true;
         }
 
-        public void Log(Entity line, int nowMin, int nextSlot)
+        public void Log(Entity line, int nowMinute, int nextSlotMinute)
         {
             if (!RtLog.CacheInvalidationDiagnosticsEnabled)
                 return;
@@ -340,7 +354,10 @@ namespace RapidTransitMod
                 return;
 
             IReadOnlyDictionary<string, AppliedLine> appliedLines = m_AppliedLines();
-            if (!appliedLines.TryGetValue(info.Key, out AppliedLine state))
+            string lookupKey = !info.StoreKey.IsEmpty
+                ? LineIdentityService.GetId(info.StoreKey)
+                : info.Key;
+            if (string.IsNullOrEmpty(lookupKey) || !appliedLines.TryGetValue(lookupKey, out AppliedLine state))
                 return;
 
             string staged = state.StagedRows != null && state.StagedRows.Count > 0
@@ -357,9 +374,9 @@ namespace RapidTransitMod
             string key =
                 info.Id
                 + "|"
-                + nowMin.ToString()
+                + nowMinute.ToString()
                 + "|"
-                + nextSlot.ToString()
+                + nextSlotMinute.ToString()
                 + "|"
                 + staged
                 + "|"
@@ -372,9 +389,9 @@ namespace RapidTransitMod
                 "[AppliedLineInspect] line="
                 + info.Id
                 + " now="
-                + m_SlotText(nowMin)
+                + m_SlotText(nowMinute)
                 + " next="
-                + (nextSlot >= 0 ? m_SlotText(nextSlot) : "-")
+                + (nextSlotMinute >= 0 ? m_SlotText(nextSlotMinute) : "-")
                 + " cache=["
                 + cache
                 + "] staged=["
@@ -446,7 +463,11 @@ namespace RapidTransitMod
                 return cfgKind;
             }
 
-            return AppliedKind(m_KeyById(lineId), applied);
+            LineKey key = m_KeyById(lineId);
+            if (!LineKey.IsStableGuidKey(key))
+                return AppliedKind(applied);
+
+            return AppliedKind(key, applied);
         }
 
         public string Kind(Entity line, AppliedLine applied)
@@ -464,7 +485,7 @@ namespace RapidTransitMod
                 return cfgKind;
             }
 
-            return AppliedKind(m_KeyByLine(line, lineId), applied);
+            return AppliedKind(ResolveStoreKey(line), applied);
         }
 
         public bool Local(Entity line)
@@ -516,6 +537,16 @@ namespace RapidTransitMod
         public ulong CfgVersion()
         {
             return m_Cfg.Version;
+        }
+
+        private LineKey ResolveStoreKey(Entity line)
+        {
+            // Store key only from injected StableKey (catalog). Unwired → Empty → not managed.
+            if (line == Entity.Null || !m_Exists(line))
+                return LineKey.Empty;
+
+            LineKey injected = m_StableStoreKey(line);
+            return LineKey.IsStableGuidKey(injected) ? injected : LineKey.Empty;
         }
 
         private int[] Times(LineFrame frame, LineKey storeKey)

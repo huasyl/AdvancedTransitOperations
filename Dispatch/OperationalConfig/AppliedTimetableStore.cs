@@ -4,6 +4,16 @@ using System.Linq;
 
 namespace RapidTransitMod
 {
+    public enum LineKeyMigrateResult
+    {
+        Migrated,
+        MissingLegacy,
+        TargetOccupied,
+        Rejected,
+        SameKey,
+        ModeMismatch
+    }
+
     public sealed class AppliedTimetableStore
     {
         private readonly Dictionary<LineKey, AppliedTimetableState> m_Lines =
@@ -171,6 +181,36 @@ namespace RapidTransitMod
             m_Lines.Remove(legacyKey);
             m_Version++;
             return true;
+        }
+
+        /// <summary>
+        /// Explicit one-shot move from a legacy numeric key (mode:n) to mode:guid32.
+        /// Does not scan lines, read RouteNumber, or invent mappings.
+        /// </summary>
+        public LineKeyMigrateResult Migrate(LineKey legacy, LineKey stable)
+        {
+            if (!LineKey.IsStableGuidKey(stable) || !LineKey.IsLegacyNumericKey(legacy))
+                return LineKeyMigrateResult.Rejected;
+
+            if (legacy.Mode == TransitMode.Unknown)
+                return LineKeyMigrateResult.Rejected;
+
+            if (legacy.Mode != stable.Mode)
+                return LineKeyMigrateResult.ModeMismatch;
+
+            if (legacy.Equals(stable))
+                return LineKeyMigrateResult.SameKey;
+
+            if (!m_Lines.TryGetValue(legacy, out AppliedTimetableState state) || state == null)
+                return LineKeyMigrateResult.MissingLegacy;
+
+            if (m_Lines.ContainsKey(stable))
+                return LineKeyMigrateResult.TargetOccupied;
+
+            m_Lines[stable] = state.Clone();
+            m_Lines.Remove(legacy);
+            m_Version++;
+            return LineKeyMigrateResult.Migrated;
         }
 
         private static AppliedTimetableState Normalize(AppliedTimetableState state)

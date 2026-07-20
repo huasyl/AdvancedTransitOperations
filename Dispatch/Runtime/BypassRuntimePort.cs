@@ -6,6 +6,7 @@ using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
+using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -24,6 +25,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             EntityManager entityManager,
             TimedLogger log,
             Func<uint> frame,
+            Func<ClockSnapshot> clockSnapshot,
             Func<IEnumerable<KeyValuePair<string, AppliedLine>>> appliedLines,
             TrackModelService trackModel,
             Func<TrackProjectionService> trackProjection,
@@ -53,6 +55,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 entityManager,
                 log,
                 frame,
+                clockSnapshot,
                 appliedLines,
                 trackModel,
                 trackProjection,

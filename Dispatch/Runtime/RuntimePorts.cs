@@ -50,6 +50,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Log = runtime.log,
                 Time = runtime.m_TimeSystem,
                 Sim = runtime.m_SimulationSystem,
+                ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                 Names = runtime.m_NameSystem,
                 City = runtime.m_CitySystem,
                 Barrier = runtime.m_EndFrameBarrier,
@@ -139,13 +140,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 {
                     EntityManager = runtime.EntityManager,
                     MixSignature = runtime.m_LineProfile.MixSignature,
-                    FramesPerMinute = (float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE,
+                    ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                     ProfileStopStartBufferMinutes = DispatchRuntimeSystem.PROFILE_STOP_START_BUFFER_MINUTES,
                     EtaScaleMin = DispatchRuntimeSystem.ETA_SCALE_MIN,
                     EtaScaleMax = DispatchRuntimeSystem.ETA_SCALE_MAX,
-                    DispatchFallbackSpeedMetersPerMinute = DispatchRuntimeSystem.DISPATCH_FALLBACK_SPEED_M_PER_MIN,
-                    DispatchEstimateMinMinutes = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_MINUTES,
-                    DispatchEstimateMaxMinutes = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_MINUTES,
+                    DispatchFallbackFramesPerMeter = DispatchRuntimeSystem.DISPATCH_FALLBACK_FRAMES_PER_METER,
+                    DispatchEstimateMinFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
+                    DispatchEstimateDefaultFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES,
+                    DispatchEstimateMaxFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_FRAMES,
                     ReadLapFrames = runtime.m_LapCache.Read,
                     ReadDispatchFrames = runtime.m_DispatchCache.Read,
                     DwellMinutes = line => runtime.m_LineView.Dwell(line),
@@ -198,6 +200,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.EntityManager,
                 runtime.log,
                 () => runtime.m_SimulationSystem.frameIndex,
+                () => runtime.m_SimClock.Snapshot,
                 () => runtime.AppliedLines,
                 runtime.m_TrackModel,
                 () => runtime.m_TrackProjection,
@@ -225,6 +228,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.EntityManager,
                 runtime.log,
                 () => runtime.m_SimulationSystem.frameIndex,
+                () => runtime.m_SimClock.Snapshot,
                 () => runtime.AppliedLines,
                 runtime.m_TrackModel,
                 () => runtime.m_TrackProjection,
@@ -263,8 +267,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Speed = entity => math.length(runtime.EntityManager.GetComponentData<Game.Objects.Moving>(entity).m_Velocity),
                 Range = runtime.VehicleMaintenanceRange,
                 Frame = () => runtime.m_SimulationSystem.frameIndex,
-                FramesPerMinute = () => (int)math.round((float)DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE),
-                LineId = runtime.LineId,
+                ToFramesCeil = gameMinutes => runtime.m_SimClock.Snapshot.ToFramesCeil(gameMinutes),
+                ToMinutes = runtime.m_SimClock.ToMinutes,
+                LineId = runtime.LineStableId,
                 Name = runtime.EntityName,
                 LineOf = entity => runtime.m_VehicleView.TryGetLine(entity, out Entity line) ? line : Entity.Null,
                 SlotOf = entity => runtime.m_VehicleView.TryGetSlot(entity, out int slot) ? slot : -1,
@@ -287,18 +292,39 @@ namespace RapidTransitMod.Dispatch.Runtime
             };
         }
 
+        public static SliceAdmissionPort BuildSliceAdmission(DispatchRuntimeSystem runtime)
+        {
+            return new SliceAdmissionPort
+            {
+                StableKey = line => runtime.m_LineView.TryFrame(line, out LineFrame frame)
+                    && LineKey.IsStableGuidKey(frame.StoreKey)
+                        ? (true, frame.StoreKey)
+                        : (false, LineKey.Empty),
+                ServiceDate = () => runtime.m_SimClock.NowDate,
+                DepartureMinutes = line => runtime.m_LineView.Times(line),
+                FormatMinute = minute => DispatchRuntimeSystem.SlotStr(minute),
+                ProfileSignature = line => runtime.m_ObsBuffers.TrySliceSignature(line, out ulong signature)
+                    ? (true, signature)
+                    : (false, 0UL),
+                TryFlushDailyQuota = runtime.m_ObsBuffers.TryFlushDailyQuota,
+                TryFlushColdStart = runtime.m_ObsBuffers.TryFlushColdStart,
+                RemoveColdStart = runtime.m_ObsBuffers.RemoveColdStart,
+                Log = message => runtime.log.Info(message)
+            };
+        }
+
         public static Port BuildObservation(DispatchRuntimeSystem runtime)
         {
             return new Port
             {
                 Store = runtime.m_Obs,
                 Frame = () => runtime.m_SimulationSystem != null ? runtime.m_SimulationSystem.frameIndex : 0,
-                Date = () => runtime.m_TimeSystem != null ? runtime.m_TimeSystem.GetCurrentDateTime().Date : DateTime.MinValue.Date,
+                Date = () => runtime.m_SimClock != null ? runtime.m_SimClock.NowDate : DateTime.MinValue.Date,
                 LoadApplied = runtime.LoadApplied,
                 Lines = () => runtime.m_Observation.Lines(),
                 Contracts = () => runtime.m_Observation.Contracts(),
                 Preferred = () => runtime.DraftStore().Preferred(),
-                LineId = runtime.LineId,
+                LineId = runtime.LineStableId,
                 StationName = runtime.m_Resolve.StationName,
                 StopName = runtime.m_WorkbenchBridge.StopSvc().Name,
                 StopId = runtime.m_Resolve.StopId,
@@ -311,13 +337,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Stop = runtime.m_Resolve.Stop,
                 HasWaypoints = line => line != Entity.Null && runtime.EntityManager.HasBuffer<RouteWaypoint>(line),
                 Waypoints = line => runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true),
-                TargetMin = entity => runtime.m_Observation.TargetMin(entity),
+                TargetMinute = entity => runtime.m_Observation.TargetMinute(entity),
                 LineOf = runtime.m_Resolve.Line,
                 Parse = RapidTransitMod.Dispatch.Workbench.Time.Parse,
                 Slot = RapidTransitMod.Dispatch.Workbench.Time.Slot,
                 Json = Workbenches.Json.Write,
                 Log = message => runtime.log.Info(message),
-                FramesPerMinute = DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE
+                ClockSnapshot = () => runtime.m_SimClock.Snapshot
             };
         }
     }

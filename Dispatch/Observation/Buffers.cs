@@ -2,6 +2,7 @@ using Game.Common;
 using Game.Pathfind;
 using Game.Routes;
 using RapidTransitMod.Dispatch.Persistence;
+using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -9,6 +10,7 @@ namespace RapidTransitMod.Dispatch.Observation
 {
     internal sealed class Buffers
     {
+        private const ulong SignatureSeed = 1469598103934665603UL;
         private readonly DispatchRuntimeSystem m_Runtime;
 
         public Buffers(DispatchRuntimeSystem runtime)
@@ -58,6 +60,12 @@ namespace RapidTransitMod.Dispatch.Observation
         public void LoadSlice()
         {
             RestoreSliceCore();
+        }
+
+        internal bool TrySliceSignature(Entity line, out ulong signature)
+        {
+            bool success = TrySliceSignatures(line, out signature, out _);
+            return success;
         }
 
         public void Flush(Entity line, int index, DwellObservation observation)
@@ -159,7 +167,7 @@ namespace RapidTransitMod.Dispatch.Observation
             if (line == Entity.Null || index < 0 || observation.SampleCount <= 0)
                 return;
 
-            if (!TryGetSignature(line, out ulong profileSignature))
+            if (!TrySliceSignatures(line, out ulong profileSignature, out _))
                 return;
 
             if (!m_Runtime.m_TraversalSliceObservationBufferReady)
@@ -215,6 +223,112 @@ namespace RapidTransitMod.Dispatch.Observation
                 if (buffer[i].m_LineEntity == line)
                     buffer.RemoveAt(i);
             }
+        }
+
+        internal bool TryFlushDailyQuota(LineKey lak, TraversalSliceDailyQuota quota)
+        {
+            if (!DispatchRuntimeSystem.IsTraversalSliceObservationPersistenceEnabled()
+                || lak.IsEmpty
+                || !m_Runtime.m_TraversalSliceObservationBufferReady)
+            {
+                return false;
+            }
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null || !m_Runtime.EntityManager.HasBuffer<TraversalSliceQuotaElement>(city))
+                return false;
+
+            DynamicBuffer<TraversalSliceQuotaElement> buffer = m_Runtime.EntityManager.GetBuffer<TraversalSliceQuotaElement>(city);
+            string lineKey = lak.ToString();
+            int found = -1;
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                if (string.Equals(buffer[i].m_LineKey.ToString(), lineKey, System.StringComparison.Ordinal))
+                {
+                    found = i;
+                    break;
+                }
+            }
+            for (int i = buffer.Length - 1; i > found; i--)
+            {
+                if (string.Equals(buffer[i].m_LineKey.ToString(), lineKey, System.StringComparison.Ordinal))
+                    buffer.RemoveAt(i);
+            }
+
+            TraversalSliceQuotaElement entry = new TraversalSliceQuotaElement
+            {
+                m_Version = 1,
+                m_LineKey = lineKey,
+                m_DateKey = quota.DateKey,
+                m_UsedCount = quota.UsedCount
+            };
+            if (found >= 0)
+                buffer[found] = entry;
+            else
+                buffer.Add(entry);
+            return true;
+        }
+
+        internal bool TryFlushColdStart(LineKey lak, TraversalSliceColdStart coldStart)
+        {
+            if (!DispatchRuntimeSystem.IsTraversalSliceObservationPersistenceEnabled()
+                || lak.IsEmpty
+                || !m_Runtime.m_TraversalSliceObservationBufferReady)
+            {
+                return false;
+            }
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null || !m_Runtime.EntityManager.HasBuffer<TraversalSliceColdStartElement>(city))
+                return false;
+
+            DynamicBuffer<TraversalSliceColdStartElement> buffer = m_Runtime.EntityManager.GetBuffer<TraversalSliceColdStartElement>(city);
+            string lineKey = lak.ToString();
+            int found = -1;
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                if (string.Equals(buffer[i].m_LineKey.ToString(), lineKey, System.StringComparison.Ordinal))
+                {
+                    found = i;
+                    break;
+                }
+            }
+            for (int i = buffer.Length - 1; i > found; i--)
+            {
+                if (string.Equals(buffer[i].m_LineKey.ToString(), lineKey, System.StringComparison.Ordinal))
+                    buffer.RemoveAt(i);
+            }
+
+            TraversalSliceColdStartElement entry = new TraversalSliceColdStartElement
+            {
+                m_Version = 2,
+                m_LineKey = lineKey,
+                m_ProfileSignature = coldStart.ProfileSignature,
+                m_Remaining = coldStart.Remaining,
+                m_PendingFinalMinute = coldStart.PendingFinalMinute,
+                m_PendingFinalDateKey = coldStart.PendingFinalDateKey
+            };
+            if (found >= 0)
+                buffer[found] = entry;
+            else
+                buffer.Add(entry);
+            return true;
+        }
+
+        internal void RemoveColdStart(LineKey lak)
+        {
+            if (lak.IsEmpty || !m_Runtime.m_TraversalSliceObservationBufferReady)
+                return;
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null || !m_Runtime.EntityManager.HasBuffer<TraversalSliceColdStartElement>(city))
+                return;
+
+            DynamicBuffer<TraversalSliceColdStartElement> buffer = m_Runtime.EntityManager.GetBuffer<TraversalSliceColdStartElement>(city);
+            string lineKey = lak.ToString();
+            for (int i = buffer.Length - 1; i >= 0; i--)
+                if (string.Equals(buffer[i].m_LineKey.ToString(), lineKey, System.StringComparison.Ordinal))
+                    buffer.RemoveAt(i);
         }
 
         public bool TryWaypointPosition(Entity waypoint, out float3 position)
@@ -374,6 +488,10 @@ namespace RapidTransitMod.Dispatch.Observation
 
             if (!m_Runtime.EntityManager.HasBuffer<TraversalSliceObservationElement>(city))
                 m_Runtime.EntityManager.AddBuffer<TraversalSliceObservationElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<TraversalSliceQuotaElement>(city))
+                m_Runtime.EntityManager.AddBuffer<TraversalSliceQuotaElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<TraversalSliceColdStartElement>(city))
+                m_Runtime.EntityManager.AddBuffer<TraversalSliceColdStartElement>(city);
 
             m_Runtime.m_TraversalSliceObservationBufferReady = true;
         }
@@ -391,25 +509,90 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
 
             m_Runtime.m_ObsPersist.ClearSliceObservations();
-            DynamicBuffer<TraversalSliceObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<TraversalSliceObservationElement>(city, true);
+            DynamicBuffer<TraversalSliceObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<TraversalSliceObservationElement>(city);
+            int storedCount = buffer.Length;
             int restoredCount = 0;
-            int skippedSignatureMismatchCount = 0;
+            int legacyRestoredCount = 0;
+            int removedMismatchCount = 0;
+            int unavailableCount = 0;
+            int removedDuplicateCount = 0;
+            int removedInvalidCount = 0;
+            Dictionary<Entity, ulong> geometrySignatures = new Dictionary<Entity, ulong>();
+            Dictionary<Entity, ulong> legacySignatures = new Dictionary<Entity, ulong>();
+            HashSet<Entity> unavailableLines = new HashSet<Entity>();
+            Dictionary<ulong, int> winners = new Dictionary<ulong, int>();
             for (int i = 0; i < buffer.Length; i++)
             {
                 TraversalSliceObservationElement entry = buffer[i];
                 if (entry.m_LineEntity == Entity.Null || entry.m_SliceIndex < 0)
                     continue;
 
-                bool signatureMatched = TryGetSignature(entry.m_LineEntity, out ulong currentSignature)
-                    && currentSignature == entry.m_ProfileSignature;
-                if (!signatureMatched)
+                if (!geometrySignatures.ContainsKey(entry.m_LineEntity)
+                    && !unavailableLines.Contains(entry.m_LineEntity))
                 {
-                    skippedSignatureMismatchCount++;
+                    if (TrySliceSignatures(entry.m_LineEntity, out ulong geometrySignature, out ulong legacySignature))
+                    {
+                        geometrySignatures[entry.m_LineEntity] = geometrySignature;
+                        legacySignatures[entry.m_LineEntity] = legacySignature;
+                    }
+                    else
+                    {
+                        unavailableLines.Add(entry.m_LineEntity);
+                    }
+                }
+
+                ulong key = Keys.Slice(entry.m_LineEntity, entry.m_SliceIndex);
+                if (!winners.TryGetValue(key, out int winner)
+                    || IsBetterSlice(
+                        entry,
+                        buffer[winner],
+                        unavailableLines.Contains(entry.m_LineEntity),
+                        geometrySignatures.TryGetValue(entry.m_LineEntity, out ulong geometry) ? geometry : 0UL,
+                        legacySignatures.TryGetValue(entry.m_LineEntity, out ulong legacy) ? legacy : 0UL))
+                    winners[key] = i;
+            }
+
+            for (int i = buffer.Length - 1; i >= 0; i--)
+            {
+                TraversalSliceObservationElement entry = buffer[i];
+                if (entry.m_LineEntity == Entity.Null || entry.m_SliceIndex < 0)
+                {
+                    buffer.RemoveAt(i);
+                    removedInvalidCount++;
                     continue;
                 }
 
                 ulong key = Keys.Slice(entry.m_LineEntity, entry.m_SliceIndex);
+                if (winners[key] != i)
+                {
+                    buffer.RemoveAt(i);
+                    removedDuplicateCount++;
+                    continue;
+                }
+
+                if (unavailableLines.Contains(entry.m_LineEntity))
+                {
+                    unavailableCount++;
+                    continue;
+                }
+
+                ulong geometrySignature = geometrySignatures[entry.m_LineEntity];
+                if (entry.m_ProfileSignature != geometrySignature)
+                {
+                    if (entry.m_ProfileSignature != legacySignatures[entry.m_LineEntity])
+                    {
+                        buffer.RemoveAt(i);
+                        removedMismatchCount++;
+                        continue;
+                    }
+
+                    entry.m_ProfileSignature = geometrySignature;
+                    buffer[i] = entry;
+                    legacyRestoredCount++;
+                }
+
                 m_Runtime.m_ObsPersist.PutSlice(
+                    entry.m_LineEntity,
                     key,
                     new TraversalSliceObservation(
                         entry.m_AverageFrames,
@@ -419,13 +602,183 @@ namespace RapidTransitMod.Dispatch.Observation
                 restoredCount++;
             }
 
+            m_Runtime.m_ObsPersist.ClearAdmissionState();
+            if (m_Runtime.EntityManager.HasBuffer<TraversalSliceQuotaElement>(city))
+            {
+                DynamicBuffer<TraversalSliceQuotaElement> quotas = m_Runtime.EntityManager.GetBuffer<TraversalSliceQuotaElement>(city, true);
+                for (int i = 0; i < quotas.Length; i++)
+                {
+                    TraversalSliceQuotaElement entry = quotas[i];
+                    if (entry.m_Version != 1
+                        || !LineKey.TryParse(entry.m_LineKey.ToString(), out LineKey lak)
+                        || !LineKey.IsStableGuidKey(lak))
+                    {
+                        continue;
+                    }
+                    m_Runtime.m_ObsPersist.PutDailyQuota(lak, entry.m_DateKey, math.clamp(entry.m_UsedCount, 0, 4));
+                }
+            }
+            if (m_Runtime.EntityManager.HasBuffer<TraversalSliceColdStartElement>(city))
+            {
+                DynamicBuffer<TraversalSliceColdStartElement> coldStarts = m_Runtime.EntityManager.GetBuffer<TraversalSliceColdStartElement>(city, true);
+                for (int i = 0; i < coldStarts.Length; i++)
+                {
+                    TraversalSliceColdStartElement entry = coldStarts[i];
+                    if ((entry.m_Version != 1 && entry.m_Version != 2)
+                        || entry.m_Remaining < 0
+                        || entry.m_Remaining > 3
+                        || !LineKey.TryParse(entry.m_LineKey.ToString(), out LineKey lak)
+                        || !LineKey.IsStableGuidKey(lak))
+                    {
+                        continue;
+                    }
+                    m_Runtime.m_ObsPersist.PutColdStart(
+                        lak,
+                        entry.m_ProfileSignature,
+                        entry.m_Remaining,
+                        entry.m_PendingFinalMinute,
+                        entry.m_PendingFinalDateKey);
+                }
+            }
+
             m_Runtime.m_TraversalSliceObservationCacheLoaded = true;
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[恢复] TraversalSliceObservations buffer=" + buffer.Length
+                m_Runtime.log.Info("[恢复] TraversalSliceObservations buffer=" + storedCount
                     + " restored=" + restoredCount
-                    + " skippedSignatureMismatch=" + skippedSignatureMismatchCount);
+                    + " legacyRestored=" + legacyRestoredCount
+                    + " removedMismatch=" + removedMismatchCount
+                    + " unavailable=" + unavailableCount
+                    + " removedDuplicate=" + removedDuplicateCount
+                    + " removedInvalid=" + removedInvalidCount);
             }
+        }
+
+        private static bool IsBetterSlice(
+            TraversalSliceObservationElement candidate,
+            TraversalSliceObservationElement current,
+            bool signatureUnavailable,
+            ulong geometrySignature,
+            ulong legacySignature)
+        {
+            int candidateRank = SliceSignatureRank(
+                candidate.m_ProfileSignature,
+                signatureUnavailable,
+                geometrySignature,
+                legacySignature);
+            int currentRank = SliceSignatureRank(
+                current.m_ProfileSignature,
+                signatureUnavailable,
+                geometrySignature,
+                legacySignature);
+            return candidateRank > currentRank
+                || (candidateRank == currentRank
+                    && (candidate.m_SampleCount > current.m_SampleCount
+                || (candidate.m_SampleCount == current.m_SampleCount
+                        && candidate.m_LastObservedFrame > current.m_LastObservedFrame)));
+        }
+
+        private static int SliceSignatureRank(
+            ulong storedSignature,
+            bool signatureUnavailable,
+            ulong geometrySignature,
+            ulong legacySignature)
+        {
+            if (signatureUnavailable)
+                return 0;
+            if (storedSignature == geometrySignature)
+                return 2;
+            return storedSignature == legacySignature ? 1 : 0;
+        }
+
+        private bool TrySliceSignatures(Entity line, out ulong geometry, out ulong legacyFull)
+        {
+            geometry = 0UL;
+            legacyFull = 0UL;
+            if (line == Entity.Null
+                || !m_Runtime.EntityManager.Exists(line)
+                || !m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+
+            BufferLookup<RouteSegment> segmentBuffers = m_Runtime.GetBufferLookup<RouteSegment>(true);
+            if (!segmentBuffers.TryGetBuffer(line, out DynamicBuffer<RouteSegment> segments))
+                return false;
+
+            DynamicBuffer<RouteWaypoint> waypoints = m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypoints.Length == 0 || segments.Length != waypoints.Length)
+                return false;
+
+            geometry = SignatureSeed;
+            legacyFull = SignatureSeed;
+            geometry = m_Runtime.m_LineProfile.MixSignature(geometry, waypoints.Length);
+            geometry = m_Runtime.m_LineProfile.MixSignature(geometry, segments.Length);
+            legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, waypoints.Length);
+            legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, segments.Length);
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, i);
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, i);
+                Entity waypointEntity = waypoints[i].m_Waypoint;
+                int waypointIndex = -1;
+                if (waypointEntity != Entity.Null
+                    && m_Runtime.EntityManager.Exists(waypointEntity)
+                    && m_Runtime.EntityManager.HasComponent<Waypoint>(waypointEntity))
+                {
+                    waypointIndex = m_Runtime.EntityManager.GetComponentData<Waypoint>(waypointEntity).m_Index;
+                }
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, waypointIndex);
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, waypointIndex);
+
+                int positionX = 0;
+                int positionY = 0;
+                int positionZ = 0;
+                if (TryWaypointPosition(waypointEntity, out float3 waypointPosition))
+                {
+                    positionX = Quantize(waypointPosition.x);
+                    positionY = Quantize(waypointPosition.y);
+                    positionZ = Quantize(waypointPosition.z);
+                }
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, positionX);
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, positionY);
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, positionZ);
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, positionX);
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, positionY);
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, positionZ);
+
+                int startCurve = 0;
+                int endCurve = 0;
+                if (m_Runtime.EntityManager.HasComponent<RouteLane>(waypointEntity))
+                {
+                    RouteLane routeLane = m_Runtime.EntityManager.GetComponentData<RouteLane>(waypointEntity);
+                    startCurve = (int)math.round(routeLane.m_StartCurvePos * 1000f);
+                    endCurve = (int)math.round(routeLane.m_EndCurvePos * 1000f);
+                    legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, routeLane.m_StartLane.Index);
+                    legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, routeLane.m_EndLane.Index);
+                    legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, startCurve);
+                    legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, endCurve);
+                }
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, startCurve);
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, endCurve);
+
+                Entity segmentEntity = segments[i].m_Segment;
+                float durationSeconds = 0f;
+                if (segmentEntity == Entity.Null
+                    || !m_Runtime.EntityManager.Exists(segmentEntity)
+                    || !m_Runtime.EntityManager.HasComponent<PathInformation>(segmentEntity))
+                {
+                    durationSeconds = 0f;
+                }
+                else
+                {
+                    durationSeconds = math.max(0f, m_Runtime.EntityManager.GetComponentData<PathInformation>(segmentEntity).m_Duration);
+                }
+                int distance = Quantize(m_Runtime.m_LineMileage.ReadSegment(segmentEntity, waypoints, i));
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, Quantize(durationSeconds));
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, distance);
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, distance);
+            }
+
+            return geometry != 0UL && legacyFull != 0UL;
         }
 
         private bool TryGetSignature(Entity line, out ulong signature)
@@ -448,7 +801,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private ulong ComputeSignature(DynamicBuffer<RouteWaypoint> waypoints, DynamicBuffer<RouteSegment> segments)
         {
-            ulong hash = 1469598103934665603UL;
+            ulong hash = SignatureSeed;
             hash = m_Runtime.m_LineProfile.MixSignature(hash, waypoints.Length);
             hash = m_Runtime.m_LineProfile.MixSignature(hash, segments.Length);
             int count = math.min(waypoints.Length, segments.Length);

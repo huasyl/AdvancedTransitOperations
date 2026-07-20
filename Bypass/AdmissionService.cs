@@ -39,7 +39,6 @@ namespace RapidTransitMod.Bypass
         internal const float LOCAL_BYPASS_TRAIN_TAIL_CLEAR_ATOMS = 8f;
         private const int MAX_CONFLICT_CORRIDOR_GAP_ATOMS = 8;
         private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
-        private const double SIM_FRAMES_PER_MINUTE = 182.044;
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
         private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
         private const uint BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES = 60;
@@ -3746,7 +3745,8 @@ namespace RapidTransitMod.Bypass
                     ? expressEntryFrames + expressTraversalTiming.TotalFrames
                     : expressTraversalTiming.TotalFrames)
                 : EstimateRuntimeFramesToAtomBoundary(expressChain, expressPosition, expressCorridor.EndAtomIndexExclusive);
-            float safetyGapFrames = TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES * (float)SIM_FRAMES_PER_MINUTE;
+            float safetyGapFrames = m_Runtime.ClockSnapshot.ToFramesCeil(
+                TRACKMODEL_ENTRY_CLEAR_SAFETY_GAP_MINUTES);
             string etaWindowText = " trunk local=a" + trunkSegment.LocalAnchorStartAtomIndex + ".." + trunkSegment.LocalAnchorEndAtomIndexExclusive
                 + " express=a" + trunkSegment.ExpressAnchorStartAtomIndex + ".." + trunkSegment.ExpressAnchorEndAtomIndexExclusive
                 + " overlap=" + trunkSegment.PhysicalOverlap
@@ -6027,12 +6027,12 @@ namespace RapidTransitMod.Bypass
             return frames;
         }
 
-        internal static string FormatEtaFrames(float frames)
+        internal string FormatEtaFrames(float frames)
         {
             if (frames == float.MaxValue)
                 return "?";
 
-            return (frames / (float)SIM_FRAMES_PER_MINUTE).ToString("0.0") + "m";
+            return m_Runtime.ClockSnapshot.ToMinutes(frames).ToString("0.0") + "m";
         }
 
         private bool TryGetBypassProtectedSharedContext(

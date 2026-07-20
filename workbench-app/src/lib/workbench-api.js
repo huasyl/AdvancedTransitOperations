@@ -5,54 +5,55 @@ import { createEmptySnapshot } from "./workbench-defaults";
 // Do not reintroduce browser mock fallback here.
 
 const CALLS = {
-  loadSnapshot: "huasyl::rt.workbench.loadSnapshot",
-  refreshSnapshot: "huasyl::rt.workbench.refreshSnapshot",
-  loadBroadcastSnapshot: "huasyl::rt.workbench.loadBroadcastSnapshot",
-  refreshBroadcastSnapshot: "huasyl::rt.workbench.refreshBroadcastSnapshot",
-  loadPassengerFlowSnapshot: "huasyl::rt.workbench.loadPassengerFlowSnapshot",
-  loadBroadcastBindingSlotHints: "huasyl::rt.workbench.loadBroadcastBindingSlotHints",
-  loadBroadcastAssetBrowser: "huasyl::rt.workbench.loadBroadcastAssetBrowser",
-  importBroadcastExternalAssets: "huasyl::rt.workbench.importBroadcastExternalAssets",
-  deleteBroadcastAsset: "huasyl::rt.workbench.deleteBroadcastAsset",
-  deleteAllBroadcastAssets: "huasyl::rt.workbench.deleteAllBroadcastAssets",
-  saveBroadcastStationBinding: "huasyl::rt.workbench.saveBroadcastStationBinding",
-  saveBroadcastStationBindings: "huasyl::rt.workbench.saveBroadcastStationBindings",
-  autoBindBroadcastStationMappings: "huasyl::rt.workbench.autoBindBroadcastStationMappings",
-  saveBroadcastRules: "huasyl::rt.workbench.saveBroadcastRules",
-  saveBroadcastPlatformAnnouncement: "huasyl::rt.workbench.saveBroadcastPlatformAnnouncement",
-  copyBroadcastPlatformAnnouncementToAllStations: "huasyl::rt.workbench.copyBroadcastPlatformAnnouncementToAllStations",
-  applyBroadcastConfig: "huasyl::rt.workbench.applyBroadcastConfig",
-  openBroadcastAssetDirectoryPicker: "huasyl::rt.workbench.openBroadcastAssetDirectoryPicker",
-  playBroadcastAssetPreview: "huasyl::rt.workbench.playBroadcastAssetPreview",
-  stopBroadcastAssetPreview: "huasyl::rt.workbench.stopBroadcastAssetPreview",
-  playBroadcastRulePreview: "huasyl::rt.workbench.playBroadcastRulePreview",
-  stopBroadcastRulePreview: "huasyl::rt.workbench.stopBroadcastRulePreview",
-  setBroadcastPreviewVolume: "huasyl::rt.workbench.setBroadcastPreviewVolume",
-  startBroadcastApplyOperation: "huasyl::rt.workbench.startBroadcastApplyOperation",
-  getBroadcastApplyOperationStatus: "huasyl::rt.workbench.getBroadcastApplyOperationStatus",
-  refreshMetadata: "huasyl::rt.workbench.refreshMetadata",
-  refreshTransitCatalog: "huasyl::rt.workbench.refreshTransitCatalog",
-  loadPlannerContext: "huasyl::rt.workbench.loadPlannerContext",
-  exportPlannerInput: "huasyl::rt.workbench.exportPlannerInput",
-  startPlannerJob: "huasyl::rt.workbench.startPlannerJob",
-  getPlannerJobStatus: "huasyl::rt.workbench.getPlannerJobStatus",
-  runPlanner: "huasyl::rt.workbench.runPlanner",
-  saveWorkbenchDraft: "huasyl::rt.workbench.saveWorkbenchDraft",
-  saveNativeWorkbenchDraft: "huasyl::rt.workbench.saveNativeWorkbenchDraft",
-  startNativeSaveOperation: "huasyl::rt.workbench.startNativeSaveOperation",
-  getNativeSaveOperationStatus: "huasyl::rt.workbench.getNativeSaveOperationStatus",
-  startOverviewFeatureSettingsOperation: "huasyl::rt.workbench.startOverviewFeatureSettingsOperation",
-  getOverviewFeatureSettingsOperationStatus: "huasyl::rt.workbench.getOverviewFeatureSettingsOperationStatus",
-  setWorkbenchHostState: "huasyl::rt.workbench.setWorkbenchHostState",
-  getLocale: "huasyl::rt.workbench.getLocale"
+  loadSnapshot: "suhua::rt.workbench.loadSnapshot",
+  refreshSnapshot: "suhua::rt.workbench.refreshSnapshot",
+  loadBroadcastSnapshot: "suhua::rt.workbench.loadBroadcastSnapshot",
+  refreshBroadcastSnapshot: "suhua::rt.workbench.refreshBroadcastSnapshot",
+  loadPassengerFlowSnapshot: "suhua::rt.workbench.loadPassengerFlowSnapshot",
+  loadBroadcastBindingSlotHints: "suhua::rt.workbench.loadBroadcastBindingSlotHints",
+  loadBroadcastAssetBrowser: "suhua::rt.workbench.loadBroadcastAssetBrowser",
+  importBroadcastExternalAssets: "suhua::rt.workbench.importBroadcastExternalAssets",
+  deleteBroadcastAsset: "suhua::rt.workbench.deleteBroadcastAsset",
+  deleteAllBroadcastAssets: "suhua::rt.workbench.deleteAllBroadcastAssets",
+  saveBroadcastStationBinding: "suhua::rt.workbench.saveBroadcastStationBinding",
+  saveBroadcastStationBindings: "suhua::rt.workbench.saveBroadcastStationBindings",
+  autoBindBroadcastStationMappings: "suhua::rt.workbench.autoBindBroadcastStationMappings",
+  saveBroadcastRules: "suhua::rt.workbench.saveBroadcastRules",
+  saveBroadcastPlatformAnnouncement: "suhua::rt.workbench.saveBroadcastPlatformAnnouncement",
+  copyBroadcastPlatformAnnouncementToAllStations: "suhua::rt.workbench.copyBroadcastPlatformAnnouncementToAllStations",
+  applyBroadcastConfig: "suhua::rt.workbench.applyBroadcastConfig",
+  openBroadcastAssetDirectoryPicker: "suhua::rt.workbench.openBroadcastAssetDirectoryPicker",
+  playBroadcastAssetPreview: "suhua::rt.workbench.playBroadcastAssetPreview",
+  stopBroadcastAssetPreview: "suhua::rt.workbench.stopBroadcastAssetPreview",
+  playBroadcastRulePreview: "suhua::rt.workbench.playBroadcastRulePreview",
+  stopBroadcastRulePreview: "suhua::rt.workbench.stopBroadcastRulePreview",
+  setBroadcastPreviewVolume: "suhua::rt.workbench.setBroadcastPreviewVolume",
+  startBroadcastApplyOperation: "suhua::rt.workbench.startBroadcastApplyOperation",
+  getBroadcastApplyOperationStatus: "suhua::rt.workbench.getBroadcastApplyOperationStatus",
+  refreshMetadata: "suhua::rt.workbench.refreshMetadata",
+  refreshTransitCatalog: "suhua::rt.workbench.refreshTransitCatalog",
+  loadPlannerContext: "suhua::rt.workbench.loadPlannerContext",
+  exportPlannerInput: "suhua::rt.workbench.exportPlannerInput",
+  startPlannerJob: "suhua::rt.workbench.startPlannerJob",
+  getPlannerJobStatus: "suhua::rt.workbench.getPlannerJobStatus",
+  runPlanner: "suhua::rt.workbench.runPlanner",
+  saveWorkbenchDraft: "suhua::rt.workbench.saveWorkbenchDraft",
+  saveNativeWorkbenchDraft: "suhua::rt.workbench.saveNativeWorkbenchDraft",
+  startNativeSaveOperation: "suhua::rt.workbench.startNativeSaveOperation",
+  getNativeSaveOperationStatus: "suhua::rt.workbench.getNativeSaveOperationStatus",
+  startOverviewFeatureSettingsOperation: "suhua::rt.workbench.startOverviewFeatureSettingsOperation",
+  getOverviewFeatureSettingsOperationStatus: "suhua::rt.workbench.getOverviewFeatureSettingsOperationStatus",
+  setWorkbenchHostState: "suhua::rt.workbench.setWorkbenchHostState",
+  getLocale: "suhua::rt.workbench.getLocale"
 };
 
 const EVENTS = {
-  snapshotChanged: "huasyl::rt.workbench.onSnapshotChanged",
-  catalog: "huasyl::rt.workbench.onCatalog",
-  broadcastSnapshotChanged: "huasyl::rt.workbench.onBroadcastSnapshotChanged",
-  broadcastAssetPreviewStateChanged: "huasyl::rt.workbench.onBroadcastAssetPreviewStateChanged",
-  broadcastRulePreviewStateChanged: "huasyl::rt.workbench.onBroadcastRulePreviewStateChanged"
+  snapshotChanged: "suhua::rt.workbench.onSnapshotChanged",
+  catalog: "suhua::rt.workbench.onCatalog",
+  lineInvalidated: "suhua::rt.workbench.onLineInvalidated",
+  broadcastSnapshotChanged: "suhua::rt.workbench.onBroadcastSnapshotChanged",
+  broadcastAssetPreviewStateChanged: "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged",
+  broadcastRulePreviewStateChanged: "suhua::rt.workbench.onBroadcastRulePreviewStateChanged"
 };
 
 const DEFAULT_TRANSPORT_MODE = "train";
@@ -632,6 +633,25 @@ function createLiveApi() {
       return () => {
         if (typeof window.engine.off === "function") {
           window.engine.off(EVENTS.catalog, handler);
+        }
+      };
+    },
+    onLineInvalidated(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const event = parsePayload(payload, null);
+        if (event) {
+          callback(event);
+        }
+      };
+
+      window.engine.on(EVENTS.lineInvalidated, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.lineInvalidated, handler);
         }
       };
     },

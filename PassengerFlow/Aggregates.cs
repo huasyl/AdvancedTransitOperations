@@ -8,23 +8,23 @@ namespace RapidTransitMod.PassengerFlow
 {
     internal readonly struct TimeBucketKey : IEquatable<TimeBucketKey>
     {
-        internal readonly int ServiceDayIndex;
+        internal readonly int ServiceDayKey;
         internal readonly int BucketStartMinute;
 
-        internal TimeBucketKey(int serviceDayIndex, int bucketStartMinute)
+        internal TimeBucketKey(int serviceDayKey, int bucketStartMinute)
         {
-            ServiceDayIndex = serviceDayIndex;
+            ServiceDayKey = serviceDayKey;
             BucketStartMinute = bucketStartMinute;
         }
 
         public bool Equals(TimeBucketKey other)
-            => ServiceDayIndex == other.ServiceDayIndex && BucketStartMinute == other.BucketStartMinute;
+            => ServiceDayKey == other.ServiceDayKey && BucketStartMinute == other.BucketStartMinute;
 
         public override bool Equals(object obj)
             => obj is TimeBucketKey other && Equals(other);
 
         public override int GetHashCode()
-            => (ServiceDayIndex * 397) ^ BucketStartMinute;
+            => (ServiceDayKey * 397) ^ BucketStartMinute;
     }
 
     internal readonly struct StationVolumeKey : IEquatable<StationVolumeKey>
@@ -280,7 +280,7 @@ namespace RapidTransitMod.PassengerFlow
                     mode = TransitModeCodec.Format(pair.Key.Mode),
                     lineId = pair.Key.LineId,
                     stationSakIndex = pair.Key.StationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     boardings = pair.Value.Boardings,
                     alightings = pair.Value.Alightings,
@@ -301,7 +301,7 @@ namespace RapidTransitMod.PassengerFlow
                     lineId = pair.Key.LineId,
                     fromStationSakIndex = pair.Key.FromStationSakIndex,
                     toStationSakIndex = pair.Key.ToStationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     loadPassengersSum = pair.Value.LoadPassengersSum,
                     sampleCount = pair.Value.SampleCount,
@@ -320,7 +320,7 @@ namespace RapidTransitMod.PassengerFlow
                     lastLineId = pair.Key.LastLineId,
                     originStationSakIndex = pair.Key.OriginStationSakIndex,
                     destinationStationSakIndex = pair.Key.DestinationStationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     completedCount = pair.Value.CompletedCount,
                     lastUpdatedFrame = pair.Value.LastUpdatedFrame
@@ -337,7 +337,7 @@ namespace RapidTransitMod.PassengerFlow
                     code = pair.Key.Code,
                     lineId = pair.Key.LineId,
                     stationSakIndex = pair.Key.StationSakIndex,
-                    serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                    serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                     bucketStartMinute = pair.Key.Bucket.BucketStartMinute,
                     count = pair.Value.Count,
                     lastFrame = pair.Value.LastFrame
@@ -368,7 +368,7 @@ namespace RapidTransitMod.PassengerFlow
                         mode,
                         row.lineId,
                         row.stationSakIndex,
-                        new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                        new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                         new StationVolumeAggregate
                         {
                             Boardings = row.boardings,
@@ -394,7 +394,7 @@ namespace RapidTransitMod.PassengerFlow
                         row.lineId,
                         row.fromStationSakIndex,
                         row.toStationSakIndex,
-                        new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                        new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                         new SectionVolumeAggregate
                         {
                             LoadPassengersSum = row.loadPassengersSum,
@@ -418,7 +418,7 @@ namespace RapidTransitMod.PassengerFlow
                         row.lastLineId,
                         row.originStationSakIndex,
                         row.destinationStationSakIndex,
-                        new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                        new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                         new OdFlowAggregate
                         {
                             CompletedCount = row.completedCount,
@@ -441,7 +441,7 @@ namespace RapidTransitMod.PassengerFlow
                     row.code,
                     row.lineId,
                     row.stationSakIndex,
-                    new TimeBucketKey(row.serviceDayIndex, row.bucketStartMinute))] =
+                    new TimeBucketKey(row.serviceDayKey, row.bucketStartMinute))] =
                     new WarningAggregate
                     {
                         Count = row.count,
@@ -532,7 +532,185 @@ namespace RapidTransitMod.PassengerFlow
             m_OdFlows[key] = aggregate;
         }
 
-        internal void TrimBefore(int minServiceDayIndex, int minBucketStartMinute)
+        internal void MigrateLineIds(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (catalog == null || report == null)
+                return;
+
+            MigrateStationVolumes(catalog, report);
+            MigrateSectionVolumes(catalog, report);
+            MigrateOdFlows(catalog, report);
+            MigrateWarnings(catalog, report);
+        }
+
+        private void MigrateStationVolumes(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_StationVolumes.Count == 0)
+                return;
+
+            const string domain = "passengerflow-station-volume";
+            List<KeyValuePair<StationVolumeKey, StationVolumeAggregate>> snapshot =
+                new List<KeyValuePair<StationVolumeKey, StationVolumeAggregate>>(m_StationVolumes);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                StationVolumeKey key = snapshot[i].Key;
+                StationVolumeAggregate value = snapshot[i].Value;
+                string promoted = PromoteLineId(key.LineId, domain, catalog, report);
+                if (string.Equals(promoted, key.LineId, StringComparison.Ordinal))
+                    continue;
+
+                StationVolumeKey newKey = new StationVolumeKey(key.Mode, promoted, key.StationSakIndex, key.Bucket);
+                if (m_StationVolumes.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.LineId, promoted, true, report);
+                    continue;
+                }
+
+                m_StationVolumes.Remove(key);
+                m_StationVolumes[newKey] = value;
+                RecordFieldMigration(domain, key.LineId, promoted, false, report);
+            }
+        }
+
+        private void MigrateSectionVolumes(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_SectionVolumes.Count == 0)
+                return;
+
+            const string domain = "passengerflow-section-volume";
+            List<KeyValuePair<SectionVolumeKey, SectionVolumeAggregate>> snapshot =
+                new List<KeyValuePair<SectionVolumeKey, SectionVolumeAggregate>>(m_SectionVolumes);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                SectionVolumeKey key = snapshot[i].Key;
+                SectionVolumeAggregate value = snapshot[i].Value;
+                string promoted = PromoteLineId(key.LineId, domain, catalog, report);
+                if (string.Equals(promoted, key.LineId, StringComparison.Ordinal))
+                    continue;
+
+                SectionVolumeKey newKey = new SectionVolumeKey(
+                    key.Mode, promoted, key.FromStationSakIndex, key.ToStationSakIndex, key.Bucket);
+                if (m_SectionVolumes.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.LineId, promoted, true, report);
+                    continue;
+                }
+
+                m_SectionVolumes.Remove(key);
+                m_SectionVolumes[newKey] = value;
+                RecordFieldMigration(domain, key.LineId, promoted, false, report);
+            }
+        }
+
+        private void MigrateOdFlows(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_OdFlows.Count == 0)
+                return;
+
+            const string domain = "passengerflow-od-flow";
+            List<KeyValuePair<OdFlowKey, OdFlowAggregate>> snapshot =
+                new List<KeyValuePair<OdFlowKey, OdFlowAggregate>>(m_OdFlows);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                OdFlowKey key = snapshot[i].Key;
+                OdFlowAggregate value = snapshot[i].Value;
+                string promotedFirst = PromoteLineId(key.FirstLineId, domain, catalog, report);
+                string promotedLast = PromoteLineId(key.LastLineId, domain, catalog, report);
+                bool firstChanged = !string.Equals(promotedFirst, key.FirstLineId, StringComparison.Ordinal);
+                bool lastChanged = !string.Equals(promotedLast, key.LastLineId, StringComparison.Ordinal);
+                if (!firstChanged && !lastChanged)
+                    continue;
+
+                OdFlowKey newKey = new OdFlowKey(
+                    key.Mode, promotedFirst, promotedLast,
+                    key.OriginStationSakIndex, key.DestinationStationSakIndex, key.Bucket);
+                if (m_OdFlows.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.FirstLineId, promotedFirst, true, report);
+                    RecordFieldMigration(domain, key.LastLineId, promotedLast, true, report);
+                    continue;
+                }
+
+                m_OdFlows.Remove(key);
+                m_OdFlows[newKey] = value;
+                RecordFieldMigration(domain, key.FirstLineId, promotedFirst, false, report);
+                RecordFieldMigration(domain, key.LastLineId, promotedLast, false, report);
+            }
+        }
+
+        private void MigrateWarnings(LineAnchorCatalog catalog, MigrationReport report)
+        {
+            if (m_Warnings.Count == 0)
+                return;
+
+            const string domain = "passengerflow-warning";
+            List<KeyValuePair<WarningKey, WarningAggregate>> snapshot =
+                new List<KeyValuePair<WarningKey, WarningAggregate>>(m_Warnings);
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                WarningKey key = snapshot[i].Key;
+                WarningAggregate value = snapshot[i].Value;
+                string promoted = PromoteLineId(key.LineId, domain, catalog, report);
+                if (string.Equals(promoted, key.LineId, StringComparison.Ordinal))
+                    continue;
+
+                WarningKey newKey = new WarningKey(key.Mode, key.Code, promoted, key.StationSakIndex, key.Bucket);
+                if (m_Warnings.ContainsKey(newKey))
+                {
+                    RecordFieldMigration(domain, key.LineId, promoted, true, report);
+                    continue;
+                }
+
+                m_Warnings.Remove(key);
+                m_Warnings[newKey] = value;
+                RecordFieldMigration(domain, key.LineId, promoted, false, report);
+            }
+        }
+
+        internal static string PromoteLineId(
+            string lineId, string domain, LineAnchorCatalog catalog, MigrationReport report, TransitMode mode = TransitMode.Unknown)
+        {
+            if (string.IsNullOrWhiteSpace(lineId))
+                return lineId;
+
+            LineKey key = mode == TransitMode.Unknown
+                ? LineIdentityService.GetKey(lineId)
+                : LineIdentityService.GetKey(lineId, mode);
+            if (key.IsEmpty || LineKey.IsStableGuidKey(key))
+                return lineId;
+
+            if (!LineKey.IsLegacyNumericKey(key))
+                return lineId;
+
+            if (catalog.IsLegacyConflict(key))
+            {
+                report.Record(domain, key, LineKey.Empty, MigrationResult.LegacyConflict);
+                return lineId;
+            }
+
+            if (catalog.TryLegacy(key, out LineKey stable))
+                return LineIdentityService.GetId(stable);
+
+            report.Record(domain, key, LineKey.Empty, MigrationResult.ZeroMatch);
+            return lineId;
+        }
+
+        internal static void RecordFieldMigration(
+            string domain, string oldLineId, string newLineId, bool targetOccupied, MigrationReport report, TransitMode mode = TransitMode.Unknown)
+        {
+            if (string.Equals(oldLineId, newLineId, StringComparison.Ordinal))
+                return;
+
+            LineKey legacyKey = mode == TransitMode.Unknown
+                ? LineIdentityService.GetKey(oldLineId)
+                : LineIdentityService.GetKey(oldLineId, mode);
+            LineKey stableKey = LineIdentityService.GetKey(newLineId);
+            report.Record(
+                domain, legacyKey, stableKey,
+                targetOccupied ? MigrationResult.TargetOccupied : MigrationResult.Migrated);
+        }
+
+        internal void TrimBefore(int minServiceDayKey, int minBucketStartMinute)
         {
             bool hasAny = m_StationVolumes.Count != 0
                 || m_SectionVolumes.Count != 0
@@ -544,7 +722,7 @@ namespace RapidTransitMod.PassengerFlow
             List<StationVolumeKey> removeStationKeys = null;
             foreach (StationVolumeKey key in m_StationVolumes.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeStationKeys == null)
                         removeStationKeys = new List<StationVolumeKey>();
@@ -561,7 +739,7 @@ namespace RapidTransitMod.PassengerFlow
             List<SectionVolumeKey> removeSectionKeys = null;
             foreach (SectionVolumeKey key in m_SectionVolumes.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeSectionKeys == null)
                         removeSectionKeys = new List<SectionVolumeKey>();
@@ -578,7 +756,7 @@ namespace RapidTransitMod.PassengerFlow
             List<OdFlowKey> removeOdKeys = null;
             foreach (OdFlowKey key in m_OdFlows.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeOdKeys == null)
                         removeOdKeys = new List<OdFlowKey>();
@@ -595,7 +773,7 @@ namespace RapidTransitMod.PassengerFlow
             List<WarningKey> removeKeys = null;
             foreach (WarningKey key in m_Warnings.Keys)
             {
-                if (IsBefore(key.Bucket, minServiceDayIndex, minBucketStartMinute))
+                if (IsBefore(key.Bucket, minServiceDayKey, minBucketStartMinute))
                 {
                     if (removeKeys == null)
                         removeKeys = new List<WarningKey>();
@@ -610,10 +788,10 @@ namespace RapidTransitMod.PassengerFlow
                 m_Warnings.Remove(removeKeys[i]);
         }
 
-        private static bool IsBefore(TimeBucketKey bucket, int minServiceDayIndex, int minBucketStartMinute)
+        private static bool IsBefore(TimeBucketKey bucket, int minServiceDayKey, int minBucketStartMinute)
         {
-            return bucket.ServiceDayIndex < minServiceDayIndex
-                || (bucket.ServiceDayIndex == minServiceDayIndex
+            return bucket.ServiceDayKey < minServiceDayKey
+                || (bucket.ServiceDayKey == minServiceDayKey
                     && bucket.BucketStartMinute < minBucketStartMinute);
         }
 
@@ -642,7 +820,7 @@ namespace RapidTransitMod.PassengerFlow
                         alightings = pair.Value.Alightings,
                         waitingPassengers = pair.Value.WaitingPassengersSnapshot,
                         throughPassengers = throughPassengers,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })
@@ -669,7 +847,7 @@ namespace RapidTransitMod.PassengerFlow
                             ? pair.Value.LoadPassengersSum / pair.Value.SampleCount
                             : 0,
                         sampleCount = pair.Value.SampleCount,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })
@@ -695,7 +873,7 @@ namespace RapidTransitMod.PassengerFlow
                         originStationId = originStationId,
                         destinationStationId = destinationStationId,
                         completedCount = pair.Value.CompletedCount,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })
@@ -716,7 +894,7 @@ namespace RapidTransitMod.PassengerFlow
                         stationId = stationId,
                         count = pair.Value.Count,
                         lastFrame = pair.Value.LastFrame,
-                        serviceDayIndex = pair.Key.Bucket.ServiceDayIndex,
+                        serviceDayKey = pair.Key.Bucket.ServiceDayKey,
                         bucketStartMinute = pair.Key.Bucket.BucketStartMinute
                     };
                 })

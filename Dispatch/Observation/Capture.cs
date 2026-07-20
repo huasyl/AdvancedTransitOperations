@@ -54,6 +54,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly LapStore m_Laps;
         private readonly DwellStore m_Dwell;
         private readonly SliceStore m_Slices;
+        private readonly SliceAdmission m_Admission;
         private readonly TrackModelService m_TrackModel;
         private readonly TrackProjectionService m_TrackProjection;
         private readonly CapturePort m_Port;
@@ -62,6 +63,7 @@ namespace RapidTransitMod.Dispatch.Observation
             LapStore laps,
             DwellStore dwell,
             SliceStore slices,
+            SliceAdmission admission,
             TrackModelService trackModel,
             TrackProjectionService trackProjection,
             CapturePort port)
@@ -69,6 +71,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Laps = laps;
             m_Dwell = dwell;
             m_Slices = slices;
+            m_Admission = admission;
             m_TrackModel = trackModel;
             m_TrackProjection = trackProjection;
             m_Port = port;
@@ -154,12 +157,12 @@ namespace RapidTransitMod.Dispatch.Observation
 
             uint framesDelta = m_Port.Frame() - startFrame;
             m_Laps.SetFrames(vehicle, framesDelta);
-            float realMin = framesDelta / (float)m_Port.FramesPerMinute();
+            float realMinutes = (float)m_Port.ToMinutes(framesDelta);
             if (RtLog.VerboseEnabled)
             {
                 string lineTag = line != Entity.Null ? "line" + line.Index : "line?";
                 m_Port.Log("[LapStats] " + lineTag + " vehicle" + vehicle.Index
-                    + " lap=" + realMin.ToString("F1") + "min/" + framesDelta + "frames");
+                    + " lap=" + realMinutes.ToString("F1") + "min/" + framesDelta + "frames");
 
                 if (line != Entity.Null
                     && m_Port.Express(line)
@@ -176,10 +179,10 @@ namespace RapidTransitMod.Dispatch.Observation
                     {
                         float profileTotalFrames = profileRunFrames + profileStopFrames;
                         m_Port.Log("[ExpressLapProfile] " + lineTag + " vehicle" + vehicle.Index
-                            + " observed=" + realMin.ToString("F1") + "min"
-                            + " profileTotal=" + (profileTotalFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
-                            + " run=" + (profileRunFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
-                            + " stop=" + (profileStopFrames / (float)m_Port.FramesPerMinute()).ToString("F1") + "min"
+                            + " observed=" + realMinutes.ToString("F1") + "min"
+                            + " profileTotal=" + m_Port.ToMinutes(profileTotalFrames).ToString("F1") + "min"
+                            + " run=" + m_Port.ToMinutes(profileRunFrames).ToString("F1") + "min"
+                            + " stop=" + m_Port.ToMinutes(profileStopFrames).ToString("F1") + "min"
                             + " stopCount=" + profileStopCount
                             + " passCount=" + profilePassCount);
                         LogTraversalProfileLapSlices(vehicle, line, timingWaypoints);
@@ -242,6 +245,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void UpdateVehicleTraversalSliceObservation(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, uint nowFrame)
         {
+            if (!m_Admission.CanObserve(vehicle))
+                return;
+
             bool hasExistingSession = vehicle != Entity.Null
                 && m_Slices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession entrySession)
                 && entrySession.Line == line;
@@ -598,14 +604,16 @@ namespace RapidTransitMod.Dispatch.Observation
                 float averageFrames = ((existing.AverageFrames * existing.SampleCount) + observedFrames) / sampleCount;
                 float fastBaselineFrames = ComputeFastTraversalBaselineFrames(existing.FastBaselineFrames, observedFrames);
                 TraversalSliceObservation updated = new TraversalSliceObservation(averageFrames, fastBaselineFrames, sampleCount, nowFrame);
-                m_Slices.Record(key, updated);
+                m_Slices.Record(session.Line, key, updated);
                 m_Port.FlushSlice(session.Line, session.SliceIndex, updated);
+                m_Admission.OnSliceWritten(session.Line);
             }
             else
             {
                 TraversalSliceObservation created = new TraversalSliceObservation(observedFrames, observedFrames, 1, nowFrame);
-                m_Slices.Record(key, created);
+                m_Slices.Record(session.Line, key, created);
                 m_Port.FlushSlice(session.Line, session.SliceIndex, created);
+                m_Admission.OnSliceWritten(session.Line);
             }
 
             m_Slices.Sessions.Remove(vehicle);
@@ -618,7 +626,7 @@ namespace RapidTransitMod.Dispatch.Observation
             if (vehicle == Entity.Null || line == Entity.Null || chain == null)
                 return;
 
-            uint sampleIntervalFrames = (uint)math.max(1f, math.round((float)m_Port.FramesPerMinute()));
+            const uint sampleIntervalFrames = 180u;
             if (m_Slices.LastPositionSampleFrames.TryGetValue(vehicle, out uint lastFrame)
                 && nowFrame > lastFrame
                 && nowFrame - lastFrame < sampleIntervalFrames)
@@ -845,10 +853,11 @@ namespace RapidTransitMod.Dispatch.Observation
             if (sampleFrames == 0)
                 return false;
 
-            float sampleMinutes = sampleFrames / (float)m_Port.FramesPerMinute();
-            if (sampleMinutes <= 0f || sampleMinutes > MaxObservedDwellMinutes)
+            uint maxObservedDwellFrames = m_Port.ToFramesCeil(MaxObservedDwellMinutes);
+            if (sampleFrames > maxObservedDwellFrames)
                 return false;
 
+            float sampleMinutes = (float)m_Port.ToMinutes(sampleFrames);
             sample = new ObservedDwellSample(line, waypointIndex, sampleFrames, nowFrame, sampleMinutes);
             return true;
         }
@@ -1009,27 +1018,27 @@ namespace RapidTransitMod.Dispatch.Observation
                         + "a";
                     if (lapDebug.FinalizeCount > 0)
                     {
-                        lapDebugText += " obsLapAvg=" + (lapDebug.ObservedFramesSum / lapDebug.FinalizeCount / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
-                            + " obsLapMin=" + (lapDebug.MinObservedFrames / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
-                            + " obsLapMax=" + (lapDebug.MaxObservedFrames / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min";
+                        lapDebugText += " obsLapAvg=" + m_Port.ToMinutes(lapDebug.ObservedFramesSum / lapDebug.FinalizeCount).ToString("0.0") + "min"
+                            + " obsLapMin=" + m_Port.ToMinutes(lapDebug.MinObservedFrames).ToString("0.0") + "min"
+                            + " obsLapMax=" + m_Port.ToMinutes(lapDebug.MaxObservedFrames).ToString("0.0") + "min";
                     }
                 }
 
                 m_Port.Log("[ExpressLapSlices] " + lineTag + " vehicle" + vehicle.Index
                     + " slice#" + slice.SliceIndex
                     + " " + startLabel + " -> " + endLabel
-                    + " run=" + (math.max(0f, effectiveRunFrames) / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
-                    + " staticRun=" + (staticRunFrames / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
-                    + " stop=" + (stopFrames / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
-                    + " total=" + ((math.max(0f, effectiveRunFrames) + stopFrames) / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
+                    + " run=" + m_Port.ToMinutes(math.max(0f, effectiveRunFrames)).ToString("0.0") + "min"
+                    + " staticRun=" + m_Port.ToMinutes(staticRunFrames).ToString("0.0") + "min"
+                    + " stop=" + m_Port.ToMinutes(stopFrames).ToString("0.0") + "min"
+                    + " total=" + m_Port.ToMinutes(math.max(0f, effectiveRunFrames) + stopFrames).ToString("0.0") + "min"
                     + " atoms=" + slice.StartAtomIndex + ".." + slice.EndAtomIndexExclusive
                     + " laneKeys=" + (slice.PhysicalLaneKeys != null ? slice.PhysicalLaneKeys.Length : 0)
                     + " obsGlobal=" + (hasObservation ? observation.SampleCount.ToString() : "0")
                     + (hasObservation
-                        ? " obsGlobalAvg=" + (observation.AverageFrames / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
+                        ? " obsGlobalAvg=" + m_Port.ToMinutes(observation.AverageFrames).ToString("0.0") + "min"
                         : string.Empty)
                     + (hasObservation && observation.FastBaselineFrames > 0f
-                        ? " obsGlobalFast=" + (observation.FastBaselineFrames / (float)m_Port.FramesPerMinute()).ToString("0.0") + "min"
+                        ? " obsGlobalFast=" + m_Port.ToMinutes(observation.FastBaselineFrames).ToString("0.0") + "min"
                         : string.Empty)
                     + lapDebugText);
             }

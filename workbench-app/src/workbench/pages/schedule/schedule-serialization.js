@@ -5,11 +5,6 @@ import {
   normalizeKind,
   normalizeRuntimeFeatureSettings
 } from "./schedule-catalog";
-import {
-  parseFrequencyValue,
-  sortAutoRuleRows,
-  sortManualDraftRows
-} from "./schedule-normalize";
 
 export function createNativeMergedViewForSave(selectedLineId, snapshotMergedView = null) {
   const sourceView =
@@ -56,42 +51,6 @@ export function serializeRuntimeFeatureSettings(featureSettings) {
     broadcastEnabled: normalized.broadcastEnabled,
     depotLockEnabled: normalized.depotLockEnabled
   };
-}
-
-export function serializeNativeManualRows(rows = []) {
-  return sortManualDraftRows(Array.isArray(rows) ? rows : [])
-    .filter((row) => row?.lineId)
-    .map((row, index) => ({
-      id: String(row?.id || `manual-${index + 1}`),
-      lineId: row.lineId,
-      time: row?.time || "",
-      kind: normalizeKind(row?.kind),
-      offsetMode: row?.offsetMode || "none",
-      offsetMinutes: row?.offsetMinutes === 0 ? "0" : String(row?.offsetMinutes || "")
-    }));
-}
-
-export function serializeNativeAutoRules(rows = []) {
-  return sortAutoRuleRows(Array.isArray(rows) ? rows : [])
-    .filter((rule) => rule?.lineId)
-    .map((rule, index) => {
-      const kind = normalizeKind(rule?.kind);
-      const departuresPerHour = parseFrequencyValue(rule?.departuresPerHour);
-      const expressOffsetMinutes = Math.max(0, Math.round(Math.abs(Number(rule?.expressOffsetMinutes) || 0)));
-      return {
-        id: String(rule?.id || `rule-${index + 1}`),
-        lineId: rule.lineId,
-        enabled: rule?.enabled !== false,
-        start: rule?.start || "08:00",
-        end: rule?.end || "10:00",
-        kind,
-        departuresPerHour,
-        localPerHour: kind === "local" ? departuresPerHour : 0,
-        expressPerHour: kind === "express" ? departuresPerHour : 0,
-        expressOffsetMode: kind === "express" ? (rule?.expressOffsetMode || "after") : "after",
-        expressOffsetMinutes: kind === "express" ? expressOffsetMinutes : 0
-      };
-    });
 }
 
 export function serializeNativeLineDraftRows(rows = []) {
@@ -144,32 +103,44 @@ export function serializeNativeLineDraftRowsByLineId(rows = []) {
   }));
 }
 
-export function mapSnapshotPlanRefs(planRefs = []) {
-  const next = {};
-  (Array.isArray(planRefs) ? planRefs : []).forEach((entry) => {
-    const lineId = String(entry?.lineId || entry?.contract?.draftKey || "");
-    if (!lineId || !entry?.contract || typeof entry.contract !== "object") {
+export function flattenSnapshotLineDraftRowsByLineId(blocks = []) {
+  const flattened = [];
+  (Array.isArray(blocks) ? blocks : []).forEach((block) => {
+    const lineId = String(block?.lineId || "");
+    if (!lineId) {
       return;
     }
 
-    next[lineId] = {
-      ...entry.contract,
-      draftKey: lineId
-    };
+    (Array.isArray(block?.lineDraftRows) ? block.lineDraftRows : []).forEach((row, index) => {
+      flattened.push({
+        id: row?.id || `draft-${lineId}-${index + 1}`,
+        lineId: row?.lineId || lineId,
+        serviceId: row?.lineId || lineId,
+        time: row?.time || "",
+        kind: row?.kind === "express" ? "express" : "local",
+        source: row?.source || "manual",
+        note: row?.note || ""
+      });
+    });
   });
-  return next;
+  return flattened;
 }
 
-export function serializePlanRefs(planRefsByLine = {}) {
-  return Object.entries(planRefsByLine || {})
-    .filter(([lineId, contract]) => lineId && contract && typeof contract === "object")
-    .map(([lineId, contract]) => ({
-      lineId,
-      contract: {
-        ...contract,
-        draftKey: lineId
-      }
-    }));
+export function serializeRemovedLineIds(lineIds = []) {
+  return [...new Set((Array.isArray(lineIds) ? lineIds : []).filter((lineId) => typeof lineId === "string" && lineId.length > 0))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function serializeRuntimeLineRefs(lines = LINE_OPTIONS) {
+  return (Array.isArray(lines) ? lines : [])
+    .filter((line) => line && typeof line === "object" && line.id)
+    .map((line) => ({
+      lineId: line.id,
+      sourceLineId: typeof line.sourceLineId === "string"
+        ? line.sourceLineId
+        : (typeof line.corridorId === "string" ? line.corridorId : "")
+    }))
+    .sort((left, right) => left.lineId.localeCompare(right.lineId));
 }
 
 export function mapSnapshotManualRows(rows = [], fallbackLineId = "") {
