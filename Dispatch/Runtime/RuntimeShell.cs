@@ -378,6 +378,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StationDwellObservationCacheLoaded = false;
             m_Runtime.m_Observation.ClearStationAnchorObservationDiagnosticsState();
             m_Runtime.m_ObsPersist.ClearSlices();
+            m_Runtime.m_SliceAdmission.Clear();
             m_Runtime.m_Obs.Clear();
             m_Runtime.m_TraversalSliceObservationBufferReady = false;
             m_Runtime.m_TraversalSliceObservationCacheLoaded = false;
@@ -441,6 +442,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StationDwellObservationCacheLoaded = false;
             m_Runtime.m_Observation.ClearStationAnchorObservationDiagnosticsState();
             m_Runtime.m_ObsPersist.ClearSlices();
+            m_Runtime.m_SliceAdmission.Clear();
             m_Runtime.m_Obs.Clear();
             m_Runtime.m_TraversalSliceObservationBufferReady = false;
             m_Runtime.m_TraversalSliceObservationCacheLoaded = false;

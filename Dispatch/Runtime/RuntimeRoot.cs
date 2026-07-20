@@ -173,8 +173,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Dwell = new DwellStore();
             runtime.m_Dwell.Init();
             runtime.m_Slices = new SliceStore();
+            runtime.m_SliceAdmission = new SliceAdmission(runtime.m_Slices, RuntimePorts.BuildSliceAdmission(runtime));
             runtime.m_ObsQuery = new RapidTransitMod.Dispatch.Observation.Query(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices);
-            runtime.m_ObsPersist = new RapidTransitMod.Dispatch.Observation.Persist(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices);
+            runtime.m_ObsPersist = new RapidTransitMod.Dispatch.Observation.Persist(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices, runtime.m_SliceAdmission);
             runtime.m_WaypointIndex = new WaypointIndex(runtime);
             runtime.m_LineRange = new LineRange(runtime.EntityManager, runtime.m_ObsQuery, DispatchRuntimeSystem.MAINTENANCE_THRESHOLD);
             LineHost lineHost = RuntimePorts.BuildLineHost(runtime);
@@ -219,10 +220,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_Laps,
                 runtime.m_Dwell,
                 runtime.m_Slices,
+                runtime.m_SliceAdmission,
                 runtime.m_TrackModel,
                 runtime.m_TrackProjection,
                 RuntimePorts.BuildCapture(runtime));
-            runtime.m_Observation = new ObservationPort(runtime, runtime.m_ObsCapture);
+            runtime.m_Observation = new ObservationPort(runtime, runtime.m_ObsCapture, runtime.m_SliceAdmission);
             runtime.m_Bypass = new RuntimeFacade(RuntimePorts.BuildBypassRuntime(runtime));
             runtime.m_LineView = new LineView(
                 runtime.EntityManager,
@@ -391,6 +393,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (runtime.m_Laps != null) runtime.m_Laps.Dispose();
             if (runtime.m_Dwell != null) runtime.m_Dwell.Dispose();
             runtime.m_Slices = null!;
+            runtime.m_SliceAdmission = null!;
             runtime.m_Obs = null!;
             runtime.m_ObsRecorder = null!;
             runtime.m_ObsCapture = null!;

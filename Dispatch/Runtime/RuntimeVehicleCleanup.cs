@@ -93,7 +93,7 @@ namespace RapidTransitMod
                 m_Runtime.m_Observation.ClearDispatchEta(dead);
                 m_Runtime.m_SpawnIntentTrace?.Remove(dead);
                 m_Runtime.m_ObsPersist.ClearDwell(dead);
-                m_Runtime.m_ObsPersist.ClearVehicleSlices(dead);
+                m_Runtime.m_Observation.ClearVehicleSlices(dead);
                 m_Runtime.m_Observation.ClearDebug(dead);
                 m_Runtime.m_RuntimeLog.ClearVehicle(dead);
                 m_Runtime.Bypass.ForgetBlocker(dead);

@@ -54,6 +54,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly LapStore m_Laps;
         private readonly DwellStore m_Dwell;
         private readonly SliceStore m_Slices;
+        private readonly SliceAdmission m_Admission;
         private readonly TrackModelService m_TrackModel;
         private readonly TrackProjectionService m_TrackProjection;
         private readonly CapturePort m_Port;
@@ -62,6 +63,7 @@ namespace RapidTransitMod.Dispatch.Observation
             LapStore laps,
             DwellStore dwell,
             SliceStore slices,
+            SliceAdmission admission,
             TrackModelService trackModel,
             TrackProjectionService trackProjection,
             CapturePort port)
@@ -69,6 +71,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Laps = laps;
             m_Dwell = dwell;
             m_Slices = slices;
+            m_Admission = admission;
             m_TrackModel = trackModel;
             m_TrackProjection = trackProjection;
             m_Port = port;
@@ -242,6 +245,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void UpdateVehicleTraversalSliceObservation(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, uint nowFrame)
         {
+            if (!m_Admission.CanObserve(vehicle))
+                return;
+
             bool hasExistingSession = vehicle != Entity.Null
                 && m_Slices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession entrySession)
                 && entrySession.Line == line;
@@ -598,14 +604,16 @@ namespace RapidTransitMod.Dispatch.Observation
                 float averageFrames = ((existing.AverageFrames * existing.SampleCount) + observedFrames) / sampleCount;
                 float fastBaselineFrames = ComputeFastTraversalBaselineFrames(existing.FastBaselineFrames, observedFrames);
                 TraversalSliceObservation updated = new TraversalSliceObservation(averageFrames, fastBaselineFrames, sampleCount, nowFrame);
-                m_Slices.Record(key, updated);
+                m_Slices.Record(session.Line, key, updated);
                 m_Port.FlushSlice(session.Line, session.SliceIndex, updated);
+                m_Admission.OnSliceWritten(session.Line);
             }
             else
             {
                 TraversalSliceObservation created = new TraversalSliceObservation(observedFrames, observedFrames, 1, nowFrame);
-                m_Slices.Record(key, created);
+                m_Slices.Record(session.Line, key, created);
                 m_Port.FlushSlice(session.Line, session.SliceIndex, created);
+                m_Admission.OnSliceWritten(session.Line);
             }
 
             m_Slices.Sessions.Remove(vehicle);

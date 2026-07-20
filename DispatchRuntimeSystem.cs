@@ -199,6 +199,7 @@ namespace RapidTransitMod
         internal SpawnLeadTheory m_SpawnLeadTheory = null!;
         internal DwellStore m_Dwell = null!;
         internal SliceStore m_Slices = null!;
+        internal SliceAdmission m_SliceAdmission = null!;
         internal TraceStore m_Obs = null!;
         internal Recorder m_ObsRecorder = null!;
         internal Capture m_ObsCapture = null!;

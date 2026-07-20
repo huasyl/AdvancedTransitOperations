@@ -23,6 +23,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private readonly DispatchRuntimeSystem m_Runtime;
         private readonly Capture m_Capture;
+        private readonly SliceAdmission m_Admission;
         private readonly Dictionary<Entity, DwellDeadlineCacheEntry> m_DwellDeadlineCache =
             new Dictionary<Entity, DwellDeadlineCacheEntry>();
         private readonly Dictionary<Entity, DispatchEtaRequest> m_DispatchEtaRequests =
@@ -59,10 +60,11 @@ namespace RapidTransitMod.Dispatch.Observation
             }
         }
 
-        public ObservationPort(DispatchRuntimeSystem runtime, Capture capture)
+        public ObservationPort(DispatchRuntimeSystem runtime, Capture capture, SliceAdmission admission)
         {
             m_Runtime = runtime;
             m_Capture = capture;
+            m_Admission = admission;
             m_Runtime.m_SimClock.ClockChanged += OnClockChanged;
         }
 
@@ -86,6 +88,27 @@ namespace RapidTransitMod.Dispatch.Observation
         public void Finish(Entity vehicle, uint nowFrame, int exitAtomIndex, float exitAtomPosition01)
         {
             m_Capture.FinalizeVehicleTraversalSliceObservation(vehicle, nowFrame, exitAtomIndex, exitAtomPosition01);
+            m_Admission.End(vehicle);
+        }
+
+        public bool DropSlice(Entity vehicle, out int sliceIndex)
+        {
+            bool dropped = m_Runtime.m_ObsPersist.DropSlice(vehicle, out sliceIndex);
+            m_Admission.End(vehicle);
+            return dropped;
+        }
+
+        public void ClearVehicleSlices(Entity vehicle)
+        {
+            m_Runtime.m_ObsPersist.ClearVehicleSlices(vehicle);
+            m_Admission.End(vehicle);
+        }
+
+        public void InvalidateSliceLine(Entity line)
+        {
+            m_Runtime.m_Slices.RemoveLine(line);
+            m_Admission.InvalidateLine(line);
+            m_Runtime.m_ObsBuffers.RemoveSliceLine(line);
         }
 
         public bool LapTiming(
@@ -678,6 +701,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void Launch(Entity line, Entity vehicle, int targetMinute, int actualMinute, uint launchFrame, bool lateDispatch)
         {
+            m_Admission.Begin(line, vehicle, targetMinute);
             m_Runtime.m_ObsRecorder?.Launch(line, vehicle, targetMinute, actualMinute, launchFrame, lateDispatch);
         }
 

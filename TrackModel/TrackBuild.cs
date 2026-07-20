@@ -175,7 +175,8 @@ namespace RapidTransitMod.TrackModel
                 waypoints.Length,
                 true,
                 chain));
-            m_NotifyLineTrackChainRebuilt?.Invoke(line, previousSignature, signature, previousAtomCount, chain.TrackAtoms.Count);
+            if (previousChain != null)
+                m_NotifyLineTrackChainRebuilt?.Invoke(line, previousSignature, signature, previousAtomCount, chain.TrackAtoms.Count);
             m_Diag.AddDevSightChain(chain);
             m_MarkSharedDirty?.Invoke();
             return true;

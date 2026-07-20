@@ -85,6 +85,8 @@ namespace RapidTransitMod
             }
 
             bool wrote = false;
+            int createdSummaryCount = 0;
+            int regeneratedSummaryCount = 0;
             HashSet<string> usedGuids = new HashSet<string>(StringComparer.Ordinal);
 
             // Collect every existing valid GUID before minting any new ones.
@@ -126,7 +128,9 @@ namespace RapidTransitMod
                 entry.ValidGuid = guid;
                 entry.Invalid = false;
                 entries[i] = entry;
-                LogAnchor(entry, guid, "created", entry.HasLak ? "empty-lak" : "missing-lak");
+                if (RtLog.VerboseEnabled)
+                    LogAnchor(entry, guid, "created", entry.HasLak ? "empty-lak" : "missing-lak");
+                createdSummaryCount++;
                 wrote = true;
             }
 
@@ -177,7 +181,9 @@ namespace RapidTransitMod
                     created.ValidGuid = guid;
                     created.Invalid = false;
                     entries[createdIndex] = created;
-                    LogAnchor(created, guid, "regenerated", "created-duplicate-lak", duplicateGuid);
+                    if (RtLog.VerboseEnabled)
+                        LogAnchor(created, guid, "regenerated", "created-duplicate-lak", duplicateGuid);
+                    regeneratedSummaryCount++;
                     wrote = true;
 
                     int remainingCount = 0;
@@ -309,6 +315,11 @@ namespace RapidTransitMod
 
             m_HasIsolation = m_IsolationByEntity.Count > 0;
             m_Changed = wrote || indexesChanged;
+            if (createdSummaryCount > 0 || regeneratedSummaryCount > 0)
+            {
+                Mod.log.Info("[LineAnchorMigration] summary: created=" + createdSummaryCount
+                    + " regenerated=" + regeneratedSummaryCount);
+            }
             return m_Changed;
         }
 

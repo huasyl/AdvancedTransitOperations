@@ -1001,7 +1001,7 @@ namespace RapidTransitMod
 
                     if (state != VehicleState.Running)
                     {
-                        if (m_Runtime.m_ObsPersist.DropSlice(v, out int droppedSliceIndex))
+                        if (m_Runtime.m_Observation.DropSlice(v, out int droppedSliceIndex))
                             m_Runtime.m_Observation.DebugDrop(v, droppedSliceIndex);
                     }
 

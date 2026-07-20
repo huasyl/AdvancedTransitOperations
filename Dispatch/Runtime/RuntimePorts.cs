@@ -292,6 +292,27 @@ namespace RapidTransitMod.Dispatch.Runtime
             };
         }
 
+        public static SliceAdmissionPort BuildSliceAdmission(DispatchRuntimeSystem runtime)
+        {
+            return new SliceAdmissionPort
+            {
+                StableKey = line => runtime.m_LineView.TryFrame(line, out LineFrame frame)
+                    && LineKey.IsStableGuidKey(frame.StoreKey)
+                        ? (true, frame.StoreKey)
+                        : (false, LineKey.Empty),
+                ServiceDate = () => runtime.m_SimClock.NowDate,
+                DepartureMinutes = line => runtime.m_LineView.Times(line),
+                FormatMinute = minute => DispatchRuntimeSystem.SlotStr(minute),
+                ProfileSignature = line => runtime.m_ObsBuffers.TrySliceSignature(line, out ulong signature)
+                    ? (true, signature)
+                    : (false, 0UL),
+                TryFlushDailyQuota = runtime.m_ObsBuffers.TryFlushDailyQuota,
+                TryFlushColdStart = runtime.m_ObsBuffers.TryFlushColdStart,
+                RemoveColdStart = runtime.m_ObsBuffers.RemoveColdStart,
+                Log = message => runtime.log.Info(message)
+            };
+        }
+
         public static Port BuildObservation(DispatchRuntimeSystem runtime)
         {
             return new Port

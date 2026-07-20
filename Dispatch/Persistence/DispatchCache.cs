@@ -536,8 +536,11 @@ namespace RapidTransitMod.Dispatch.Persistence
 
         private void LogPrep(Entity line, uint raw, uint saved, byte count)
         {
-            m_Runtime.log.Info("[SpawnLeadPrep] line=" + line.Index + " rawFrames=" + raw
-                + " usedFrames=" + saved + " samples=" + count);
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[SpawnLeadPrep] line=" + line.Index + " rawFrames=" + raw
+                    + " usedFrames=" + saved + " samples=" + count);
+            }
         }
 
         private static LineDispatchDepotHistoryElement GetDepotHistory(

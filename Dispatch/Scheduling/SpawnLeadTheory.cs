@@ -52,9 +52,12 @@ namespace RapidTransitMod.Dispatch.Scheduling
             m_FactFailures.Remove(line);
             m_Entries[line] = facts;
             float legacy = m_Runtime.m_DispatchCache.Read(line);
-            m_Runtime.log.Info("[SpawnLead] line=" + line.Index + " source=" + FallbackSource(legacy)
-                + " reason=rail-eta-theory-pending prepUsedFrames=" + m_Runtime.m_DispatchCache.ReadPrep(line)
-                + " legacyFrames=" + legacy.ToString("F0"));
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[SpawnLead] line=" + line.Index + " source=" + FallbackSource(legacy)
+                    + " reason=rail-eta-theory-pending prepUsedFrames=" + m_Runtime.m_DispatchCache.ReadPrep(line)
+                    + " legacyFrames=" + legacy.ToString("F0"));
+            }
             if (m_ActiveLine == line)
             {
                 m_Runtime.m_RailEtaService?.Cancel(m_ActiveTicket);
@@ -146,10 +149,13 @@ namespace RapidTransitMod.Dispatch.Scheduling
             entry.Ready = true;
             uint prep = m_Runtime.m_DispatchCache.ReadPrep(line);
             float legacy = m_Runtime.m_DispatchCache.Read(line);
-            m_Runtime.log.Info("[SpawnLead] line=" + line.Index + " source=rail-eta-theory"
-                + " prepRawMaxFrames=" + prep + " prepUsedFrames=" + prep
-                + " theoryRawFrames=" + raw + " theoryUsedFrames=" + raw
-                + " spawnLeadFrames=" + (prep + raw) + " legacyFrames=" + legacy.ToString("F0"));
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[SpawnLead] line=" + line.Index + " source=rail-eta-theory"
+                    + " prepRawMaxFrames=" + prep + " prepUsedFrames=" + prep
+                    + " theoryRawFrames=" + raw + " theoryUsedFrames=" + raw
+                    + " spawnLeadFrames=" + (prep + raw) + " legacyFrames=" + legacy.ToString("F0"));
+            }
         }
 
         private bool TryFacts(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out Entry entry, out string failure)
