@@ -137,6 +137,22 @@ namespace RapidTransitMod
             m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
         }
 
+        public void ForceManualDepart(
+            Entity vehicle,
+            ref Game.Vehicles.PublicTransport publicTransport,
+            uint nowFrame,
+            EntityCommandBuffer ecb)
+        {
+            Entity blocker = m_Runtime.Bypass.TryGetLatchedBlocker(vehicle, out Entity latchedBlocker)
+                ? latchedBlocker
+                : Entity.Null;
+            m_Runtime.Bypass.ClearVehicle(vehicle, "UI强制发车");
+            m_Runtime.Bypass.MarkBypassHoldSkipped(vehicle, blocker);
+            m_Runtime.m_ForcedMidStopBoardingGraceUntil[vehicle] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
+            m_Runtime.m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, ecb);
+            StartDeparturePending(vehicle, nowFrame);
+        }
+
         private bool TryRecoverInvalidatedMidStopSession(
             Entity vehicle,
             Entity line,
@@ -1565,6 +1581,7 @@ namespace RapidTransitMod
                                 if (shouldRefreshTimeoutAssist)
                                 {
                                     m_Runtime.m_CommandApplier.ForceDepart(v, ref pt, nowFrame, ecb);
+                                    m_Runtime.m_ForcedMidStopBoardingGraceUntil[v] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
                                     if (RtLog.VerboseEnabled)
                                     {
                                         string timeoutLogKey = midStopDwellSinceFrame.ToString();
@@ -1584,6 +1601,7 @@ namespace RapidTransitMod
                                     ? runningBypass.ReleaseReason
                                     : "timeout-close:no-bypass-release-reason";
                                 m_Runtime.Bypass.ClearVehiclePreservingBypassHoldSkipped(v, timeoutBypassReleaseReason);
+                                m_Runtime.Bypass.MarkBypassHoldSkipped(v, runningBypassBlocker);
                                 SetLocalizedVehicleLabel(v, "StopTimeout", "停站超时", vTag);
                                 if (ENABLE_MIDSTOP_TIMEOUT_GATE_LOGS && !shouldRefreshTimeoutAssist)
                                 {

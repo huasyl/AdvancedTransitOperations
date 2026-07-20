@@ -568,8 +568,7 @@ namespace RapidTransitMod
                     : -1;
 
             EntityCommandBuffer commandBuffer = m_Port.Barrier.CreateCommandBuffer();
-            m_Port.Commands.ForceDepart(vehicle, ref pt, m_Port.Sim.frameIndex, commandBuffer);
-            m_Port.ClearBypass(vehicle, "UI强制发车");
+            m_Port.Runtime.ForceManualDepart(vehicle, ref pt, m_Port.Sim.frameIndex, commandBuffer);
             m_Port.Labels.Set(vehicle, "结束上客");
             log.Info("[强制发车协助] 线路" + line.Index + " 车辆" + vehicle.Index
                 + " wp=" + currentWaypointIndex);
