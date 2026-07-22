@@ -175,6 +175,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void ClearStopSessionState(Entity vehicle)
         {
+            PassengerFlow.Runtime.Current?.RemoveVehicle(vehicle);
             m_LastEffectiveBoardingState.Remove(vehicle);
             m_LastOfficialBoardingState.Remove(vehicle);
             m_StopSessionLine.Remove(vehicle);

@@ -43,6 +43,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         internal void Attach(Runtime runtime)
         {
             Announcements = runtime ?? throw new ArgumentNullException(nameof(runtime));
+            LineMigration.SetInvalidator(runtime.ClearLineChecks);
         }
     }
 

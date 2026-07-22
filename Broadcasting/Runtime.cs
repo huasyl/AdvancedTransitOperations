@@ -84,8 +84,47 @@ namespace RapidTransitMod.Broadcasting
             int currentWaypointIndex,
             bool boarding)
         {
-            m_Platforms.Running(vehicle, line, waypoints, currentWaypointIndex, boarding);
-            m_Vehicles.Running(vehicle, line, waypoints, currentWaypointIndex, boarding);
+            if (!m_Config.Enabled)
+            {
+                return;
+            }
+
+            string lineId = m_Access.DraftKey(m_Access.LineId(line));
+            Config.LineFlags flags = m_Config.Flags(lineId);
+            if (!flags.Any)
+            {
+                return;
+            }
+
+            bool vehicleTracked = flags.HasVehicle && m_Vehicles.ShouldPlay(vehicle);
+            bool needsContext = vehicleTracked || flags.HasPlatform || flags.HasApproach;
+            FrameContext context = default;
+            bool hasContext = needsContext
+                && FrameContexts.TryBuild(
+                    m_Access,
+                    m_Stations,
+                    vehicle,
+                    line,
+                    waypoints,
+                    currentWaypointIndex,
+                    out context);
+
+            m_Platforms.Running(
+                vehicle,
+                line,
+                waypoints,
+                boarding,
+                flags,
+                hasContext,
+                context);
+            m_Vehicles.Running(
+                vehicle,
+                line,
+                waypoints,
+                boarding,
+                vehicleTracked,
+                hasContext,
+                context);
         }
 
         internal void Tick(uint nowFrame)
@@ -120,6 +159,7 @@ namespace RapidTransitMod.Broadcasting
 
         internal void Clear()
         {
+            m_Config.ClearFlags();
             m_Playback.Clear();
             m_Vehicles.Clear();
             m_Platforms.Clear();

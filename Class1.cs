@@ -81,6 +81,7 @@ namespace RapidTransitMod
             updateSystem.UpdateBefore<OriginArrivingStallRepairSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<DepotSourceLockSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<DepotSourceLockSystem, TransportDepotAISystem>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAfter<DepotSourceLockSystem, RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateBefore<DepotSourceLockSystem, TransportVehicleDispatchSystem>(SystemUpdatePhase.GameSimulation);
 #if RT_DEBUG_TOOLS
             updateSystem.UpdateAt<DevSightRaycastCollectorSystem>(SystemUpdatePhase.Raycast);

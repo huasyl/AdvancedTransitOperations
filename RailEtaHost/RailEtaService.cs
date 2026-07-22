@@ -36,7 +36,18 @@ namespace RapidTransitMod.RailEtaHost
         internal JobHandle TickHot(uint frame, JobHandle dependency)
         {
             if (m_HotRuntime == null) return dependency;
+            ConsumePublishedResult();
+            RefreshTerminalStatus();
+            if (!m_HotRuntime.NeedsTick) return dependency;
+
             JobHandle output = m_HotRuntime.Tick(frame, dependency);
+            ConsumePublishedResult();
+            RefreshTerminalStatus();
+            return output;
+        }
+
+        private void ConsumePublishedResult()
+        {
             RailEtaPublicResult result = DispatchRuntimeSystem.Instance?.LastRailEtaPublicResult;
             if (result != null && !ReferenceEquals(result, m_LastAppliedResult))
             {
@@ -50,11 +61,16 @@ namespace RapidTransitMod.RailEtaHost
                 }
                 if (accepted && IsTerminal(result.State)) m_LastTerminalTicket = result.Ticket;
             }
+        }
+
+        private void RefreshTerminalStatus()
+        {
             long terminalTicket = Volatile.Read(ref m_LastTerminalTicket);
             if (terminalTicket != 0 && m_Status.TryGetValue(terminalTicket, out RailEtaPublicStatus terminalStatus)
                 && m_HotRuntime.TryGetComparisonSummary(terminalTicket, out string summary))
                 terminalStatus.ComparisonSummary = summary;
-            return output;
+            if (terminalTicket != 0 && !m_HotRuntime.NeedsTick)
+                Interlocked.CompareExchange(ref m_LastTerminalTicket, 0, terminalTicket);
         }
 
         public RailEtaPublicTicket RequestEta(RailEtaPublicRequest descriptor)

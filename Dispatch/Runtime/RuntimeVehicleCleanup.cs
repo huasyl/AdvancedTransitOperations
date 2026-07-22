@@ -64,6 +64,7 @@ namespace RapidTransitMod
                 m_Runtime.m_StationContextQuery.RemoveVehicle(dead);
                 m_Runtime.m_CommandApplier.FlushRetireShadowSnapshots(dead, "entity-removed");
                 m_Runtime.m_CommandApplier.ResetRetireShadowSnapshots(dead);
+                PassengerFlow.Runtime.Current?.RemoveVehicle(dead);
                 m_Runtime.m_VehicleRegistry.Remove(dead);
                 m_Runtime.m_ObsPersist.ClearLap(dead);
                 m_Runtime.m_UICache.Remove(dead);

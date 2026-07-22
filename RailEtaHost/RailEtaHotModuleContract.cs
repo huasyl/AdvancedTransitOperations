@@ -19,6 +19,7 @@ namespace RapidTransitMod.RailEtaHost
     {
         string BuildId { get; }
         bool Busy { get; }
+        bool NeedsTick { get; }
         void Attach(RailEtaHotContext context);
         void Submit(RailEtaHotCommand command);
         JobHandle Tick(uint simulationFrame, JobHandle inputDependency);

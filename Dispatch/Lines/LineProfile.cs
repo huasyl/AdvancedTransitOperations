@@ -103,6 +103,11 @@ namespace RapidTransitMod.Dispatch.Lines
                 return true;
             }
 
+            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
+            uint vehiclePhase = unchecked((uint)vehicle.Index) & 15u;
+            if ((nowFrame & 15u) != vehiclePhase)
+                return false;
+
             Entity line = m_Runtime.m_Resolve.Line(vehicle);
             if (line == Entity.Null
                 || !m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))

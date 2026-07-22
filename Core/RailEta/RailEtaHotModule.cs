@@ -52,6 +52,18 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         public string BuildId => m_BuildId;
         public bool Busy => m_ActiveTicket.IsValid;
+        public bool NeedsTick
+        {
+            get
+            {
+                if (Busy) return true;
+#if RT_DEBUG_TOOLS
+                return m_ComparisonSystem != null && m_ComparisonSystem.NeedsTick;
+#else
+                return false;
+#endif
+            }
+        }
 
         public void Attach(RailEtaHotContext context)
         {
@@ -101,7 +113,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
 #endif
             JobHandle handle = m_SnapshotSystem.TickExternal(inputDependency);
 #if RT_DEBUG_TOOLS
-            if (RailEtaDebugSettings.HeavyExportsEnabled)
+            if (RailEtaDebugSettings.HeavyExportsEnabled || m_ComparisonSystem.NeedsTick)
                 handle = m_ComparisonSystem.TickExternal(simulationFrame, handle);
 #endif
             PublishCompleted();

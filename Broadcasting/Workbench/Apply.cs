@@ -115,6 +115,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 IncrementWorkbenchSnapshotVersion();
                 SaveWorkbench();
+                m_Announcements.ClearLineChecks();
 
                 return new ApplyResult
                 {

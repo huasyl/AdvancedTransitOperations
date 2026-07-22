@@ -101,6 +101,20 @@ namespace RapidTransitMod.RailEtaHost
         public Selection Current => Volatile.Read(ref m_Current);
 
         public bool ModuleBusy => Current?.Module.Busy ?? false;
+        public bool NeedsTick
+        {
+            get
+            {
+                if (Volatile.Read(ref m_PendingClearGeneration) >= 0) return true;
+#if RT_DEBUG_TOOLS
+                lock (m_Gate)
+                {
+                    if (m_PendingSwap != null) return true;
+                }
+#endif
+                return Current?.Module.NeedsTick ?? false;
+            }
+        }
 
         public void Attach(RailEtaHotContext context)
         {

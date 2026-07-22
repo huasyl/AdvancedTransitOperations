@@ -189,7 +189,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             m_State.AppliedLines.Clear();
             m_State.DraftVolumesByMode.Clear();
             m_State.AppliedVolumesByMode.Clear();
-            m_Announcements.ClearLineChecks();
             RestoreVolumes(persistedAppliedState, persistedDraftVolume, persistedVolumeStates);
             bool restoredTrainFromScopedState = RestoreAssetStates(persistedAssetStates);
             if (!restoredTrainFromScopedState)
@@ -225,6 +224,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
             m_Ctx.Preview.ApplyVolume();
             m_Announcements.ApplyVolume();
+            m_Announcements.ClearLineChecks();
         }
 
         private void RestoreVolumes(

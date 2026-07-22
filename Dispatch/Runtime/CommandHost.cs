@@ -104,6 +104,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearBoardingObservation(Entity vehicle)
         {
+            PassengerFlow.Runtime.Current?.CancelStop(vehicle);
             m_LastEffectiveBoardingState.Remove(vehicle);
             m_LastOfficialBoardingState.Remove(vehicle);
             m_StopSessionLine.Remove(vehicle);

@@ -338,6 +338,11 @@ namespace RapidTransitMod.RailEta.BuiltIn
         private uint m_LastConsumedFrame = UInt32.MaxValue;
         private int m_MissedIntervals;
 
+        internal bool NeedsTick => m_PendingStart != null
+            || m_JobActive
+            || (m_Session != null && !m_Session.IsTerminal)
+            || m_Exports.Count != 0;
+
         protected override void OnCreate()
         {
             base.OnCreate();

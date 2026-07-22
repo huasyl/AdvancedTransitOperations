@@ -446,22 +446,15 @@ namespace RapidTransitMod.Broadcasting
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex,
-            bool boarding)
+            bool boarding,
+            bool shouldPlayForTracked,
+            bool hasContext,
+            FrameContext context)
         {
-            bool shouldPlayForTracked = ShouldPlayForTracked(vehicle);
-            FrameContext context = default;
-            bool hasContext = shouldPlayForTracked
-                && FrameContexts.TryBuild(
-                    m_Access,
-                    m_Stations,
-                    vehicle,
-                    line,
-                    waypoints,
-                    currentWaypointIndex,
-                    out context);
             Progress(vehicle, line, waypoints, boarding, shouldPlayForTracked, hasContext, context);
         }
+
+        internal bool ShouldPlay(Entity vehicle) => ShouldPlayForTracked(vehicle);
 
         internal void Remove(Entity vehicle)
         {
@@ -1020,23 +1013,6 @@ namespace RapidTransitMod.Broadcasting
             new Dictionary<string, uint>(StringComparer.Ordinal);
         private readonly Dictionary<string, uint> m_StationQuietSinceFrame =
             new Dictionary<string, uint>(StringComparer.Ordinal);
-        private readonly Dictionary<string, LineAnnouncementFlags> m_LineAnnouncementFlags =
-            new Dictionary<string, LineAnnouncementFlags>(StringComparer.Ordinal);
-
-        private readonly struct LineAnnouncementFlags
-        {
-            public readonly uint Frame;
-            public readonly bool HasPlatform;
-            public readonly bool HasApproach;
-
-            public LineAnnouncementFlags(uint frame, bool hasPlatform, bool hasApproach)
-            {
-                Frame = frame;
-                HasPlatform = hasPlatform;
-                HasApproach = hasApproach;
-            }
-        }
-
         internal Platforms(BroadcastAccess access, Config config, Stations stations, Playback playback, Diagnostics diagnostics)
         {
             m_Access = access ?? throw new ArgumentNullException(nameof(access));
@@ -1063,35 +1039,19 @@ namespace RapidTransitMod.Broadcasting
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex,
-            bool boarding)
+            bool boarding,
+            Config.LineFlags flags,
+            bool hasContext,
+            FrameContext context)
         {
-            if (!m_Config.Enabled || m_Config.PlatformsByLine.Count == 0)
+            if (!m_Config.Enabled || !flags.HasPlatform)
             {
                 m_ApproachStateByVehicle.Remove(vehicle);
                 return;
             }
 
-            GetLineAnnouncementFlags(line, out bool hasPlatformAnnouncements, out bool hasApproachWatch);
-            bool needsContext = hasPlatformAnnouncements || hasApproachWatch;
-            if (!needsContext)
-            {
-                m_ApproachStateByVehicle.Remove(vehicle);
-                return;
-            }
-
-            FrameContext context = default;
-            bool hasContext = FrameContexts.TryBuild(
-                    m_Access,
-                    m_Stations,
-                    vehicle,
-                    line,
-                    waypoints,
-                    currentWaypointIndex,
-                    out context);
-
-            WatchBusy(line, waypoints, hasPlatformAnnouncements && hasContext, boarding, context);
-            WatchApproach(vehicle, line, waypoints, hasApproachWatch && hasContext, context);
+            WatchBusy(line, waypoints, hasContext, boarding, context);
+            WatchApproach(vehicle, line, waypoints, flags.HasApproach && hasContext, context);
         }
 
         internal void Remove(Entity vehicle)
@@ -1102,7 +1062,6 @@ namespace RapidTransitMod.Broadcasting
         internal void Clear()
         {
             m_CheckedLineIds.Clear();
-            m_LineAnnouncementFlags.Clear();
             m_ApproachStateByVehicle.Clear();
             m_AnnouncementCooldownUntilFrame.Clear();
             m_StationBusyUntilFrame.Clear();
@@ -1112,6 +1071,7 @@ namespace RapidTransitMod.Broadcasting
         internal void ClearLineChecks()
         {
             m_CheckedLineIds.Clear();
+            m_Config.ClearFlags();
         }
 
         internal void ClearAssetState()
@@ -1461,72 +1421,8 @@ namespace RapidTransitMod.Broadcasting
                 return false;
 
             string lineId = m_Access.DraftKey(m_Access.LineId(line));
-            if (string.IsNullOrWhiteSpace(lineId)
-                || !m_Config.PlatformsByLine.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
-                || lineAnnouncements == null)
-            {
-                return false;
-            }
-
-            foreach (BroadcastWorkbenchPlatformAnnouncementDto announcement in lineAnnouncements.Values)
-            {
-                if (announcement != null
-                    && announcement.enabled
-                    && announcement.nodes != null
-                    && announcement.nodes.Length > 0
-                    && string.Equals(announcement.triggerId, TriggerConstants.PlatformApproachTriggerId, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void GetLineAnnouncementFlags(Entity line, out bool hasPlatform, out bool hasApproach)
-        {
-            hasPlatform = false;
-            hasApproach = false;
-            if (!m_Config.Enabled || line == Entity.Null)
-                return;
-
-            string lineId = m_Access.DraftKey(m_Access.LineId(line));
-            if (string.IsNullOrWhiteSpace(lineId))
-                return;
-
-            uint frame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
-            if (m_LineAnnouncementFlags.TryGetValue(lineId, out LineAnnouncementFlags cached)
-                && cached.Frame == frame)
-            {
-                hasPlatform = cached.HasPlatform;
-                hasApproach = cached.HasApproach;
-                return;
-            }
-
             EnsureBroadcastRuntimeLineState(lineId, line);
-            if (m_Config.PlatformsByLine.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
-                && lineAnnouncements != null)
-            {
-                foreach (BroadcastWorkbenchPlatformAnnouncementDto announcement in lineAnnouncements.Values)
-                {
-                    if (announcement == null
-                        || !announcement.enabled
-                        || announcement.nodes == null
-                        || announcement.nodes.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    hasPlatform = true;
-                    if (string.Equals(announcement.triggerId, TriggerConstants.PlatformApproachTriggerId, StringComparison.Ordinal))
-                        hasApproach = true;
-
-                    if (hasPlatform && hasApproach)
-                        break;
-                }
-            }
-
-            m_LineAnnouncementFlags[lineId] = new LineAnnouncementFlags(frame, hasPlatform, hasApproach);
+            return m_Config.Flags(lineId).HasApproach;
         }
 
 
@@ -1571,25 +1467,7 @@ namespace RapidTransitMod.Broadcasting
 
             string lineId = m_Access.DraftKey(m_Access.LineId(line));
             EnsureBroadcastRuntimeLineState(lineId, line);
-            if (string.IsNullOrWhiteSpace(lineId)
-                || !m_Config.PlatformsByLine.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
-                || lineAnnouncements == null)
-            {
-                return false;
-            }
-
-            foreach (BroadcastWorkbenchPlatformAnnouncementDto announcement in lineAnnouncements.Values)
-            {
-                if (announcement != null
-                    && announcement.enabled
-                    && announcement.nodes != null
-                    && announcement.nodes.Length > 0)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return m_Config.Flags(lineId).HasPlatform;
         }
 
 

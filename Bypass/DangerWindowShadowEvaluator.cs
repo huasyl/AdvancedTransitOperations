@@ -10,8 +10,7 @@ namespace RapidTransitMod.Bypass
 {
     // FROZEN 2026-06-11: danger-window shadow compare is retained for work-card context only.
     // Runtime compare and selection-panel hooks are intentionally disconnected because live logs
-    // showed direction and blocker choice misalignment. See:
-    // design notes
+    // showed direction and blocker choice misalignment.
     internal sealed class DangerWindowShadowEvaluator
     {
         private const uint LOG_INTERVAL_FRAMES = 3600;

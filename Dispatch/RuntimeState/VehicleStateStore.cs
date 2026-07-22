@@ -51,6 +51,8 @@ namespace RapidTransitMod
         public MapRef<ReadyClockState> ForcedOriginReadyFrame { get; }
         public MapRef<uint> ForcedOriginBoardingGraceUntil { get; }
 
+        internal NativeHashMap<Entity, VehicleState> StateMap => m_State;
+
         public void Init()
         {
             if (m_State.IsCreated)
