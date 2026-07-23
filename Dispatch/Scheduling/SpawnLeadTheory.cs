@@ -22,7 +22,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
             public bool Failed;
         }
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, Entry> m_Entries = new Dictionary<Entity, Entry>();
         private readonly Dictionary<Entity, string> m_FactFailures = new Dictionary<Entity, string>();
         private readonly Queue<Entity> m_Queue = new Queue<Entity>();
@@ -30,7 +30,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
         private Entity m_ActiveLine;
         private RailEtaPublicTicket m_ActiveTicket;
 
-        internal SpawnLeadTheory(DispatchRuntimeSystem runtime)
+        internal SpawnLeadTheory(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
             m_Runtime.m_SimClock.ClockChanged += OnClockChanged;

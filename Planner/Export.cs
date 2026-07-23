@@ -25,13 +25,13 @@ namespace RapidTransitMod.Planner
             m_Port = port;
         }
 
-        private DispatchRuntimeSystem R => m_Port.Runtime;
+        private ModRuntimeHostSystem R => m_Port.Runtime;
         private Unity.Entities.EntityManager EntityManager => R.EntityManager;
         private TrackModelService m_TrackModel => R.TrackModel;
         private RuntimeFacade m_Bypass => R.Bypass;
         private Game.Simulation.SimulationSystem m_SimulationSystem => R.m_SimulationSystem;
         private RapidTransitMod.Dispatch.Workbench.Bridge m_WorkbenchBridge => R.m_WorkbenchBridge;
-        private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = DispatchRuntimeSystem.LOCAL_BYPASS_EXIT_RELEASE_ATOMS;
+        private const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = ModRuntimeHostSystem.LOCAL_BYPASS_EXIT_RELEASE_ATOMS;
 
         private List<WorkbenchLineRuntime> Lines() => R.Lines();
         private RapidTransitMod.Dispatch.Workbench.Trips Trips() => R.Trips();

@@ -59,7 +59,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly NativeHashMap<Entity, uint> m_MisfireStartFrame;
         private readonly NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
 
-        public RetireHost(DispatchRuntimeSystem runtime)
+        public RetireHost(ModRuntimeHostSystem runtime)
         {
             m_EntityManager = runtime.EntityManager;
             m_Log = runtime.log;
@@ -72,10 +72,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_VehicleRegistry = runtime.m_VehicleRegistry;
             m_VehicleStates = runtime.m_VehicleStateStore.State;
             m_SpawnIntentTrace = runtime.m_SpawnIntentTrace;
-            m_RetireRuntime = runtime.m_RuntimeController.Retire;
-            m_CaptureRetireSpawnTarget = runtime.m_RuntimeController.CaptureRetireSpawnTarget;
-            m_ApplyRetireSpawnTarget = runtime.m_RuntimeController.ApplyRetireSpawnTarget;
-            m_ClearAssistLaunchPending = runtime.m_RuntimeController.ClearAssistLaunchPending;
+            m_RetireRuntime = runtime.m_RuntimeEngine.Retire;
+            m_CaptureRetireSpawnTarget = runtime.m_RuntimeEngine.CaptureRetireSpawnTarget;
+            m_ApplyRetireSpawnTarget = runtime.m_RuntimeEngine.ApplyRetireSpawnTarget;
+            m_ClearAssistLaunchPending = runtime.m_RuntimeEngine.ClearAssistLaunchPending;
             m_ClearForcedMidStopClosingConsist = runtime.m_Observation.ClearForcedMidStop;
             m_RemoveAnnouncementVehicle = runtime.m_Announcements.RemoveVehicle;
             m_VehicleLabels = runtime.m_VehicleLabels;

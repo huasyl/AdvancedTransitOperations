@@ -48,7 +48,7 @@ namespace RapidTransitMod.RailEtaHost
 
         private void ConsumePublishedResult()
         {
-            RailEtaPublicResult result = DispatchRuntimeSystem.Instance?.LastRailEtaPublicResult;
+            RailEtaPublicResult result = ModRuntimeHostSystem.Instance?.LastRailEtaPublicResult;
             if (result != null && !ReferenceEquals(result, m_LastAppliedResult))
             {
                 m_LastAppliedResult = result;
@@ -110,7 +110,7 @@ namespace RapidTransitMod.RailEtaHost
         public bool TryGetState(RailEtaPublicTicket ticket, out RailEtaPublicStatus status)
         {
             if (!m_Status.TryGetValue(ticket.Value, out status)) return false;
-            RailEtaPublicResult result = DispatchRuntimeSystem.Instance?.LastRailEtaPublicResult;
+            RailEtaPublicResult result = ModRuntimeHostSystem.Instance?.LastRailEtaPublicResult;
             if (result != null && result.Ticket == ticket.Value
                 && status.ClockEpoch == m_ClockSnapshot().ClockEpoch) Apply(status, result);
             if (m_HotRuntime != null && m_HotRuntime.TryGetComparisonSummary(ticket.Value, out string summary))

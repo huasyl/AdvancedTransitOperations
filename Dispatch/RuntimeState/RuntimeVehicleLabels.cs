@@ -21,13 +21,13 @@ namespace RapidTransitMod
 
     internal sealed class RuntimeVehicleLabels
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, string> m_LabelCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, LocalizedLabelSpec> m_LocalizedSpecCache = new Dictionary<Entity, LocalizedLabelSpec>();
         private readonly Dictionary<string, string> m_LocalizedBaseCache = new Dictionary<string, string>();
         private object m_ActiveLocalizationDictionary;
 
-        public RuntimeVehicleLabels(DispatchRuntimeSystem runtime)
+        public RuntimeVehicleLabels(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -125,7 +125,7 @@ namespace RapidTransitMod
                     {
                         key = spec.Late ? "HoldingLate" : "Holding";
                         fallback = spec.Late ? "候车 补发" : "候车";
-                        suffix = " " + DispatchRuntimeSystem.SlotStr(spec.CurrentSlotMinute) + suffix;
+                        suffix = " " + ModRuntimeHostSystem.SlotStr(spec.CurrentSlotMinute) + suffix;
                     }
                     else
                     {
@@ -141,7 +141,7 @@ namespace RapidTransitMod
                     key = "GoingOrigin";
                     fallback = "前往始发站";
                     if (spec.NextSlotMinute >= 0)
-                        suffix = " " + DispatchRuntimeSystem.SlotStr(spec.NextSlotMinute) + suffix;
+                        suffix = " " + ModRuntimeHostSystem.SlotStr(spec.NextSlotMinute) + suffix;
                     return;
                 case VehicleLabelType.Running:
                     key = spec.Abnormal ? "RunningAbnormal" : (spec.Late ? "RunningLate" : "Running");
@@ -149,18 +149,18 @@ namespace RapidTransitMod
                     if (!spec.Abnormal)
                     {
                         if (spec.CurrentSlotMinute >= 0 || spec.CurrentSlotMinute == int.MinValue)
-                            suffix = (spec.CurrentSlotMinute == int.MinValue ? "?" : DispatchRuntimeSystem.SlotStr(spec.CurrentSlotMinute))
-                                + (spec.NextSlotMinute >= 0 ? "->" + DispatchRuntimeSystem.SlotStr(spec.NextSlotMinute) : string.Empty)
+                            suffix = (spec.CurrentSlotMinute == int.MinValue ? "?" : ModRuntimeHostSystem.SlotStr(spec.CurrentSlotMinute))
+                                + (spec.NextSlotMinute >= 0 ? "->" + ModRuntimeHostSystem.SlotStr(spec.NextSlotMinute) : string.Empty)
                                 + suffix;
                         else if (spec.NextSlotMinute >= 0)
-                            suffix = " " + DispatchRuntimeSystem.SlotStr(spec.NextSlotMinute) + suffix;
+                            suffix = " " + ModRuntimeHostSystem.SlotStr(spec.NextSlotMinute) + suffix;
                     }
                     return;
                 case VehicleLabelType.BoardingEnd:
                     key = "BoardingEnd";
                     fallback = "结束上客";
                     if (spec.CurrentSlotMinute >= 0)
-                        suffix = " " + DispatchRuntimeSystem.SlotStr(spec.CurrentSlotMinute) + suffix;
+                        suffix = " " + ModRuntimeHostSystem.SlotStr(spec.CurrentSlotMinute) + suffix;
                     return;
                 case VehicleLabelType.StopTimeout:
                     key = "StopTimeout";

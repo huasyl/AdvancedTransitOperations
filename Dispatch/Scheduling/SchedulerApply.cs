@@ -9,9 +9,9 @@ namespace RapidTransitMod
 {
     internal sealed class SchedulerApply
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public SchedulerApply(DispatchRuntimeSystem runtime)
+        public SchedulerApply(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

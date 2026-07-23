@@ -9,9 +9,9 @@ namespace RapidTransitMod.PassengerFlow
 {
     internal sealed class Port
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        internal Port(DispatchRuntimeSystem runtime)
+        internal Port(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

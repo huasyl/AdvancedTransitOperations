@@ -79,7 +79,7 @@ namespace RapidTransitMod.PassengerFlow
 
         public void PreSerialize(Colossal.Serialization.Entities.Context context)
         {
-            DispatchRuntimeSystem runtime = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
             if (runtime == null || runtime.m_CitySystem == null)
                 return;
 

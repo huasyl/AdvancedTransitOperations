@@ -35,9 +35,9 @@ namespace RapidTransitMod
 
     internal sealed class AnnouncementHost
     {
-        private readonly DispatchRuntimeSystem m_Host;
+        private readonly ModRuntimeHostSystem m_Host;
 
-        internal AnnouncementHost(DispatchRuntimeSystem host)
+        internal AnnouncementHost(ModRuntimeHostSystem host)
         {
             m_Host = host;
         }
@@ -55,9 +55,9 @@ namespace RapidTransitMod
 
         private sealed class RuntimePort : Broadcasting.BroadcastAccess.Host
         {
-            private readonly DispatchRuntimeSystem m_Host;
+            private readonly ModRuntimeHostSystem m_Host;
 
-            internal RuntimePort(DispatchRuntimeSystem host)
+            internal RuntimePort(ModRuntimeHostSystem host)
             {
                 m_Host = host;
             }
@@ -196,9 +196,9 @@ namespace RapidTransitMod
 
         private sealed class WorkbenchPort : Broadcasting.WorkbenchBackend.Host
         {
-            private readonly DispatchRuntimeSystem m_Host;
+            private readonly ModRuntimeHostSystem m_Host;
 
-            internal WorkbenchPort(DispatchRuntimeSystem host)
+            internal WorkbenchPort(ModRuntimeHostSystem host)
             {
                 m_Host = host;
             }
@@ -215,7 +215,7 @@ namespace RapidTransitMod
             internal override List<WorkbenchLineRuntime> Lines() => m_Host.Lines();
             internal override string StationName(Entity stopEntity) => m_Host.m_Resolve.StationName(stopEntity);
             internal override string Name(Entity entity) => m_Host.EntityName(entity);
-            internal override string Error(System.Exception ex) => DispatchRuntimeSystem.DescribeError(ex);
+            internal override string Error(System.Exception ex) => ModRuntimeHostSystem.DescribeError(ex);
         }
     }
 }

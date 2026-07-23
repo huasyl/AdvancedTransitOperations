@@ -21,7 +21,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private const float DispatchSampleOutlierFactor = 1.5f;
         private const uint DISPATCH_SAMPLE_MIN_FRAMES = 365u;
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Capture m_Capture;
         private readonly SliceAdmission m_Admission;
         private readonly Dictionary<Entity, DwellDeadlineCacheEntry> m_DwellDeadlineCache =
@@ -60,7 +60,7 @@ namespace RapidTransitMod.Dispatch.Observation
             }
         }
 
-        public ObservationPort(DispatchRuntimeSystem runtime, Capture capture, SliceAdmission admission)
+        public ObservationPort(ModRuntimeHostSystem runtime, Capture capture, SliceAdmission admission)
         {
             m_Runtime = runtime;
             m_Capture = capture;
@@ -335,7 +335,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     observationFrames - configuredFrames,
-                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
+                    clockSnapshot.ToFramesCeil(ModRuntimeHostSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);
@@ -810,7 +810,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             float3 vehiclePosition = m_Runtime.EntityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position;
             float3 stopPosition = m_Runtime.EntityManager.GetComponentData<Game.Objects.Transform>(targetStop).m_Position;
-            return math.distance(vehiclePosition, stopPosition) > DispatchRuntimeSystem.AT_STOP_MAX_DIST;
+            return math.distance(vehiclePosition, stopPosition) > ModRuntimeHostSystem.AT_STOP_MAX_DIST;
         }
 
         private uint ComputeDeadline(Entity line, int waypointIndex, uint dwellSinceFrame, int maxDwellMinutes)
@@ -826,7 +826,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     observationFrames - configuredFrames,
-                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
+                    clockSnapshot.ToFramesCeil(ModRuntimeHostSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             if (!(earlyCloseFrames > 0f)
@@ -836,7 +836,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 earlyCloseFrames = math.min(
                     anchoredFrames - configuredFrames,
-                    clockSnapshot.ToFramesCeil(DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
+                    clockSnapshot.ToFramesCeil(ModRuntimeHostSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES));
             }
 
             float adjustedFrames = math.max(0f, configuredFrames - earlyCloseFrames);
@@ -930,7 +930,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 m_Runtime.m_StationAnchorDiagSuspiciousOriginOrTerminal++;
                 m_Runtime.m_StationAnchorDiagTotalSuspiciousOriginOrTerminal++;
             }
-            if (sampleMinutes > DispatchRuntimeSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES)
+            if (sampleMinutes > ModRuntimeHostSystem.EARLY_STOP_DWELL_CLOSE_MAX_MINUTES)
             {
                 m_Runtime.m_StationAnchorDiagSuspiciousLongDwell++;
                 m_Runtime.m_StationAnchorDiagTotalSuspiciousLongDwell++;
@@ -978,7 +978,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private void MaybeLogStationAnchorObservationDiagnostics(uint nowFrame)
         {
             if (m_Runtime.m_StationAnchorObservationDiagLastLogFrame != 0
-                && nowFrame - m_Runtime.m_StationAnchorObservationDiagLastLogFrame < DispatchRuntimeSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES)
+                && nowFrame - m_Runtime.m_StationAnchorObservationDiagLastLogFrame < ModRuntimeHostSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES)
             {
                 return;
             }
@@ -999,7 +999,7 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             StationAnchorObservationSummaryDto coverage = m_Runtime.m_StationAnchorDiagnostics.Build().summary;
-            m_Runtime.log.Info("[StationAnchorDiag] intervalFrames=" + DispatchRuntimeSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
+            m_Runtime.log.Info("[StationAnchorDiag] intervalFrames=" + ModRuntimeHostSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
                 + " lines=" + coverage.lineCount
                 + " stopWaypoints=" + coverage.stopWaypointCount
                 + " anchorResolved=" + coverage.anchorResolvedCount
@@ -1007,7 +1007,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 + " uniqueAnchors=" + coverage.uniqueAnchorCount
                 + " duplicateAnchorOccurrences=" + coverage.duplicateAnchorOccurrenceCount);
 
-            m_Runtime.log.Info("[StopDwellAnchorDiag] intervalFrames=" + DispatchRuntimeSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
+            m_Runtime.log.Info("[StopDwellAnchorDiag] intervalFrames=" + ModRuntimeHostSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
                 + " accepted=" + m_Runtime.m_StationAnchorDiagAcceptedSamples
                 + " legacyWritten=" + m_Runtime.m_StationAnchorDiagLegacyWritten
                 + " anchorWritten=" + m_Runtime.m_StationAnchorDiagAnchorWritten

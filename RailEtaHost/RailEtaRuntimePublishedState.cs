@@ -3,7 +3,7 @@ using RapidTransitMod.RailEtaHost;
 
 namespace RapidTransitMod
 {
-    public partial class DispatchRuntimeSystem
+    public partial class ModRuntimeHostSystem
     {
         private RailEtaPublicResult m_LastRailEtaPublicResult;
         internal RailEtaPublicResult LastRailEtaPublicResult => Volatile.Read(ref m_LastRailEtaPublicResult);

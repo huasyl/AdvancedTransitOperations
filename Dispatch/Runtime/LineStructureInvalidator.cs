@@ -6,7 +6,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 {
     internal sealed class LineStructureInvalidator
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, PendingInvalidation> m_Pending = new Dictionary<Entity, PendingInvalidation>();
 
         private readonly struct PendingInvalidation
@@ -37,7 +37,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
-        internal LineStructureInvalidator(DispatchRuntimeSystem runtime)
+        internal LineStructureInvalidator(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

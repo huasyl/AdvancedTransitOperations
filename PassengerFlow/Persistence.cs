@@ -244,7 +244,7 @@ namespace RapidTransitMod.PassengerFlow
             DateTime nowDate = port != null ? port.NowDate() : DateTime.Today;
             int currentLegacyDayIndex = persisted.currentBucketServiceDayIndex;
             bool legacyClockCompatible = port == null
-                || Math.Abs(port.FramesPerMinute() - DispatchRuntimeSystem.SIM_FRAMES_PER_MINUTE) < 0.001d;
+                || Math.Abs(port.FramesPerMinute() - ModRuntimeHostSystem.SIM_FRAMES_PER_MINUTE) < 0.001d;
             PassengerFlowPersistentState migrated = new PassengerFlowPersistentState
             {
                 schemaVersion = SchemaVersion,

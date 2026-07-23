@@ -7,12 +7,12 @@ namespace RapidTransitMod
 {
     internal sealed class RuntimeVehicleCleanup
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly LineSpawnControl m_LineSpawnControl;
         private readonly Action<Entity> m_ClearAssistLaunchPending;
 
         public RuntimeVehicleCleanup(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             LineSpawnControl lineSpawnControl,
             Action<Entity> clearAssistLaunchPending)
         {
@@ -55,7 +55,7 @@ namespace RapidTransitMod
                     {
                         log.Info("[PreparingRemoved] 车辆" + dead.Index
                             + " line=" + DispatchCommandApplier.DescribeRetireShadowEntity(mappedLine)
-                            + " targetMin=" + (removedTargetMin >= 0 ? DispatchRuntimeSystem.SlotStr(removedTargetMin) : "-")
+                            + " targetMin=" + (removedTargetMin >= 0 ? ModRuntimeHostSystem.SlotStr(removedTargetMin) : "-")
                             + " cachedWp=" + removedCachedWp
                             + " prepAgeFrames=" + removedPrepAge);
                     }

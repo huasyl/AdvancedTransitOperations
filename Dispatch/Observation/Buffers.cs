@@ -11,9 +11,9 @@ namespace RapidTransitMod.Dispatch.Observation
     internal sealed class Buffers
     {
         private const ulong SignatureSeed = 1469598103934665603UL;
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public Buffers(DispatchRuntimeSystem runtime)
+        public Buffers(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -70,7 +70,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void Flush(Entity line, int index, DwellObservation observation)
         {
-            if (!DispatchRuntimeSystem.IsDwellObservationPersistenceEnabled())
+            if (!ModRuntimeHostSystem.IsDwellObservationPersistenceEnabled())
                 return;
 
             if (line == Entity.Null
@@ -118,7 +118,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void Flush(string key, StationDwellObservation observation)
         {
-            if (!DispatchRuntimeSystem.IsStationDwellObservationPersistenceEnabled())
+            if (!ModRuntimeHostSystem.IsStationDwellObservationPersistenceEnabled())
                 return;
 
             if (string.IsNullOrWhiteSpace(key)
@@ -161,7 +161,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void Flush(Entity line, int index, TraversalSliceObservation observation)
         {
-            if (!DispatchRuntimeSystem.IsTraversalSliceObservationPersistenceEnabled())
+            if (!ModRuntimeHostSystem.IsTraversalSliceObservationPersistenceEnabled())
                 return;
 
             if (line == Entity.Null || index < 0 || observation.SampleCount <= 0)
@@ -227,7 +227,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal bool TryFlushDailyQuota(LineKey lak, TraversalSliceDailyQuota quota)
         {
-            if (!DispatchRuntimeSystem.IsTraversalSliceObservationPersistenceEnabled()
+            if (!ModRuntimeHostSystem.IsTraversalSliceObservationPersistenceEnabled()
                 || lak.IsEmpty
                 || !m_Runtime.m_TraversalSliceObservationBufferReady)
             {
@@ -271,7 +271,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal bool TryFlushColdStart(LineKey lak, TraversalSliceColdStart coldStart)
         {
-            if (!DispatchRuntimeSystem.IsTraversalSliceObservationPersistenceEnabled()
+            if (!ModRuntimeHostSystem.IsTraversalSliceObservationPersistenceEnabled()
                 || lak.IsEmpty
                 || !m_Runtime.m_TraversalSliceObservationBufferReady)
             {
@@ -338,7 +338,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private void EnsureDwellCore()
         {
-            if (!DispatchRuntimeSystem.IsDwellObservationPersistenceEnabled() || m_Runtime.m_DwellObservationBufferReady)
+            if (!ModRuntimeHostSystem.IsDwellObservationPersistenceEnabled() || m_Runtime.m_DwellObservationBufferReady)
                 return;
 
             Entity city = m_Runtime.m_CitySystem.City;
@@ -353,7 +353,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private void RestoreDwellCore()
         {
-            if (!DispatchRuntimeSystem.IsDwellObservationPersistenceEnabled())
+            if (!ModRuntimeHostSystem.IsDwellObservationPersistenceEnabled())
                 return;
 
             if (m_Runtime.m_DwellObservationCacheLoaded || !m_Runtime.m_DwellObservationBufferReady)
@@ -413,7 +413,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private void EnsureStationDwellCore()
         {
-            if (!DispatchRuntimeSystem.IsStationDwellObservationPersistenceEnabled() || m_Runtime.m_StationDwellObservationBufferReady)
+            if (!ModRuntimeHostSystem.IsStationDwellObservationPersistenceEnabled() || m_Runtime.m_StationDwellObservationBufferReady)
                 return;
 
             Entity city = m_Runtime.m_CitySystem.City;
@@ -428,7 +428,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private void RestoreStationDwellCore()
         {
-            if (!DispatchRuntimeSystem.IsStationDwellObservationPersistenceEnabled())
+            if (!ModRuntimeHostSystem.IsStationDwellObservationPersistenceEnabled())
                 return;
 
             if (m_Runtime.m_StationDwellObservationCacheLoaded || !m_Runtime.m_StationDwellObservationBufferReady)
@@ -479,7 +479,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private void EnsureSliceCore()
         {
-            if (!DispatchRuntimeSystem.IsTraversalSliceObservationPersistenceEnabled() || m_Runtime.m_TraversalSliceObservationBufferReady)
+            if (!ModRuntimeHostSystem.IsTraversalSliceObservationPersistenceEnabled() || m_Runtime.m_TraversalSliceObservationBufferReady)
                 return;
 
             Entity city = m_Runtime.m_CitySystem.City;
@@ -498,7 +498,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         private void RestoreSliceCore()
         {
-            if (!DispatchRuntimeSystem.IsTraversalSliceObservationPersistenceEnabled())
+            if (!ModRuntimeHostSystem.IsTraversalSliceObservationPersistenceEnabled())
                 return;
 
             if (m_Runtime.m_TraversalSliceObservationCacheLoaded || !m_Runtime.m_TraversalSliceObservationBufferReady)

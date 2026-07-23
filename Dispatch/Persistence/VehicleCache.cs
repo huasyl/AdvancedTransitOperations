@@ -9,7 +9,7 @@ namespace RapidTransitMod.Dispatch.Persistence
 {
     internal sealed class VehicleCache
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, float> m_ReadLap;
         private readonly Func<Entity, float> m_ReadDist;
         private readonly TryProgress m_Progress;
@@ -17,7 +17,7 @@ namespace RapidTransitMod.Dispatch.Persistence
         public delegate bool TryProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
 
         public VehicleCache(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             Func<Entity, float> readLap,
             Func<Entity, float> readDist,
             TryProgress progress)
@@ -86,7 +86,7 @@ namespace RapidTransitMod.Dispatch.Persistence
 
                 if (cachedState == VehicleState.Holding)
                 {
-                    m_Runtime.m_RuntimeController.RestoreHold(v, cachedTarget);
+                    m_Runtime.m_RuntimeEngine.RestoreHold(v, cachedTarget);
 
                     if (m_Runtime.EntityManager.HasComponent<PublicTransport>(v))
                     {
@@ -97,7 +97,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     if (RtLog.VerboseEnabled)
                     {
                         m_Runtime.log.Info("[恢复] 线路" + line.Index + " 车辆" + v.Index
-                            + " Holding target=" + (cachedTarget >= 0 ? DispatchRuntimeSystem.SlotStr(cachedTarget) : "-"));
+                            + " Holding target=" + (cachedTarget >= 0 ? ModRuntimeHostSystem.SlotStr(cachedTarget) : "-"));
                     }
                     return true;
                 }
@@ -107,7 +107,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     if (!allowRunningRestore)
                         return false;
 
-                    m_Runtime.m_RuntimeController.RestoreRun(v);
+                    m_Runtime.m_RuntimeEngine.RestoreRun(v);
 
                     float cachedLapDist = m_ReadDist(line);
                     bool restoredLapStart = false;
@@ -150,7 +150,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (cachedLapFrames <= 0f) return false;
             if (!m_Progress(v, out int nextWaypointIndex, out float segmentPosition)) return false;
 
-            m_Runtime.m_RuntimeController.RestoreRun(v);
+            m_Runtime.m_RuntimeEngine.RestoreRun(v);
 
             float segmentBase = nextWaypointIndex == 0 ? (wps.Length - 1) : (nextWaypointIndex - 1);
             float progress = (segmentBase + math.saturate(segmentPosition)) / math.max(1, wps.Length);

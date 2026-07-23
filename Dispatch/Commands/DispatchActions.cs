@@ -18,7 +18,7 @@ namespace RapidTransitMod.Dispatch.Commands
             PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
             publicTransport.m_DepartureFrame = m_Host.SimulationSystem.frameIndex + 9999;
             CommitPublicTransport(vehicle, publicTransport, ecb);
-            m_Host.SetLocalizedVehicleLabel(vehicle, "Holding", "候车", " " + DispatchRuntimeSystem.SlotStr(slot));
+            m_Host.SetLocalizedVehicleLabel(vehicle, "Holding", "候车", " " + ModRuntimeHostSystem.SlotStr(slot));
         }
 
         public void CommitPublicTransport(
@@ -51,8 +51,8 @@ namespace RapidTransitMod.Dispatch.Commands
 
         internal static void ForceOfficialBoardingClose(ref PublicTransport publicTransport, uint nowFrame)
         {
-            publicTransport.m_DepartureFrame = nowFrame > DispatchRuntimeSystem.OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
-                ? nowFrame - DispatchRuntimeSystem.OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
+            publicTransport.m_DepartureFrame = nowFrame > ModRuntimeHostSystem.OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
+                ? nowFrame - ModRuntimeHostSystem.OFFICIAL_BOARDING_CLOSE_TIMEOUT_FRAMES
                 : 1;
             publicTransport.m_MinWaitingDistance = float.MaxValue;
             publicTransport.m_MaxBoardingDistance = float.MaxValue;

@@ -10,7 +10,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 {
     internal sealed class RuntimeLog
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
         internal readonly Dictionary<Entity, string> m_YieldSkipLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_PreparingSlotLogCache = new Dictionary<Entity, string>();
@@ -32,7 +32,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         internal readonly Dictionary<Entity, TrainHeadSnapshot> m_LastLaunchHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
         internal readonly Dictionary<Entity, TrainHeadSnapshot> m_LastBoardingHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
 
-        public RuntimeLog(DispatchRuntimeSystem runtime)
+        public RuntimeLog(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -161,7 +161,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         public static string Slot(int targetMin)
         {
-            return targetMin >= 0 ? DispatchRuntimeSystem.SlotStr(targetMin) : "-";
+            return targetMin >= 0 ? ModRuntimeHostSystem.SlotStr(targetMin) : "-";
         }
 
         public string TrainHeadLaunch(
@@ -315,11 +315,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 vehicle,
                 key,
                 "[CrossLineCandidate] line=" + observedLine.Index
-                    + " slot=" + DispatchRuntimeSystem.SlotStr(slot)
+                    + " slot=" + ModRuntimeHostSystem.SlotStr(slot)
                     + " vehicle=" + vehicle.Index
                     + " state=" + state
                     + " eta=" + (etaFrames == float.MaxValue ? "?" : m_Runtime.m_SimClock.ToMinutes(etaFrames).ToString("F1") + "分钟")
-                    + " prevTarget=" + (previousTarget >= 0 ? DispatchRuntimeSystem.SlotStr(previousTarget) : "-")
+                    + " prevTarget=" + (previousTarget >= 0 ? ModRuntimeHostSystem.SlotStr(previousTarget) : "-")
                     + " " + VehicleOwnership(observedLine, vehicle, state, targetMin, "candidate"));
         }
 
@@ -366,13 +366,13 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     vehicle,
                     key,
                     nowFrame,
-                    DispatchRuntimeSystem.ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
+                    ModRuntimeHostSystem.ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
             {
                 return;
             }
 
             float distanceToOriginMeters = waypoints.Length > 0 ? m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints) : -1f;
-            bool hasAssistPending = m_Runtime.m_RuntimeController.TryGetAssistPendingTarget(vehicle, route, targetMin, out int assistTargetMin);
+            bool hasAssistPending = m_Runtime.m_RuntimeEngine.TryGetAssistPendingTarget(vehicle, route, targetMin, out int assistTargetMin);
             uint forcedReadyRemainingFrames = hasForcedReady ? forcedReadyFrame - nowFrame : 0;
 
             m_Runtime.log.Info("[OriginDispatchTrace] reason=" + reason
@@ -380,7 +380,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " route=" + route.Index
                 + " vehicle=" + vehicle.Index
                 + " state=" + state
-                + " now=" + DispatchRuntimeSystem.SlotStr(nowMin)
+                + " now=" + ModRuntimeHostSystem.SlotStr(nowMin)
                 + " target=" + Slot(targetMin)
                 + " current=" + Slot(currentSlot)
                 + " atA=" + (atOrigin ? "1" : "0")
@@ -431,7 +431,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     line,
                     key,
                     nowFrame,
-                    DispatchRuntimeSystem.ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
+                    ModRuntimeHostSystem.ORIGIN_DISPATCH_TRACE_COOLDOWN_FRAMES))
             {
                 return;
             }
@@ -442,8 +442,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_Runtime.log.Info("[DispatchSlotHeld] reason=" + reason
                 + " line=" + line.Index
                 + " route=" + route.Index
-                + " now=" + DispatchRuntimeSystem.SlotStr(nowMin)
-                + " slot=" + DispatchRuntimeSystem.SlotStr(slot)
+                + " now=" + ModRuntimeHostSystem.SlotStr(nowMin)
+                + " slot=" + ModRuntimeHostSystem.SlotStr(slot)
                 + " holder=" + holder.Index
                 + " state=" + holderState
                 + " target=" + Slot(holderTarget)
@@ -467,10 +467,10 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 "[BVObserve] " + lineTag + " 车辆" + vehicle.Index
                     + " phase=" + phase
                     + " detail=" + detail
-                    + " enforcement=" + (DispatchRuntimeSystem.IsBvMisfireEnforcementEnabled() ? "on" : "off")
+                    + " enforcement=" + (ModRuntimeHostSystem.IsBvMisfireEnforcementEnabled() ? "on" : "off")
                     + " frame=" + nowFrame);
 
-            if (DispatchRuntimeSystem.IsBvMisfireEnforcementEnabled())
+            if (ModRuntimeHostSystem.IsBvMisfireEnforcementEnabled())
             {
                 m_Runtime.m_BVMisfire.Add(vehicle);
                 m_Runtime.m_BVMisfireStartFrame[vehicle] = nowFrame;
@@ -562,7 +562,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " mappedLine=" + DispatchCommandApplier.DescribeRetireShadowEntity(mappedLine)
                 + " currentRoute=" + DispatchCommandApplier.DescribeRetireShadowEntity(currentRoute)
                 + " state=" + state
-                + " targetMin=" + (targetMin >= 0 ? DispatchRuntimeSystem.SlotStr(targetMin) : "-")
+                + " targetMin=" + (targetMin >= 0 ? ModRuntimeHostSystem.SlotStr(targetMin) : "-")
                 + " cachedWp=" + cachedWaypointIndex
                 + " preparingAgeFrames=" + preparingAge
                 + " owner=" + DispatchCommandApplier.DescribeRetireShadowEntity(owner)

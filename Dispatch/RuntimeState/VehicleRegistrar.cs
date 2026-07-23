@@ -81,12 +81,12 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly List<Entity> m_DisabledLineLateSpawnRetireQueue = new List<Entity>();
         private readonly HashSet<Entity> m_DisabledLineLateSpawnRetireQueueSeen = new HashSet<Entity>();
         private readonly HashSet<Entity> m_DisabledLineLateSpawnHandledLines = new HashSet<Entity>();
 
-        public VehicleRegistrar(DispatchRuntimeSystem runtime)
+        public VehicleRegistrar(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -314,7 +314,7 @@ namespace RapidTransitMod
             }
 
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
-            m_Runtime.m_RuntimeController.Adopt(vehicle, line, initialState, nowFrame, dispatchFrame);
+            m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, nowFrame, dispatchFrame);
             string spawnIntent = dispatchFrame.HasValue
                 ? m_Runtime.m_SpawnIntentTrace.Bind(line, vehicle, dispatchFrame.Value, nowFrame)
                 : string.Empty;
@@ -362,13 +362,13 @@ namespace RapidTransitMod
                 m_Runtime.m_Observation.Seed(vehicle, line, nowFrame);
 
             if (finalState == VehicleState.Running)
-                m_Runtime.m_VehicleLabels.SetLocalized(vehicle, "Running", "运行中", finalTarget >= 0 ? " " + DispatchRuntimeSystem.SlotStr(finalTarget) : "");
+                m_Runtime.m_VehicleLabels.SetLocalized(vehicle, "Running", "运行中", finalTarget >= 0 ? " " + ModRuntimeHostSystem.SlotStr(finalTarget) : "");
             else if (finalState == VehicleState.Holding)
                 m_Runtime.m_VehicleLabels.SetLocalized(
                     vehicle,
                     finalTarget >= 0 ? "Holding" : "HoldingWaitingDispatch",
                     finalTarget >= 0 ? "候车" : "候车 等待调度",
-                    finalTarget >= 0 ? " " + DispatchRuntimeSystem.SlotStr(finalTarget) : "");
+                    finalTarget >= 0 ? " " + ModRuntimeHostSystem.SlotStr(finalTarget) : "");
             else
                 m_Runtime.m_VehicleLabels.SetLocalized(vehicle, atOrigin ? "HoldingWaitingDispatch" : "GoingOrigin", atOrigin ? "候车 等待调度" : "前往始发站");
 
@@ -406,7 +406,7 @@ namespace RapidTransitMod
                 }
             }
             if (!adoptExistingVehicles)
-                m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.m_RuntimeShell.Minute(), vehicle, finalState);
+                m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.m_RuntimeLifecycleHost.Minute(), vehicle, finalState);
         }
 
         private void HandleDisabledLinePendingSpawn(
@@ -491,7 +491,7 @@ namespace RapidTransitMod
             }
             if (boarding)
             {
-                if (m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
+                if (m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
                 {
                     if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nearOriginWaypointIndex, out float nearOriginSegmentPosition)
                         || (nearOriginWaypointIndex == 1 && nearOriginSegmentPosition <= 0.10f)
@@ -523,7 +523,7 @@ namespace RapidTransitMod
             {
                 bool nearOriginProgress = nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.05f);
                 if (nearOriginProgress
-                    && m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
+                    && m_Runtime.m_LineProfile.IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS)
                     && (boarding || arriving))
                 {
                     reason = "route-progress-origin-fallback wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
@@ -534,7 +534,7 @@ namespace RapidTransitMod
             }
 
             float originDistance = m_Runtime.m_LineProfile.DistanceToOrigin(vehicle, waypoints);
-            if (originDistance > DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS)
+            if (originDistance > ModRuntimeHostSystem.ORIGIN_CONGESTION_RADIUS_METERS)
             {
                 reason = "far-from-origin " + originDistance.ToString("F0") + "m";
                 return VehicleState.Running;

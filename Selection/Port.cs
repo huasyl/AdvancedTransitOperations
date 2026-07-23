@@ -39,7 +39,7 @@ namespace RapidTransitMod
         internal NativeHashMap<Entity, int> CachedWp;
         internal NativeHashSet<Entity> Misfires;
         internal DispatchCommandApplier Commands;
-        internal DispatchRuntimeController Runtime;
+        internal DispatchEngine Runtime;
         internal DispatchScheduler Scheduler;
         internal RuntimeVehicleLabels Labels;
 

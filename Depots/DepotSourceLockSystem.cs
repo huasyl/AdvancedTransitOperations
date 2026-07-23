@@ -259,7 +259,7 @@ namespace RapidTransitMod
         {
             ClearFrameDepotCaches();
             CleanupConfiguredRequestTracking();
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             if (control != null && !control.m_Features.DepotLock())
             {
                 ClearConfiguredSourceRetries();
@@ -355,7 +355,7 @@ namespace RapidTransitMod
             if (m_LineRuntimeSnapshots.Count == 0)
                 return;
 
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             ulong settingsVersion = control != null
                 ? control.m_LineView.CfgVersion()
                 : 0ul;
@@ -432,7 +432,7 @@ namespace RapidTransitMod
             Entity configuredDepot,
             Entity blockedLane)
         {
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             if (request == Entity.Null
                 || line == Entity.Null
                 || configuredDepot == Entity.Null
@@ -458,7 +458,7 @@ namespace RapidTransitMod
             if (!m_ConfiguredDepotBlockedRequests.TryGetValue(request, out ConfiguredDepotBlockedRequestState state))
                 return false;
 
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             if (control == null
                 || state.Request != request
                 || state.Line != line
@@ -555,7 +555,7 @@ namespace RapidTransitMod
             if (line == Entity.Null || !EntityManager.Exists(line))
                 return false;
 
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             if (control == null)
                 return false;
 
@@ -1090,7 +1090,7 @@ namespace RapidTransitMod
                 return false;
             }
 
-            Entity owner = DispatchRuntimeSystem.Instance?.CanonDepot(
+            Entity owner = ModRuntimeHostSystem.Instance?.CanonDepot(
                 EntityManager.GetComponentData<Owner>(vehicle).m_Owner) ?? Entity.Null;
             if (owner != configuredDepot)
                 return false;
@@ -1243,7 +1243,7 @@ namespace RapidTransitMod
             }
 
             m_ConfiguredDepotFrameCacheMisses++;
-            configuredDepot = DispatchRuntimeSystem.Instance?.GetDepot(line) ?? Entity.Null;
+            configuredDepot = ModRuntimeHostSystem.Instance?.GetDepot(line) ?? Entity.Null;
             m_FrameConfiguredDepotByLine[line] = configuredDepot;
             return configuredDepot;
         }
@@ -1391,7 +1391,7 @@ namespace RapidTransitMod
                 return false;
             }
 
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             if (control == null)
                 return false;
 
@@ -1490,7 +1490,7 @@ namespace RapidTransitMod
             if (blockerCandidate == Entity.Null || configuredDepot == Entity.Null)
                 return false;
 
-            DispatchRuntimeSystem control = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             if (control == null)
                 return false;
 

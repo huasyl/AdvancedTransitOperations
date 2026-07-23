@@ -16,7 +16,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 {
     internal sealed class Bridge
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly DraftStore m_Drafts = new DraftStore();
         private readonly AppliedTimetableStore m_AppliedStore = new AppliedTimetableStore();
         private readonly AppliedTimetableValidator m_Validator = new AppliedTimetableValidator();
@@ -50,7 +50,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private string m_LastSnapshotLogKey = string.Empty;
         private static readonly bool EnableIntegrity = true;
 
-        internal Bridge(DispatchRuntimeSystem runtime)
+        internal Bridge(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         }
@@ -219,7 +219,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Ids().StableId,
                     line => m_Runtime.m_LineView.Kind(line, null),
                     m_Runtime.m_Observation.Stop,
-                    DispatchRuntimeSystem.IsTripTraceLoggingEnabled,
+                    ModRuntimeHostSystem.IsTripTraceLoggingEnabled,
                     evt => TraceLog.Write(message => Mod.log.Info(message), evt)));
             return m_ObsStops;
         }

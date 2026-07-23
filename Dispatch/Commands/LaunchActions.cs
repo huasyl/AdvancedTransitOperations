@@ -76,7 +76,7 @@ namespace RapidTransitMod.Dispatch.Commands
             publicTransport.m_DepartureFrame = nowFrame + 9999;
             target.m_Target = stationA;
             m_RouteWriter.Repath(vehicle, publicTransport, target, ecb);
-            m_Host.SetPreparingCooldown(vehicle, nowFrame + DispatchRuntimeSystem.PREPARINGFIX_REPATH_COOLDOWN_FRAMES);
+            m_Host.SetPreparingCooldown(vehicle, nowFrame + ModRuntimeHostSystem.PREPARINGFIX_REPATH_COOLDOWN_FRAMES);
 
             m_Host.Log.Info("[PreparingFix] " + lineTag + " 车辆" + vehicle.Index
                 + " " + why + "，重置去始发站 wp0=" + stationA.Index);

@@ -24,7 +24,7 @@ namespace RapidTransitMod.Dispatch.Lines
     {
         private const bool TrackAnchor = true;
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, WaypointIndexFrameSnapshot> m_FrameSnapshots = new Dictionary<Entity, WaypointIndexFrameSnapshot>();
         private readonly Dictionary<Entity, TrackAnchorSnapshot> m_TrackAnchorSnapshots = new Dictionary<Entity, TrackAnchorSnapshot>();
 
@@ -76,7 +76,7 @@ namespace RapidTransitMod.Dispatch.Lines
             }
         }
 
-        public WaypointIndex(DispatchRuntimeSystem runtime)
+        public WaypointIndex(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

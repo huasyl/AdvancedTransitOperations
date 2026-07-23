@@ -20,7 +20,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 {
     internal static class RuntimeRoot
     {
-        public static void Build(DispatchRuntimeSystem runtime)
+        public static void Build(ModRuntimeHostSystem runtime)
         {
             runtime.m_SimClock = new SimClock(runtime.m_TimeSystem);
             runtime.m_SimClock.ForceRefresh(runtime.m_SimulationSystem.frameIndex);
@@ -33,7 +33,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_SimulationSystem.frameIndex,
                     oldClockSnapshot,
                     newClockSnapshot);
-            runtime.m_RuntimeController = new DispatchRuntimeController(runtime.m_VehicleRegistry, runtime);
+            runtime.m_RuntimeEngine = new DispatchEngine(runtime.m_VehicleRegistry, runtime);
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
             runtime.m_LineAnchorCatalog = new LineAnchorCatalog(runtime.EntityManager);
@@ -153,7 +153,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 message => runtime.log.Info(message)));
             runtime.m_RailEtaService.SetHotRuntime(runtime.m_RailEtaHotRuntime);
             runtime.m_SpawnLeadTheory = new SpawnLeadTheory(runtime);
-            runtime.m_RuntimeShell = new RuntimeShell(runtime);
+            runtime.m_RuntimeLifecycleHost = new RuntimeLifecycleHost(runtime);
             runtime.m_LineStructureInvalidator = new LineStructureInvalidator(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
                 runtime,
@@ -177,7 +177,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_ObsQuery = new RapidTransitMod.Dispatch.Observation.Query(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices);
             runtime.m_ObsPersist = new RapidTransitMod.Dispatch.Observation.Persist(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices, runtime.m_SliceAdmission);
             runtime.m_WaypointIndex = new WaypointIndex(runtime);
-            runtime.m_LineRange = new LineRange(runtime.EntityManager, runtime.m_ObsQuery, DispatchRuntimeSystem.MAINTENANCE_THRESHOLD);
+            runtime.m_LineRange = new LineRange(runtime.EntityManager, runtime.m_ObsQuery, ModRuntimeHostSystem.MAINTENANCE_THRESHOLD);
             LineHost lineHost = RuntimePorts.BuildLineHost(runtime);
             runtime.m_LineTimes = new LineTimes(lineHost.Times);
             runtime.m_LineTimes.Init();
@@ -318,7 +318,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         /// Full line-anchor scan from the live line query snapshot.
         /// Clears only in-memory catalog ownership on <see cref="Clear"/>; never removes entity Lak.
         /// </summary>
-        internal static bool ScanLineAnchors(DispatchRuntimeSystem runtime)
+        internal static bool ScanLineAnchors(ModRuntimeHostSystem runtime)
         {
             if (runtime == null || runtime.m_LineAnchorCatalog == null)
                 return false;
@@ -335,7 +335,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
-        public static void Clear(DispatchRuntimeSystem runtime)
+        public static void Clear(ModRuntimeHostSystem runtime)
         {
             runtime.m_SpawnLeadTheory?.Clear();
             runtime.m_RailEtaHotRuntime?.Dispose();
@@ -366,7 +366,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_PlannerPort = null!;
             runtime.m_AnnouncementWorkbench = null!;
             runtime.m_Announcements = null!;
-            runtime.m_RuntimeController = null!;
+            runtime.m_RuntimeEngine = null!;
             runtime.m_OverviewFeatureSettingsPersist = null!;
             runtime.m_Features = null!;
             runtime.m_LineView = null!;
@@ -383,7 +383,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Observation = null!;
             runtime.m_SharedCorridor = null!;
             runtime.m_RuntimeLog = null!;
-            runtime.m_RuntimeShell = null!;
+            runtime.m_RuntimeLifecycleHost = null!;
             runtime.m_LineStructureInvalidator = null!;
             if (runtime.m_Bypass != null) runtime.m_Bypass.Dispose();
             runtime.m_TrackModel = null!;

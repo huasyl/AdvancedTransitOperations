@@ -10,7 +10,7 @@ namespace RapidTransitMod.Dispatch.Lines
 {
     internal sealed class RouteProgress
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, RouteProgressFrameSnapshot> m_FrameSnapshots = new Dictionary<Entity, RouteProgressFrameSnapshot>();
 
         private readonly struct RouteProgressFrameSnapshot
@@ -36,7 +36,7 @@ namespace RapidTransitMod.Dispatch.Lines
             }
         }
 
-        public RouteProgress(DispatchRuntimeSystem runtime)
+        public RouteProgress(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -71,7 +71,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
 
             return nextWaypointIndex == 0
-                && segmentPosition >= DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS;
+                && segmentPosition >= ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_SEGMENT_PROGRESS;
         }
 
         private bool TryPath(Entity vehicle, CurrentRoute currentRoute, out int nextWaypointIndex, out float segmentPosition)

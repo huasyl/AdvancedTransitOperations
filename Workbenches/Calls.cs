@@ -58,27 +58,27 @@ namespace RapidTransitMod.Workbenches
 
         internal static string Load(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_PlannerApi?.Load(requestJson) ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_PlannerApi?.Load(requestJson) ?? string.Empty;
         }
 
         internal static string Start(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_PlannerApi?.Start(requestJson) ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_PlannerApi?.Start(requestJson) ?? string.Empty;
         }
 
         internal static string Status(string jobId)
         {
-            return DispatchRuntimeSystem.Instance?.m_PlannerApi?.Status(jobId) ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_PlannerApi?.Status(jobId) ?? string.Empty;
         }
 
         internal static string Run(string requestJson)
         {
-            return DispatchRuntimeSystem.Instance?.m_PlannerApi?.Run(requestJson) ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_PlannerApi?.Run(requestJson) ?? string.Empty;
         }
 
         internal static string Observe()
         {
-            return DispatchRuntimeSystem.Instance?.m_Observation.Json() ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_Observation.Json() ?? string.Empty;
         }
 
         internal static string Locale()

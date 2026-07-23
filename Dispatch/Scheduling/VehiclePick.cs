@@ -40,9 +40,9 @@ namespace RapidTransitMod.Dispatch.Scheduling
             }
         }
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public VehiclePick(DispatchRuntimeSystem runtime)
+        public VehiclePick(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

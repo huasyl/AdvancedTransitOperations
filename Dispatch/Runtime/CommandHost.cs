@@ -27,17 +27,17 @@ namespace RapidTransitMod.Dispatch.Runtime
         private NativeHashMap<Entity, uint> m_MisfireStartFrames;
         private NativeHashMap<Entity, uint> m_PreparingCooldown;
 
-        public CommandHost(DispatchRuntimeSystem runtime)
+        public CommandHost(ModRuntimeHostSystem runtime)
         {
             EntityManager = runtime.EntityManager;
             SimulationSystem = runtime.m_SimulationSystem;
             Log = runtime.log;
             m_VehicleLabels = runtime.m_VehicleLabels;
             m_ReadVehicleLine = vehicle => runtime.m_VehicleView.TryGetLine(vehicle, out Entity line) ? line : Entity.Null;
-            m_IsFreshPreparing = (vehicle, nowFrame) => runtime.m_VehicleView.IsFreshPreparing(vehicle, nowFrame, DispatchRuntimeSystem.PREPARING_ROUTE_FIX_GRACE_FRAMES);
-            m_SetPreparing = runtime.m_RuntimeController.SetPreparing;
-            m_ClearAssistLaunchPending = runtime.m_RuntimeController.ClearAssistLaunchPending;
-            m_ClearBoardingGrace = runtime.m_RuntimeController.ClearBoardingGrace;
+            m_IsFreshPreparing = (vehicle, nowFrame) => runtime.m_VehicleView.IsFreshPreparing(vehicle, nowFrame, ModRuntimeHostSystem.PREPARING_ROUTE_FIX_GRACE_FRAMES);
+            m_SetPreparing = runtime.m_RuntimeEngine.SetPreparing;
+            m_ClearAssistLaunchPending = runtime.m_RuntimeEngine.ClearAssistLaunchPending;
+            m_ClearBoardingGrace = runtime.m_RuntimeEngine.ClearBoardingGrace;
             m_CachedWaypoint = runtime.m_CachedWpIdx;
             m_LastEffectiveBoardingState = runtime.m_LastEffectiveBoardingState;
             m_LastOfficialBoardingState = runtime.m_LastOfficialBoardingState;

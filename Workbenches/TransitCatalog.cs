@@ -22,7 +22,7 @@ namespace RapidTransitMod.Workbenches
         {
             ModeScope scope = ModeRequest.ReadScope(requestJson, callName);
             string preferredLineId = scope.NormalizeLineId(ModeRequest.ReadPreferredLine(requestJson));
-            DispatchRuntimeSystem runtime = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
             uint frame = runtime?.m_SimulationSystem != null ? runtime.m_SimulationSystem.frameIndex : 0u;
 
             if (runtime == null || runtime.m_WorkbenchCatalogCache == null)
@@ -32,7 +32,7 @@ namespace RapidTransitMod.Workbenches
         }
 
         private static TransitCatalogSnapshot Build(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             ModeScope scope,
             string preferredLineId,
             uint frame)
@@ -94,7 +94,7 @@ namespace RapidTransitMod.Workbenches
         }
 
         private static DispatchWorkbenchLineDto ToLineDto(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             LineIds lineIds,
             WorkbenchLineRuntime line)
         {

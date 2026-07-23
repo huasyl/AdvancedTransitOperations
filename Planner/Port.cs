@@ -5,14 +5,14 @@ namespace RapidTransitMod.Planner
 {
     internal sealed class PlannerPort
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        internal PlannerPort(DispatchRuntimeSystem runtime)
+        internal PlannerPort(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
 
-        internal DispatchRuntimeSystem Runtime => m_Runtime;
+        internal ModRuntimeHostSystem Runtime => m_Runtime;
 
         internal void Dump(PlannerExport export)
         {

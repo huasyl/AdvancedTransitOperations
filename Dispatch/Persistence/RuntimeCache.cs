@@ -2,13 +2,13 @@ namespace RapidTransitMod.Dispatch.Persistence
 {
     internal sealed class RuntimeCache
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly RapidTransitMod.Dispatch.Observation.Buffers m_Buffers;
         private readonly MileageStore m_Mileage;
         private readonly BypassStore m_Bypass;
 
         public RuntimeCache(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             RapidTransitMod.Dispatch.Observation.Buffers buffers,
             MileageStore mileage,
             BypassStore bypass)

@@ -19,7 +19,7 @@ namespace RapidTransitMod
         private readonly RetireHost m_RetireHost;
         private readonly RetireHandoff m_RetireHandoff;
 
-        public DispatchCommandApplier(DispatchRuntimeSystem runtime)
+        public DispatchCommandApplier(ModRuntimeHostSystem runtime)
         {
             m_CommandHost = new CommandHost(runtime);
             m_DispatchActions = new DispatchActions(m_CommandHost);

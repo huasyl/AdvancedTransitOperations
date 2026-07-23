@@ -7,14 +7,14 @@ namespace RapidTransitMod.Dispatch.Scheduling
 {
     internal sealed class SchedulePolicy
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, bool> m_Managed;
         private readonly Func<Entity, int[]> m_Times;
         private readonly Func<Entity, int> m_Hold;
         private readonly Func<Entity, float> m_ReadDispatchCache;
 
         public SchedulePolicy(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             Func<Entity, bool> managed,
             Func<Entity, int[]> times,
             Func<Entity, int> hold,
@@ -43,13 +43,13 @@ namespace RapidTransitMod.Dispatch.Scheduling
             {
                 if (ScheduleClock.CanLate(nowMinute, targetMinute))
                     return true;
-                return ScheduleClock.MinutesUntil(nowMinute, targetMinute) <= DispatchRuntimeSystem.YIELD_PROTECT_MINUTES;
+                return ScheduleClock.MinutesUntil(nowMinute, targetMinute) <= ModRuntimeHostSystem.YIELD_PROTECT_MINUTES;
             }
 
             if (nextTargetMinute >= 0)
-                return ScheduleClock.MinutesUntil(nowMinute, nextTargetMinute) <= DispatchRuntimeSystem.YIELD_PROTECT_MINUTES;
+                return ScheduleClock.MinutesUntil(nowMinute, nextTargetMinute) <= ModRuntimeHostSystem.YIELD_PROTECT_MINUTES;
 
-            return ScheduleClock.MinutesUntil(nowMinute, Fallback(line, nowMinute)) <= DispatchRuntimeSystem.YIELD_PROTECT_MINUTES;
+            return ScheduleClock.MinutesUntil(nowMinute, Fallback(line, nowMinute)) <= ModRuntimeHostSystem.YIELD_PROTECT_MINUTES;
         }
 
         public int Fallback(Entity line, int nowMinute)
@@ -105,7 +105,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
             float estimateFrames = lineDurationFrames > 0f
                 ? lineDurationFrames * 0.2f
-                : DispatchRuntimeSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES;
+                : ModRuntimeHostSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES;
             return ClampSpawnLeadFrames(estimateFrames);
         }
 
@@ -118,17 +118,17 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         public float SpawnBuffer(float spawnLeadFrames)
         {
-            return spawnLeadFrames < DispatchRuntimeSystem.SPAWN_TRIGGER_BUFFER_THRESHOLD_FRAMES
-                ? DispatchRuntimeSystem.SPAWN_TRIGGER_BUFFER_SHORT_FRAMES
-                : DispatchRuntimeSystem.SPAWN_TRIGGER_BUFFER_LONG_FRAMES;
+            return spawnLeadFrames < ModRuntimeHostSystem.SPAWN_TRIGGER_BUFFER_THRESHOLD_FRAMES
+                ? ModRuntimeHostSystem.SPAWN_TRIGGER_BUFFER_SHORT_FRAMES
+                : ModRuntimeHostSystem.SPAWN_TRIGGER_BUFFER_LONG_FRAMES;
         }
 
         private static float ClampSpawnLeadFrames(float spawnLeadFrames)
         {
             return math.clamp(
                 spawnLeadFrames,
-                DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
-                DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_FRAMES);
+                ModRuntimeHostSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
+                ModRuntimeHostSystem.DISPATCH_ESTIMATE_MAX_FRAMES);
         }
     }
 }

@@ -366,13 +366,13 @@ namespace RapidTransitMod.Dispatch.Commands
 
             if (RtLog.VerboseEnabled
                 && TryGetWatch(vehicle, out RetireHandoffWatchRecord watch)
-                && nowFrame - watch.RequestedFrame >= DispatchRuntimeSystem.RETIRE_HANDOFF_MAX_AGE_FRAMES
+                && nowFrame - watch.RequestedFrame >= ModRuntimeHostSystem.RETIRE_HANDOFF_MAX_AGE_FRAMES
                 && nowFrame >= stage.NextDiagnosticFrame)
             {
                 if (!hardAck)
                 {
                     stage.NextDiagnosticFrame = nowFrame
-                        + DispatchRuntimeSystem.RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
+                        + ModRuntimeHostSystem.RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
                     Log.Info("[RetireHandoffObserve] 车辆" + vehicle.Index
                         + " vanilla尚未进入hard ack"
                         + " route=" + (currentRoutePresent ? "1" : "0")
@@ -389,7 +389,7 @@ namespace RapidTransitMod.Dispatch.Commands
                     if (vehicleParking || headParking)
                     {
                         stage.NextDiagnosticFrame = nowFrame
-                            + DispatchRuntimeSystem.RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
+                            + ModRuntimeHostSystem.RETIRE_HANDOFF_TRACE_COOLDOWN_FRAMES;
                         Log.Info("[RetireParkingStall] vehicle=" + vehicle.Index
                             + " elapsedFrames=" + (nowFrame - watch.RequestedFrame)
                             + " vehicleParking=" + (vehicleParking ? "1" : "0")
@@ -674,7 +674,7 @@ namespace RapidTransitMod.Dispatch.Commands
                 && m_RetireShadowLastSnapshot.TryGetValue(vehicle, out string lastSnapshot)
                 && lastSnapshot == snapshot
                 && m_RetireShadowLastFrame.TryGetValue(vehicle, out uint lastFrame)
-                && (nowFrame - lastFrame) < DispatchRuntimeSystem.RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES)
+                && (nowFrame - lastFrame) < ModRuntimeHostSystem.RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES)
             {
                 shouldSample = false;
             }
@@ -693,11 +693,11 @@ namespace RapidTransitMod.Dispatch.Commands
 
             if (!m_RetireShadowHistory.TryGetValue(vehicle, out List<string> history) || history == null)
             {
-                history = new List<string>(DispatchRuntimeSystem.RETIRE_SHADOW_HISTORY_LIMIT);
+                history = new List<string>(ModRuntimeHostSystem.RETIRE_SHADOW_HISTORY_LIMIT);
                 m_RetireShadowHistory[vehicle] = history;
             }
 
-            if (history.Count >= DispatchRuntimeSystem.RETIRE_SHADOW_HISTORY_LIMIT)
+            if (history.Count >= ModRuntimeHostSystem.RETIRE_SHADOW_HISTORY_LIMIT)
                 history.RemoveAt(0);
             history.Add(snapshot);
         }
@@ -739,7 +739,7 @@ namespace RapidTransitMod.Dispatch.Commands
             }
 
             return !m_RetireShadowLastRetiringFrame.TryGetValue(vehicle, out uint lastFrame)
-                || nowFrame - lastFrame >= DispatchRuntimeSystem.RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES;
+                || nowFrame - lastFrame >= ModRuntimeHostSystem.RETIRE_SHADOW_SAMPLE_INTERVAL_FRAMES;
         }
 
         private string BuildShadowSnapshot(Entity vehicle, string phase)

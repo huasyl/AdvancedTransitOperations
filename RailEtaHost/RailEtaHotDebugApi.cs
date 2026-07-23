@@ -9,7 +9,7 @@ namespace RapidTransitMod.RailEtaHost
 {
     public static class RailEtaHotDebugApi
     {
-        private static RailEtaHotRuntime Runtime => DispatchRuntimeSystem.Instance?.m_RailEtaHotRuntime;
+        private static RailEtaHotRuntime Runtime => ModRuntimeHostSystem.Instance?.m_RailEtaHotRuntime;
 
         public static Task<bool> ReloadRailEta(string dllPath)
             => Runtime?.ReloadAsync(dllPath) ?? Task.FromResult(false);

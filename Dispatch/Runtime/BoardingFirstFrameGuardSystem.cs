@@ -24,7 +24,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         protected override void OnUpdate()
         {
-            DispatchRuntimeSystem runtime = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
             if (runtime == null
                 || runtime.m_VehicleView == null
                 || !runtime.m_BoardingFirstFrameGuardState.IsCreated)

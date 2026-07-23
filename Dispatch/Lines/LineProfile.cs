@@ -14,13 +14,13 @@ namespace RapidTransitMod.Dispatch.Lines
 {
     internal sealed class LineProfile
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private NativeHashMap<Entity, ulong> m_LineWaypointSignature;
         private NativeHashMap<Entity, uint> m_LineStableSinceFrame;
         private NativeHashSet<Entity> m_DiagnosedLines;
         private readonly Dictionary<Entity, Entity> m_OriginStopByWaypoint = new Dictionary<Entity, Entity>();
 
-        public LineProfile(DispatchRuntimeSystem runtime)
+        public LineProfile(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
             m_LineWaypointSignature = new NativeHashMap<Entity, ulong>(64, Allocator.Persistent);
@@ -164,28 +164,28 @@ namespace RapidTransitMod.Dispatch.Lines
 
             if (!waitingAtOrigin)
             {
-                if (!IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
+                if (!IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
                 {
-                    m_Runtime.m_RuntimeController.ClearOriginCandidate(vehicle);
+                    m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
                     return false;
                 }
 
                 if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
                 {
-                    m_Runtime.m_RuntimeController.ClearOriginCandidate(vehicle);
+                    m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
                     return false;
                 }
 
                 if (nextWaypointIndex != 0 || segmentPosition < 0.92f)
                 {
-                    m_Runtime.m_RuntimeController.ClearOriginCandidate(vehicle);
+                    m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
                     return false;
                 }
             }
 
             if (!m_Runtime.m_VehicleView.TryGetOrigin(vehicle, out uint sinceFrame))
             {
-                m_Runtime.m_RuntimeController.SetOriginCandidate(vehicle, nowFrame);
+                m_Runtime.m_RuntimeEngine.SetOriginCandidate(vehicle, nowFrame);
                 return false;
             }
 
@@ -194,7 +194,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public bool IsBorderlineOriginArrivalCandidate(Entity vehicle, DynamicBuffer<RouteWaypoint> waypoints)
         {
-            if (!IsWithinOriginDistance(vehicle, waypoints, DispatchRuntimeSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
+            if (!IsWithinOriginDistance(vehicle, waypoints, ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS))
                 return false;
 
             if (!m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
@@ -257,7 +257,7 @@ namespace RapidTransitMod.Dispatch.Lines
             if (m_Runtime.m_VehicleView.TryGetCooldown(nearestVehicle, out uint cooldownUntil) && nowFrame < cooldownUntil)
                 return false;
 
-            if (IsWithinOriginDistance(nearestVehicle, waypoints, DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS))
+            if (IsWithinOriginDistance(nearestVehicle, waypoints, ModRuntimeHostSystem.ORIGIN_CONGESTION_RADIUS_METERS))
                 return true;
 
             if (m_Runtime.m_RouteProgress.Try(nearestVehicle, out int nextWaypointIndex, out float segmentPosition))
@@ -370,7 +370,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
             }
 
-            return nowFrame - stableSince >= DispatchRuntimeSystem.NEW_LINE_STABLE_FRAMES;
+            return nowFrame - stableSince >= ModRuntimeHostSystem.NEW_LINE_STABLE_FRAMES;
         }
 
         public bool IsDiagnosed(Entity line)

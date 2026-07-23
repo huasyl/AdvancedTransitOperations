@@ -11,9 +11,9 @@ namespace RapidTransitMod
 {
     internal sealed class RuntimeResolve
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public RuntimeResolve(DispatchRuntimeSystem runtime)
+        public RuntimeResolve(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

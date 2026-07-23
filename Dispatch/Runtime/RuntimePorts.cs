@@ -12,9 +12,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 {
     internal sealed class TrackBuffers : TrackModelContext.IBuffers
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public TrackBuffers(DispatchRuntimeSystem runtime)
+        public TrackBuffers(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -27,12 +27,12 @@ namespace RapidTransitMod.Dispatch.Runtime
 
     internal static class RuntimePorts
     {
-        public static TrackModelContext.IBuffers Buffers(DispatchRuntimeSystem runtime)
+        public static TrackModelContext.IBuffers Buffers(ModRuntimeHostSystem runtime)
         {
             return new TrackBuffers(runtime);
         }
 
-        public static void Build(DispatchRuntimeSystem runtime)
+        public static void Build(ModRuntimeHostSystem runtime)
         {
             runtime.m_SelectPort = BuildSelect(runtime);
             runtime.m_SelectPanel = new SelectPanel(runtime.m_SelectPort);
@@ -42,7 +42,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_PlannerApi = new PlannerApi(runtime.m_PlannerExport, runtime.m_PlannerJobs);
         }
 
-        private static SelectPort BuildSelect(DispatchRuntimeSystem runtime)
+        private static SelectPort BuildSelect(ModRuntimeHostSystem runtime)
         {
             return new SelectPort
             {
@@ -62,7 +62,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 CachedWp = runtime.m_CachedWpIdx,
                 Misfires = runtime.m_BVMisfire,
                 Commands = runtime.m_CommandApplier,
-                Runtime = runtime.m_RuntimeController,
+                Runtime = runtime.m_RuntimeEngine,
                 Scheduler = runtime.m_DispatchScheduler,
                 Labels = runtime.m_VehicleLabels,
                 ResolveLine = runtime.m_Resolve.SelectedLine,
@@ -132,7 +132,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             };
         }
 
-        public static LineHost BuildLineHost(DispatchRuntimeSystem runtime)
+        public static LineHost BuildLineHost(ModRuntimeHostSystem runtime)
         {
             return new LineHost
             {
@@ -141,13 +141,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                     EntityManager = runtime.EntityManager,
                     MixSignature = runtime.m_LineProfile.MixSignature,
                     ClockSnapshot = () => runtime.m_SimClock.Snapshot,
-                    ProfileStopStartBufferMinutes = DispatchRuntimeSystem.PROFILE_STOP_START_BUFFER_MINUTES,
-                    EtaScaleMin = DispatchRuntimeSystem.ETA_SCALE_MIN,
-                    EtaScaleMax = DispatchRuntimeSystem.ETA_SCALE_MAX,
-                    DispatchFallbackFramesPerMeter = DispatchRuntimeSystem.DISPATCH_FALLBACK_FRAMES_PER_METER,
-                    DispatchEstimateMinFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
-                    DispatchEstimateDefaultFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES,
-                    DispatchEstimateMaxFrames = DispatchRuntimeSystem.DISPATCH_ESTIMATE_MAX_FRAMES,
+                    ProfileStopStartBufferMinutes = ModRuntimeHostSystem.PROFILE_STOP_START_BUFFER_MINUTES,
+                    EtaScaleMin = ModRuntimeHostSystem.ETA_SCALE_MIN,
+                    EtaScaleMax = ModRuntimeHostSystem.ETA_SCALE_MAX,
+                    DispatchFallbackFramesPerMeter = ModRuntimeHostSystem.DISPATCH_FALLBACK_FRAMES_PER_METER,
+                    DispatchEstimateMinFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
+                    DispatchEstimateDefaultFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES,
+                    DispatchEstimateMaxFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_MAX_FRAMES,
                     ReadLapFrames = runtime.m_LapCache.Read,
                     ReadDispatchFrames = runtime.m_DispatchCache.Read,
                     DwellMinutes = line => runtime.m_LineView.Dwell(line),
@@ -179,7 +179,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             };
         }
 
-        public static TrackProjectionPort BuildTrackProjection(DispatchRuntimeSystem runtime)
+        public static TrackProjectionPort BuildTrackProjection(ModRuntimeHostSystem runtime)
         {
             return new TrackProjectionPort(
                 runtime.EntityManager,
@@ -194,7 +194,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.IsVehicleBoarding);
         }
 
-        public static BypassAdmissionPort BuildBypassAdmission(DispatchRuntimeSystem runtime)
+        public static BypassAdmissionPort BuildBypassAdmission(ModRuntimeHostSystem runtime)
         {
             return new BypassAdmissionPort(
                 runtime.EntityManager,
@@ -210,7 +210,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 line => runtime.m_LineView.Local(line),
                 line => runtime.m_LineView.Express(line),
                 runtime.m_Resolve,
-                DispatchRuntimeSystem.IsLineOrderedRuntimeLoggingEnabled,
+                ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
                 runtime.m_WaypointIndex,
                 runtime.m_Observation,
                 runtime.m_SharedCorridor,
@@ -222,7 +222,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_RuntimeHotPathProbe);
         }
 
-        public static BypassRuntimePort BuildBypassRuntime(DispatchRuntimeSystem runtime)
+        public static BypassRuntimePort BuildBypassRuntime(ModRuntimeHostSystem runtime)
         {
             return new BypassRuntimePort(
                 runtime.EntityManager,
@@ -238,7 +238,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 line => runtime.m_LineView.Local(line),
                 line => runtime.m_LineView.Express(line),
                 runtime.m_Resolve,
-                DispatchRuntimeSystem.IsLineOrderedRuntimeLoggingEnabled,
+                ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
                 runtime.m_WaypointIndex,
                 runtime.m_Observation,
                 runtime.m_SharedCorridor,
@@ -248,7 +248,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_LineTimes,
                 runtime.EntityName,
                 runtime.m_RuntimeHotPathProbe,
-                DispatchRuntimeSystem.IsBypassRuntimeLoggingEnabled,
+                ModRuntimeHostSystem.IsBypassRuntimeLoggingEnabled,
                 runtime.m_Observation.Hold,
                 runtime.m_Observation.Release,
                 runtime.m_Announcements.BypassWaiting,
@@ -256,7 +256,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_LineTimes.Clear);
         }
 
-        public static CapturePort BuildCapture(DispatchRuntimeSystem runtime)
+        public static CapturePort BuildCapture(ModRuntimeHostSystem runtime)
         {
             return new CapturePort
             {
@@ -292,7 +292,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             };
         }
 
-        public static SliceAdmissionPort BuildSliceAdmission(DispatchRuntimeSystem runtime)
+        public static SliceAdmissionPort BuildSliceAdmission(ModRuntimeHostSystem runtime)
         {
             return new SliceAdmissionPort
             {
@@ -302,7 +302,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                         : (false, LineKey.Empty),
                 ServiceDate = () => runtime.m_SimClock.NowDate,
                 DepartureMinutes = line => runtime.m_LineView.Times(line),
-                FormatMinute = minute => DispatchRuntimeSystem.SlotStr(minute),
+                FormatMinute = minute => ModRuntimeHostSystem.SlotStr(minute),
                 ProfileSignature = line => runtime.m_ObsBuffers.TrySliceSignature(line, out ulong signature)
                     ? (true, signature)
                     : (false, 0UL),
@@ -313,7 +313,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             };
         }
 
-        public static Port BuildObservation(DispatchRuntimeSystem runtime)
+        public static Port BuildObservation(ModRuntimeHostSystem runtime)
         {
             return new Port
             {

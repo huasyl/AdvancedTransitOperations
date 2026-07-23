@@ -65,7 +65,7 @@ namespace RapidTransitMod
         Retiring = 5,
     }
 
-    public partial class DispatchRuntimeSystem : GameSystemBase, IPreSerialize
+    public partial class ModRuntimeHostSystem : GameSystemBase, IPreSerialize
     {
         internal const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 3f;
         internal CameraUpdateSystem m_CameraUpdateSystem;
@@ -158,7 +158,7 @@ namespace RapidTransitMod
         internal static string DescribeError(Exception ex)
             => RapidTransitMod.Dispatch.Workbench.Bridge.Describe(ex);
 
-        public static DispatchRuntimeSystem Instance = null!;
+        public static ModRuntimeHostSystem Instance = null!;
         internal TimedLogger log = Mod.log;
         internal SimulationSystem m_SimulationSystem = null!;
         internal TimeSystem m_TimeSystem = null!;
@@ -173,7 +173,7 @@ namespace RapidTransitMod
         internal LineView m_LineView = null!;
         internal FeatureGate m_Features = null!;
         internal RapidTransitMod.Overview.FeatureSettingsPersist m_OverviewFeatureSettingsPersist = null!;
-        internal DispatchRuntimeController m_RuntimeController = null!;
+        internal DispatchEngine m_RuntimeEngine = null!;
         internal VehicleRegistrar m_VehicleRegistrar = null!;
         internal RuntimeVehicleLabels m_VehicleLabels = null!;
         internal RuntimeResolve m_Resolve = null!;
@@ -210,7 +210,7 @@ namespace RapidTransitMod
         internal RuntimeLog m_RuntimeLog = null!;
         internal SpawnIntentTrace m_SpawnIntentTrace = null!;
         internal RuntimeHotPathProbe m_RuntimeHotPathProbe = null!;
-        internal RuntimeShell m_RuntimeShell = null!;
+        internal RuntimeLifecycleHost m_RuntimeLifecycleHost = null!;
         internal RailEtaHost.RailEtaBridgeService m_RailEtaService = null!;
         internal RailEtaHost.RailEtaHotRuntime m_RailEtaHotRuntime = null!;
         internal LineTimes m_LineTimes = null!;
@@ -471,13 +471,181 @@ namespace RapidTransitMod
             uint simulationFrame = m_SimulationSystem.frameIndex;
             m_SimClock.RefreshIfDue(simulationFrame);
             Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
-            m_RuntimeShell.Tick();
+            if (GameManager.instance.gameMode != GameMode.Game) return;
+            m_SelectPanel.UpdateVersionBucket();
+
+#if RT_DEBUG_TOOLS
+            if (Input.GetKey(KeyCode.LeftControl)
+                && Input.GetKey(KeyCode.LeftAlt)
+                && Input.GetKey(KeyCode.X))
+            {
+                m_RuntimeLifecycleHost.ClearAll();
+                return;
+            }
+
+            if (Input.GetKeyDown(KeyCode.F8))
+            {
+                m_RuntimeLifecycleHost.SpawnTest();
+                return;
+            }
+
+            if (m_Bypass.ToggleKey(Input.GetKey(KeyCode.F5)))
+                return;
+
+            if (Input.GetKeyDown(KeyCode.F6))
+            {
+                m_RuntimeLifecycleHost.ClearAll();
+                return;
+            }
+
+            if (Input.GetKeyDown(KeyCode.F7))
+            {
+                m_CommandApplier.ForceRetireOne();
+                return;
+            }
+#endif
+
+            if (!m_SystemReady)
+            {
+                if (!m_StartupRuntimeStateCleared)
+                {
+                    m_RuntimeLifecycleHost.ClearTracking();
+                    m_StartupRuntimeStateCleared = true;
+                }
+
+                BufferLookup<RouteVehicle> routeVehicles = GetBufferLookup<RouteVehicle>(true);
+                NativeArray<Entity> lines = m_LineQuery.ToEntityArray(Allocator.Temp);
+                int totalVehicles = 0;
+                foreach (Entity line in lines)
+                {
+                    if (routeVehicles.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles))
+                        totalVehicles += vehicles.Length;
+                }
+
+                lines.Dispose();
+                if (totalVehicles != m_LastVehicleCount)
+                {
+                    m_LastVehicleCount = totalVehicles;
+                    m_StableFrameCount = 0;
+                    return;
+                }
+
+                m_StableFrameCount++;
+                if (m_StableFrameCount < STABLE_FRAMES_REQUIRED)
+                    return;
+
+                m_SystemReady = true;
+                log.Info("[启动] 稳定检测通过，系统就绪(车辆数=" + totalVehicles + ")");
+            }
+
+            EntityCommandBuffer commandBuffer = m_EndFrameBarrier.CreateCommandBuffer();
+            ClockSnapshot clockSnapshot = m_SimClock.Snapshot;
+            int nowMinute = clockSnapshot.NowMinute;
+
+            m_LapCache.Ensure();
+            m_VehicleCache.Ensure();
+            m_DispatchCache.Ensure();
+            if (IsStationDwellObservationPersistenceEnabled())
+            {
+                m_ObsBuffers.EnsureStationDwell();
+                m_RuntimeCache.LoadStationDwell();
+            }
+
+            if (IsTraversalSliceObservationPersistenceEnabled())
+            {
+                m_ObsBuffers.EnsureSlice();
+                m_RuntimeCache.LoadSlice();
+            }
+
+            m_LineStructureInvalidator.Drain();
+
+            m_CommandApplier.ReconcileRetireDispatchLocksOnReady();
+
+            bool runFullRegisterSweep = nowMinute != m_LastRegisterSweepMinute;
+            try
+            {
+                m_VehicleRegistrar.Register(runFullRegisterSweep);
+                if (runFullRegisterSweep)
+                    m_LastRegisterSweepMinute = nowMinute;
+            }
+            catch (Exception ex)
+            {
+                log.Info("[运行异常] VehicleRegistrar -> " + ex.GetType().Name + ": " + ex.Message);
+                throw;
+            }
+
+            DrainDisabledLineLateSpawnRetireQueue(commandBuffer);
+
+            try
+            {
+                m_RuntimeEngine.ProcessFrame(commandBuffer, clockSnapshot);
+            }
+            catch (Exception ex)
+            {
+                log.Info("[运行异常] DispatchEngine.ProcessFrame -> " + ex.GetType().Name + ": " + ex.Message);
+                throw;
+            }
+
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
+            {
+                m_VehicleCache.Save();
+                m_LastVehicleCacheFlushFrame = nowFrame;
+            }
+
+            m_WorkbenchCatalogDirty.Check(nowFrame);
+            m_WorkbenchCatalogCache.Tick(nowFrame);
+
+            m_Bypass.FlushProbeLogs(nowFrame);
+            m_RuntimeHotPathProbe.FlushIfDue(nowFrame);
+        }
+
+        private void DrainDisabledLineLateSpawnRetireQueue(EntityCommandBuffer commandBuffer)
+        {
+            IReadOnlyList<Entity> queue = m_VehicleRegistrar.DisabledLineLateSpawnRetireQueue;
+            if (queue.Count == 0)
+                return;
+
+            try
+            {
+                for (int i = 0; i < queue.Count; i++)
+                {
+                    Entity vehicle = queue[i];
+                    if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
+                        continue;
+                    if (EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
+                    {
+                        continue;
+                    }
+                    if (EntityManager.HasComponent<Deleted>(vehicle)
+                        || EntityManager.HasComponent<ParkedTrain>(vehicle))
+                    {
+                        continue;
+                    }
+                    if (!EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
+                        || !EntityManager.HasComponent<Target>(vehicle)
+                        || !EntityManager.HasComponent<Owner>(vehicle))
+                    {
+                        log.Info("[DisabledLineLateSpawnSkip] 车辆" + vehicle.Index
+                            + " 缺少回库前置组件，跳过误产车回库");
+                        continue;
+                    }
+
+                    Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                    Target target = EntityManager.GetComponentData<Target>(vehicle);
+                    m_CommandApplier.Retire(vehicle, publicTransport, target, commandBuffer, "关闭线路误产车");
+                }
+            }
+            finally
+            {
+                m_VehicleRegistrar.ClearDisabledLineLateSpawnRetireQueue();
+            }
         }
 
         protected override void OnGameLoaded(Context serializationContext)
         {
             base.OnGameLoaded(serializationContext);
-            m_RuntimeShell.Loaded(serializationContext);
+            m_RuntimeLifecycleHost.Loaded(serializationContext);
         }
 
         public void PreSerialize(Context context)
