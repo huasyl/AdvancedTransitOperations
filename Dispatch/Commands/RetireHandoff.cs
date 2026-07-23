@@ -33,10 +33,13 @@ namespace RapidTransitMod.Dispatch.Commands
         public RetireHandoffStageKind Stage;
         public uint NextProbeFrame;
         public uint NextDiagnosticFrame;
+        public uint BoardingWindowEndFrame;
     }
 
     internal sealed class RetireHandoff
     {
+        private const uint RetireBoardingWindowFrames = 60;
+
         // New handoff order:
         // Retire(...) request -> pre/post train-AI lock keepers -> vanilla return/path setup ->
         // controller terminal finalize -> controller tail TickRetireHandoffStages(...).
@@ -427,10 +430,28 @@ namespace RapidTransitMod.Dispatch.Commands
                     headVehicle,
                     strictPathEndReached: false,
                     out _);
-                if (targetWaypoint && boundaryReady)
+                bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
+                if (targetWaypoint
+                    && boarding
+                    && m_RetireHandoffStages.TryGetValue(vehicle, out RetireHandoffStageRecord stage)
+                    && (boundaryReady || stage.BoardingWindowEndFrame != 0))
                 {
                     publicTransport.m_State &= ~PublicTransportFlags.EnRoute;
-                    DispatchActions.ForceOfficialBoardingClose(ref publicTransport, nowFrame);
+                    if (stage.BoardingWindowEndFrame == 0)
+                    {
+                        stage.BoardingWindowEndFrame = nowFrame + RetireBoardingWindowFrames;
+                    }
+
+                    if (nowFrame < stage.BoardingWindowEndFrame)
+                    {
+                        publicTransport.m_DepartureFrame = stage.BoardingWindowEndFrame;
+                        publicTransport.m_MinWaitingDistance = float.MaxValue;
+                        publicTransport.m_MaxBoardingDistance = 0f;
+                    }
+                    else
+                    {
+                        DispatchActions.ForceOfficialBoardingClose(ref publicTransport, nowFrame);
+                    }
                 }
             }
 
