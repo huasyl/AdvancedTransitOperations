@@ -1,11 +1,10 @@
 using System;
 using System.Collections.Generic;
-using Game.Vehicles;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Runtime
 {
-    internal enum VehicleFactKind : byte { Registered, Rebound, Removed, Boarding, Route, PublicTransport, Target, Path, Lane, Motion }
+    internal enum VehicleFactKind : byte { Registered, Rebound, Removed, Boarding, Route, Target, Waypoint, Moving, PathReady, OriginRange }
     internal enum DispatchFactKind : byte { State, Target, Slot, Removed }
     internal enum FrameEventKind : byte { Vehicle, Stop, Bypass, Dispatch }
 
@@ -13,25 +12,54 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         public readonly Entity Vehicle;
         public readonly uint SourceFrame;
+        public readonly ulong SourceGeneration;
         public readonly ulong Sequence;
         public readonly VehicleFactKind Kind;
-        public readonly PublicTransportFlags PublicTransportState;
-        public readonly Entity Route;
-        public readonly RailSnapshot PreviousRail;
-        public readonly RailSnapshot CurrentRail;
+        public readonly Entity PreviousLine;
+        public readonly Entity CurrentLine;
+        public readonly VehicleState State;
+        public readonly bool PreviousBoarding;
+        public readonly bool CurrentBoarding;
+        public readonly bool PreviousMoving;
+        public readonly bool CurrentMoving;
+        public readonly int PreviousWaypointIndex;
+        public readonly int CurrentWaypointIndex;
+        public readonly int RecoveryWaypointIndex;
+        public readonly int WaypointCount;
+        public readonly bool AtOrigin;
+        public readonly bool NearOrigin;
+        public readonly bool PathReady;
+
+        public Entity Line => CurrentLine;
 
         public VehicleEvent(Entity vehicle, uint sourceFrame, ulong sequence, VehicleFactKind kind,
-            PublicTransportFlags publicTransportState = default, Entity route = default,
-            RailSnapshot previousRail = default, RailSnapshot currentRail = default)
+            Entity previousLine = default, Entity line = default, VehicleState state = default,
+            bool previousBoarding = false, bool currentBoarding = false,
+            bool previousMoving = false, bool currentMoving = false,
+            int previousWaypointIndex = -1, int currentWaypointIndex = -1,
+            int recoveryWaypointIndex = -1, int waypointCount = 0,
+            bool atOrigin = false, bool nearOrigin = false, bool pathReady = false,
+            ulong sourceGeneration = 0UL)
         {
             Vehicle = vehicle;
             SourceFrame = sourceFrame;
+            SourceGeneration = sourceGeneration;
             Sequence = sequence;
             Kind = kind;
-            PublicTransportState = publicTransportState;
-            Route = route;
-            PreviousRail = previousRail;
-            CurrentRail = currentRail;
+            PreviousLine = previousLine;
+            CurrentLine = line;
+            State = state;
+            PreviousBoarding = previousBoarding;
+            CurrentBoarding = currentBoarding;
+            PreviousMoving = previousMoving;
+            CurrentMoving = currentMoving;
+            PreviousWaypointIndex = previousWaypointIndex;
+            CurrentWaypointIndex = currentWaypointIndex;
+            RecoveryWaypointIndex = recoveryWaypointIndex;
+            WaypointCount = waypointCount;
+            AtOrigin = atOrigin;
+            NearOrigin = nearOrigin;
+            PathReady = pathReady;
         }
     }
 
@@ -39,6 +67,7 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         public readonly Entity Vehicle;
         public readonly uint SourceFrame;
+        public readonly ulong SourceGeneration;
         public readonly ulong Sequence;
         public readonly DispatchFactKind Kind;
         public readonly VehicleState PreviousState;
@@ -48,10 +77,12 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly int CurrentValue;
 
         public DispatchEvent(Entity vehicle, uint sourceFrame, ulong sequence, DispatchFactKind kind,
-            VehicleState previousState, VehicleState currentState, Entity line = default, int previousValue = -1, int currentValue = -1)
+            VehicleState previousState, VehicleState currentState, Entity line = default,
+            int previousValue = -1, int currentValue = -1, ulong sourceGeneration = 0UL)
         {
             Vehicle = vehicle;
             SourceFrame = sourceFrame;
+            SourceGeneration = sourceGeneration;
             Sequence = sequence;
             Kind = kind;
             PreviousState = previousState;
@@ -66,16 +97,32 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         public readonly Entity Vehicle;
         public readonly uint SourceFrame;
+        public readonly ulong SourceGeneration;
         public readonly ulong Sequence;
-        public StopEvent(Entity vehicle, uint sourceFrame, ulong sequence) { Vehicle = vehicle; SourceFrame = sourceFrame; Sequence = sequence; }
+
+        public StopEvent(Entity vehicle, uint sourceFrame, ulong sequence, ulong sourceGeneration)
+        {
+            Vehicle = vehicle;
+            SourceFrame = sourceFrame;
+            SourceGeneration = sourceGeneration;
+            Sequence = sequence;
+        }
     }
 
     internal readonly struct BypassEvent
     {
         public readonly Entity Vehicle;
         public readonly uint SourceFrame;
+        public readonly ulong SourceGeneration;
         public readonly ulong Sequence;
-        public BypassEvent(Entity vehicle, uint sourceFrame, ulong sequence) { Vehicle = vehicle; SourceFrame = sourceFrame; Sequence = sequence; }
+
+        public BypassEvent(Entity vehicle, uint sourceFrame, ulong sequence, ulong sourceGeneration)
+        {
+            Vehicle = vehicle;
+            SourceFrame = sourceFrame;
+            SourceGeneration = sourceGeneration;
+            Sequence = sequence;
+        }
     }
 
     internal readonly struct FrameEventRef
@@ -115,21 +162,61 @@ namespace RapidTransitMod.Dispatch.Runtime
             BeginFrame();
         }
 
-        public void AppendVehicle(Entity vehicle, uint sourceFrame, VehicleFactKind kind,
-            PublicTransportFlags publicTransportState = default, Entity route = default,
-            RailSnapshot previousRail = default, RailSnapshot currentRail = default)
+        public ulong AppendVehicle(Entity vehicle, uint sourceFrame, VehicleFactKind kind,
+            Entity previousLine = default, Entity line = default, VehicleState state = default,
+            bool previousBoarding = false, bool currentBoarding = false,
+            bool previousMoving = false, bool currentMoving = false,
+            int previousWaypointIndex = -1, int currentWaypointIndex = -1,
+            int recoveryWaypointIndex = -1, int waypointCount = 0,
+            bool atOrigin = false, bool nearOrigin = false, bool pathReady = false,
+            ulong sourceGeneration = 0UL)
         {
-            m_VehicleEvents.Add(new VehicleEvent(vehicle, sourceFrame, NextSequence(), kind, publicTransportState, route, previousRail, currentRail));
+            ulong sequence = NextSequence();
+            m_VehicleEvents.Add(new VehicleEvent(
+                vehicle,
+                sourceFrame,
+                sequence,
+                kind,
+                previousLine,
+                line,
+                state,
+                previousBoarding,
+                currentBoarding,
+                previousMoving,
+                currentMoving,
+                previousWaypointIndex,
+                currentWaypointIndex,
+                recoveryWaypointIndex,
+                waypointCount,
+                atOrigin,
+                nearOrigin,
+                pathReady,
+                sourceGeneration));
+            return sequence;
         }
 
-        public void AppendDispatch(Entity vehicle, uint sourceFrame, DispatchFactKind kind, VehicleState previousState, VehicleState currentState,
-            Entity line = default, int previousValue = -1, int currentValue = -1)
+        public void AppendDispatch(Entity vehicle, uint sourceFrame, DispatchFactKind kind,
+            VehicleState previousState, VehicleState currentState, Entity line = default,
+            int previousValue = -1, int currentValue = -1, ulong sourceGeneration = 0UL)
         {
-            m_DispatchEvents.Add(new DispatchEvent(vehicle, sourceFrame, NextSequence(), kind, previousState, currentState, line, previousValue, currentValue));
+            m_DispatchEvents.Add(new DispatchEvent(
+                vehicle,
+                sourceFrame,
+                NextSequence(),
+                kind,
+                previousState,
+                currentState,
+                line,
+                previousValue,
+                currentValue,
+                sourceGeneration));
         }
 
-        public void AppendStop(Entity vehicle, uint sourceFrame) => m_StopEvents.Add(new StopEvent(vehicle, sourceFrame, NextSequence()));
-        public void AppendBypass(Entity vehicle, uint sourceFrame) => m_BypassEvents.Add(new BypassEvent(vehicle, sourceFrame, NextSequence()));
+        public void AppendStop(Entity vehicle, uint sourceFrame, ulong sourceGeneration = 0UL)
+            => m_StopEvents.Add(new StopEvent(vehicle, sourceFrame, NextSequence(), sourceGeneration));
+
+        public void AppendBypass(Entity vehicle, uint sourceFrame, ulong sourceGeneration = 0UL)
+            => m_BypassEvents.Add(new BypassEvent(vehicle, sourceFrame, NextSequence(), sourceGeneration));
 
         // 第四步消费者使用此入口；第二步仅作只读结构验收。
         public IReadOnlyList<FrameEventRef> MergeBySequence()

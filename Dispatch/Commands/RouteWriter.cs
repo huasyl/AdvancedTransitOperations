@@ -41,7 +41,7 @@ namespace RapidTransitMod.Dispatch.Commands
                 PathOwner pathOwner = m_Host.ReadPath(vehicle);
                 pathOwner.m_State = PathFlags.Obsolete;
                 pathOwner.m_ElementIndex = 0;
-                m_Host.AppendPathWrite(vehicle, pathOwner, 0);
+                m_Host.AppendPathWrite(vehicle, pathOwner, true, 0);
                 ecb.SetComponent(vehicle, pathOwner);
             }
 
@@ -99,7 +99,7 @@ namespace RapidTransitMod.Dispatch.Commands
             if (m_Host.EntityManager.HasComponent<PathOwner>(vehicle))
             {
                 PathOwner pathOwner = new PathOwner(PathFlags.Updated);
-                m_Host.AppendPathWrite(vehicle, pathOwner, segmentPath);
+                m_Host.AppendPathWrite(vehicle, pathOwner, true, segmentPath);
                 ecb.SetComponent(vehicle, pathOwner);
             }
 

@@ -254,7 +254,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_Announcements.BypassWaiting,
                 (vehicle, publicTransport) =>
                 {
-                    runtime.m_RailEventSource.AppendModWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);
+                    runtime.m_RailEventSource.AppendPublicTransportWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);
                     runtime.m_RuntimeWorksets.AddCandidate(vehicle);
                 },
                 () => runtime.m_Features.BypassRun(),

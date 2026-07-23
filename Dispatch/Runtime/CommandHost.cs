@@ -58,7 +58,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void AppendPublicTransportWrite(Entity vehicle, PublicTransport value)
         {
-            m_RailEvents.AppendModWrite(vehicle, value, SimulationSystem.frameIndex);
+            m_RailEvents.AppendPublicTransportWrite(vehicle, value, SimulationSystem.frameIndex);
             m_Worksets.AddCandidate(vehicle);
         }
 
@@ -68,17 +68,18 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Worksets.AddCandidate(vehicle);
         }
 
-        public void AppendPathWrite(Entity vehicle, PathOwner value, int pathElementCount)
+        public void AppendPathWrite(Entity vehicle, PathOwner value, bool hasPathElements, int pathElementCount)
         {
-            m_RailEvents.AppendPathWrite(vehicle, value, pathElementCount, 0UL, SimulationSystem.frameIndex);
+            m_RailEvents.AppendPathWrite(vehicle, value, hasPathElements, pathElementCount, 0UL, SimulationSystem.frameIndex);
             m_Worksets.AddCandidate(vehicle);
         }
 
-        public void AppendPathWrite(Entity vehicle, PathOwner value, DynamicBuffer<PathElement> path)
+        public void AppendPathWrite(Entity vehicle, PathOwner value, bool hasPathElements, DynamicBuffer<PathElement> path)
         {
             m_RailEvents.AppendPathWrite(
                 vehicle,
                 value,
+                hasPathElements,
                 path.Length,
                 RailEventSource.PathSignature(path),
                 SimulationSystem.frameIndex);

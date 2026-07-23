@@ -242,7 +242,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void SetPublicTransport(Entity vehicle, PublicTransport value)
         {
-            m_RailEvents.AppendModWrite(vehicle, value, Frame);
+            m_RailEvents.AppendPublicTransportWrite(vehicle, value, Frame);
             m_Worksets.AddCandidate(vehicle);
             m_EntityManager.SetComponentData(vehicle, value);
         }

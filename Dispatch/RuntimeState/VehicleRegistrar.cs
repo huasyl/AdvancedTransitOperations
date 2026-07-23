@@ -412,7 +412,8 @@ namespace RapidTransitMod
             m_Runtime.m_Bypass.ClearVehicle(vehicle, "换线");
             ClearRebindRuntime(vehicle);
 
-            m_Runtime.m_VehicleRegistry.BeginRebind(vehicle);
+            ulong sourceGeneration = m_Runtime.m_RailEventSource.RebindSource(vehicle);
+            m_Runtime.m_VehicleRegistry.BeginRebind(vehicle, oldLine, sourceGeneration);
             try
             {
                 m_Runtime.m_VehicleRegistry.Remove(vehicle);
@@ -501,7 +502,7 @@ namespace RapidTransitMod
 
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             if (completeRestore)
-                m_Runtime.m_VehicleRegistry.BeginRestore(vehicle);
+                m_Runtime.m_VehicleRegistry.BeginRestore(vehicle, m_Runtime.m_RailEventSource.RegisterSource(vehicle));
             bool restored = false;
             VehicleState finalState = default;
             int finalTarget = -1;

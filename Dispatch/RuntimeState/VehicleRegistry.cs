@@ -19,6 +19,8 @@ namespace RapidTransitMod
         private bool m_Restoring;
         private Entity m_RestoreVehicle;
         private VehicleFactKind m_RestoreFactKind;
+        private Entity m_RestorePreviousLine;
+        private ulong m_RestoreSourceGeneration;
 
         public VehicleRegistry(VehicleStateStore store, VehicleWorksets worksets, FrameEvents events, Func<uint> frame,
             Func<double, uint> toFramesCeil, Func<Entity, TransitMode> modeOfLine)
@@ -31,7 +33,7 @@ namespace RapidTransitMod
             m_ModeOfLine = modeOfLine;
         }
 
-        // RuntimeWorksets 按组合根顺序在 RailEventSource 后创建，随后一次性绑定。
+        // RuntimeWorksets 按组合根顺序创建后一次性绑定。
         public void BindWorksets(RuntimeWorksets worksets) => m_RuntimeWorksets = worksets;
 
         public void Track(Entity vehicle, Entity line)
@@ -351,13 +353,17 @@ namespace RapidTransitMod
         public void Remove(Entity vehicle)
         {
             Entity line = ReadLine(vehicle);
+            VehicleState state = m_Store.State.TryGetValue(vehicle, out VehicleState existingState)
+                ? existingState
+                : default;
             if (vehicle != Entity.Null && !m_Restoring)
             {
-                m_Events.AppendVehicle(vehicle, m_Frame(), VehicleFactKind.Removed);
+                uint frame = m_Frame();
+                m_Events.AppendVehicle(vehicle, frame, VehicleFactKind.Removed, line: line, state: state);
                 m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Removed, default, default, line);
             }
             m_Worksets.RemoveMode(vehicle);
-            if (m_Store.State.TryGetValue(vehicle, out VehicleState state))
+            if (m_Store.State.TryGetValue(vehicle, out state))
                 m_Worksets.RemoveState(vehicle, state);
             m_RuntimeWorksets?.ClearVehicle(vehicle);
             m_Store.Remove(vehicle);
@@ -373,18 +379,22 @@ namespace RapidTransitMod
             m_Store.Clear();
         }
 
-        public void BeginRestore(Entity vehicle)
+        public void BeginRestore(Entity vehicle, ulong sourceGeneration)
         {
             m_Restoring = true;
             m_RestoreVehicle = vehicle;
             m_RestoreFactKind = VehicleFactKind.Registered;
+            m_RestorePreviousLine = Entity.Null;
+            m_RestoreSourceGeneration = sourceGeneration;
         }
 
-        public void BeginRebind(Entity vehicle)
+        public void BeginRebind(Entity vehicle, Entity previousLine, ulong sourceGeneration)
         {
             m_Restoring = true;
             m_RestoreVehicle = vehicle;
             m_RestoreFactKind = VehicleFactKind.Rebound;
+            m_RestorePreviousLine = previousLine;
+            m_RestoreSourceGeneration = sourceGeneration;
         }
 
         public void EndRestore(Entity line)
@@ -394,16 +404,23 @@ namespace RapidTransitMod
 
             Entity vehicle = m_RestoreVehicle;
             VehicleFactKind factKind = m_RestoreFactKind;
+            Entity previousLine = m_RestorePreviousLine;
+            ulong sourceGeneration = m_RestoreSourceGeneration;
             m_Restoring = false;
             m_RestoreVehicle = Entity.Null;
             m_Events.AppendVehicle(
                 vehicle,
                 m_Frame(),
                 factKind,
-                route: factKind == VehicleFactKind.Rebound ? line : Entity.Null);
+                previousLine: factKind == VehicleFactKind.Rebound ? previousLine : Entity.Null,
+                line: line,
+                state: m_Store.State.TryGetValue(vehicle, out VehicleState state) ? state : default,
+                sourceGeneration: sourceGeneration);
+            if (m_Store.State.TryGetValue(vehicle, out VehicleState restoredState))
+                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.State, default, restoredState, line, sourceGeneration: sourceGeneration);
             m_RestoreFactKind = default;
-            if (m_Store.State.TryGetValue(vehicle, out VehicleState state))
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.State, default, state, line);
+            m_RestorePreviousLine = Entity.Null;
+            m_RestoreSourceGeneration = 0UL;
             m_RuntimeWorksets?.AddCandidate(vehicle);
             m_RuntimeWorksets?.MarkDirty(line);
         }
@@ -413,6 +430,8 @@ namespace RapidTransitMod
             m_Restoring = false;
             m_RestoreVehicle = Entity.Null;
             m_RestoreFactKind = default;
+            m_RestorePreviousLine = Entity.Null;
+            m_RestoreSourceGeneration = 0UL;
         }
 
         // 只读审查入口：不创建 ECS 写入，也不修正任何索引。

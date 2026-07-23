@@ -94,7 +94,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                         uint frame = m_Runtime.m_SimulationSystem.frameIndex;
                         PublicTransport pt = m_Runtime.m_RailEventSource.ReadPublicTransport(v);
                         pt.m_DepartureFrame = frame + 99999;
-                        m_Runtime.m_RailEventSource.AppendModWrite(v, pt, frame);
+                        m_Runtime.m_RailEventSource.AppendPublicTransportWrite(v, pt, frame);
                         m_Runtime.m_RuntimeWorksets.AddCandidate(v);
                         m_Runtime.EntityManager.SetComponentData(v, pt);
                     }
