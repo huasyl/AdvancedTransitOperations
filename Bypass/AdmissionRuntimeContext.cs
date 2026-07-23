@@ -3,6 +3,7 @@ using Game.Routes;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -40,5 +41,10 @@ namespace RapidTransitMod.Bypass
         bool TryBuildLineDistanceModel(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out BypassLineDistanceModel model);
         bool TryGetLineTimeProfile(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTimeProfileHeader profile);
         string FormatBypassNodeLabel(Entity building);
+        void SetRuntimeDeadline(Entity vehicle, DeadlineKind kind, uint frame);
+        void ClearRuntimeDeadline(Entity vehicle, DeadlineKind kind);
+        void ClearRuntimeDeadlines(DeadlineKind kind);
+        void SetRuntimeBypassActive(Entity vehicle, bool active);
+        void ClearRuntimeBypassActive();
     }
 }

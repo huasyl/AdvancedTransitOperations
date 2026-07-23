@@ -26,6 +26,7 @@ namespace RapidTransitMod.Dispatch.Commands
             PublicTransport publicTransport,
             EntityCommandBuffer ecb)
         {
+            m_Host.AppendPublicTransportWrite(vehicle, publicTransport);
             ecb.SetComponent(vehicle, publicTransport);
         }
 

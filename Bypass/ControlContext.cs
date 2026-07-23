@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Game.Routes;
+using Game.Vehicles;
 using Unity.Entities;
 
 namespace RapidTransitMod.Bypass
@@ -13,5 +14,6 @@ namespace RapidTransitMod.Bypass
         void RecordHold(Entity vehicle, Entity blocker, string lineTag, Entity holdStation, int waypointIndex, string stateTag);
         void RecordRelease(Entity vehicle, Entity blocker, string reason);
         void TriggerWaiting(Entity vehicle, Entity route, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
+        void RecordPublicTransportWrite(Entity vehicle, PublicTransport publicTransport);
     }
 }

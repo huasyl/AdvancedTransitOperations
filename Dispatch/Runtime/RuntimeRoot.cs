@@ -26,13 +26,27 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SimClock.ForceRefresh(runtime.m_SimulationSystem.frameIndex);
             runtime.m_VehicleStateStore = new VehicleStateStore();
             runtime.m_VehicleStateStore.Init();
-            runtime.m_VehicleRegistry = new VehicleRegistry(runtime.m_VehicleStateStore);
+            runtime.m_FrameEvents = new FrameEvents();
+            runtime.m_VehicleWorksets = new VehicleWorksets();
+            runtime.m_VehicleRegistry = new VehicleRegistry(
+                runtime.m_VehicleStateStore,
+                runtime.m_VehicleWorksets,
+                runtime.m_FrameEvents,
+                () => runtime.m_SimulationSystem.frameIndex,
+                minutes => runtime.m_SimClock.Snapshot.ToFramesCeil(minutes),
+                line => TransportModeResolver.Resolve(runtime.EntityManager, line));
+            runtime.m_RailEventSource = new RailEventSource(runtime, runtime.m_FrameEvents);
+            runtime.m_RuntimeWorksets = new RuntimeWorksets(runtime, runtime.m_FrameEvents);
+            runtime.m_VehicleRegistry.BindWorksets(runtime.m_RuntimeWorksets);
             runtime.m_VehicleView = new VehicleView(runtime.m_VehicleStateStore);
             runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
+            {
                 runtime.m_VehicleRegistry.ReprojectReady(
                     runtime.m_SimulationSystem.frameIndex,
                     oldClockSnapshot,
                     newClockSnapshot);
+                runtime.m_VehicleRegistry.ReprojectIdle(newClockSnapshot);
+            };
             runtime.m_RuntimeEngine = new DispatchEngine(runtime.m_VehicleRegistry, runtime);
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
@@ -41,6 +55,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SharedCorridor = new SharedCorridorSupport(runtime.m_Resolve, runtime.IsBypassStationSetting);
             runtime.m_StationAnchorDiagnostics = new StationAnchorDiagnostics(runtime);
             runtime.m_WorkbenchBridge = new RapidTransitMod.Dispatch.Workbench.Bridge(runtime);
+            runtime.m_WorkbenchBridge.AppliedStore.SetDirtyCallbacks(
+                line => runtime.m_RuntimeWorksets.MarkPendingDirty(line.ToString()),
+                () => runtime.m_RuntimeWorksets.MarkPendingAllDirty());
+            runtime.m_WorkbenchBridge.LineStore.SetDirtyCallbacks(
+                line => runtime.m_RuntimeWorksets.MarkPendingDirty(line.ToString()),
+                () => runtime.m_RuntimeWorksets.MarkPendingAllDirty());
             runtime.m_WorkbenchCatalogCache = runtime.m_WorkbenchBridge.CatalogCache();
             runtime.m_WorkbenchCatalogDirty = new CatalogDirty(
                 runtime.EntityManager,
@@ -67,7 +87,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 new FeatureSettingsStore(),
                 () => runtime.m_Bypass.RuntimeEnabled(),
                 () => runtime.m_Bypass.ClearAll(),
-                () => runtime.m_AnnouncementWorkbench.StopPreview());
+                () => runtime.m_AnnouncementWorkbench.StopPreview(),
+                () => runtime.m_RuntimeWorksets.MarkPendingAllDirty());
             runtime.m_OverviewFeatureSettingsPersist = new RapidTransitMod.Overview.FeatureSettingsPersist(
                 runtime.EntityManager,
                 () => runtime.m_CitySystem.City,
@@ -172,7 +193,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Laps.Init();
             runtime.m_Dwell = new DwellStore();
             runtime.m_Dwell.Init();
-            runtime.m_Slices = new SliceStore();
+            runtime.m_Slices = new SliceStore(runtime.m_RuntimeWorksets);
             runtime.m_SliceAdmission = new SliceAdmission(runtime.m_Slices, RuntimePorts.BuildSliceAdmission(runtime));
             runtime.m_ObsQuery = new RapidTransitMod.Dispatch.Observation.Query(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices);
             runtime.m_ObsPersist = new RapidTransitMod.Dispatch.Observation.Persist(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices, runtime.m_SliceAdmission);
@@ -372,6 +393,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineView = null!;
             runtime.m_VehicleView = null!;
             runtime.m_VehicleRegistry = null!;
+            runtime.m_RuntimeWorksets?.Dispose();
+            runtime.m_RuntimeWorksets = null!;
+            runtime.m_RailEventSource?.Dispose();
+            runtime.m_RailEventSource = null!;
+            runtime.m_VehicleWorksets?.Dispose();
+            runtime.m_VehicleWorksets = null!;
+            runtime.m_FrameEvents?.Dispose();
+            runtime.m_FrameEvents = null!;
             runtime.m_Resolve = null!;
             runtime.m_DispatchCache = null!;
             runtime.m_LapCache = null!;

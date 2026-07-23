@@ -23,7 +23,9 @@ namespace RapidTransitMod.Dispatch.Commands
             Target target,
             EntityCommandBuffer ecb)
         {
+            m_Host.AppendTargetWrite(vehicle, target);
             ecb.SetComponent(vehicle, target);
+            m_Host.AppendPublicTransportWrite(vehicle, publicTransport);
             ecb.SetComponent(vehicle, publicTransport);
             ecb.AddComponent<Updated>(vehicle);
         }
@@ -36,14 +38,17 @@ namespace RapidTransitMod.Dispatch.Commands
         {
             if (m_Host.EntityManager.HasComponent<PathOwner>(vehicle))
             {
-                PathOwner pathOwner = m_Host.EntityManager.GetComponentData<PathOwner>(vehicle);
+                PathOwner pathOwner = m_Host.ReadPath(vehicle);
                 pathOwner.m_State = PathFlags.Obsolete;
                 pathOwner.m_ElementIndex = 0;
+                m_Host.AppendPathWrite(vehicle, pathOwner, 0);
                 ecb.SetComponent(vehicle, pathOwner);
             }
 
             ecb.SetBuffer<PathElement>(vehicle).Clear();
+            m_Host.AppendTargetWrite(vehicle, target);
             ecb.SetComponent(vehicle, target);
+            m_Host.AppendPublicTransportWrite(vehicle, publicTransport);
             ecb.SetComponent(vehicle, publicTransport);
             ecb.AddComponent<PathfindUpdated>(vehicle);
             ecb.AddComponent<Updated>(vehicle);
@@ -92,7 +97,11 @@ namespace RapidTransitMod.Dispatch.Commands
             CommitVehicleDepartureState(vehicle, publicTransport, target, ecb);
 
             if (m_Host.EntityManager.HasComponent<PathOwner>(vehicle))
-                ecb.SetComponent(vehicle, new PathOwner(PathFlags.Updated));
+            {
+                PathOwner pathOwner = new PathOwner(PathFlags.Updated);
+                m_Host.AppendPathWrite(vehicle, pathOwner, segmentPath);
+                ecb.SetComponent(vehicle, pathOwner);
+            }
 
             DynamicBuffer<PathElement> targetPath = ecb.SetBuffer<PathElement>(vehicle);
             targetPath.Clear();

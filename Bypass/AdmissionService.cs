@@ -9,6 +9,7 @@ using Game.Vehicles;
 using RapidTransitMod.Bypass;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -222,6 +223,10 @@ namespace RapidTransitMod.Bypass
             m_LineBypassExecutionModeLogCache.Clear();
             m_SceneIndex.Clear();
             m_VanillaBlockerStalls.Clear();
+            m_Runtime.ClearRuntimeDeadlines(DeadlineKind.RescueProbe);
+            m_Runtime.ClearRuntimeDeadlines(DeadlineKind.RescueStall);
+            m_Runtime.ClearRuntimeDeadlines(DeadlineKind.RescueRecheck);
+            m_Runtime.ClearRuntimeBypassActive();
             m_BypassHoldSkipped.Clear();
             m_QueuedLocalReleaseFrameCache.Clear();
             m_StopSceneEligibilityLineCaches.Clear();
@@ -233,16 +238,31 @@ namespace RapidTransitMod.Bypass
             m_StopSceneEligibilityLineCaches.Clear();
         }
         internal void WarmStaticSceneIndex() => m_SceneIndex.WarmAll();
+        internal void ClearRescue(Entity vehicle)
+        {
+            m_VanillaBlockerStalls.Remove(vehicle);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueProbe);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueStall);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueRecheck);
+        }
         internal void ClearVehicle(Entity vehicle)
         {
             m_Decision.Remove(vehicle);
             m_VanillaBlockerStalls.Remove(vehicle);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueProbe);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueStall);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueRecheck);
+            m_Runtime.SetRuntimeBypassActive(vehicle, false);
             m_BypassHoldSkipped.Remove(vehicle);
         }
         internal void ClearVehiclePreservingBypassHoldSkipped(Entity vehicle)
         {
             m_Decision.Remove(vehicle);
             m_VanillaBlockerStalls.Remove(vehicle);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueProbe);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueStall);
+            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueRecheck);
+            m_Runtime.SetRuntimeBypassActive(vehicle, false);
         }
         internal void MarkBypassHoldSkipped(Entity vehicle, Entity blocker)
         {
@@ -476,8 +496,17 @@ namespace RapidTransitMod.Bypass
             m_StopSceneEligibilityLineCaches[line] = cache;
             return true;
         }
-        internal void SetBlocker(Entity vehicle, Entity blocker) => m_Decision.SetBlocker(vehicle, blocker);
-        internal void ClearBlocker(Entity vehicle) => m_Decision.ClearBlocker(vehicle);
+        internal void SetBlocker(Entity vehicle, Entity blocker)
+        {
+            m_Decision.SetBlocker(vehicle, blocker);
+            m_Runtime.SetRuntimeBypassActive(vehicle, true);
+        }
+
+        internal void ClearBlocker(Entity vehicle)
+        {
+            m_Decision.ClearBlocker(vehicle);
+            m_Runtime.SetRuntimeBypassActive(vehicle, false);
+        }
         internal void RemoveCadence(Entity vehicle) => m_Decision.Remove(vehicle, BypassEntryKind.Cadence);
         internal void RemoveEpisode(Entity vehicle) => m_Decision.Remove(vehicle, BypassEntryKind.Episode);
         internal List<Entity> ReleaseLine(Entity line, Func<Entity, Entity> resolveLine)
@@ -680,6 +709,8 @@ namespace RapidTransitMod.Bypass
 
             if (!ShouldProbeVanillaBlockerRescue(expressVehicle, nowFrame))
                 return false;
+            m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueProbe,
+                nowFrame + VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES);
 
             if (!BypassRun()
                 || !Managed(expressLine)
@@ -688,6 +719,8 @@ namespace RapidTransitMod.Bypass
                 || vanillaBlocker.m_Blocker == Entity.Null)
             {
                 m_VanillaBlockerStalls.Remove(expressVehicle);
+                m_Runtime.ClearRuntimeDeadline(expressVehicle, DeadlineKind.RescueStall);
+                m_Runtime.ClearRuntimeDeadline(expressVehicle, DeadlineKind.RescueRecheck);
                 return false;
             }
 
@@ -698,12 +731,20 @@ namespace RapidTransitMod.Bypass
             {
                 stall = new VanillaBlockerStall(firstBlocker, nowFrame, nowFrame, 0);
                 m_VanillaBlockerStalls[expressVehicle] = stall;
+                m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueProbe,
+                    nowFrame + VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES);
+                m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueStall,
+                    nowFrame + VANILLA_BLOCKER_RESCUE_STALL_FRAMES);
                 return false;
             }
 
             if (nowFrame - stall.FirstSeenFrame < VANILLA_BLOCKER_RESCUE_STALL_FRAMES)
             {
                 m_VanillaBlockerStalls[expressVehicle] = new VanillaBlockerStall(firstBlocker, stall.FirstSeenFrame, nowFrame, stall.LastResolvedFrame);
+                m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueProbe,
+                    nowFrame + VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES);
+                m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueStall,
+                    stall.FirstSeenFrame + VANILLA_BLOCKER_RESCUE_STALL_FRAMES);
                 return false;
             }
 
@@ -711,10 +752,18 @@ namespace RapidTransitMod.Bypass
                 && nowFrame - stall.LastResolvedFrame < VANILLA_BLOCKER_RESCUE_RECHECK_FRAMES)
             {
                 m_VanillaBlockerStalls[expressVehicle] = new VanillaBlockerStall(firstBlocker, stall.FirstSeenFrame, nowFrame, stall.LastResolvedFrame);
+                m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueProbe,
+                    nowFrame + VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES);
+                m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueRecheck,
+                    stall.LastResolvedFrame + VANILLA_BLOCKER_RESCUE_RECHECK_FRAMES);
                 return false;
             }
 
             m_VanillaBlockerStalls[expressVehicle] = new VanillaBlockerStall(firstBlocker, stall.FirstSeenFrame, nowFrame, nowFrame);
+            m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueProbe,
+                nowFrame + VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES);
+            m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueRecheck,
+                nowFrame + VANILLA_BLOCKER_RESCUE_RECHECK_FRAMES);
             if (!TryResolveVanillaBlockerRoot(firstBlocker, vanillaBlockerSource, out Entity rootBlocker))
                 return false;
 
@@ -739,10 +788,36 @@ namespace RapidTransitMod.Bypass
             return true;
         }
 
+        internal void ArmVanillaBlockerRescue(Entity expressVehicle, Entity expressLine, uint nowFrame)
+        {
+            if (expressVehicle == Entity.Null
+                || expressLine == Entity.Null
+                || !BypassRun()
+                || !Managed(expressLine)
+                || !Express(expressLine))
+            {
+                return;
+            }
+
+            m_Runtime.SetRuntimeDeadline(expressVehicle, DeadlineKind.RescueProbe,
+                NextVanillaBlockerRescueProbe(expressVehicle, nowFrame));
+        }
+
         private static bool ShouldProbeVanillaBlockerRescue(Entity vehicle, uint nowFrame)
         {
             uint bucket = (uint)(vehicle.Index & 0x7fffffff) % VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES;
             return nowFrame % VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES == bucket;
+        }
+
+        private static uint NextVanillaBlockerRescueProbe(Entity vehicle, uint nowFrame)
+        {
+            uint bucket = (uint)(vehicle.Index & 0x7fffffff) % VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES;
+            uint remainder = nowFrame % VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES;
+            uint offset = (bucket + VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES - remainder)
+                % VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES;
+            if (offset == 0)
+                offset = VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES;
+            return nowFrame + offset;
         }
 
         private bool TryReadVanillaBlocker(Entity vehicle, out Entity sourceVehicle, out Blocker blocker)

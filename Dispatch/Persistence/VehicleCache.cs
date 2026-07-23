@@ -1,6 +1,7 @@
 using System;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -90,8 +91,11 @@ namespace RapidTransitMod.Dispatch.Persistence
 
                     if (m_Runtime.EntityManager.HasComponent<PublicTransport>(v))
                     {
-                        PublicTransport pt = m_Runtime.EntityManager.GetComponentData<PublicTransport>(v);
-                        pt.m_DepartureFrame = m_Runtime.m_SimulationSystem.frameIndex + 99999;
+                        uint frame = m_Runtime.m_SimulationSystem.frameIndex;
+                        PublicTransport pt = m_Runtime.m_RailEventSource.ReadPublicTransport(v);
+                        pt.m_DepartureFrame = frame + 99999;
+                        m_Runtime.m_RailEventSource.AppendModWrite(v, pt, frame);
+                        m_Runtime.m_RuntimeWorksets.AddCandidate(v);
                         m_Runtime.EntityManager.SetComponentData(v, pt);
                     }
                     if (RtLog.VerboseEnabled)
@@ -127,6 +131,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                     m_Runtime.m_ObsPersist.SetLapFrames(v, 0);
                     m_Runtime.m_BVMisfire.Remove(v);
                     m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                    m_Runtime.m_RuntimeWorksets.ClearDeadline(v, DeadlineKind.BvMisfire);
                     m_Runtime.m_ObsPersist.MarkLapRestored(v);
                     if (RtLog.VerboseEnabled)
                     {

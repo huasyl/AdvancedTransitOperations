@@ -148,6 +148,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StopSessionBoardingChangeCount.Remove(vehicle);
             m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
             m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace);
         }
     }
 }

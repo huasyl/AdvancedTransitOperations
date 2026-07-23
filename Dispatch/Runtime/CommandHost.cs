@@ -1,5 +1,7 @@
 using System;
 using Game.Simulation;
+using Game.Common;
+using Game.Pathfind;
 using Game.Vehicles;
 using Unity.Collections;
 using Unity.Entities;
@@ -14,6 +16,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity, uint> m_SetPreparing;
         private readonly Action<Entity> m_ClearAssistLaunchPending;
         private readonly Action<Entity> m_ClearBoardingGrace;
+        private readonly RailEventSource m_RailEvents;
+        private readonly RuntimeWorksets m_Worksets;
         private NativeHashMap<Entity, int> m_CachedWaypoint;
         private NativeHashMap<Entity, byte> m_LastEffectiveBoardingState;
         private NativeHashMap<Entity, byte> m_LastOfficialBoardingState;
@@ -38,6 +42,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_SetPreparing = runtime.m_RuntimeEngine.SetPreparing;
             m_ClearAssistLaunchPending = runtime.m_RuntimeEngine.ClearAssistLaunchPending;
             m_ClearBoardingGrace = runtime.m_RuntimeEngine.ClearBoardingGrace;
+            m_RailEvents = runtime.m_RailEventSource;
+            m_Worksets = runtime.m_RuntimeWorksets;
             m_CachedWaypoint = runtime.m_CachedWpIdx;
             m_LastEffectiveBoardingState = runtime.m_LastEffectiveBoardingState;
             m_LastOfficialBoardingState = runtime.m_LastOfficialBoardingState;
@@ -58,7 +64,39 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public PublicTransport ReadPublicTransport(Entity vehicle)
         {
-            return EntityManager.GetComponentData<PublicTransport>(vehicle);
+            return m_RailEvents.ReadPublicTransport(vehicle);
+        }
+
+        public Target ReadTarget(Entity vehicle) => m_RailEvents.ReadTarget(vehicle);
+        public PathOwner ReadPath(Entity vehicle) => m_RailEvents.ReadPath(vehicle);
+
+        public void AppendPublicTransportWrite(Entity vehicle, PublicTransport value)
+        {
+            m_RailEvents.AppendModWrite(vehicle, value, SimulationSystem.frameIndex);
+            m_Worksets.AddCandidate(vehicle);
+        }
+
+        public void AppendTargetWrite(Entity vehicle, Target value)
+        {
+            m_RailEvents.AppendTargetWrite(vehicle, value, SimulationSystem.frameIndex);
+            m_Worksets.AddCandidate(vehicle);
+        }
+
+        public void AppendPathWrite(Entity vehicle, PathOwner value, int pathElementCount)
+        {
+            m_RailEvents.AppendPathWrite(vehicle, value, pathElementCount, 0UL, SimulationSystem.frameIndex);
+            m_Worksets.AddCandidate(vehicle);
+        }
+
+        public void AppendPathWrite(Entity vehicle, PathOwner value, DynamicBuffer<PathElement> path)
+        {
+            m_RailEvents.AppendPathWrite(
+                vehicle,
+                value,
+                path.Length,
+                RailEventSource.PathSignature(path),
+                SimulationSystem.frameIndex);
+            m_Worksets.AddCandidate(vehicle);
         }
 
         public void SetVehicleLabel(Entity vehicle, string text)
@@ -119,6 +157,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             m_Misfires.Remove(vehicle);
             m_MisfireStartFrames.Remove(vehicle);
+            m_Worksets.ClearDeadline(vehicle, DeadlineKind.BvMisfire);
         }
 
         public bool GetPreparingCooldown(Entity vehicle, out uint frame)
@@ -131,10 +170,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (frame == 0)
             {
                 m_PreparingCooldown.Remove(vehicle);
+                m_Worksets.ClearDeadline(vehicle, DeadlineKind.PreparingCooldown);
                 return;
             }
 
             m_PreparingCooldown[vehicle] = frame;
+            m_Worksets.SetDeadline(vehicle, DeadlineKind.PreparingCooldown, frame);
         }
     }
 }

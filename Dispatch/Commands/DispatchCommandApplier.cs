@@ -89,6 +89,7 @@ namespace RapidTransitMod
             bool boarding,
             EntityCommandBuffer ecb)
         {
+            target = m_CommandHost.ReadTarget(vehicle);
             m_LaunchActions.EnsurePreparingRoute(
                 vehicle,
                 ref publicTransport,

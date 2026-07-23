@@ -8,6 +8,7 @@ using Game.Simulation;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Scheduling;
+using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.Core;
 using Unity.Collections;
 using Unity.Entities;
@@ -60,6 +61,27 @@ namespace RapidTransitMod
         private const float DEPARTURE_MOVING_SPEED_SQ = 0.01f;
 
         private static byte BoardingByte(bool boarding) => boarding ? (byte)1 : (byte)0;
+
+        private void SetState(Entity vehicle, VehicleState state)
+        {
+            bool leavingRunning = state != VehicleState.Running
+                && m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState previous)
+                && previous == VehicleState.Running;
+            m_Vehicles.SetState(vehicle, state);
+            if (!leavingRunning)
+                return;
+
+            m_Runtime.m_Bypass.ClearRescue(vehicle);
+            if (m_Runtime.m_Observation.DropSlice(vehicle, out int droppedSliceIndex))
+                m_Runtime.m_Observation.DebugDrop(vehicle, droppedSliceIndex);
+        }
+
+        private void ClearMisfire(Entity vehicle)
+        {
+            m_Runtime.m_BVMisfire.Remove(vehicle);
+            m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
+            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, DeadlineKind.BvMisfire);
+        }
 
         private void SetVehicleLabel(
             Entity vehicle,
@@ -147,6 +169,7 @@ namespace RapidTransitMod
             m_Runtime.Bypass.ClearVehicle(vehicle, "UI强制发车");
             m_Runtime.Bypass.MarkBypassHoldSkipped(vehicle, blocker);
             m_Runtime.m_ForcedMidStopBoardingGraceUntil[vehicle] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
+            m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
             m_Runtime.m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, ecb);
             StartDeparturePending(vehicle, nowFrame);
         }
@@ -308,8 +331,7 @@ namespace RapidTransitMod
             m_Runtime.Bypass.ClearBypassHoldSkipped(vehicle);
             m_Runtime.m_CachedWpIdx[vehicle] = -1;
             ClearStopSession(vehicle);
-            m_Runtime.m_BVMisfire.Remove(vehicle);
-            m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
+            ClearMisfire(vehicle);
             m_Runtime.m_Observation.ClearForcedMidStop(vehicle);
             m_Runtime.m_Observation.ClearDwellDeadlineCache(vehicle);
             m_Runtime.m_ObsPersist.ClearDwell(vehicle);
@@ -318,7 +340,7 @@ namespace RapidTransitMod
         public void Adopt(Entity vehicle, Entity line, VehicleState state, uint nowFrame, uint? dispatchFrame)
         {
             m_Vehicles.Track(vehicle, line);
-            m_Vehicles.SetState(vehicle, state);
+            SetState(vehicle, state);
             m_Vehicles.ClearTarget(vehicle);
             m_Vehicles.ClearIdle(vehicle);
             m_Vehicles.ClearLaunch(vehicle);
@@ -345,7 +367,7 @@ namespace RapidTransitMod
 
         public void Retire(Entity vehicle)
         {
-            m_Vehicles.SetState(vehicle, VehicleState.Retiring);
+            SetState(vehicle, VehicleState.Retiring);
             m_Vehicles.ClearTarget(vehicle);
             m_Vehicles.ClearIdle(vehicle);
             m_Vehicles.ClearPreparing(vehicle);
@@ -385,7 +407,7 @@ namespace RapidTransitMod
 
         public void Hold(Entity vehicle, uint startFrame, ClockSnapshot clockSnapshot)
         {
-            m_Vehicles.SetState(vehicle, VehicleState.Holding);
+            SetState(vehicle, VehicleState.Holding);
             m_Vehicles.SetReady(
                 vehicle,
                 startFrame,
@@ -395,13 +417,13 @@ namespace RapidTransitMod
 
         public void HoldFromIdle(Entity vehicle)
         {
-            m_Vehicles.SetState(vehicle, VehicleState.Holding);
+            SetState(vehicle, VehicleState.Holding);
             m_Vehicles.ClearIdle(vehicle);
         }
 
         public void RecoverToHolding(Entity vehicle)
         {
-            m_Vehicles.SetState(vehicle, VehicleState.Holding);
+            SetState(vehicle, VehicleState.Holding);
             m_Vehicles.ClearIdle(vehicle);
             m_Vehicles.ClearSlot(vehicle);
             m_Vehicles.ClearLaunch(vehicle);
@@ -423,6 +445,8 @@ namespace RapidTransitMod
             m_Vehicles.SetSlot(vehicle, slot);
             m_Vehicles.ClearTarget(vehicle);
             m_Vehicles.ClearOriginCandidate(vehicle);
+            if (m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line))
+                m_Runtime.m_Bypass.ArmExpressRescue(vehicle, line, nowFrame);
         }
 
         public void Run(Entity vehicle)
@@ -431,11 +455,13 @@ namespace RapidTransitMod
             m_Vehicles.ClearPreparing(vehicle);
             m_Vehicles.ClearIdle(vehicle);
             m_Vehicles.ClearReady(vehicle);
+            if (m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line))
+                m_Runtime.m_Bypass.ArmExpressRescue(vehicle, line, m_Runtime.m_SimulationSystem.frameIndex);
         }
 
         public void RestoreHold(Entity vehicle, int targetMinute)
         {
-            m_Vehicles.SetState(vehicle, VehicleState.Holding);
+            SetState(vehicle, VehicleState.Holding);
             m_Vehicles.SetTarget(vehicle, targetMinute);
             m_Vehicles.ClearSlot(vehicle);
             m_Vehicles.ClearLaunch(vehicle);
@@ -450,11 +476,13 @@ namespace RapidTransitMod
             m_Vehicles.ClearLaunch(vehicle);
             m_Vehicles.ClearCooldown(vehicle);
             m_Vehicles.ClearOriginCandidate(vehicle);
+            if (m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line))
+                m_Runtime.m_Bypass.ArmExpressRescue(vehicle, line, m_Runtime.m_SimulationSystem.frameIndex);
         }
 
         public void RecoverToIdle(Entity vehicle, uint nowFrame)
         {
-            m_Vehicles.SetState(vehicle, VehicleState.Idle);
+            SetState(vehicle, VehicleState.Idle);
             m_Vehicles.ClearTarget(vehicle);
             m_Vehicles.SetIdle(vehicle, nowFrame);
             m_Vehicles.ClearSlot(vehicle);
@@ -467,7 +495,7 @@ namespace RapidTransitMod
 
         public void ArriveIdle(Entity vehicle)
         {
-            m_Vehicles.SetState(vehicle, VehicleState.Idle);
+            SetState(vehicle, VehicleState.Idle);
             m_Vehicles.ClearSlot(vehicle);
             m_Vehicles.ClearLaunch(vehicle);
             m_Vehicles.ClearCooldown(vehicle);
@@ -628,6 +656,7 @@ namespace RapidTransitMod
             m_Runtime.m_CommandApplier.FinalizeRetireDispatchLockTerminals();
             m_RuntimeVehicleCleanup.Tick();
             TickLineControls(nowMinute);
+            m_Runtime.m_RuntimeWorksets.SealDirtyLines();
             m_SchedulerApply.Tick(ecb, clockSnapshot);
             m_Runtime.m_CommandApplier.TickRetireHandoffStages(m_Runtime.m_SimulationSystem.frameIndex);
         }
@@ -712,8 +741,7 @@ namespace RapidTransitMod
                     if (suppressForcedMidStopBoardingGhost)
                     {
                         boarding = false;
-                        m_Runtime.m_BVMisfire.Remove(v);
-                        m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                        ClearMisfire(v);
                     }
 
                     Entity lineEnt = line;
@@ -729,8 +757,7 @@ namespace RapidTransitMod
 
                     if (!ModRuntimeHostSystem.IsBvMisfireEnforcementEnabled() && m_Runtime.m_BVMisfire.Contains(v))
                     {
-                        m_Runtime.m_BVMisfire.Remove(v);
-                        m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                        ClearMisfire(v);
                     }
 
                     if (m_Runtime.m_BVMisfire.Contains(v))
@@ -740,8 +767,7 @@ namespace RapidTransitMod
                             && m_Runtime.m_LineProfile.IsWithinOriginDistance(v, wps, ORIGIN_FORCE_IDLE_RADIUS_METERS);
                         if (allowOriginHoldingBoardingGhost)
                         {
-                            m_Runtime.m_BVMisfire.Remove(v);
-                            m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                            ClearMisfire(v);
                             m_Runtime.m_LastEffectiveBoardingState[v] = 0;
                             m_Runtime.m_CachedWpIdx[v] = 0;
                             boarding = false;
@@ -763,8 +789,7 @@ namespace RapidTransitMod
                             {
                                 log.Info("[BVMisfire] " + LineTag() + " 车辆" + v.Index + " 超时，回库");
                             }
-                            m_Runtime.m_BVMisfire.Remove(v);
-                            m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                            ClearMisfire(v);
                             m_Runtime.m_CommandApplier.Retire(v, pt, tgt, ecb, "BVMisfire超时");
                             continue;
                         }
@@ -913,8 +938,7 @@ namespace RapidTransitMod
                                     m_Runtime.m_Announcements.StopOpened(v, lineEnt, wps, curWpIdx);
                                     OpenStopSession(v, lineEnt, curWpIdx, nowFrame);
                                     m_Runtime.TrackProjection.NoteVehicleProgressSuspectRecoveryBoarding(v, curWpIdx);
-                                    m_Runtime.m_BVMisfire.Remove(v);
-                                    m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                                    ClearMisfire(v);
                                     m_Runtime.m_Observation.ClearForcedMidStop(v);
                                 }
                                 else
@@ -1122,8 +1146,7 @@ namespace RapidTransitMod
                                     ClearStopSession(v);
                                     m_Runtime.m_LastEffectiveBoardingState[v] = 0;
                                     m_Runtime.m_CachedWpIdx[v] = -1;
-                                    m_Runtime.m_BVMisfire.Remove(v);
-                                    m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                                    ClearMisfire(v);
                                     m_Runtime.m_Observation.Launch(routeEnt, v, assistedTargetMinute, nowMinute, nowFrame, isLateAssistLaunch);
                                     ClearAssistLaunchPending(v);
                                     pt.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
@@ -1403,8 +1426,7 @@ namespace RapidTransitMod
                                 ClearStopSession(v);
                                 m_Runtime.m_LastEffectiveBoardingState[v] = 0;
                                 m_Runtime.m_CachedWpIdx[v] = -1;
-                                m_Runtime.m_BVMisfire.Remove(v);
-                                m_Runtime.m_BVMisfireStartFrame.Remove(v);
+                                ClearMisfire(v);
                                 m_Runtime.m_Observation.Launch(routeEnt, v, targetMinute, nowMinute, nowFrame, isLateDispatch);
                                 m_Runtime.m_WorkbenchBridge.ObservationStops().Start(v, lineEnt, wps);
                                 if (RtLog.VerboseEnabled)
@@ -1581,6 +1603,7 @@ namespace RapidTransitMod
                                 {
                                     m_Runtime.m_CommandApplier.ForceDepart(v, ref pt, nowFrame, ecb);
                                     m_Runtime.m_ForcedMidStopBoardingGraceUntil[v] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
+                                    m_Runtime.m_RuntimeWorksets.SetDeadline(v, DeadlineKind.ForcedMidStopBoardingGrace, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
                                     if (RtLog.VerboseEnabled)
                                     {
                                         string timeoutLogKey = midStopDwellSinceFrame.ToString();

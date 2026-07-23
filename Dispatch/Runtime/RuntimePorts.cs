@@ -252,8 +252,18 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_Observation.Hold,
                 runtime.m_Observation.Release,
                 runtime.m_Announcements.BypassWaiting,
+                (vehicle, publicTransport) =>
+                {
+                    runtime.m_RailEventSource.AppendModWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);
+                    runtime.m_RuntimeWorksets.AddCandidate(vehicle);
+                },
                 () => runtime.m_Features.BypassRun(),
-                runtime.m_LineTimes.Clear);
+                runtime.m_LineTimes.Clear,
+                runtime.m_RuntimeWorksets.SetDeadline,
+                runtime.m_RuntimeWorksets.ClearDeadline,
+                runtime.m_RuntimeWorksets.ClearDeadlines,
+                runtime.m_RuntimeWorksets.SetBypassActive,
+                () => runtime.m_RuntimeWorksets.ClearActiveBypass());
         }
 
         public static CapturePort BuildCapture(ModRuntimeHostSystem runtime)
@@ -288,6 +298,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 FlushSlice = (line, sliceIndex, observation) => runtime.m_ObsBuffers.Flush(line, sliceIndex, observation),
                 FlushStationDwell = (observationKey, observation) => runtime.m_ObsBuffers.Flush(observationKey, observation),
                 HotPathProbe = runtime.m_RuntimeHotPathProbe,
+                SetDeadline = runtime.m_RuntimeWorksets.SetDeadline,
+                ClearDeadline = runtime.m_RuntimeWorksets.ClearDeadline,
                 Log = message => runtime.log.Info(message)
             };
         }

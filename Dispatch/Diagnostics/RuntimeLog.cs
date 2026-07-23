@@ -4,6 +4,7 @@ using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Observation;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Diagnostics
@@ -474,11 +475,13 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             {
                 m_Runtime.m_BVMisfire.Add(vehicle);
                 m_Runtime.m_BVMisfireStartFrame[vehicle] = nowFrame;
+                m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, DeadlineKind.BvMisfire, nowFrame + ModRuntimeHostSystem.BV_MISFIRE_TIMEOUT + 1u);
             }
             else
             {
                 m_Runtime.m_BVMisfire.Remove(vehicle);
                 m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
+                m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, DeadlineKind.BvMisfire);
             }
         }
 

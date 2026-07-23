@@ -18,8 +18,14 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity, Entity, Entity, int, uint, string> m_RecordHold;
         private readonly Action<Entity, Entity, uint, string> m_RecordRelease;
         private readonly Action<Entity, Entity, DynamicBuffer<RouteWaypoint>, int> m_TriggerWaiting;
+        private readonly Action<Entity, Game.Vehicles.PublicTransport> m_RecordPublicTransportWrite;
         private readonly Func<bool> m_RuntimeEnabled;
         private readonly Action m_ClearLineTimeProfiles;
+        private readonly Action<Entity, DeadlineKind, uint> m_SetDeadline;
+        private readonly Action<Entity, DeadlineKind> m_ClearDeadline;
+        private readonly Action<DeadlineKind> m_ClearDeadlines;
+        private readonly Action<Entity, bool> m_SetBypassActive;
+        private readonly Action m_ClearBypassActive;
 
         internal BypassRuntimePort(
             EntityManager entityManager,
@@ -49,8 +55,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             Action<Entity, Entity, Entity, int, uint, string> recordHold,
             Action<Entity, Entity, uint, string> recordRelease,
             Action<Entity, Entity, DynamicBuffer<RouteWaypoint>, int> triggerWaiting,
+            Action<Entity, Game.Vehicles.PublicTransport> recordPublicTransportWrite,
             Func<bool> runtimeEnabled,
-            Action clearLineTimeProfiles)
+            Action clearLineTimeProfiles,
+            Action<Entity, DeadlineKind, uint> setDeadline,
+            Action<Entity, DeadlineKind> clearDeadline,
+            Action<DeadlineKind> clearDeadlines,
+            Action<Entity, bool> setBypassActive,
+            Action clearBypassActive)
             : base(
                 entityManager,
                 log,
@@ -80,8 +92,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_RecordHold = recordHold;
             m_RecordRelease = recordRelease;
             m_TriggerWaiting = triggerWaiting;
+            m_RecordPublicTransportWrite = recordPublicTransportWrite;
             m_RuntimeEnabled = runtimeEnabled;
             m_ClearLineTimeProfiles = clearLineTimeProfiles;
+            m_SetDeadline = setDeadline;
+            m_ClearDeadline = clearDeadline;
+            m_ClearDeadlines = clearDeadlines;
+            m_SetBypassActive = setBypassActive;
+            m_ClearBypassActive = clearBypassActive;
         }
 
         uint IControlContext.Frame => FrameGetter();
@@ -91,7 +109,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         void IControlContext.RecordHold(Entity vehicle, Entity blocker, string lineTag, Entity holdStation, int waypointIndex, string stateTag) => m_RecordHold(vehicle, blocker, holdStation, waypointIndex, FrameGetter(), stateTag);
         void IControlContext.RecordRelease(Entity vehicle, Entity blocker, string reason) => m_RecordRelease(vehicle, blocker, FrameGetter(), reason);
         void IControlContext.TriggerWaiting(Entity vehicle, Entity route, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex) => m_TriggerWaiting(vehicle, route, waypoints, waypointIndex);
+        void IControlContext.RecordPublicTransportWrite(Entity vehicle, Game.Vehicles.PublicTransport publicTransport) => m_RecordPublicTransportWrite(vehicle, publicTransport);
         bool IRuntimeContext.RuntimeEnabled() => m_RuntimeEnabled();
         void IRuntimeContext.ClearLineTimeProfiles() => m_ClearLineTimeProfiles();
+        public override void SetRuntimeDeadline(Entity vehicle, DeadlineKind kind, uint frame) => m_SetDeadline(vehicle, kind, frame);
+        public override void ClearRuntimeDeadline(Entity vehicle, DeadlineKind kind) => m_ClearDeadline(vehicle, kind);
+        public override void ClearRuntimeDeadlines(DeadlineKind kind) => m_ClearDeadlines(kind);
+        public override void SetRuntimeBypassActive(Entity vehicle, bool active) => m_SetBypassActive(vehicle, active);
+        public override void ClearRuntimeBypassActive() => m_ClearBypassActive();
     }
 }

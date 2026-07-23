@@ -136,6 +136,12 @@ namespace RapidTransitMod.Bypass
             m_Admission.ForgetBlocker(blocker);
         }
 
+        internal void ClearRescue(Entity vehicle)
+        {
+            if (vehicle != Entity.Null)
+                m_Admission.ClearRescue(vehicle);
+        }
+
         internal void ClearVehicle(Entity vehicle, string releaseReason = null)
         {
             ClearVehicle(vehicle, releaseReason, true);
@@ -277,6 +283,11 @@ namespace RapidTransitMod.Bypass
             }
 
             return Entity.Null;
+        }
+
+        internal void ArmExpressRescue(Entity vehicle, Entity line, uint nowFrame)
+        {
+            m_Admission.ArmVanillaBlockerRescue(vehicle, line, nowFrame);
         }
 
         internal void LogDepartureGate(Entity vehicle, string key, string message)

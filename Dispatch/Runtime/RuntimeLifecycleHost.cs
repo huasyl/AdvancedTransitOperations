@@ -24,7 +24,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void Loaded(Context serializationContext)
         {
+            ClearTracking();
             m_Runtime.m_SimClock.ForceRefresh(m_Runtime.m_SimulationSystem.frameIndex);
+            m_Runtime.m_StartupRuntimeStateCleared = true;
 
             // 阶段 B（前半，Reset 类）——保持原位，不动迁移语义。
             m_Runtime.m_SpawnIntentTrace?.Clear();
@@ -57,7 +59,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_CommandApplier.ResetRetireDispatchLockStages();
             m_Runtime.m_CommandApplier.ProjectRetireDispatchLocksImmediatelyOnLoad();
             m_Runtime.m_SystemReady = false;
-            m_Runtime.m_StartupRuntimeStateCleared = false;
+            m_Runtime.m_StartupRuntimeStateCleared = true;
             m_Runtime.m_StableFrameCount = 0;
             m_Runtime.m_LastVehicleCount = -1;
             m_Runtime.m_AnnouncementWorkbench.Reset();
@@ -215,6 +217,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             entities.Dispose();
             m_Runtime.m_VehicleRegistry.Clear();
+            m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
+            m_Runtime.m_RailEventSource.ResetTracking();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();
             m_Runtime.m_VehicleLabels.Clear();
@@ -279,6 +283,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_Observation.ClearDispatchEta();
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
+            m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
+            m_Runtime.m_RailEventSource.ResetTracking();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();
             m_Runtime.m_VehicleLabels.Clear();

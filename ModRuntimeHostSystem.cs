@@ -168,6 +168,10 @@ namespace RapidTransitMod
 
         // ── 车辆状态 ──
         internal VehicleStateStore m_VehicleStateStore = null!;
+        internal FrameEvents m_FrameEvents = null!;
+        internal RailEventSource m_RailEventSource = null!;
+        internal RuntimeWorksets m_RuntimeWorksets = null!;
+        internal VehicleWorksets m_VehicleWorksets = null!;
         internal VehicleRegistry m_VehicleRegistry = null!;
         internal VehicleView m_VehicleView = null!;
         internal LineView m_LineView = null!;
@@ -538,6 +542,9 @@ namespace RapidTransitMod
                 log.Info("[启动] 稳定检测通过，系统就绪(车辆数=" + totalVehicles + ")");
             }
 
+            m_FrameEvents.BeginFrame();
+            m_RailEventSource.BeginFrame();
+            m_RuntimeWorksets.BeginFrame();
             EntityCommandBuffer commandBuffer = m_EndFrameBarrier.CreateCommandBuffer();
             ClockSnapshot clockSnapshot = m_SimClock.Snapshot;
             int nowMinute = clockSnapshot.NowMinute;
@@ -561,6 +568,8 @@ namespace RapidTransitMod
 
             m_CommandApplier.ReconcileRetireDispatchLocksOnReady();
 
+            m_RailEventSource.CollectIfDue(simulationFrame);
+
             bool runFullRegisterSweep = nowMinute != m_LastRegisterSweepMinute;
             try
             {
@@ -575,10 +584,11 @@ namespace RapidTransitMod
             }
 
             DrainDisabledLineLateSpawnRetireQueue(commandBuffer);
+            m_RuntimeWorksets.Build();
 
             try
             {
-                m_RuntimeEngine.ProcessFrame(commandBuffer, clockSnapshot);
+            m_RuntimeEngine.ProcessFrame(commandBuffer, clockSnapshot);
             }
             catch (Exception ex)
             {

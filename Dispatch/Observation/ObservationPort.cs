@@ -72,7 +72,46 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             _ = oldClockSnapshot;
             _ = newClockSnapshot;
+            ulong cfgVersion = m_Runtime.m_LineView.CfgVersion();
+            var cached = new List<KeyValuePair<Entity, DwellDeadlineCacheEntry>>(m_DwellDeadlineCache);
             m_DwellDeadlineCache.Clear();
+            m_Runtime.m_RuntimeWorksets.ClearDeadlines(Dispatch.Runtime.DeadlineKind.Dwell);
+            for (int i = 0; i < cached.Count; i++)
+            {
+                Entity vehicle = cached[i].Key;
+                DwellDeadlineCacheEntry entry = cached[i].Value;
+                if (vehicle == Entity.Null
+                    || !m_Runtime.EntityManager.Exists(vehicle)
+                    || !m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line)
+                    || line != entry.Line
+                    || line == Entity.Null
+                    || !m_Runtime.EntityManager.Exists(line)
+                    || !m_Runtime.m_ObsQuery.TryDwellStart(vehicle, out uint dwellSinceFrame)
+                    || dwellSinceFrame != entry.DwellSinceFrame)
+                {
+                    continue;
+                }
+
+                int maxDwellMinutes = m_Runtime.m_LineView.Dwell(entry.Line);
+                if (maxDwellMinutes <= 0)
+                    continue;
+                uint deadlineFrame = ComputeDeadline(
+                    entry.Line,
+                    entry.WaypointIndex,
+                    entry.DwellSinceFrame,
+                    maxDwellMinutes);
+                m_DwellDeadlineCache[vehicle] = new DwellDeadlineCacheEntry(
+                    entry.Line,
+                    entry.WaypointIndex,
+                    entry.DwellSinceFrame,
+                    maxDwellMinutes,
+                    cfgVersion,
+                    deadlineFrame);
+                m_Runtime.m_RuntimeWorksets.SetDeadline(
+                    vehicle,
+                    Dispatch.Runtime.DeadlineKind.Dwell,
+                    deadlineFrame);
+            }
         }
 
         public void Record(Entity vehicle, string reason)
@@ -95,6 +134,9 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             bool dropped = m_Runtime.m_ObsPersist.DropSlice(vehicle, out sliceIndex);
             m_Admission.End(vehicle);
+            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.SliceSample);
+            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.SliceEntryProbe);
+            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
             return dropped;
         }
 
@@ -310,12 +352,16 @@ namespace RapidTransitMod.Dispatch.Observation
         public void ClearDwellDeadlineCache(Entity vehicle)
         {
             if (vehicle != Entity.Null)
+            {
                 m_DwellDeadlineCache.Remove(vehicle);
+                m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.Dwell);
+            }
         }
 
         public void ClearDwellDeadlineCache()
         {
             m_DwellDeadlineCache.Clear();
+            m_Runtime.m_RuntimeWorksets.ClearDeadlines(Dispatch.Runtime.DeadlineKind.Dwell);
         }
 
         public uint ComputeAdjustedStopDwellDeadlineFrame(
@@ -768,6 +814,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
 
             m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.ForcedMidStopBoardingGrace);
             m_Runtime.m_RuntimeLog.m_MidStopTimeoutLogCache.Remove(vehicle);
         }
 
@@ -788,6 +835,7 @@ namespace RapidTransitMod.Dispatch.Observation
             if (nowFrame >= graceUntil)
             {
                 m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+                m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.ForcedMidStopBoardingGrace);
                 return false;
             }
 
@@ -866,7 +914,10 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_RuntimeHotPathProbe.CountDwellDeadlineCacheMiss();
             maxDwellMinutes = m_Runtime.m_LineView.Dwell(line);
             if (maxDwellMinutes <= 0)
+            {
+                ClearDwellDeadlineCache(vehicle);
                 return 0;
+            }
             uint deadlineFrame = ComputeDeadline(line, waypointIndex, dwellSinceFrame, maxDwellMinutes);
             if (vehicle != Entity.Null)
             {
@@ -877,6 +928,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     maxDwellMinutes,
                     cfgVersion,
                     deadlineFrame);
+                m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, Dispatch.Runtime.DeadlineKind.Dwell, deadlineFrame);
             }
             return deadlineFrame;
         }

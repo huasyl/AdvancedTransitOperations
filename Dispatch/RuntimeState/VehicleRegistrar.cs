@@ -29,7 +29,6 @@ namespace RapidTransitMod
             [ReadOnly] public ComponentLookup<Owner> Owners;
             [ReadOnly] public ComponentLookup<PublicTransport> PublicTransports;
             [ReadOnly] public BufferLookup<LayoutElement> Layouts;
-            [ReadOnly] public NativeHashMap<Entity, VehicleState> VehicleStates;
             public NativeParallelHashSet<Entity>.ParallelWriter Seen;
             public NativeList<VehicleCandidate>.ParallelWriter Candidates;
 
@@ -40,7 +39,7 @@ namespace RapidTransitMod
                 for (int i = 0; i < vehicles.Length; i++)
                 {
                     Entity vehicle = Resolve(vehicles[i].m_Vehicle);
-                    if (vehicle == Entity.Null || VehicleStates.ContainsKey(vehicle)) continue;
+                    if (vehicle == Entity.Null) continue;
                     if (!Seen.Add(vehicle)) continue;
                     PublicTransport publicTransport = PublicTransports[vehicle];
                     if ((publicTransport.m_State & PublicTransportFlags.Returning) != 0) continue;
@@ -85,6 +84,8 @@ namespace RapidTransitMod
         private readonly List<Entity> m_DisabledLineLateSpawnRetireQueue = new List<Entity>();
         private readonly HashSet<Entity> m_DisabledLineLateSpawnRetireQueueSeen = new HashSet<Entity>();
         private readonly HashSet<Entity> m_DisabledLineLateSpawnHandledLines = new HashSet<Entity>();
+        // 跨来源帧候选：第二步只保留完整 Entity，第三步才由 Register 唯一消费。
+        private readonly HashSet<Entity> m_PendingRebindCandidates = new HashSet<Entity>();
 
         public VehicleRegistrar(ModRuntimeHostSystem runtime)
         {
@@ -92,12 +93,21 @@ namespace RapidTransitMod
         }
 
         internal IReadOnlyList<Entity> DisabledLineLateSpawnRetireQueue => m_DisabledLineLateSpawnRetireQueue;
+        internal IReadOnlyCollection<Entity> PendingRebindCandidates => m_PendingRebindCandidates;
 
         internal void ClearDisabledLineLateSpawnRetireQueue()
         {
             m_DisabledLineLateSpawnRetireQueue.Clear();
             m_DisabledLineLateSpawnRetireQueueSeen.Clear();
             m_DisabledLineLateSpawnHandledLines.Clear();
+        }
+
+        internal void ClearPendingRebindCandidates() => m_PendingRebindCandidates.Clear();
+
+        internal void ObserveRailRoute(Entity vehicle)
+        {
+            if (vehicle != Entity.Null && m_Runtime.m_VehicleView.Contains(vehicle))
+                m_PendingRebindCandidates.Add(vehicle);
         }
 
         public void Register(bool fullSweep)
@@ -187,7 +197,6 @@ namespace RapidTransitMod
                     Owners = m_Runtime.GetComponentLookup<Owner>(true),
                     PublicTransports = m_Runtime.GetComponentLookup<PublicTransport>(true),
                     Layouts = m_Runtime.GetBufferLookup<LayoutElement>(true),
-                    VehicleStates = m_Runtime.m_VehicleView.StateMap,
                     Seen = jobSeen.AsParallelWriter(),
                     Candidates = candidates.AsParallelWriter()
                 };
@@ -204,7 +213,11 @@ namespace RapidTransitMod
                     VehicleCandidate candidate = ordered[i];
                     if (!seen.Add(candidate.Vehicle)) continue;
                     if (!m_Runtime.EntityManager.Exists(candidate.Vehicle)) continue;
-                    if (m_Runtime.m_VehicleView.Contains(candidate.Vehicle)) continue;
+                    if (m_Runtime.m_VehicleView.Contains(candidate.Vehicle))
+                    {
+                        ObserveRebind(candidate.Line, candidate.Vehicle);
+                        continue;
+                    }
                     if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(candidate.Vehicle)) continue;
                     if (!wpBuffers.TryGetBuffer(candidate.Line, out DynamicBuffer<RouteWaypoint> waypoints)) continue;
                     bool adoptExisting = !m_Runtime.m_LineInitialAdopted.Contains(candidate.Line);
@@ -215,6 +228,11 @@ namespace RapidTransitMod
             for (int i = 0; i < eligible.Length; i++)
             {
                 Entity line = eligible[i];
+                if (rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> knownVehicles))
+                {
+                    for (int vehicleIndex = 0; vehicleIndex < knownVehicles.Length; vehicleIndex++)
+                        ObserveRebind(line, knownVehicles[vehicleIndex].m_Vehicle);
+                }
                 if (!m_Runtime.m_LineInitialAdopted.Contains(line))
                     m_Runtime.m_LineInitialAdopted.Add(line);
             }
@@ -272,7 +290,11 @@ namespace RapidTransitMod
             {
                 Entity v = rvs[i].m_Vehicle;
                 if (!m_Runtime.EntityManager.Exists(v)) continue;
-                if (m_Runtime.m_VehicleView.Contains(v)) continue;
+                if (m_Runtime.m_VehicleView.Contains(v))
+                {
+                    ObserveRebind(line, v);
+                    continue;
+                }
                 if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(v))
                 {
                     continue;
@@ -283,6 +305,14 @@ namespace RapidTransitMod
 
             if (adoptExistingVehicles)
                 m_Runtime.m_LineInitialAdopted.Add(line);
+        }
+
+        private void ObserveRebind(Entity line, Entity vehicle)
+        {
+            Entity resolved = m_Runtime.m_Resolve.RuntimeVehicle(vehicle);
+            if (resolved == Entity.Null || !m_Runtime.EntityManager.Exists(resolved)) return;
+            if (!m_Runtime.m_VehicleView.TryGetLine(resolved, out Entity registeredLine) || registeredLine == line) return;
+            m_PendingRebindCandidates.Add(resolved);
         }
 
         private void AdoptCandidate(
@@ -314,8 +344,15 @@ namespace RapidTransitMod
             }
 
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
+            m_Runtime.m_VehicleRegistry.BeginRestore(vehicle);
+            bool restored = false;
+            VehicleState finalState = default;
+            int finalTarget = -1;
+            string spawnIntent = string.Empty;
+            try
+            {
             m_Runtime.m_RuntimeEngine.Adopt(vehicle, line, initialState, nowFrame, dispatchFrame);
-            string spawnIntent = dispatchFrame.HasValue
+            spawnIntent = dispatchFrame.HasValue
                 ? m_Runtime.m_SpawnIntentTrace.Bind(line, vehicle, dispatchFrame.Value, nowFrame)
                 : string.Empty;
             m_Runtime.m_ObsPersist.SetLapDistance(vehicle, -1f);
@@ -353,13 +390,22 @@ namespace RapidTransitMod
                 && (initialReason == "at-origin"
                     || initialReason == "boarding-origin-fallback"
                     || initialReason.StartsWith("route-progress-origin-fallback"));
-            bool restored = m_Runtime.m_VehicleCache.Restore(vehicle, line, !preferOriginHolding);
+            restored = m_Runtime.m_VehicleCache.Restore(vehicle, line, !preferOriginHolding);
             if (!restored && initialState == VehicleState.Running)
                 restored = m_Runtime.m_VehicleCache.RestoreRun(vehicle, line, waypoints, initialReason);
-            VehicleState finalState = m_Runtime.m_VehicleView.GetState(vehicle);
-            int finalTarget = m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int target) ? target : -1;
+            finalState = m_Runtime.m_VehicleView.GetState(vehicle);
+            finalTarget = m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int target) ? target : -1;
+            m_Runtime.m_VehicleRegistry.EndRestore(line);
+            }
+            catch
+            {
+                m_Runtime.m_VehicleRegistry.CancelRestore();
+                throw;
+            }
             if (finalState == VehicleState.Holding)
                 m_Runtime.m_Observation.Seed(vehicle, line, nowFrame);
+            else if (finalState == VehicleState.Running)
+                m_Runtime.m_Bypass.ArmExpressRescue(vehicle, line, nowFrame);
 
             if (finalState == VehicleState.Running)
                 m_Runtime.m_VehicleLabels.SetLocalized(vehicle, "Running", "运行中", finalTarget >= 0 ? " " + ModRuntimeHostSystem.SlotStr(finalTarget) : "");

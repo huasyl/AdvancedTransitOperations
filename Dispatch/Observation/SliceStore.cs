@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Observation
@@ -242,6 +243,12 @@ namespace RapidTransitMod.Dispatch.Observation
             new List<TraversalSliceActualSample>();
         private readonly List<TraversalPositionSample> m_RecentPositionSamples =
             new List<TraversalPositionSample>();
+        private readonly RuntimeWorksets m_Worksets;
+
+        internal SliceStore(RuntimeWorksets worksets)
+        {
+            m_Worksets = worksets;
+        }
 
         internal Dictionary<ulong, TraversalSliceObservation> Observations => m_Obs;
         internal Dictionary<Entity, VehicleTraversalSliceSession> Sessions => m_Sessions;
@@ -269,6 +276,9 @@ namespace RapidTransitMod.Dispatch.Observation
             m_LapDebug.Clear();
             m_RecentActualSamples.Clear();
             m_RecentPositionSamples.Clear();
+            m_Worksets.ClearDeadlines(DeadlineKind.SliceSample);
+            m_Worksets.ClearDeadlines(DeadlineKind.SliceEntryProbe);
+            m_Worksets.ClearDeadlines(DeadlineKind.SliceRefresh);
         }
 
         internal void Remove(Entity vehicle)
@@ -279,6 +289,9 @@ namespace RapidTransitMod.Dispatch.Observation
             m_NextSampleFrames.Remove(vehicle);
             m_Plans.Remove(vehicle);
             m_NextEntryProbeFrames.Remove(vehicle);
+            m_Worksets.ClearDeadline(vehicle, DeadlineKind.SliceSample);
+            m_Worksets.ClearDeadline(vehicle, DeadlineKind.SliceEntryProbe);
+            m_Worksets.ClearDeadline(vehicle, DeadlineKind.SliceRefresh);
         }
 
         internal bool TryObservation(ulong key, out TraversalSliceObservation observation) =>
