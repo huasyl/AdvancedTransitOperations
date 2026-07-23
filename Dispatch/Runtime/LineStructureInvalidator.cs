@@ -128,27 +128,13 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void ClearVehiclePosition(Entity vehicle)
         {
-            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            if (m_Runtime.m_StopSessionWaypointIndex.TryGetValue(vehicle, out int stopSessionWaypointIndex)
-                && stopSessionWaypointIndex > 0
-                && !m_Runtime.m_DeparturePendingSinceFrame.ContainsKey(vehicle))
-            {
-                m_Runtime.m_InvalidatedMidStopRecoveryPending.Add(vehicle);
-            }
-
             m_Runtime.m_CachedWpIdx.Remove(vehicle);
             m_Runtime.m_WaypointIndex.Remove(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);
             m_Runtime.m_TrackProjection.ClearVehicle(vehicle);
             m_Runtime.m_ObsPersist.ClearLap(vehicle);
             m_Runtime.m_Observation.ClearVehicleSlices(vehicle);
-            m_Runtime.m_StopSessionLine.Remove(vehicle);
-            m_Runtime.m_StopSessionWaypointIndex.Remove(vehicle);
-            m_Runtime.m_StopSessionArrivalFrame.Remove(vehicle);
-            m_Runtime.m_StopSessionBoardingChangeCount.Remove(vehicle);
-            m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
-            m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
-            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace);
+            m_Runtime.m_StopRuntime.InvalidateVehiclePosition(vehicle);
         }
     }
 }

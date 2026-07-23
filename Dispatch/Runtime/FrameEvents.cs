@@ -5,7 +5,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Runtime
 {
-    internal enum VehicleFactKind : byte { Registered, Removed, Boarding, Route, PublicTransport, Target, Path, Lane, Motion }
+    internal enum VehicleFactKind : byte { Registered, Rebound, Removed, Boarding, Route, PublicTransport, Target, Path, Lane, Motion }
     internal enum DispatchFactKind : byte { State, Target, Slot, Removed }
     internal enum FrameEventKind : byte { Vehicle, Stop, Bypass, Dispatch }
 

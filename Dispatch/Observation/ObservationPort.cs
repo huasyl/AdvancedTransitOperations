@@ -810,12 +810,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void ClearForcedMidStop(Entity vehicle)
         {
-            if (vehicle == Entity.Null)
-                return;
-
-            m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
-            m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.ForcedMidStopBoardingGrace);
-            m_Runtime.m_RuntimeLog.m_MidStopTimeoutLogCache.Remove(vehicle);
+            m_Runtime.m_StopRuntime.ClearForcedMidStop(vehicle);
         }
 
         public bool IsSuppressedMidStopGhost(
@@ -825,40 +820,12 @@ namespace RapidTransitMod.Dispatch.Observation
             uint nowFrame,
             out int targetWaypointIndex)
         {
-            targetWaypointIndex = -1;
-            if (vehicle == Entity.Null
-                || !m_Runtime.m_ForcedMidStopBoardingGraceUntil.TryGetValue(vehicle, out uint graceUntil))
-            {
-                return false;
-            }
-
-            if (nowFrame >= graceUntil)
-            {
-                m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
-                m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, Dispatch.Runtime.DeadlineKind.ForcedMidStopBoardingGrace);
-                return false;
-            }
-
-            if (!m_Runtime.EntityManager.HasComponent<Waypoint>(target.m_Target))
-                return false;
-
-            targetWaypointIndex = m_Runtime.EntityManager.GetComponentData<Waypoint>(target.m_Target).m_Index;
-            if (targetWaypointIndex < 0 || targetWaypointIndex >= waypoints.Length)
-                return false;
-
-            Entity targetStop = GetConnectedStopForWaypoint(waypoints[targetWaypointIndex].m_Waypoint);
-            if (targetStop == Entity.Null
-                || !m_Runtime.EntityManager.HasComponent<BoardingVehicle>(targetStop)
-                || m_Runtime.EntityManager.GetComponentData<BoardingVehicle>(targetStop).m_Vehicle != vehicle
-                || !m_Runtime.EntityManager.HasComponent<Game.Objects.Transform>(targetStop)
-                || !m_Runtime.EntityManager.HasComponent<Game.Objects.Transform>(vehicle))
-            {
-                return false;
-            }
-
-            float3 vehiclePosition = m_Runtime.EntityManager.GetComponentData<Game.Objects.Transform>(vehicle).m_Position;
-            float3 stopPosition = m_Runtime.EntityManager.GetComponentData<Game.Objects.Transform>(targetStop).m_Position;
-            return math.distance(vehiclePosition, stopPosition) > ModRuntimeHostSystem.AT_STOP_MAX_DIST;
+            return m_Runtime.m_StopRuntime.IsSuppressedMidStopGhost(
+                vehicle,
+                target,
+                waypoints,
+                nowFrame,
+                out targetWaypointIndex);
         }
 
         private uint ComputeDeadline(Entity line, int waypointIndex, uint dwellSinceFrame, int maxDwellMinutes)
@@ -931,21 +898,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, Dispatch.Runtime.DeadlineKind.Dwell, deadlineFrame);
             }
             return deadlineFrame;
-        }
-
-        private Entity GetConnectedStopForWaypoint(Entity waypoint)
-        {
-            if (waypoint == Entity.Null
-                || !m_Runtime.EntityManager.Exists(waypoint)
-                || !m_Runtime.EntityManager.HasComponent<Connected>(waypoint))
-            {
-                return Entity.Null;
-            }
-
-            Entity connected = m_Runtime.EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
-            return connected != Entity.Null && m_Runtime.EntityManager.Exists(connected)
-                ? connected
-                : Entity.Null;
         }
 
         public void ClearStationAnchorObservationDiagnosticsState()

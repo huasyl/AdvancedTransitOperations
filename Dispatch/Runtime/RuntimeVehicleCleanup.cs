@@ -69,16 +69,9 @@ namespace RapidTransitMod
                 m_Runtime.m_ObsPersist.ClearLap(dead);
                 m_Runtime.m_UICache.Remove(dead);
                 m_Runtime.m_VehicleLabels.Remove(dead);
-                m_Runtime.m_LastEffectiveBoardingState.Remove(dead);
-                m_Runtime.m_LastOfficialBoardingState.Remove(dead);
                 m_Runtime.m_BoardingFirstFrameGuardState.Remove(dead);
-                m_Runtime.m_StopSessionLine.Remove(dead);
-                m_Runtime.m_StopSessionWaypointIndex.Remove(dead);
-                m_Runtime.m_StopSessionArrivalFrame.Remove(dead);
-                m_Runtime.m_StopSessionBoardingChangeCount.Remove(dead);
-                m_Runtime.m_DeparturePendingSinceFrame.Remove(dead);
+                m_Runtime.m_StopRuntime.RemoveVehicle(dead);
                 m_Runtime.m_CachedWpIdx.Remove(dead);
-                m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(dead);
                 m_Runtime.TrackProjection.ClearVehicle(dead);
                 m_Runtime.m_WaypointIndex.Remove(dead);
                 m_Runtime.m_RouteProgress.Remove(dead);

@@ -108,6 +108,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Dictionary<Entity, HashSet<Entity>> m_RouteMembers = new Dictionary<Entity, HashSet<Entity>>();
         // 本帧写后影子：同车同字段以后写值覆盖前写值，供本帧来源读取。
         private readonly Dictionary<Entity, RailSnapshot> m_ModWrites = new Dictionary<Entity, RailSnapshot>();
+        private uint m_LastCollectedFrame = uint.MaxValue;
 
         public RailEventSource(ModRuntimeHostSystem runtime, FrameEvents events) { m_Runtime = runtime; m_Events = events; }
 
@@ -117,6 +118,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void CollectIfDue(uint frame)
         {
             if ((frame & 15u) != 3u) return;
+            m_LastCollectedFrame = frame;
             m_RouteMembers.Clear();
             NativeArray<Entity> vehicles = m_Runtime.m_VehicleView.Keys(Allocator.Temp);
             try
@@ -135,6 +137,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 PruneSnapshots();
             }
         }
+
+        public bool CollectedThisFrame(uint frame) => m_LastCollectedFrame == frame;
 
         // 所有模组 PublicTransport 写入入口：DispatchActions、RouteWriter、RetireHost。
         public void AppendModWrite(Entity vehicle, PublicTransport publicTransport, uint frame)
@@ -218,6 +222,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ModWrites.Clear();
             m_LastSnapshots.Clear();
             m_RouteMembers.Clear();
+            m_LastCollectedFrame = uint.MaxValue;
         }
 
         // 销毁时不保留任何 ECS 快照或来源基线。

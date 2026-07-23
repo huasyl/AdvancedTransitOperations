@@ -35,7 +35,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly CaptureRetireSpawnTargetDelegate m_CaptureRetireSpawnTarget;
         private readonly Action<Entity, int, bool, int> m_ApplyRetireSpawnTarget;
         private readonly Action<Entity> m_ClearAssistLaunchPending;
-        private readonly Action<Entity> m_ClearForcedMidStopClosingConsist;
+        private readonly StopRuntime m_StopRuntime;
         private readonly Action<Entity> m_RemoveAnnouncementVehicle;
         private readonly RuntimeVehicleLabels m_VehicleLabels;
         private readonly Action<Entity> m_ClearVehicleLabel;
@@ -46,15 +46,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity, string> m_ClearTrackProjectionVehicleProgressSuspect;
         private readonly Action<Entity, string> m_ClearBypassVehicle;
         private readonly NativeHashMap<Entity, FixedString64Bytes> m_UICache;
-        private readonly NativeHashMap<Entity, byte> m_LastEffectiveBoardingState;
-        private readonly NativeHashMap<Entity, byte> m_LastOfficialBoardingState;
-        private readonly NativeHashMap<Entity, Entity> m_StopSessionLine;
-        private readonly NativeHashMap<Entity, int> m_StopSessionWaypointIndex;
-        private readonly NativeHashMap<Entity, uint> m_StopSessionArrivalFrame;
-        private readonly NativeHashMap<Entity, uint> m_StopSessionBoardingChangeCount;
-        private readonly NativeHashMap<Entity, uint> m_DeparturePendingSinceFrame;
         private readonly NativeHashMap<Entity, int> m_CachedWaypoint;
-        private readonly NativeHashSet<Entity> m_InvalidatedMidStopRecoveryPending;
         private readonly NativeHashSet<Entity> m_Misfire;
         private readonly NativeHashMap<Entity, uint> m_MisfireStartFrame;
         private readonly NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
@@ -78,7 +70,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_CaptureRetireSpawnTarget = runtime.m_RuntimeEngine.CaptureRetireSpawnTarget;
             m_ApplyRetireSpawnTarget = runtime.m_RuntimeEngine.ApplyRetireSpawnTarget;
             m_ClearAssistLaunchPending = runtime.m_RuntimeEngine.ClearAssistLaunchPending;
-            m_ClearForcedMidStopClosingConsist = runtime.m_Observation.ClearForcedMidStop;
+            m_StopRuntime = runtime.m_StopRuntime;
             m_RemoveAnnouncementVehicle = runtime.m_Announcements.RemoveVehicle;
             m_VehicleLabels = runtime.m_VehicleLabels;
             m_ClearVehicleLabel = runtime.m_VehicleLabels.Remove;
@@ -89,15 +81,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ClearTrackProjectionVehicleProgressSuspect = runtime.TrackProjection.ClearVehicleProgressSuspect;
             m_ClearBypassVehicle = runtime.Bypass.ClearVehicle;
             m_UICache = runtime.m_UICache;
-            m_LastEffectiveBoardingState = runtime.m_LastEffectiveBoardingState;
-            m_LastOfficialBoardingState = runtime.m_LastOfficialBoardingState;
-            m_StopSessionLine = runtime.m_StopSessionLine;
-            m_StopSessionWaypointIndex = runtime.m_StopSessionWaypointIndex;
-            m_StopSessionArrivalFrame = runtime.m_StopSessionArrivalFrame;
-            m_StopSessionBoardingChangeCount = runtime.m_StopSessionBoardingChangeCount;
-            m_DeparturePendingSinceFrame = runtime.m_DeparturePendingSinceFrame;
             m_CachedWaypoint = runtime.m_CachedWpIdx;
-            m_InvalidatedMidStopRecoveryPending = runtime.m_InvalidatedMidStopRecoveryPending;
             m_Misfire = runtime.m_BVMisfire;
             m_MisfireStartFrame = runtime.m_BVMisfireStartFrame;
             m_PreparingFixCooldownUntil = runtime.m_PreparingFixCooldownUntil;
@@ -209,15 +193,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private void ClearStopSessionState(Entity vehicle)
         {
             PassengerFlow.Runtime.Current?.RemoveVehicle(vehicle);
-            m_LastEffectiveBoardingState.Remove(vehicle);
-            m_LastOfficialBoardingState.Remove(vehicle);
-            m_StopSessionLine.Remove(vehicle);
-            m_StopSessionWaypointIndex.Remove(vehicle);
-            m_StopSessionArrivalFrame.Remove(vehicle);
-            m_StopSessionBoardingChangeCount.Remove(vehicle);
-            m_DeparturePendingSinceFrame.Remove(vehicle);
-            m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            m_ClearForcedMidStopClosingConsist(vehicle);
+            m_StopRuntime.RemoveVehicle(vehicle);
+            m_StopRuntime.ClearForcedMidStop(vehicle);
             m_ClearDwellDeadlineCache(vehicle);
             m_ClearDwell(vehicle);
         }

@@ -58,9 +58,6 @@ namespace RapidTransitMod
         private const uint PREPARING_WAYPOINT_LIVE_REFRESH_FRAMES = 16;
         private const float ORIGIN_CONGESTION_RADIUS_METERS = ModRuntimeHostSystem.ORIGIN_CONGESTION_RADIUS_METERS;
         private const float ORIGIN_FORCE_IDLE_RADIUS_METERS = ModRuntimeHostSystem.ORIGIN_FORCE_IDLE_RADIUS_METERS;
-        private const float DEPARTURE_MOVING_SPEED_SQ = 0.01f;
-
-        private static byte BoardingByte(bool boarding) => boarding ? (byte)1 : (byte)0;
 
         private void SetState(Entity vehicle, VehicleState state)
         {
@@ -81,6 +78,80 @@ namespace RapidTransitMod
             m_Runtime.m_BVMisfire.Remove(vehicle);
             m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
             m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, DeadlineKind.BvMisfire);
+        }
+
+        private void ApplyStopControl(Entity vehicle, int waypointIndex, StopControlResult control)
+        {
+            if (control.InboundAction == StopInboundAction.Mark)
+                MarkInbound(vehicle);
+            else if (control.InboundAction == StopInboundAction.Clear)
+                ClearInbound(vehicle);
+
+            if (control.WriteCachedWaypoint)
+                m_Runtime.m_CachedWpIdx[vehicle] = control.CachedWaypointIndex;
+            if (control.NoteProgressSuspect)
+                m_Runtime.TrackProjection.NoteVehicleProgressSuspectRecoveryBoarding(vehicle, waypointIndex);
+            if (control.ClearProgressSuspect)
+                m_Runtime.TrackProjection.TryClearVehicleProgressSuspectOnStableDeparture(vehicle, waypointIndex);
+            if (control.ClearBypassHoldSkipped)
+                m_Runtime.Bypass.ClearBypassHoldSkipped(vehicle);
+            if (control.ClearForcedMidStop)
+                m_Runtime.m_StopRuntime.ClearForcedMidStop(vehicle);
+        }
+
+        private void LogObservedDeparture(
+            StopFact fact,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            VehicleState state,
+            int waypointCount,
+            int nowMinute)
+        {
+            if (state != VehicleState.Running || !ModRuntimeHostSystem.IsDepartureObserveLoggingEnabled())
+                return;
+
+            string lineTag = "线路" + fact.Line.Index;
+            StopRef departedStop = m_Runtime.m_Resolve.StopRef(
+                waypoints[fact.WaypointIndex].m_Waypoint,
+                m_Runtime.m_WorkbenchBridge.ObservationStops().Latest(fact.Vehicle));
+            Entity departedStopEntity = departedStop.Ent;
+            Entity departedStopBuilding = departedStop.Kind == ResolvedStopKind.Building
+                ? departedStop.Ent
+                : m_Runtime.m_SharedCorridor.GetStationBuildingForWaypoint(waypoints, fact.WaypointIndex);
+            string departedStopName = departedStop.Kind == ResolvedStopKind.Building
+                ? m_Runtime.EntityName(departedStopEntity)
+                : m_Runtime.EntityName(departedStopBuilding);
+            if (string.IsNullOrWhiteSpace(departedStopName))
+                departedStopName = "stop#" + departedStopEntity.Index;
+
+            int nextWaypointIndex = fact.WaypointIndex + 1 < waypointCount
+                ? fact.WaypointIndex + 1
+                : -1;
+            Entity nextStop = nextWaypointIndex >= 0
+                ? m_Runtime.m_SharedCorridor.GetStationBuildingForWaypoint(waypoints, nextWaypointIndex)
+                : Entity.Null;
+            string nextStopName = nextStop != Entity.Null
+                ? m_Runtime.EntityName(nextStop)
+                : string.Empty;
+            if (nextStop != Entity.Null && string.IsNullOrWhiteSpace(nextStopName))
+                nextStopName = "stop#" + nextStop.Index;
+
+            string departureKey = ModRuntimeHostSystem.SlotStr(nowMinute)
+                + "|wp=" + fact.WaypointIndex.ToString()
+                + "|next=" + nextWaypointIndex.ToString();
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.m_RuntimeLog.Once(
+                    m_Runtime.m_RuntimeLog.m_DepartureObserveLogCache,
+                    fact.Vehicle,
+                    departureKey,
+                    "[离站观察] " + lineTag
+                    + " 车辆" + fact.Vehicle.Index
+                    + " 从\"" + departedStopName + "\"离站"
+                    + (nextWaypointIndex >= 0 ? " next=\"" + nextStopName + "\"" : " next=\"-\"")
+                    + " state=" + state.ToString()
+                    + " officialBoardingChanges=" + fact.OfficialBoardingChanges
+                    + " departurePendingFrames=" + fact.PendingFrames);
+            }
         }
 
         private void SetVehicleLabel(
@@ -118,45 +189,6 @@ namespace RapidTransitMod
             SetVehicleLabel(vehicle, VehicleLabelType.Running, nextSlotMinute: targetMinute, late: late);
         }
 
-        private bool HasOpenStopSession(Entity vehicle)
-        {
-            return m_Runtime.m_StopSessionWaypointIndex.ContainsKey(vehicle);
-        }
-
-        private void OpenStopSession(Entity vehicle, Entity line, int waypointIndex, uint nowFrame)
-        {
-            m_Runtime.Bypass.ClearBypassHoldSkipped(vehicle);
-            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            m_Runtime.m_StopSessionLine[vehicle] = line;
-            m_Runtime.m_StopSessionWaypointIndex[vehicle] = waypointIndex;
-            m_Runtime.m_StopSessionArrivalFrame[vehicle] = nowFrame;
-            m_Runtime.m_StopSessionBoardingChangeCount[vehicle] = 0;
-            m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
-            PassengerFlow.Runtime.Current?.OpenStop(vehicle, line, waypointIndex, nowFrame);
-        }
-
-        private void ClearStopSession(Entity vehicle)
-        {
-            m_Runtime.m_StopSessionLine.Remove(vehicle);
-            m_Runtime.m_StopSessionWaypointIndex.Remove(vehicle);
-            m_Runtime.m_StopSessionArrivalFrame.Remove(vehicle);
-            m_Runtime.m_StopSessionBoardingChangeCount.Remove(vehicle);
-            m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
-            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            m_Runtime.Bypass.ClearBypassHoldSkipped(vehicle);
-        }
-
-        private void StartDeparturePending(Entity vehicle, uint nowFrame)
-        {
-            if (!m_Runtime.m_DeparturePendingSinceFrame.ContainsKey(vehicle))
-                m_Runtime.m_DeparturePendingSinceFrame[vehicle] = nowFrame;
-        }
-
-        private void CancelDeparturePending(Entity vehicle)
-        {
-            m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
-        }
-
         public void ForceManualDepart(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,
@@ -168,173 +200,9 @@ namespace RapidTransitMod
                 : Entity.Null;
             m_Runtime.Bypass.ClearVehicle(vehicle, "UI强制发车");
             m_Runtime.Bypass.MarkBypassHoldSkipped(vehicle, blocker);
-            m_Runtime.m_ForcedMidStopBoardingGraceUntil[vehicle] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
-            m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
+            m_Runtime.m_StopRuntime.SetForcedMidStopGrace(vehicle, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
             m_Runtime.m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, ecb);
-            StartDeparturePending(vehicle, nowFrame);
-        }
-
-        private bool TryRecoverInvalidatedMidStopSession(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            uint nowFrame,
-            ref int currentWaypointIndex)
-        {
-            if (vehicle == Entity.Null
-                || line == Entity.Null
-                || currentWaypointIndex >= 0
-                || HasOpenStopSession(vehicle)
-                || !m_Runtime.m_InvalidatedMidStopRecoveryPending.Contains(vehicle))
-            {
-                return false;
-            }
-
-            int recoveredWaypointIndex = m_Runtime.m_WaypointIndex.Compute(vehicle, waypoints);
-            if (recoveredWaypointIndex <= 0)
-                return false;
-
-            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            currentWaypointIndex = recoveredWaypointIndex;
-            m_Runtime.m_CachedWpIdx[vehicle] = recoveredWaypointIndex;
-            m_Runtime.m_StopSessionLine[vehicle] = line;
-            m_Runtime.m_StopSessionWaypointIndex[vehicle] = recoveredWaypointIndex;
-            m_Runtime.m_StopSessionArrivalFrame[vehicle] = nowFrame;
-            m_Runtime.m_StopSessionBoardingChangeCount[vehicle] = 0;
-            CancelDeparturePending(vehicle);
-            PassengerFlow.Runtime.Current?.RestoreStop(vehicle, line, recoveredWaypointIndex, nowFrame);
-            m_Runtime.TrackProjection.NoteVehicleProgressSuspectRecoveryBoarding(vehicle, recoveredWaypointIndex);
-            m_Runtime.m_Observation.ClearForcedMidStop(vehicle);
-            return true;
-        }
-
-        private void ObserveOfficialBoarding(Entity vehicle, bool officialBoarding)
-        {
-            byte current = BoardingByte(officialBoarding);
-            if (m_Runtime.m_LastOfficialBoardingState.TryGetValue(vehicle, out byte previous)
-                && previous != current
-                && HasOpenStopSession(vehicle))
-            {
-                uint changes = m_Runtime.m_StopSessionBoardingChangeCount.TryGetValue(vehicle, out uint existing)
-                    ? existing
-                    : 0;
-                m_Runtime.m_StopSessionBoardingChangeCount[vehicle] = changes + 1;
-            }
-
-            m_Runtime.m_LastOfficialBoardingState[vehicle] = current;
-        }
-
-        private bool IsVehicleMovingForDeparture(Entity vehicle)
-        {
-            if (vehicle == Entity.Null
-                || !EntityManager.Exists(vehicle)
-                || !EntityManager.HasComponent<Game.Objects.Moving>(vehicle))
-            {
-                return false;
-            }
-
-            float3 velocity = EntityManager.GetComponentData<Game.Objects.Moving>(vehicle).m_Velocity;
-            return math.lengthsq(velocity) > DEPARTURE_MOVING_SPEED_SQ;
-        }
-
-        private void CompleteObservedDeparture(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            VehicleState state,
-            int waypointIndex,
-            int waypointCount,
-            uint nowFrame,
-            int nowMinute)
-        {
-            if (vehicle == Entity.Null
-                || line == Entity.Null
-                || waypointIndex < 0
-                || waypointIndex >= waypointCount
-                || waypointIndex >= waypoints.Length)
-            {
-                return;
-            }
-
-            uint officialBoardingChanges = m_Runtime.m_StopSessionBoardingChangeCount.TryGetValue(vehicle, out uint changes)
-                ? changes
-                : 0;
-            uint pendingFrames = m_Runtime.m_DeparturePendingSinceFrame.TryGetValue(vehicle, out uint pendingSince)
-                && nowFrame >= pendingSince
-                    ? nowFrame - pendingSince
-                    : 0;
-
-            PassengerFlow.Runtime.Current?.ConfirmDeparture(vehicle, nowFrame);
-            m_Runtime.m_Observation.TryRecordObservedStopDwellOnBoardingEnd(vehicle, line, waypointIndex, nowFrame);
-            m_Runtime.m_WorkbenchBridge.ObservationStops().Record(vehicle, line, waypoints, false, -1, waypointIndex);
-            m_Runtime.m_Announcements.ServiceEnded(vehicle, line, waypoints, waypointIndex);
-            if (state == VehicleState.Running)
-            {
-                if (waypointIndex == waypointCount - 1)
-                    this.MarkInbound(vehicle);
-                else if (waypointIndex > 0 && waypointIndex < waypointCount - 1)
-                    this.ClearInbound(vehicle);
-            }
-
-            if (state == VehicleState.Running && ModRuntimeHostSystem.IsDepartureObserveLoggingEnabled())
-            {
-                string lineTag = "线路" + line.Index;
-                StopRef departedStop = m_Runtime.m_Resolve.StopRef(
-                    waypoints[waypointIndex].m_Waypoint,
-                    m_Runtime.m_WorkbenchBridge.ObservationStops().Latest(vehicle));
-                Entity departedStopEntity = departedStop.Ent;
-                Entity departedStopBuilding = departedStop.Kind == ResolvedStopKind.Building
-                    ? departedStop.Ent
-                    : m_Runtime.m_SharedCorridor.GetStationBuildingForWaypoint(waypoints, waypointIndex);
-                string departedStopName = departedStop.Kind == ResolvedStopKind.Building
-                    ? m_Runtime.EntityName(departedStopEntity)
-                    : m_Runtime.EntityName(departedStopBuilding);
-                if (string.IsNullOrWhiteSpace(departedStopName))
-                {
-                    departedStopName = "stop#" + departedStopEntity.Index;
-                }
-
-                int nextWaypointIndex = waypointIndex + 1 < waypointCount
-                    ? waypointIndex + 1
-                    : -1;
-                Entity nextStop = nextWaypointIndex >= 0
-                    ? m_Runtime.m_SharedCorridor.GetStationBuildingForWaypoint(waypoints, nextWaypointIndex)
-                    : Entity.Null;
-                string nextStopName = nextStop != Entity.Null
-                    ? m_Runtime.EntityName(nextStop)
-                    : string.Empty;
-                if (nextStop != Entity.Null && string.IsNullOrWhiteSpace(nextStopName))
-                {
-                    nextStopName = "stop#" + nextStop.Index;
-                }
-
-                string departureKey = ModRuntimeHostSystem.SlotStr(nowMinute)
-                    + "|wp=" + waypointIndex.ToString()
-                    + "|next=" + nextWaypointIndex.ToString();
-                if (RtLog.VerboseEnabled)
-                {
-                    m_Runtime.m_RuntimeLog.Once(
-                        m_Runtime.m_RuntimeLog.m_DepartureObserveLogCache,
-                        vehicle,
-                        departureKey,
-                        "[离站观察] " + lineTag
-                        + " 车辆" + vehicle.Index
-                        + " 从\"" + departedStopName + "\"离站"
-                        + (nextWaypointIndex >= 0 ? " next=\"" + nextStopName + "\"" : " next=\"-\"")
-                        + " state=" + state.ToString()
-                        + " officialBoardingChanges=" + officialBoardingChanges
-                        + " departurePendingFrames=" + pendingFrames);
-                }
-            }
-
-            m_Runtime.TrackProjection.TryClearVehicleProgressSuspectOnStableDeparture(vehicle, waypointIndex);
-            m_Runtime.Bypass.ClearBypassHoldSkipped(vehicle);
-            m_Runtime.m_CachedWpIdx[vehicle] = -1;
-            ClearStopSession(vehicle);
-            ClearMisfire(vehicle);
-            m_Runtime.m_Observation.ClearForcedMidStop(vehicle);
-            m_Runtime.m_Observation.ClearDwellDeadlineCache(vehicle);
-            m_Runtime.m_ObsPersist.ClearDwell(vehicle);
+            m_Runtime.m_StopRuntime.StartDeparturePending(vehicle, nowFrame);
         }
 
         public void Adopt(Entity vehicle, Entity line, VehicleState state, uint nowFrame, uint? dispatchFrame)
@@ -732,12 +600,12 @@ namespace RapidTransitMod
                     int waypointCount = wps.Length;
 
                     bool officialBoarding = (pt.m_State & PublicTransportFlags.Boarding) != 0;
-                    ObserveOfficialBoarding(v, officialBoarding);
+                    m_Runtime.m_StopRuntime.ObserveOfficialBoarding(v, officialBoarding);
                     bool boarding = officialBoarding;
                     uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
                     bool suppressForcedMidStopBoardingGhost = state == VehicleState.Running
                         && boarding
-                        && m_Runtime.m_Observation.IsSuppressedMidStopGhost(v, tgt, wps, nowFrame, out _);
+                        && m_Runtime.m_StopRuntime.IsSuppressedMidStopGhost(v, tgt, wps, nowFrame, out _);
                     if (suppressForcedMidStopBoardingGhost)
                     {
                         boarding = false;
@@ -768,7 +636,7 @@ namespace RapidTransitMod
                         if (allowOriginHoldingBoardingGhost)
                         {
                             ClearMisfire(v);
-                            m_Runtime.m_LastEffectiveBoardingState[v] = 0;
+                            m_Runtime.m_StopRuntime.SetEffectiveBoarding(v, false);
                             m_Runtime.m_CachedWpIdx[v] = 0;
                             boarding = false;
                         }
@@ -811,12 +679,11 @@ namespace RapidTransitMod
                                 misfireCurWpIdx,
                                 misfireAtA,
                                 boarding,
-                                HasOpenStopSession(v),
+                                m_Runtime.m_StopRuntime.HasOpenStopSession(v),
                                 nowFrame,
                                 "misfireAgeFrames=" + (m_Runtime.m_BVMisfireStartFrame.TryGetValue(v, out uint loggedMisfireStart) ? (nowFrame - loggedMisfireStart).ToString() : "?"));
                         }
-                        if (m_Runtime.m_ForcedMidStopBoardingGraceUntil.TryGetValue(v, out uint forcedDepartGraceUntil)
-                            && nowFrame < forcedDepartGraceUntil)
+                        if (m_Runtime.m_StopRuntime.HasForcedMidStopGrace(v, nowFrame))
                             SetVehicleLabel(v, VehicleLabelType.StopTimeoutAssist);
                         else
                             SetVehicleLabel(v, VehicleLabelType.PathFault);
@@ -826,10 +693,10 @@ namespace RapidTransitMod
                     bool inCooldown = m_Runtime.m_VehicleView.TryGetCooldown(v, out uint cooldownUntil)
                         && nowFrame < cooldownUntil;
 
-                    bool lastBoarding = HasOpenStopSession(v);
-                    bool lastEffectiveBoarding = m_Runtime.m_LastEffectiveBoardingState.TryGetValue(v, out byte lb) && lb != 0;
+                    bool lastBoarding = m_Runtime.m_StopRuntime.HasOpenStopSession(v);
+                    bool lastEffectiveBoarding = m_Runtime.m_StopRuntime.ReadEffectiveBoarding(v);
                     bool boardingChanged = !inCooldown && (boarding != lastEffectiveBoarding);
-                    m_Runtime.m_LastEffectiveBoardingState[v] = BoardingByte(boarding);
+                    m_Runtime.m_StopRuntime.SetEffectiveBoarding(v, boarding);
                     int curWpIdx;
                     int previousCachedWpIdx = m_Runtime.m_CachedWpIdx.TryGetValue(v, out int prevCached) ? prevCached : -1;
 
@@ -897,7 +764,7 @@ namespace RapidTransitMod
                                         + " action=suppress");
                                 curWpIdx = previousCachedWpIdx;
                                 m_Runtime.m_CachedWpIdx[v] = previousCachedWpIdx;
-                                CancelDeparturePending(v);
+                                m_Runtime.m_StopRuntime.CancelDeparturePending(v);
                             }
                             else
                             {
@@ -905,16 +772,16 @@ namespace RapidTransitMod
                                 if (previousCachedWpIdx >= 0)
                                 {
                                     m_Runtime.m_CachedWpIdx[v] = previousCachedWpIdx;
-                                    StartDeparturePending(v, nowFrame);
+                                    m_Runtime.m_StopRuntime.StartDeparturePending(v, nowFrame);
                                 }
                             }
                         }
                         else
                         {
-                            if (HasOpenStopSession(v))
+                            if (m_Runtime.m_StopRuntime.HasOpenStopSession(v))
                             {
-                                CancelDeparturePending(v);
-                                curWpIdx = m_Runtime.m_StopSessionWaypointIndex.TryGetValue(v, out int sessionWaypointIndex)
+                                m_Runtime.m_StopRuntime.CancelDeparturePending(v);
+                                curWpIdx = m_Runtime.m_StopRuntime.TryGetSessionWaypoint(v, out int sessionWaypointIndex)
                                     ? sessionWaypointIndex
                                     : previousCachedWpIdx;
                                 m_Runtime.m_CachedWpIdx[v] = curWpIdx;
@@ -936,10 +803,12 @@ namespace RapidTransitMod
                                     m_Runtime.m_Observation.BeginObservedDwellSession(v, lineEnt, curWpIdx, nowFrame);
                                     m_Runtime.m_WorkbenchBridge.ObservationStops().Record(v, lineEnt, wps, true, curWpIdx, previousCachedWpIdx);
                                     m_Runtime.m_Announcements.StopOpened(v, lineEnt, wps, curWpIdx);
-                                    OpenStopSession(v, lineEnt, curWpIdx, nowFrame);
+                                    StopControlResult openedStop = m_Runtime.m_StopRuntime.OpenStopSession(v, lineEnt, curWpIdx, nowFrame);
+                                    ApplyStopControl(v, curWpIdx, openedStop);
+                                    PassengerFlow.Runtime.Current?.OpenStop(v, lineEnt, curWpIdx, nowFrame);
                                     m_Runtime.TrackProjection.NoteVehicleProgressSuspectRecoveryBoarding(v, curWpIdx);
                                     ClearMisfire(v);
-                                    m_Runtime.m_Observation.ClearForcedMidStop(v);
+                                    m_Runtime.m_StopRuntime.ClearForcedMidStop(v);
                                 }
                                 else
                                 {
@@ -969,27 +838,37 @@ namespace RapidTransitMod
                     if (state == VehicleState.Running
                         && boarding
                         && curWpIdx < 0
-                        && !lastBoarding)
+                        && !lastBoarding
+                        && m_Runtime.m_StopRuntime.HasInvalidatedRecovery(v))
                     {
-                        if (TryRecoverInvalidatedMidStopSession(
+                        int recoveryWaypointIndex = m_Runtime.m_WaypointIndex.Compute(v, wps);
+                        if (m_Runtime.m_StopRuntime.TryRecoverInvalidatedMidStopSession(
                             v,
                             lineEnt,
-                            wps,
+                            recoveryWaypointIndex,
                             nowFrame,
-                            ref curWpIdx))
+                            out StopFact recoveredStop,
+                            out StopControlResult recoveredControl))
                         {
+                            curWpIdx = recoveredStop.WaypointIndex;
+                            PassengerFlow.Runtime.Current?.RestoreStop(
+                                recoveredStop.Vehicle,
+                                recoveredStop.Line,
+                                recoveredStop.WaypointIndex,
+                                recoveredStop.Frame);
+                            ApplyStopControl(v, recoveredStop.WaypointIndex, recoveredControl);
                             lastBoarding = true;
                         }
                     }
 
                     if (!boarding
-                        && m_Runtime.m_DeparturePendingSinceFrame.ContainsKey(v)
-                        && IsVehicleMovingForDeparture(v))
+                        && m_Runtime.m_StopRuntime.IsDeparturePending(v)
+                        && m_Runtime.m_StopRuntime.IsVehicleMovingForDeparture(v))
                     {
-                        int departureWaypointIndex = m_Runtime.m_StopSessionWaypointIndex.TryGetValue(v, out int sessionDepartureWaypoint)
+                        int departureWaypointIndex = m_Runtime.m_StopRuntime.TryGetSessionWaypoint(v, out int sessionDepartureWaypoint)
                             ? sessionDepartureWaypoint
                             : previousCachedWpIdx;
-                        CompleteObservedDeparture(
+                        if (m_Runtime.m_StopRuntime.CompleteObservedDeparture(
                             v,
                             lineEnt,
                             wps,
@@ -997,10 +876,20 @@ namespace RapidTransitMod
                             departureWaypointIndex,
                             waypointCount,
                             nowFrame,
-                            nowMinute);
-                        curWpIdx = -1;
-                        previousCachedWpIdx = -1;
-                        lastBoarding = false;
+                            out StopFact departedStop,
+                            out StopControlResult departedControl))
+                        {
+                            PassengerFlow.Runtime.Current?.ConfirmDeparture(v, nowFrame);
+                            m_Runtime.m_Observation.TryRecordObservedStopDwellOnBoardingEnd(v, lineEnt, departureWaypointIndex, nowFrame);
+                            m_Runtime.m_WorkbenchBridge.ObservationStops().Record(v, lineEnt, wps, false, -1, departureWaypointIndex);
+                            m_Runtime.m_Announcements.ServiceEnded(v, lineEnt, wps, departureWaypointIndex);
+                            ApplyStopControl(v, departedStop.WaypointIndex, departedControl);
+                            LogObservedDeparture(departedStop, wps, state, waypointCount, nowMinute);
+                            m_Runtime.m_StopRuntime.FinalizeDeparture(v);
+                            curWpIdx = -1;
+                            previousCachedWpIdx = -1;
+                            lastBoarding = false;
+                        }
                     }
 
                     if (state == VehicleState.Preparing)
@@ -1143,8 +1032,9 @@ namespace RapidTransitMod
                                     m_Runtime.Bypass.RequestLineOrderedRuntimeForceRefresh(routeEnt, "origin-assist-launch-sync");
                                     m_Runtime.m_JustLaunched.Add(v);
                                     m_Runtime.m_Observation.Record(v, isLateAssistLaunch ? "协助补发确认" : "协助发车确认");
-                                    ClearStopSession(v);
-                                    m_Runtime.m_LastEffectiveBoardingState[v] = 0;
+                                    StopControlResult clearedAssistStop = m_Runtime.m_StopRuntime.ClearStopSession(v);
+                                    ApplyStopControl(v, curWpIdx, clearedAssistStop);
+                                    m_Runtime.m_StopRuntime.SetEffectiveBoarding(v, false);
                                     m_Runtime.m_CachedWpIdx[v] = -1;
                                     ClearMisfire(v);
                                     m_Runtime.m_Observation.Launch(routeEnt, v, assistedTargetMinute, nowMinute, nowFrame, isLateAssistLaunch);
@@ -1423,8 +1313,9 @@ namespace RapidTransitMod
                                         m_Runtime.m_RuntimeLog.ForgetLaunchHead(v);
                                 }
                                 m_Runtime.m_Observation.Record(v, isLateDispatch ? "补发" : "计划发车");
-                                ClearStopSession(v);
-                                m_Runtime.m_LastEffectiveBoardingState[v] = 0;
+                                StopControlResult clearedLaunchStop = m_Runtime.m_StopRuntime.ClearStopSession(v);
+                                ApplyStopControl(v, curWpIdx, clearedLaunchStop);
+                                m_Runtime.m_StopRuntime.SetEffectiveBoarding(v, false);
                                 m_Runtime.m_CachedWpIdx[v] = -1;
                                 ClearMisfire(v);
                                 m_Runtime.m_Observation.Launch(routeEnt, v, targetMinute, nowMinute, nowFrame, isLateDispatch);
@@ -1597,13 +1488,15 @@ namespace RapidTransitMod
 
                             if (midStopDwellTimedOut && !runningShouldHoldBypass)
                             {
-                                bool shouldRefreshTimeoutAssist = !m_Runtime.m_ForcedMidStopBoardingGraceUntil.TryGetValue(v, out uint timeoutAssistGraceUntil)
+                                bool hasTimeoutAssistGrace = m_Runtime.m_StopRuntime.TryGetForcedMidStopGrace(
+                                    v,
+                                    out uint timeoutAssistGraceUntil);
+                                bool shouldRefreshTimeoutAssist = !hasTimeoutAssistGrace
                                     || nowFrame >= timeoutAssistGraceUntil;
                                 if (shouldRefreshTimeoutAssist)
                                 {
                                     m_Runtime.m_CommandApplier.ForceDepart(v, ref pt, nowFrame, ecb);
-                                    m_Runtime.m_ForcedMidStopBoardingGraceUntil[v] = nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES;
-                                    m_Runtime.m_RuntimeWorksets.SetDeadline(v, DeadlineKind.ForcedMidStopBoardingGrace, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
+                                    m_Runtime.m_StopRuntime.SetForcedMidStopGrace(v, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
                                     if (RtLog.VerboseEnabled)
                                     {
                                         string timeoutLogKey = midStopDwellSinceFrame.ToString();

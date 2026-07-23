@@ -18,6 +18,7 @@ namespace RapidTransitMod
         private RuntimeWorksets m_RuntimeWorksets;
         private bool m_Restoring;
         private Entity m_RestoreVehicle;
+        private VehicleFactKind m_RestoreFactKind;
 
         public VehicleRegistry(VehicleStateStore store, VehicleWorksets worksets, FrameEvents events, Func<uint> frame,
             Func<double, uint> toFramesCeil, Func<Entity, TransitMode> modeOfLine)
@@ -376,6 +377,14 @@ namespace RapidTransitMod
         {
             m_Restoring = true;
             m_RestoreVehicle = vehicle;
+            m_RestoreFactKind = VehicleFactKind.Registered;
+        }
+
+        public void BeginRebind(Entity vehicle)
+        {
+            m_Restoring = true;
+            m_RestoreVehicle = vehicle;
+            m_RestoreFactKind = VehicleFactKind.Rebound;
         }
 
         public void EndRestore(Entity line)
@@ -384,9 +393,15 @@ namespace RapidTransitMod
                 return;
 
             Entity vehicle = m_RestoreVehicle;
+            VehicleFactKind factKind = m_RestoreFactKind;
             m_Restoring = false;
             m_RestoreVehicle = Entity.Null;
-            m_Events.AppendVehicle(vehicle, m_Frame(), VehicleFactKind.Registered);
+            m_Events.AppendVehicle(
+                vehicle,
+                m_Frame(),
+                factKind,
+                route: factKind == VehicleFactKind.Rebound ? line : Entity.Null);
+            m_RestoreFactKind = default;
             if (m_Store.State.TryGetValue(vehicle, out VehicleState state))
                 m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.State, default, state, line);
             m_RuntimeWorksets?.AddCandidate(vehicle);
@@ -397,6 +412,7 @@ namespace RapidTransitMod
         {
             m_Restoring = false;
             m_RestoreVehicle = Entity.Null;
+            m_RestoreFactKind = default;
         }
 
         // 只读审查入口：不创建 ECS 写入，也不修正任何索引。

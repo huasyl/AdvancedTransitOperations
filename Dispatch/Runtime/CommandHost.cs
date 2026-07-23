@@ -18,15 +18,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity> m_ClearBoardingGrace;
         private readonly RailEventSource m_RailEvents;
         private readonly RuntimeWorksets m_Worksets;
+        private readonly StopRuntime m_StopRuntime;
         private NativeHashMap<Entity, int> m_CachedWaypoint;
-        private NativeHashMap<Entity, byte> m_LastEffectiveBoardingState;
-        private NativeHashMap<Entity, byte> m_LastOfficialBoardingState;
-        private NativeHashMap<Entity, Entity> m_StopSessionLine;
-        private NativeHashMap<Entity, int> m_StopSessionWaypointIndex;
-        private NativeHashMap<Entity, uint> m_StopSessionArrivalFrame;
-        private NativeHashMap<Entity, uint> m_StopSessionBoardingChangeCount;
-        private NativeHashMap<Entity, uint> m_DeparturePendingSinceFrame;
-        private NativeHashSet<Entity> m_InvalidatedMidStopRecoveryPending;
         private NativeHashSet<Entity> m_Misfires;
         private NativeHashMap<Entity, uint> m_MisfireStartFrames;
         private NativeHashMap<Entity, uint> m_PreparingCooldown;
@@ -44,15 +37,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ClearBoardingGrace = runtime.m_RuntimeEngine.ClearBoardingGrace;
             m_RailEvents = runtime.m_RailEventSource;
             m_Worksets = runtime.m_RuntimeWorksets;
+            m_StopRuntime = runtime.m_StopRuntime;
             m_CachedWaypoint = runtime.m_CachedWpIdx;
-            m_LastEffectiveBoardingState = runtime.m_LastEffectiveBoardingState;
-            m_LastOfficialBoardingState = runtime.m_LastOfficialBoardingState;
-            m_StopSessionLine = runtime.m_StopSessionLine;
-            m_StopSessionWaypointIndex = runtime.m_StopSessionWaypointIndex;
-            m_StopSessionArrivalFrame = runtime.m_StopSessionArrivalFrame;
-            m_StopSessionBoardingChangeCount = runtime.m_StopSessionBoardingChangeCount;
-            m_DeparturePendingSinceFrame = runtime.m_DeparturePendingSinceFrame;
-            m_InvalidatedMidStopRecoveryPending = runtime.m_InvalidatedMidStopRecoveryPending;
             m_Misfires = runtime.m_BVMisfire;
             m_MisfireStartFrames = runtime.m_BVMisfireStartFrame;
             m_PreparingCooldown = runtime.m_PreparingFixCooldownUntil;
@@ -143,14 +129,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void ClearBoardingObservation(Entity vehicle)
         {
             PassengerFlow.Runtime.Current?.CancelStop(vehicle);
-            m_LastEffectiveBoardingState.Remove(vehicle);
-            m_LastOfficialBoardingState.Remove(vehicle);
-            m_StopSessionLine.Remove(vehicle);
-            m_StopSessionWaypointIndex.Remove(vehicle);
-            m_StopSessionArrivalFrame.Remove(vehicle);
-            m_StopSessionBoardingChangeCount.Remove(vehicle);
-            m_DeparturePendingSinceFrame.Remove(vehicle);
-            m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
+            m_StopRuntime.ClearBoardingObservation(vehicle);
         }
 
         public void ClearMisfire(Entity vehicle)

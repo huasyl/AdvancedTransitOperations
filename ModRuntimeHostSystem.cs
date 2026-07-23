@@ -172,6 +172,8 @@ namespace RapidTransitMod
         internal RailEventSource m_RailEventSource = null!;
         internal RuntimeWorksets m_RuntimeWorksets = null!;
         internal VehicleWorksets m_VehicleWorksets = null!;
+        internal StopRuntimeState m_StopRuntimeState = null!;
+        internal StopRuntime m_StopRuntime = null!;
         internal VehicleRegistry m_VehicleRegistry = null!;
         internal VehicleView m_VehicleView = null!;
         internal LineView m_LineView = null!;
@@ -225,19 +227,10 @@ namespace RapidTransitMod
         internal RapidTransitMod.Dispatch.Observation.Query m_ObsQuery = null!;
         internal RapidTransitMod.Dispatch.Observation.Persist m_ObsPersist = null!;
         internal NativeHashMap<Entity, FixedString64Bytes> m_UICache;
-        internal NativeHashMap<Entity, byte> m_LastEffectiveBoardingState;
-        internal NativeHashMap<Entity, byte> m_LastOfficialBoardingState;
         internal NativeHashMap<Entity, byte> m_BoardingFirstFrameGuardState;
-        internal NativeHashMap<Entity, Entity> m_StopSessionLine;
-        internal NativeHashMap<Entity, int> m_StopSessionWaypointIndex;
-        internal NativeHashMap<Entity, uint> m_StopSessionArrivalFrame;
-        internal NativeHashMap<Entity, uint> m_StopSessionBoardingChangeCount;
-        internal NativeHashMap<Entity, uint> m_DeparturePendingSinceFrame;
         internal NativeHashMap<Entity, int> m_CachedWpIdx;
-        internal NativeHashSet<Entity> m_InvalidatedMidStopRecoveryPending;
         internal NativeHashSet<Entity> m_BVMisfire;
         internal NativeHashMap<Entity, uint> m_BVMisfireStartFrame;
-        internal NativeHashMap<Entity, uint> m_ForcedMidStopBoardingGraceUntil;
         /// <summary>
         /// 已进入最后一个 waypoint 的车辆集合。
         /// Idle 转 Holding 前检查本线路是否有此标签的车距始发站 350 米内，有则回库。
@@ -583,6 +576,7 @@ namespace RapidTransitMod
                 throw;
             }
 
+            m_LineStructureInvalidator.Drain();
             DrainDisabledLineLateSpawnRetireQueue(commandBuffer);
             m_RuntimeWorksets.Build();
 
@@ -677,19 +671,18 @@ namespace RapidTransitMod
                 if (ReferenceEquals(Instance, this)) Instance = null!;
                 RuntimeRoot.Clear(this);
                 if (m_UICache.IsCreated) m_UICache.Dispose();
-                if (m_LastEffectiveBoardingState.IsCreated) m_LastEffectiveBoardingState.Dispose();
-                if (m_LastOfficialBoardingState.IsCreated) m_LastOfficialBoardingState.Dispose();
+                m_StopRuntime?.Dispose();
+                m_StopRuntime = null!;
+                m_StopRuntimeState?.DisposeBoardingStates();
                 if (m_BoardingFirstFrameGuardState.IsCreated) m_BoardingFirstFrameGuardState.Dispose();
-                if (m_StopSessionLine.IsCreated) m_StopSessionLine.Dispose();
-                if (m_StopSessionWaypointIndex.IsCreated) m_StopSessionWaypointIndex.Dispose();
-                if (m_StopSessionArrivalFrame.IsCreated) m_StopSessionArrivalFrame.Dispose();
-                if (m_StopSessionBoardingChangeCount.IsCreated) m_StopSessionBoardingChangeCount.Dispose();
-                if (m_DeparturePendingSinceFrame.IsCreated) m_DeparturePendingSinceFrame.Dispose();
+                m_StopRuntimeState?.DisposeStopSessions();
                 if (m_CachedWpIdx.IsCreated) m_CachedWpIdx.Dispose();
-                if (m_InvalidatedMidStopRecoveryPending.IsCreated) m_InvalidatedMidStopRecoveryPending.Dispose();
+                m_StopRuntimeState?.DisposeInvalidatedRecovery();
                 if (m_BVMisfire.IsCreated) m_BVMisfire.Dispose();
                 if (m_BVMisfireStartFrame.IsCreated) m_BVMisfireStartFrame.Dispose();
-                if (m_ForcedMidStopBoardingGraceUntil.IsCreated) m_ForcedMidStopBoardingGraceUntil.Dispose();
+                m_StopRuntimeState?.DisposeForcedMidStopGrace();
+                m_StopRuntimeState?.Dispose();
+                m_StopRuntimeState = null!;
                 if (m_PreparingFixCooldownUntil.IsCreated) m_PreparingFixCooldownUntil.Dispose();
                 if (m_SpawningLines.IsCreated) m_SpawningLines.Dispose();
                 if (m_LastSpawnBlockedLogFrame.IsCreated) m_LastSpawnBlockedLogFrame.Dispose();

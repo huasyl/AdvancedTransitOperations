@@ -269,16 +269,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_WorkbenchBridge.Ids().StableKey);
 
             runtime.m_UICache = new NativeHashMap<Entity, FixedString64Bytes>(1024, Allocator.Persistent);
-            runtime.m_LastEffectiveBoardingState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
-            runtime.m_LastOfficialBoardingState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
+            runtime.m_StopRuntimeState = new StopRuntimeState();
+            runtime.m_StopRuntime = new StopRuntime(runtime, runtime.m_StopRuntimeState);
             runtime.m_BoardingFirstFrameGuardState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
-            runtime.m_StopSessionLine = new NativeHashMap<Entity, Entity>(1024, Allocator.Persistent);
-            runtime.m_StopSessionWaypointIndex = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            runtime.m_StopSessionArrivalFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            runtime.m_StopSessionBoardingChangeCount = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            runtime.m_DeparturePendingSinceFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            runtime.m_InvalidatedMidStopRecoveryPending = new NativeHashSet<Entity>(256, Allocator.Persistent);
             runtime.m_StationContextQuery = new VehicleStationContextQuery(
                 runtime.EntityManager,
                 runtime.m_Resolve.Stop,
@@ -309,7 +303,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_CachedWpIdx);
             runtime.m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
             runtime.m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
-            runtime.m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
+            runtime.m_StopRuntimeState.InitForcedGrace();
             runtime.m_PreparingFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_SpawningLines = new NativeHashMap<Entity, int>(64, Allocator.Persistent);
             runtime.m_LastSpawnBlockedLogFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
