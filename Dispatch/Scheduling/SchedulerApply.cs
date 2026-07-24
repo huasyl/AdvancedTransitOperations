@@ -61,9 +61,7 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                PublicTransport publicTransport = m_Runtime.m_RailEventSource.ReadPublicTransport(vehicle);
-                Target target = m_Runtime.m_RailEventSource.ReadTarget(vehicle);
-                m_Runtime.m_CommandApplier.Retire(vehicle, publicTransport, target, ecb, retireDecisions[i].Reason);
+                m_Runtime.m_CommandApplier.Retire(vehicle, retireDecisions[i].Reason);
             }
 
             IReadOnlyList<DispatchScheduler.SlotClaim> slotClaims = m_Runtime.m_DispatchScheduler.SlotClaims;

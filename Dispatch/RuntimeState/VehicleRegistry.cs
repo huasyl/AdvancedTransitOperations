@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
@@ -446,54 +445,6 @@ namespace RapidTransitMod
             m_RestoreFactKind = default;
             m_RestorePreviousLine = Entity.Null;
             m_RestoreSourceGeneration = 0UL;
-        }
-
-        // 只读审查入口：不创建 ECS 写入，也不修正任何索引。
-        public bool IsWorksetConsistent(Entity vehicle)
-        {
-            if (!m_Store.State.TryGetValue(vehicle, out VehicleState state)
-                || !m_Store.Line.TryGetValue(vehicle, out Entity line)
-                )
-            {
-                return false;
-            }
-
-            return m_Worksets.HasOnlyState(vehicle, state)
-                && m_Worksets.HasOnlyMode(vehicle, m_ModeOfLine(line));
-        }
-
-        // 只读审查入口：逐完整 Entity 比较权威 Store 与两类派生桶，不修复任何异常。
-        public bool AreWorksetsConsistent()
-        {
-            NativeArray<Entity> stateKeys = m_Store.State.GetKeyArray(Allocator.Temp);
-            NativeArray<Entity> lineKeys = m_Store.Line.GetKeyArray(Allocator.Temp);
-            try
-            {
-                var states = new HashSet<Entity>();
-                var lines = new HashSet<Entity>();
-                for (int i = 0; i < stateKeys.Length; i++)
-                {
-                    Entity vehicle = stateKeys[i];
-                    if (!states.Add(vehicle) || !IsWorksetConsistent(vehicle)) return false;
-                }
-                for (int i = 0; i < lineKeys.Length; i++)
-                {
-                    Entity vehicle = lineKeys[i];
-                    if (!lines.Add(vehicle) || !m_Store.Line.TryGetValue(vehicle, out Entity line)
-                        || !m_Worksets.HasOnlyMode(vehicle, m_ModeOfLine(line)))
-                    {
-                        return false;
-                    }
-                }
-                return states.SetEquals(lines)
-                    && m_Worksets.MatchesStateKeys(states)
-                    && m_Worksets.MatchesModeKeys(lines);
-            }
-            finally
-            {
-                stateKeys.Dispose();
-                lineKeys.Dispose();
-            }
         }
 
         private Entity ReadLine(Entity vehicle) => m_Store.Line.TryGetValue(vehicle, out Entity line) ? line : Entity.Null;

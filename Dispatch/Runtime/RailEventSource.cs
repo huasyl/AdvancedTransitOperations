@@ -397,7 +397,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (vehicle == Entity.Null) return;
             RailWriteShadow shadow = WriteShadow(vehicle);
             bool hasPrevious = shadow.TryGetPublicTransport(out PublicTransport previous)
-                || TryReadLastPublicTransport(vehicle, out previous);
+                || TryGetLastPublicTransport(vehicle, out previous);
             ulong sourceGeneration = AdvanceSourceGeneration(vehicle);
             m_SourceFrames[vehicle] = frame;
             shadow.SetPublicTransport(publicTransport);
@@ -434,10 +434,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (vehicle == Entity.Null) return;
             RailWriteShadow shadow = WriteShadow(vehicle);
             bool hasPrevious = shadow.TryGetPath(out PathOwner previousPath, out bool previousHasPathElements, out int previousCount)
-                || TryReadLastPath(vehicle, out previousPath, out previousHasPathElements, out previousCount);
+                || TryGetLastPath(vehicle, out previousPath, out previousHasPathElements, out previousCount);
             ulong previousSignature = shadow.PathSignatureKnown
                 ? shadow.PathSignature
-                : TryReadLastPathSignature(vehicle, out ulong baselineSignature) ? baselineSignature : 0UL;
+                : TryGetLastPathSignature(vehicle, out ulong baselineSignature) ? baselineSignature : 0UL;
             ulong sourceGeneration = AdvanceSourceGeneration(vehicle);
             m_SourceFrames[vehicle] = frame;
             ulong currentSignature = NormalizePathSignature(hasPathElements, pathElementCount, pathElementSignature);
@@ -456,7 +456,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
-        public bool TryReadPublicTransport(Entity vehicle, out PublicTransport publicTransport)
+        public bool TryGetWrittenPublicTransport(Entity vehicle, out PublicTransport publicTransport)
         {
             if (m_ModWrites.TryGetValue(vehicle, out RailWriteShadow shadow)
                 && shadow.TryGetPublicTransport(out publicTransport))
@@ -467,7 +467,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             return false;
         }
 
-        public bool TryReadTarget(Entity vehicle, out Target target)
+        public bool TryGetWrittenTarget(Entity vehicle, out Target target)
         {
             if (m_ModWrites.TryGetValue(vehicle, out RailWriteShadow shadow) && shadow.TargetKnown)
             {
@@ -478,7 +478,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             return false;
         }
 
-        public bool TryReadPath(Entity vehicle, out PathOwner pathOwner)
+        public bool TryGetWrittenPath(Entity vehicle, out PathOwner pathOwner)
         {
             if (m_ModWrites.TryGetValue(vehicle, out RailWriteShadow shadow)
                 && shadow.TryGetPath(out pathOwner, out _, out _))
@@ -489,22 +489,15 @@ namespace RapidTransitMod.Dispatch.Runtime
             return false;
         }
 
-        public PublicTransport ReadPublicTransport(Entity vehicle) => TryReadPublicTransport(vehicle, out PublicTransport value)
-            ? value : m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-        public Target ReadTarget(Entity vehicle) => TryReadTarget(vehicle, out Target value)
-            ? value : m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
-        public PathOwner ReadPath(Entity vehicle) => TryReadPath(vehicle, out PathOwner value)
-            ? value : m_Runtime.EntityManager.GetComponentData<PathOwner>(vehicle);
-        public int ReadPathElementCount(Entity vehicle)
+        public bool TryGetWrittenPathElementCount(Entity vehicle, out int pathElementCount)
         {
             if (m_ModWrites.TryGetValue(vehicle, out RailWriteShadow shadow)
-                && shadow.TryGetPath(out _, out _, out int pathElementCount))
+                && shadow.TryGetPath(out _, out _, out pathElementCount))
             {
-                return pathElementCount;
+                return true;
             }
-            return m_Runtime.EntityManager.Exists(vehicle) && m_Runtime.EntityManager.HasBuffer<PathElement>(vehicle)
-                ? m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true).Length
-                : 0;
+            pathElementCount = 0;
+            return false;
         }
 
         public void BuildStopInput(
@@ -1179,7 +1172,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             return shadow;
         }
 
-        private bool TryReadLastPublicTransport(Entity vehicle, out PublicTransport value)
+        private bool TryGetLastPublicTransport(Entity vehicle, out PublicTransport value)
         {
             if (m_LastSnapshots.TryGetValue(vehicle, out RailSnapshot snapshot) && snapshot.HasPublicTransport)
             {
@@ -1190,7 +1183,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             return false;
         }
 
-        private bool TryReadLastPath(Entity vehicle, out PathOwner value, out bool hasPathElements, out int count)
+        private bool TryGetLastPath(Entity vehicle, out PathOwner value, out bool hasPathElements, out int count)
         {
             if (m_LastSnapshots.TryGetValue(vehicle, out RailSnapshot snapshot) && snapshot.HasPathOwner)
             {
@@ -1205,7 +1198,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             return false;
         }
 
-        private bool TryReadLastPathSignature(Entity vehicle, out ulong signature)
+        private bool TryGetLastPathSignature(Entity vehicle, out ulong signature)
         {
             if (m_LastSnapshots.TryGetValue(vehicle, out RailSnapshot snapshot))
             {

@@ -31,11 +31,17 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public PublicTransport ReadPublicTransport(Entity vehicle)
         {
-            return m_RailEvents.ReadPublicTransport(vehicle);
+            return m_RailEvents.TryGetWrittenPublicTransport(vehicle, out PublicTransport value)
+                ? value
+                : EntityManager.GetComponentData<PublicTransport>(vehicle);
         }
 
-        public Target ReadTarget(Entity vehicle) => m_RailEvents.ReadTarget(vehicle);
-        public PathOwner ReadPath(Entity vehicle) => m_RailEvents.ReadPath(vehicle);
+        public Target ReadTarget(Entity vehicle) => m_RailEvents.TryGetWrittenTarget(vehicle, out Target value)
+            ? value
+            : EntityManager.GetComponentData<Target>(vehicle);
+        public PathOwner ReadPath(Entity vehicle) => m_RailEvents.TryGetWrittenPath(vehicle, out PathOwner value)
+            ? value
+            : EntityManager.GetComponentData<PathOwner>(vehicle);
 
         public bool TryGetRouteWaypoints(Entity vehicle, out DynamicBuffer<RouteWaypoint> waypoints)
         {

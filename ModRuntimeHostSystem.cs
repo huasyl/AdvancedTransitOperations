@@ -333,7 +333,6 @@ namespace RapidTransitMod
         internal uint m_LastVehicleCacheFlushFrame = 0;
         internal const uint VEHICLE_CACHE_FLUSH_INTERVAL = 300;
 
-        internal EntityQuery m_VehicleQuery;
         internal EntityQuery m_AllPublicTransportQuery;
         internal EntityQuery m_LineQuery;
         internal const int SLOT_INTERVAL_MINUTES = 30;
@@ -429,16 +428,6 @@ namespace RapidTransitMod
             m_EndFrameBarrier = World.GetOrCreateSystemManaged<EndFrameBarrier>();
             m_CitySystem = World.GetOrCreateSystemManaged<CitySystem>();
             m_CameraUpdateSystem = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
-
-            m_VehicleQuery = GetEntityQuery(new EntityQueryDesc
-            {
-                All = new ComponentType[] {
-                    ComponentType.ReadWrite<Game.Vehicles.PublicTransport>(),
-                    ComponentType.ReadWrite<Target>(),
-                    ComponentType.ReadOnly<CurrentRoute>()
-                },
-                None = new ComponentType[] { ComponentType.ReadOnly<Deleted>() }
-            });
 
             m_AllPublicTransportQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Vehicles.PublicTransport>());
@@ -598,7 +587,7 @@ namespace RapidTransitMod
             }
 
             m_LineStructureInvalidator.Drain();
-            DrainDisabledLineLateSpawnRetireQueue(commandBuffer);
+            DrainDisabledLineLateSpawnRetireQueue();
             bool fullMinuteSweep = nowMinute != m_LastSchedulerTickMinute;
             if (fullMinuteSweep)
                 m_RuntimeWorksets.MarkAllDirty();
@@ -679,7 +668,7 @@ namespace RapidTransitMod
                 switch (command.Kind)
                 {
                     case UiCommandKind.Retire:
-                        ApplyRetireCommand(new RetireCommand(command.Entity), commandBuffer);
+                        ApplyRetireCommand(new RetireCommand(command.Entity));
                         break;
                     case UiCommandKind.Recheck:
                         ApplyRecheckCommand(new RecheckCommand(command.Entity));
@@ -950,7 +939,7 @@ namespace RapidTransitMod
                         reason: "vanilla-blocker-chain-stall"),
                     nowFrame);
                 m_RuntimeWorksets.AddCandidate(candidate.Local);
-                Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(candidate.Local);
+                Game.Vehicles.PublicTransport publicTransport = ReadRailPublicTransport(candidate.Local);
                 m_CommandApplier.ForceDepart(candidate.Local, ref publicTransport, nowFrame, commandBuffer);
                 if (RtLog.VerboseEnabled)
                 {
@@ -1002,7 +991,7 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(vehicle);
+                Game.Vehicles.PublicTransport publicTransport = ReadRailPublicTransport(vehicle);
                 bool boarding = m_StopRuntime.ReadEffectiveBoarding(vehicle);
                 int waypointIndex = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
                     ? cachedWaypointIndex
@@ -1164,7 +1153,7 @@ namespace RapidTransitMod
             }
         }
 
-        private void ApplyRetireCommand(RetireCommand command, EntityCommandBuffer commandBuffer)
+        private void ApplyRetireCommand(RetireCommand command)
         {
             Entity vehicle = m_Resolve.SelectedVehicle(command.Vehicle);
             if (vehicle == Entity.Null
@@ -1175,9 +1164,7 @@ namespace RapidTransitMod
                 return;
             }
 
-            Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(vehicle);
-            Target target = m_RailEventSource.ReadTarget(vehicle);
-            m_CommandApplier.Retire(vehicle, publicTransport, target, commandBuffer, "UI请求");
+            m_CommandApplier.Retire(vehicle, "UI请求");
         }
 
         private void ApplyRecheckCommand(RecheckCommand command)
@@ -1202,7 +1189,7 @@ namespace RapidTransitMod
             if (line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
                 return;
 
-            Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(vehicle);
+            Game.Vehicles.PublicTransport publicTransport = ReadRailPublicTransport(vehicle);
             if ((publicTransport.m_State & PublicTransportFlags.Boarding) == 0)
                 return;
 
@@ -1743,7 +1730,14 @@ namespace RapidTransitMod
                 : left.Version.CompareTo(right.Version);
         }
 
-        private void DrainDisabledLineLateSpawnRetireQueue(EntityCommandBuffer commandBuffer)
+        private Game.Vehicles.PublicTransport ReadRailPublicTransport(Entity vehicle)
+        {
+            return m_RailEventSource.TryGetWrittenPublicTransport(vehicle, out Game.Vehicles.PublicTransport value)
+                ? value
+                : EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+        }
+
+        private void DrainDisabledLineLateSpawnRetireQueue()
         {
             IReadOnlyList<Entity> queue = m_VehicleRegistrar.DisabledLineLateSpawnRetireQueue;
             if (queue.Count == 0)
@@ -1774,9 +1768,7 @@ namespace RapidTransitMod
                         continue;
                     }
 
-                    Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
-                    Target target = EntityManager.GetComponentData<Target>(vehicle);
-                    m_CommandApplier.Retire(vehicle, publicTransport, target, commandBuffer, "关闭线路误产车");
+                    m_CommandApplier.Retire(vehicle, "关闭线路误产车");
                 }
             }
             finally

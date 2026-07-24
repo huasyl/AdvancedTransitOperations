@@ -92,7 +92,9 @@ namespace RapidTransitMod.Dispatch.Persistence
                     if (m_Runtime.EntityManager.HasComponent<PublicTransport>(v))
                     {
                         uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-                        PublicTransport pt = m_Runtime.m_RailEventSource.ReadPublicTransport(v);
+                        PublicTransport pt = m_Runtime.m_RailEventSource.TryGetWrittenPublicTransport(v, out PublicTransport written)
+                            ? written
+                            : m_Runtime.EntityManager.GetComponentData<PublicTransport>(v);
                         pt.m_DepartureFrame = frame + 99999;
                         m_Runtime.m_RailEventSource.AppendPublicTransportWrite(v, pt, frame);
                         m_Runtime.m_RuntimeWorksets.AddCandidate(v);

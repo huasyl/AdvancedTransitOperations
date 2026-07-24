@@ -100,10 +100,20 @@ namespace RapidTransitMod.Dispatch.Runtime
         public EntityManager EntityManager => m_EntityManager;
         public TimedLogger Log => m_Log;
         public uint Frame => m_Frame();
-        public PublicTransport ReadPublicTransport(Entity vehicle) => m_RailEvents.ReadPublicTransport(vehicle);
-        public Target ReadTarget(Entity vehicle) => m_RailEvents.ReadTarget(vehicle);
-        public PathOwner ReadPath(Entity vehicle) => m_RailEvents.ReadPath(vehicle);
-        public int ReadPathElementCount(Entity vehicle) => m_RailEvents.ReadPathElementCount(vehicle);
+        public PublicTransport ReadPublicTransport(Entity vehicle) => m_RailEvents.TryGetWrittenPublicTransport(vehicle, out PublicTransport value)
+            ? value
+            : m_EntityManager.GetComponentData<PublicTransport>(vehicle);
+        public Target ReadTarget(Entity vehicle) => m_RailEvents.TryGetWrittenTarget(vehicle, out Target value)
+            ? value
+            : m_EntityManager.GetComponentData<Target>(vehicle);
+        public PathOwner ReadPath(Entity vehicle) => m_RailEvents.TryGetWrittenPath(vehicle, out PathOwner value)
+            ? value
+            : m_EntityManager.GetComponentData<PathOwner>(vehicle);
+        public int ReadPathElementCount(Entity vehicle) => m_RailEvents.TryGetWrittenPathElementCount(vehicle, out int value)
+            ? value
+            : m_EntityManager.Exists(vehicle) && m_EntityManager.HasBuffer<PathElement>(vehicle)
+                ? m_EntityManager.GetBuffer<PathElement>(vehicle, true).Length
+                : 0;
 
         public void SetRetireDeadline(Entity vehicle, DeadlineKind kind, uint frame)
         {
