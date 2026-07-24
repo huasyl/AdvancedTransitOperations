@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -10,6 +11,8 @@ namespace RapidTransitMod
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly LineSpawnControl m_LineSpawnControl;
         private readonly Action<Entity> m_ClearAssistLaunchPending;
+        private readonly Action<StopFact> m_PublishStopFact;
+        private readonly Action<Entity, int, StopControlResult> m_ApplyStopControl;
 
         public RuntimeVehicleCleanup(
             ModRuntimeHostSystem runtime,
@@ -19,6 +22,8 @@ namespace RapidTransitMod
             m_Runtime = runtime;
             m_LineSpawnControl = lineSpawnControl;
             m_ClearAssistLaunchPending = clearAssistLaunchPending;
+            m_PublishStopFact = runtime.PublishStopFact;
+            m_ApplyStopControl = runtime.ApplyStopControl;
         }
 
         private EntityManager EntityManager => m_Runtime.EntityManager;
@@ -60,15 +65,20 @@ namespace RapidTransitMod
                             + " prepAgeFrames=" + removedPrepAge);
                     }
                 }
-                m_Runtime.m_Announcements.RemoveVehicle(dead);
                 m_Runtime.m_StationContextQuery.RemoveVehicle(dead);
                 m_Runtime.m_CommandApplier.FlushRetireShadowSnapshots(dead, "entity-removed");
                 m_Runtime.m_CommandApplier.ResetRetireShadowSnapshots(dead);
-                PassengerFlow.Runtime.Current?.RemoveVehicle(dead);
+                StopCancelResult cancelledStop = m_Runtime.m_StopRuntime.CancelStopSession(
+                    dead,
+                    m_Runtime.m_SimulationSystem.frameIndex);
+                if (cancelledStop.Exists)
+                {
+                    m_PublishStopFact(cancelledStop.Fact);
+                    m_ApplyStopControl(dead, cancelledStop.Control.WaypointIndex, cancelledStop.Control);
+                }
                 m_Runtime.m_VehicleRegistry.Remove(dead);
                 m_Runtime.m_ObsPersist.ClearLap(dead);
                 m_Runtime.m_UICache.Remove(dead);
-                m_Runtime.m_VehicleLabels.Remove(dead);
                 m_Runtime.m_BoardingFirstFrameGuardState.Remove(dead);
                 m_Runtime.m_StopRuntime.RemoveVehicle(dead);
                 m_Runtime.m_CachedWpIdx.Remove(dead);

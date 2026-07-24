@@ -14,6 +14,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal NativeHashMap<Entity, uint> StopSessionBoardingChangeCount;
         internal NativeHashMap<Entity, uint> DeparturePendingSinceFrame;
         internal NativeHashSet<Entity> InvalidatedMidStopRecoveryPending;
+        internal NativeHashSet<Entity> DwellTimedOutLatched;
         internal NativeHashMap<Entity, uint> ForcedMidStopBoardingGraceUntil;
 
         internal StopRuntimeState()
@@ -26,6 +27,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             StopSessionBoardingChangeCount = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             DeparturePendingSinceFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             InvalidatedMidStopRecoveryPending = new NativeHashSet<Entity>(256, Allocator.Persistent);
+            DwellTimedOutLatched = new NativeHashSet<Entity>(256, Allocator.Persistent);
         }
 
         internal void InitForcedGrace()
@@ -38,6 +40,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             ClearBoardingStates();
             ClearStopSessions();
             ClearInvalidatedRecovery();
+            ClearDwellTimeoutLatches();
             ClearForcedMidStopGrace();
         }
 
@@ -61,6 +64,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             InvalidatedMidStopRecoveryPending.Clear();
         }
 
+        internal void ClearDwellTimeoutLatches()
+        {
+            DwellTimedOutLatched.Clear();
+        }
+
         internal void ClearForcedMidStopGrace()
         {
             ForcedMidStopBoardingGraceUntil.Clear();
@@ -71,6 +79,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             DisposeBoardingStates();
             DisposeStopSessions();
             DisposeInvalidatedRecovery();
+            DisposeDwellTimeoutLatches();
             DisposeForcedMidStopGrace();
         }
 
@@ -92,6 +101,11 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal void DisposeInvalidatedRecovery()
         {
             if (InvalidatedMidStopRecoveryPending.IsCreated) InvalidatedMidStopRecoveryPending.Dispose();
+        }
+
+        internal void DisposeDwellTimeoutLatches()
+        {
+            if (DwellTimedOutLatched.IsCreated) DwellTimedOutLatched.Dispose();
         }
 
         internal void DisposeForcedMidStopGrace()

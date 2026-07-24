@@ -67,6 +67,19 @@ namespace RapidTransitMod
 
     public partial class ModRuntimeHostSystem : GameSystemBase, IPreSerialize
     {
+        private readonly struct RescueCandidate
+        {
+            public readonly Entity Express;
+            public readonly Entity Local;
+
+            public RescueCandidate(Entity express, Entity local)
+            {
+                Express = express;
+                Local = local;
+            }
+        }
+
+
         internal const float LOCAL_BYPASS_EXIT_RELEASE_ATOMS = 3f;
         internal CameraUpdateSystem m_CameraUpdateSystem;
         internal Broadcasting.WorkbenchBackend.Workbench m_AnnouncementWorkbench;
@@ -174,12 +187,18 @@ namespace RapidTransitMod
         internal VehicleWorksets m_VehicleWorksets = null!;
         internal StopRuntimeState m_StopRuntimeState = null!;
         internal StopRuntime m_StopRuntime = null!;
+        private readonly List<StopInput> m_StopInputs = new List<StopInput>();
+        private readonly List<DispatchInput> m_DispatchInputs = new List<DispatchInput>();
+        private readonly HashSet<Entity> m_BypassReleaseConsumers = new HashSet<Entity>();
         internal VehicleRegistry m_VehicleRegistry = null!;
         internal VehicleView m_VehicleView = null!;
         internal LineView m_LineView = null!;
         internal FeatureGate m_Features = null!;
         internal RapidTransitMod.Overview.FeatureSettingsPersist m_OverviewFeatureSettingsPersist = null!;
         internal DispatchEngine m_RuntimeEngine = null!;
+        internal LineSpawnControl m_LineSpawnControl = null!;
+        internal RuntimeVehicleCleanup m_RuntimeVehicleCleanup = null!;
+        internal SchedulerApply m_SchedulerApply = null!;
         internal VehicleRegistrar m_VehicleRegistrar = null!;
         internal RuntimeVehicleLabels m_VehicleLabels = null!;
         internal RuntimeResolve m_Resolve = null!;
@@ -560,6 +579,8 @@ namespace RapidTransitMod
             m_LineStructureInvalidator.Drain();
 
             m_CommandApplier.ReconcileRetireDispatchLocksOnReady();
+            m_RuntimeWorksets.DrainUiCommands();
+            ApplyUiCommands(commandBuffer, clockSnapshot);
 
             m_RailEventSource.CollectIfDue(simulationFrame);
 
@@ -578,17 +599,62 @@ namespace RapidTransitMod
 
             m_LineStructureInvalidator.Drain();
             DrainDisabledLineLateSpawnRetireQueue(commandBuffer);
+            bool fullMinuteSweep = nowMinute != m_LastSchedulerTickMinute;
+            if (fullMinuteSweep)
+                m_RuntimeWorksets.MarkAllDirty();
             m_RuntimeWorksets.Build();
+            m_StopRuntime.ClearExpiredForcedMidStopGrace(simulationFrame);
+            m_RailEventSource.BuildStopInput(
+                m_RuntimeWorksets.FrozenVehicles,
+                simulationFrame,
+                vehicle => m_StopRuntime.IsForcedMidStopGraceActive(vehicle, simulationFrame),
+                m_StopInputs);
+            m_StopRuntime.Process(m_StopInputs, simulationFrame);
+            PublishStopFacts();
+            ApplyStopControls();
+            m_TrackProjection.ClearLineRunningVehicleSnapshots();
+            Dictionary<Entity, BypassControlResult> bypassControls = new Dictionary<Entity, BypassControlResult>();
+            ResolveVanillaBlockerRescues(commandBuffer);
+            RunBypassPhase(commandBuffer, bypassControls, simulationFrame);
+            m_StopRuntime.ResolveDeparture(bypassControls, simulationFrame);
+            CommitStopDepartures();
+            m_RailEventSource.BuildDispatchInput(
+                m_RuntimeWorksets.FrozenVehicles,
+                simulationFrame,
+                m_StopRuntime.FrameStates,
+                bypassControls,
+                m_DispatchInputs);
+            ApplyPreparingRepairs(m_DispatchInputs, commandBuffer, simulationFrame);
 
             try
             {
-            m_RuntimeEngine.ProcessFrame(commandBuffer, clockSnapshot);
+                m_RuntimeEngine.ProcessFrame(
+                    commandBuffer,
+                    clockSnapshot,
+                    m_RuntimeWorksets,
+                    m_FrameEvents,
+                    m_DispatchInputs);
             }
             catch (Exception ex)
             {
                 log.Info("[运行异常] DispatchEngine.ProcessFrame -> " + ex.GetType().Name + ": " + ex.Message);
                 throw;
             }
+
+            ApplyLaunchCommits();
+            ApplyRunningCommits();
+            m_CommandApplier.FinalizeRetireDispatchLockTerminals();
+            m_RuntimeVehicleCleanup.Tick();
+            TickLineSpawnControl(nowMinute);
+            m_RuntimeWorksets.SealDirtyLines();
+            m_SchedulerApply.Tick(
+                commandBuffer,
+                clockSnapshot,
+                m_RuntimeWorksets.ResolvedDirtyLines,
+                fullMinuteSweep);
+            m_CommandApplier.TickRetireHandoffStages(simulationFrame);
+            ConsumeFrameEvents();
+            m_Announcements.Tick(simulationFrame);
 
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
@@ -602,6 +668,1079 @@ namespace RapidTransitMod
 
             m_Bypass.FlushProbeLogs(nowFrame);
             m_RuntimeHotPathProbe.FlushIfDue(nowFrame);
+        }
+
+        private void ApplyUiCommands(EntityCommandBuffer commandBuffer, ClockSnapshot clockSnapshot)
+        {
+            bool hadCommands = m_RuntimeWorksets.UiCommands.Count > 0;
+            for (int i = 0; i < m_RuntimeWorksets.UiCommands.Count; i++)
+            {
+                UiCommand command = m_RuntimeWorksets.UiCommands[i];
+                switch (command.Kind)
+                {
+                    case UiCommandKind.Retire:
+                        ApplyRetireCommand(new RetireCommand(command.Entity), commandBuffer);
+                        break;
+                    case UiCommandKind.Recheck:
+                        ApplyRecheckCommand(new RecheckCommand(command.Entity));
+                        break;
+                    case UiCommandKind.Depart:
+                        ApplyDepartCommand(new DepartCommand(command.Entity), commandBuffer);
+                        break;
+                    case UiCommandKind.Spawn:
+                        ApplySpawnCommand(new SpawnCommand(command.Entity), clockSnapshot);
+                        break;
+                }
+            }
+
+            if (hadCommands)
+                m_SelectPanel.Invalidate();
+        }
+
+        internal void PublishStopFact(StopFact fact)
+        {
+            if (!fact.Exists)
+                return;
+
+            m_FrameEvents.AppendStop(fact, fact.Frame, fact.SourceGeneration);
+            m_RuntimeWorksets.AddCandidate(fact.Vehicle);
+        }
+
+        private void PublishStopFacts()
+        {
+            IReadOnlyList<StopFact> facts = m_StopRuntime.Facts;
+            for (int i = 0; i < facts.Count; i++)
+                PublishStopFact(facts[i]);
+        }
+
+        private void ApplyStopControls()
+        {
+            IReadOnlyList<StopControlResult> controls = m_StopRuntime.Controls;
+            for (int i = 0; i < controls.Count; i++)
+            {
+                StopControlResult control = controls[i];
+                ApplyStopControl(control.Vehicle, control.WaypointIndex, control);
+            }
+        }
+
+        private void CommitStopDepartures()
+        {
+            IReadOnlyList<StopDeparture> departures = m_StopRuntime.ResolvedDepartures;
+            for (int i = 0; i < departures.Count; i++)
+            {
+                StopDeparture departure = departures[i];
+                StopFact fact = departure.Fact;
+                if (fact.Line == Entity.Null
+                    || !EntityManager.Exists(fact.Line)
+                    || !EntityManager.HasBuffer<RouteWaypoint>(fact.Line))
+                {
+                    continue;
+                }
+
+                DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(fact.Line, true);
+                CommitObservedDeparture(fact, waypoints, departure.Control, fact.Frame);
+                m_StopRuntime.FinalizeDeparture(fact.Vehicle);
+                m_Observation.ClearDwellDeadlineCache(fact.Vehicle);
+                m_ObsPersist.ClearDwell(fact.Vehicle);
+                PublishStopFact(fact);
+            }
+        }
+
+        private void ApplyLaunchCommits()
+        {
+            IReadOnlyList<LaunchCommit> commits = m_RuntimeEngine.LaunchCommits;
+            for (int i = 0; i < commits.Count; i++)
+            {
+                LaunchCommit commit = commits[i];
+                StopControlResult control = m_StopRuntime.ClearStopSession(commit.Vehicle);
+                ApplyStopControl(commit.Vehicle, commit.Waypoint, control);
+                m_StopRuntime.SetEffectiveBoarding(commit.Vehicle, false);
+                m_CachedWpIdx[commit.Vehicle] = -1;
+                m_BVMisfire.Remove(commit.Vehicle);
+                m_BVMisfireStartFrame.Remove(commit.Vehicle);
+                m_RuntimeWorksets.ClearDeadline(commit.Vehicle, DeadlineKind.BvMisfire);
+                if (commit.ClearRescue)
+                    m_Bypass.ClearRescue(commit.Vehicle);
+                if (commit.Line != Entity.Null && commit.ArmExpressRescue)
+                {
+                    m_Bypass.ArmExpressRescue(commit.Vehicle, commit.Line, m_SimulationSystem.frameIndex);
+                }
+                if (commit.Line != Entity.Null && commit.RefreshLine)
+                {
+                    m_Bypass.RequestLineOrderedRuntimeForceRefresh(commit.Line, "launch-confirmed");
+                }
+            }
+        }
+
+        private void ApplyRunningCommits()
+        {
+            IReadOnlyList<RunningCommit> commits = m_RuntimeEngine.RunningCommits;
+            for (int i = 0; i < commits.Count; i++)
+            {
+                RunningCommit commit = commits[i];
+                if (!m_VehicleView.TryGetState(commit.Vehicle, out VehicleState state)
+                    || state != VehicleState.Running)
+                {
+                    continue;
+                }
+                if (commit.ClearRescue)
+                    m_Bypass.ClearRescue(commit.Vehicle);
+                if (commit.Line != Entity.Null && commit.ArmExpressRescue)
+                    m_Bypass.ArmExpressRescue(commit.Vehicle, commit.Line, m_SimulationSystem.frameIndex);
+                if (commit.Line != Entity.Null && commit.RefreshLine)
+                    m_Bypass.RequestLineOrderedRuntimeForceRefresh(commit.Line, "running-commit");
+            }
+            m_RuntimeEngine.ClearRunningCommits();
+        }
+
+        private void ApplyPreparingRepairs(
+            IReadOnlyList<DispatchInput> inputs,
+            EntityCommandBuffer commandBuffer,
+            uint nowFrame)
+        {
+            for (int i = 0; i < inputs.Count; i++)
+            {
+                DispatchInput input = inputs[i];
+                if (!input.PreparingRouteNeedsRepair)
+                    continue;
+
+                StopCancelResult cancelled = m_StopRuntime.CancelStopSession(
+                    input.Vehicle,
+                    nowFrame,
+                    input.SourceGeneration);
+                if (cancelled.Exists)
+                {
+                    PublishStopFact(cancelled.Fact);
+                    ApplyStopControl(
+                        input.Vehicle,
+                        cancelled.Control.WaypointIndex,
+                        cancelled.Control);
+                }
+
+                m_CachedWpIdx.Remove(input.Vehicle);
+                m_BVMisfire.Remove(input.Vehicle);
+                m_BVMisfireStartFrame.Remove(input.Vehicle);
+                m_RuntimeWorksets.ClearDeadline(input.Vehicle, DeadlineKind.BvMisfire);
+                m_VehicleRegistry.SetState(input.Vehicle, VehicleState.Preparing);
+                m_VehicleRegistry.SetPreparing(input.Vehicle, nowFrame);
+                m_VehicleRegistry.ClearBoardingGrace(input.Vehicle);
+                m_RuntimeEngine.ClearAssistLaunchPending(input.Vehicle);
+
+                if (m_CommandApplier.EnsurePreparingRoute(
+                    input.Vehicle,
+                    input.Line,
+                    input.CurrentWaypoint,
+                    commandBuffer))
+                {
+                    uint cooldownUntil = nowFrame + PREPARINGFIX_REPATH_COOLDOWN_FRAMES;
+                    m_PreparingFixCooldownUntil[input.Vehicle] = cooldownUntil;
+                    m_RuntimeWorksets.SetDeadline(
+                        input.Vehicle,
+                        DeadlineKind.PreparingCooldown,
+                        cooldownUntil);
+                    log.Info("[PreparingFix] 线路" + input.Line.Index + " 车辆" + input.Vehicle.Index
+                        + " 重置去始发站 wp=" + input.CurrentWaypoint);
+                }
+            }
+        }
+
+        internal void ApplyStopControl(Entity vehicle, int waypointIndex, StopControlResult control)
+        {
+            if (control.InboundAction == StopInboundAction.Mark)
+                m_VehicleRegistry.MarkInbound(vehicle);
+            else if (control.InboundAction == StopInboundAction.Clear)
+                m_VehicleRegistry.ClearInbound(vehicle);
+
+            if (control.WriteCachedWaypoint)
+                m_CachedWpIdx[vehicle] = control.CachedWaypointIndex;
+            if (control.NoteProgressSuspect)
+                m_TrackProjection.NoteVehicleProgressSuspectRecoveryBoarding(vehicle, waypointIndex);
+            if (control.ClearProgressSuspect)
+                m_TrackProjection.TryClearVehicleProgressSuspectOnStableDeparture(vehicle, waypointIndex);
+            if (control.ClearBypassHoldSkipped)
+                m_Bypass.ClearBypassHoldSkipped(vehicle);
+            if (control.ClearForcedMidStop)
+                m_StopRuntime.ClearForcedMidStop(vehicle);
+            if (control.ClearBvMisfire)
+                m_BVMisfire.Remove(vehicle);
+            if (control.ClearBvMisfireStartFrame)
+                m_BVMisfireStartFrame.Remove(vehicle);
+            if (control.ClearBvMisfireDeadline)
+                m_RuntimeWorksets.ClearDeadline(vehicle, DeadlineKind.BvMisfire);
+        }
+
+        internal void CommitObservedDeparture(
+            StopFact fact,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            StopControlResult control,
+            uint nowFrame)
+        {
+            PassengerFlow.Runtime.Current?.ConfirmDeparture(fact.Vehicle, nowFrame);
+            m_Observation.TryRecordObservedStopDwellOnBoardingEnd(
+                fact.Vehicle,
+                fact.Line,
+                fact.WaypointIndex,
+                nowFrame);
+            m_WorkbenchBridge.ObservationStops().Record(
+                fact.Vehicle,
+                fact.Line,
+                waypoints,
+                false,
+                -1,
+                fact.WaypointIndex);
+            m_Announcements.ServiceEnded(
+                fact.Vehicle,
+                fact.Line,
+                waypoints,
+                fact.WaypointIndex);
+            ApplyStopControl(fact.Vehicle, fact.WaypointIndex, control);
+        }
+
+        private void ResolveVanillaBlockerRescues(EntityCommandBuffer commandBuffer)
+        {
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            IReadOnlyList<Entity> expressVehicles = m_RuntimeWorksets.RescueExpressCandidates;
+            List<RescueCandidate> candidates = new List<RescueCandidate>();
+            HashSet<Entity> seenLocalVehicles = new HashSet<Entity>();
+            for (int i = 0; i < expressVehicles.Count; i++)
+            {
+                Entity express = expressVehicles[i];
+                if (express == Entity.Null
+                    || !m_VehicleView.TryGetLine(express, out Entity expressLine)
+                    || !m_Bypass.TryResolveVanillaBlockerRescue(express, expressLine, nowFrame, out Entity local)
+                    || local == Entity.Null
+                    || !seenLocalVehicles.Add(local))
+                {
+                    continue;
+                }
+
+                candidates.Add(new RescueCandidate(express, local));
+            }
+
+            candidates.Sort((left, right) =>
+            {
+                Entity leftLine = m_Resolve.Line(left.Local);
+                Entity rightLine = m_Resolve.Line(right.Local);
+                int lineOrder = CompareEntities(leftLine, rightLine);
+                return lineOrder != 0 ? lineOrder : CompareEntities(left.Local, right.Local);
+            });
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                RescueCandidate candidate = candidates[i];
+                if (!EntityManager.Exists(candidate.Local)
+                    || !EntityManager.HasComponent<Game.Vehicles.PublicTransport>(candidate.Local))
+                {
+                    continue;
+                }
+
+                m_Bypass.CommitVanillaBlockerRescue(
+                    candidate.Local,
+                    candidate.Express,
+                    0UL);
+                m_FrameEvents.AppendBypass(
+                    new BypassFact(
+                        BypassFactKind.Rescued,
+                        candidate.Local,
+                        m_Resolve.Line(candidate.Local),
+                        candidate.Express,
+                        -1,
+                        false,
+                        true,
+                        reason: "vanilla-blocker-chain-stall"),
+                    nowFrame);
+                m_RuntimeWorksets.AddCandidate(candidate.Local);
+                Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(candidate.Local);
+                m_CommandApplier.ForceDepart(candidate.Local, ref publicTransport, nowFrame, commandBuffer);
+                if (RtLog.VerboseEnabled)
+                {
+                    Entity line = m_Resolve.Line(candidate.Express);
+                    log.Info("[待避防卡死放行] 线路" + line.Index
+                        + " express=" + candidate.Express.Index
+                        + " local=" + candidate.Local.Index
+                        + " reason=vanilla-blocker-chain-stall");
+                }
+            }
+        }
+
+        private void RunBypassPhase(
+            EntityCommandBuffer commandBuffer,
+            Dictionary<Entity, BypassControlResult> bypassControls,
+            uint nowFrame)
+        {
+            BufferLookup<RouteWaypoint> waypointBuffers = GetBufferLookup<RouteWaypoint>(true);
+            ComponentLookup<Game.Vehicles.PublicTransport> publicTransportLookup = GetComponentLookup<Game.Vehicles.PublicTransport>(true);
+            ComponentLookup<CurrentRoute> currentRouteLookup = GetComponentLookup<CurrentRoute>(true);
+            IReadOnlyList<Entity> vehicles = m_RuntimeWorksets.FrozenVehicles;
+            for (int i = 0; i < vehicles.Count; i++)
+            {
+                Entity vehicle = vehicles[i];
+                if (!m_VehicleView.TryGetState(vehicle, out VehicleState state)
+                    || !m_VehicleView.TryGetLine(vehicle, out Entity line)
+                    || line == Entity.Null)
+                {
+                    continue;
+                }
+
+                if (state != VehicleState.Running)
+                {
+                    m_Bypass.ClearVehicle(vehicle, sourceGeneration: 0UL);
+                    continue;
+                }
+
+                ulong sourceGeneration = m_RailEventSource.CurrentSourceGeneration(vehicle);
+                if (!publicTransportLookup.HasComponent(vehicle)
+                    || !currentRouteLookup.HasComponent(vehicle))
+                {
+                    continue;
+                }
+
+                Entity route = currentRouteLookup[vehicle].m_Route;
+                if (!waypointBuffers.TryGetBuffer(route, out DynamicBuffer<RouteWaypoint> waypoints)
+                    || waypoints.Length < 2)
+                {
+                    continue;
+                }
+
+                Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(vehicle);
+                bool boarding = m_StopRuntime.ReadEffectiveBoarding(vehicle);
+                int waypointIndex = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
+                    ? cachedWaypointIndex
+                    : -1;
+                int controlWaypointIndex = waypointIndex;
+                bool bypassSkipped = m_Bypass.TryGetBypassHoldSkipped(vehicle, out _);
+                bool bypassLatched = m_Bypass.TryGetLatchedBlocker(vehicle, out _);
+                if (m_StopRuntime.IsDepartureCandidate(vehicle)
+                    && controlWaypointIndex > 0
+                    && !bypassSkipped)
+                {
+                    BypassDecisionResult departureGate = m_Bypass.EvaluateDepartureGate(
+                        vehicle,
+                        route,
+                        waypoints,
+                        controlWaypointIndex,
+                        nowFrame);
+                    if (departureGate.ShouldHold && !departureGate.CanClearAfterExit)
+                    {
+                        m_StopRuntime.RejectDepartureCandidate(vehicle);
+                        m_Bypass.LogDepartureGate(
+                            vehicle,
+                            "gate|suppress|" + controlWaypointIndex,
+                            "[待避离站门] vehicle=" + vehicle.Index
+                                + " line=" + line.Index
+                                + " prevWp=" + controlWaypointIndex
+                                + " action=suppress");
+                    }
+                }
+                bool skipBypass = !boarding && !bypassLatched && !bypassSkipped;
+                if (!skipBypass && boarding && !bypassLatched && !bypassSkipped && controlWaypointIndex > 0)
+                {
+                    bool sceneEligible = m_Bypass.IsStopSceneEligible(
+                        route,
+                        waypoints,
+                        controlWaypointIndex,
+                        out bool sceneKnown);
+                    skipBypass = sceneKnown && !sceneEligible;
+                }
+
+                uint midStopDwellSinceFrame = 0;
+                uint midStopDwellDeadlineFrame = 0;
+                int maxStationDwellMinutes = 0;
+                bool midStopDwellTimedOut = false;
+                if (boarding && controlWaypointIndex > 0)
+                {
+                    midStopDwellTimedOut = m_Observation.Dwell(
+                        vehicle,
+                        line,
+                        controlWaypointIndex,
+                        boarding,
+                        nowFrame,
+                        waypoints.Length,
+                        out midStopDwellSinceFrame,
+                        out midStopDwellDeadlineFrame,
+                        out maxStationDwellMinutes);
+                }
+
+                BypassControlResult control = skipBypass
+                    ? new BypassControlResult(
+                        false,
+                        vehicle,
+                        route,
+                        controlWaypointIndex,
+                        false,
+                        false,
+                        Entity.Null,
+                        true,
+                        null,
+                        sourceGeneration)
+                    : m_Bypass.TickVehicle(
+                        vehicle,
+                        route,
+                        waypoints,
+                        controlWaypointIndex,
+                        boarding,
+                        ref publicTransport,
+                        commandBuffer,
+                        "线路" + line.Index,
+                        midStopDwellTimedOut,
+                        nowFrame,
+                        sourceGeneration);
+                bypassControls[vehicle] = control;
+                if (control.ShouldHold
+                    && m_Bypass.TryGetHoldCadence(vehicle, out BypassHoldCadenceSnapshot cadence)
+                    && cadence.EvaluatedFrame == nowFrame)
+                {
+                    m_FrameEvents.AppendBypass(new BypassFact(
+                        BypassFactKind.BypassHoldCadence,
+                        vehicle,
+                        control.Line,
+                        control.Blocker,
+                        control.WaypointIndex,
+                        true,
+                        control.CanClearAfterExit,
+                        control.ReleaseReason,
+                        control.SourceGeneration), nowFrame);
+                }
+                if (m_StopRuntime.IsDeparturePending(vehicle)
+                    && control.ShouldHold
+                    && !control.CanClearAfterExit)
+                {
+                    m_StopRuntime.CancelDeparturePending(vehicle);
+                }
+                if (midStopDwellTimedOut
+                    && !control.ShouldHold
+                    && m_StopRuntime.TryLatchDwellTimedOut(vehicle))
+                {
+                    bool hasGrace = m_StopRuntime.TryGetForcedMidStopGrace(vehicle, out uint graceUntil);
+                    bool forcedDeparture = !hasGrace || nowFrame >= graceUntil;
+                    if (forcedDeparture)
+                    {
+                        m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, commandBuffer);
+                        m_StopRuntime.SetForcedMidStopGrace(vehicle, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
+                        if (RtLog.VerboseEnabled)
+                        {
+                            m_RuntimeLog.Once(
+                                m_RuntimeLog.m_MidStopTimeoutLogCache,
+                                vehicle,
+                                midStopDwellSinceFrame.ToString(),
+                                "[停站超时] 线路" + line.Index + " 车辆" + vehicle.Index
+                                    + " 停站超时" + maxStationDwellMinutes + "分钟"
+                                    + " sinceFrame=" + midStopDwellSinceFrame
+                                    + " deadlineFrame=" + midStopDwellDeadlineFrame
+                                    + " curWpIdx=" + waypointIndex);
+                        }
+                    }
+
+                    string releaseReason = !string.IsNullOrWhiteSpace(control.ReleaseReason)
+                        ? control.ReleaseReason
+                        : "timeout-close:no-bypass-release-reason";
+                    m_Bypass.ClearVehiclePreservingBypassHoldSkipped(
+                        vehicle,
+                        releaseReason,
+                        0UL);
+                    m_Bypass.MarkBypassHoldSkipped(vehicle, control.Blocker);
+                        StopFact timeoutFact = new StopFact(
+                        StopFactKind.DwellTimedOut,
+                        vehicle,
+                        line,
+                        controlWaypointIndex,
+                        nowFrame,
+                            dwellDeadlineFrame: midStopDwellDeadlineFrame,
+                            forcedDeparture: forcedDeparture,
+                            blocker: control.Blocker,
+                            reason: releaseReason);
+                        PublishStopFact(timeoutFact);
+                        if (forcedDeparture)
+                        {
+                            PublishStopFact(new StopFact(
+                                StopFactKind.StopAssistActive,
+                                vehicle,
+                                line,
+                                controlWaypointIndex,
+                                nowFrame,
+                                reason: "midstop-dwell-timeout"));
+                        }
+                    }
+            }
+        }
+
+        private void ApplyRetireCommand(RetireCommand command, EntityCommandBuffer commandBuffer)
+        {
+            Entity vehicle = m_Resolve.SelectedVehicle(command.Vehicle);
+            if (vehicle == Entity.Null
+                || !m_VehicleView.Contains(vehicle)
+                || !EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
+                || !EntityManager.HasComponent<Target>(vehicle))
+            {
+                return;
+            }
+
+            Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(vehicle);
+            Target target = m_RailEventSource.ReadTarget(vehicle);
+            m_CommandApplier.Retire(vehicle, publicTransport, target, commandBuffer, "UI请求");
+        }
+
+        private void ApplyRecheckCommand(RecheckCommand command)
+        {
+            Entity vehicle = m_Resolve.SelectedVehicle(command.Vehicle);
+            if (vehicle != Entity.Null && m_VehicleView.Contains(vehicle))
+                m_RuntimeEngine.Reevaluate(vehicle);
+        }
+
+        private void ApplyDepartCommand(DepartCommand command, EntityCommandBuffer commandBuffer)
+        {
+            Entity vehicle = m_Resolve.SelectedVehicle(command.Vehicle);
+            if (vehicle == Entity.Null
+                || !m_VehicleView.Contains(vehicle)
+                || !EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
+                || !EntityManager.HasComponent<Target>(vehicle))
+            {
+                return;
+            }
+
+            Entity line = m_Resolve.Line(vehicle);
+            if (line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
+                return;
+
+            Game.Vehicles.PublicTransport publicTransport = m_RailEventSource.ReadPublicTransport(vehicle);
+            if ((publicTransport.m_State & PublicTransportFlags.Boarding) == 0)
+                return;
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            int waypointIndex = m_WaypointIndex.Compute(vehicle, waypoints);
+            if (waypointIndex < 0)
+                waypointIndex = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
+                    ? cachedWaypointIndex
+                    : -1;
+
+            Entity blocker = m_Bypass.TryGetLatchedBlocker(vehicle, out Entity latchedBlocker)
+                ? latchedBlocker
+                : Entity.Null;
+            m_Bypass.ClearVehicle(vehicle, "UI强制发车");
+            m_Bypass.MarkBypassHoldSkipped(vehicle, blocker);
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            m_StopRuntime.SetForcedMidStopGrace(vehicle, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
+            m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, commandBuffer);
+            m_StopRuntime.StartDeparturePending(vehicle, nowFrame);
+            PublishStopFact(new StopFact(
+                StopFactKind.BoardingCloseRequested,
+                vehicle,
+                line,
+                waypointIndex,
+                nowFrame,
+                reason: "manual-depart"));
+            log.Info("[强制发车协助] 线路" + line.Index + " 车辆" + vehicle.Index
+                + " wp=" + waypointIndex);
+        }
+
+        private void ApplySpawnCommand(SpawnCommand command, ClockSnapshot clockSnapshot)
+        {
+            Entity line = m_Resolve.SelectedLine(command.Line, Entity.Null);
+            if (line == Entity.Null || !EntityManager.Exists(line) || !m_LineView.Applied(line))
+                return;
+
+            BufferLookup<RouteVehicle> routeVehicles = GetBufferLookup<RouteVehicle>(true);
+            int actualCount = m_LineVehicles.Count(line, routeVehicles);
+            int pendingTarget = m_SpawningLines.TryGetValue(line, out int existingTarget)
+                ? math.max(existingTarget, actualCount)
+                : actualCount;
+            int nextTarget = pendingTarget + 1;
+            m_SpawningLines[line] = nextTarget;
+            m_LineSpawnRequestFrame[line] = m_SimulationSystem.frameIndex;
+            m_SelectPanel.RecordManualSpawnSummary(line, clockSnapshot.NowMinute, nextTarget);
+            log.Info("[面板发车] 线路" + line.Index + " 触发产车+1 (当前=" + actualCount + ", 目标=" + nextTarget + ")");
+        }
+
+        private void TickLineSpawnControl(int nowMinute)
+        {
+            if (nowMinute == m_LastPuppetMasterMinute)
+                return;
+
+            try
+            {
+                m_LineSpawnControl.Tick(nowMinute);
+                m_LastPuppetMasterMinute = nowMinute;
+            }
+            catch (Exception ex)
+            {
+                log.Info("[运行异常] PuppetMasterControl -> " + ex.GetType().Name + ": " + ex.Message);
+                throw;
+            }
+        }
+
+        private void ConsumeFrameEvents()
+        {
+            m_BypassReleaseConsumers.Clear();
+            IReadOnlyList<FrameEventRef> events = m_FrameEvents.MergeBySequence();
+            for (int i = 0; i < events.Count; i++)
+            {
+                FrameEventRef frameEvent = events[i];
+                if (frameEvent.Kind == FrameEventKind.Stop)
+                {
+                    ConsumeStopEvent(m_FrameEvents.StopEvents[frameEvent.Index]);
+                    continue;
+                }
+
+                if (frameEvent.Kind == FrameEventKind.Bypass)
+                {
+                    ConsumeBypassEvent(m_FrameEvents.BypassEvents[frameEvent.Index]);
+                    continue;
+                }
+
+                if (frameEvent.Kind == FrameEventKind.Dispatch)
+                {
+                    DispatchEvent dispatchEvent = m_FrameEvents.DispatchEvents[frameEvent.Index];
+                    ConsumeDispatchEvent(dispatchEvent);
+                    continue;
+                }
+
+                if (frameEvent.Kind != FrameEventKind.Vehicle)
+                    continue;
+
+                ConsumeVehicleEvent(m_FrameEvents.VehicleEvents[frameEvent.Index]);
+            }
+        }
+
+        private void ConsumeVehicleEvent(VehicleEvent vehicleEvent)
+        {
+            if (vehicleEvent.Kind == VehicleFactKind.Rebound)
+                return;
+
+            m_RailEtaService?.InvalidateRuntimeFact(
+                vehicleEvent.Vehicle,
+                vehicleEvent.Kind,
+                vehicleEvent.SourceGeneration);
+            if (vehicleEvent.Kind == VehicleFactKind.Removed)
+            {
+                m_RailEventSource.RemoveVehicle(vehicleEvent.Vehicle);
+                return;
+            }
+
+            if (vehicleEvent.State != VehicleState.Running)
+            {
+                return;
+            }
+
+            if (!m_RailEventSource.TryGetRailRoute(
+                    vehicleEvent.Sequence,
+                    out bool hadPreviousRoute,
+                    out bool hasCurrentRoute,
+                    out Entity route))
+            {
+                return;
+            }
+
+            if (!hasCurrentRoute)
+            {
+                if (hadPreviousRoute
+                    && m_Observation.DropSlice(vehicleEvent.Vehicle, out int droppedSliceIndex))
+                {
+                    m_Observation.DebugDrop(vehicleEvent.Vehicle, droppedSliceIndex);
+                }
+                return;
+            }
+
+            Entity line = vehicleEvent.Line;
+            if (line == Entity.Null
+                || route == Entity.Null
+                || !EntityManager.Exists(route)
+                || !EntityManager.HasBuffer<RouteWaypoint>(route))
+            {
+                return;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(route, true);
+            if (waypoints.Length < 2)
+                return;
+
+            int waypointIndex = m_CachedWpIdx.TryGetValue(vehicleEvent.Vehicle, out int cachedWaypointIndex)
+                ? cachedWaypointIndex
+                : -1;
+            bool boarding = m_RailEventSource.TryGetRailBoarding(
+                vehicleEvent.Sequence,
+                out bool boardingKnown,
+                out bool currentBoarding)
+                && boardingKnown
+                && currentBoarding;
+            m_Observation.UpdateSlice(vehicleEvent.Vehicle, line, waypoints, vehicleEvent.SourceFrame);
+            m_Announcements.Running(vehicleEvent.Vehicle, route, waypoints, waypointIndex, boarding);
+        }
+
+        private void ConsumeStopEvent(RapidTransitMod.Dispatch.Runtime.StopEvent stopEvent)
+        {
+            StopFact fact = stopEvent.Fact;
+            m_RailEtaService?.InvalidateRuntimeFact(fact.Vehicle, fact.Kind, stopEvent.SourceGeneration);
+            ProjectStopLabel(fact);
+            if (fact.Kind == StopFactKind.Removed)
+            {
+                m_Announcements.RemoveVehicle(fact.Vehicle);
+                PassengerFlow.Runtime.Current?.RemoveVehicle(fact.Vehicle);
+                return;
+            }
+
+            if (fact.Kind == StopFactKind.Restored
+                || fact.Kind == StopFactKind.Recovered)
+            {
+                ProjectCurrentStateLabel(fact.Vehicle);
+                PassengerFlow.Runtime.Current?.RestoreStop(
+                    fact.Vehicle,
+                    fact.Line,
+                    fact.WaypointIndex,
+                    fact.Frame);
+                return;
+            }
+
+            if (fact.Kind == StopFactKind.Cancelled)
+            {
+                PassengerFlow.Runtime.Current?.CancelStop(fact.Vehicle);
+                return;
+            }
+
+            if (fact.Kind == StopFactKind.Opened)
+                ProjectCurrentStateLabel(fact.Vehicle);
+
+            if (fact.Kind == StopFactKind.BoardingEnded
+                || fact.Kind == StopFactKind.Departed
+                || fact.Kind == StopFactKind.DwellTimedOut)
+            {
+                return;
+            }
+
+            if (fact.Kind != StopFactKind.Opened
+                || fact.Line == Entity.Null
+                || !EntityManager.Exists(fact.Line)
+                || !EntityManager.HasBuffer<RouteWaypoint>(fact.Line))
+            {
+                return;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(fact.Line, true);
+            m_Observation.BeginObservedDwellSession(fact.Vehicle, fact.Line, fact.WaypointIndex, fact.Frame);
+            m_WorkbenchBridge.ObservationStops().Record(
+                fact.Vehicle,
+                fact.Line,
+                waypoints,
+                true,
+                fact.WaypointIndex,
+                fact.PreviousWaypointIndex);
+            m_Announcements.StopOpened(fact.Vehicle, fact.Line, waypoints, fact.WaypointIndex);
+            PassengerFlow.Runtime.Current?.OpenStop(
+                fact.Vehicle,
+                fact.Line,
+                fact.WaypointIndex,
+                fact.Frame);
+            m_TrackProjection.NoteVehicleProgressSuspectRecoveryBoarding(
+                fact.Vehicle,
+                fact.WaypointIndex);
+        }
+
+        private void ConsumeBypassEvent(RapidTransitMod.Dispatch.Runtime.BypassEvent bypassEvent)
+        {
+            BypassFact fact = bypassEvent.Fact;
+            m_RailEtaService?.InvalidateRuntimeFact(fact.Vehicle, fact.Kind, bypassEvent.SourceGeneration);
+            ProjectBypassLabel(fact);
+            if (fact.Kind == BypassFactKind.Released
+                || fact.Kind == BypassFactKind.Cleared
+                || fact.Kind == BypassFactKind.Expired
+                || fact.Kind == BypassFactKind.Rescued)
+            {
+                ProjectCurrentStateLabel(fact.Vehicle);
+            }
+            if (fact.Kind == BypassFactKind.BypassHoldCadence
+                && fact.ShouldHold
+                && fact.Line != Entity.Null
+                && EntityManager.Exists(fact.Line)
+                && EntityManager.HasBuffer<RouteWaypoint>(fact.Line))
+            {
+                DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(fact.Line, true);
+                if (fact.WaypointIndex >= 0 && fact.WaypointIndex < waypoints.Length)
+                    m_Announcements.BypassWaiting(fact.Vehicle, fact.Line, waypoints, fact.WaypointIndex);
+                return;
+            }
+
+            if (fact.Kind == BypassFactKind.Held
+                && fact.Line != Entity.Null
+                && EntityManager.Exists(fact.Line)
+                && EntityManager.HasBuffer<RouteWaypoint>(fact.Line))
+            {
+                DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(fact.Line, true);
+                if (fact.WaypointIndex >= 0 && fact.WaypointIndex < waypoints.Length)
+                {
+                    Entity station = m_Resolve.Stop(waypoints[fact.WaypointIndex].m_Waypoint);
+                    m_Observation.Hold(
+                        fact.Vehicle,
+                        fact.Blocker,
+                        station,
+                        fact.WaypointIndex,
+                        bypassEvent.SourceFrame,
+                        string.IsNullOrEmpty(fact.Reason) ? "运行中" : fact.Reason);
+                }
+                return;
+            }
+
+            if ((fact.Kind == BypassFactKind.Released || fact.Kind == BypassFactKind.Expired)
+                && m_BypassReleaseConsumers.Add(fact.Vehicle))
+            {
+                m_Observation.Release(
+                    fact.Vehicle,
+                    fact.Blocker,
+                    bypassEvent.SourceFrame,
+                    string.IsNullOrEmpty(fact.Reason) ? "bypass-release" : fact.Reason);
+            }
+        }
+
+        private void ConsumeDispatchEvent(DispatchEvent dispatchEvent)
+        {
+            m_RailEtaService?.InvalidateRuntimeFact(
+                dispatchEvent.Vehicle,
+                dispatchEvent.Kind,
+                dispatchEvent.SourceGeneration);
+            ProjectDispatchLabel(dispatchEvent);
+            if (dispatchEvent.Kind == DispatchFactKind.Target
+                && dispatchEvent.CurrentValue >= 0
+                && dispatchEvent.Line != Entity.Null)
+            {
+                m_Observation.BindTarget(
+                    dispatchEvent.Line,
+                    dispatchEvent.Vehicle,
+                    dispatchEvent.CurrentValue,
+                    dispatchEvent.SourceFrame,
+                    "dispatch-target");
+                return;
+            }
+
+            if (dispatchEvent.Kind == DispatchFactKind.LaunchConfirmed)
+            {
+                DispatchBusinessFact fact = dispatchEvent.Fact;
+                bool assistLaunch = string.Equals(fact.Reason, "assist-launch", StringComparison.Ordinal);
+                m_Observation.Record(
+                    dispatchEvent.Vehicle,
+                    assistLaunch
+                        ? (fact.Late ? "协助补发确认" : "协助发车确认")
+                        : (fact.Late ? "补发" : "计划发车"));
+                m_Observation.Launch(
+                    dispatchEvent.Line,
+                    dispatchEvent.Vehicle,
+                    fact.SlotMinute,
+                    fact.ActualMinute,
+                    dispatchEvent.SourceFrame,
+                    fact.Late);
+                PassengerFlow.Runtime.Current?.LaunchOrigin(dispatchEvent.Vehicle, dispatchEvent.SourceFrame);
+                if (TryGetLineWaypoints(dispatchEvent.Line, out DynamicBuffer<RouteWaypoint> launchWaypoints))
+                    m_WorkbenchBridge.ObservationStops().Start(dispatchEvent.Vehicle, dispatchEvent.Line, launchWaypoints);
+                return;
+            }
+
+            if (dispatchEvent.Kind == DispatchFactKind.UnplannedRun)
+            {
+                bool idleRun = string.Equals(dispatchEvent.Fact.Reason, "idle-unplanned-run", StringComparison.Ordinal);
+                m_Observation.Record(dispatchEvent.Vehicle, idleRun ? "Idle异常离站" : "Holding异常离站");
+                return;
+            }
+
+            if (dispatchEvent.Kind != DispatchFactKind.State)
+                return;
+
+            if (dispatchEvent.PreviousState == VehicleState.Preparing
+                && dispatchEvent.CurrentState != VehicleState.Preparing)
+            {
+                m_RailEventSource.ClearPreparingWaypoint(dispatchEvent.Vehicle);
+            }
+
+            if (dispatchEvent.PreviousState == VehicleState.Preparing
+                && dispatchEvent.CurrentState == VehicleState.Holding
+                && dispatchEvent.Line != Entity.Null)
+            {
+                m_Observation.Seed(dispatchEvent.Vehicle, dispatchEvent.Line, dispatchEvent.SourceFrame);
+            }
+
+            if (dispatchEvent.PreviousState == VehicleState.Running
+                && dispatchEvent.CurrentState == VehicleState.Idle)
+            {
+                m_Observation.Finish(dispatchEvent.Vehicle, dispatchEvent.SourceFrame, -1, 0f);
+                m_Observation.Update(dispatchEvent.Vehicle);
+            }
+
+            if (dispatchEvent.Line != Entity.Null)
+                ConsumeDispatchBroadcast(dispatchEvent);
+        }
+
+        private void ConsumeDispatchBroadcast(DispatchEvent dispatchEvent)
+        {
+            if (!TryGetLineWaypoints(dispatchEvent.Line, out DynamicBuffer<RouteWaypoint> waypoints))
+                return;
+
+            int waypointIndex = m_CachedWpIdx.TryGetValue(dispatchEvent.Vehicle, out int cachedWaypointIndex)
+                ? cachedWaypointIndex
+                : -1;
+            bool boarding = m_StopRuntime.ReadEffectiveBoarding(dispatchEvent.Vehicle);
+            bool atOrigin = waypointIndex == 0;
+            if (dispatchEvent.CurrentState == VehicleState.Preparing)
+            {
+                m_Announcements.Preparing(
+                    dispatchEvent.Vehicle,
+                    dispatchEvent.Line,
+                    waypoints,
+                    atOrigin,
+                    dispatchEvent.SourceFrame);
+                return;
+            }
+
+            if (dispatchEvent.CurrentState == VehicleState.Holding
+                || dispatchEvent.CurrentState == VehicleState.Idle)
+            {
+                bool originBusy = atOrigin
+                    || boarding
+                    || m_VehicleStateStore.ForcedOriginReadyFrame.ContainsKey(dispatchEvent.Vehicle)
+                    || waypointIndex == 0;
+                m_Announcements.Origin(dispatchEvent.Line, waypoints, originBusy);
+            }
+        }
+
+        private bool TryGetLineWaypoints(Entity line, out DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (line != Entity.Null
+                && EntityManager.Exists(line)
+                && EntityManager.HasBuffer<RouteWaypoint>(line))
+            {
+                waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                return waypoints.Length >= 2;
+            }
+
+            waypoints = default;
+            return false;
+        }
+
+        private void ProjectStopLabel(StopFact fact)
+        {
+            string vehicleSuffix = " #" + fact.Vehicle.Index;
+            if (fact.Kind == StopFactKind.Removed)
+                m_VehicleLabels.Remove(fact.Vehicle);
+            else if (fact.Kind == StopFactKind.BoardingEnded || fact.Kind == StopFactKind.BoardingCloseRequested)
+            {
+                int targetMinute = m_VehicleView.TryGetTarget(fact.Vehicle, out int target) ? target : -1;
+                m_VehicleLabels.SetLocalized(
+                    fact.Vehicle,
+                    "BoardingEnd",
+                    "结束上客",
+                    (targetMinute >= 0 ? " " + SlotStr(targetMinute) : string.Empty) + vehicleSuffix);
+            }
+            else if (fact.Kind == StopFactKind.StopAssistActive)
+                m_VehicleLabels.SetLocalized(fact.Vehicle, "StopTimeoutAssist", "停站超时协助中", vehicleSuffix);
+            else if (fact.Kind == StopFactKind.DwellTimedOut)
+                m_VehicleLabels.SetLocalized(fact.Vehicle, "StopTimeout", "停站超时", vehicleSuffix);
+        }
+
+        private void ProjectBypassLabel(BypassFact fact)
+        {
+            if (fact.Kind == BypassFactKind.Held || fact.Kind == BypassFactKind.BypassHoldCadence)
+                m_VehicleLabels.SetPrefixedLocalized(
+                    fact.Vehicle,
+                    "BypassExpress",
+                    "待避快车",
+                    "#" + fact.Vehicle.Index + " ");
+        }
+
+        private void ProjectDispatchLabel(DispatchEvent dispatchEvent)
+        {
+            if (dispatchEvent.Kind == DispatchFactKind.RetireRequested)
+            {
+                string reasonSuffix = string.IsNullOrWhiteSpace(dispatchEvent.Fact.Reason)
+                    ? string.Empty
+                    : "(" + dispatchEvent.Fact.Reason + ")";
+                m_VehicleLabels.SetLocalized(dispatchEvent.Vehicle, "Returning", "回库中", reasonSuffix);
+                return;
+            }
+
+            if (dispatchEvent.Kind == DispatchFactKind.Removed)
+            {
+                return;
+            }
+
+            if (dispatchEvent.Kind == DispatchFactKind.PathFault)
+            {
+                m_VehicleLabels.SetLocalized(dispatchEvent.Vehicle, "PathFault", "寻路异常", " #" + dispatchEvent.Vehicle.Index);
+                return;
+            }
+
+            if (dispatchEvent.Kind == DispatchFactKind.UnplannedRun)
+            {
+                bool idleRun = string.Equals(dispatchEvent.Fact.Reason, "idle-unplanned-run", StringComparison.Ordinal);
+                m_VehicleLabels.SetLocalized(
+                    dispatchEvent.Vehicle,
+                    idleRun ? "AbnormalDeparture" : "RunningAbnormal",
+                    idleRun ? "运行中(异常离站)" : "运行中(异常)",
+                    " #" + dispatchEvent.Vehicle.Index);
+                return;
+            }
+
+            if (dispatchEvent.Kind == DispatchFactKind.LaunchConfirmed)
+            {
+                m_VehicleLabels.SetLocalized(
+                    dispatchEvent.Vehicle,
+                    dispatchEvent.Fact.Late ? "RunningLate" : "Running",
+                    dispatchEvent.Fact.Late ? "运行中 补发" : "运行中",
+                    " " + SlotStr(dispatchEvent.Fact.TargetMinute) + " #" + dispatchEvent.Vehicle.Index);
+                return;
+            }
+
+            if (dispatchEvent.Kind == DispatchFactKind.Target
+                || dispatchEvent.Kind == DispatchFactKind.Slot
+                || dispatchEvent.Kind == DispatchFactKind.RunningRecovery)
+            {
+                ProjectCurrentStateLabel(dispatchEvent.Vehicle);
+                return;
+            }
+
+            if (dispatchEvent.Kind != DispatchFactKind.State)
+                return;
+
+            ProjectStateLabel(
+                dispatchEvent.Vehicle,
+                dispatchEvent.CurrentState,
+                m_VehicleView.TryGetTarget(dispatchEvent.Vehicle, out int targetMinute) ? targetMinute : -1);
+        }
+
+        private void ProjectCurrentStateLabel(Entity vehicle)
+        {
+            if (m_VehicleView.TryGetState(vehicle, out VehicleState state))
+            {
+                int targetMinute = m_VehicleView.TryGetTarget(vehicle, out int target) ? target : -1;
+                ProjectStateLabel(vehicle, state, targetMinute);
+            }
+        }
+
+        private void ProjectStateLabel(Entity vehicle, VehicleState state, int targetMinute)
+        {
+            if (state == VehicleState.Retiring)
+                return;
+            else if (state == VehicleState.Running)
+                m_VehicleLabels.SetLocalized(vehicle, "Running", "运行中", " #" + vehicle.Index);
+            else if (state == VehicleState.Holding)
+            {
+                m_VehicleLabels.SetLocalized(
+                    vehicle,
+                    targetMinute >= 0 ? "Holding" : "WaitingForDispatch",
+                    targetMinute >= 0 ? "候车" : "Waiting for Dispatch",
+                    (targetMinute >= 0 ? " " + SlotStr(targetMinute) : string.Empty) + " #" + vehicle.Index);
+            }
+            else if (state == VehicleState.Idle)
+                m_VehicleLabels.SetLocalized(vehicle, "WaitingForDispatch", "Waiting for Dispatch", " #" + vehicle.Index);
+            else if (state == VehicleState.Preparing)
+            {
+                m_VehicleLabels.SetLocalized(
+                    vehicle,
+                    "HeadingForOrigin",
+                    "Heading for Origin",
+                    (targetMinute >= 0 ? " " + SlotStr(targetMinute) : string.Empty) + " #" + vehicle.Index);
+            }
+        }
+
+        private static int CompareEntities(Entity left, Entity right)
+        {
+            return left.Index != right.Index
+                ? left.Index.CompareTo(right.Index)
+                : left.Version.CompareTo(right.Version);
         }
 
         private void DrainDisabledLineLateSpawnRetireQueue(EntityCommandBuffer commandBuffer)

@@ -97,20 +97,21 @@ namespace RapidTransitMod
             m_SlotPlan = new SlotPlan(runtime, m_Policy, managed, times, hold, resolveRuntimeControllerVehicle);
         }
 
-        public void Tick(ClockSnapshot clockSnapshot)
+        public void Tick(ClockSnapshot clockSnapshot, IReadOnlyList<Entity> lines)
         {
             int nowMinute = clockSnapshot.NowMinute;
             m_Runtime.m_SpawnLeadTheory?.Tick();
             m_SlotClaims.Clear();
             m_RetireDecisions.Clear();
-            NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
 
-            try
+            if (lines == null)
+                return;
+
+            for (int lineIndex = 0; lineIndex < lines.Count; lineIndex++)
             {
-                foreach (Entity line in lines)
-                {
+                Entity line = lines[lineIndex];
                     if (!m_Runtime.EntityManager.Exists(line))
                         continue;
                     if (!DispatchLineEligibility.IsDispatchTransportLine(m_Runtime.EntityManager, line))
@@ -511,13 +512,9 @@ namespace RapidTransitMod
 
                         slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                     }
-                }
             }
-            finally
-            {
-                lines.Dispose();
-                m_Runtime.m_SpawnLeadTheory?.Tick();
-            }
+
+            m_Runtime.m_SpawnLeadTheory?.Tick();
         }
 
         public int NextSlotMin(int nowMinute)

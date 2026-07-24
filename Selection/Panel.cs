@@ -6,6 +6,7 @@ using Game.Routes;
 using Game.UI.InGame;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Scheduling;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -52,6 +53,16 @@ namespace RapidTransitMod
             m_LineLastSpawnTriggerSummary[line] = ModRuntimeHostSystem.SlotStr(nowMinute)
                 + " 班次" + ModRuntimeHostSystem.SlotStr(slot)
                 + " 真实产车命令 当前=" + actualCount;
+        }
+
+        public void RecordManualSpawnSummary(Entity line, int nowMinute, int nextTarget)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_LineLastSpawnTriggerSummary[line] = ModRuntimeHostSystem.SlotStr(nowMinute)
+                + " 手动发车 -> "
+                + nextTarget.ToString();
         }
 
         public void RecordLineVehicleRegisterSummary(Entity line, int nowMinute, Entity vehicle, VehicleState finalState)
@@ -510,93 +521,36 @@ namespace RapidTransitMod
         public bool Retire(Entity vehicle)
         {
             vehicle = m_Port.ResolveVehicle(vehicle);
-            if (!IsManagedVehicle(vehicle))
+            if (vehicle == Entity.Null)
                 return false;
-            if (!EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
-                return false;
-            if (!EntityManager.HasComponent<Target>(vehicle))
-                return false;
-
-            Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
-            Target target = EntityManager.GetComponentData<Target>(vehicle);
-
-            m_Port.Commands.Retire(
-                vehicle,
-                publicTransport,
-                target,
-                m_Port.Barrier.CreateCommandBuffer(),
-                "UI请求");
-            Invalidate();
+            m_Port.Worksets.EnqueueUiCommand(new RetireCommand(vehicle));
             return true;
         }
 
         public bool Recheck(Entity vehicle)
         {
             vehicle = m_Port.ResolveVehicle(vehicle);
-            if (!IsManagedVehicle(vehicle))
+            if (vehicle == Entity.Null)
                 return false;
-
-            m_Port.Runtime.Reevaluate(vehicle);
-            Invalidate();
+            m_Port.Worksets.EnqueueUiCommand(new RecheckCommand(vehicle));
             return true;
         }
 
         public bool Depart(Entity vehicle)
         {
             vehicle = m_Port.ResolveVehicle(vehicle);
-            if (!IsManagedVehicle(vehicle))
+            if (vehicle == Entity.Null)
                 return false;
-            if (!EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
-                return false;
-            if (!EntityManager.HasComponent<Target>(vehicle))
-                return false;
-
-            Entity line = m_Port.ResolveVehicleLine(vehicle);
-            if (line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
-                return false;
-
-            Game.Vehicles.PublicTransport pt = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
-            if ((pt.m_State & PublicTransportFlags.Boarding) == 0)
-                return false;
-
-            Target tgt = EntityManager.GetComponentData<Target>(vehicle);
-            DynamicBuffer<RouteWaypoint> wps = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            int currentWaypointIndex = m_Port.ComputeWp(vehicle, wps);
-            if (currentWaypointIndex < 0)
-                currentWaypointIndex = m_Port.CachedWp.TryGetValue(vehicle, out int cachedWaypointIndex)
-                    ? cachedWaypointIndex
-                    : -1;
-
-            EntityCommandBuffer commandBuffer = m_Port.Barrier.CreateCommandBuffer();
-            m_Port.Runtime.ForceManualDepart(vehicle, ref pt, m_Port.Sim.frameIndex, commandBuffer);
-            m_Port.Labels.Set(vehicle, "结束上客");
-            log.Info("[强制发车协助] 线路" + line.Index + " 车辆" + vehicle.Index
-                + " wp=" + currentWaypointIndex);
-            Invalidate();
+            m_Port.Worksets.EnqueueUiCommand(new DepartCommand(vehicle));
             return true;
         }
 
         public bool Spawn(Entity line)
         {
             line = m_Port.ResolveLine(line, Entity.Null);
-            if (line == Entity.Null || !EntityManager.Exists(line) || !m_Port.Lines.Applied(line))
+            if (line == Entity.Null)
                 return false;
-
-            var rvBuffers = m_Port.RouteVehicles(true);
-            int actualCount = m_Port.CountVehicles(line, rvBuffers);
-            int pendingTarget = actualCount;
-            if (m_Port.Spawns.TryGetValue(line, out int existingTarget))
-            {
-                pendingTarget = math.max(existingTarget, actualCount);
-            }
-
-            int nextTarget = pendingTarget + 1;
-            m_Port.Spawns[line] = nextTarget;
-            m_Port.SpawnFrames[line] = m_Port.Sim.frameIndex;
-            m_LineLastSpawnTriggerSummary[line] = ModRuntimeHostSystem.SlotStr((int)(m_Port.Time.normalizedTime * 1440f) % 1440)
-                + " 手动发车 -> "
-                + nextTarget.ToString();
-            log.Info("[面板发车] 线路" + line.Index + " 触发产车+1 (当前=" + actualCount + ", 目标=" + nextTarget + ")");
+            m_Port.Worksets.EnqueueUiCommand(new SpawnCommand(line));
             return true;
         }
 

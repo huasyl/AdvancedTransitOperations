@@ -65,6 +65,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Runtime = runtime.m_RuntimeEngine,
                 Scheduler = runtime.m_DispatchScheduler,
                 Labels = runtime.m_VehicleLabels,
+                Worksets = runtime.m_RuntimeWorksets,
                 ResolveLine = runtime.m_Resolve.SelectedLine,
                 ResolveVehicle = runtime.m_Resolve.SelectedVehicle,
                 ResolveVehicleLine = runtime.m_Resolve.Line,
@@ -249,9 +250,37 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.EntityName,
                 runtime.m_RuntimeHotPathProbe,
                 ModRuntimeHostSystem.IsBypassRuntimeLoggingEnabled,
-                runtime.m_Observation.Hold,
-                runtime.m_Observation.Release,
-                runtime.m_Announcements.BypassWaiting,
+                (vehicle, blocker, station, waypointIndex, frame, reason, sourceGeneration) =>
+                {
+                    runtime.m_FrameEvents.AppendBypass(new BypassFact(
+                        BypassFactKind.Held,
+                        vehicle,
+                        runtime.m_Resolve.Line(vehicle),
+                        blocker,
+                        waypointIndex,
+                        true,
+                        false,
+                        reason,
+                        sourceGeneration), frame);
+                },
+                (vehicle, blocker, frame, reason, sourceGeneration) =>
+                {
+                    runtime.m_FrameEvents.AppendBypass(new BypassFact(
+                        BypassFactKind.Released,
+                        vehicle,
+                        runtime.m_Resolve.Line(vehicle),
+                        blocker,
+                        -1,
+                        false,
+                        true,
+                        reason,
+                        sourceGeneration), frame);
+                },
+                fact =>
+                {
+                    runtime.m_FrameEvents.AppendBypass(fact, runtime.m_SimulationSystem.frameIndex);
+                },
+                (vehicle, route, waypoints, waypointIndex) => { },
                 (vehicle, publicTransport) =>
                 {
                     runtime.m_RailEventSource.AppendPublicTransportWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);

@@ -459,7 +459,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             string lineTag,
             string phase,
             string detail,
-            uint nowFrame)
+            uint nowFrame,
+            ulong sourceGeneration = 0UL)
         {
             Once(
                 m_BvMisfireObserveLogCache,
@@ -473,9 +474,20 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
             if (ModRuntimeHostSystem.IsBvMisfireEnforcementEnabled())
             {
-                m_Runtime.m_BVMisfire.Add(vehicle);
-                m_Runtime.m_BVMisfireStartFrame[vehicle] = nowFrame;
-                m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, DeadlineKind.BvMisfire, nowFrame + ModRuntimeHostSystem.BV_MISFIRE_TIMEOUT + 1u);
+                if (m_Runtime.m_BVMisfire.Add(vehicle))
+                {
+                    m_Runtime.m_BVMisfireStartFrame[vehicle] = nowFrame;
+                    m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, DeadlineKind.BvMisfire, nowFrame + ModRuntimeHostSystem.BV_MISFIRE_TIMEOUT + 1u);
+                    m_Runtime.m_FrameEvents.AppendDispatch(
+                        vehicle,
+                        nowFrame,
+                        DispatchFactKind.PathFault,
+                        default,
+                        default,
+                        m_Runtime.m_Resolve.Line(vehicle),
+                        fact: new DispatchBusinessFact(-1, -1, -1, false, "bv-misfire"),
+                        sourceGeneration: sourceGeneration);
+                }
             }
             else
             {

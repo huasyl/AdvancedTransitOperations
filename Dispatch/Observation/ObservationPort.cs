@@ -480,7 +480,11 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Capture.BeginObservedDwellSession(vehicle, line, waypointIndex, nowFrame);
         }
 
-        public void TryRecordObservedStopDwellOnBoardingEnd(Entity vehicle, Entity line, int fallbackWaypointIndex, uint nowFrame)
+        public void TryRecordObservedStopDwellOnBoardingEnd(
+            Entity vehicle,
+            Entity line,
+            int fallbackWaypointIndex,
+            uint nowFrame)
         {
             if (!m_Capture.TryRecordObservedStopDwellOnBoardingEnd(vehicle, line, fallbackWaypointIndex, nowFrame, out ObservedDwellSample sample))
                 return;
@@ -811,21 +815,6 @@ namespace RapidTransitMod.Dispatch.Observation
         public void ClearForcedMidStop(Entity vehicle)
         {
             m_Runtime.m_StopRuntime.ClearForcedMidStop(vehicle);
-        }
-
-        public bool IsSuppressedMidStopGhost(
-            Entity vehicle,
-            Target target,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            uint nowFrame,
-            out int targetWaypointIndex)
-        {
-            return m_Runtime.m_StopRuntime.IsSuppressedMidStopGhost(
-                vehicle,
-                target,
-                waypoints,
-                nowFrame,
-                out targetWaypointIndex);
         }
 
         private uint ComputeDeadline(Entity line, int waypointIndex, uint dwellSinceFrame, int maxDwellMinutes)

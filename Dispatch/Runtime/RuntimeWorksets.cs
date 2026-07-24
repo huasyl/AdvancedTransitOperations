@@ -30,6 +30,50 @@ namespace RapidTransitMod.Dispatch.Runtime
         public DeadlineEntry(Entity vehicle, DeadlineKind kind, uint dueFrame) { Vehicle = vehicle; Kind = kind; DueFrame = dueFrame; }
     }
 
+    internal readonly struct RetireCommand
+    {
+        public readonly Entity Vehicle;
+        public RetireCommand(Entity vehicle) { Vehicle = vehicle; }
+    }
+
+    internal readonly struct RecheckCommand
+    {
+        public readonly Entity Vehicle;
+        public RecheckCommand(Entity vehicle) { Vehicle = vehicle; }
+    }
+
+    internal readonly struct DepartCommand
+    {
+        public readonly Entity Vehicle;
+        public DepartCommand(Entity vehicle) { Vehicle = vehicle; }
+    }
+
+    internal readonly struct SpawnCommand
+    {
+        public readonly Entity Line;
+        public SpawnCommand(Entity line) { Line = line; }
+    }
+
+    internal enum UiCommandKind : byte
+    {
+        Retire,
+        Recheck,
+        Depart,
+        Spawn
+    }
+
+    internal readonly struct UiCommand
+    {
+        public readonly UiCommandKind Kind;
+        public readonly Entity Entity;
+
+        public UiCommand(UiCommandKind kind, Entity entity)
+        {
+            Kind = kind;
+            Entity = entity;
+        }
+    }
+
     internal sealed class RuntimeWorksets : IDisposable
     {
         private readonly ModRuntimeHostSystem m_Runtime;
@@ -43,6 +87,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly List<Entity> m_RescueExpressCandidates = new List<Entity>();
         private readonly HashSet<Entity> m_RescueExpressCandidateSet = new HashSet<Entity>();
         private readonly List<Entity> m_ResolvedDirtyLines = new List<Entity>();
+        private readonly List<UiCommand> m_FrameUiCommands = new List<UiCommand>();
         private bool m_Built;
         private bool m_Sealed;
         private bool m_AllLinesDirty;
@@ -51,8 +96,11 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Dictionary<DeadlineKey, uint> m_Deadlines = new Dictionary<DeadlineKey, uint>();
         private readonly HashSet<Entity> m_ActiveBypass = new HashSet<Entity>();
         private readonly HashSet<Entity> m_ActiveRetire = new HashSet<Entity>();
+        private readonly HashSet<Entity> m_ActiveDeparturePending = new HashSet<Entity>();
+        private readonly HashSet<Entity> m_ActiveOriginCandidates = new HashSet<Entity>();
         private readonly HashSet<Entity> m_PendingVehicleCandidates = new HashSet<Entity>();
         private readonly HashSet<string> m_PendingDirtyLineKeys = new HashSet<string>();
+        private readonly List<UiCommand> m_PendingUiCommands = new List<UiCommand>();
         private bool m_PendingAllLinesDirty;
 
         public RuntimeWorksets(ModRuntimeHostSystem runtime, FrameEvents events) { m_Runtime = runtime; m_Events = events; }
@@ -63,6 +111,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public IReadOnlyCollection<Entity> ActiveRetire => m_ActiveRetire;
         public bool AllLinesDirty => m_AllLinesDirty;
         public IReadOnlyList<Entity> ResolvedDirtyLines => m_ResolvedDirtyLines;
+        public IReadOnlyList<UiCommand> UiCommands => m_FrameUiCommands;
 
         public void BeginFrame()
         {
@@ -74,6 +123,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_RescueExpressCandidates.Clear();
             m_RescueExpressCandidateSet.Clear();
             m_ResolvedDirtyLines.Clear();
+            m_FrameUiCommands.Clear();
             m_Built = false;
             m_Sealed = false;
             m_AllLinesDirty = m_PendingAllLinesDirty;
@@ -82,6 +132,32 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_CurrentDirtyLineKeys.UnionWith(m_PendingDirtyLineKeys);
             m_PendingVehicleCandidates.Clear();
             m_PendingDirtyLineKeys.Clear();
+        }
+
+        public void EnqueueUiCommand(RetireCommand command)
+        {
+            EnqueueUiCommand(UiCommandKind.Retire, command.Vehicle);
+        }
+
+        public void EnqueueUiCommand(RecheckCommand command)
+        {
+            EnqueueUiCommand(UiCommandKind.Recheck, command.Vehicle);
+        }
+
+        public void EnqueueUiCommand(DepartCommand command)
+        {
+            EnqueueUiCommand(UiCommandKind.Depart, command.Vehicle);
+        }
+
+        public void EnqueueUiCommand(SpawnCommand command)
+        {
+            EnqueueUiCommand(UiCommandKind.Spawn, command.Line);
+        }
+
+        public void DrainUiCommands()
+        {
+            m_FrameUiCommands.AddRange(m_PendingUiCommands);
+            m_PendingUiCommands.Clear();
         }
 
         public void Build()
@@ -93,6 +169,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 DispatchEvent dispatchEvent = m_Events.DispatchEvents[i];
                 AddCandidate(dispatchEvent.Vehicle);
                 MarkDirty(dispatchEvent.Line);
+            }
+            for (int i = 0; i < m_Events.StopEvents.Count; i++)
+                AddCandidate(m_Events.StopEvents[i].Vehicle);
+            for (int i = 0; i < m_Events.BypassEvents.Count; i++)
+            {
+                BypassEvent bypassEvent = m_Events.BypassEvents[i];
+                if (bypassEvent.Fact.Kind != BypassFactKind.BypassHoldCadence)
+                    AddCandidate(bypassEvent.Vehicle);
             }
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             foreach (KeyValuePair<DeadlineKey, uint> entry in m_Deadlines)
@@ -109,6 +193,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
             foreach (Entity vehicle in m_ActiveBypass) AddCandidate(vehicle);
             foreach (Entity vehicle in m_ActiveRetire) AddCandidate(vehicle);
+            foreach (Entity vehicle in m_ActiveDeparturePending) AddCandidate(vehicle);
+            foreach (Entity vehicle in m_ActiveOriginCandidates) AddCandidate(vehicle);
+            ExpandDirtyStateBuckets();
             foreach (Entity vehicle in m_CurrentCandidates)
             {
                 if (vehicle != Entity.Null && m_Runtime.EntityManager.Exists(vehicle) && m_Runtime.m_VehicleView.Contains(vehicle))
@@ -143,6 +230,16 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             if (vehicle == Entity.Null) return;
             (m_Built ? m_PendingVehicleCandidates : m_CurrentCandidates).Add(vehicle);
+        }
+
+        public void AddIdleLineCandidates(Entity line)
+        {
+            AddStateLineCandidates(VehicleState.Idle, line);
+        }
+
+        public void AddHoldingLineCandidates(Entity line)
+        {
+            AddStateLineCandidates(VehicleState.Holding, line);
         }
 
         public void MarkDirty(string lineKey)
@@ -191,6 +288,23 @@ namespace RapidTransitMod.Dispatch.Runtime
             RemoveDueDeadline(vehicle, kind);
         }
 
+        public bool TryGetDeadline(Entity vehicle, DeadlineKind kind, out uint dueFrame)
+        {
+            if (vehicle == Entity.Null)
+            {
+                dueFrame = 0;
+                return false;
+            }
+
+            return m_Deadlines.TryGetValue(new DeadlineKey(vehicle, kind), out dueFrame);
+        }
+
+        public bool IsDeadlineDue(Entity vehicle, DeadlineKind kind, uint nowFrame)
+        {
+            return TryGetDeadline(vehicle, kind, out uint dueFrame)
+                && nowFrame >= dueFrame;
+        }
+
         public void ClearDeadlines(DeadlineKind kind)
         {
             List<DeadlineKey> stale = new List<DeadlineKey>();
@@ -218,6 +332,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (vehicle == Entity.Null) return;
             m_ActiveBypass.Remove(vehicle);
             m_ActiveRetire.Remove(vehicle);
+            m_ActiveDeparturePending.Remove(vehicle);
+            m_ActiveOriginCandidates.Remove(vehicle);
             m_PendingVehicleCandidates.Remove(vehicle);
             List<DeadlineKey> stale = new List<DeadlineKey>();
             foreach (DeadlineKey key in m_Deadlines.Keys) if (key.Vehicle == vehicle) stale.Add(key);
@@ -234,12 +350,16 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void ClearActiveBypass() => m_ActiveBypass.Clear();
         public void SetRetireActive(Entity vehicle, bool active) { if (active) m_ActiveRetire.Add(vehicle); else m_ActiveRetire.Remove(vehicle); }
         public void ClearActiveRetire() => m_ActiveRetire.Clear();
+        public void SetDeparturePending(Entity vehicle, bool active) { if (active) m_ActiveDeparturePending.Add(vehicle); else m_ActiveDeparturePending.Remove(vehicle); }
+        public void SetOriginCandidate(Entity vehicle, bool active) { if (active) m_ActiveOriginCandidates.Add(vehicle); else m_ActiveOriginCandidates.Remove(vehicle); }
 
         public void ResetCity()
         {
             // 整体清理本帧视图、期限、活跃集合和全部 pending。
             m_CurrentCandidates.Clear(); m_CurrentDirtyLineKeys.Clear(); m_FrozenVehicles.Clear(); m_DueDeadlines.Clear(); m_RescueExpressCandidates.Clear(); m_RescueExpressCandidateSet.Clear(); m_ResolvedDirtyLines.Clear();
-            m_Deadlines.Clear(); m_ActiveBypass.Clear(); m_ActiveRetire.Clear(); m_PendingVehicleCandidates.Clear(); m_PendingDirtyLineKeys.Clear();
+            m_FrameUiCommands.Clear();
+            m_Deadlines.Clear(); m_ActiveBypass.Clear(); m_ActiveRetire.Clear(); m_ActiveDeparturePending.Clear(); m_ActiveOriginCandidates.Clear(); m_PendingVehicleCandidates.Clear(); m_PendingDirtyLineKeys.Clear();
+            m_PendingUiCommands.Clear();
             m_AllLinesDirty = false; m_PendingAllLinesDirty = false; m_Built = false; m_Sealed = false;
         }
 
@@ -314,6 +434,57 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
             finally { lines.Dispose(); }
             m_ResolvedDirtyLines.Sort(CompareEntity);
+        }
+
+        private void EnqueueUiCommand(UiCommandKind kind, Entity entity)
+        {
+            if (entity != Entity.Null)
+                m_PendingUiCommands.Add(new UiCommand(kind, entity));
+        }
+
+        private void ExpandDirtyStateBuckets()
+        {
+            ExpandStateBucket(VehicleState.Preparing);
+            ExpandStateBucket(VehicleState.Holding);
+            ExpandStateBucket(VehicleState.Idle);
+        }
+
+        private void ExpandStateBucket(VehicleState state)
+        {
+            foreach (Entity vehicle in m_Runtime.m_VehicleWorksets.State(state))
+            {
+                if (!m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line)
+                    || line == Entity.Null
+                    || !LineIsDirty(line))
+                {
+                    continue;
+                }
+                AddCandidate(vehicle);
+            }
+        }
+
+        private void AddStateLineCandidates(VehicleState state, Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            foreach (Entity vehicle in m_Runtime.m_VehicleWorksets.State(state))
+            {
+                if (m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity vehicleLine)
+                    && vehicleLine == line)
+                {
+                    AddCandidate(vehicle);
+                }
+            }
+        }
+
+        private bool LineIsDirty(Entity line)
+        {
+            if (m_AllLinesDirty)
+                return true;
+
+            return m_Runtime.m_LineView.TryFrame(line, out LineFrame frame)
+                && m_CurrentDirtyLineKeys.Contains(frame.StoreKey.ToString());
         }
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Jobs;
 
 namespace RapidTransitMod.RailEtaHost
@@ -10,6 +11,8 @@ namespace RapidTransitMod.RailEtaHost
     {
         private static RailEtaBridgeService s_Current;
         private readonly ConcurrentDictionary<long, RailEtaPublicStatus> m_Status = new ConcurrentDictionary<long, RailEtaPublicStatus>();
+        private readonly ConcurrentDictionary<long, ulong> m_LatestSourceGenerations = new ConcurrentDictionary<long, ulong>();
+        private readonly ConcurrentDictionary<long, ulong> m_RuntimeFactGenerations = new ConcurrentDictionary<long, ulong>();
         private readonly RailEtaWorker m_Worker;
         private readonly Func<ClockSnapshot> m_ClockSnapshot;
         private RailEtaHotRuntime m_HotRuntime;
@@ -54,7 +57,8 @@ namespace RapidTransitMod.RailEtaHost
                 m_LastAppliedResult = result;
                 bool accepted = false;
                 if (m_Status.TryGetValue(result.Ticket, out RailEtaPublicStatus publishedStatus)
-                    && publishedStatus.ClockEpoch == m_ClockSnapshot().ClockEpoch)
+                    && publishedStatus.ClockEpoch == m_ClockSnapshot().ClockEpoch
+                    && !IsTerminal(publishedStatus.State))
                 {
                     Apply(publishedStatus, result);
                     accepted = true;
@@ -86,7 +90,10 @@ namespace RapidTransitMod.RailEtaHost
                 TargetWaypoint = descriptor.TargetCheckpointId,
                 Mode = descriptor.Mode,
                 Generation = selection?.Generation ?? 0,
-                ClockEpoch = m_ClockSnapshot().ClockEpoch
+                ClockEpoch = m_ClockSnapshot().ClockEpoch,
+                RuntimeFactGeneration = m_RuntimeFactGenerations.GetOrAdd(
+                    ((long)(uint)descriptor.VehicleIndex << 32) | (uint)descriptor.VehicleVersion,
+                    0UL)
             };
             m_Status[ticket.Value] = status;
             if (selection == null)
@@ -112,7 +119,8 @@ namespace RapidTransitMod.RailEtaHost
             if (!m_Status.TryGetValue(ticket.Value, out status)) return false;
             RailEtaPublicResult result = ModRuntimeHostSystem.Instance?.LastRailEtaPublicResult;
             if (result != null && result.Ticket == ticket.Value
-                && status.ClockEpoch == m_ClockSnapshot().ClockEpoch) Apply(status, result);
+                && status.ClockEpoch == m_ClockSnapshot().ClockEpoch
+                && !IsTerminal(status.State)) Apply(status, result);
             if (m_HotRuntime != null && m_HotRuntime.TryGetComparisonSummary(ticket.Value, out string summary))
                 status.ComparisonSummary = summary;
             return true;
@@ -127,10 +135,45 @@ namespace RapidTransitMod.RailEtaHost
             return true;
         }
 
+        internal void InvalidateRuntimeFact(Unity.Entities.Entity vehicle, VehicleFactKind kind, ulong sourceGeneration)
+        {
+            InvalidateRuntimeFact(vehicle, IsRelevant(kind), sourceGeneration, kind.ToString());
+        }
+
+        internal void InvalidateRuntimeFact(Unity.Entities.Entity vehicle, StopFactKind kind, ulong sourceGeneration)
+        {
+            InvalidateRuntimeFact(vehicle, IsRelevant(kind), sourceGeneration, kind.ToString());
+        }
+
+        internal void InvalidateRuntimeFact(Unity.Entities.Entity vehicle, BypassFactKind kind, ulong sourceGeneration)
+        {
+            InvalidateRuntimeFact(vehicle, IsRelevant(kind), sourceGeneration, kind.ToString());
+        }
+
+        internal void InvalidateRuntimeFact(Unity.Entities.Entity vehicle, DispatchFactKind kind, ulong sourceGeneration)
+        {
+            InvalidateRuntimeFact(vehicle, IsRelevant(kind), sourceGeneration, kind.ToString());
+        }
+
+        internal void InvalidateRebind(Unity.Entities.Entity vehicle, ulong sourceGeneration)
+        {
+            if (vehicle == Unity.Entities.Entity.Null)
+                return;
+
+            long targetVehicle = ((long)(uint)vehicle.Index << 32) | (uint)vehicle.Version;
+            m_LatestSourceGenerations.AddOrUpdate(
+                targetVehicle,
+                sourceGeneration,
+                (_, current) => current > sourceGeneration ? current : sourceGeneration);
+            InvalidateRuntimeFactGeneration(targetVehicle, "Rebound");
+        }
+
         public void ResetCity()
         {
             int generation = Interlocked.Increment(ref m_Generation);
             m_Status.Clear();
+            m_LatestSourceGenerations.Clear();
+            m_RuntimeFactGenerations.Clear();
             Interlocked.Exchange(ref m_LastTerminalTicket, 0);
             m_HotRuntime?.Clear(generation);
         }
@@ -145,6 +188,87 @@ namespace RapidTransitMod.RailEtaHost
                 status.Failure = "ClockChanged";
                 status.Detail = "Rail ETA request clock epoch changed before completion.";
             }
+        }
+
+        private void InvalidateRuntimeFact(
+            Unity.Entities.Entity vehicle,
+            bool relevant,
+            ulong sourceGeneration,
+            string factKind)
+        {
+            if (vehicle == Unity.Entities.Entity.Null || !relevant)
+                return;
+
+            long targetVehicle = ((long)(uint)vehicle.Index << 32) | (uint)vehicle.Version;
+            if (sourceGeneration != 0UL)
+            {
+                ulong latest = m_LatestSourceGenerations.GetOrAdd(targetVehicle, 0UL);
+                if (sourceGeneration < latest)
+                    return;
+                m_LatestSourceGenerations.AddOrUpdate(targetVehicle, sourceGeneration,
+                    (_, current) => current > sourceGeneration ? current : sourceGeneration);
+            }
+
+            InvalidateRuntimeFactGeneration(targetVehicle, factKind);
+        }
+
+        private void InvalidateRuntimeFactGeneration(long targetVehicle, string factKind)
+        {
+            ulong currentGeneration = m_RuntimeFactGenerations.AddOrUpdate(
+                targetVehicle,
+                1UL,
+                (_, current) => current + 1UL);
+            foreach (RailEtaPublicStatus status in m_Status.Values)
+            {
+                if (status.TargetVehicle != targetVehicle
+                    || IsTerminal(status.State)
+                    || status.RuntimeFactGeneration >= currentGeneration)
+                {
+                    continue;
+                }
+
+                m_HotRuntime?.Cancel(status.Ticket.Value);
+                status.State = "Cancelled";
+                status.Failure = "RuntimeFactChanged";
+                status.Detail = "Rail runtime fact changed: " + factKind + ".";
+            }
+        }
+
+        private static bool IsRelevant(VehicleFactKind kind)
+        {
+            return kind == VehicleFactKind.Registered
+                || kind == VehicleFactKind.Rebound
+                || kind == VehicleFactKind.Removed
+                || kind == VehicleFactKind.Boarding
+                || kind == VehicleFactKind.Target
+                || kind == VehicleFactKind.Route
+                || kind == VehicleFactKind.Waypoint
+                || kind == VehicleFactKind.Moving
+                || kind == VehicleFactKind.PathReady
+                || kind == VehicleFactKind.OriginRange;
+        }
+
+        private static bool IsRelevant(StopFactKind kind) => kind != StopFactKind.None;
+
+        private static bool IsRelevant(BypassFactKind kind)
+        {
+            return kind == BypassFactKind.Held
+                || kind == BypassFactKind.Released
+                || kind == BypassFactKind.Cleared
+                || kind == BypassFactKind.Expired
+                || kind == BypassFactKind.Rescued;
+        }
+
+        private static bool IsRelevant(DispatchFactKind kind)
+        {
+            return kind == DispatchFactKind.State
+                || kind == DispatchFactKind.Target
+                || kind == DispatchFactKind.Slot
+                || kind == DispatchFactKind.LaunchConfirmed
+                || kind == DispatchFactKind.UnplannedRun
+                || kind == DispatchFactKind.RetireRequested
+                || kind == DispatchFactKind.PathFault
+                || kind == DispatchFactKind.RunningRecovery;
         }
 
         private static void Apply(RailEtaPublicStatus status, RailEtaPublicResult result)

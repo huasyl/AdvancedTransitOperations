@@ -19,27 +19,35 @@ namespace RapidTransitMod
         private EntityManager EntityManager => m_Runtime.EntityManager;
         private TimedLogger log => m_Runtime.log;
 
-        public void Tick(EntityCommandBuffer ecb, ClockSnapshot clockSnapshot)
+        public void Tick(
+            EntityCommandBuffer ecb,
+            ClockSnapshot clockSnapshot,
+            IReadOnlyList<Entity> lineCandidates,
+            bool fullMinuteSweep)
         {
             int nowMinute = clockSnapshot.NowMinute;
-            if (nowMinute != m_Runtime.m_LastSchedulerTickMinute)
+            if (!fullMinuteSweep && (lineCandidates == null || lineCandidates.Count == 0))
+                return;
+
+            try
             {
-                try
-                {
-                    Apply(ecb, clockSnapshot);
+                Apply(ecb, clockSnapshot, lineCandidates);
+                if (fullMinuteSweep)
                     m_Runtime.m_LastSchedulerTickMinute = nowMinute;
-                }
-                catch (Exception ex)
-                {
-                    log.Info("[运行异常] SchedulerTick -> " + ex.GetType().Name + ": " + ex.Message);
-                    throw;
-                }
+            }
+            catch (Exception ex)
+            {
+                log.Info("[运行异常] SchedulerTick -> " + ex.GetType().Name + ": " + ex.Message);
+                throw;
             }
         }
 
-        private void Apply(EntityCommandBuffer ecb, ClockSnapshot clockSnapshot)
+        private void Apply(
+            EntityCommandBuffer ecb,
+            ClockSnapshot clockSnapshot,
+            IReadOnlyList<Entity> lineCandidates)
         {
-            m_Runtime.m_DispatchScheduler.Tick(clockSnapshot);
+            m_Runtime.m_DispatchScheduler.Tick(clockSnapshot, lineCandidates);
 
             IReadOnlyList<DispatchScheduler.RetireDecision> retireDecisions = m_Runtime.m_DispatchScheduler.RetireDecisions;
             for (int i = 0; i < retireDecisions.Count; i++)

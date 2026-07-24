@@ -1,5 +1,6 @@
 using System;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Runtime;
 using Game;
 using Game.Common;
 using Game.Routes;
@@ -42,6 +43,7 @@ namespace RapidTransitMod
         internal DispatchEngine Runtime;
         internal DispatchScheduler Scheduler;
         internal RuntimeVehicleLabels Labels;
+        internal RuntimeWorksets Worksets;
 
         internal Func<Entity, Entity, Entity> ResolveLine;
         internal Func<Entity, Entity> ResolveVehicle;

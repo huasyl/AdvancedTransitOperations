@@ -15,8 +15,9 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal sealed class BypassRuntimePort : BypassAdmissionPort, IRuntimeContext
     {
         private readonly Func<bool> m_IsBypassRuntimeLoggingEnabled;
-        private readonly Action<Entity, Entity, Entity, int, uint, string> m_RecordHold;
-        private readonly Action<Entity, Entity, uint, string> m_RecordRelease;
+        private readonly Action<Entity, Entity, Entity, int, uint, string, ulong> m_RecordHold;
+        private readonly Action<Entity, Entity, uint, string, ulong> m_RecordRelease;
+        private readonly Action<BypassFact> m_RecordBypassFact;
         private readonly Action<Entity, Entity, DynamicBuffer<RouteWaypoint>, int> m_TriggerWaiting;
         private readonly Action<Entity, Game.Vehicles.PublicTransport> m_RecordPublicTransportWrite;
         private readonly Func<bool> m_RuntimeEnabled;
@@ -52,8 +53,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             Func<Entity, string> entityName,
             RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe,
             Func<bool> isBypassRuntimeLoggingEnabled,
-            Action<Entity, Entity, Entity, int, uint, string> recordHold,
-            Action<Entity, Entity, uint, string> recordRelease,
+            Action<Entity, Entity, Entity, int, uint, string, ulong> recordHold,
+            Action<Entity, Entity, uint, string, ulong> recordRelease,
+            Action<BypassFact> recordBypassFact,
             Action<Entity, Entity, DynamicBuffer<RouteWaypoint>, int> triggerWaiting,
             Action<Entity, Game.Vehicles.PublicTransport> recordPublicTransportWrite,
             Func<bool> runtimeEnabled,
@@ -91,6 +93,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_IsBypassRuntimeLoggingEnabled = isBypassRuntimeLoggingEnabled;
             m_RecordHold = recordHold;
             m_RecordRelease = recordRelease;
+            m_RecordBypassFact = recordBypassFact;
             m_TriggerWaiting = triggerWaiting;
             m_RecordPublicTransportWrite = recordPublicTransportWrite;
             m_RuntimeEnabled = runtimeEnabled;
@@ -106,8 +109,9 @@ namespace RapidTransitMod.Dispatch.Runtime
         bool IControlContext.IsBypassRuntimeLoggingEnabled() => m_IsBypassRuntimeLoggingEnabled();
         void IControlContext.LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message) => LogVehicleStateOnceAction(cache, vehicle, key, message);
         Entity IControlContext.ResolveStation(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex) => waypointIndex >= 0 && waypointIndex < waypoints.Length ? Resolve.Stop(waypoints[waypointIndex].m_Waypoint) : Entity.Null;
-        void IControlContext.RecordHold(Entity vehicle, Entity blocker, string lineTag, Entity holdStation, int waypointIndex, string stateTag) => m_RecordHold(vehicle, blocker, holdStation, waypointIndex, FrameGetter(), stateTag);
-        void IControlContext.RecordRelease(Entity vehicle, Entity blocker, string reason) => m_RecordRelease(vehicle, blocker, FrameGetter(), reason);
+        void IControlContext.RecordHold(Entity vehicle, Entity blocker, string lineTag, Entity holdStation, int waypointIndex, string stateTag, ulong sourceGeneration) => m_RecordHold(vehicle, blocker, holdStation, waypointIndex, FrameGetter(), stateTag, sourceGeneration);
+        void IControlContext.RecordRelease(Entity vehicle, Entity blocker, string reason, ulong sourceGeneration) => m_RecordRelease(vehicle, blocker, FrameGetter(), reason, sourceGeneration);
+        void IControlContext.RecordBypassFact(BypassFact fact) => m_RecordBypassFact(fact);
         void IControlContext.TriggerWaiting(Entity vehicle, Entity route, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex) => m_TriggerWaiting(vehicle, route, waypoints, waypointIndex);
         void IControlContext.RecordPublicTransportWrite(Entity vehicle, Game.Vehicles.PublicTransport publicTransport) => m_RecordPublicTransportWrite(vehicle, publicTransport);
         bool IRuntimeContext.RuntimeEnabled() => m_RuntimeEnabled();

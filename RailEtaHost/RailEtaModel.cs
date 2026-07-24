@@ -55,6 +55,7 @@ namespace RapidTransitMod.RailEtaHost
         public string Source { get; internal set; } = string.Empty;
         public string Build { get; internal set; } = string.Empty;
         public long Generation { get; internal set; }
+        internal ulong RuntimeFactGeneration { get; set; }
         public long ClockEpoch { get; internal set; }
         public bool Incomplete { get; internal set; }
         public RailEtaMode Mode { get; internal set; }

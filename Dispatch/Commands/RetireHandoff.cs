@@ -85,7 +85,8 @@ namespace RapidTransitMod.Dispatch.Commands
             Entity vehicle,
             PublicTransport publicTransport,
             Target target,
-            string reason = "")
+            string reason = "",
+            ulong sourceGeneration = 0UL)
         {
             vehicle = m_RetireHost.ResolveVehicle(vehicle);
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
@@ -113,7 +114,8 @@ namespace RapidTransitMod.Dispatch.Commands
 
             string spawnIntent = m_RetireHost.RetireIntent(vehicle);
             ResetShadow(vehicle);
-            m_RetireHost.RetireRuntimeVehicle(vehicle);
+            m_RetireHost.RecordRetireRequested(vehicle, sourceLine, reason, sourceGeneration);
+            m_RetireHost.RetireRuntimeVehicle(vehicle, sourceGeneration);
             m_RetireHost.ClearRetireRequestState(vehicle);
 
             string lineTag = sourceLine != Entity.Null
@@ -121,7 +123,6 @@ namespace RapidTransitMod.Dispatch.Commands
                 : m_RetireHost.TryVehicleLine(vehicle, out Entity line)
                     ? "线路" + line.Index
                 : "线路?";
-            m_RetireHost.SetRetireLabel(vehicle, reason);
             Log.Info("[回库] " + lineTag + " 车辆" + vehicle.Index
                 + (reason.Length > 0 ? " 原因:" + reason : "") + " -> 车库"
                 + spawnIntent);

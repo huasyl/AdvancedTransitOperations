@@ -15,6 +15,7 @@ namespace RapidTransitMod
         private readonly Func<uint> m_Frame;
         private readonly Func<double, uint> m_ToFramesCeil;
         private readonly Func<Entity, TransitMode> m_ModeOfLine;
+        private readonly Action<StopFact> m_PublishStopFact;
         private RuntimeWorksets m_RuntimeWorksets;
         private bool m_Restoring;
         private Entity m_RestoreVehicle;
@@ -23,7 +24,7 @@ namespace RapidTransitMod
         private ulong m_RestoreSourceGeneration;
 
         public VehicleRegistry(VehicleStateStore store, VehicleWorksets worksets, FrameEvents events, Func<uint> frame,
-            Func<double, uint> toFramesCeil, Func<Entity, TransitMode> modeOfLine)
+            Func<double, uint> toFramesCeil, Func<Entity, TransitMode> modeOfLine, Action<StopFact> publishStopFact)
         {
             m_Store = store;
             m_Worksets = worksets;
@@ -31,6 +32,7 @@ namespace RapidTransitMod
             m_Frame = frame;
             m_ToFramesCeil = toFramesCeil;
             m_ModeOfLine = modeOfLine;
+            m_PublishStopFact = publishStopFact;
         }
 
         // RuntimeWorksets 按组合根顺序创建后一次性绑定。
@@ -54,7 +56,7 @@ namespace RapidTransitMod
             }
         }
 
-        public void SetState(Entity vehicle, VehicleState state)
+        public void SetState(Entity vehicle, VehicleState state, ulong sourceGeneration = 0UL)
         {
             if (vehicle == Entity.Null)
                 return;
@@ -72,10 +74,10 @@ namespace RapidTransitMod
             if (!m_Restoring)
                 m_RuntimeWorksets?.MarkDirty(ReadLine(vehicle));
             if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.State, previous, state, ReadLine(vehicle));
+                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.State, previous, state, ReadLine(vehicle), sourceGeneration: sourceGeneration);
         }
 
-        public void SetTarget(Entity vehicle, int targetMinute)
+        public void SetTarget(Entity vehicle, int targetMinute, ulong sourceGeneration = 0UL)
         {
             if (vehicle == Entity.Null)
                 return;
@@ -84,13 +86,14 @@ namespace RapidTransitMod
             if (previous == targetMinute) return;
             m_Store.TargetMinute[vehicle] = targetMinute;
             m_RuntimeWorksets?.AddCandidate(vehicle);
+            m_RuntimeWorksets?.AddHoldingLineCandidates(ReadLine(vehicle));
             if (!m_Restoring)
                 m_RuntimeWorksets?.MarkDirty(ReadLine(vehicle));
             if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Target, default, default, ReadLine(vehicle), previous, targetMinute);
+                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Target, default, default, ReadLine(vehicle), previous, targetMinute, sourceGeneration: sourceGeneration);
         }
 
-        public void ClearTarget(Entity vehicle)
+        public void ClearTarget(Entity vehicle, ulong sourceGeneration = 0UL)
         {
             if (vehicle == Entity.Null)
                 return;
@@ -99,13 +102,14 @@ namespace RapidTransitMod
             if (previous == -1) return;
             m_Store.TargetMinute[vehicle] = -1;
             m_RuntimeWorksets?.AddCandidate(vehicle);
+            m_RuntimeWorksets?.AddHoldingLineCandidates(ReadLine(vehicle));
             if (!m_Restoring)
                 m_RuntimeWorksets?.MarkDirty(ReadLine(vehicle));
             if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Target, default, default, ReadLine(vehicle), previous, -1);
+                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Target, default, default, ReadLine(vehicle), previous, -1, sourceGeneration: sourceGeneration);
         }
 
-        public void SetSlot(Entity vehicle, int slotMinute)
+        public void SetSlot(Entity vehicle, int slotMinute, ulong sourceGeneration = 0UL)
         {
             if (vehicle == Entity.Null)
                 return;
@@ -114,13 +118,14 @@ namespace RapidTransitMod
             if (previous == slotMinute) return;
             m_Store.CurrentSlotMinute[vehicle] = slotMinute;
             m_RuntimeWorksets?.AddCandidate(vehicle);
+            m_RuntimeWorksets?.AddHoldingLineCandidates(ReadLine(vehicle));
             if (!m_Restoring)
                 m_RuntimeWorksets?.MarkDirty(ReadLine(vehicle));
             if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Slot, default, default, ReadLine(vehicle), previous, slotMinute);
+                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Slot, default, default, ReadLine(vehicle), previous, slotMinute, sourceGeneration: sourceGeneration);
         }
 
-        public void ClearSlot(Entity vehicle)
+        public void ClearSlot(Entity vehicle, ulong sourceGeneration = 0UL)
         {
             if (vehicle == Entity.Null)
                 return;
@@ -128,10 +133,11 @@ namespace RapidTransitMod
             if (!m_Store.CurrentSlotMinute.TryGetValue(vehicle, out int previous)) return;
             m_Store.CurrentSlotMinute.Remove(vehicle);
             m_RuntimeWorksets?.AddCandidate(vehicle);
+            m_RuntimeWorksets?.AddHoldingLineCandidates(ReadLine(vehicle));
             if (!m_Restoring)
                 m_RuntimeWorksets?.MarkDirty(ReadLine(vehicle));
             if (!m_Restoring)
-                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Slot, default, default, ReadLine(vehicle), previous, -1);
+                m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Slot, default, default, ReadLine(vehicle), previous, -1, sourceGeneration: sourceGeneration);
         }
 
         public void SetIdle(Entity vehicle, uint frame)
@@ -232,6 +238,7 @@ namespace RapidTransitMod
 
             m_Store.NearingTerminus.Add(vehicle);
             m_RuntimeWorksets?.AddCandidate(vehicle);
+            m_RuntimeWorksets?.AddIdleLineCandidates(ReadLine(vehicle));
         }
 
         public void ClearInbound(Entity vehicle)
@@ -241,6 +248,7 @@ namespace RapidTransitMod
 
             m_Store.NearingTerminus.Remove(vehicle);
             m_RuntimeWorksets?.AddCandidate(vehicle);
+            m_RuntimeWorksets?.AddIdleLineCandidates(ReadLine(vehicle));
         }
 
         public void SetOriginCandidate(Entity vehicle, uint frame)
@@ -250,6 +258,7 @@ namespace RapidTransitMod
 
             m_Store.OriginArrivalCandidateSinceFrame[vehicle] = frame;
             m_RuntimeWorksets?.SetDeadline(vehicle, DeadlineKind.OriginSettle, unchecked(frame + 180u));
+            m_RuntimeWorksets?.SetOriginCandidate(vehicle, true);
         }
 
         public void ClearOriginCandidate(Entity vehicle)
@@ -259,6 +268,7 @@ namespace RapidTransitMod
 
             m_Store.OriginArrivalCandidateSinceFrame.Remove(vehicle);
             m_RuntimeWorksets?.ClearDeadline(vehicle, DeadlineKind.OriginSettle);
+            m_RuntimeWorksets?.SetOriginCandidate(vehicle, false);
         }
 
         public void SetReady(
@@ -361,6 +371,7 @@ namespace RapidTransitMod
                 uint frame = m_Frame();
                 m_Events.AppendVehicle(vehicle, frame, VehicleFactKind.Removed, line: line, state: state);
                 m_Events.AppendDispatch(vehicle, m_Frame(), DispatchFactKind.Removed, default, default, line);
+                m_PublishStopFact(new StopFact(StopFactKind.Removed, vehicle, line, -1, frame));
             }
             m_Worksets.RemoveMode(vehicle);
             if (m_Store.State.TryGetValue(vehicle, out state))
@@ -368,7 +379,10 @@ namespace RapidTransitMod
             m_RuntimeWorksets?.ClearVehicle(vehicle);
             m_Store.Remove(vehicle);
             if (!m_Restoring)
+            {
+                m_RuntimeWorksets?.AddCandidate(vehicle);
                 m_RuntimeWorksets?.MarkDirty(line);
+            }
         }
 
         public void Clear()

@@ -51,6 +51,11 @@ namespace RapidTransitMod
             m_DispatchActions.HoldDeparture(vehicle, ref publicTransport, nowFrame, ecb);
         }
 
+        internal void HoldDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
+        {
+            m_DispatchActions.HoldDeparture(vehicle, nowFrame, ecb);
+        }
+
         internal void ForceDepart(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,
@@ -60,14 +65,40 @@ namespace RapidTransitMod
             m_DispatchActions.ForceDepart(vehicle, ref publicTransport, nowFrame, ecb);
         }
 
+        internal void ForceDepart(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
+        {
+            m_DispatchActions.ForceDepart(vehicle, nowFrame, ecb);
+        }
+
+        internal void CommitAssistLaunch(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
+        {
+            m_DispatchActions.CommitAssistLaunch(vehicle, nowFrame, ecb);
+        }
+
+        internal void KeepDepartureHeld(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
+        {
+            m_DispatchActions.HoldDeparture(vehicle, nowFrame, ecb);
+        }
+
         internal void Retire(
             Entity vehicle,
             Game.Vehicles.PublicTransport publicTransport,
             Target target,
             EntityCommandBuffer ecb,
-            string reason = "")
+            string reason = "",
+            ulong sourceGeneration = 0UL)
         {
-            m_RetireHandoff.Retire(vehicle, publicTransport, target, reason);
+            m_RetireHandoff.Retire(vehicle, publicTransport, target, reason, sourceGeneration);
+        }
+
+        internal void Retire(Entity vehicle, string reason, ulong sourceGeneration = 0UL)
+        {
+            m_RetireHandoff.Retire(
+                vehicle,
+                m_CommandHost.ReadPublicTransport(vehicle),
+                m_CommandHost.ReadTarget(vehicle),
+                reason,
+                sourceGeneration);
         }
 
         internal void Launch(
@@ -80,24 +111,18 @@ namespace RapidTransitMod
             m_LaunchActions.Launch(vehicle, publicTransport, target, waypoints, ecb);
         }
 
-        internal void EnsurePreparingRoute(
+        internal void Launch(Entity vehicle, Entity line, int waypoint, EntityCommandBuffer ecb)
+        {
+            m_LaunchActions.Launch(vehicle, line, waypoint, ecb);
+        }
+
+        internal bool EnsurePreparingRoute(
             Entity vehicle,
-            ref Game.Vehicles.PublicTransport publicTransport,
-            ref Target target,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex,
-            bool boarding,
+            Entity line,
+            int waypoint,
             EntityCommandBuffer ecb)
         {
-            target = m_CommandHost.ReadTarget(vehicle);
-            m_LaunchActions.EnsurePreparingRoute(
-                vehicle,
-                ref publicTransport,
-                ref target,
-                waypoints,
-                currentWaypointIndex,
-                boarding,
-                ecb);
+            return m_LaunchActions.EnsurePreparingRoute(vehicle, line, waypoint, ecb);
         }
 
         internal void Repath(

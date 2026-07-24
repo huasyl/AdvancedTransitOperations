@@ -16,6 +16,7 @@ namespace RapidTransitMod.Bypass
         public readonly Entity Blocker;
         public readonly bool CanClearAfterExit;
         public readonly string ReleaseReason;
+        public readonly ulong SourceGeneration;
 
         public BypassControlResult(
             bool evaluated,
@@ -26,7 +27,8 @@ namespace RapidTransitMod.Bypass
             bool shouldHold,
             Entity blocker,
             bool canClearAfterExit,
-            string releaseReason)
+            string releaseReason,
+            ulong sourceGeneration = 0UL)
         {
             Evaluated = evaluated;
             Vehicle = vehicle;
@@ -37,6 +39,7 @@ namespace RapidTransitMod.Bypass
             Blocker = blocker;
             CanClearAfterExit = canClearAfterExit;
             ReleaseReason = releaseReason;
+            SourceGeneration = sourceGeneration;
         }
 
         public bool ShouldRelease => !string.IsNullOrWhiteSpace(ReleaseReason);
@@ -71,7 +74,8 @@ namespace RapidTransitMod.Bypass
             DynamicBuffer<RouteWaypoint> waypoints,
             int waypointIndex,
             bool boarding,
-            uint nowFrame)
+            uint nowFrame,
+            ulong sourceGeneration)
         {
             if (m_Admission.TryGetBypassHoldSkipped(vehicle, out Entity skippedBlocker))
             {
@@ -85,7 +89,8 @@ namespace RapidTransitMod.Bypass
                     false,
                     skippedBlocker,
                     true,
-                    null);
+                    null,
+                    sourceGeneration);
             }
 
             bool hadLatchedYield = m_Admission.TryGetLatchedBlocker(vehicle, out _);
@@ -106,7 +111,8 @@ namespace RapidTransitMod.Bypass
                     false,
                     Entity.Null,
                     true,
-                    null);
+                    null,
+                    sourceGeneration);
             }
 
             BypassDecisionResult decision = m_Admission.EvaluateDepartureGate(
@@ -134,7 +140,8 @@ namespace RapidTransitMod.Bypass
                 decision.ShouldHold,
                 blocker,
                 decision.CanClearAfterExit,
-                releaseReason);
+                releaseReason,
+                sourceGeneration);
         }
 
         internal void LogHoldFrame(
@@ -199,7 +206,7 @@ namespace RapidTransitMod.Bypass
                     || previousBlocker != control.Blocker))
             {
                 m_Admission.SetBlocker(control.Vehicle, control.Blocker);
-                m_Runtime.RecordHold(control.Vehicle, control.Blocker, lineTag, holdStation, control.WaypointIndex, "运行中");
+                m_Runtime.RecordHold(control.Vehicle, control.Blocker, lineTag, holdStation, control.WaypointIndex, "运行中", control.SourceGeneration);
             }
             m_Runtime.TriggerWaiting(control.Vehicle, control.Line, waypoints, control.WaypointIndex);
         }
@@ -216,7 +223,7 @@ namespace RapidTransitMod.Bypass
             m_Admission.ClearBlocker(control.Vehicle);
             m_Admission.RemoveCadence(control.Vehicle);
             m_Admission.RemoveEpisode(control.Vehicle);
-            m_Runtime.RecordRelease(control.Vehicle, blocker, control.ReleaseReason);
+            m_Runtime.RecordRelease(control.Vehicle, blocker, control.ReleaseReason, control.SourceGeneration);
         }
 
         internal BypassControlResult TickVehicle(
@@ -229,7 +236,8 @@ namespace RapidTransitMod.Bypass
             EntityCommandBuffer ecb,
             string lineTag,
             bool midStopDwellTimedOut,
-            uint nowFrame)
+            uint nowFrame,
+            ulong sourceGeneration)
         {
             BypassControlResult control = Update(
                 vehicle,
@@ -237,7 +245,8 @@ namespace RapidTransitMod.Bypass
                 waypoints,
                 waypointIndex,
                 boarding,
-                nowFrame);
+                nowFrame,
+                sourceGeneration);
             LogHoldFrame(control, boarding, midStopDwellTimedOut, publicTransport.m_DepartureFrame, nowFrame);
 
             if (waypointIndex > 0 && control.ShouldHold)
@@ -262,12 +271,13 @@ namespace RapidTransitMod.Bypass
             TCommandBuffer ecb,
             string lineTag,
             bool midStopDwellTimedOut,
-            uint nowFrame)
+            uint nowFrame,
+            ulong sourceGeneration)
         {
             if (!(publicTransport is PublicTransport typedPublicTransport)
                 || !(ecb is EntityCommandBuffer typedEcb))
             {
-                return Update(vehicle, line, waypoints, waypointIndex, boarding, nowFrame);
+                return Update(vehicle, line, waypoints, waypointIndex, boarding, nowFrame, sourceGeneration);
             }
 
             BypassControlResult control = TickVehicle(
@@ -280,7 +290,8 @@ namespace RapidTransitMod.Bypass
                 typedEcb,
                 lineTag,
                 midStopDwellTimedOut,
-                nowFrame);
+                nowFrame,
+                sourceGeneration);
             publicTransport = (TTransport)(object)typedPublicTransport;
             return control;
         }
