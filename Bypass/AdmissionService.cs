@@ -41,10 +41,8 @@ namespace RapidTransitMod.Bypass
         private const int MAX_CONFLICT_CORRIDOR_GAP_ATOMS = 8;
         private const uint BYPASS_PERF_PROBE_LOG_INTERVAL_FRAMES = 3600;
         private const uint PERF_PROBE_SCENE_EXPRESS_LINE_RECENT_WINDOW_FRAMES = 30;
-        private const uint BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES = 8;
         private const uint BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES = 60;
         private const uint BYPASS_LATCHED_RELEASE_RECHECK_INTERVAL_FRAMES = 6;
-        private const uint BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES = 6;
         private const uint VANILLA_BLOCKER_RESCUE_STALL_FRAMES = 240;
         private const uint VANILLA_BLOCKER_RESCUE_RECHECK_FRAMES = 60;
         private const uint VANILLA_BLOCKER_RESCUE_PROBE_INTERVAL_FRAMES = 20;
@@ -105,6 +103,7 @@ namespace RapidTransitMod.Bypass
         private readonly Dictionary<Entity, string> m_LineBypassExecutionModeLogCache = new Dictionary<Entity, string>();
         private readonly Dictionary<Entity, VanillaBlockerStall> m_VanillaBlockerStalls = new Dictionary<Entity, VanillaBlockerStall>();
         private readonly Dictionary<Entity, Entity> m_BypassHoldSkipped = new Dictionary<Entity, Entity>();
+        private readonly Dictionary<Entity, Entity> m_Watches = new Dictionary<Entity, Entity>();
         private readonly Dictionary<QueuedLocalReleaseFrameCacheKey, bool> m_QueuedLocalReleaseFrameCache = new Dictionary<QueuedLocalReleaseFrameCacheKey, bool>();
         // Version-stamped so boarding precheck avoids scene snapshot rebuilds while stale line scenes cannot skip bypass.
         private readonly Dictionary<Entity, StopSceneEligibilityLineCache> m_StopSceneEligibilityLineCaches = new Dictionary<Entity, StopSceneEligibilityLineCache>();
@@ -227,7 +226,9 @@ namespace RapidTransitMod.Bypass
             m_Runtime.ClearRuntimeDeadlines(DeadlineKind.RescueStall);
             m_Runtime.ClearRuntimeDeadlines(DeadlineKind.RescueRecheck);
             m_Runtime.ClearRuntimeBypassActive();
+            m_Runtime.ClearRuntimeBypassWatch();
             m_BypassHoldSkipped.Clear();
+            m_Watches.Clear();
             m_QueuedLocalReleaseFrameCache.Clear();
             m_StopSceneEligibilityLineCaches.Clear();
             m_QueuedLocalReleaseFrameCacheFrame = 0;
@@ -253,15 +254,20 @@ namespace RapidTransitMod.Bypass
             m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueStall);
             m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueRecheck);
             m_Runtime.SetRuntimeBypassActive(vehicle, false);
+            ClearWatch(vehicle);
             m_BypassHoldSkipped.Remove(vehicle);
         }
-        internal void ClearVehiclePreservingBypassHoldSkipped(Entity vehicle)
+        internal void ClearInactive(Entity vehicle)
         {
-            m_Decision.Remove(vehicle);
-            m_VanillaBlockerStalls.Remove(vehicle);
-            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueProbe);
-            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueStall);
-            m_Runtime.ClearRuntimeDeadline(vehicle, DeadlineKind.RescueRecheck);
+            if (vehicle == Entity.Null
+                || TryGetBypassHoldSkipped(vehicle, out _)
+                || m_Decision.TryGetLatchedBlocker(vehicle, out _))
+            {
+                return;
+            }
+
+            m_Decision.Remove(vehicle, BypassEntryKind.Cadence);
+            m_Decision.Remove(vehicle, BypassEntryKind.Episode);
             m_Runtime.SetRuntimeBypassActive(vehicle, false);
         }
         internal void MarkBypassHoldSkipped(Entity vehicle, Entity blocker)
@@ -398,7 +404,6 @@ namespace RapidTransitMod.Bypass
         }
         internal BypassDecisionResult EvaluateDepartureGate(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex, uint nowFrame)
         {
-            m_Runtime.HotPathProbe.CountEvaluateDepartureGate();
             return m_Decision.Evaluate(vehicle, line, waypoints, waypointIndex, nowFrame);
         }
         internal Entity FindBlocker(BypassDecisionResult result) => m_Decision.FindBlocker(result);
@@ -454,6 +459,59 @@ namespace RapidTransitMod.Bypass
             return true;
         }
 
+        internal void UpdateWatch(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            bool boarding,
+            bool sceneKnown,
+            bool sceneEligible)
+        {
+            if (vehicle == Entity.Null || line == Entity.Null || !boarding || waypointIndex <= 0)
+                return;
+
+            if (TryGetBypassHoldSkipped(vehicle, out _))
+                return;
+
+            if (sceneKnown && !sceneEligible)
+            {
+                ClearWatch(vehicle);
+                return;
+            }
+
+            m_Watches[vehicle] = line;
+            m_Runtime.SetRuntimeBypassWatch(vehicle, true);
+        }
+
+        internal void ClearWatchLine(Entity line)
+        {
+            if (line == Entity.Null || m_Watches.Count == 0)
+                return;
+
+            List<Entity> vehicles = null;
+            foreach (KeyValuePair<Entity, Entity> entry in m_Watches)
+            {
+                if (entry.Value != line)
+                    continue;
+
+                vehicles ??= new List<Entity>();
+                vehicles.Add(entry.Key);
+            }
+
+            if (vehicles == null)
+                return;
+
+            for (int i = 0; i < vehicles.Count; i++)
+                ClearWatch(vehicles[i]);
+        }
+
+        private void ClearWatch(Entity vehicle)
+        {
+            m_Watches.Remove(vehicle);
+            m_Runtime.SetRuntimeBypassWatch(vehicle, false);
+        }
+
         private bool TryValidateStopSceneEligibilityCache(Entity line, int waypointCount, StopSceneEligibilityLineCache cache)
         {
             if (cache == null
@@ -507,7 +565,10 @@ namespace RapidTransitMod.Bypass
             m_Decision.ClearBlocker(vehicle);
             m_Runtime.SetRuntimeBypassActive(vehicle, false);
         }
-        internal void RemoveCadence(Entity vehicle) => m_Decision.Remove(vehicle, BypassEntryKind.Cadence);
+        internal void RemoveCadence(Entity vehicle)
+        {
+            m_Decision.Remove(vehicle, BypassEntryKind.Cadence);
+        }
         internal void RemoveEpisode(Entity vehicle) => m_Decision.Remove(vehicle, BypassEntryKind.Episode);
         internal List<Entity> ReleaseLine(Entity line, Func<Entity, Entity> resolveLine)
         {
@@ -636,38 +697,10 @@ namespace RapidTransitMod.Bypass
             m_QueuedLocalReleaseFrameCache.Clear();
             m_QueuedLocalReleaseFrameCacheFrame = 0;
         }
-        internal List<Entity> ExpireLine(Entity line)
-        {
-            if (line == Entity.Null)
-                return null;
-
-            m_Decision.ClearLocalLineGateForLine(line);
-            m_StopSceneEligibilityLineCaches.Remove(line);
-
-            List<Entity> expiredVehicles = null;
-            foreach (KeyValuePair<Entity, BypassHoldCadenceSnapshot> entry in m_Decision.Cadence)
-            {
-                if (entry.Value.SceneKey.Line != line)
-                    continue;
-
-                expiredVehicles ??= new List<Entity>();
-                expiredVehicles.Add(entry.Key);
-            }
-
-            if (expiredVehicles != null)
-            {
-                for (int i = 0; i < expiredVehicles.Count; i++)
-                {
-                    m_Decision.Remove(expiredVehicles[i], BypassEntryKind.Cadence);
-                }
-            }
-
-            return expiredVehicles;
-        }
-        internal void ForgetBlocker(Entity blocker)
+        internal List<Entity> ForgetBlocker(Entity blocker)
         {
             if (blocker == Entity.Null)
-                return;
+                return null;
 
             List<Entity> episodeKeys = null;
             foreach (KeyValuePair<Entity, BypassConflictEpisode> entry in m_Decision.Conflict)
@@ -680,10 +713,12 @@ namespace RapidTransitMod.Bypass
             }
 
             if (episodeKeys == null)
-                return;
+                return null;
 
             for (int i = 0; i < episodeKeys.Count; i++)
                 m_Decision.Conflict.Remove(episodeKeys[i]);
+
+            return episodeKeys;
         }
         internal void RequestLineOrderedRuntimeForceRefresh(Entity line, string reason)
         {
@@ -1116,7 +1151,13 @@ namespace RapidTransitMod.Bypass
                 return cachedShouldRelease;
             }
 
-            bool shouldRelease = ShouldReleaseForQueuedLocalAhead(scope, waypoints, blocker, out float expressSceneCoordinate, out float localSceneCoordinate, out float queuedLocalMeters);
+            bool shouldRelease = ShouldReleaseForQueuedLocalAhead(
+                scope,
+                waypoints,
+                blocker,
+                out float expressSceneCoordinate,
+                out float localSceneCoordinate,
+                out float queuedLocalMeters);
             PutQueuedLocalReleaseFrameCache(scope, blocker, shouldRelease);
             if (!shouldRelease)
                 return false;
@@ -1140,10 +1181,8 @@ namespace RapidTransitMod.Bypass
         }
 
         Entity IDecisionContext.ResolveLine(Entity vehicle) => ResolveLine(vehicle);
-        uint IDecisionContext.HeldReevaluateFrames() => BYPASS_HELD_REEVALUATE_INTERVAL_FRAMES;
         uint IDecisionContext.EpisodeRecheckFrames() => BYPASS_EPISODE_RELEASE_RECHECK_INTERVAL_FRAMES;
         uint IDecisionContext.LatchedReleaseRecheckFrames() => BYPASS_LATCHED_RELEASE_RECHECK_INTERVAL_FRAMES;
-        uint IDecisionContext.UnlatchedReevaluateFrames() => BYPASS_UNLATCHED_REEVALUATE_INTERVAL_FRAMES;
         void IDecisionContext.CountCadenceCall()
         {
             if (IsBypassPerfProbeLoggingEnabled())
@@ -1272,8 +1311,6 @@ namespace RapidTransitMod.Bypass
             out string failureReason)
         {
             bool found = m_Queue.TryGetBypassControlScope(localVehicle, localLine, localWaypoints, currentWaypointIndex, out scope, out failureReason);
-            if (!found)
-                m_Runtime.HotPathProbe.CountScopeMiss();
             return found;
         }
 
@@ -1308,7 +1345,13 @@ namespace RapidTransitMod.Bypass
             out float localSceneCoordinate,
             out float queuedLocalMeters)
         {
-            return m_Queue.ShouldReleaseForQueuedLocalAhead(scope, localWaypoints, blockerVehicle, out expressSceneCoordinate, out localSceneCoordinate, out queuedLocalMeters);
+            return m_Queue.ShouldReleaseForQueuedLocalAhead(
+                scope,
+                localWaypoints,
+                blockerVehicle,
+                out expressSceneCoordinate,
+                out localSceneCoordinate,
+                out queuedLocalMeters);
         }
 
         internal bool IsExpressBlockerStillWithinBypassStation(Entity blockerVehicle, Entity localCurrentBypassBuilding)
@@ -6317,7 +6360,6 @@ namespace RapidTransitMod.Bypass
                     out LineTrackChain localChain,
                     out LocalBypassSceneStaticSnapshot localScene))
             {
-                m_Runtime.HotPathProbe.CountTryGetLocalSceneMiss();
                 trackModelDecision = new BypassTrackModelDecision(false, false, "local-chain-missing", -1, false, Entity.Null, false);
                 return false;
             }

@@ -140,6 +140,57 @@ namespace RapidTransitMod.Dispatch.Lines
             return true;
         }
 
+        public void RefreshObservedStop(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex)
+        {
+            if (line == Entity.Null
+                || waypointIndex < 0
+                || !m_Profiles.TryGetValue(line, out LineTimeProfileHeader profile)
+                || waypointIndex >= profile.m_Count
+                || !m_StopFrames.IsCreated
+                || !m_Port.EntityManager.HasBuffer<RouteSegment>(line)
+                || !m_Port.EntityManager.HasComponent<PrefabRef>(line))
+            {
+                return;
+            }
+
+            DynamicBuffer<RouteSegment> segments = m_Port.EntityManager.GetBuffer<RouteSegment>(line, true);
+            if (waypoints.Length != profile.m_Count
+                || segments.Length != waypoints.Length
+                || profile.m_Signature != Signature(waypoints, segments))
+            {
+                return;
+            }
+
+            Entity prefab = m_Port.EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
+            if (!m_Port.EntityManager.HasComponent<TransportLineData>(prefab))
+                return;
+
+            int stopOffset = profile.m_Offset + waypointIndex;
+            if (stopOffset < 0 || stopOffset >= m_StopFrames.Length)
+                return;
+
+            float previousStopFrames = m_StopFrames[stopOffset];
+            float updatedStopFrames = Stop(
+                line,
+                waypoints,
+                waypointIndex,
+                m_Port.EntityManager.GetComponentData<TransportLineData>(prefab));
+            if (math.abs(previousStopFrames - updatedStopFrames) < 0.01f)
+                return;
+
+            m_StopFrames[stopOffset] = updatedStopFrames;
+            if (waypointIndex != 0)
+            {
+                profile.m_BaseLoopFrames = math.max(
+                    0f,
+                    profile.m_BaseLoopFrames + updatedStopFrames - previousStopFrames);
+                m_Profiles[line] = profile;
+            }
+        }
+
         public float Stop(
             Entity line,
             DynamicBuffer<RouteWaypoint> wps,

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Game.Common;
 using Game.Vehicles;
 using RapidTransitMod.Core;
+using Unity.Collections;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -10,6 +11,11 @@ namespace RapidTransitMod
     internal sealed class SchedulerApply
     {
         private readonly ModRuntimeHostSystem m_Runtime;
+        private readonly HashSet<string> m_CurrentDirtyLineKeys = new HashSet<string>();
+        private readonly HashSet<string> m_PendingDirtyLineKeys = new HashSet<string>();
+        private readonly List<Entity> m_ResolvedDirtyLines = new List<Entity>();
+        private bool m_AllLinesDirty;
+        private bool m_PendingAllLinesDirty;
 
         public SchedulerApply(ModRuntimeHostSystem runtime)
         {
@@ -18,6 +24,76 @@ namespace RapidTransitMod
 
         private EntityManager EntityManager => m_Runtime.EntityManager;
         private TimedLogger log => m_Runtime.log;
+        internal IReadOnlyList<Entity> ResolvedDirtyLines => m_ResolvedDirtyLines;
+
+        internal void BeginFrame()
+        {
+            m_CurrentDirtyLineKeys.Clear();
+            m_CurrentDirtyLineKeys.UnionWith(m_PendingDirtyLineKeys);
+            m_PendingDirtyLineKeys.Clear();
+            m_AllLinesDirty = m_PendingAllLinesDirty;
+            m_PendingAllLinesDirty = false;
+            m_ResolvedDirtyLines.Clear();
+        }
+
+        internal void MarkDirty(Entity line)
+        {
+            if (line != Entity.Null
+                && m_Runtime.EntityManager.Exists(line)
+                && m_Runtime.m_LineView.TryFrame(line, out LineFrame frame))
+            {
+                m_CurrentDirtyLineKeys.Add(frame.StoreKey.ToString());
+                return;
+            }
+            m_AllLinesDirty = true;
+        }
+
+        internal void MarkAllDirty() => m_AllLinesDirty = true;
+
+        internal void MarkPendingDirty(string lineKey)
+        {
+            if (!string.IsNullOrEmpty(lineKey))
+                m_PendingDirtyLineKeys.Add(lineKey);
+        }
+
+        internal void MarkPendingAllDirty() => m_PendingAllLinesDirty = true;
+
+        internal void SealDirtyLines()
+        {
+            m_ResolvedDirtyLines.Clear();
+            if (!m_AllLinesDirty && m_CurrentDirtyLineKeys.Count == 0)
+                return;
+
+            NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    Entity line = lines[i];
+                    if (!m_AllLinesDirty
+                        && (!m_Runtime.m_LineView.TryFrame(line, out LineFrame frame)
+                            || !m_CurrentDirtyLineKeys.Contains(frame.StoreKey.ToString())))
+                    {
+                        continue;
+                    }
+                    m_ResolvedDirtyLines.Add(line);
+                }
+            }
+            finally
+            {
+                lines.Dispose();
+            }
+            m_ResolvedDirtyLines.Sort(CompareEntity);
+        }
+
+        internal void ResetCity()
+        {
+            m_CurrentDirtyLineKeys.Clear();
+            m_PendingDirtyLineKeys.Clear();
+            m_ResolvedDirtyLines.Clear();
+            m_AllLinesDirty = false;
+            m_PendingAllLinesDirty = false;
+        }
 
         public void Tick(
             EntityCommandBuffer ecb,
@@ -79,6 +155,12 @@ namespace RapidTransitMod
                 if (claim.CommitHold)
                     m_Runtime.m_CommandApplier.CommitAssignedSlotHold(claim.Vehicle, claim.Target, ecb);
             }
+        }
+
+        private static int CompareEntity(Entity left, Entity right)
+        {
+            int index = left.Index.CompareTo(right.Index);
+            return index != 0 ? index : left.Version.CompareTo(right.Version);
         }
     }
 }

@@ -4,6 +4,7 @@ using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -46,5 +47,7 @@ namespace RapidTransitMod.Bypass
         void ClearRuntimeDeadlines(DeadlineKind kind);
         void SetRuntimeBypassActive(Entity vehicle, bool active);
         void ClearRuntimeBypassActive();
+        void SetRuntimeBypassWatch(Entity vehicle, bool active);
+        void ClearRuntimeBypassWatch();
     }
 }

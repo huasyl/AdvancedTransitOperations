@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Game;
 using Game.Common;
 using Game.Pathfind;
@@ -72,14 +73,13 @@ namespace RapidTransitMod
             m_DispatchActions.HoldDeparture(vehicle, nowFrame, ecb);
         }
 
-        internal void Retire(Entity vehicle, string reason, ulong sourceGeneration = 0UL)
+        internal void Retire(Entity vehicle, string reason)
         {
             m_RetireHandoff.Retire(
                 vehicle,
                 m_CommandHost.ReadPublicTransport(vehicle),
                 m_CommandHost.ReadTarget(vehicle),
-                reason,
-                sourceGeneration);
+                reason);
         }
 
         internal void Launch(Entity vehicle, Entity line, int waypoint, EntityCommandBuffer ecb)
@@ -101,9 +101,9 @@ namespace RapidTransitMod
             m_RetireHandoff.ForceRetireOne();
         }
 
-        internal void TickRetireHandoffStages(uint nowFrame)
+        internal void TickRetireHandoffStages(uint nowFrame, IReadOnlyList<FramePlanEntry> candidates)
         {
-            m_RetireHandoff.TickRetireHandoffStages(nowFrame);
+            m_RetireHandoff.TickRetireHandoffStages(nowFrame, candidates);
         }
 
         internal void FinalizeRetireDispatchLockTerminals()

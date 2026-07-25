@@ -70,7 +70,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 Entity vehicle = tick.Vehicles[i];
                 if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state))
                     continue;
-                if (state == VehicleState.Retiring || m_Runtime.m_BVMisfire.Contains(vehicle))
+                if (state == VehicleState.Retiring)
                     continue;
 
                 int assignedTargetMinute = -1;

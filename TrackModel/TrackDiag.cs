@@ -307,6 +307,9 @@ namespace RapidTransitMod.TrackModel
 
         private void LogRouteSegmentPathElementDiagnostics(Entity line, int waypointIndex, Entity segmentEntity)
         {
+            if (!RtLog.TrackRawDiagnosticsEnabled)
+                return;
+
             if (segmentEntity == Entity.Null || !EntityManager.Exists(segmentEntity))
             {
                 log.Info("[TrackModelRaw] line=" + line.Index + " wp=" + waypointIndex + " segment=null");
@@ -439,7 +442,7 @@ namespace RapidTransitMod.TrackModel
                 return;
 
             DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            if (EntityManager.HasBuffer<RouteSegment>(line))
+            if (RtLog.TrackRawDiagnosticsEnabled && EntityManager.HasBuffer<RouteSegment>(line))
             {
                 DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
                 int rawLimit = math.min(segments.Length, 4);

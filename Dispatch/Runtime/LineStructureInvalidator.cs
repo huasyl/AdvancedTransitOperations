@@ -79,6 +79,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private void DrainLine(PendingInvalidation pending)
         {
             Entity line = pending.Line;
+            m_Runtime.m_RailEventSource.InvalidateLine(line);
             m_Runtime.m_LapCache.RemoveLine(line);
             m_Runtime.m_DispatchCache.RemoveLine(line);
             m_Runtime.m_Observation.InvalidateSliceLine(line);

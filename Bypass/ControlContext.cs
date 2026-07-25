@@ -12,8 +12,8 @@ namespace RapidTransitMod.Bypass
         bool IsBypassRuntimeLoggingEnabled();
         void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message);
         Entity ResolveStation(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
-        void RecordHold(Entity vehicle, Entity blocker, string lineTag, Entity holdStation, int waypointIndex, string stateTag, ulong sourceGeneration);
-        void RecordRelease(Entity vehicle, Entity blocker, string reason, ulong sourceGeneration);
+        void RecordHold(Entity vehicle, Entity blocker, string lineTag, Entity holdStation, int waypointIndex, string stateTag);
+        void RecordRelease(Entity vehicle, Entity blocker, string reason);
         void RecordBypassFact(BypassFact fact);
         void TriggerWaiting(Entity vehicle, Entity route, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
         void RecordPublicTransportWrite(Entity vehicle, PublicTransport publicTransport);

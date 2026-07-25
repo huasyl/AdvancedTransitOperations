@@ -85,8 +85,6 @@ namespace RapidTransitMod
                 m_Runtime.TrackProjection.ClearVehicle(dead);
                 m_Runtime.m_WaypointIndex.Remove(dead);
                 m_Runtime.m_RouteProgress.Remove(dead);
-                m_Runtime.m_BVMisfire.Remove(dead);
-                m_Runtime.m_BVMisfireStartFrame.Remove(dead);
                 m_Runtime.Bypass.ClearVehicle(dead);
                 m_Runtime.TrackProjection.ClearVehicleProgressSuspect(dead, "vehicle-removed");
                 m_Runtime.m_Observation.ClearForcedMidStop(dead);
@@ -100,7 +98,16 @@ namespace RapidTransitMod
                 m_Runtime.m_Observation.ClearVehicleSlices(dead);
                 m_Runtime.m_Observation.ClearDebug(dead);
                 m_Runtime.m_RuntimeLog.ClearVehicle(dead);
-                m_Runtime.Bypass.ForgetBlocker(dead);
+                List<Entity> affectedLocals = m_Runtime.Bypass.ForgetBlocker(dead);
+                if (affectedLocals != null)
+                {
+                    for (int i = 0; i < affectedLocals.Count; i++)
+                    {
+                        m_Runtime.m_RuntimeFramePlan.AddStage(
+                            affectedLocals[i],
+                            RuntimeStageMask.Bypass);
+                    }
+                }
                 if (mappedLine != Entity.Null && deadState != VehicleState.Retiring)
                 {
                     removedCountByLine ??= new Dictionary<Entity, int>();

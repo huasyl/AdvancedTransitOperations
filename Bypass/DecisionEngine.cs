@@ -5,6 +5,20 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Bypass
 {
+    internal enum BypassDecisionPath : byte
+    {
+        SkippedBypass,
+        InvalidControlInput,
+        InvalidWaypoint,
+        FeatureDisabled,
+        LineNotLocal,
+        ScopeUnavailable,
+        ScopeLineNotLocal,
+        EpisodeReuse,
+        CadenceReuse,
+        Baseline
+    }
+
     internal interface IDecisionContext
     {
         bool FeatureEnabled();
@@ -43,13 +57,9 @@ namespace RapidTransitMod.Bypass
 
         Entity ResolveLine(Entity vehicle);
 
-        uint HeldReevaluateFrames();
-
         uint EpisodeRecheckFrames();
 
         uint LatchedReleaseRecheckFrames();
-
-        uint UnlatchedReevaluateFrames();
 
         void CountCadenceCall();
 
@@ -70,6 +80,7 @@ namespace RapidTransitMod.Bypass
         public readonly Entity Blocker;
         public readonly bool CanClearAfterExit;
         public readonly string ReleaseReason;
+        public readonly BypassDecisionPath Path;
 
         public BypassDecisionResult(
             bool evaluated,
@@ -79,7 +90,8 @@ namespace RapidTransitMod.Bypass
             bool shouldHold,
             Entity blocker,
             bool canClearAfterExit,
-            string releaseReason = null)
+            string releaseReason = null,
+            BypassDecisionPath path = BypassDecisionPath.Baseline)
         {
             Evaluated = evaluated;
             HadLatchedYield = hadLatchedYield;
@@ -89,6 +101,7 @@ namespace RapidTransitMod.Bypass
             Blocker = blocker;
             CanClearAfterExit = canClearAfterExit;
             ReleaseReason = releaseReason;
+            Path = path;
         }
     }
 
@@ -149,14 +162,15 @@ namespace RapidTransitMod.Bypass
                     initialLatchedBlocker,
                     false,
                     Entity.Null,
-                    true);
+                    true,
+                    path: BypassDecisionPath.InvalidWaypoint);
             }
 
             if (!m_Runtime.FeatureEnabled())
             {
                 Remove(vehicle, BypassEntryKind.Cadence);
                 Remove(vehicle, BypassEntryKind.Episode);
-                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "feature-disabled");
+                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "feature-disabled", BypassDecisionPath.FeatureDisabled);
             }
 
             bool lineKnownLocal = GetOrCreateLocalLineGate(vehicle, line, waypointIndex);
@@ -164,7 +178,7 @@ namespace RapidTransitMod.Bypass
             {
                 Remove(vehicle, BypassEntryKind.Cadence);
                 Remove(vehicle, BypassEntryKind.Episode);
-                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "line-not-local");
+                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "line-not-local", BypassDecisionPath.LineNotLocal);
             }
 
             if (!m_Runtime.TryScope(
@@ -177,24 +191,24 @@ namespace RapidTransitMod.Bypass
             {
                 Remove(vehicle, BypassEntryKind.Cadence);
                 Remove(vehicle, BypassEntryKind.Episode);
-                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true);
+                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, null, BypassDecisionPath.ScopeUnavailable);
             }
 
             if ((!lineKnownLocal || scope.Line != line) && !m_Runtime.IsLocalLine(scope.Line))
             {
-                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "line-no-longer-local");
+                return BuildResult(vehicle, true, hadLatchedYield, false, Entity.Null, true, "line-no-longer-local", BypassDecisionPath.ScopeLineNotLocal);
             }
 
             string episodeReleaseReason = null;
             if (hadLatchedYield
                 && ReuseEpisode(scope, waypoints, nowFrame, out bool shouldHold, out Entity blocker, out bool canClearAfterExit, out episodeReleaseReason))
             {
-                return BuildResult(vehicle, true, hadLatchedYield, shouldHold, blocker, canClearAfterExit);
+                return BuildResult(vehicle, true, hadLatchedYield, shouldHold, blocker, canClearAfterExit, null, BypassDecisionPath.EpisodeReuse);
             }
 
             if (ReuseCadence(scope, waypoints, hadLatchedYield, nowFrame, out shouldHold, out blocker, out canClearAfterExit))
             {
-                return BuildResult(vehicle, true, hadLatchedYield, shouldHold, blocker, canClearAfterExit, shouldHold ? null : episodeReleaseReason);
+                return BuildResult(vehicle, true, hadLatchedYield, shouldHold, blocker, canClearAfterExit, shouldHold ? null : episodeReleaseReason, BypassDecisionPath.CadenceReuse);
             }
 
             m_Runtime.CountCadenceMiss();
@@ -209,8 +223,8 @@ namespace RapidTransitMod.Bypass
             else
                 Remove(scope.Vehicle, BypassEntryKind.Episode);
 
-            StoreCadence(scope, hadLatchedYield, nowFrame, shouldHold, canClearAfterExit, conflictMode, blocker);
-            return BuildResult(vehicle, true, hadLatchedYield, shouldHold, blocker, canClearAfterExit, shouldHold ? null : (episodeReleaseReason ?? decisionReason));
+            StoreCadence(scope, nowFrame, shouldHold, canClearAfterExit, conflictMode, blocker);
+            return BuildResult(vehicle, true, hadLatchedYield, shouldHold, blocker, canClearAfterExit, shouldHold ? null : (episodeReleaseReason ?? decisionReason), BypassDecisionPath.Baseline);
         }
 
         internal bool CanRelease(BypassDecisionResult result)
@@ -333,7 +347,8 @@ namespace RapidTransitMod.Bypass
             bool shouldHold,
             Entity blocker,
             bool canClearAfterExit,
-            string releaseReason = null)
+            string releaseReason,
+            BypassDecisionPath path)
         {
             bool hasLatchedYield = TryGetLatchedBlocker(vehicle, out Entity latchedBlocker);
             return new BypassDecisionResult(
@@ -344,7 +359,8 @@ namespace RapidTransitMod.Bypass
                 shouldHold,
                 blocker,
                 canClearAfterExit,
-                releaseReason);
+                releaseReason,
+                path);
         }
 
         private bool ReuseEpisode(
@@ -461,6 +477,17 @@ namespace RapidTransitMod.Bypass
 
             shouldHold = true;
             canClearAfterExit = episode.CanClearAfterExit;
+            if (Get(scope.Vehicle, out BypassHoldCadenceSnapshot cadence)
+                && nowFrame >= cadence.ReevaluateAfterFrame)
+            {
+                StoreCadence(
+                    scope,
+                    nowFrame,
+                    shouldHold,
+                    canClearAfterExit,
+                    episode.Mode,
+                    blocker);
+            }
             m_Runtime.CountEpisodeReuse();
             return true;
         }
@@ -584,18 +611,13 @@ namespace RapidTransitMod.Bypass
 
         private void StoreCadence(
             BypassControlScope scope,
-            bool hasLatchedYield,
             uint nowFrame,
             bool shouldHold,
             bool canClearAfterExit,
             BypassConflictMode mode,
             Entity blocker)
         {
-            uint reevaluateAfterFrame = nowFrame + 1;
-            if (hasLatchedYield && shouldHold)
-                reevaluateAfterFrame = nowFrame + m_Runtime.HeldReevaluateFrames();
-            else if (!hasLatchedYield && !shouldHold)
-                reevaluateAfterFrame = nowFrame + m_Runtime.UnlatchedReevaluateFrames();
+            uint reevaluateAfterFrame = NextSourceFrame(nowFrame);
 
             Put(scope.Vehicle, new BypassHoldCadenceSnapshot(
                 scope.SceneKey,
@@ -606,6 +628,13 @@ namespace RapidTransitMod.Bypass
                 canClearAfterExit,
                 mode,
                 blocker));
+        }
+
+        private static uint NextSourceFrame(uint nowFrame)
+        {
+            uint phase = nowFrame & 15u;
+            uint offset = phase < 3u ? 3u - phase : 19u - phase;
+            return unchecked(nowFrame + offset);
         }
 
         private static BypassConflictMode InferConflictMode(string reason)

@@ -1065,9 +1065,10 @@ namespace RapidTransitMod.Bypass
             expressSceneCoordinate = float.NaN;
             localSceneCoordinate = float.NaN;
             queuedLocalMeters = float.NaN;
-
             if (blockerVehicle == Entity.Null)
+            {
                 return false;
+            }
             if (!TryBuildQueuedLocalReleaseScope(scope, localWaypoints, out QueuedLocalReleaseScope releaseScope))
             {
                 LogQueuedLocalBypassOverrideOnce(
@@ -1113,7 +1114,7 @@ namespace RapidTransitMod.Bypass
                 releaseScope,
                 localWaypoints,
                 localSceneCoordinate,
-                out _,
+                    out _,
                 out queuedLocalMeters);
             if (!hasQueuedLocalInApproach)
             {

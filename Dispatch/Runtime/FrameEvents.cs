@@ -4,62 +4,59 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Runtime
 {
-    internal enum VehicleFactKind : byte { Registered, Rebound, Removed, Boarding, Route, Target, Waypoint, Moving, PathReady, OriginRange }
-    internal enum DispatchFactKind : byte { State, Target, Slot, Removed, LaunchConfirmed, UnplannedRun, RetireRequested, PathFault, RunningRecovery }
-    internal enum FrameEventKind : byte { Vehicle, Stop, Bypass, Dispatch }
+    internal enum LifecycleFactKind : byte
+    {
+        Registered,
+        Rebound,
+        Removed
+    }
 
-    internal readonly struct VehicleEvent
+    internal enum DispatchFactKind : byte
+    {
+        State,
+        Target,
+        Slot,
+        LaunchConfirmed,
+        UnplannedRun,
+        RetireRequested,
+        PathFault,
+        RunningRecovery
+    }
+
+    internal enum FrameEventKind : byte
+    {
+        Lifecycle,
+        Stop,
+        Bypass,
+        Dispatch
+    }
+
+    internal readonly struct LifecycleEvent
     {
         public readonly Entity Vehicle;
-        public readonly uint SourceFrame;
-        public readonly ulong SourceGeneration;
+        public readonly uint Frame;
         public readonly ulong Sequence;
-        public readonly VehicleFactKind Kind;
+        public readonly LifecycleFactKind Kind;
         public readonly Entity PreviousLine;
-        public readonly Entity CurrentLine;
+        public readonly Entity Line;
         public readonly VehicleState State;
-        public readonly bool PreviousBoarding;
-        public readonly bool CurrentBoarding;
-        public readonly bool PreviousMoving;
-        public readonly bool CurrentMoving;
-        public readonly int PreviousWaypointIndex;
-        public readonly int CurrentWaypointIndex;
-        public readonly int RecoveryWaypointIndex;
-        public readonly int WaypointCount;
-        public readonly bool AtOrigin;
-        public readonly bool NearOrigin;
-        public readonly bool PathReady;
 
-        public Entity Line => CurrentLine;
-
-        public VehicleEvent(Entity vehicle, uint sourceFrame, ulong sequence, VehicleFactKind kind,
-            Entity previousLine = default, Entity line = default, VehicleState state = default,
-            bool previousBoarding = false, bool currentBoarding = false,
-            bool previousMoving = false, bool currentMoving = false,
-            int previousWaypointIndex = -1, int currentWaypointIndex = -1,
-            int recoveryWaypointIndex = -1, int waypointCount = 0,
-            bool atOrigin = false, bool nearOrigin = false, bool pathReady = false,
-            ulong sourceGeneration = 0UL)
+        public LifecycleEvent(
+            Entity vehicle,
+            uint frame,
+            ulong sequence,
+            LifecycleFactKind kind,
+            Entity previousLine,
+            Entity line,
+            VehicleState state)
         {
             Vehicle = vehicle;
-            SourceFrame = sourceFrame;
-            SourceGeneration = sourceGeneration;
+            Frame = frame;
             Sequence = sequence;
             Kind = kind;
             PreviousLine = previousLine;
-            CurrentLine = line;
+            Line = line;
             State = state;
-            PreviousBoarding = previousBoarding;
-            CurrentBoarding = currentBoarding;
-            PreviousMoving = previousMoving;
-            CurrentMoving = currentMoving;
-            PreviousWaypointIndex = previousWaypointIndex;
-            CurrentWaypointIndex = currentWaypointIndex;
-            RecoveryWaypointIndex = recoveryWaypointIndex;
-            WaypointCount = waypointCount;
-            AtOrigin = atOrigin;
-            NearOrigin = nearOrigin;
-            PathReady = pathReady;
         }
     }
 
@@ -72,13 +69,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly bool Late;
         public readonly string Reason;
 
-        public DispatchBusinessFact(
-            int targetMinute,
-            int slotMinute,
-            int actualMinute,
-            bool late,
-            string reason,
-            ulong sourceGeneration = 0UL)
+        public DispatchBusinessFact(int targetMinute, int slotMinute, int actualMinute, bool late, string reason)
         {
             Exists = true;
             TargetMinute = targetMinute;
@@ -92,8 +83,7 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal readonly struct DispatchEvent
     {
         public readonly Entity Vehicle;
-        public readonly uint SourceFrame;
-        public readonly ulong SourceGeneration;
+        public readonly uint Frame;
         public readonly ulong Sequence;
         public readonly DispatchFactKind Kind;
         public readonly VehicleState PreviousState;
@@ -103,13 +93,20 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly int CurrentValue;
         public readonly DispatchBusinessFact Fact;
 
-        public DispatchEvent(Entity vehicle, uint sourceFrame, ulong sequence, DispatchFactKind kind,
-            VehicleState previousState, VehicleState currentState, Entity line = default, int previousValue = -1, int currentValue = -1,
-            DispatchBusinessFact fact = default, ulong sourceGeneration = 0UL)
+        public DispatchEvent(
+            Entity vehicle,
+            uint frame,
+            ulong sequence,
+            DispatchFactKind kind,
+            VehicleState previousState,
+            VehicleState currentState,
+            Entity line,
+            int previousValue,
+            int currentValue,
+            DispatchBusinessFact fact)
         {
             Vehicle = vehicle;
-            SourceFrame = sourceFrame;
-            SourceGeneration = sourceGeneration;
+            Frame = frame;
             Sequence = sequence;
             Kind = kind;
             PreviousState = previousState;
@@ -125,20 +122,27 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         public readonly StopFact Fact;
         public readonly Entity Vehicle;
-        public readonly uint SourceFrame;
-        public readonly ulong SourceGeneration;
+        public readonly uint Frame;
         public readonly ulong Sequence;
-        public StopEvent(StopFact fact, uint sourceFrame, ulong sequence, ulong sourceGeneration)
+
+        public StopEvent(StopFact fact, uint frame, ulong sequence)
         {
             Fact = fact;
             Vehicle = fact.Vehicle;
-            SourceFrame = sourceFrame;
-            SourceGeneration = sourceGeneration;
+            Frame = frame;
             Sequence = sequence;
         }
     }
 
-    internal enum BypassFactKind : byte { Held, BypassHoldCadence, Released, Cleared, Expired, Rescued }
+    internal enum BypassFactKind : byte
+    {
+        Held,
+        BypassHoldCadence,
+        Released,
+        Cleared,
+        Expired,
+        Rescued
+    }
 
     internal readonly struct BypassFact
     {
@@ -150,7 +154,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly bool ShouldHold;
         public readonly bool CanClearAfterExit;
         public readonly string Reason;
-        public readonly ulong SourceGeneration;
 
         public BypassFact(
             BypassFactKind kind,
@@ -160,8 +163,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             int waypointIndex,
             bool shouldHold,
             bool canClearAfterExit,
-            string reason = null,
-            ulong sourceGeneration = 0UL)
+            string reason = null)
         {
             Kind = kind;
             Vehicle = vehicle;
@@ -171,7 +173,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             ShouldHold = shouldHold;
             CanClearAfterExit = canClearAfterExit;
             Reason = reason;
-            SourceGeneration = sourceGeneration;
         }
     }
 
@@ -179,15 +180,14 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         public readonly BypassFact Fact;
         public readonly Entity Vehicle;
-        public readonly uint SourceFrame;
-        public readonly ulong SourceGeneration;
+        public readonly uint Frame;
         public readonly ulong Sequence;
-        public BypassEvent(BypassFact fact, uint sourceFrame, ulong sequence, ulong sourceGeneration)
+
+        public BypassEvent(BypassFact fact, uint frame, ulong sequence)
         {
             Fact = fact;
             Vehicle = fact.Vehicle;
-            SourceFrame = sourceFrame;
-            SourceGeneration = sourceGeneration;
+            Frame = frame;
             Sequence = sequence;
         }
     }
@@ -197,144 +197,119 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly FrameEventKind Kind;
         public readonly ulong Sequence;
         public readonly int Index;
-        public FrameEventRef(FrameEventKind kind, ulong sequence, int index) { Kind = kind; Sequence = sequence; Index = index; }
+
+        public FrameEventRef(FrameEventKind kind, ulong sequence, int index)
+        {
+            Kind = kind;
+            Sequence = sequence;
+            Index = index;
+        }
     }
 
     internal sealed class FrameEvents : IDisposable
     {
-        // 本帧数据：BeginFrame 清四类批次并从零开始本帧取号；不触及任何 owner。
-        private readonly List<VehicleEvent> m_VehicleEvents = new List<VehicleEvent>();
+        private readonly List<LifecycleEvent> m_LifecycleEvents = new List<LifecycleEvent>();
         private readonly List<DispatchEvent> m_DispatchEvents = new List<DispatchEvent>();
         private readonly List<StopEvent> m_StopEvents = new List<StopEvent>();
         private readonly List<BypassEvent> m_BypassEvents = new List<BypassEvent>();
+        private readonly List<FrameEventRef> m_Merged = new List<FrameEventRef>();
+        private Action m_FactCounter;
         private ulong m_NextSequence;
 
-        public IReadOnlyList<VehicleEvent> VehicleEvents => m_VehicleEvents;
+        public IReadOnlyList<LifecycleEvent> LifecycleEvents => m_LifecycleEvents;
         public IReadOnlyList<DispatchEvent> DispatchEvents => m_DispatchEvents;
         public IReadOnlyList<StopEvent> StopEvents => m_StopEvents;
         public IReadOnlyList<BypassEvent> BypassEvents => m_BypassEvents;
 
+        public void SetFactCounter(Action factCounter) => m_FactCounter = factCounter;
+
         public void BeginFrame()
         {
-            m_VehicleEvents.Clear();
+            m_LifecycleEvents.Clear();
             m_DispatchEvents.Clear();
             m_StopEvents.Clear();
             m_BypassEvents.Clear();
+            m_Merged.Clear();
             m_NextSequence = 0;
         }
 
-        public void ResetCity()
-        {
-            // 读档/整体清理：除当前批次外无跨城事件状态可保留。
-            BeginFrame();
-        }
+        public void ResetCity() => BeginFrame();
 
-        public ulong AppendVehicle(Entity vehicle, uint sourceFrame, VehicleFactKind kind,
-            Entity previousLine = default, Entity line = default, VehicleState state = default,
-            bool previousBoarding = false, bool currentBoarding = false,
-            bool previousMoving = false, bool currentMoving = false,
-            int previousWaypointIndex = -1, int currentWaypointIndex = -1,
-            int recoveryWaypointIndex = -1, int waypointCount = 0,
-            bool atOrigin = false, bool nearOrigin = false, bool pathReady = false,
-            ulong sourceGeneration = 0UL)
-        {
-            ulong sequence = NextSequence();
-            m_VehicleEvents.Add(new VehicleEvent(
-                vehicle,
-                sourceFrame,
-                sequence,
-                kind,
-                previousLine,
-                line,
-                state,
-                previousBoarding,
-                currentBoarding,
-                previousMoving,
-                currentMoving,
-                previousWaypointIndex,
-                currentWaypointIndex,
-                recoveryWaypointIndex,
-                waypointCount,
-                atOrigin,
-                nearOrigin,
-                pathReady,
-                sourceGeneration));
-            return sequence;
-        }
-
-        public void AppendDispatch(Entity vehicle, uint sourceFrame, DispatchFactKind kind, VehicleState previousState, VehicleState currentState,
-            Entity line = default, int previousValue = -1, int currentValue = -1,
-            DispatchBusinessFact fact = default, ulong sourceGeneration = 0UL)
-        {
-            m_DispatchEvents.Add(new DispatchEvent(vehicle, sourceFrame, NextSequence(), kind, previousState, currentState, line, previousValue, currentValue, fact, sourceGeneration));
-        }
-
-        public void AppendLaunchConfirmed(
+        public void AppendLifecycle(
             Entity vehicle,
-            uint sourceFrame,
-            Entity line,
-            int targetMinute,
-            int slotMinute,
-            int actualMinute,
-            bool late,
-            string reason,
-            ulong sourceGeneration = 0UL)
+            uint frame,
+            LifecycleFactKind kind,
+            Entity previousLine = default,
+            Entity line = default,
+            VehicleState state = default)
         {
-            AppendDispatch(
-                vehicle,
-                sourceFrame,
-                DispatchFactKind.LaunchConfirmed,
-                default,
-                default,
-                line,
-                fact: new DispatchBusinessFact(targetMinute, slotMinute, actualMinute, late, reason),
-                sourceGeneration: sourceGeneration);
+            m_LifecycleEvents.Add(new LifecycleEvent(vehicle, frame, NextSequence(), kind, previousLine, line, state));
+            CountFact();
         }
 
-        public void AppendUnplannedRun(Entity vehicle, uint sourceFrame, Entity line, string reason, ulong sourceGeneration = 0UL)
+        public void AppendDispatch(
+            Entity vehicle,
+            uint frame,
+            DispatchFactKind kind,
+            VehicleState previousState,
+            VehicleState currentState,
+            Entity line = default,
+            int previousValue = -1,
+            int currentValue = -1,
+            DispatchBusinessFact fact = default)
         {
-            AppendDispatch(
-                vehicle,
-                sourceFrame,
-                DispatchFactKind.UnplannedRun,
-                default,
-                default,
-                line,
-                fact: new DispatchBusinessFact(-1, -1, -1, false, reason),
-                sourceGeneration: sourceGeneration);
+            m_DispatchEvents.Add(new DispatchEvent(vehicle, frame, NextSequence(), kind, previousState, currentState, line, previousValue, currentValue, fact));
+            CountFact();
         }
 
-        public void AppendRetireRequested(Entity vehicle, uint sourceFrame, Entity line, string reason, ulong sourceGeneration = 0UL)
+        public void AppendLaunchConfirmed(Entity vehicle, uint frame, Entity line, int targetMinute, int slotMinute, int actualMinute, bool late, string reason)
         {
-            AppendDispatch(
-                vehicle,
-                sourceFrame,
-                DispatchFactKind.RetireRequested,
-                default,
-                default,
-                line,
-                fact: new DispatchBusinessFact(-1, -1, -1, false, reason),
-                sourceGeneration: sourceGeneration);
+            AppendDispatch(vehicle, frame, DispatchFactKind.LaunchConfirmed, default, default, line,
+                fact: new DispatchBusinessFact(targetMinute, slotMinute, actualMinute, late, reason));
         }
 
-        public void AppendStop(StopFact fact, uint sourceFrame, ulong sourceGeneration = 0UL)
-            => m_StopEvents.Add(new StopEvent(fact, sourceFrame, NextSequence(), sourceGeneration != 0UL ? sourceGeneration : fact.SourceGeneration));
-        public void AppendBypass(BypassFact fact, uint sourceFrame, ulong sourceGeneration = 0UL)
-            => m_BypassEvents.Add(new BypassEvent(fact, sourceFrame, NextSequence(), sourceGeneration != 0UL ? sourceGeneration : fact.SourceGeneration));
+        public void AppendUnplannedRun(Entity vehicle, uint frame, Entity line, string reason)
+        {
+            AppendDispatch(vehicle, frame, DispatchFactKind.UnplannedRun, default, default, line,
+                fact: new DispatchBusinessFact(-1, -1, -1, false, reason));
+        }
 
-        // 第四步消费者使用此入口；第二步仅作只读结构验收。
+        public void AppendRetireRequested(Entity vehicle, uint frame, Entity line, string reason)
+        {
+            AppendDispatch(vehicle, frame, DispatchFactKind.RetireRequested, default, default, line,
+                fact: new DispatchBusinessFact(-1, -1, -1, false, reason));
+        }
+
+        public void AppendStop(StopFact fact, uint frame)
+        {
+            m_StopEvents.Add(new StopEvent(fact, frame, NextSequence()));
+            CountFact();
+        }
+
+        public void AppendBypass(BypassFact fact, uint frame)
+        {
+            m_BypassEvents.Add(new BypassEvent(fact, frame, NextSequence()));
+            CountFact();
+        }
+
         public IReadOnlyList<FrameEventRef> MergeBySequence()
         {
-            List<FrameEventRef> merged = new List<FrameEventRef>(m_VehicleEvents.Count + m_DispatchEvents.Count + m_StopEvents.Count + m_BypassEvents.Count);
-            for (int i = 0; i < m_VehicleEvents.Count; i++) merged.Add(new FrameEventRef(FrameEventKind.Vehicle, m_VehicleEvents[i].Sequence, i));
-            for (int i = 0; i < m_StopEvents.Count; i++) merged.Add(new FrameEventRef(FrameEventKind.Stop, m_StopEvents[i].Sequence, i));
-            for (int i = 0; i < m_BypassEvents.Count; i++) merged.Add(new FrameEventRef(FrameEventKind.Bypass, m_BypassEvents[i].Sequence, i));
-            for (int i = 0; i < m_DispatchEvents.Count; i++) merged.Add(new FrameEventRef(FrameEventKind.Dispatch, m_DispatchEvents[i].Sequence, i));
-            merged.Sort((left, right) => left.Sequence.CompareTo(right.Sequence));
-            return merged;
+            m_Merged.Clear();
+            for (int i = 0; i < m_LifecycleEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Lifecycle, m_LifecycleEvents[i].Sequence, i));
+            for (int i = 0; i < m_StopEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Stop, m_StopEvents[i].Sequence, i));
+            for (int i = 0; i < m_BypassEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Bypass, m_BypassEvents[i].Sequence, i));
+            for (int i = 0; i < m_DispatchEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Dispatch, m_DispatchEvents[i].Sequence, i));
+            m_Merged.Sort((left, right) => left.Sequence.CompareTo(right.Sequence));
+            return m_Merged;
         }
 
-        public void Dispose() => ResetCity();
+        public void Dispose()
+        {
+            ResetCity();
+            m_FactCounter = null;
+        }
+
+        private void CountFact() => m_FactCounter?.Invoke();
         private ulong NextSequence() => ++m_NextSequence;
     }
 }

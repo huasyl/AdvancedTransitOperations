@@ -87,7 +87,6 @@ namespace RapidTransitMod.Dispatch.Lines
             bool probeEnabled = RuntimeHotPathProbe.Enabled();
             if (probeEnabled)
                 m_Runtime.m_PerfProbeOriginSettleCalls++;
-            m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleCall();
             if (vehicle == Entity.Null || waypoints.Length == 0)
                 return false;
 
@@ -99,7 +98,6 @@ namespace RapidTransitMod.Dispatch.Lines
             {
                 if (probeEnabled)
                     m_Runtime.m_PerfProbeOriginSettleFastPathHits++;
-                m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleFastPath(m_Runtime.m_VehicleStateStore.OriginArrivalCandidateSinceFrame.ContainsKey(vehicle));
                 return true;
             }
 
@@ -117,7 +115,6 @@ namespace RapidTransitMod.Dispatch.Lines
 
             if (probeEnabled)
                 m_Runtime.m_PerfProbeOriginSettleSlowPathEntered++;
-            m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleSlowPath();
             if (!m_Runtime.m_TrackProjection.TrySnapshot(
                     vehicle,
                     line,
@@ -141,7 +138,6 @@ namespace RapidTransitMod.Dispatch.Lines
             {
                 if (probeEnabled)
                     m_Runtime.m_PerfProbeOriginSettleWindowHits++;
-                m_Runtime.m_RuntimeHotPathProbe.CountOriginSettleWindowHit();
             }
             return inOriginWindow;
         }

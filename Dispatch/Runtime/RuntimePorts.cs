@@ -60,12 +60,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Spawns = runtime.m_SpawningLines,
                 SpawnFrames = runtime.m_LineSpawnRequestFrame,
                 CachedWp = runtime.m_CachedWpIdx,
-                Misfires = runtime.m_BVMisfire,
                 Commands = runtime.m_CommandApplier,
                 Runtime = runtime.m_RuntimeEngine,
                 Scheduler = runtime.m_DispatchScheduler,
                 Labels = runtime.m_VehicleLabels,
-                Worksets = runtime.m_RuntimeWorksets,
+                FramePlan = runtime.m_RuntimeFramePlan,
                 ResolveLine = runtime.m_Resolve.SelectedLine,
                 ResolveVehicle = runtime.m_Resolve.SelectedVehicle,
                 ResolveVehicleLine = runtime.m_Resolve.Line,
@@ -192,7 +191,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_RouteProgress,
                 runtime.m_VehicleView,
                 runtime.m_LineMileage,
-                runtime.IsVehicleBoarding);
+                runtime.IsVehicleBoarding,
+                runtime.m_RuntimeHotPathProbe);
         }
 
         public static BypassAdmissionPort BuildBypassAdmission(ModRuntimeHostSystem runtime)
@@ -250,7 +250,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.EntityName,
                 runtime.m_RuntimeHotPathProbe,
                 ModRuntimeHostSystem.IsBypassRuntimeLoggingEnabled,
-                (vehicle, blocker, station, waypointIndex, frame, reason, sourceGeneration) =>
+                (vehicle, blocker, station, waypointIndex, frame, reason) =>
                 {
                     runtime.m_FrameEvents.AppendBypass(new BypassFact(
                         BypassFactKind.Held,
@@ -260,10 +260,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                         waypointIndex,
                         true,
                         false,
-                        reason,
-                        sourceGeneration), frame);
+                        reason), frame);
                 },
-                (vehicle, blocker, frame, reason, sourceGeneration) =>
+                (vehicle, blocker, frame, reason) =>
                 {
                     runtime.m_FrameEvents.AppendBypass(new BypassFact(
                         BypassFactKind.Released,
@@ -273,8 +272,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                         -1,
                         false,
                         true,
-                        reason,
-                        sourceGeneration), frame);
+                        reason), frame);
                 },
                 fact =>
                 {
@@ -284,15 +282,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                 (vehicle, publicTransport) =>
                 {
                     runtime.m_RailEventSource.AppendPublicTransportWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);
-                    runtime.m_RuntimeWorksets.AddCandidate(vehicle);
                 },
                 () => runtime.m_Features.BypassRun(),
-                runtime.m_LineTimes.Clear,
-                runtime.m_RuntimeWorksets.SetDeadline,
-                runtime.m_RuntimeWorksets.ClearDeadline,
-                runtime.m_RuntimeWorksets.ClearDeadlines,
-                runtime.m_RuntimeWorksets.SetBypassActive,
-                () => runtime.m_RuntimeWorksets.ClearActiveBypass());
+                runtime.m_RuntimeFramePlan.SetDeadline,
+                runtime.m_RuntimeFramePlan.ClearDeadline,
+                runtime.m_RuntimeFramePlan.ClearDeadlines,
+                (vehicle, active) => runtime.m_RailEventSource.SetDemand(vehicle, RuntimeDemandMask.BypassActive, active),
+                () => runtime.m_RailEventSource.ClearDemands(RuntimeDemandMask.BypassActive),
+                (vehicle, active) => runtime.m_RailEventSource.SetDemand(vehicle, RuntimeDemandMask.BypassWatch, active),
+                () => runtime.m_RailEventSource.ClearDemands(RuntimeDemandMask.BypassWatch));
         }
 
         public static CapturePort BuildCapture(ModRuntimeHostSystem runtime)
@@ -327,8 +325,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 FlushSlice = (line, sliceIndex, observation) => runtime.m_ObsBuffers.Flush(line, sliceIndex, observation),
                 FlushStationDwell = (observationKey, observation) => runtime.m_ObsBuffers.Flush(observationKey, observation),
                 HotPathProbe = runtime.m_RuntimeHotPathProbe,
-                SetDeadline = runtime.m_RuntimeWorksets.SetDeadline,
-                ClearDeadline = runtime.m_RuntimeWorksets.ClearDeadline,
+                SetDeadline = runtime.m_RuntimeFramePlan.SetDeadline,
+                ClearDeadline = runtime.m_RuntimeFramePlan.ClearDeadline,
                 Log = message => runtime.log.Info(message)
             };
         }

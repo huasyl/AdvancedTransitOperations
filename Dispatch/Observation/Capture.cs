@@ -255,7 +255,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 && m_Slices.NextEntryProbeFrames.TryGetValue(vehicle, out uint nextEntryProbeFrame)
                 && nowFrame < nextEntryProbeFrame)
             {
-                m_Port.HotPathProbe?.CountSliceEntryProbeSkip();
                 return;
             }
 
@@ -263,14 +262,12 @@ namespace RapidTransitMod.Dispatch.Observation
                 && m_Slices.NextSampleFrames.TryGetValue(vehicle, out uint nextSampleFrame)
                 && nowFrame < nextSampleFrame)
             {
-                m_Port.HotPathProbe?.CountSliceSampleNonDue();
                 return;
             }
 
             if (!hasExistingSession)
             {
                 m_Slices.NextSampleFrames.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceSample);
             }
 
             if (!TryGetEligibleTraversalSliceChain(line, waypoints, nowFrame, out LineTrackChain eligibleChain))
@@ -278,10 +275,8 @@ namespace RapidTransitMod.Dispatch.Observation
 
             if (!ShouldSampleVehicleTraversalSliceObservation(vehicle, line, waypoints, eligibleChain, nowFrame, out TraversalSliceSamplingPlan samplingPlan))
             {
-                m_Port.HotPathProbe?.CountSliceSampleNonDue();
                 return;
             }
-            m_Port.HotPathProbe?.CountSliceSampleDue();
 
             if (vehicle != Entity.Null
                 && line != Entity.Null
@@ -310,15 +305,12 @@ namespace RapidTransitMod.Dispatch.Observation
                     RecordTraversalSliceLapDebugDropped(vehicle, droppedSession.SliceIndex);
                 m_Slices.Sessions.Remove(vehicle);
                 m_Slices.Plans.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
                 m_Slices.NextSampleFrames.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceSample);
                 ScheduleNextTraversalSliceEntryProbe(vehicle, nowFrame);
                 return;
             }
 
             m_Slices.NextEntryProbeFrames.Remove(vehicle);
-            m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceEntryProbe);
 
             if (m_Slices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
                 && session.Line == line
@@ -339,7 +331,6 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             m_Slices.Plans.Remove(vehicle);
-            m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
             m_Slices.Sessions[vehicle] = new VehicleTraversalSliceSession(line, sliceIndex, nowFrame, cursor.AtomCursorIndex, cursor.AtomPosition01);
             MaybeRecordTraversalPositionSample(vehicle, line, chain, sliceIndex, cursor, nowFrame);
             m_Slices.LastSampleFrames[vehicle] = nowFrame;
@@ -349,6 +340,22 @@ namespace RapidTransitMod.Dispatch.Observation
         internal bool ShouldSampleVehicleTraversalSliceObservation(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, uint nowFrame)
         {
             return ShouldSampleVehicleTraversalSliceObservation(vehicle, line, waypoints, null, nowFrame);
+        }
+
+        internal bool IsSourceSliceDue(Entity vehicle, Entity line, uint nowFrame)
+        {
+            if (vehicle == Entity.Null || line == Entity.Null || !m_Admission.CanObserve(vehicle))
+                return false;
+
+            if (m_Slices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
+                && session.Line == line)
+            {
+                return !m_Slices.NextSampleFrames.TryGetValue(vehicle, out uint nextSampleFrame)
+                    || nowFrame >= nextSampleFrame;
+            }
+
+            return !m_Slices.NextEntryProbeFrames.TryGetValue(vehicle, out uint nextEntryProbeFrame)
+                || nowFrame >= nextEntryProbeFrame;
         }
 
         private bool ShouldSampleVehicleTraversalSliceObservation(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain knownChain, uint nowFrame)
@@ -395,7 +402,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
             uint nextSampleFrame = lastSampleFrame + math.max(1u, plan.SampleIntervalFrames);
             m_Slices.NextSampleFrames[vehicle] = nextSampleFrame;
-            m_Port.SetDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceSample, nextSampleFrame);
             return nowFrame <= lastSampleFrame || nowFrame >= nextSampleFrame;
         }
 
@@ -416,7 +422,6 @@ namespace RapidTransitMod.Dispatch.Observation
             uint nextFrame = baseFrame;
             do { nextFrame += intervalFrames; } while (nextFrame <= nowFrame);
             m_Slices.NextSampleFrames[vehicle] = nextFrame;
-            m_Port.SetDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceSample, nextFrame);
         }
 
         private void ScheduleNextTraversalSliceEntryProbe(Entity vehicle, uint nowFrame)
@@ -430,7 +435,6 @@ namespace RapidTransitMod.Dispatch.Observation
             uint nextFrame = baseFrame;
             do { nextFrame += TraversalSliceEntryProbeIntervalFrames; } while (nextFrame <= nowFrame);
             m_Slices.NextEntryProbeFrames[vehicle] = nextFrame;
-            m_Port.SetDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceEntryProbe, nextFrame);
         }
 
         internal bool TryBuildTraversalSliceSamplingPlan(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, out TraversalSliceSamplingPlan plan)
@@ -449,7 +453,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 || session.Line != line)
             {
                 m_Slices.Plans.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
                 return false;
             }
 
@@ -477,14 +480,12 @@ namespace RapidTransitMod.Dispatch.Observation
                 || profile.SegmentSliceCutPointProgresses == null)
             {
                 m_Slices.Plans.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
                 return false;
             }
 
             if (!TryBuildTraversalSliceSamplingPlanUncached(vehicle, waypoints, chain, out plan))
             {
                 m_Slices.Plans.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
                 return false;
             }
 
@@ -492,7 +493,6 @@ namespace RapidTransitMod.Dispatch.Observation
             uint nextRefreshFrame = scheduledRefreshFrame != 0 ? scheduledRefreshFrame : nowFrame;
             do { nextRefreshFrame += refreshFrames; } while (nextRefreshFrame <= nowFrame);
             m_Slices.Plans[vehicle] = new TraversalSliceSamplingPlanCache(line, chain.Signature, session.SliceIndex, nextRefreshFrame, plan);
-            m_Port.SetDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh, nextRefreshFrame);
             return true;
         }
 
@@ -621,10 +621,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 m_Slices.Sessions.Remove(vehicle);
                 m_Slices.Plans.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
                 m_Slices.NextSampleFrames.Remove(vehicle);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceSample);
-                m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceEntryProbe);
                 return;
             }
 
@@ -661,10 +658,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             m_Slices.Sessions.Remove(vehicle);
             m_Slices.Plans.Remove(vehicle);
-            m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceRefresh);
             m_Slices.NextSampleFrames.Remove(vehicle);
-            m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceSample);
-            m_Port.ClearDeadline?.Invoke(vehicle, Dispatch.Runtime.DeadlineKind.SliceEntryProbe);
         }
 
         internal void MaybeRecordTraversalPositionSample(Entity vehicle, Entity line, LineTrackChain chain, int sliceIndex, VehicleTrackCursor cursor, uint nowFrame)

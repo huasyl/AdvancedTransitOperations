@@ -2,6 +2,7 @@ using System;
 using Game.Routes;
 using RapidTransitMod.Dispatch.Diagnostics;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Runtime;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Observation

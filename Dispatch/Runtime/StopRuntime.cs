@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -35,7 +36,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly bool ForcedDeparture;
         public readonly Entity Blocker;
         public readonly string Reason;
-        public readonly ulong SourceGeneration;
 
         public StopFact(
             StopFactKind kind,
@@ -49,8 +49,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             uint dwellDeadlineFrame = 0,
             bool forcedDeparture = false,
             Entity blocker = default,
-            string reason = null,
-            ulong sourceGeneration = 0UL)
+            string reason = null)
         {
             Kind = kind;
             Vehicle = vehicle;
@@ -64,7 +63,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             ForcedDeparture = forcedDeparture;
             Blocker = blocker;
             Reason = reason;
-            SourceGeneration = sourceGeneration;
         }
 
         public bool Exists => Kind != StopFactKind.None;
@@ -75,7 +73,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly Entity Vehicle;
         public readonly Entity Line;
         public readonly uint SourceFrame;
-        public readonly ulong SourceGeneration;
         public readonly VehicleState State;
         public readonly bool InputValid;
         public readonly bool OfficialBoarding;
@@ -86,19 +83,12 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly int WaypointCount;
         public readonly bool MovingKnown;
         public readonly bool MovingForDeparture;
-        public readonly bool BvMisfireLatched;
-        public readonly bool BvMisfireEnforcementEnabled;
-        public readonly bool HoldingMisfireCanClear;
         public readonly bool SuppressBoardingGhost;
-        public readonly bool AtOrigin;
-        public readonly bool NearOrigin;
-        public readonly bool TargetPresent;
 
         public StopInput(
             Entity vehicle,
             Entity line,
             uint sourceFrame,
-            ulong sourceGeneration,
             VehicleState state,
             bool inputValid,
             bool officialBoarding,
@@ -109,18 +99,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             int waypointCount,
             bool movingKnown,
             bool movingForDeparture,
-            bool bvMisfireLatched,
-            bool bvMisfireEnforcementEnabled,
-            bool holdingMisfireCanClear,
-            bool suppressBoardingGhost,
-            bool atOrigin,
-            bool nearOrigin,
-            bool targetPresent)
+            bool suppressBoardingGhost)
         {
             Vehicle = vehicle;
             Line = line;
             SourceFrame = sourceFrame;
-            SourceGeneration = sourceGeneration;
             State = state;
             InputValid = inputValid;
             OfficialBoarding = officialBoarding;
@@ -131,13 +114,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             WaypointCount = waypointCount;
             MovingKnown = movingKnown;
             MovingForDeparture = movingForDeparture;
-            BvMisfireLatched = bvMisfireLatched;
-            BvMisfireEnforcementEnabled = bvMisfireEnforcementEnabled;
-            HoldingMisfireCanClear = holdingMisfireCanClear;
             SuppressBoardingGhost = suppressBoardingGhost;
-            AtOrigin = atOrigin;
-            NearOrigin = nearOrigin;
-            TargetPresent = targetPresent;
         }
     }
 
@@ -159,9 +136,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly bool WriteCachedWaypoint;
         public readonly int CachedWaypointIndex;
         public readonly StopInboundAction InboundAction;
-        public readonly bool ClearBvMisfire;
-        public readonly bool ClearBvMisfireStartFrame;
-        public readonly bool ClearBvMisfireDeadline;
 
         public StopControlResult(
             Entity vehicle,
@@ -172,10 +146,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             bool noteProgressSuspect = false,
             bool writeCachedWaypoint = false,
             int cachedWaypointIndex = -1,
-            StopInboundAction inboundAction = StopInboundAction.None,
-            bool clearBvMisfire = false,
-            bool clearBvMisfireStartFrame = false,
-            bool clearBvMisfireDeadline = false)
+            StopInboundAction inboundAction = StopInboundAction.None)
         {
             Vehicle = vehicle;
             WaypointIndex = waypointIndex;
@@ -186,9 +157,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             WriteCachedWaypoint = writeCachedWaypoint;
             CachedWaypointIndex = cachedWaypointIndex;
             InboundAction = inboundAction;
-            ClearBvMisfire = clearBvMisfire;
-            ClearBvMisfireStartFrame = clearBvMisfireStartFrame;
-            ClearBvMisfireDeadline = clearBvMisfireDeadline;
         }
 
         public bool Exists => Vehicle != Entity.Null;
@@ -239,7 +207,8 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal sealed class StopRuntime : IDisposable
     {
         private readonly StopRuntimeState m_State;
-        private readonly RuntimeWorksets m_Worksets;
+        private readonly RuntimeFramePlan m_FramePlan;
+        private readonly Action<Entity, bool> m_SetDeparturePending;
         private readonly List<StopFact> m_Facts = new List<StopFact>();
         private readonly List<StopControlResult> m_Controls = new List<StopControlResult>();
         private readonly List<Entity> m_DepartureCandidates = new List<Entity>();
@@ -248,10 +217,14 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Dictionary<Entity, StopFrameState> m_FrameStates = new Dictionary<Entity, StopFrameState>();
         private readonly Dictionary<Entity, StopInput> m_InputByVehicle = new Dictionary<Entity, StopInput>();
 
-        internal StopRuntime(StopRuntimeState state, RuntimeWorksets worksets)
+        internal StopRuntime(
+            StopRuntimeState state,
+            RuntimeFramePlan framePlan,
+            Action<Entity, bool> setDeparturePending)
         {
             m_State = state;
-            m_Worksets = worksets;
+            m_FramePlan = framePlan;
+            m_SetDeparturePending = setDeparturePending;
         }
 
         internal IReadOnlyList<StopFact> Facts => m_Facts;
@@ -288,36 +261,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
 
                 bool boarding = input.OfficialBoarding;
-                bool misfireLatched = input.BvMisfireLatched;
                 if (input.State == VehicleState.Running && boarding && input.SuppressBoardingGhost)
                 {
                     boarding = false;
-                    QueueClearMisfire(vehicle, input.CurrentWaypoint);
-                    misfireLatched = false;
-                }
-                if (!input.BvMisfireEnforcementEnabled && misfireLatched)
-                {
-                    QueueClearMisfire(vehicle, input.CurrentWaypoint);
-                    misfireLatched = false;
-                }
-
-                if (misfireLatched && input.State == VehicleState.Holding && input.HoldingMisfireCanClear)
-                {
-                    QueueClearMisfire(vehicle, 0, writeCachedWaypoint: true);
-                    SetEffectiveBoarding(vehicle, false);
-                    boarding = false;
-                    misfireLatched = false;
-                }
-
-                // 路径误写锁存期间不得把假的上客边沿转成 Stop 会话。
-                if (misfireLatched)
-                {
-                    m_FrameStates[vehicle] = new StopFrameState(
-                        boarding,
-                        HasOpenStopSession(vehicle),
-                        false,
-                        IsForcedMidStopGraceActive(vehicle, nowFrame));
-                    continue;
                 }
 
                 bool lastEffectiveBoarding = ReadEffectiveBoarding(vehicle);
@@ -352,8 +298,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                                     waypoint,
                                     nowFrame,
                                     previousWaypointIndex: previousWaypoint,
-                                    sourceGeneration: input.SourceGeneration));
-                                QueueClearMisfire(vehicle, waypoint);
+                                    reason: null));
                                 ClearForcedMidStop(vehicle);
                             }
                         }
@@ -365,6 +310,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                             : previousWaypoint;
                         QueueCachedWaypoint(vehicle, waypoint);
                         AddDepartureCandidate(vehicle);
+                        StartDeparturePending(vehicle, nowFrame);
                         m_Facts.Add(new StopFact(
                             StopFactKind.BoardingEnded,
                             vehicle,
@@ -372,7 +318,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                             waypoint,
                             nowFrame,
                             previousWaypointIndex: previousWaypoint,
-                            sourceGeneration: input.SourceGeneration));
+                            reason: null));
                     }
                 }
 
@@ -386,7 +332,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                         input.Line,
                         input.RecoveryWaypoint,
                         nowFrame,
-                        input.SourceGeneration,
                         out StopFact recoveredFact,
                         out StopControlResult recoveredControl))
                 {
@@ -418,7 +363,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                     && bypass.ShouldHold
                     && !bypass.CanClearAfterExit)
                 {
-                    CancelDeparturePending(vehicle);
                     continue;
                 }
 
@@ -442,7 +386,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                     waypoint,
                     input.WaypointCount,
                     nowFrame,
-                    input.SourceGeneration,
                     out StopFact fact,
                     out StopControlResult control))
                 {
@@ -458,7 +401,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal void RejectDepartureCandidate(Entity vehicle)
         {
             m_DepartureCandidateSet.Remove(vehicle);
-            CancelDeparturePending(vehicle);
         }
 
         internal void ResetCity() => m_State.ResetCity();
@@ -482,7 +424,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return;
 
             m_State.ForcedMidStopBoardingGraceUntil[vehicle] = graceUntil;
-            m_Worksets.SetDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace, graceUntil);
+            m_FramePlan.SetDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace, graceUntil);
         }
 
         internal bool IsForcedMidStopGraceActive(Entity vehicle, uint nowFrame)
@@ -521,7 +463,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return;
 
             m_State.ForcedMidStopBoardingGraceUntil.Remove(vehicle);
-            m_Worksets.ClearDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace);
+            m_FramePlan.ClearDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace);
         }
 
         internal StopControlResult OpenStopSession(Entity vehicle, Entity line, int waypoint, uint nowFrame)
@@ -547,13 +489,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             if (!m_State.DeparturePendingSinceFrame.ContainsKey(vehicle))
                 m_State.DeparturePendingSinceFrame[vehicle] = nowFrame;
-            m_Worksets.SetDeparturePending(vehicle, true);
+            m_SetDeparturePending(vehicle, true);
         }
 
         internal void CancelDeparturePending(Entity vehicle)
         {
             m_State.DeparturePendingSinceFrame.Remove(vehicle);
-            m_Worksets.SetDeparturePending(vehicle, false);
+            m_SetDeparturePending(vehicle, false);
         }
 
         internal bool TryRecoverInvalidatedMidStopSession(
@@ -561,7 +503,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             Entity line,
             int recoveryWaypoint,
             uint nowFrame,
-            ulong sourceGeneration,
             out StopFact fact,
             out StopControlResult control)
         {
@@ -588,8 +529,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 vehicle,
                 line,
                 recoveryWaypoint,
-                nowFrame,
-                sourceGeneration: sourceGeneration);
+                nowFrame);
             control = new StopControlResult(
                 vehicle,
                 recoveryWaypoint,
@@ -624,7 +564,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             int waypoint,
             int waypointCount,
             uint nowFrame,
-            ulong sourceGeneration,
             out StopFact fact,
             out StopControlResult control)
         {
@@ -662,8 +601,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 waypoint,
                 nowFrame,
                 officialBoardingChanges,
-                pendingFrames,
-                sourceGeneration: sourceGeneration);
+                pendingFrames);
             control = new StopControlResult(
                 vehicle,
                 waypoint,
@@ -672,10 +610,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 clearProgressSuspect: true,
                 writeCachedWaypoint: true,
                 cachedWaypointIndex: -1,
-                inboundAction: inbound,
-                clearBvMisfire: true,
-                clearBvMisfireStartFrame: true,
-                clearBvMisfireDeadline: true);
+                inboundAction: inbound);
             return true;
         }
 
@@ -686,8 +621,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             Entity line,
             bool boarding,
             int waypoint,
-            uint nowFrame,
-            ulong sourceGeneration)
+            uint nowFrame)
         {
             byte boardingByte = BoardingByte(boarding);
             m_State.LastEffectiveBoarding[vehicle] = boardingByte;
@@ -702,10 +636,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.StopSessionBoardingChangeCount[vehicle] = 0;
             m_State.DeparturePendingSinceFrame.Remove(vehicle);
             m_State.InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            return new StopFact(StopFactKind.Restored, vehicle, line, waypoint, nowFrame, sourceGeneration: sourceGeneration);
+            return new StopFact(StopFactKind.Restored, vehicle, line, waypoint, nowFrame);
         }
 
-        internal StopCancelResult CancelStopSession(Entity vehicle, uint nowFrame, ulong sourceGeneration = 0UL)
+        internal StopCancelResult CancelStopSession(Entity vehicle, uint nowFrame)
         {
             if (!HasOpenStopSession(vehicle))
                 return default;
@@ -718,7 +652,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 : -1;
             ClearSession(vehicle);
             return new StopCancelResult(
-                new StopFact(StopFactKind.Cancelled, vehicle, line, waypoint, nowFrame, sourceGeneration: sourceGeneration),
+                new StopFact(StopFactKind.Cancelled, vehicle, line, waypoint, nowFrame),
                 new StopControlResult(vehicle, waypoint, clearBypassHoldSkipped: false));
         }
 
@@ -729,9 +663,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             ClearSession(vehicle);
         }
 
-        internal StopCancelResult CancelRebind(Entity vehicle, uint nowFrame, ulong sourceGeneration)
+        internal StopCancelResult CancelRebind(Entity vehicle, uint nowFrame)
         {
-            StopCancelResult result = CancelStopSession(vehicle, nowFrame, sourceGeneration);
+            StopCancelResult result = CancelStopSession(vehicle, nowFrame);
             RemoveVehicle(vehicle);
             ClearForcedMidStop(vehicle);
             return result;
@@ -761,8 +695,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.DeparturePendingSinceFrame.Remove(vehicle);
             m_State.DwellTimedOutLatched.Remove(vehicle);
             m_State.ForcedMidStopBoardingGraceUntil.Remove(vehicle);
-            m_Worksets.ClearDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace);
-            m_Worksets.SetDeparturePending(vehicle, false);
+            m_FramePlan.ClearDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace);
+            m_SetDeparturePending(vehicle, false);
         }
 
         public void Dispose()
@@ -778,7 +712,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.DeparturePendingSinceFrame.Remove(vehicle);
             m_State.InvalidatedMidStopRecoveryPending.Remove(vehicle);
             m_State.DwellTimedOutLatched.Remove(vehicle);
-            m_Worksets.SetDeparturePending(vehicle, false);
+            m_SetDeparturePending(vehicle, false);
         }
 
         private void AddDepartureCandidate(Entity vehicle)
@@ -806,19 +740,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 clearBypassHoldSkipped: false,
                 writeCachedWaypoint: true,
                 cachedWaypointIndex: waypoint));
-        }
-
-        private void QueueClearMisfire(Entity vehicle, int waypoint, bool writeCachedWaypoint = false)
-        {
-            QueueControl(new StopControlResult(
-                vehicle,
-                waypoint,
-                clearBypassHoldSkipped: false,
-                writeCachedWaypoint: writeCachedWaypoint,
-                cachedWaypointIndex: writeCachedWaypoint ? waypoint : -1,
-                clearBvMisfire: true,
-                clearBvMisfireStartFrame: true,
-                clearBvMisfireDeadline: true));
         }
 
         private static byte BoardingByte(bool boarding) => boarding ? (byte)1 : (byte)0;

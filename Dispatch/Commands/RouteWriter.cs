@@ -64,15 +64,9 @@ namespace RapidTransitMod.Dispatch.Commands
             if (waypoints.Length < 2)
                 return false;
 
-            Entity route = Entity.Null;
-            if (m_Host.TryGetVehicleLine(vehicle, out Entity mappedLine) && mappedLine != Entity.Null)
-            {
-                route = mappedLine;
-            }
-            else if (m_Host.EntityManager.HasComponent<CurrentRoute>(vehicle))
-            {
-                route = m_Host.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route;
-            }
+            Entity route = m_Host.EntityManager.HasComponent<CurrentRoute>(vehicle)
+                ? m_Host.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
+                : Entity.Null;
 
             if (route == Entity.Null || !m_Host.EntityManager.Exists(route) || !m_Host.EntityManager.HasBuffer<RouteSegment>(route))
                 return false;
@@ -105,6 +99,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
             DynamicBuffer<PathElement> targetPath = ecb.SetBuffer<PathElement>(vehicle);
             targetPath.Clear();
+            m_Host.CountPathDetailRead();
             for (int i = 0; i < segmentPath.Length; i++)
                 targetPath.Add(segmentPath[i]);
 

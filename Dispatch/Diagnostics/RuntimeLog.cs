@@ -20,7 +20,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         internal readonly Dictionary<Entity, string> m_RouteVehicleOwnerMismatchLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_HoldingSkipLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_LateDispatchLogCache = new Dictionary<Entity, string>();
-        internal readonly Dictionary<Entity, string> m_BvMisfireObserveLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_DepartureObserveLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, string> m_OriginDispatchTraceLogCache = new Dictionary<Entity, string>();
         internal readonly Dictionary<Entity, uint> m_OriginDispatchTraceLastLogFrameCache = new Dictionary<Entity, uint>();
@@ -32,7 +31,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         internal readonly Dictionary<Entity, uint> m_BvWaypointMismatchLastLogFrame = new Dictionary<Entity, uint>();
         internal readonly Dictionary<Entity, TrainHeadSnapshot> m_LastLaunchHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
         internal readonly Dictionary<Entity, TrainHeadSnapshot> m_LastBoardingHeadSnapshots = new Dictionary<Entity, TrainHeadSnapshot>();
-
         public RuntimeLog(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
@@ -53,7 +51,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_DispatchSlotHeldLastLogFrameCache.Clear();
             m_BvWaypointMismatchLogCache.Clear();
             m_BvTrackAnchorRecoveryLogCache.Clear();
-            m_BvMisfireObserveLogCache.Clear();
             m_DepartureObserveLogCache.Clear();
             m_BvWaypointMismatchLastLogFrame.Clear();
             m_LastLaunchHeadSnapshots.Clear();
@@ -73,7 +70,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_HoldingSkipLogCache.Remove(vehicle);
             m_LateDispatchLogCache.Remove(vehicle);
             m_YieldSkipLogCache.Remove(vehicle);
-            m_BvMisfireObserveLogCache.Remove(vehicle);
             m_DepartureObserveLogCache.Remove(vehicle);
             m_OriginDispatchTraceLogCache.Remove(vehicle);
             m_OriginDispatchTraceLastLogFrameCache.Remove(vehicle);
@@ -347,7 +343,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 ? cachedWaypoint
                 : -1;
             bool hasForcedReady = m_Runtime.m_VehicleView.TryGetReady(vehicle, out uint forcedReadyFrame) && forcedReadyFrame > nowFrame;
-            bool hasBvMisfire = m_Runtime.m_BVMisfire.Contains(vehicle);
             int currentSlot = m_Runtime.m_VehicleView.TryGetSlot(vehicle, out int currentAssignedSlot) ? currentAssignedSlot : -1;
             string key = reason
                 + "|state=" + state
@@ -358,8 +353,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + "|atA=" + (atOrigin ? "1" : "0")
                 + "|boarding=" + (boarding ? "1" : "0")
                 + "|last=" + (lastBoarding ? "1" : "0")
-                + "|forced=" + (hasForcedReady ? "1" : "0")
-                + "|misfire=" + (hasBvMisfire ? "1" : "0");
+                + "|forced=" + (hasForcedReady ? "1" : "0");
 
             if (!Cooldown(
                     m_OriginDispatchTraceLogCache,
@@ -392,7 +386,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?")
                 + " forcedReadyFrames=" + forcedReadyRemainingFrames
                 + " assistPending=" + (hasAssistPending ? ("1(" + Slot(assistTargetMin) + ")") : "0")
-                + " bvMisfire=" + (hasBvMisfire ? "1" : "0")
                 + (string.IsNullOrWhiteSpace(extra) ? string.Empty : " " + extra));
         }
 
@@ -452,49 +445,6 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " cachedWpIdx=" + holderCachedWaypoint
                 + " boarding=" + (holderBoarding ? "1" : "0")
                 + " distOrigin=" + (distanceToOriginMeters >= 0f ? distanceToOriginMeters.ToString("F1") : "?"));
-        }
-
-        public void BvMisfireCandidate(
-            Entity vehicle,
-            string lineTag,
-            string phase,
-            string detail,
-            uint nowFrame,
-            ulong sourceGeneration = 0UL)
-        {
-            Once(
-                m_BvMisfireObserveLogCache,
-                vehicle,
-                phase + "|" + detail,
-                "[BVObserve] " + lineTag + " 车辆" + vehicle.Index
-                    + " phase=" + phase
-                    + " detail=" + detail
-                    + " enforcement=" + (ModRuntimeHostSystem.IsBvMisfireEnforcementEnabled() ? "on" : "off")
-                    + " frame=" + nowFrame);
-
-            if (ModRuntimeHostSystem.IsBvMisfireEnforcementEnabled())
-            {
-                if (m_Runtime.m_BVMisfire.Add(vehicle))
-                {
-                    m_Runtime.m_BVMisfireStartFrame[vehicle] = nowFrame;
-                    m_Runtime.m_RuntimeWorksets.SetDeadline(vehicle, DeadlineKind.BvMisfire, nowFrame + ModRuntimeHostSystem.BV_MISFIRE_TIMEOUT + 1u);
-                    m_Runtime.m_FrameEvents.AppendDispatch(
-                        vehicle,
-                        nowFrame,
-                        DispatchFactKind.PathFault,
-                        default,
-                        default,
-                        m_Runtime.m_Resolve.Line(vehicle),
-                        fact: new DispatchBusinessFact(-1, -1, -1, false, "bv-misfire"),
-                        sourceGeneration: sourceGeneration);
-                }
-            }
-            else
-            {
-                m_Runtime.m_BVMisfire.Remove(vehicle);
-                m_Runtime.m_BVMisfireStartFrame.Remove(vehicle);
-                m_Runtime.m_RuntimeWorksets.ClearDeadline(vehicle, DeadlineKind.BvMisfire);
-            }
         }
 
         public void PreparingTargetDrift(

@@ -218,6 +218,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             entities.Dispose();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
+            m_Runtime.m_VehicleRegistrar.ClearDisabledLineLateSpawnRetireQueue();
+            m_Runtime.m_VehicleRegistrar.ClearStartupGate();
             m_Runtime.m_RailEventSource.ResetTracking();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();
@@ -227,8 +229,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StopRuntimeState.ClearStopSessions();
             m_Runtime.m_StopRuntimeState.ClearInvalidatedRecovery();
             m_Runtime.m_CachedWpIdx.Clear();
-            m_Runtime.m_BVMisfire.Clear();
-            m_Runtime.m_BVMisfireStartFrame.Clear();
             m_Runtime.m_StopRuntimeState.ClearForcedMidStopGrace();
             m_Runtime.m_CommandApplier.ClearRetireHandoffState();
             m_Runtime.m_PreparingFixCooldownUntil.Clear();
@@ -269,6 +269,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StationContextQuery.Clear();
             m_Runtime.m_RuntimeLog.Clear();
             m_Runtime.m_RuntimeHotPathProbe.Clear();
+            m_Runtime.ClearFrameBuffers();
             m_Runtime.log.Info("[清场] 已清除所有公共交通车辆");
         }
 
@@ -280,6 +281,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
+            m_Runtime.m_VehicleRegistrar.ClearDisabledLineLateSpawnRetireQueue();
+            m_Runtime.m_VehicleRegistrar.ClearStartupGate();
             m_Runtime.m_RailEventSource.ResetTracking();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();
@@ -289,8 +292,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StopRuntimeState.ClearStopSessions();
             m_Runtime.m_StopRuntimeState.ClearInvalidatedRecovery();
             m_Runtime.m_CachedWpIdx.Clear();
-            m_Runtime.m_BVMisfire.Clear();
-            m_Runtime.m_BVMisfireStartFrame.Clear();
             m_Runtime.m_StopRuntimeState.ClearForcedMidStopGrace();
             m_Runtime.m_CommandApplier.ClearRetireHandoffState();
             m_Runtime.m_PreparingFixCooldownUntil.Clear();
@@ -327,6 +328,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_StationContextQuery.Clear();
             m_Runtime.m_RuntimeLog.Clear();
             m_Runtime.m_RuntimeHotPathProbe.Clear();
+            m_Runtime.ClearFrameBuffers();
             m_Runtime.log.Info("[启动] 已清空跨档运行态缓存");
         }
 

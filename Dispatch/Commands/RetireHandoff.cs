@@ -57,7 +57,6 @@ namespace RapidTransitMod.Dispatch.Commands
             new Dictionary<Entity, uint>();
         private readonly Dictionary<Entity, uint> m_RetireShadowLastRetiringFrame =
             new Dictionary<Entity, uint>();
-        private readonly List<Entity> m_StageKeysScratch = new List<Entity>();
         private readonly EntityQuery m_RetireDispatchLockQuery;
         private bool m_RetireDispatchLocksReconciledOnReady;
 
@@ -85,8 +84,7 @@ namespace RapidTransitMod.Dispatch.Commands
             Entity vehicle,
             PublicTransport publicTransport,
             Target target,
-            string reason = "",
-            ulong sourceGeneration = 0UL)
+            string reason = "")
         {
             vehicle = m_RetireHost.ResolveVehicle(vehicle);
             if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
@@ -114,8 +112,8 @@ namespace RapidTransitMod.Dispatch.Commands
 
             string spawnIntent = m_RetireHost.RetireIntent(vehicle);
             ResetShadow(vehicle);
-            m_RetireHost.RecordRetireRequested(vehicle, sourceLine, reason, sourceGeneration);
-            m_RetireHost.RetireRuntimeVehicle(vehicle, sourceGeneration);
+            m_RetireHost.RecordRetireRequested(vehicle, sourceLine, reason);
+            m_RetireHost.RetireRuntimeVehicle(vehicle);
             m_RetireHost.ClearRetireRequestState(vehicle);
 
             string lineTag = sourceLine != Entity.Null
@@ -288,21 +286,21 @@ namespace RapidTransitMod.Dispatch.Commands
             }
         }
 
-        public void TickRetireHandoffStages(uint nowFrame)
+        public void TickRetireHandoffStages(uint nowFrame, IReadOnlyList<FramePlanEntry> candidates)
         {
-            if (m_RetireHandoffStages.Count == 0)
+            if (candidates == null || candidates.Count == 0)
                 return;
 
-            List<Entity> stagedVehicles = StageKeys();
-            for (int i = 0; i < stagedVehicles.Count; i++)
+            for (int i = 0; i < candidates.Count; i++)
             {
-                Entity vehicle = stagedVehicles[i];
+                Entity vehicle = candidates[i].Vehicle;
                 if (!m_RetireHandoffStages.TryGetValue(vehicle, out RetireHandoffStageRecord stage)
                     || nowFrame < stage.NextProbeFrame)
                 {
                     continue;
                 }
 
+                m_RetireHost.CountRetireStageExecuted();
                 TickRetireDispatchLockStage(vehicle, nowFrame);
             }
         }
@@ -708,14 +706,6 @@ namespace RapidTransitMod.Dispatch.Commands
             m_RetireShadowLastSnapshot.Clear();
             m_RetireShadowLastFrame.Clear();
             m_RetireShadowLastRetiringFrame.Clear();
-        }
-
-        private List<Entity> StageKeys()
-        {
-            m_StageKeysScratch.Clear();
-            foreach (Entity vehicle in m_RetireHandoffStages.Keys)
-                m_StageKeysScratch.Add(vehicle);
-            return m_StageKeysScratch;
         }
 
         private void RecordShadow(Entity vehicle, string phase)

@@ -523,7 +523,7 @@ namespace RapidTransitMod
             vehicle = m_Port.ResolveVehicle(vehicle);
             if (vehicle == Entity.Null)
                 return false;
-            m_Port.Worksets.EnqueueUiCommand(new RetireCommand(vehicle));
+            m_Port.FramePlan.EnqueueUiCommand(new RetireCommand(vehicle));
             return true;
         }
 
@@ -532,7 +532,7 @@ namespace RapidTransitMod
             vehicle = m_Port.ResolveVehicle(vehicle);
             if (vehicle == Entity.Null)
                 return false;
-            m_Port.Worksets.EnqueueUiCommand(new RecheckCommand(vehicle));
+            m_Port.FramePlan.EnqueueUiCommand(new RecheckCommand(vehicle));
             return true;
         }
 
@@ -541,7 +541,7 @@ namespace RapidTransitMod
             vehicle = m_Port.ResolveVehicle(vehicle);
             if (vehicle == Entity.Null)
                 return false;
-            m_Port.Worksets.EnqueueUiCommand(new DepartCommand(vehicle));
+            m_Port.FramePlan.EnqueueUiCommand(new DepartCommand(vehicle));
             return true;
         }
 
@@ -550,7 +550,7 @@ namespace RapidTransitMod
             line = m_Port.ResolveLine(line, Entity.Null);
             if (line == Entity.Null)
                 return false;
-            m_Port.Worksets.EnqueueUiCommand(new SpawnCommand(line));
+            m_Port.FramePlan.EnqueueUiCommand(new SpawnCommand(line));
             return true;
         }
 
@@ -606,8 +606,6 @@ namespace RapidTransitMod
                 return "official-dispatch";
 
             string alerts = string.Empty;
-            if (m_Port.Misfires.Contains(vehicle))
-                alerts = AppendAlert(alerts, "bv-misfire");
             if (m_Port.Vehicles.IsInbound(vehicle))
                 alerts = AppendAlert(alerts, "nearing-terminus");
             if (m_Port.Vehicles.TryGetCooldown(vehicle, out uint cooldownUntil) && m_Port.Sim.frameIndex < cooldownUntil)
@@ -740,7 +738,6 @@ namespace RapidTransitMod
             string cachedWp = m_Port.CachedWp.TryGetValue(vehicle, out int wp) ? wp.ToString() : "-";
             string tagged = BoolDebugStr(m_Port.Vehicles.IsInbound(vehicle));
             string cooldown = BoolDebugStr(m_Port.Vehicles.TryGetCooldown(vehicle, out uint cd) && m_Port.Sim.frameIndex < cd);
-            string misfire = BoolDebugStr(m_Port.Misfires.Contains(vehicle));
             string lapStartFrame = m_Port.Obs.TryLapStartFrame(vehicle, out uint lsf) ? lsf.ToString() : "-";
             string lapFrames = m_Port.Obs.TryLapFrames(vehicle, out uint lf) ? lf.ToString() : "-";
             string lapDistance = m_Port.Obs.TryLapDistance(vehicle, out float ld) && ld >= 0f ? (ld / 1000f).ToString("F2") + "km" : "-";
@@ -755,7 +752,6 @@ namespace RapidTransitMod
             AddDebugItem(list, "缓存路点", "Cached Waypoint", cachedWp);
             AddDebugItem(list, "回流标签", "Nearing Terminus", tagged);
             AddDebugItem(list, "发车冷却", "Launch Cooldown", cooldown);
-            AddDebugItem(list, "BV异常", "BV Misfire", misfire);
             AddDebugItem(list, "圈起点帧", "Lap Start Frame", lapStartFrame);
             AddDebugItem(list, "本圈帧数", "Lap Frames", lapFrames);
             AddDebugItem(list, "本圈距离", "Lap Distance", lapDistance);

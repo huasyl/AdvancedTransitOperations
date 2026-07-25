@@ -1,6 +1,7 @@
 using System;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Runtime;
 using Game;
 using Game.Common;
 using Game.Routes;
@@ -38,12 +39,11 @@ namespace RapidTransitMod
         internal NativeHashMap<Entity, int> Spawns;
         internal NativeHashMap<Entity, uint> SpawnFrames;
         internal NativeHashMap<Entity, int> CachedWp;
-        internal NativeHashSet<Entity> Misfires;
         internal DispatchCommandApplier Commands;
         internal DispatchEngine Runtime;
         internal DispatchScheduler Scheduler;
         internal RuntimeVehicleLabels Labels;
-        internal RuntimeWorksets Worksets;
+        internal RuntimeFramePlan FramePlan;
 
         internal Func<Entity, Entity, Entity> ResolveLine;
         internal Func<Entity, Entity> ResolveVehicle;

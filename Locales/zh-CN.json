@@ -67,7 +67,6 @@
   "RapidTransit.AlertNextSlotGap": "\u4e0b\u4e00\u73ed\u6b21\u5b58\u5728\u7a7a\u7f3a",
   "RapidTransit.AlertNoLapCache": "\u7f3a\u5c11\u5708\u65f6\u7f13\u5b58",
   "RapidTransit.AlertNoDispatchCache": "\u7f3a\u5c11\u51fa\u5e93\u7f13\u5b58",
-  "RapidTransit.AlertBvMisfire": "BV \u5f02\u5e38",
   "RapidTransit.AlertNearingTerminus": "\u8f66\u8f86\u63a5\u8fd1\u59cb\u53d1\u7ad9",
   "RapidTransit.AlertLaunchCooldown": "\u53d1\u8f66\u51b7\u5374\u4e2d",
   "RapidTransit.AlertTargetExpired": "\u76ee\u6807\u73ed\u6b21\u5df2\u8fc7\u671f",
