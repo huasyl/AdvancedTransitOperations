@@ -102,6 +102,7 @@ namespace RapidTransitMod.TrackModel
     internal sealed class LineWaypointIndexLookup
     {
         public ulong Signature;
+        public int LastStopWaypointIndex = -1;
         public readonly Dictionary<Entity, int> WaypointIndexByWaypoint = new Dictionary<Entity, int>();
         public readonly Dictionary<Entity, int> WaypointIndexByStop = new Dictionary<Entity, int>();
     }

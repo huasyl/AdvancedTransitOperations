@@ -16,17 +16,18 @@ namespace RapidTransitMod.Broadcasting
         internal readonly struct LineFlags
         {
             internal readonly bool HasVehicle;
-            internal readonly bool HasPlatform;
+            internal readonly bool HasIdle;
             internal readonly bool HasApproach;
 
-            internal LineFlags(bool hasVehicle, bool hasPlatform, bool hasApproach)
+            internal LineFlags(bool hasVehicle, bool hasIdle, bool hasApproach)
             {
                 HasVehicle = hasVehicle;
-                HasPlatform = hasPlatform;
+                HasIdle = hasIdle;
                 HasApproach = hasApproach;
             }
 
-            internal bool Any => HasVehicle || HasPlatform || HasApproach;
+            internal bool HasPlatform => HasIdle || HasApproach;
+            internal bool Any => HasVehicle || HasPlatform;
         }
 
         internal Config(RuntimeConfig source)
@@ -82,7 +83,7 @@ namespace RapidTransitMod.Broadcasting
             bool hasVehicle = RulesByLine.TryGetValue(lineId, out List<BroadcastWorkbenchRuleDto> rules)
                 && rules != null
                 && rules.Exists(rule => rule != null && rule.nodes != null && rule.nodes.Length > 0);
-            bool hasPlatform = false;
+            bool hasIdle = false;
             bool hasApproach = false;
             if (PlatformsByLine.TryGetValue(
                     lineId,
@@ -99,8 +100,14 @@ namespace RapidTransitMod.Broadcasting
                         continue;
                     }
 
-                    hasPlatform = true;
                     if (string.Equals(
+                            announcement.triggerId,
+                            TriggerConstants.PlatformIdleTriggerId,
+                            System.StringComparison.Ordinal))
+                    {
+                        hasIdle = true;
+                    }
+                    else if (string.Equals(
                             announcement.triggerId,
                             TriggerConstants.PlatformApproachTriggerId,
                             System.StringComparison.Ordinal))
@@ -108,14 +115,14 @@ namespace RapidTransitMod.Broadcasting
                         hasApproach = true;
                     }
 
-                    if (hasApproach)
+                    if (hasIdle && hasApproach)
                     {
                         break;
                     }
                 }
             }
 
-            LineFlags flags = new LineFlags(hasVehicle, hasPlatform, hasApproach);
+            LineFlags flags = new LineFlags(hasVehicle, hasIdle, hasApproach);
             m_LineFlags[lineId] = flags;
             return flags;
         }

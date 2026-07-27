@@ -77,6 +77,14 @@ namespace RapidTransitMod.Broadcasting
             m_Platforms.Origin(line, waypoints, busy);
         }
 
+        internal void StateChanged(
+            Entity vehicle,
+            VehicleState previousState,
+            VehicleState currentState)
+        {
+            m_Platforms.StateChanged(vehicle, previousState, currentState);
+        }
+
         internal void Running(
             Entity vehicle,
             Entity line,
@@ -97,7 +105,7 @@ namespace RapidTransitMod.Broadcasting
             }
 
             bool vehicleTracked = flags.HasVehicle && m_Vehicles.ShouldPlay(vehicle);
-            bool needsContext = vehicleTracked || flags.HasPlatform || flags.HasApproach;
+            bool needsContext = vehicleTracked || flags.HasPlatform;
             FrameContext context = default;
             bool hasContext = needsContext
                 && FrameContexts.TryBuild(
@@ -127,7 +135,7 @@ namespace RapidTransitMod.Broadcasting
                 context);
         }
 
-        internal void Tick(uint nowFrame)
+        internal void Tick(uint nowFrame, bool sourceSweep)
         {
             if (!m_Config.Enabled)
             {
@@ -138,7 +146,7 @@ namespace RapidTransitMod.Broadcasting
                 return;
             }
 
-            m_Platforms.Tick(nowFrame);
+            m_Platforms.Tick(nowFrame, sourceSweep);
             m_Playback.Tick(nowFrame);
         }
 

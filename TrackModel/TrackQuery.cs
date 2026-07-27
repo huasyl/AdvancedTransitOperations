@@ -91,6 +91,13 @@ namespace RapidTransitMod.TrackModel
                 };
 
                 EntityManager entityManager = m_Support.EntityManager;
+                Entity originStop = TryTransportStop(
+                    entityManager,
+                    waypoints[0].m_Waypoint,
+                    out Entity resolvedOriginStop)
+                    ? resolvedOriginStop
+                    : Entity.Null;
+                int lastStopWaypointIndex = -1;
                 for (int waypointIndex = 0; waypointIndex < waypoints.Length; waypointIndex++)
                 {
                     Entity waypoint = waypoints[waypointIndex].m_Waypoint;
@@ -102,14 +109,28 @@ namespace RapidTransitMod.TrackModel
                     {
                         Entity stop = entityManager.GetComponentData<Connected>(waypoint).m_Connected;
                         if (stop != Entity.Null)
+                        {
                             lookup.WaypointIndexByStop[stop] = waypointIndex;
+                            if (TryTransportStop(entityManager, waypoint, out Entity transportStop)
+                                && waypointIndex > 0
+                                && (originStop == Entity.Null || transportStop != originStop))
+                            {
+                                lastStopWaypointIndex = waypointIndex;
+                            }
+                        }
                     }
                 }
 
+                lookup.LastStopWaypointIndex = lastStopWaypointIndex;
                 m_State.PutWaypointLookup(line, lookup);
             }
 
             return true;
+        }
+
+        internal bool TryGetWaypointIndexLookup(Entity line, out LineWaypointIndexLookup lookup)
+        {
+            return m_State.TryWaypointLookup(line, out lookup);
         }
 
         private static ulong ComputeLineWaypointSignature(DynamicBuffer<RouteWaypoint> wps)
@@ -119,6 +140,28 @@ namespace RapidTransitMod.TrackModel
             for (int i = 0; i < wps.Length; i++)
                 hash = MixLineSignature(hash, wps[i].m_Waypoint.Index);
             return hash;
+        }
+
+        private static bool TryTransportStop(EntityManager entityManager, Entity waypoint, out Entity stop)
+        {
+            stop = Entity.Null;
+            if (waypoint == Entity.Null
+                || !entityManager.Exists(waypoint)
+                || !entityManager.HasComponent<Connected>(waypoint))
+            {
+                return false;
+            }
+
+            Entity connected = entityManager.GetComponentData<Connected>(waypoint).m_Connected;
+            if (connected == Entity.Null
+                || !entityManager.Exists(connected)
+                || !entityManager.HasComponent<Game.Routes.TransportStop>(connected))
+            {
+                return false;
+            }
+
+            stop = connected;
+            return true;
         }
 
         private static ulong MixLineSignature(ulong hash, int value)

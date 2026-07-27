@@ -81,6 +81,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly int CurrentWaypoint;
         public readonly int RecoveryWaypoint;
         public readonly int WaypointCount;
+        public readonly int LastStopWaypoint;
         public readonly bool MovingKnown;
         public readonly bool MovingForDeparture;
         public readonly bool SuppressBoardingGhost;
@@ -97,6 +98,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             int currentWaypoint,
             int recoveryWaypoint,
             int waypointCount,
+            int lastStopWaypoint,
             bool movingKnown,
             bool movingForDeparture,
             bool suppressBoardingGhost)
@@ -112,6 +114,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             CurrentWaypoint = currentWaypoint;
             RecoveryWaypoint = recoveryWaypoint;
             WaypointCount = waypointCount;
+            LastStopWaypoint = lastStopWaypoint;
             MovingKnown = movingKnown;
             MovingForDeparture = movingForDeparture;
             SuppressBoardingGhost = suppressBoardingGhost;
@@ -385,6 +388,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     input.State,
                     waypoint,
                     input.WaypointCount,
+                    input.LastStopWaypoint,
                     nowFrame,
                     out StopFact fact,
                     out StopControlResult control))
@@ -563,6 +567,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             VehicleState state,
             int waypoint,
             int waypointCount,
+            int lastStopWaypoint,
             uint nowFrame,
             out StopFact fact,
             out StopControlResult control)
@@ -586,11 +591,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                     : 0;
 
             StopInboundAction inbound = StopInboundAction.None;
-            if (state == VehicleState.Running)
+            if (state == VehicleState.Running && lastStopWaypoint >= 0)
             {
-                if (waypoint == waypointCount - 1)
+                if (waypoint == lastStopWaypoint)
                     inbound = StopInboundAction.Mark;
-                else if (waypoint > 0 && waypoint < waypointCount - 1)
+                else if (waypoint > 0)
                     inbound = StopInboundAction.Clear;
             }
 

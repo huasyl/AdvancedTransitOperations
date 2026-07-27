@@ -475,7 +475,7 @@ namespace RapidTransitMod
                 m_PendingRebindCandidates.Add(vehicle);
         }
 
-        public void Register(bool fullSweep)
+        public void Register(bool fullSweep, bool scanSpawnLines)
         {
             NativeArray<Entity> lines = default;
             NativeArray<Entity> spawnLines = default;
@@ -491,7 +491,7 @@ namespace RapidTransitMod
                     lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.TempJob);
                     RegisterFullSweep(lines, rvBuffers, wpBuffers, modBuffers);
                 }
-                else
+                else if (scanSpawnLines)
                 {
                     spawnLines = m_Runtime.m_SpawningLines.GetKeyArray(Allocator.Temp);
                     for (int i = 0; i < spawnLines.Length; i++)
@@ -659,10 +659,7 @@ namespace RapidTransitMod
                 Entity v = rvs[i].m_Vehicle;
                 if (!m_Runtime.EntityManager.Exists(v)) continue;
                 if (m_Runtime.m_VehicleView.Contains(v))
-                {
-                    ObserveRebind(line, v);
                     continue;
-                }
                 if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(v))
                 {
                     continue;
@@ -837,7 +834,7 @@ namespace RapidTransitMod
         {
             m_Runtime.m_TrackProjection.ClearVehicle(vehicle);
             m_Runtime.TrackProjection.ClearVehicleProgressSuspect(vehicle, "route-rebind");
-            m_Runtime.m_CachedWpIdx.Remove(vehicle);
+            m_Runtime.m_RailEventSource.CommitWaypoint(vehicle, -1);
             m_Runtime.m_WaypointIndex.Remove(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);
             m_Runtime.m_ObsPersist.ClearLap(vehicle);
@@ -889,6 +886,13 @@ namespace RapidTransitMod
                 waypointIndex,
                 adoptExistingVehicles,
                 out string initialReason);
+            if (initialState == VehicleState.Holding
+                && (initialReason == "boarding-origin-fallback"
+                    || initialReason.StartsWith("route-progress-origin-fallback")))
+            {
+                waypointIndex = 0;
+                atOrigin = true;
+            }
             uint? dispatchFrame = null;
             if (!adoptExistingVehicles
                 && m_Runtime.m_LineSpawnRequestFrame.TryGetValue(line, out uint spawnRequestFrame))
@@ -951,7 +955,7 @@ namespace RapidTransitMod
             }
             if (!startupSilent)
             {
-                m_Runtime.m_CachedWpIdx[vehicle] = waypointIndex;
+                m_Runtime.m_RailEventSource.CommitWaypoint(vehicle, waypointIndex);
                 m_Runtime.m_UICache.Remove(vehicle);
                 m_Runtime.TrackProjection.ClearVehicleProgressSuspect(vehicle, "register-reset");
                 if (initialReason == "boarding-midway")

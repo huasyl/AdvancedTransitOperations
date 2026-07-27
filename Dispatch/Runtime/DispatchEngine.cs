@@ -46,6 +46,18 @@ namespace RapidTransitMod
         }
     }
 
+    internal readonly struct WaypointCommit
+    {
+        public readonly Entity Vehicle;
+        public readonly int Waypoint;
+
+        public WaypointCommit(Entity vehicle, int waypoint)
+        {
+            Vehicle = vehicle;
+            Waypoint = waypoint;
+        }
+    }
+
     internal sealed class DispatchEngine
     {
         private readonly VehicleRegistry m_Vehicles;
@@ -54,6 +66,7 @@ namespace RapidTransitMod
         private readonly Dictionary<Entity, AssistLaunchPendingRecord> m_AssistLaunchPendingByVehicle = new Dictionary<Entity, AssistLaunchPendingRecord>();
         private readonly List<LaunchCommit> m_LaunchCommits = new List<LaunchCommit>();
         private readonly List<RunningCommit> m_RunningCommits = new List<RunningCommit>();
+        private readonly List<WaypointCommit> m_WaypointCommits = new List<WaypointCommit>();
 
         private readonly struct AssistLaunchPendingRecord
         {
@@ -82,6 +95,7 @@ namespace RapidTransitMod
 
         internal IReadOnlyList<LaunchCommit> LaunchCommits => m_LaunchCommits;
         internal IReadOnlyList<RunningCommit> RunningCommits => m_RunningCommits;
+        internal IReadOnlyList<WaypointCommit> WaypointCommits => m_WaypointCommits;
 
         private void SetState(Entity vehicle, VehicleState state)
         {
@@ -427,6 +441,7 @@ namespace RapidTransitMod
             IReadOnlyList<DispatchInput> inputs)
         {
             m_LaunchCommits.Clear();
+            m_WaypointCommits.Clear();
             int nowMinute = clockSnapshot.NowMinute;
             for (int i = 0; i < inputs.Count; i++)
             {
@@ -448,6 +463,12 @@ namespace RapidTransitMod
                 m_RunningCommits.Add(new RunningCommit(vehicle, line));
         }
 
+        private void QueueWaypointCommit(Entity vehicle, int waypoint)
+        {
+            if (vehicle != Entity.Null)
+                m_WaypointCommits.Add(new WaypointCommit(vehicle, waypoint));
+        }
+
         private void ProcessVehicle(
             EntityCommandBuffer ecb,
             int nowMinute,
@@ -458,6 +479,11 @@ namespace RapidTransitMod
         {
                     Entity v = input.Vehicle;
                     if (!m_Runtime.m_VehicleView.TryGetState(v, out var state)) return;
+                    uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
+                    if (worksets.IsDeadlineDue(v, DeadlineKind.Ready, nowFrame))
+                    {
+                        this.ClearReady(v);
+                    }
                     int targetMinute = m_Runtime.m_VehicleView.TryGetTarget(v, out int tm) ? tm : -1;
                     Entity line = input.Line;
                     Entity routeEnt = input.Route;
@@ -480,18 +506,12 @@ namespace RapidTransitMod
                     }
                     int waypointCount = input.WaypointCount;
                     bool boarding = input.Boarding;
-                    uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
                     Entity lineEnt = line;
                     string cachedLineTag = null;
                     string LineTag() => cachedLineTag ??= "线路" + line.Index;
                     if (state == VehicleState.Retiring)
                     {
                         return;
-                    }
-
-                    if (worksets.IsDeadlineDue(v, DeadlineKind.Ready, nowFrame))
-                    {
-                        this.ClearReady(v);
                     }
 
                     bool inCooldown = m_Runtime.m_VehicleView.TryGetCooldown(v, out uint cooldownUntil)
@@ -823,7 +843,7 @@ namespace RapidTransitMod
                                         lineEnt,
                                         fact: new DispatchBusinessFact(targetMinute, -1, -1, false, "broken-lap-recovered"));
                                     m_Runtime.m_ObsPersist.ClearLapRestore(v);
-                                    m_Runtime.m_CachedWpIdx[v] = 0;
+                                    QueueWaypointCommit(v, 0);
                                     m_Runtime.m_CommandApplier.KeepDepartureHeld(v, nowFrame, ecb);
                                     log.Info("[恢复兜底] " + LineTag() + " 车辆" + v.Index
                                         + " Running圈起点无效，回站后转Idle"
@@ -845,7 +865,7 @@ namespace RapidTransitMod
                                             this.RecoverToHolding(v);
                                         else
                                             this.RecoverToIdle(v, nowFrame);
-                                        m_Runtime.m_CachedWpIdx[v] = 0;
+                                        QueueWaypointCommit(v, 0);
                                         m_Runtime.m_CommandApplier.KeepDepartureHeld(v, nowFrame, ecb);
 
                                         if (recoverToHolding)
@@ -907,7 +927,8 @@ namespace RapidTransitMod
                                 {
                                     this.ReleaseTarget(v);
                                 }
-                                m_Runtime.m_CachedWpIdx[v] = 0;
+                                m_Runtime.m_CommandApplier.KeepDepartureHeld(v, nowFrame, ecb);
+                                QueueWaypointCommit(v, 0);
                                 this.ClearInbound(v);
                                 this.ClearOriginCandidate(v);
                                 if (forcedAtOrigin)

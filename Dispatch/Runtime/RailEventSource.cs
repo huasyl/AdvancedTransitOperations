@@ -5,6 +5,7 @@ using Game.Objects;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
+using RapidTransitMod.TrackModel;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -35,14 +36,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             public bool InputValid;
             public bool HasPublicTransport;
             public PublicTransport PublicTransport;
-            public bool HasTarget;
-            public Target Target;
-            public bool HasRoute;
             public Entity Route;
-            public bool HasPath;
-            public PathOwner Path;
-            public bool HasPathBuffer;
-            public int PathElementCount;
             public bool MovingKnown;
             public bool Moving;
         }
@@ -85,6 +79,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Dictionary<Entity, DynamicBuffer<RouteWaypoint>> m_WaypointBuffers = new Dictionary<Entity, DynamicBuffer<RouteWaypoint>>();
         private readonly Dictionary<Entity, int> m_WaypointCounts = new Dictionary<Entity, int>();
         private readonly List<int> m_RunningNoticeRows = new List<int>();
+        private readonly List<int> m_PreparingNoticeRows = new List<int>();
         private readonly Dictionary<Entity, uint> m_PreparingWaypointLiveFrames = new Dictionary<Entity, uint>();
         private readonly List<Entity> m_DemandVehicles = new List<Entity>();
         private readonly List<Entity> m_StaleVehicles = new List<Entity>();
@@ -102,6 +97,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRows.Clear();
             m_FrameRowIndex.Clear();
             m_RunningNoticeRows.Clear();
+            m_PreparingNoticeRows.Clear();
             m_WaypointBuffers.Clear();
             m_WaypointCounts.Clear();
         }
@@ -158,7 +154,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_RuntimeHotPathProbe.CountDemand(row.Demands);
 
                 if ((row.Changes & RailChangeMask.OfficialBoardingChanged) != 0 && state != VehicleState.Idle)
+                {
                     framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Stop);
+                    if (state == VehicleState.Running)
+                        framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Dispatch);
+                }
                 if ((row.Demands & RuntimeDemandMask.DeparturePending) != 0)
                     framePlan.AddStage(row.Vehicle, i, RuntimeStageMask.Stop);
 
@@ -188,12 +188,50 @@ namespace RapidTransitMod.Dispatch.Runtime
 
                 if (state == VehicleState.Running)
                     m_RunningNoticeRows.Add(i);
+                else if (state == VehicleState.Preparing)
+                    m_PreparingNoticeRows.Add(i);
             }
         }
 
         public int RunningNoticeCount => m_RunningNoticeRows.Count;
+        public int PreparingNoticeCount => m_PreparingNoticeRows.Count;
 
         public bool TryGetRunningNotice(
+            int noticeIndex,
+            out Entity vehicle,
+            out Entity line,
+            out DynamicBuffer<RouteWaypoint> waypoints,
+            out int waypointIndex,
+            out bool boarding)
+            => TryGetNotice(
+                m_RunningNoticeRows,
+                noticeIndex,
+                out vehicle,
+                out line,
+                out waypoints,
+                out waypointIndex,
+                out boarding);
+
+        public bool TryGetPreparingNotice(
+            int noticeIndex,
+            out Entity vehicle,
+            out Entity line,
+            out DynamicBuffer<RouteWaypoint> waypoints,
+            out int waypointIndex,
+            out bool boarding)
+        {
+            return TryGetNotice(
+                m_PreparingNoticeRows,
+                noticeIndex,
+                out vehicle,
+                out line,
+                out waypoints,
+                out waypointIndex,
+                out boarding);
+        }
+
+        private bool TryGetNotice(
+            List<int> noticeRows,
             int noticeIndex,
             out Entity vehicle,
             out Entity line,
@@ -206,10 +244,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             waypoints = default;
             waypointIndex = -1;
             boarding = false;
-            if (noticeIndex < 0 || noticeIndex >= m_RunningNoticeRows.Count)
+            if (noticeIndex < 0 || noticeIndex >= noticeRows.Count)
                 return false;
 
-            int rowIndex = m_RunningNoticeRows[noticeIndex];
+            int rowIndex = noticeRows[noticeIndex];
             if (rowIndex < 0 || rowIndex >= m_FrameRows.Count)
                 return false;
 
@@ -275,6 +313,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (!TryGetRow(vehicle, out RailFrameRow row) || row.RegisteredLine != line || row.SourceFrame != frame)
                 return false;
 
+            row.WaypointCount = TryGetWaypointCount(row.CurrentRoute, out int routeWaypointCount)
+                ? routeWaypointCount
+                : 0;
+            m_FrameRows[m_FrameRowIndex[vehicle]] = row;
             boarding = OfficialBoarding(row);
             waypoint = row.CachedWaypoint;
             waypointCount = row.WaypointCount;
@@ -292,19 +334,26 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (!TryGetStartupSource(vehicle, line, frame, out boarding, out waypoint, out waypointCount))
                 return false;
 
+            if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
+                return false;
+
+            RailFrameRow row = m_FrameRows[rowIndex];
+            if (row.RegistryState == VehicleState.Holding)
+            {
+                waypoint = 0;
+                CommitWaypoint(vehicle, waypoint);
+                return true;
+            }
+
             if (!boarding || !TryGetWaypointsForRoute(line, out _, out DynamicBuffer<RouteWaypoint> waypoints))
                 return true;
 
             waypoint = m_Runtime.m_WaypointIndex.Compute(vehicle, waypoints);
             waypointCount = waypoints.Length;
-            if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
-                return false;
-
-            RailFrameRow row = m_FrameRows[rowIndex];
             row.CachedWaypoint = waypoint;
             row.WaypointCount = waypointCount;
             m_FrameRows[rowIndex] = row;
-            m_Runtime.m_CachedWpIdx[vehicle] = waypoint;
+            CommitWaypoint(vehicle, waypoint);
             return true;
         }
 
@@ -326,6 +375,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             row.WaypointCount = waypointCount;
             row.Writes |= RailFrameWriteMask.PublicTransport;
             m_FrameRows[rowIndex] = row;
+            CommitWaypoint(vehicle, waypoint);
             UpdateBaseline(row);
         }
 
@@ -379,6 +429,20 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
+        public void CommitWaypoint(Entity vehicle, int waypoint)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_Runtime.m_CachedWpIdx[vehicle] = waypoint;
+            if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
+                return;
+
+            RailFrameRow row = m_FrameRows[rowIndex];
+            row.CachedWaypoint = waypoint;
+            m_FrameRows[rowIndex] = row;
+        }
+
         public void RefreshRebindComponents(Entity vehicle)
         {
             int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
@@ -408,6 +472,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             HydrateOwners(ref row);
             row.IsCompilable = row.InputValid && row.RegisteredLine != Entity.Null;
             m_FrameRows[rowIndex] = row;
+            UpdateBaseline(row);
         }
 
         public void NotePreparingWaypoint(Entity vehicle, uint frame)
@@ -629,6 +694,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                     m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
                     UpdateBaseline(row);
                 }
+                row.WaypointCount = TryGetWaypointCount(row.CurrentRoute, out int routeWaypointCount)
+                    ? routeWaypointCount
+                    : 0;
                 int previousWaypoint = row.CachedWaypoint;
                 int currentWaypoint = previousWaypoint;
                 bool boarding = OfficialBoarding(row);
@@ -640,14 +708,26 @@ namespace RapidTransitMod.Dispatch.Runtime
                     m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
                 }
 
-                bool suppressBoardingGhost = boarding
+                int lastStopWaypoint = m_Runtime.m_TrackModel.TryGetWaypointIndexLookup(
+                    row.RegisteredLine,
+                    out LineWaypointIndexLookup lookup)
+                    ? lookup.LastStopWaypointIndex
+                    : -1;
+
+                bool suppressBoardingGhost = false;
+                if (boarding
                     && forcedMidStopGraceActive(row.Vehicle, nowFrame)
-                    && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> ghostWaypoints)
-                    && SuppressBoardingGhost(row, ghostWaypoints);
+                    && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> ghostWaypoints))
+                {
+                    ReadWriteComponent(ref row, RailFrameWriteMask.Target);
+                    suppressBoardingGhost = SuppressBoardingGhost(row, ghostWaypoints);
+                }
+                m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
                 inputs.Add(new StopInput(row.Vehicle, row.RegisteredLine, row.SourceFrame == 0 ? nowFrame : row.SourceFrame,
                     row.RegistryState, row.InputValid && row.CurrentRoute == row.RegisteredLine && row.WaypointCount >= 2,
                     boarding, m_Runtime.m_VehicleView.TryGetCooldown(row.Vehicle, out uint cooldown) && nowFrame < cooldown,
                     previousWaypoint, currentWaypoint, currentWaypoint, row.WaypointCount,
+                    lastStopWaypoint,
                     isDeparturePending(row.Vehicle) && row.MovingKnown,
                     isDeparturePending(row.Vehicle) && row.Moving,
                     suppressBoardingGhost));
@@ -707,12 +787,23 @@ namespace RapidTransitMod.Dispatch.Runtime
 
                 bool hasWaypoints = TryGetWaypointsForRoute(row.CurrentRoute, out Entity route, out DynamicBuffer<RouteWaypoint> waypoints);
                 int waypointCount = hasWaypoints ? waypoints.Length : 0;
+                ReadWriteComponent(ref row, RailFrameWriteMask.Target);
+                m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
                 int previousWaypoint = row.CachedWaypoint;
                 int currentWaypoint = row.CachedWaypoint;
-                bool boarding = OfficialBoarding(row);
-                StopFrameState stop = stopStates.TryGetValue(row.Vehicle, out StopFrameState state) ? state : default;
+                bool hasStopState = stopStates.TryGetValue(row.Vehicle, out StopFrameState stop);
+                bool boarding = row.RegistryState == VehicleState.Running && hasStopState
+                    ? stop.Boarding
+                    : OfficialBoarding(row);
+                int targetMinute = row.RegistryState == VehicleState.Running
+                    && m_Runtime.m_VehicleView.TryGetTarget(row.Vehicle, out int target)
+                        ? target
+                        : -1;
+                bool runningStopSignal = stop.BoardingChanged || stop.Boarding || stop.HadStopSession;
                 bool runningOriginDetail = row.RegistryState == VehicleState.Running
-                    && (row.Demands & (RuntimeDemandMask.OriginCandidate | RuntimeDemandMask.InboundWatch)) != 0;
+                    && ((row.Demands & (RuntimeDemandMask.OriginCandidate | RuntimeDemandMask.InboundWatch)) != 0
+                        || runningStopSignal
+                        || targetMinute >= 0);
                 uint preparingStart = 0;
                 bool hasPreparingStart = row.RegistryState == VehicleState.Preparing
                     && m_Runtime.m_VehicleView.TryGetPreparing(row.Vehicle, out preparingStart);
@@ -731,8 +822,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     if (currentWaypoint >= 0 && currentWaypoint != previousWaypoint)
                     {
                         row.CachedWaypoint = currentWaypoint;
-                        m_Runtime.m_CachedWpIdx[row.Vehicle] = currentWaypoint;
-                        m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
+                        CommitWaypoint(row.Vehicle, currentWaypoint);
                     }
                     m_PreparingWaypointLiveFrames[row.Vehicle] = nowFrame;
                 }
@@ -745,13 +835,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                         if (currentWaypoint >= 0 && currentWaypoint != previousWaypoint)
                         {
                             row.CachedWaypoint = currentWaypoint;
-                            m_Runtime.m_CachedWpIdx[row.Vehicle] = currentWaypoint;
-                            m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
+                            CommitWaypoint(row.Vehicle, currentWaypoint);
                         }
                     }
                 }
 
-                bool hasTarget = row.HasTarget && row.Target.m_Target != Entity.Null;
+                bool hasTargetComponent = row.HasTarget;
+                bool targetPresent = hasTargetComponent && row.Target.m_Target != Entity.Null;
                 bool preparingAtOrigin = row.RegistryState == VehicleState.Preparing
                     && hasWaypoints
                     && waypointCount >= 2
@@ -760,7 +850,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Entity originStation = hasWaypoints && waypointCount >= 2
                     ? waypoints[0].m_Waypoint
                     : Entity.Null;
-                bool targetAtOrigin = hasTarget && row.Target.m_Target == originStation;
+                bool targetAtOrigin = targetPresent && row.Target.m_Target == originStation;
                 bool originBusy = row.RegistryState == VehicleState.Idle
                     && hasWaypoints
                     && waypointCount >= 2
@@ -782,16 +872,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                         nowFrame,
                         ModRuntimeHostSystem.PREPARING_ROUTE_FIX_GRACE_FRAMES);
                 bool preparingDrifted = boarding && currentWaypoint > 0;
-                bool preparingWrongTarget = hasTarget && !targetAtOrigin;
+                bool preparingWrongTarget = hasTargetComponent && !targetAtOrigin;
                 bool preparingRouteNeedsRepair = row.RegistryState == VehicleState.Preparing
                     && hasWaypoints
                     && waypointCount >= 2
-                    && hasTarget
+                    && hasTargetComponent
+                    && !preparingAtOrigin
                     && !preparingCooldown
                     && (preparingDrifted || (preparingWrongTarget && !preparingFresh));
-                int targetMinute = runningOriginDetail && m_Runtime.m_VehicleView.TryGetTarget(row.Vehicle, out int target)
-                    ? target
-                    : -1;
                 bool shouldEvaluateOriginSettle = runningOriginDetail
                     && !cooldownActive
                     && hasWaypoints
@@ -929,9 +1017,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             fresh.IsCompilable = true;
             fresh.IsSource = true;
             fresh.SourceFrame = frame;
-            if ((writes & RailFrameWriteMask.PublicTransport) != 0) { fresh.PublicTransport = row.PublicTransport; fresh.HasPublicTransport = row.HasPublicTransport; }
-            if ((writes & RailFrameWriteMask.Target) != 0) { fresh.Target = row.Target; fresh.HasTarget = row.HasTarget; }
-            if ((writes & RailFrameWriteMask.Path) != 0) { fresh.Path = row.Path; fresh.HasPath = row.HasPath; fresh.HasPathBuffer = row.HasPathBuffer; fresh.PathElementCount = row.PathElementCount; }
+            if ((writes & RailFrameWriteMask.PublicTransport) != 0) { fresh.PublicTransport = row.PublicTransport; fresh.HasPublicTransport = row.HasPublicTransport; fresh.PublicTransportLoaded = row.PublicTransportLoaded; }
+            if ((writes & RailFrameWriteMask.Target) != 0) { fresh.Target = row.Target; fresh.HasTarget = row.HasTarget; fresh.TargetLoaded = row.TargetLoaded; }
+            if ((writes & RailFrameWriteMask.Path) != 0) { fresh.Path = row.Path; fresh.HasPath = row.HasPath; fresh.HasPathBuffer = row.HasPathBuffer; fresh.PathElementCount = row.PathElementCount; fresh.PathLoaded = row.PathLoaded; }
             fresh.Changes = (previous.HasPublicTransport && previous.HasPublicTransport == fresh.HasPublicTransport
                 && ((previous.PublicTransport.m_State & PublicTransportFlags.Boarding) != (fresh.PublicTransport.m_State & PublicTransportFlags.Boarding))
                     ? RailChangeMask.OfficialBoardingChanged : RailChangeMask.None)
@@ -952,24 +1040,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             row.HasPublicTransport = m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle);
             if (row.HasPublicTransport) row.PublicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
             row.PublicTransportLoaded = true;
-            row.HasTarget = m_Runtime.EntityManager.HasComponent<Target>(vehicle);
-            if (row.HasTarget) row.Target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
-            row.TargetLoaded = true;
             bool hasRoute = m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle);
             row.CurrentRoute = hasRoute ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route : Entity.Null;
-            row.HasPath = m_Runtime.EntityManager.HasComponent<PathOwner>(vehicle);
-            if (row.HasPath) row.Path = m_Runtime.EntityManager.GetComponentData<PathOwner>(vehicle);
-            row.HasPathBuffer = m_Runtime.EntityManager.HasBuffer<PathElement>(vehicle);
-            row.PathElementCount = row.HasPathBuffer ? m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true).Length : 0;
-            row.PathLoaded = true;
             if (readMoving)
             {
                 row.MovingKnown = m_Runtime.EntityManager.HasComponent<Moving>(vehicle);
                 row.Moving = row.MovingKnown && math.lengthsq(m_Runtime.EntityManager.GetComponentData<Moving>(vehicle).m_Velocity) > DepartureMovingSpeedSq;
             }
-            row.WaypointCount = TryGetWaypointCount(row.CurrentRoute, out int waypointCount)
-                ? waypointCount
-                : 0;
         }
 
         private void ApplyBaseline(ref RailFrameRow row, RailBaseline baseline)
@@ -977,13 +1054,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             row.InputValid = baseline.InputValid;
             row.HasPublicTransport = baseline.HasPublicTransport;
             row.PublicTransport = baseline.PublicTransport;
-            row.HasTarget = baseline.HasTarget;
-            row.Target = baseline.Target;
             row.CurrentRoute = baseline.Route;
-            row.HasPath = baseline.HasPath;
-            row.Path = baseline.Path;
-            row.HasPathBuffer = baseline.HasPathBuffer;
-            row.PathElementCount = baseline.PathElementCount;
             row.MovingKnown = baseline.MovingKnown;
             row.Moving = baseline.Moving;
         }
@@ -993,10 +1064,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             row.RegisteredLine = m_Runtime.m_VehicleView.TryGetLine(row.Vehicle, out Entity line) ? line : Entity.Null;
             row.RegistryState = m_Runtime.m_VehicleView.TryGetState(row.Vehicle, out VehicleState state) ? state : default;
             row.Demands = ReadDemand(row.Vehicle);
-            Entity waypointLine = row.CurrentRoute != Entity.Null ? row.CurrentRoute : row.RegisteredLine;
-            row.WaypointCount = TryGetWaypointCount(waypointLine, out int waypointCount)
-                ? waypointCount
-                : 0;
         }
 
         private void UpgradeForWrite(int rowIndex, RailFrameWriteMask writeComponent)
@@ -1059,14 +1126,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 InputValid = row.InputValid,
                 HasPublicTransport = row.HasPublicTransport,
                 PublicTransport = row.PublicTransport,
-                HasTarget = row.HasTarget,
-                Target = row.Target,
-                HasRoute = row.CurrentRoute != Entity.Null,
                 Route = row.CurrentRoute,
-                HasPath = row.HasPath,
-                Path = row.Path,
-                HasPathBuffer = row.HasPathBuffer,
-                PathElementCount = row.PathElementCount,
                 MovingKnown = row.MovingKnown,
                 Moving = row.Moving
             };

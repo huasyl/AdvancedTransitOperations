@@ -35,11 +35,13 @@ namespace RapidTransitMod.Dispatch.Commands
         public uint NextDiagnosticFrame;
         public uint BoardingWindowEndFrame;
         public bool BoardingWindowCompleted;
+        public byte BoardingWindowExtensions;
     }
 
     internal sealed class RetireHandoff
     {
         private const uint RetireBoardingWindowFrames = 60;
+        private const byte MaxBoardingWindowExtensions = 5;
 
         // New handoff order:
         // Retire(...) request -> pre/post train-AI lock keepers -> vanilla return/path setup ->
@@ -174,7 +176,8 @@ namespace RapidTransitMod.Dispatch.Commands
                 Stage = RetireHandoffStageKind.PendingBoundary,
                 NextProbeFrame = nowFrame,
                 NextDiagnosticFrame = nowFrame,
-                BoardingWindowCompleted = false
+                BoardingWindowCompleted = false,
+                BoardingWindowExtensions = 0
             };
             m_RetireHost.SetRetireDeadline(vehicle, DeadlineKind.RetireBoundary, nowFrame);
         }
@@ -430,13 +433,16 @@ namespace RapidTransitMod.Dispatch.Commands
                     // 原版可能在两次六帧探测之间改写交接状态，窗口内每次都重新投影完整保护值。
                     PublicTransportFlags protectedState = publicTransport.m_State | PublicTransportFlags.AbandonRoute;
                     protectedState &= ~PublicTransportFlags.EnRoute;
+                    uint protectedDepartureFrame = stage.BoardingWindowExtensions == 1
+                        ? nowFrame
+                        : stage.BoardingWindowEndFrame + 1u;
                     if (publicTransport.m_State != protectedState
-                        || publicTransport.m_DepartureFrame != stage.BoardingWindowEndFrame
+                        || publicTransport.m_DepartureFrame != protectedDepartureFrame
                         || publicTransport.m_MinWaitingDistance != float.MaxValue
                         || publicTransport.m_MaxBoardingDistance != 0f)
                     {
                         publicTransport.m_State = protectedState;
-                        publicTransport.m_DepartureFrame = stage.BoardingWindowEndFrame;
+                        publicTransport.m_DepartureFrame = protectedDepartureFrame;
                         publicTransport.m_MinWaitingDistance = float.MaxValue;
                         publicTransport.m_MaxBoardingDistance = 0f;
                         changed = true;
@@ -444,6 +450,25 @@ namespace RapidTransitMod.Dispatch.Commands
                     if (changed)
                         m_RetireHost.SetPublicTransport(vehicle, publicTransport);
                     return true;
+                }
+
+                if (stage.BoardingWindowExtensions < MaxBoardingWindowExtensions)
+                {
+                    int remainingPassengers = CountPassengers(vehicle);
+                    if (remainingPassengers > 0)
+                    {
+                        stage.BoardingWindowExtensions++;
+                        stage.BoardingWindowEndFrame = nowFrame + RetireBoardingWindowFrames;
+                        publicTransport.m_State |= PublicTransportFlags.AbandonRoute;
+                        publicTransport.m_State &= ~PublicTransportFlags.EnRoute;
+                        publicTransport.m_DepartureFrame = stage.BoardingWindowExtensions == 1
+                            ? nowFrame
+                            : stage.BoardingWindowEndFrame + 1u;
+                        publicTransport.m_MinWaitingDistance = float.MaxValue;
+                        publicTransport.m_MaxBoardingDistance = 0f;
+                        m_RetireHost.SetPublicTransport(vehicle, publicTransport);
+                        return true;
+                    }
                 }
 
                 DispatchActions.ForceOfficialBoardingClose(ref publicTransport, nowFrame);
@@ -459,6 +484,27 @@ namespace RapidTransitMod.Dispatch.Commands
             }
             if (!EntityManager.HasComponent<CurrentRoute>(vehicle))
             {
+                bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
+                if (boarding
+                    && m_RetireHandoffStages.TryGetValue(vehicle, out RetireHandoffStageRecord routeLessStage)
+                    && !routeLessStage.BoardingWindowCompleted
+                    && routeLessStage.BoardingWindowEndFrame == 0)
+                {
+                    Entity ownerDepot = EntityManager.HasComponent<Owner>(vehicle)
+                        ? EntityManager.GetComponentData<Owner>(vehicle).m_Owner
+                        : Entity.Null;
+                    if (!IsRetireHandoffHardAck(vehicle, ownerDepot))
+                    {
+                        routeLessStage.BoardingWindowEndFrame = nowFrame + RetireBoardingWindowFrames;
+                        publicTransport.m_State |= PublicTransportFlags.AbandonRoute;
+                        publicTransport.m_State &= ~PublicTransportFlags.EnRoute;
+                        publicTransport.m_DepartureFrame = routeLessStage.BoardingWindowEndFrame + 1u;
+                        publicTransport.m_MinWaitingDistance = float.MaxValue;
+                        publicTransport.m_MaxBoardingDistance = 0f;
+                        m_RetireHost.SetPublicTransport(vehicle, publicTransport);
+                        return true;
+                    }
+                }
                 if (changed) m_RetireHost.SetPublicTransport(vehicle, publicTransport);
                 return false;
             }
@@ -494,7 +540,7 @@ namespace RapidTransitMod.Dispatch.Commands
 
                     if (armStage.BoardingWindowEndFrame != 0 && nowFrame < armStage.BoardingWindowEndFrame)
                     {
-                        publicTransport.m_DepartureFrame = armStage.BoardingWindowEndFrame;
+                        publicTransport.m_DepartureFrame = armStage.BoardingWindowEndFrame + 1u;
                         publicTransport.m_MinWaitingDistance = float.MaxValue;
                         publicTransport.m_MaxBoardingDistance = 0f;
                     }
@@ -515,6 +561,30 @@ namespace RapidTransitMod.Dispatch.Commands
             }
             return m_RetireHandoffStages.TryGetValue(vehicle, out RetireHandoffStageRecord finalStage)
                 && finalStage.BoardingWindowEndFrame != 0;
+        }
+
+        private int CountPassengers(Entity vehicle)
+        {
+            int count = 0;
+            if (EntityManager.HasBuffer<LayoutElement>(vehicle))
+            {
+                DynamicBuffer<LayoutElement> layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+                if (layout.Length != 0)
+                {
+                    for (int i = 0; i < layout.Length; i++)
+                    {
+                        Entity unit = layout[i].m_Vehicle;
+                        if (EntityManager.HasBuffer<Passenger>(unit))
+                            count += EntityManager.GetBuffer<Passenger>(unit, true).Length;
+                    }
+                    return count;
+                }
+            }
+
+            if (EntityManager.HasBuffer<Passenger>(vehicle))
+                count = EntityManager.GetBuffer<Passenger>(vehicle, true).Length;
+
+            return count;
         }
 
         public void FinalizeRetireDispatchLockTerminals()

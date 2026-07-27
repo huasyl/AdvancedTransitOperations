@@ -350,6 +350,7 @@ namespace RapidTransitMod.PassengerFlow
 
             BufferLookup<Passenger> passengerBuffers = GetBufferLookup<Passenger>(true);
             BufferLookup<LayoutElement> layoutBuffers = GetBufferLookup<LayoutElement>(true);
+            Dependency.Complete();
             int currentCount = Math.Max(1, EstimateCurrentPassengerCapacity(requests, passengerBuffers, layoutBuffers));
             NativeParallelMultiHashMap<int, Entity> currentPassengers =
                 new NativeParallelMultiHashMap<int, Entity>(currentCount, Allocator.TempJob);

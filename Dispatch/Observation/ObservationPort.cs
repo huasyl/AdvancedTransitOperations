@@ -296,11 +296,13 @@ namespace RapidTransitMod.Dispatch.Observation
                     ClearForcedMidStop(vehicle);
                     if (RtLog.VerboseEnabled)
                     {
+                        int lastStopWaypoint = LastStopWaypoint(line);
                         m_Runtime.log.Info("[StopDwellEnd] line" + line.Index
                             + " vehicle" + vehicle.Index
                             + " boarding=" + boarding
-                            + " wp=" + currentWaypointIndex
-                            + "/" + (waypointCount - 1)
+                            + " routeWp=" + currentWaypointIndex
+                            + " routeWaypointCount=" + waypointCount
+                            + (lastStopWaypoint >= 0 ? " lastStopWp=" + lastStopWaypoint : "")
                             + " nowFrame=" + nowFrame);
                     }
                 }
@@ -321,10 +323,12 @@ namespace RapidTransitMod.Dispatch.Observation
                 m_Runtime.m_ObsPersist.SetDwellStart(vehicle, dwellSinceFrame);
                 if (RtLog.VerboseEnabled)
                 {
+                    int lastStopWaypoint = LastStopWaypoint(line);
                     m_Runtime.log.Info("[StopDwellBegin] line" + line.Index
                         + " vehicle" + vehicle.Index
-                        + " wp=" + currentWaypointIndex
-                        + "/" + (waypointCount - 1)
+                        + " routeWp=" + currentWaypointIndex
+                        + " routeWaypointCount=" + waypointCount
+                        + (lastStopWaypoint >= 0 ? " lastStopWp=" + lastStopWaypoint : "")
                         + " limit=" + maxDwellMinutes + "min"
                         + " deadlineFrame=" + dwellDeadlineFrame);
                 }
@@ -340,6 +344,15 @@ namespace RapidTransitMod.Dispatch.Observation
             if (maxDwellMinutes <= 0)
                 return false;
             return nowFrame >= dwellDeadlineFrame;
+        }
+
+        private int LastStopWaypoint(Entity line)
+        {
+            return m_Runtime.m_TrackModel.TryGetWaypointIndexLookup(
+                line,
+                out LineWaypointIndexLookup lookup)
+                ? lookup.LastStopWaypointIndex
+                : -1;
         }
 
         public void ClearDwellDeadlineCache(Entity vehicle)

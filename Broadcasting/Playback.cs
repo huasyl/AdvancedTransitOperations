@@ -671,7 +671,7 @@ namespace RapidTransitMod.Broadcasting
     internal sealed class Audio
     {
         private const float VolumeScalarMin = 5f;
-        private const float VolumeScalarMax = 20f;
+        private const float VolumeScalarMax = 60f;
         private static readonly FieldInfo s_WorldGroupField =
             typeof(AudioManager).GetField("m_WorldGroup", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -707,7 +707,7 @@ namespace RapidTransitMod.Broadcasting
             audioSource.spread = 140f;
             audioSource.dopplerLevel = 0f;
             audioSource.minDistance = 90f;
-            audioSource.maxDistance = 450f;
+            audioSource.maxDistance = 400f;
             audioSource.rolloffMode = AudioRolloffMode.Linear;
             audioSource.ignoreListenerPause = false;
             AudioManager.AudioSourcePool.Play(audioSource);

@@ -26,6 +26,23 @@ function normalizePassengerMode(mode) {
 }
 
 const PASSENGER_FLOW_POLL_INTERVAL_MS = 5000;
+const PASSENGER_CATALOG_RETRY_INTERVAL_MS = 30000;
+
+function hasPassengerLineIds(snapshot) {
+  const directRows = [snapshot?.stationVolumes, snapshot?.sectionVolumes];
+  if (directRows.some((rows) => Array.isArray(rows) && rows.some((entry) => String(entry?.lineId || "").trim()))) {
+    return true;
+  }
+
+  return Array.isArray(snapshot?.odFlows) && snapshot.odFlows.some((entry) => (
+    String(entry?.lineId || entry?.firstLineId || entry?.lastLineId || "").trim()
+  ));
+}
+
+function hasCatalogLines(snapshot) {
+  return Array.isArray(snapshot?.lines)
+    && snapshot.lines.some((line) => String(line?.id || "").trim());
+}
 
 function buildEmptyPassengerFlowViewModel() {
   return {
@@ -49,6 +66,10 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
   const mountedRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const pollInFlightRef = useRef(false);
+  const catalogReadyRef = useRef(false);
+  const passengerHasLineRef = useRef(false);
+  const catalogRetryAfterRef = useRef(0);
+  const catalogRequestsRef = useRef(new Map());
   const activeModeRef = useRef(normalizePassengerMode(activeTransportMode));
   activeModeRef.current = normalizePassengerMode(activeTransportMode);
 
@@ -60,6 +81,32 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
       traceWorkbench("passenger.unmount");
     };
   }, []);
+
+  const loadLineCatalog = useCallback((api, mode) => {
+    const existingRequest = catalogRequestsRef.current.get(mode);
+    if (existingRequest) {
+      return existingRequest;
+    }
+
+    const request = api.refreshTransitCatalog({ mode }).catch((metadataError) => {
+      traceWorkbench("passenger.lineCatalog.error", { mode, message: metadataError?.message || metadataError });
+      return null;
+    });
+    catalogRequestsRef.current.set(mode, request);
+    request.finally(() => {
+      if (catalogRequestsRef.current.get(mode) === request) {
+        catalogRequestsRef.current.delete(mode);
+      }
+    });
+    return request;
+  }, []);
+
+  const shouldLoadLineCatalog = useCallback((mode) => (
+    catalogRequestsRef.current.has(mode)
+      || (passengerHasLineRef.current
+        && !catalogReadyRef.current
+        && Date.now() >= catalogRetryAfterRef.current)
+  ), []);
 
   const refreshPassengerFlow = useCallback(async ({ includeCatalog = false, reset = false, reason = "refresh" } = {}) => {
     const mode = normalizePassengerMode(activeTransportMode);
@@ -81,6 +128,9 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
       setSelectedLineId("ALL");
       setSnapshot(null);
       setLineCatalogSnapshot(null);
+      catalogReadyRef.current = false;
+      passengerHasLineRef.current = false;
+      catalogRetryAfterRef.current = 0;
     }
     setError("");
 
@@ -88,10 +138,7 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
       const [nextSnapshot, nextLineCatalogSnapshot] = await Promise.all([
         api.loadPassengerFlowSnapshot({ mode }),
         includeCatalog
-          ? api.refreshTransitCatalog({ mode }).catch((metadataError) => {
-              traceWorkbench("passenger.lineCatalog.error", { mode, message: metadataError?.message || metadataError });
-              return null;
-            })
+          ? loadLineCatalog(api, mode)
           : Promise.resolve(null)
       ]);
 
@@ -99,9 +146,18 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
         return;
       }
 
+      const nextHasPassengerLines = hasPassengerLineIds(nextSnapshot);
+      const nextHasCatalogLines = hasCatalogLines(nextLineCatalogSnapshot);
+      passengerHasLineRef.current = nextHasPassengerLines;
       setSnapshot(nextSnapshot);
       if (nextLineCatalogSnapshot) {
         setLineCatalogSnapshot(nextLineCatalogSnapshot);
+      }
+      if (nextHasCatalogLines) {
+        catalogReadyRef.current = true;
+        catalogRetryAfterRef.current = 0;
+      } else if (includeCatalog && nextHasPassengerLines) {
+        catalogRetryAfterRef.current = Date.now() + PASSENGER_CATALOG_RETRY_INTERVAL_MS;
       }
       setError("");
       traceWorkbench("passenger.load.done", {
@@ -126,7 +182,7 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
         pollInFlightRef.current = false;
       }
     }
-  }, [activeTransportMode, t]);
+  }, [activeTransportMode, loadLineCatalog, t]);
 
   useEffect(() => {
     refreshPassengerFlow({ includeCatalog: true, reset: true, reason: "mode" });
@@ -137,15 +193,21 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
       return undefined;
     }
 
-    refreshPassengerFlow({ includeCatalog: true, reason: "active" });
+    refreshPassengerFlow({
+      includeCatalog: shouldLoadLineCatalog(normalizePassengerMode(activeTransportMode)),
+      reason: "active"
+    });
     const intervalId = window.setInterval(() => {
-      refreshPassengerFlow({ includeCatalog: false, reason: "poll" });
+      const includeCatalog = passengerHasLineRef.current
+        && !catalogReadyRef.current
+        && Date.now() >= catalogRetryAfterRef.current;
+      refreshPassengerFlow({ includeCatalog, reason: "poll" });
     }, PASSENGER_FLOW_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [isActive, refreshPassengerFlow]);
+  }, [activeTransportMode, isActive, refreshPassengerFlow, shouldLoadLineCatalog]);
 
   useEffect(() => {
     if (!isActive) {
@@ -174,7 +236,10 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
 
     registerHostActions({
       refreshData: async () => {
-        await refreshPassengerFlow({ includeCatalog: true, reason: "host" });
+        await refreshPassengerFlow({
+          includeCatalog: true,
+          reason: "host"
+        });
       }
     });
 

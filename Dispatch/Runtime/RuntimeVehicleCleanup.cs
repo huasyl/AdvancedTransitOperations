@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using RapidTransitMod.Dispatch.Runtime;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -13,6 +12,7 @@ namespace RapidTransitMod
         private readonly Action<Entity> m_ClearAssistLaunchPending;
         private readonly Action<StopFact> m_PublishStopFact;
         private readonly Action<Entity, int, StopControlResult> m_ApplyStopControl;
+        private readonly List<Entity> m_DeadVehicles = new List<Entity>();
 
         public RuntimeVehicleCleanup(
             ModRuntimeHostSystem runtime,
@@ -31,13 +31,13 @@ namespace RapidTransitMod
 
         public void Tick()
         {
-            NativeList<Entity> deadKeys = new NativeList<Entity>(Allocator.Temp);
+            m_DeadVehicles.Clear();
             foreach (var kv in m_Runtime.m_VehicleStateStore.State)
             {
-                if (!EntityManager.Exists(kv.Key)) deadKeys.Add(kv.Key);
+                if (!EntityManager.Exists(kv.Key)) m_DeadVehicles.Add(kv.Key);
             }
             Dictionary<Entity, int> removedCountByLine = null;
-            foreach (Entity dead in deadKeys)
+            foreach (Entity dead in m_DeadVehicles)
             {
                 VehicleState deadState = m_Runtime.m_VehicleView.TryGetState(dead, out VehicleState removedState)
                     ? removedState
@@ -121,21 +121,21 @@ namespace RapidTransitMod
             {
                 m_LineSpawnControl.ApplyCleanupTargetReduction(removedCountByLine);
             }
-            if (deadKeys.Length > 0)
+            if (m_DeadVehicles.Count > 0)
                 m_Runtime.m_WaypointIndex.Clear();
-            if (deadKeys.Length > 0)
+            if (m_DeadVehicles.Count > 0)
                 m_Runtime.m_RouteProgress.Clear();
-            if (deadKeys.Length > 0)
+            if (m_DeadVehicles.Count > 0)
                 m_Runtime.TrackProjection.ClearLineRunningVehicleSnapshots();
-            if (deadKeys.Length > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
+            if (m_DeadVehicles.Count > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
             {
-                log.Info("[VehicleCleanupSummary] deadVehicles=" + deadKeys.Length
+                log.Info("[VehicleCleanupSummary] deadVehicles=" + m_DeadVehicles.Count
                     + " affectedLines=" + (removedCountByLine != null ? removedCountByLine.Count : 0)
                     + " clearedWaypointIndex=1"
                     + " clearedRouteProgress=1"
                     + " clearedLineRunningSnapshots=1");
             }
-            deadKeys.Dispose();
+            m_DeadVehicles.Clear();
         }
     }
 }

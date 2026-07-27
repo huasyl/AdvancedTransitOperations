@@ -1033,7 +1033,8 @@ namespace RapidTransitMod.Broadcasting
 
         internal bool HasState => m_AnnouncementCooldownUntilFrame.Count > 0
             || m_StationBusyUntilFrame.Count > 0
-            || m_StationQuietSinceFrame.Count > 0;
+            || m_StationQuietSinceFrame.Count > 0
+            || m_ApproachStateByVehicle.Count > 0;
 
         internal void Running(
             Entity vehicle,
@@ -1050,8 +1051,27 @@ namespace RapidTransitMod.Broadcasting
                 return;
             }
 
-            WatchBusy(line, waypoints, hasContext, boarding, context);
-            WatchApproach(vehicle, line, waypoints, flags.HasApproach && hasContext, context);
+            if (flags.HasIdle)
+            {
+                WatchBusy(line, waypoints, hasContext, boarding, context);
+            }
+
+            if (flags.HasApproach)
+            {
+                WatchApproach(vehicle, line, waypoints, hasContext, context);
+            }
+        }
+
+        internal void StateChanged(
+            Entity vehicle,
+            VehicleState previousState,
+            VehicleState currentState)
+        {
+            if ((previousState == VehicleState.Preparing && currentState != VehicleState.Preparing)
+                || (previousState == VehicleState.Running && currentState != VehicleState.Running))
+            {
+                m_ApproachStateByVehicle.Remove(vehicle);
+            }
         }
 
         internal void Remove(Entity vehicle)
@@ -1072,6 +1092,11 @@ namespace RapidTransitMod.Broadcasting
         {
             m_CheckedLineIds.Clear();
             m_Config.ClearFlags();
+            m_ApproachStateByVehicle.Clear();
+            m_AnnouncementCooldownUntilFrame.Clear();
+            m_StationBusyUntilFrame.Clear();
+            m_StationQuietSinceFrame.Clear();
+            m_Diagnostics.ClearPlatformApproach();
         }
 
         internal void ClearAssetState()
@@ -1124,20 +1149,24 @@ namespace RapidTransitMod.Broadcasting
             bool atOrigin,
             uint nowFrame)
         {
-            if (!HasPlatformAnnouncements(line))
+            Config.LineFlags flags = PlatformFlags(line);
+            if (!flags.HasPlatform)
                 return;
 
             float etaFrames = atOrigin
                 ? 0f
                 : m_Access.EstimatePreparing(vehicle, line, waypoints, nowFrame);
 
-            WatchOriginBusy(
-                line,
-                waypoints,
-                atOrigin || etaFrames <= m_Access.ClockSnapshot.ToFramesCeil(
-                    TriggerConstants.PlatformPreparingApproachLeadMinutes));
+            if (flags.HasIdle)
+            {
+                WatchOriginBusy(
+                    line,
+                    waypoints,
+                    atOrigin || etaFrames <= m_Access.ClockSnapshot.ToFramesCeil(
+                        TriggerConstants.PlatformPreparingApproachLeadMinutes));
+            }
 
-            if (HasApproachAnnouncements(line))
+            if (flags.HasApproach)
             {
                 WatchPreparingApproach(
                     vehicle,
@@ -1151,21 +1180,21 @@ namespace RapidTransitMod.Broadcasting
 
         internal void Origin(Entity line, DynamicBuffer<RouteWaypoint> waypoints, bool busy)
         {
-            if (HasPlatformAnnouncements(line))
+            if (PlatformFlags(line).HasIdle)
             {
                 WatchOriginBusy(line, waypoints, busy);
             }
         }
 
 
-        internal void Tick(uint nowFrame)
+        internal void Tick(uint nowFrame, bool sourceSweep)
         {
-            if (m_Config.PlatformsByLine.Count == 0)
+            if (!sourceSweep || m_Config.PlatformsByLine.Count == 0)
             {
                 return;
             }
 
-            PruneApproachStates(nowFrame);
+            PruneRunningApproachStates(nowFrame);
 
             List<WorkbenchLineRuntime> runtimeLines = m_Access.Lines();
             for (int i = 0; i < runtimeLines.Count; i++)
@@ -1183,6 +1212,12 @@ namespace RapidTransitMod.Broadcasting
 
                 DynamicBuffer<RouteWaypoint> waypoints = m_Access.EntityManager.GetBuffer<RouteWaypoint>(runtime.Entity, true);
                 EnsureBroadcastRuntimeLineState(runtime.Id, runtime.Entity);
+                Config.LineFlags flags = m_Config.Flags(runtime.Id);
+                if (!flags.HasPlatform)
+                {
+                    continue;
+                }
+
                 Dictionary<string, Dictionary<int, Entity>> approachCandidatesByStation = null;
                 foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in lineAnnouncements)
                 {
@@ -1199,6 +1234,11 @@ namespace RapidTransitMod.Broadcasting
 
                     if (string.Equals(announcement.triggerId, TriggerConstants.PlatformIdleTriggerId, StringComparison.Ordinal))
                     {
+                        if (!flags.HasIdle)
+                        {
+                            continue;
+                        }
+
                         string normalizedIdleStationId = m_Stations.NormalizeRepresentativeStationId(
                             runtime.Entity,
                             waypoints,
@@ -1236,6 +1276,11 @@ namespace RapidTransitMod.Broadcasting
 
                     if (string.Equals(announcement.triggerId, TriggerConstants.PlatformApproachTriggerId, StringComparison.Ordinal))
                     {
+                        if (!flags.HasApproach)
+                        {
+                            continue;
+                        }
+
                         if (approachCandidatesByStation == null)
                         {
                             approachCandidatesByStation = ApproachCandidatesByStation(runtime.Id, nowFrame);
@@ -1254,7 +1299,7 @@ namespace RapidTransitMod.Broadcasting
         }
 
 
-        private void PruneApproachStates(uint nowFrame)
+        private void PruneRunningApproachStates(uint nowFrame)
         {
             if (m_ApproachStateByVehicle.Count == 0)
             {
@@ -1265,10 +1310,15 @@ namespace RapidTransitMod.Broadcasting
             foreach (KeyValuePair<Entity, ApproachState> entry in m_ApproachStateByVehicle)
             {
                 Entity vehicle = entry.Key;
+                if (entry.Value.TraversalPhaseIndex == TriggerConstants.PlatformPreparingApproachPhaseIndex)
+                {
+                    continue;
+                }
+
                 if (vehicle == Entity.Null
                     || !m_Access.EntityManager.Exists(vehicle)
                     || !m_Access.VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
-                    || (vehicleState != VehicleState.Running && vehicleState != VehicleState.Preparing)
+                    || vehicleState != VehicleState.Running
                     || entry.Value.LastObservedFrame != nowFrame)
                 {
                     staleVehicles ??= new List<Entity>();
@@ -1389,7 +1439,8 @@ namespace RapidTransitMod.Broadcasting
             {
                 ApproachState state = entry.Value;
                 if (state.Triggered
-                    || state.LastObservedFrame != nowFrame
+                    || (state.TraversalPhaseIndex != TriggerConstants.PlatformPreparingApproachPhaseIndex
+                        && state.LastObservedFrame != nowFrame)
                     || string.IsNullOrWhiteSpace(state.LineId)
                     || string.IsNullOrWhiteSpace(state.StationId)
                     || !string.Equals(state.LineId, lineId, StringComparison.Ordinal))
@@ -1412,17 +1463,6 @@ namespace RapidTransitMod.Broadcasting
             }
 
             return candidatesByStation;
-        }
-
-
-        private bool HasApproachAnnouncements(Entity line)
-        {
-            if (!m_Config.Enabled)
-                return false;
-
-            string lineId = m_Access.DraftKey(m_Access.LineId(line));
-            EnsureBroadcastRuntimeLineState(lineId, line);
-            return m_Config.Flags(lineId).HasApproach;
         }
 
 
@@ -1460,14 +1500,16 @@ namespace RapidTransitMod.Broadcasting
         }
 
 
-        private bool HasPlatformAnnouncements(Entity line)
+        private Config.LineFlags PlatformFlags(Entity line)
         {
-            if (!m_Config.Enabled)
-                return false;
+            if (!m_Config.Enabled || line == Entity.Null)
+            {
+                return default;
+            }
 
             string lineId = m_Access.DraftKey(m_Access.LineId(line));
             EnsureBroadcastRuntimeLineState(lineId, line);
-            return m_Config.Flags(lineId).HasPlatform;
+            return m_Config.Flags(lineId);
         }
 
 

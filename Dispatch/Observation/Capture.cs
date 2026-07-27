@@ -43,8 +43,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
     internal sealed class Capture
     {
-        private const uint TraversalSliceSampleIntervalMediumFrames = 20;
-        private const uint TraversalSliceSampleIntervalLowFrames = 60;
+        private const uint TraversalSliceSampleIntervalHighFrames = 16;
+        private const uint TraversalSliceSampleIntervalMediumFrames = 32;
+        private const uint TraversalSliceSampleIntervalLowFrames = 64;
         private const uint TraversalSliceLineEligibilityNegativeCacheFrames = 60;
         private const uint TraversalSliceEntryProbeIntervalFrames = 32;
         private const float TraversalSliceSampleHighThreshold = 0.03f;
@@ -589,7 +590,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 if (nearestCutPointDistance <= TraversalSliceSampleHighThreshold)
                 {
                     isHighSampling = true;
-                    sampleIntervalFrames = 1;
+                    sampleIntervalFrames = TraversalSliceSampleIntervalHighFrames;
                 }
                 else if (nearestCutPointDistance <= TraversalSliceSampleMediumThreshold)
                 {

@@ -52,7 +52,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         protected const string DrivesToken = "__drives__";
         protected const string ManagedDirName = "BroadcastAssets";
         protected const float VolumeScalarMin = 5f;
-        protected const float VolumeScalarMax = 20f;
+        protected const float VolumeScalarMax = 60f;
         protected static readonly string[] s_Extensions = { ".wav", ".mp3", ".ogg" };
 
         protected readonly Context m_Ctx;
