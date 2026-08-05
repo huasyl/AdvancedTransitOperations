@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
-    <LangVersion>latest</LangVersion>
+    <LangVersion>10.0</LangVersion>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
@@ -184,6 +184,11 @@
   </Target>
 
   <Import Project="$(OfficialToolPath)\Mod.props" Condition="'$(EnableOfficialToolchain)'=='true' and Exists('$(OfficialToolPath)\Mod.props')" />
+
+  <PropertyGroup>
+    <LangVersion>10.0</LangVersion>
+  </PropertyGroup>
+
   <Import Project="$(OfficialToolPath)\Mod.targets" Condition="'$(EnableOfficialToolchain)'=='true' and Exists('$(OfficialToolPath)\Mod.targets')" />
 
   <Target Name="DisablePackagePostProcessorDebug" AfterTargets="ModPostProcessorConfig" Condition="'$(StripSymbolsForPackage)'=='true'">
