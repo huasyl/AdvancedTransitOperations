@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Runtime;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Observation
@@ -242,6 +244,12 @@ namespace RapidTransitMod.Dispatch.Observation
             new List<TraversalSliceActualSample>();
         private readonly List<TraversalPositionSample> m_RecentPositionSamples =
             new List<TraversalPositionSample>();
+        private readonly RuntimeFramePlan m_FramePlan;
+
+        internal SliceStore(RuntimeFramePlan framePlan)
+        {
+            m_FramePlan = framePlan;
+        }
 
         internal Dictionary<ulong, TraversalSliceObservation> Observations => m_Obs;
         internal Dictionary<Entity, VehicleTraversalSliceSession> Sessions => m_Sessions;

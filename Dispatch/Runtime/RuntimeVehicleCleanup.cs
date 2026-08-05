@@ -1,24 +1,29 @@
 using System;
 using System.Collections.Generic;
-using Unity.Collections;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Entities;
 
 namespace RapidTransitMod
 {
     internal sealed class RuntimeVehicleCleanup
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly LineSpawnControl m_LineSpawnControl;
         private readonly Action<Entity> m_ClearAssistLaunchPending;
+        private readonly Action<StopFact> m_PublishStopFact;
+        private readonly Action<Entity, int, StopControlResult> m_ApplyStopControl;
+        private readonly List<Entity> m_DeadVehicles = new List<Entity>();
 
         public RuntimeVehicleCleanup(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             LineSpawnControl lineSpawnControl,
             Action<Entity> clearAssistLaunchPending)
         {
             m_Runtime = runtime;
             m_LineSpawnControl = lineSpawnControl;
             m_ClearAssistLaunchPending = clearAssistLaunchPending;
+            m_PublishStopFact = runtime.PublishStopFact;
+            m_ApplyStopControl = runtime.ApplyStopControl;
         }
 
         private EntityManager EntityManager => m_Runtime.EntityManager;
@@ -26,13 +31,13 @@ namespace RapidTransitMod
 
         public void Tick()
         {
-            NativeList<Entity> deadKeys = new NativeList<Entity>(Allocator.Temp);
+            m_DeadVehicles.Clear();
             foreach (var kv in m_Runtime.m_VehicleStateStore.State)
             {
-                if (!EntityManager.Exists(kv.Key)) deadKeys.Add(kv.Key);
+                if (!EntityManager.Exists(kv.Key)) m_DeadVehicles.Add(kv.Key);
             }
             Dictionary<Entity, int> removedCountByLine = null;
-            foreach (Entity dead in deadKeys)
+            foreach (Entity dead in m_DeadVehicles)
             {
                 VehicleState deadState = m_Runtime.m_VehicleView.TryGetState(dead, out VehicleState removedState)
                     ? removedState
@@ -55,34 +60,31 @@ namespace RapidTransitMod
                     {
                         log.Info("[PreparingRemoved] 车辆" + dead.Index
                             + " line=" + DispatchCommandApplier.DescribeRetireShadowEntity(mappedLine)
-                            + " targetMin=" + (removedTargetMin >= 0 ? DispatchRuntimeSystem.SlotStr(removedTargetMin) : "-")
+                            + " targetMin=" + (removedTargetMin >= 0 ? ModRuntimeHostSystem.SlotStr(removedTargetMin) : "-")
                             + " cachedWp=" + removedCachedWp
                             + " prepAgeFrames=" + removedPrepAge);
                     }
                 }
-                m_Runtime.m_Announcements.RemoveVehicle(dead);
                 m_Runtime.m_StationContextQuery.RemoveVehicle(dead);
                 m_Runtime.m_CommandApplier.FlushRetireShadowSnapshots(dead, "entity-removed");
                 m_Runtime.m_CommandApplier.ResetRetireShadowSnapshots(dead);
+                StopCancelResult cancelledStop = m_Runtime.m_StopRuntime.CancelStopSession(
+                    dead,
+                    m_Runtime.m_SimulationSystem.frameIndex);
+                if (cancelledStop.Exists)
+                {
+                    m_PublishStopFact(cancelledStop.Fact);
+                    m_ApplyStopControl(dead, cancelledStop.Control.WaypointIndex, cancelledStop.Control);
+                }
                 m_Runtime.m_VehicleRegistry.Remove(dead);
                 m_Runtime.m_ObsPersist.ClearLap(dead);
                 m_Runtime.m_UICache.Remove(dead);
-                m_Runtime.m_VehicleLabels.Remove(dead);
-                m_Runtime.m_LastEffectiveBoardingState.Remove(dead);
-                m_Runtime.m_LastOfficialBoardingState.Remove(dead);
                 m_Runtime.m_BoardingFirstFrameGuardState.Remove(dead);
-                m_Runtime.m_StopSessionLine.Remove(dead);
-                m_Runtime.m_StopSessionWaypointIndex.Remove(dead);
-                m_Runtime.m_StopSessionArrivalFrame.Remove(dead);
-                m_Runtime.m_StopSessionBoardingChangeCount.Remove(dead);
-                m_Runtime.m_DeparturePendingSinceFrame.Remove(dead);
+                m_Runtime.m_StopRuntime.RemoveVehicle(dead);
                 m_Runtime.m_CachedWpIdx.Remove(dead);
-                m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(dead);
                 m_Runtime.TrackProjection.ClearVehicle(dead);
                 m_Runtime.m_WaypointIndex.Remove(dead);
                 m_Runtime.m_RouteProgress.Remove(dead);
-                m_Runtime.m_BVMisfire.Remove(dead);
-                m_Runtime.m_BVMisfireStartFrame.Remove(dead);
                 m_Runtime.Bypass.ClearVehicle(dead);
                 m_Runtime.TrackProjection.ClearVehicleProgressSuspect(dead, "vehicle-removed");
                 m_Runtime.m_Observation.ClearForcedMidStop(dead);
@@ -96,7 +98,16 @@ namespace RapidTransitMod
                 m_Runtime.m_Observation.ClearVehicleSlices(dead);
                 m_Runtime.m_Observation.ClearDebug(dead);
                 m_Runtime.m_RuntimeLog.ClearVehicle(dead);
-                m_Runtime.Bypass.ForgetBlocker(dead);
+                List<Entity> affectedLocals = m_Runtime.Bypass.ForgetBlocker(dead);
+                if (affectedLocals != null)
+                {
+                    for (int i = 0; i < affectedLocals.Count; i++)
+                    {
+                        m_Runtime.m_RuntimeFramePlan.AddStage(
+                            affectedLocals[i],
+                            RuntimeStageMask.Bypass);
+                    }
+                }
                 if (mappedLine != Entity.Null && deadState != VehicleState.Retiring)
                 {
                     removedCountByLine ??= new Dictionary<Entity, int>();
@@ -110,21 +121,21 @@ namespace RapidTransitMod
             {
                 m_LineSpawnControl.ApplyCleanupTargetReduction(removedCountByLine);
             }
-            if (deadKeys.Length > 0)
+            if (m_DeadVehicles.Count > 0)
                 m_Runtime.m_WaypointIndex.Clear();
-            if (deadKeys.Length > 0)
+            if (m_DeadVehicles.Count > 0)
                 m_Runtime.m_RouteProgress.Clear();
-            if (deadKeys.Length > 0)
+            if (m_DeadVehicles.Count > 0)
                 m_Runtime.TrackProjection.ClearLineRunningVehicleSnapshots();
-            if (deadKeys.Length > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
+            if (m_DeadVehicles.Count > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
             {
-                log.Info("[VehicleCleanupSummary] deadVehicles=" + deadKeys.Length
+                log.Info("[VehicleCleanupSummary] deadVehicles=" + m_DeadVehicles.Count
                     + " affectedLines=" + (removedCountByLine != null ? removedCountByLine.Count : 0)
                     + " clearedWaypointIndex=1"
                     + " clearedRouteProgress=1"
                     + " clearedLineRunningSnapshots=1");
             }
-            deadKeys.Dispose();
+            m_DeadVehicles.Clear();
         }
     }
 }

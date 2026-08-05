@@ -30,7 +30,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
 #endif
 {
     /// <summary>
-    /// Request-driven read-only capture system. RailEtaHotModule ticks it from DispatchRuntimeSystem after
+    /// Request-driven read-only capture system. RailEtaHotModule ticks it from ModRuntimeHostSystem after
     /// the runtime read port has been updated. TrainNavigation updates at interval 16/offset 3, while lane
     /// reservations reset their frameIndex % 16 bucket every frame.
     /// No query or job is scheduled while the service has no request and this system has no active batch.

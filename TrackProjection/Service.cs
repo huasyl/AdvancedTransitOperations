@@ -411,6 +411,7 @@ namespace RapidTransitMod.TrackProjection
                 return false;
             }
 
+            m_Runtime.CountNavigationDetailRead();
             TrainCurrentLane currentLane = m_Runtime.EntityManager.GetComponentData<TrainCurrentLane>(vehicle);
             Entity frontLane = currentLane.m_Front.m_Lane;
             Entity rearLane = currentLane.m_Rear.m_Lane;

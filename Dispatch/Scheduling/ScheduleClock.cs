@@ -7,7 +7,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
     {
         public static int NextSlot(int nowMinute)
         {
-            return ((nowMinute / DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) + 1) * DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES % 1440;
+            return ((nowMinute / ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) + 1) * ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES % 1440;
         }
 
         public static int MinutesUntil(int nowMinute, int targetMinute)
@@ -20,12 +20,12 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         public static bool Reached(int nowMinute, int targetMinute)
         {
-            return ((nowMinute - targetMinute + 1440) % 1440) <= DispatchRuntimeSystem.SLOT_GRACE_MINUTES;
+            return ((nowMinute - targetMinute + 1440) % 1440) <= ModRuntimeHostSystem.SLOT_GRACE_MINUTES;
         }
 
         public static int PreviousSlot(int nowMinute)
         {
-            return ((nowMinute / DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) * DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+            return ((nowMinute / ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) * ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
         }
 
         public static bool CurrentOrRecent(int nowMinute, int targetMinute)
@@ -45,34 +45,34 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
             int overdueMinutes = Overdue(nowMinute, targetMinute);
             int lateWindow = LateWindow();
-            return overdueMinutes > DispatchRuntimeSystem.SLOT_GRACE_MINUTES && overdueMinutes <= lateWindow;
+            return overdueMinutes > ModRuntimeHostSystem.SLOT_GRACE_MINUTES && overdueMinutes <= lateWindow;
         }
 
         public static bool SoftExpired(int nowMinute, int targetMinute)
         {
             int overdueMinutes = Overdue(nowMinute, targetMinute);
-            int releaseAfter = math.max(DispatchRuntimeSystem.SLOT_GRACE_MINUTES, LateWindow());
-            return overdueMinutes > releaseAfter && overdueMinutes <= DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES;
+            int releaseAfter = math.max(ModRuntimeHostSystem.SLOT_GRACE_MINUTES, LateWindow());
+            return overdueMinutes > releaseAfter && overdueMinutes <= ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES;
         }
 
         public static bool HardExpired(int nowMinute, int targetMinute)
         {
             int overdueMinutes = Overdue(nowMinute, targetMinute);
-            return overdueMinutes > DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES
-                && overdueMinutes <= DispatchRuntimeSystem.SPAWN_LEAD_MINUTES + DispatchRuntimeSystem.SLOT_GRACE_MINUTES;
+            return overdueMinutes > ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES
+                && overdueMinutes <= ModRuntimeHostSystem.SPAWN_LEAD_MINUTES + ModRuntimeHostSystem.SLOT_GRACE_MINUTES;
         }
 
         public static bool Expired(int nowMinute, int targetMinute)
         {
             int overdueMinutes = Overdue(nowMinute, targetMinute);
-            return overdueMinutes > DispatchRuntimeSystem.SLOT_GRACE_MINUTES
-                && overdueMinutes <= DispatchRuntimeSystem.SPAWN_LEAD_MINUTES + DispatchRuntimeSystem.SLOT_GRACE_MINUTES;
+            return overdueMinutes > ModRuntimeHostSystem.SLOT_GRACE_MINUTES
+                && overdueMinutes <= ModRuntimeHostSystem.SPAWN_LEAD_MINUTES + ModRuntimeHostSystem.SLOT_GRACE_MINUTES;
         }
 
         public static int Lead(int nowMinute, int targetMinute)
         {
             int overdueMinutes = Overdue(nowMinute, targetMinute);
-            if (overdueMinutes <= DispatchRuntimeSystem.SLOT_GRACE_MINUTES)
+            if (overdueMinutes <= ModRuntimeHostSystem.SLOT_GRACE_MINUTES)
                 return 0;
 
             return MinutesUntil(nowMinute, targetMinute);
@@ -85,7 +85,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         private static int LateWindow()
         {
-            return math.clamp(DispatchRuntimeSystem.LATE_DISPATCH_WINDOW_MINUTES, 0, DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES);
+            return math.clamp(ModRuntimeHostSystem.LATE_DISPATCH_WINDOW_MINUTES, 0, ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES);
         }
 
         private static bool LateEnabled()

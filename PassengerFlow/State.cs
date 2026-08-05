@@ -9,6 +9,7 @@ namespace RapidTransitMod.PassengerFlow
         internal readonly Queue<PendingSample> PendingSamples = new Queue<PendingSample>();
         internal readonly Dictionary<Entity, PassengerBaseline> Baselines = new Dictionary<Entity, PassengerBaseline>();
         internal readonly Dictionary<Entity, uint> LastProbeFrames = new Dictionary<Entity, uint>();
+        internal readonly Dictionary<Entity, uint> LastLaunchFrames = new Dictionary<Entity, uint>();
         internal readonly Trips Trips = new Trips();
         internal readonly Aggregates Aggregates = new Aggregates();
         internal readonly Anchors Anchors = new Anchors();
@@ -34,6 +35,7 @@ namespace RapidTransitMod.PassengerFlow
             PendingSamples.Clear();
             Baselines.Clear();
             LastProbeFrames.Clear();
+            LastLaunchFrames.Clear();
             Trips.Clear();
             Aggregates.Clear();
             Anchors.Clear();

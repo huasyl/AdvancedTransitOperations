@@ -43,7 +43,7 @@ namespace RapidTransitMod
             }
         }
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, bool> m_Managed;
         private readonly Func<Entity, int[]> m_Times;
         private readonly Func<Entity, int> m_Hold;
@@ -67,7 +67,7 @@ namespace RapidTransitMod
         internal SlotPlan Plan => m_SlotPlan;
 
         public DispatchScheduler(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             Func<Entity, bool> managed,
             Func<Entity, int[]> times,
             Func<Entity, int> hold,
@@ -97,20 +97,21 @@ namespace RapidTransitMod
             m_SlotPlan = new SlotPlan(runtime, m_Policy, managed, times, hold, resolveRuntimeControllerVehicle);
         }
 
-        public void Tick(ClockSnapshot clockSnapshot)
+        public void Tick(ClockSnapshot clockSnapshot, IReadOnlyList<Entity> lines)
         {
             int nowMinute = clockSnapshot.NowMinute;
             m_Runtime.m_SpawnLeadTheory?.Tick();
             m_SlotClaims.Clear();
             m_RetireDecisions.Clear();
-            NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
 
-            try
+            if (lines == null)
+                return;
+
+            for (int lineIndex = 0; lineIndex < lines.Count; lineIndex++)
             {
-                foreach (Entity line in lines)
-                {
+                Entity line = lines[lineIndex];
                     if (!m_Runtime.EntityManager.Exists(line))
                         continue;
                     if (!DispatchLineEligibility.IsDispatchTransportLine(m_Runtime.EntityManager, line))
@@ -138,7 +139,7 @@ namespace RapidTransitMod
 
                     int originHoldLimitMinutes = useManagedTimes
                         ? m_Hold(line)
-                        : DispatchRuntimeSystem.SPAWN_LEAD_MINUTES;
+                        : ModRuntimeHostSystem.SPAWN_LEAD_MINUTES;
 
                     uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
                     string lineTag = "线路" + line.Index;
@@ -188,10 +189,10 @@ namespace RapidTransitMod
                     int slotMinute = useManagedTimes && appliedTargets.Length > 0 ? appliedTargets[0] : NextSlotMin(nowMinute);
                     int maxSlots = useManagedTimes
                         ? appliedTargets.Length
-                        : DispatchRuntimeSystem.SPAWN_LEAD_MINUTES / DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES + 1;
+                        : ModRuntimeHostSystem.SPAWN_LEAD_MINUTES / ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES + 1;
                     int dispatchCycleMinutes = useManagedTimes
                         ? ScheduleTargets.Headway(appliedTargets)
-                        : DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES;
+                        : ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES;
                     int nextAppliedTargetIndex = useManagedTimes
                         ? ScheduleTargets.NextIndex(nowMinute, appliedTargets)
                         : -1;
@@ -265,14 +266,14 @@ namespace RapidTransitMod
                         float slotFramesAway = clockSnapshot.ToFramesCeil(minutesToSlot);
                         if (ScheduleClock.Expired(nowMinute, slotMinute))
                         {
-                            slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                            slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                             continue;
                         }
                         if (slotFramesAway > dispatchScanLimitFrames)
                         {
                             if (useManagedTimes && s >= 0)
                                 break;
-                            slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                            slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                             continue;
                         }
 
@@ -293,7 +294,7 @@ namespace RapidTransitMod
 
                         if (currentOccupier != Entity.Null)
                         {
-                            slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                            slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                             continue;
                         }
 
@@ -322,7 +323,7 @@ namespace RapidTransitMod
                         {
                             if (RtLog.VerboseEnabled)
                                 m_LogDispatchSlotHeld(line, slotMinute, currentHolder, line, wps, nowMinute, nowFrame, "idle-or-holding-holder");
-                            slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                            slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                             continue;
                         }
 
@@ -340,7 +341,7 @@ namespace RapidTransitMod
                                 clockSnapshot))
                             {
                                 TryLogSpawnBlocked(line, lineTag, slotMinute);
-                                slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                                 continue;
                             }
                         }
@@ -372,7 +373,7 @@ namespace RapidTransitMod
                             m_SlotClaims);
                         if (slotStatus == SlotPlan.Status.Skip)
                         {
-                            slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                            slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                             continue;
                         }
 
@@ -395,7 +396,7 @@ namespace RapidTransitMod
 
                             if (hasIdleOrHoldingUnassigned)
                             {
-                                slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                                 continue;
                             }
 
@@ -438,13 +439,13 @@ namespace RapidTransitMod
                                     clockSnapshot))
                                 {
                                     TryLogSpawnBlocked(line, lineTag, slotMinute);
-                                    slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                    slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                                     continue;
                                 }
-                                if (m_Runtime.m_LineProfile.HasInboundNearOrigin(line, wps, Entity.Null, DispatchRuntimeSystem.ORIGIN_CONGESTION_RADIUS_METERS))
+                                if (m_Runtime.m_LineProfile.HasInboundNearOrigin(line, wps, Entity.Null, ModRuntimeHostSystem.ORIGIN_CONGESTION_RADIUS_METERS))
                                 {
                                     TryLogSpawnBlocked(line, lineTag, slotMinute);
-                                    slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                    slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                                     continue;
                                 }
                                 if (m_HasBorderlineOriginArrivalCandidate(
@@ -456,7 +457,7 @@ namespace RapidTransitMod
                                     clockSnapshot))
                                 {
                                     TryLogSpawnBlocked(line, lineTag, slotMinute);
-                                    slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                    slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                                     continue;
                                 }
 
@@ -471,7 +472,7 @@ namespace RapidTransitMod
                                         spawnLeadFrames,
                                         reachableWindowFrames,
                                         clockSnapshot);
-                                    slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                    slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                                     continue;
                                 }
 
@@ -479,7 +480,7 @@ namespace RapidTransitMod
                                     + originHoldLimitFrames;
                                 if (slotFramesAway > spawnTriggerFrames)
                                 {
-                                    slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                    slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                                     continue;
                                 }
 
@@ -501,7 +502,7 @@ namespace RapidTransitMod
                                 m_RecordLineSpawnTriggerSummary(line, nowMinute, slotMinute, actualCount);
                                 if (RtLog.VerboseEnabled)
                                 {
-                                    m_Runtime.log.Info("[调度] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slotMinute)
+                                    m_Runtime.log.Info("[调度] " + lineTag + " 班次" + ModRuntimeHostSystem.SlotStr(slotMinute)
                                         + " 无候选，触发产车+1 (当前=" + actualCount
                                         + " 圈时=" + clockSnapshot.ToMinutes(lineDurationFrames).ToString("F1") + "游戏分钟)"
                                         + spawnIntent);
@@ -509,15 +510,11 @@ namespace RapidTransitMod
                             }
                         }
 
-                        slotMinute = (slotMinute + DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                        slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
                     }
-                }
             }
-            finally
-            {
-                lines.Dispose();
-                m_Runtime.m_SpawnLeadTheory?.Tick();
-            }
+
+            m_Runtime.m_SpawnLeadTheory?.Tick();
         }
 
         public int NextSlotMin(int nowMinute)
@@ -561,13 +558,13 @@ namespace RapidTransitMod
 
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             if (m_Runtime.m_LastSpawnBlockedLogFrame.TryGetValue(line, out uint lastFrame)
-                && (nowFrame - lastFrame) < DispatchRuntimeSystem.SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES)
+                && (nowFrame - lastFrame) < ModRuntimeHostSystem.SPAWN_BLOCKED_LOG_COOLDOWN_FRAMES)
             {
                 return;
             }
 
             m_Runtime.m_LastSpawnBlockedLogFrame[line] = nowFrame;
-            m_Runtime.log.Info("[SpawnBlocked] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slotMinute)
+            m_Runtime.log.Info("[SpawnBlocked] " + lineTag + " 班次" + ModRuntimeHostSystem.SlotStr(slotMinute)
                 + " 始发站附近已有回流车，跳过产车");
         }
 
@@ -585,14 +582,14 @@ namespace RapidTransitMod
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             ulong key = MakeLineSlotKey(line, slotMinute) ^ 0x8000000000000000UL;
             if (m_Runtime.m_LastScheduleDiagnosticLogFrame.TryGetValue(key, out uint lastFrame)
-                && (nowFrame - lastFrame) < DispatchRuntimeSystem.SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES)
+                && (nowFrame - lastFrame) < ModRuntimeHostSystem.SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES)
             {
                 return;
             }
 
             m_Runtime.m_LastScheduleDiagnosticLogFrame[key] = nowFrame;
             m_Runtime.log.Info("[SpawnLeadBlocked] " + lineTag
-                + " 班次" + DispatchRuntimeSystem.SlotStr(slotMinute)
+                + " 班次" + ModRuntimeHostSystem.SlotStr(slotMinute)
                 + " 出库ETA=" + clockSnapshot.ToMinutes(spawnLeadFrames).ToString("F1") + "分钟"
                 + " 正点窗口剩余=" + clockSnapshot.ToMinutes(reachableWindowFrames).ToString("F1") + "分钟"
                 + "，跳过产车");
@@ -613,13 +610,13 @@ namespace RapidTransitMod
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
             ulong key = MakeLineSlotKey(line, slotMinute);
             if (m_Runtime.m_LastScheduleDiagnosticLogFrame.TryGetValue(key, out uint lastFrame)
-                && (nowFrame - lastFrame) < DispatchRuntimeSystem.SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES)
+                && (nowFrame - lastFrame) < ModRuntimeHostSystem.SCHEDULE_DIAGNOSTIC_LOG_COOLDOWN_FRAMES)
             {
                 return;
             }
 
             m_Runtime.m_LastScheduleDiagnosticLogFrame[key] = nowFrame;
-            m_Runtime.log.Info("[调度诊断] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slotMinute)
+            m_Runtime.log.Info("[调度诊断] " + lineTag + " 班次" + ModRuntimeHostSystem.SlotStr(slotMinute)
                 + " 最近候选车辆" + nearestVehicle.Index
                 + " state=" + nearestState
                 + " eta=" + etaText

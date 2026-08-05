@@ -70,7 +70,6 @@ const KEYS = {
   alertNextSlotGap: "RapidTransit.AlertNextSlotGap",
   alertNoLapCache: "RapidTransit.AlertNoLapCache",
   alertNoDispatchCache: "RapidTransit.AlertNoDispatchCache",
-  alertBvMisfire: "RapidTransit.AlertBvMisfire",
   alertNearingTerminus: "RapidTransit.AlertNearingTerminus",
   alertLaunchCooldown: "RapidTransit.AlertLaunchCooldown",
   alertTargetExpired: "RapidTransit.AlertTargetExpired",

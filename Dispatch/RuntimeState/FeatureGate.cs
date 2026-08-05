@@ -8,17 +8,21 @@ namespace RapidTransitMod
         private readonly Func<bool> m_BypassRunOn;
         private readonly Action m_ClearBypass;
         private readonly Action m_StopBroadcast;
+        private readonly Action m_DispatchChanged;
+        private ulong m_DispatchGeneration;
 
         public FeatureGate(
             FeatureSettingsStore store,
             Func<bool> bypassRunOn,
             Action clearBypass,
-            Action stopBroadcast)
+            Action stopBroadcast,
+            Action dispatchChanged)
         {
             m_Store = store ?? throw new ArgumentNullException(nameof(store));
             m_BypassRunOn = bypassRunOn ?? throw new ArgumentNullException(nameof(bypassRunOn));
             m_ClearBypass = clearBypass ?? throw new ArgumentNullException(nameof(clearBypass));
             m_StopBroadcast = stopBroadcast ?? throw new ArgumentNullException(nameof(stopBroadcast));
+            m_DispatchChanged = dispatchChanged ?? throw new ArgumentNullException(nameof(dispatchChanged));
         }
 
         public RuntimeFeatureSettingsDto Dto()
@@ -44,6 +48,12 @@ namespace RapidTransitMod
             FeatureSettingsState next = ToState(settings);
             m_Store.Set(next);
 
+            if (previous.DispatchEnabled != next.DispatchEnabled)
+            {
+                m_DispatchGeneration++;
+                m_DispatchChanged();
+            }
+
             if (previous.BypassEnabled && !next.BypassEnabled)
             {
                 m_ClearBypass();
@@ -57,8 +67,16 @@ namespace RapidTransitMod
 
         public void Reset()
         {
+            bool wasEnabled = m_Store.DispatchEnabled;
             m_Store.Reset();
+            if (wasEnabled != m_Store.DispatchEnabled)
+            {
+                m_DispatchGeneration++;
+                m_DispatchChanged();
+            }
         }
+
+        public ulong DispatchGeneration => m_DispatchGeneration;
 
         public bool Dispatch()
         {

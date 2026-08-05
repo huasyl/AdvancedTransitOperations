@@ -75,7 +75,6 @@ namespace RapidTransitMod.Bypass
         {
             if (m_Admission.TryGetBypassHoldSkipped(vehicle, out Entity skippedBlocker))
             {
-                m_Admission.Probe.CountBypassSkipped();
                 return new BypassControlResult(
                     true,
                     vehicle,
@@ -89,14 +88,13 @@ namespace RapidTransitMod.Bypass
             }
 
             bool hadLatchedYield = m_Admission.TryGetLatchedBlocker(vehicle, out _);
-            if (hadLatchedYield)
-                m_Admission.Probe.CountBypassLatched();
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || waypointIndex <= 0
                 || (!boarding && !hadLatchedYield))
             {
-                m_Admission.Probe.CountBypassEarlyReturn();
+                if (!boarding && !hadLatchedYield)
+                    m_Admission.ClearInactive(vehicle);
                 return new BypassControlResult(
                     false,
                     vehicle,
@@ -115,7 +113,6 @@ namespace RapidTransitMod.Bypass
                 waypoints,
                 waypointIndex,
                 nowFrame);
-            m_Admission.Probe.CountBypassEvaluated();
             Entity blocker = m_Admission.FindBlocker(decision);
             string releaseReason = null;
             if (m_Admission.CanRelease(decision))
@@ -190,6 +187,7 @@ namespace RapidTransitMod.Bypass
                 return;
 
             publicTransport.m_DepartureFrame = nowFrame + 9999;
+            m_Runtime.RecordPublicTransportWrite(control.Vehicle, publicTransport);
             ecb.SetComponent(control.Vehicle, publicTransport);
             Entity holdStation = m_Runtime.ResolveStation(waypoints, control.WaypointIndex);
             if (control.Vehicle != Entity.Null
@@ -247,7 +245,6 @@ namespace RapidTransitMod.Bypass
             {
                 Release(control);
             }
-
             return control;
         }
 

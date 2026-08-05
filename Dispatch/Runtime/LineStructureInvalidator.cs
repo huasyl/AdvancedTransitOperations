@@ -6,7 +6,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 {
     internal sealed class LineStructureInvalidator
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, PendingInvalidation> m_Pending = new Dictionary<Entity, PendingInvalidation>();
 
         private readonly struct PendingInvalidation
@@ -37,7 +37,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
-        internal LineStructureInvalidator(DispatchRuntimeSystem runtime)
+        internal LineStructureInvalidator(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -79,6 +79,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private void DrainLine(PendingInvalidation pending)
         {
             Entity line = pending.Line;
+            m_Runtime.m_RailEventSource.InvalidateLine(line);
+            m_Runtime.m_TrackModel.InvalidateWaypointIndexLookup(line);
             m_Runtime.m_LapCache.RemoveLine(line);
             m_Runtime.m_DispatchCache.RemoveLine(line);
             m_Runtime.m_Observation.InvalidateSliceLine(line);
@@ -128,26 +130,14 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void ClearVehiclePosition(Entity vehicle)
         {
-            m_Runtime.m_InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            if (m_Runtime.m_StopSessionWaypointIndex.TryGetValue(vehicle, out int stopSessionWaypointIndex)
-                && stopSessionWaypointIndex > 0
-                && !m_Runtime.m_DeparturePendingSinceFrame.ContainsKey(vehicle))
-            {
-                m_Runtime.m_InvalidatedMidStopRecoveryPending.Add(vehicle);
-            }
-
-            m_Runtime.m_CachedWpIdx.Remove(vehicle);
+            m_Runtime.m_RailEventSource.CommitWaypoint(vehicle, -1);
             m_Runtime.m_WaypointIndex.Remove(vehicle);
             m_Runtime.m_RouteProgress.Remove(vehicle);
             m_Runtime.m_TrackProjection.ClearVehicle(vehicle);
             m_Runtime.m_ObsPersist.ClearLap(vehicle);
             m_Runtime.m_Observation.ClearVehicleSlices(vehicle);
-            m_Runtime.m_StopSessionLine.Remove(vehicle);
-            m_Runtime.m_StopSessionWaypointIndex.Remove(vehicle);
-            m_Runtime.m_StopSessionArrivalFrame.Remove(vehicle);
-            m_Runtime.m_StopSessionBoardingChangeCount.Remove(vehicle);
-            m_Runtime.m_DeparturePendingSinceFrame.Remove(vehicle);
-            m_Runtime.m_ForcedMidStopBoardingGraceUntil.Remove(vehicle);
+            m_Runtime.m_StopRuntime.InvalidateVehiclePosition(vehicle);
+            m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RuntimeStageMask.Stop);
         }
     }
 }

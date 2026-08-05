@@ -108,7 +108,6 @@ const ALERT_CODES: Record<string, string> = {
   "next-slot-gap": "alertNextSlotGap",
   "no-lap-cache": "alertNoLapCache",
   "no-dispatch-cache": "alertNoDispatchCache",
-  "bv-misfire": "alertBvMisfire",
   "nearing-terminus": "alertNearingTerminus",
   "launch-cooldown": "alertLaunchCooldown",
   "target-expired": "alertTargetExpired",

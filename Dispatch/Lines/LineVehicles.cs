@@ -5,9 +5,9 @@ namespace RapidTransitMod.Dispatch.Lines
 {
     internal sealed class LineVehicles
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public LineVehicles(DispatchRuntimeSystem runtime)
+        public LineVehicles(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

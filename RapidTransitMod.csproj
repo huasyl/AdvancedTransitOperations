@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
-    <LangVersion>latest</LangVersion>
+    <LangVersion>10.0</LangVersion>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
@@ -29,6 +29,7 @@
     <Compile Remove="references\**\*.cs" />
     <Compile Remove="tools\**\*.cs" />
     <Compile Remove="hot\**\*.cs" />
+    <Compile Remove="diagnostics\**\*.cs" />
     <!-- Core/RailEta 由主 DLL 默认编译为 BuiltIn 命名空间；热模块链接同源代码并编译为 Hot。 -->
     <None Include="references\**\*.cs" />
     <None Include="rapidtransit-ui-module\dist\RapidTransitMod.mjs">
@@ -183,6 +184,11 @@
   </Target>
 
   <Import Project="$(OfficialToolPath)\Mod.props" Condition="'$(EnableOfficialToolchain)'=='true' and Exists('$(OfficialToolPath)\Mod.props')" />
+
+  <PropertyGroup>
+    <LangVersion>10.0</LangVersion>
+  </PropertyGroup>
+
   <Import Project="$(OfficialToolPath)\Mod.targets" Condition="'$(EnableOfficialToolchain)'=='true' and Exists('$(OfficialToolPath)\Mod.targets')" />
 
   <Target Name="DisablePackagePostProcessorDebug" AfterTargets="ModPostProcessorConfig" Condition="'$(StripSymbolsForPackage)'=='true'">

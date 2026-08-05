@@ -7,6 +7,7 @@ using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using RapidTransitMod.Core;
+using RapidTransitMod.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -14,6 +15,13 @@ namespace RapidTransitMod.Dispatch.Runtime
 {
     internal class BypassAdmissionPort : IBypassAdmissionRuntimeContext
     {
+        public virtual void SetRuntimeDeadline(Entity vehicle, DeadlineKind kind, uint frame) { }
+        public virtual void ClearRuntimeDeadline(Entity vehicle, DeadlineKind kind) { }
+        public virtual void ClearRuntimeDeadlines(DeadlineKind kind) { }
+        public virtual void SetRuntimeBypassActive(Entity vehicle, bool active) { }
+        public virtual void ClearRuntimeBypassActive() { }
+        public virtual void SetRuntimeBypassWatch(Entity vehicle, bool active) { }
+        public virtual void ClearRuntimeBypassWatch() { }
         private readonly EntityManager m_EntityManager;
         private readonly TimedLogger m_Log;
         private readonly Func<uint> m_Frame;

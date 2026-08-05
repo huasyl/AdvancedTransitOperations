@@ -4,6 +4,8 @@ namespace RapidTransitMod
     {
         internal static bool DebugToolsEnabled => BuildFlavor.DebugTools;
         internal static bool VerboseEnabled => BuildFlavor.VerboseLogs;
+        // Raw path dumps are much heavier than ordinary verbose diagnostics.
+        internal static bool TrackRawDiagnosticsEnabled => VerboseEnabled && false;
         internal static bool CacheInvalidationDiagnosticsEnabled => false;
 
         internal static void Info(string message)

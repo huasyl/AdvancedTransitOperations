@@ -8,8 +8,16 @@ namespace RapidTransitMod
         private readonly Dictionary<LineKey, LineConfigState> m_Lines =
             new Dictionary<LineKey, LineConfigState>();
         private ulong m_Version = 1;
+        private Action<LineKey> m_LineChanged;
+        private Action m_AllChanged;
 
         public ulong Version => m_Version;
+
+        internal void SetDirtyCallbacks(Action<LineKey> lineChanged, Action allChanged)
+        {
+            m_LineChanged = lineChanged;
+            m_AllChanged = allChanged;
+        }
 
         public LineConfigState Get(LineKey lineKey)
         {
@@ -59,11 +67,13 @@ namespace RapidTransitMod
             if (state == null)
             {
                 m_Lines.Remove(key);
+                m_LineChanged?.Invoke(key);
                 return;
             }
 
             LineConfigState normalized = Normalize(state, m_Version);
             m_Lines[key] = normalized;
+            m_LineChanged?.Invoke(key);
         }
 
         public bool Clear(LineKey lineKey)
@@ -76,6 +86,7 @@ namespace RapidTransitMod
                 return false;
 
             m_Version++;
+            m_LineChanged?.Invoke(key);
             return true;
         }
 
@@ -95,6 +106,7 @@ namespace RapidTransitMod
 
             m_Version++;
             m_Lines.Clear();
+            m_AllChanged?.Invoke();
         }
 
         public void Clear(TransitMode mode)
@@ -122,6 +134,7 @@ namespace RapidTransitMod
             {
                 m_Lines.Remove(keys[i]);
             }
+            m_AllChanged?.Invoke();
         }
 
         public IEnumerable<KeyValuePair<LineKey, LineConfigState>> GetAll()
@@ -167,6 +180,7 @@ namespace RapidTransitMod
             m_Version++;
             m_Lines[targetKey] = Normalize(state, m_Version);
             m_Lines.Remove(legacyKey);
+            m_AllChanged?.Invoke();
             return true;
         }
 
@@ -197,6 +211,7 @@ namespace RapidTransitMod
             m_Version++;
             m_Lines[stable] = Normalize(state, m_Version);
             m_Lines.Remove(legacy);
+            m_AllChanged?.Invoke();
             return LineKeyMigrateResult.Migrated;
         }
 

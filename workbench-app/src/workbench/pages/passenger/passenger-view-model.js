@@ -2,20 +2,7 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-const LINE_COLORS = ["#38bdf8", "#f59e0b", "#10b981", "#ef4444", "#a78bfa", "#f472b6", "#22c55e", "#eab308"];
-
-function hashText(text) {
-  let hash = 0;
-  const source = String(text || "");
-  for (let index = 0; index < source.length; index += 1) {
-    hash = ((hash * 31) + source.charCodeAt(index)) >>> 0;
-  }
-  return hash;
-}
-
-function lineColor(lineId) {
-  return LINE_COLORS[hashText(lineId) % LINE_COLORS.length];
-}
+const UNKNOWN_LINE_COLOR = "#64748b";
 
 function buildLineCatalog(metadataSnapshot) {
   const map = new Map();
@@ -31,7 +18,7 @@ function buildLineCatalog(metadataSnapshot) {
       code,
       name: name || code || "--",
       shortName: name,
-      color: line?.color || lineColor(id)
+      color: line?.color || UNKNOWN_LINE_COLOR
     });
   });
   return map;
@@ -151,7 +138,7 @@ function addLine(lineMap, lineCatalog, lineId) {
     code: "",
     name: "--",
     shortName: "",
-    color: lineColor(id)
+    color: UNKNOWN_LINE_COLOR
   });
 }
 

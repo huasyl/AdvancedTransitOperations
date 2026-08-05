@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Game;
 using Game.Common;
 using Game.Pathfind;
@@ -19,7 +20,7 @@ namespace RapidTransitMod
         private readonly RetireHost m_RetireHost;
         private readonly RetireHandoff m_RetireHandoff;
 
-        public DispatchCommandApplier(DispatchRuntimeSystem runtime)
+        public DispatchCommandApplier(ModRuntimeHostSystem runtime)
         {
             m_CommandHost = new CommandHost(runtime);
             m_DispatchActions = new DispatchActions(m_CommandHost);
@@ -34,14 +35,6 @@ namespace RapidTransitMod
             m_DispatchActions.CommitAssignedSlotHold(vehicle, slot, ecb);
         }
 
-        internal void CommitPublicTransport(
-            Entity vehicle,
-            Game.Vehicles.PublicTransport publicTransport,
-            EntityCommandBuffer ecb)
-        {
-            m_DispatchActions.CommitPublicTransport(vehicle, publicTransport, ecb);
-        }
-
         internal void HoldDeparture(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,
@@ -49,6 +42,11 @@ namespace RapidTransitMod
             EntityCommandBuffer ecb)
         {
             m_DispatchActions.HoldDeparture(vehicle, ref publicTransport, nowFrame, ecb);
+        }
+
+        internal void HoldDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
+        {
+            m_DispatchActions.HoldDeparture(vehicle, nowFrame, ecb);
         }
 
         internal void ForceDepart(
@@ -60,52 +58,42 @@ namespace RapidTransitMod
             m_DispatchActions.ForceDepart(vehicle, ref publicTransport, nowFrame, ecb);
         }
 
-        internal void Retire(
-            Entity vehicle,
-            Game.Vehicles.PublicTransport publicTransport,
-            Target target,
-            EntityCommandBuffer ecb,
-            string reason = "")
+        internal void ForceDepart(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
         {
-            m_RetireHandoff.Retire(vehicle, publicTransport, target, reason);
+            m_DispatchActions.ForceDepart(vehicle, nowFrame, ecb);
         }
 
-        internal void Launch(
-            Entity vehicle,
-            Game.Vehicles.PublicTransport publicTransport,
-            Target target,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            EntityCommandBuffer ecb)
+        internal void CommitAssistLaunch(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
         {
-            m_LaunchActions.Launch(vehicle, publicTransport, target, waypoints, ecb);
+            m_DispatchActions.CommitAssistLaunch(vehicle, nowFrame, ecb);
         }
 
-        internal void EnsurePreparingRoute(
-            Entity vehicle,
-            ref Game.Vehicles.PublicTransport publicTransport,
-            ref Target target,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex,
-            bool boarding,
-            EntityCommandBuffer ecb)
+        internal void KeepDepartureHeld(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
         {
-            m_LaunchActions.EnsurePreparingRoute(
+            m_DispatchActions.HoldDeparture(vehicle, nowFrame, ecb);
+        }
+
+        internal void Retire(Entity vehicle, string reason)
+        {
+            m_RetireHandoff.Retire(
                 vehicle,
-                ref publicTransport,
-                ref target,
-                waypoints,
-                currentWaypointIndex,
-                boarding,
-                ecb);
+                m_CommandHost.ReadPublicTransport(vehicle),
+                m_CommandHost.ReadTarget(vehicle),
+                reason);
         }
 
-        internal void Repath(
+        internal void Launch(Entity vehicle, Entity line, int waypoint, EntityCommandBuffer ecb)
+        {
+            m_LaunchActions.Launch(vehicle, line, waypoint, ecb);
+        }
+
+        internal bool EnsurePreparingRoute(
             Entity vehicle,
-            Game.Vehicles.PublicTransport publicTransport,
-            Target target,
+            Entity line,
+            int waypoint,
             EntityCommandBuffer ecb)
         {
-            m_RouteWriter.Repath(vehicle, publicTransport, target, ecb);
+            return m_LaunchActions.EnsurePreparingRoute(vehicle, line, waypoint, ecb);
         }
 
         internal void ForceRetireOne()
@@ -113,9 +101,9 @@ namespace RapidTransitMod
             m_RetireHandoff.ForceRetireOne();
         }
 
-        internal void TickRetireHandoffStages(uint nowFrame)
+        internal void TickRetireHandoffStages(uint nowFrame, IReadOnlyList<FramePlanEntry> candidates)
         {
-            m_RetireHandoff.TickRetireHandoffStages(nowFrame);
+            m_RetireHandoff.TickRetireHandoffStages(nowFrame, candidates);
         }
 
         internal void FinalizeRetireDispatchLockTerminals()

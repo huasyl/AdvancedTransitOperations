@@ -7,9 +7,9 @@ namespace RapidTransitMod.Dispatch.Persistence
 {
     internal sealed class MileageStore
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public MileageStore(DispatchRuntimeSystem runtime)
+        public MileageStore(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

@@ -11,6 +11,7 @@ using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.Core;
 using RapidTransitMod.RailEta.BuiltIn;
+using RapidTransitMod.Runtime;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -20,20 +21,44 @@ namespace RapidTransitMod.Dispatch.Runtime
 {
     internal static class RuntimeRoot
     {
-        public static void Build(DispatchRuntimeSystem runtime)
+        public static void Build(ModRuntimeHostSystem runtime)
         {
             runtime.m_SimClock = new SimClock(runtime.m_TimeSystem);
             runtime.m_SimClock.ForceRefresh(runtime.m_SimulationSystem.frameIndex);
             runtime.m_VehicleStateStore = new VehicleStateStore();
             runtime.m_VehicleStateStore.Init();
-            runtime.m_VehicleRegistry = new VehicleRegistry(runtime.m_VehicleStateStore);
+            runtime.m_FrameEvents = new FrameEvents();
+            runtime.m_VehicleWorksets = new VehicleWorksets();
+            runtime.m_VehicleRegistry = new VehicleRegistry(
+                runtime.m_VehicleStateStore,
+                runtime.m_VehicleWorksets,
+                runtime.m_FrameEvents,
+                () => runtime.m_SimulationSystem.frameIndex,
+                minutes => runtime.m_SimClock.Snapshot.ToFramesCeil(minutes),
+                line => TransportModeResolver.Resolve(runtime.EntityManager, line),
+                runtime.PublishStopFact);
+            runtime.m_RailEventSource = new RailEventSource(runtime, runtime.m_FrameEvents);
+            runtime.m_RuntimeFramePlan = new RuntimeFramePlan();
+            runtime.m_SchedulerApply = new SchedulerApply(runtime);
+            runtime.m_VehicleRegistry.BindFramePlan(
+                runtime.m_RuntimeFramePlan,
+                runtime.m_RailEventSource.SetDemand,
+                runtime.m_SchedulerApply.MarkDirty);
             runtime.m_VehicleView = new VehicleView(runtime.m_VehicleStateStore);
             runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
+            {
                 runtime.m_VehicleRegistry.ReprojectReady(
                     runtime.m_SimulationSystem.frameIndex,
                     oldClockSnapshot,
                     newClockSnapshot);
-            runtime.m_RuntimeController = new DispatchRuntimeController(runtime.m_VehicleRegistry, runtime);
+                runtime.m_VehicleRegistry.ReprojectIdle(newClockSnapshot);
+            };
+            runtime.m_RuntimeEngine = new DispatchEngine(runtime.m_VehicleRegistry, runtime, runtime.PublishStopFact);
+            runtime.m_LineSpawnControl = new LineSpawnControl(runtime);
+            runtime.m_RuntimeVehicleCleanup = new RuntimeVehicleCleanup(
+                runtime,
+                runtime.m_LineSpawnControl,
+                runtime.m_RuntimeEngine.ClearAssistLaunchPending);
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
             runtime.m_LineAnchorCatalog = new LineAnchorCatalog(runtime.EntityManager);
@@ -41,6 +66,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_SharedCorridor = new SharedCorridorSupport(runtime.m_Resolve, runtime.IsBypassStationSetting);
             runtime.m_StationAnchorDiagnostics = new StationAnchorDiagnostics(runtime);
             runtime.m_WorkbenchBridge = new RapidTransitMod.Dispatch.Workbench.Bridge(runtime);
+            runtime.m_WorkbenchBridge.AppliedStore.SetDirtyCallbacks(
+                line => runtime.m_SchedulerApply.MarkPendingDirty(line.ToString()),
+                () => runtime.m_SchedulerApply.MarkPendingAllDirty());
+            runtime.m_WorkbenchBridge.LineStore.SetDirtyCallbacks(
+                line => runtime.m_SchedulerApply.MarkPendingDirty(line.ToString()),
+                () => runtime.m_SchedulerApply.MarkPendingAllDirty());
             runtime.m_WorkbenchCatalogCache = runtime.m_WorkbenchBridge.CatalogCache();
             runtime.m_WorkbenchCatalogDirty = new CatalogDirty(
                 runtime.EntityManager,
@@ -67,7 +98,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 new FeatureSettingsStore(),
                 () => runtime.m_Bypass.RuntimeEnabled(),
                 () => runtime.m_Bypass.ClearAll(),
-                () => runtime.m_AnnouncementWorkbench.StopPreview());
+                () => runtime.m_AnnouncementWorkbench.StopPreview(),
+                () => runtime.m_SchedulerApply.MarkPendingAllDirty());
             runtime.m_OverviewFeatureSettingsPersist = new RapidTransitMod.Overview.FeatureSettingsPersist(
                 runtime.EntityManager,
                 () => runtime.m_CitySystem.City,
@@ -82,6 +114,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RuntimeLog = new RuntimeLog(runtime);
             runtime.m_SpawnIntentTrace = new SpawnIntentTrace(runtime);
             runtime.m_RuntimeHotPathProbe = new RuntimeHotPathProbe(runtime.log);
+            runtime.m_FrameEvents.SetFactCounter(runtime.m_RuntimeHotPathProbe.CountBusinessFact);
             RailEtaHost.RailEtaWorker railEtaWorker = new RailEtaHost.RailEtaWorker();
             runtime.m_RailEtaService = new RailEtaHost.RailEtaBridgeService(railEtaWorker, () => runtime.m_SimClock.Snapshot);
             runtime.m_SimClock.ClockChanged += runtime.m_RailEtaService.OnClockChanged;
@@ -153,7 +186,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 message => runtime.log.Info(message)));
             runtime.m_RailEtaService.SetHotRuntime(runtime.m_RailEtaHotRuntime);
             runtime.m_SpawnLeadTheory = new SpawnLeadTheory(runtime);
-            runtime.m_RuntimeShell = new RuntimeShell(runtime);
+            runtime.m_RuntimeLifecycleHost = new RuntimeLifecycleHost(runtime);
             runtime.m_LineStructureInvalidator = new LineStructureInvalidator(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
                 runtime,
@@ -172,12 +205,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Laps.Init();
             runtime.m_Dwell = new DwellStore();
             runtime.m_Dwell.Init();
-            runtime.m_Slices = new SliceStore();
+            runtime.m_Slices = new SliceStore(runtime.m_RuntimeFramePlan);
             runtime.m_SliceAdmission = new SliceAdmission(runtime.m_Slices, RuntimePorts.BuildSliceAdmission(runtime));
             runtime.m_ObsQuery = new RapidTransitMod.Dispatch.Observation.Query(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices);
             runtime.m_ObsPersist = new RapidTransitMod.Dispatch.Observation.Persist(runtime.m_Laps, runtime.m_Dwell, runtime.m_Slices, runtime.m_SliceAdmission);
             runtime.m_WaypointIndex = new WaypointIndex(runtime);
-            runtime.m_LineRange = new LineRange(runtime.EntityManager, runtime.m_ObsQuery, DispatchRuntimeSystem.MAINTENANCE_THRESHOLD);
+            runtime.m_LineRange = new LineRange(runtime.EntityManager, runtime.m_ObsQuery, ModRuntimeHostSystem.MAINTENANCE_THRESHOLD);
             LineHost lineHost = RuntimePorts.BuildLineHost(runtime);
             runtime.m_LineTimes = new LineTimes(lineHost.Times);
             runtime.m_LineTimes.Init();
@@ -248,16 +281,16 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_WorkbenchBridge.Ids().StableKey);
 
             runtime.m_UICache = new NativeHashMap<Entity, FixedString64Bytes>(1024, Allocator.Persistent);
-            runtime.m_LastEffectiveBoardingState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
-            runtime.m_LastOfficialBoardingState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
+            runtime.m_StopRuntimeState = new StopRuntimeState();
+            runtime.m_StopRuntime = new StopRuntime(
+                runtime.m_StopRuntimeState,
+                runtime.m_RuntimeFramePlan,
+                (vehicle, active) => runtime.m_RailEventSource.SetDemand(
+                    vehicle,
+                    RuntimeDemandMask.DeparturePending,
+                    active));
             runtime.m_BoardingFirstFrameGuardState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
-            runtime.m_StopSessionLine = new NativeHashMap<Entity, Entity>(1024, Allocator.Persistent);
-            runtime.m_StopSessionWaypointIndex = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            runtime.m_StopSessionArrivalFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            runtime.m_StopSessionBoardingChangeCount = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
-            runtime.m_DeparturePendingSinceFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
-            runtime.m_InvalidatedMidStopRecoveryPending = new NativeHashSet<Entity>(256, Allocator.Persistent);
             runtime.m_StationContextQuery = new VehicleStationContextQuery(
                 runtime.EntityManager,
                 runtime.m_Resolve.Stop,
@@ -286,9 +319,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.LineStableId,
                 RapidTransitMod.Dispatch.Workbench.Drafts.Key,
                 runtime.m_CachedWpIdx);
-            runtime.m_BVMisfire = new NativeHashSet<Entity>(64, Allocator.Persistent);
-            runtime.m_BVMisfireStartFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
-            runtime.m_ForcedMidStopBoardingGraceUntil = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
+            runtime.m_StopRuntimeState.InitForcedGrace();
             runtime.m_PreparingFixCooldownUntil = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             runtime.m_SpawningLines = new NativeHashMap<Entity, int>(64, Allocator.Persistent);
             runtime.m_LastSpawnBlockedLogFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
@@ -318,7 +349,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         /// Full line-anchor scan from the live line query snapshot.
         /// Clears only in-memory catalog ownership on <see cref="Clear"/>; never removes entity Lak.
         /// </summary>
-        internal static bool ScanLineAnchors(DispatchRuntimeSystem runtime)
+        internal static bool ScanLineAnchors(ModRuntimeHostSystem runtime)
         {
             if (runtime == null || runtime.m_LineAnchorCatalog == null)
                 return false;
@@ -335,7 +366,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
-        public static void Clear(DispatchRuntimeSystem runtime)
+        public static void Clear(ModRuntimeHostSystem runtime)
         {
             runtime.m_SpawnLeadTheory?.Clear();
             runtime.m_RailEtaHotRuntime?.Dispose();
@@ -347,6 +378,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             LifecyclePort.Clear();
             runtime.m_CommandApplier = null!;
             runtime.m_DispatchScheduler = null!;
+            runtime.m_SchedulerApply = null!;
+            runtime.m_RuntimeVehicleCleanup = null!;
+            runtime.m_LineSpawnControl = null!;
             runtime.m_SpawnLeadTheory = null!;
             runtime.m_VehicleRegistrar = null!;
             runtime.m_VehicleLabels = null!;
@@ -366,12 +400,20 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_PlannerPort = null!;
             runtime.m_AnnouncementWorkbench = null!;
             runtime.m_Announcements = null!;
-            runtime.m_RuntimeController = null!;
+            runtime.m_RuntimeEngine = null!;
             runtime.m_OverviewFeatureSettingsPersist = null!;
             runtime.m_Features = null!;
             runtime.m_LineView = null!;
             runtime.m_VehicleView = null!;
             runtime.m_VehicleRegistry = null!;
+            runtime.m_RuntimeFramePlan?.Dispose();
+            runtime.m_RuntimeFramePlan = null!;
+            runtime.m_RailEventSource?.Dispose();
+            runtime.m_RailEventSource = null!;
+            runtime.m_VehicleWorksets?.Dispose();
+            runtime.m_VehicleWorksets = null!;
+            runtime.m_FrameEvents?.Dispose();
+            runtime.m_FrameEvents = null!;
             runtime.m_Resolve = null!;
             runtime.m_DispatchCache = null!;
             runtime.m_LapCache = null!;
@@ -383,7 +425,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Observation = null!;
             runtime.m_SharedCorridor = null!;
             runtime.m_RuntimeLog = null!;
-            runtime.m_RuntimeShell = null!;
+            runtime.m_RuntimeLifecycleHost = null!;
             runtime.m_LineStructureInvalidator = null!;
             if (runtime.m_Bypass != null) runtime.m_Bypass.Dispose();
             runtime.m_TrackModel = null!;

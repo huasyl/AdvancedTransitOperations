@@ -20,6 +20,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly VehicleView m_VehicleView;
         private readonly LineMileage m_LineMileage;
         private readonly Func<Entity, bool> m_IsVehicleBoarding;
+        private readonly RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe m_HotPathProbe;
 
         internal TrackProjectionPort(
             EntityManager entityManager,
@@ -31,7 +32,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             RouteProgress routeProgress,
             VehicleView vehicleView,
             LineMileage lineMileage,
-            Func<Entity, bool> isVehicleBoarding)
+            Func<Entity, bool> isVehicleBoarding,
+            RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe)
         {
             m_EntityManager = entityManager;
             m_Log = log;
@@ -43,6 +45,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_VehicleView = vehicleView;
             m_LineMileage = lineMileage;
             m_IsVehicleBoarding = isVehicleBoarding;
+            m_HotPathProbe = hotPathProbe;
         }
 
         EntityManager ITrackProjectionRuntimeContext.EntityManager => m_EntityManager;
@@ -50,6 +53,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         uint ITrackProjectionRuntimeContext.Frame => m_Frame();
         NativeHashMap<Entity, int> ITrackProjectionRuntimeContext.CachedWaypointIndex => m_CachedWaypointIndex();
         TrackModelService ITrackProjectionRuntimeContext.TrackModel => m_TrackModel;
+
+        void ITrackProjectionRuntimeContext.CountNavigationDetailRead() => m_HotPathProbe.CountNavigationDetailRead();
 
         BufferLookup<T> ITrackProjectionRuntimeContext.GetBufferLookup<T>(bool isReadOnly)
         {

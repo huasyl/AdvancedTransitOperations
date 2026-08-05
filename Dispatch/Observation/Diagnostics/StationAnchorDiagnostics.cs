@@ -5,10 +5,10 @@ namespace RapidTransitMod
 {
     internal sealed class StationAnchorDiagnostics
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private StationAnchorDiag m_StationAnchorDiag;
 
-        public StationAnchorDiagnostics(DispatchRuntimeSystem runtime)
+        public StationAnchorDiagnostics(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

@@ -14,7 +14,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
             Skip
         }
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly SchedulePolicy m_Policy;
         private readonly Func<Entity, bool> m_Managed;
         private readonly Func<Entity, int[]> m_Times;
@@ -22,7 +22,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
         private readonly Func<Entity, Entity> m_ResolveRuntimeControllerVehicle;
 
         public SlotPlan(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             SchedulePolicy policy,
             Func<Entity, bool> managed,
             Func<Entity, int[]> times,
@@ -72,11 +72,11 @@ namespace RapidTransitMod.Dispatch.Scheduling
             claims.Add(new DispatchScheduler.SlotClaim(pick.Vehicle, slotMinute, holder, commitHold: false, clearIdle: false));
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + DispatchRuntimeSystem.SlotStr(slotMinute)
+                m_Runtime.log.Info("[调度候选] " + lineTag + " 班次" + ModRuntimeHostSystem.SlotStr(slotMinute)
                     + " 选择车辆" + pick.Vehicle.Index
                     + " state=" + bestState
                     + " eta=" + m_Runtime.m_SimClock.ToMinutes(pick.EtaFrames).ToString("F1") + "分钟"
-                    + " prevTarget=" + (pick.PreviousTargetMinute >= 0 ? DispatchRuntimeSystem.SlotStr(pick.PreviousTargetMinute) : "-"));
+                    + " prevTarget=" + (pick.PreviousTargetMinute >= 0 ? ModRuntimeHostSystem.SlotStr(pick.PreviousTargetMinute) : "-"));
             }
             return Status.Claimed;
         }
@@ -110,7 +110,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                     "LateDispatchCandidate|" + previousSlotMinute + "|" + stateTag,
                     "[补发候选] " + lineTag + " 车辆" + vehicle.Index
                         + " state=" + stateTag
-                        + " 候选补发班次" + DispatchRuntimeSystem.SlotStr(previousSlotMinute)
+                        + " 候选补发班次" + ModRuntimeHostSystem.SlotStr(previousSlotMinute)
                         + " 已过期" + ScheduleClock.Overdue(nowMinute, previousSlotMinute) + "分钟");
             }
 
@@ -149,7 +149,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                     "UpcomingTarget|" + nextTargetMinute + "|" + stateTag,
                     "[预分配] " + lineTag + " 车辆" + vehicle.Index
                         + " state=" + stateTag
-                        + " 预分配未来班次" + DispatchRuntimeSystem.SlotStr(nextTargetMinute)
+                        + " 预分配未来班次" + ModRuntimeHostSystem.SlotStr(nextTargetMinute)
                         + " 距今" + waitMinutes + "分钟");
             }
             return true;
@@ -185,7 +185,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                     "LateDispatchCandidate|" + previousTargetMinute + "|" + stateTag,
                     "[补发候选] " + lineTag + " 车辆" + vehicle.Index
                         + " state=" + stateTag
-                        + " 候选补发班次" + DispatchRuntimeSystem.SlotStr(previousTargetMinute)
+                        + " 候选补发班次" + ModRuntimeHostSystem.SlotStr(previousTargetMinute)
                         + " 已过期" + ScheduleClock.Overdue(nowMinute, previousTargetMinute) + "分钟");
             }
 
@@ -251,7 +251,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                         vehicle,
                         "LateDispatchTakeover|" + target + "|" + other.Index,
                         "[补发接管] " + lineTag + " 车辆" + vehicle.Index
-                            + " 接管班次" + DispatchRuntimeSystem.SlotStr(target)
+                            + " 接管班次" + ModRuntimeHostSystem.SlotStr(target)
                             + " 释放车辆" + other.Index
                             + " state=" + (m_Runtime.m_VehicleView.TryGetState(other, out VehicleState releasedState) ? releasedState.ToString() : "?"));
                 }

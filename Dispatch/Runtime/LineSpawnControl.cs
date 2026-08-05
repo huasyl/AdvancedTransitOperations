@@ -9,9 +9,9 @@ namespace RapidTransitMod
 {
     internal sealed class LineSpawnControl
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public LineSpawnControl(DispatchRuntimeSystem runtime)
+        public LineSpawnControl(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

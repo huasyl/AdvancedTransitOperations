@@ -3,16 +3,15 @@ using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.Core;
 using System;
-using Unity.Collections;
 using Unity.Entities;
 
 namespace RapidTransitMod.PassengerFlow
 {
     internal sealed class Port
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        internal Port(DispatchRuntimeSystem runtime)
+        internal Port(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -38,27 +37,29 @@ namespace RapidTransitMod.PassengerFlow
         internal void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler)
             => m_Runtime.m_SimClock.ClockChanged += handler;
 
-        internal NativeArray<Entity> Vehicles(Allocator allocator)
-            => m_Runtime.m_VehicleView.Keys(allocator);
-
         internal bool TryState(Entity vehicle, out VehicleState state)
             => m_Runtime.TryGetRuntimeVehicleState(vehicle, out state);
 
         internal bool TryLine(Entity vehicle, out Entity line)
             => m_Runtime.m_VehicleView.TryGetLine(vehicle, out line);
 
-        internal bool TryLaunchFrame(Entity vehicle, out uint launchFrame)
-            => m_Runtime.m_VehicleView.TryGetLaunch(vehicle, out launchFrame);
+        internal void OpenStop(Entity vehicle, Entity line, int waypointIndex, uint frame)
+            => Observer.OpenStop(this, SamplingSystem.CurrentState, vehicle, line, waypointIndex, frame);
 
-        internal bool TryCachedWaypoint(Entity vehicle, out int waypointIndex)
-            => m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out waypointIndex);
+        internal void RestoreStop(Entity vehicle, Entity line, int waypointIndex, uint frame)
+            => Observer.RestoreStop(this, SamplingSystem.CurrentState, vehicle, line, waypointIndex, frame);
 
-        internal bool TryAcceptedBoarding(Entity vehicle, out bool boarding)
-        {
-            boarding = m_Runtime.m_StopSessionWaypointIndex.ContainsKey(vehicle)
-                && !m_Runtime.m_DeparturePendingSinceFrame.ContainsKey(vehicle);
-            return boarding;
-        }
+        internal void ConfirmDeparture(Entity vehicle, uint frame)
+            => Observer.ConfirmDeparture(this, SamplingSystem.CurrentState, vehicle, frame);
+
+        internal void LaunchOrigin(Entity vehicle, uint frame)
+            => Observer.LaunchOrigin(this, SamplingSystem.CurrentState, vehicle, frame);
+
+        internal void CancelStop(Entity vehicle)
+            => Observer.CancelStop(SamplingSystem.CurrentState, vehicle);
+
+        internal void RemoveVehicle(Entity vehicle)
+            => Observer.RemoveVehicle(this, SamplingSystem.CurrentState, vehicle);
 
         internal bool HasWaypoints(Entity line)
             => line != Entity.Null && m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line);

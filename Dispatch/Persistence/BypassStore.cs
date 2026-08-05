@@ -4,9 +4,9 @@ namespace RapidTransitMod.Dispatch.Persistence
 {
     internal sealed class BypassStore
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public BypassStore(DispatchRuntimeSystem runtime)
+        public BypassStore(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

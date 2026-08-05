@@ -25,8 +25,6 @@ namespace RapidTransitMod.Dispatch.Commands
             DynamicBuffer<RouteWaypoint> waypoints,
             EntityCommandBuffer ecb)
         {
-            m_Host.ClearAssistLaunchPending(vehicle);
-            m_Host.ClearBoardingGrace(vehicle);
             publicTransport.m_State &= ~PublicTransportFlags.Boarding;
             publicTransport.m_DepartureFrame = m_Host.SimulationSystem.frameIndex - 1;
             if (m_RouteWriter.TryApplyLaunchSegmentPath(vehicle, ref publicTransport, ref target, waypoints, ecb))
@@ -36,50 +34,51 @@ namespace RapidTransitMod.Dispatch.Commands
             m_RouteWriter.Repath(vehicle, publicTransport, target, ecb);
         }
 
-        public void EnsurePreparingRoute(
-            Entity vehicle,
-            ref PublicTransport publicTransport,
-            ref Target target,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex,
-            bool boarding,
-            EntityCommandBuffer ecb)
+        public void Launch(Entity vehicle, Entity line, int waypoint, EntityCommandBuffer ecb)
         {
-            Entity stationA = waypoints[0].m_Waypoint;
-            bool wrongTarget = target.m_Target != stationA;
-            bool driftedToMidStop = boarding && currentWaypointIndex > 0;
-            if (!wrongTarget && !driftedToMidStop)
-                return;
-
-            uint nowFrame = m_Host.SimulationSystem.frameIndex;
-            if (wrongTarget
-                && !driftedToMidStop
-                && m_Host.IsFreshPreparing(vehicle, nowFrame))
+            if (line == Entity.Null
+                || waypoint < 0
+                || !m_Host.TryGetRouteWaypoints(vehicle, out DynamicBuffer<RouteWaypoint> waypoints))
             {
                 return;
             }
-            if (m_Host.GetPreparingCooldown(vehicle, out uint cooldownUntil) && nowFrame < cooldownUntil)
-                return;
 
-            string lineTag = m_Host.TryGetVehicleLine(vehicle, out Entity lineEnt)
-                ? "线路" + lineEnt.Index
-                : "线路?";
-            string why = driftedToMidStop
-                ? (currentWaypointIndex >= 0 ? ("偏航到 wp=" + currentWaypointIndex) : "偏航 boarding")
-                : "目标不是始发站";
+            Launch(
+                vehicle,
+                m_Host.ReadPublicTransport(vehicle),
+                m_Host.ReadTarget(vehicle),
+                waypoints,
+                ecb);
+        }
 
-            m_Host.SetPreparing(vehicle, nowFrame);
-            m_Host.ClearCachedWaypoint(vehicle);
-            m_Host.ClearBoardingObservation(vehicle);
-            m_Host.ClearMisfire(vehicle);
+        public bool EnsurePreparingRoute(
+            Entity vehicle,
+            Entity line,
+            int currentWaypointIndex,
+            EntityCommandBuffer ecb)
+        {
+            if (line == Entity.Null
+                || !m_Host.EntityManager.HasComponent<Target>(vehicle)
+                || !m_Host.TryGetRouteWaypoints(vehicle, out DynamicBuffer<RouteWaypoint> waypoints))
+            {
+                return false;
+            }
+
+            PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
+            Target target = m_Host.ReadTarget(vehicle);
+            Entity stationA = waypoints[0].m_Waypoint;
+            bool wrongTarget = target.m_Target != stationA;
+            bool driftedToMidStop = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0
+                && currentWaypointIndex > 0;
+            if (!wrongTarget && !driftedToMidStop)
+                return false;
+
             publicTransport.m_State &= ~PublicTransportFlags.Boarding;
-            publicTransport.m_DepartureFrame = nowFrame + 9999;
+            publicTransport.m_DepartureFrame = m_Host.SimulationSystem.frameIndex + 9999;
             target.m_Target = stationA;
             m_RouteWriter.Repath(vehicle, publicTransport, target, ecb);
-            m_Host.SetPreparingCooldown(vehicle, nowFrame + DispatchRuntimeSystem.PREPARINGFIX_REPATH_COOLDOWN_FRAMES);
-
-            m_Host.Log.Info("[PreparingFix] " + lineTag + " 车辆" + vehicle.Index
-                + " " + why + "，重置去始发站 wp0=" + stationA.Index);
+            return true;
         }
+
     }
 }

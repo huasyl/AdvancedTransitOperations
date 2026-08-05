@@ -10,9 +10,9 @@ namespace RapidTransitMod
 {
     internal sealed class ManagedRequestPort
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public ManagedRequestPort(DispatchRuntimeSystem runtime)
+        public ManagedRequestPort(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -86,7 +86,7 @@ namespace RapidTransitMod
             for (int i = 0; i < routeVehicles.Length; i++)
             {
                 Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(routeVehicles[i].m_Vehicle);
-                if (m_Runtime.m_VehicleView.IsFreshPreparing(vehicle, nowFrame, DispatchRuntimeSystem.PREPARING_ROUTE_FIX_GRACE_FRAMES))
+                if (m_Runtime.m_VehicleView.IsFreshPreparing(vehicle, nowFrame, ModRuntimeHostSystem.PREPARING_ROUTE_FIX_GRACE_FRAMES))
                     return false;
             }
 

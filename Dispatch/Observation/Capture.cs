@@ -43,8 +43,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
     internal sealed class Capture
     {
-        private const uint TraversalSliceSampleIntervalMediumFrames = 20;
-        private const uint TraversalSliceSampleIntervalLowFrames = 60;
+        private const uint TraversalSliceSampleIntervalHighFrames = 16;
+        private const uint TraversalSliceSampleIntervalMediumFrames = 32;
+        private const uint TraversalSliceSampleIntervalLowFrames = 64;
         private const uint TraversalSliceLineEligibilityNegativeCacheFrames = 60;
         private const uint TraversalSliceEntryProbeIntervalFrames = 32;
         private const float TraversalSliceSampleHighThreshold = 0.03f;
@@ -255,7 +256,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 && m_Slices.NextEntryProbeFrames.TryGetValue(vehicle, out uint nextEntryProbeFrame)
                 && nowFrame < nextEntryProbeFrame)
             {
-                m_Port.HotPathProbe?.CountSliceEntryProbeSkip();
                 return;
             }
 
@@ -263,22 +263,21 @@ namespace RapidTransitMod.Dispatch.Observation
                 && m_Slices.NextSampleFrames.TryGetValue(vehicle, out uint nextSampleFrame)
                 && nowFrame < nextSampleFrame)
             {
-                m_Port.HotPathProbe?.CountSliceSampleNonDue();
                 return;
             }
 
             if (!hasExistingSession)
+            {
                 m_Slices.NextSampleFrames.Remove(vehicle);
+            }
 
             if (!TryGetEligibleTraversalSliceChain(line, waypoints, nowFrame, out LineTrackChain eligibleChain))
                 return;
 
             if (!ShouldSampleVehicleTraversalSliceObservation(vehicle, line, waypoints, eligibleChain, nowFrame, out TraversalSliceSamplingPlan samplingPlan))
             {
-                m_Port.HotPathProbe?.CountSliceSampleNonDue();
                 return;
             }
-            m_Port.HotPathProbe?.CountSliceSampleDue();
 
             if (vehicle != Entity.Null
                 && line != Entity.Null
@@ -308,7 +307,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 m_Slices.Sessions.Remove(vehicle);
                 m_Slices.Plans.Remove(vehicle);
                 m_Slices.NextSampleFrames.Remove(vehicle);
-                m_Slices.NextEntryProbeFrames[vehicle] = nowFrame + TraversalSliceEntryProbeIntervalFrames;
+                ScheduleNextTraversalSliceEntryProbe(vehicle, nowFrame);
                 return;
             }
 
@@ -342,6 +341,22 @@ namespace RapidTransitMod.Dispatch.Observation
         internal bool ShouldSampleVehicleTraversalSliceObservation(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, uint nowFrame)
         {
             return ShouldSampleVehicleTraversalSliceObservation(vehicle, line, waypoints, null, nowFrame);
+        }
+
+        internal bool IsSourceSliceDue(Entity vehicle, Entity line, uint nowFrame)
+        {
+            if (vehicle == Entity.Null || line == Entity.Null || !m_Admission.CanObserve(vehicle))
+                return false;
+
+            if (m_Slices.Sessions.TryGetValue(vehicle, out VehicleTraversalSliceSession session)
+                && session.Line == line)
+            {
+                return !m_Slices.NextSampleFrames.TryGetValue(vehicle, out uint nextSampleFrame)
+                    || nowFrame >= nextSampleFrame;
+            }
+
+            return !m_Slices.NextEntryProbeFrames.TryGetValue(vehicle, out uint nextEntryProbeFrame)
+                || nowFrame >= nextEntryProbeFrame;
         }
 
         private bool ShouldSampleVehicleTraversalSliceObservation(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, LineTrackChain knownChain, uint nowFrame)
@@ -399,7 +414,28 @@ namespace RapidTransitMod.Dispatch.Observation
             uint intervalFrames = plan.Available
                 ? math.max(1u, plan.SampleIntervalFrames)
                 : TraversalSliceSampleIntervalLowFrames;
-            m_Slices.NextSampleFrames[vehicle] = nowFrame + intervalFrames;
+            uint baseFrame = nowFrame;
+            if (m_Slices.Sessions.ContainsKey(vehicle)
+                && m_Slices.NextSampleFrames.TryGetValue(vehicle, out uint scheduledFrame))
+            {
+                baseFrame = scheduledFrame;
+            }
+            uint nextFrame = baseFrame;
+            do { nextFrame += intervalFrames; } while (nextFrame <= nowFrame);
+            m_Slices.NextSampleFrames[vehicle] = nextFrame;
+        }
+
+        private void ScheduleNextTraversalSliceEntryProbe(Entity vehicle, uint nowFrame)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            uint baseFrame = m_Slices.NextEntryProbeFrames.TryGetValue(vehicle, out uint scheduledFrame)
+                ? scheduledFrame
+                : nowFrame;
+            uint nextFrame = baseFrame;
+            do { nextFrame += TraversalSliceEntryProbeIntervalFrames; } while (nextFrame <= nowFrame);
+            m_Slices.NextEntryProbeFrames[vehicle] = nextFrame;
         }
 
         internal bool TryBuildTraversalSliceSamplingPlan(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, out TraversalSliceSamplingPlan plan)
@@ -425,15 +461,19 @@ namespace RapidTransitMod.Dispatch.Observation
             if (chain == null && !m_TrackModel.TryChain(line, out chain))
                 chain = null;
 
+            uint scheduledRefreshFrame = 0;
             if (chain != null
                 && m_Slices.Plans.TryGetValue(vehicle, out TraversalSliceSamplingPlanCache cachedPlan)
                 && cachedPlan.Line == line
                 && cachedPlan.ChainSignature == chain.Signature
-                && cachedPlan.SliceIndex == session.SliceIndex
-                && nowFrame < cachedPlan.NextRefreshFrame)
+                && cachedPlan.SliceIndex == session.SliceIndex)
             {
-                plan = cachedPlan.Plan;
-                return true;
+                if (nowFrame < cachedPlan.NextRefreshFrame)
+                {
+                    plan = cachedPlan.Plan;
+                    return true;
+                }
+                scheduledRefreshFrame = cachedPlan.NextRefreshFrame;
             }
 
             if (!m_TrackModel.TryProfile(line, out LineTraversalProfile profile)
@@ -451,7 +491,8 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             uint refreshFrames = math.max(1u, plan.SampleIntervalFrames);
-            uint nextRefreshFrame = nowFrame + refreshFrames;
+            uint nextRefreshFrame = scheduledRefreshFrame != 0 ? scheduledRefreshFrame : nowFrame;
+            do { nextRefreshFrame += refreshFrames; } while (nextRefreshFrame <= nowFrame);
             m_Slices.Plans[vehicle] = new TraversalSliceSamplingPlanCache(line, chain.Signature, session.SliceIndex, nextRefreshFrame, plan);
             return true;
         }
@@ -549,7 +590,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 if (nearestCutPointDistance <= TraversalSliceSampleHighThreshold)
                 {
                     isHighSampling = true;
-                    sampleIntervalFrames = 1;
+                    sampleIntervalFrames = TraversalSliceSampleIntervalHighFrames;
                 }
                 else if (nearestCutPointDistance <= TraversalSliceSampleMediumThreshold)
                 {

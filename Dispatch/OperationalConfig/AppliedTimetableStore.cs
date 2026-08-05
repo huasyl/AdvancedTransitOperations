@@ -19,8 +19,16 @@ namespace RapidTransitMod
         private readonly Dictionary<LineKey, AppliedTimetableState> m_Lines =
             new Dictionary<LineKey, AppliedTimetableState>();
         private ulong m_Version = 1;
+        private Action<LineKey> m_LineChanged;
+        private Action m_AllChanged;
 
         public ulong Version => m_Version;
+
+        internal void SetDirtyCallbacks(Action<LineKey> lineChanged, Action allChanged)
+        {
+            m_LineChanged = lineChanged;
+            m_AllChanged = allChanged;
+        }
 
         public bool IsManaged(LineKey lineKey)
         {
@@ -112,12 +120,16 @@ namespace RapidTransitMod
             if (state == null)
             {
                 if (m_Lines.Remove(key))
+                {
                     m_Version++;
+                    m_LineChanged?.Invoke(key);
+                }
                 return;
             }
 
             m_Lines[key] = Normalize(state);
             m_Version++;
+            m_LineChanged?.Invoke(key);
         }
 
         public void Clear(LineKey lineKey)
@@ -127,13 +139,19 @@ namespace RapidTransitMod
                 return;
 
             if (m_Lines.Remove(key))
+            {
                 m_Version++;
+                m_LineChanged?.Invoke(key);
+            }
         }
 
         public void Clear()
         {
             if (m_Lines.Count > 0)
+            {
                 m_Version++;
+                m_AllChanged?.Invoke();
+            }
             m_Lines.Clear();
         }
 
@@ -180,6 +198,7 @@ namespace RapidTransitMod
             m_Lines[targetKey] = state.Clone();
             m_Lines.Remove(legacyKey);
             m_Version++;
+            m_AllChanged?.Invoke();
             return true;
         }
 
@@ -210,6 +229,7 @@ namespace RapidTransitMod
             m_Lines[stable] = state.Clone();
             m_Lines.Remove(legacy);
             m_Version++;
+            m_AllChanged?.Invoke();
             return LineKeyMigrateResult.Migrated;
         }
 

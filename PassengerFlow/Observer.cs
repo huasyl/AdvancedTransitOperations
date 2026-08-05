@@ -4,90 +4,179 @@ namespace RapidTransitMod.PassengerFlow
 {
     internal static class Observer
     {
-        internal static void Observe(
+        internal static void OpenStop(
             Port port,
             State state,
-            uint currentFrame,
             Entity vehicle,
-            VehicleState vehicleState,
             Entity line,
-            TransitMode mode,
-            string lineId,
-            int cachedWaypointIndex,
-            bool acceptedBoarding,
-            bool hasLaunchFrame,
-            uint launchFrame)
+            int waypointIndex,
+            uint frame)
         {
-            if (state.OpenStops.TryGetValue(vehicle, out OpenStop openStop))
+            RecordOpenStop(port, state, vehicle, line, waypointIndex, frame);
+        }
+
+        internal static void RestoreStop(
+            Port port,
+            State state,
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            uint frame)
+        {
+            RecordOpenStop(port, state, vehicle, line, waypointIndex, frame);
+        }
+
+        internal static void ConfirmDeparture(Port port, State state, Entity vehicle, uint frame)
+        {
+            if (state == null || !state.OpenStops.TryGetValue(vehicle, out OpenStop openStop))
+                return;
+
+            EnqueueDepartureSample(port, state, frame, openStop);
+            state.OpenStops.Remove(vehicle);
+            state.LastProbeFrames.Remove(vehicle);
+        }
+
+        internal static void LaunchOrigin(Port port, State state, Entity vehicle, uint frame)
+        {
+            if (port == null
+                || state == null
+                || (state.LastLaunchFrames.TryGetValue(vehicle, out uint launchFrame) && launchFrame == frame))
             {
-                if (!acceptedBoarding && cachedWaypointIndex < 0 && openStop.Line == line)
-                {
-                    EnqueueDepartureSample(port, state, currentFrame, openStop);
-                    state.OpenStops.Remove(vehicle);
-                    return;
-                }
-
-                if (openStop.Line != line)
-                    state.OpenStops.Remove(vehicle);
-            }
-
-            if (acceptedBoarding && cachedWaypointIndex >= 0)
-            {
-                if (!state.Anchors.TryForWaypoint(port, line, cachedWaypointIndex, out StationKey stationKey))
-                {
-                    state.Aggregates.RecordWarning(
-                        mode,
-                        Aggregates.WarningAnchorMissing,
-                        lineId,
-                        -1,
-                        state.CurrentBucket,
-                        currentFrame);
-                    return;
-                }
-
-                if (!state.OpenStops.TryGetValue(vehicle, out OpenStop existing)
-                    || existing.Line != line
-                    || existing.OpenWaypointIndex != cachedWaypointIndex)
-                {
-                    state.OpenStops[vehicle] = new OpenStop(
-                        vehicle,
-                        mode,
-                        lineId,
-                        line,
-                        cachedWaypointIndex,
-                        stationKey.Index,
-                        currentFrame,
-                        0);
-                }
-
                 return;
             }
 
-            if (hasLaunchFrame && launchFrame == currentFrame && !state.OpenStops.ContainsKey(vehicle))
+            state.LastLaunchFrames[vehicle] = frame;
+            if (state.OpenStops.TryGetValue(vehicle, out OpenStop openStop))
             {
-                if (!state.Anchors.TryForWaypoint(port, line, 0, out StationKey stationKey))
-                {
-                    state.Aggregates.RecordWarning(
-                        mode,
-                        Aggregates.WarningAnchorMissing,
-                        lineId,
-                        -1,
-                        state.CurrentBucket,
-                        currentFrame);
-                    return;
-                }
-
-                OpenStop origin = new OpenStop(
-                    vehicle,
-                    mode,
-                    lineId,
-                    line,
-                    0,
-                    stationKey.Index,
-                    currentFrame,
-                    0);
-                EnqueueDepartureSample(port, state, currentFrame, origin);
+                EnqueueDepartureSample(port, state, frame, openStop);
+                state.OpenStops.Remove(vehicle);
+                state.LastProbeFrames.Remove(vehicle);
+                return;
             }
+
+            if (!port.TryLine(vehicle, out Entity line)
+                || !TryCreateOpenStop(port, state, vehicle, line, 0, frame, out OpenStop origin))
+            {
+                return;
+            }
+
+            EnqueueDepartureSample(port, state, frame, origin);
+        }
+
+        internal static void CancelStop(State state, Entity vehicle)
+        {
+            if (state == null)
+                return;
+
+            state.OpenStops.Remove(vehicle);
+            state.LastProbeFrames.Remove(vehicle);
+        }
+
+        internal static void RemoveVehicle(Port port, State state, Entity vehicle)
+        {
+            if (state == null)
+                return;
+
+            Entity runtimeVehicle = port != null ? port.RuntimeVehicle(vehicle) : vehicle;
+            state.OpenStops.Remove(vehicle);
+            state.LastProbeFrames.Remove(vehicle);
+            state.LastLaunchFrames.Remove(vehicle);
+            state.Baselines.Remove(vehicle);
+            if (runtimeVehicle != Entity.Null)
+                state.Baselines.Remove(runtimeVehicle);
+
+            if (state.PendingSamples.Count == 0)
+                return;
+
+            int pendingCount = state.PendingSamples.Count;
+            for (int i = 0; i < pendingCount; i++)
+            {
+                PendingSample sample = state.PendingSamples.Dequeue();
+                if (sample.Vehicle != vehicle
+                    && sample.RuntimeVehicle != vehicle
+                    && sample.RuntimeVehicle != runtimeVehicle)
+                {
+                    state.PendingSamples.Enqueue(sample);
+                }
+                else
+                {
+                    state.Baselines.Remove(sample.RuntimeVehicle);
+                }
+            }
+        }
+
+        private static void RecordOpenStop(
+            Port port,
+            State state,
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            uint frame)
+        {
+            if (state == null || waypointIndex < 0)
+                return;
+
+            if (state.OpenStops.TryGetValue(vehicle, out OpenStop existing)
+                && existing.Line == line
+                && existing.OpenWaypointIndex == waypointIndex)
+            {
+                return;
+            }
+
+            state.OpenStops.Remove(vehicle);
+            state.LastProbeFrames.Remove(vehicle);
+            if (TryCreateOpenStop(port, state, vehicle, line, waypointIndex, frame, out OpenStop openStop))
+                state.OpenStops[vehicle] = openStop;
+        }
+
+        private static bool TryCreateOpenStop(
+            Port port,
+            State state,
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            uint frame,
+            out OpenStop openStop)
+        {
+            openStop = default;
+            TransitMode mode = TransitMode.Unknown;
+            string lineId = string.Empty;
+            if (port == null
+                || !port.TryLineMetadata(line, out mode, out lineId)
+                || (mode != TransitMode.Train && mode != TransitMode.Subway))
+            {
+                state.Aggregates.RecordWarning(
+                    mode,
+                    Aggregates.WarningUnsupportedMode,
+                    lineId,
+                    -1,
+                    state.CurrentBucket,
+                    frame);
+                return false;
+            }
+
+            if (!state.Anchors.TryForWaypoint(port, line, waypointIndex, out StationKey stationKey))
+            {
+                state.Aggregates.RecordWarning(
+                    mode,
+                    Aggregates.WarningAnchorMissing,
+                    lineId,
+                    -1,
+                    state.CurrentBucket,
+                    frame);
+                return false;
+            }
+
+            openStop = new OpenStop(
+                vehicle,
+                mode,
+                lineId,
+                line,
+                waypointIndex,
+                stationKey.Index,
+                frame,
+                0);
+            return true;
         }
 
         private static void EnqueueDepartureSample(

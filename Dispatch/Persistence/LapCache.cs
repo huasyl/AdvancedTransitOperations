@@ -5,9 +5,9 @@ namespace RapidTransitMod.Dispatch.Persistence
 {
     internal sealed class LapCache
     {
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
 
-        public LapCache(DispatchRuntimeSystem runtime)
+        public LapCache(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }

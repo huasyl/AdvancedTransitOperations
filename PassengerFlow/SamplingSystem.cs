@@ -58,59 +58,6 @@ namespace RapidTransitMod.PassengerFlow
             RunPendingCleanup(state, frame);
             ExpirePendingSamples(port, state, frame);
 
-            NativeArray<Entity> vehicles = port.Vehicles(Allocator.Temp);
-            try
-            {
-                for (int i = 0; i < vehicles.Length; i++)
-                {
-                    Entity vehicle = vehicles[i];
-                    if (!port.TryState(vehicle, out VehicleState vehicleState)
-                        || !port.TryLine(vehicle, out Entity line))
-                    {
-                        continue;
-                    }
-
-                    LineSampleMetadata lineMetadata = GetLineMetadata(port, line);
-                    TransitMode mode = lineMetadata.Mode;
-                    string lineId = lineMetadata.LineId;
-                    if (!lineMetadata.Supported)
-                    {
-                        state.Aggregates.RecordWarning(
-                            mode,
-                            Aggregates.WarningUnsupportedMode,
-                            lineId,
-                            -1,
-                            state.CurrentBucket,
-                            frame);
-                        continue;
-                    }
-
-                    int cachedWaypointIndex = port.TryCachedWaypoint(vehicle, out int cached)
-                        ? cached
-                        : -1;
-                    bool acceptedBoarding = port.TryAcceptedBoarding(vehicle, out bool accepted) && accepted;
-                    bool hasLaunchFrame = port.TryLaunchFrame(vehicle, out uint launchFrame);
-
-                    Observer.Observe(
-                        port,
-                        state,
-                        frame,
-                        vehicle,
-                        vehicleState,
-                        line,
-                        mode,
-                        lineId,
-                        cachedWaypointIndex,
-                        acceptedBoarding,
-                        hasLaunchFrame,
-                        launchFrame);
-                }
-            }
-            finally
-            {
-                vehicles.Dispose();
-            }
-
             RunProbes(port, state, frame);
         }
 
@@ -132,7 +79,7 @@ namespace RapidTransitMod.PassengerFlow
 
         public void PreSerialize(Colossal.Serialization.Entities.Context context)
         {
-            DispatchRuntimeSystem runtime = DispatchRuntimeSystem.Instance;
+            ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
             if (runtime == null || runtime.m_CitySystem == null)
                 return;
 
@@ -403,6 +350,7 @@ namespace RapidTransitMod.PassengerFlow
 
             BufferLookup<Passenger> passengerBuffers = GetBufferLookup<Passenger>(true);
             BufferLookup<LayoutElement> layoutBuffers = GetBufferLookup<LayoutElement>(true);
+            Dependency.Complete();
             int currentCount = Math.Max(1, EstimateCurrentPassengerCapacity(requests, passengerBuffers, layoutBuffers));
             NativeParallelMultiHashMap<int, Entity> currentPassengers =
                 new NativeParallelMultiHashMap<int, Entity>(currentCount, Allocator.TempJob);

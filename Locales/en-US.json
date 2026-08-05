@@ -70,7 +70,6 @@
   "RapidTransit.AlertNextSlotGap": "Next slot gap",
   "RapidTransit.AlertNoLapCache": "No lap cache",
   "RapidTransit.AlertNoDispatchCache": "No dispatch cache",
-  "RapidTransit.AlertBvMisfire": "BV misfire",
   "RapidTransit.AlertNearingTerminus": "Nearing terminus",
   "RapidTransit.AlertLaunchCooldown": "Launch cooldown",
   "RapidTransit.AlertTargetExpired": "Target expired",

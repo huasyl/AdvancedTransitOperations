@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Game.Routes;
+using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackModel;
 using Unity.Entities;
 
@@ -74,6 +75,7 @@ namespace RapidTransitMod.Bypass
                 return;
 
             List<Entity> yieldVehiclesToRelease = m_Admission.ReleaseLine(line, m_Runtime.ResolveLine);
+            m_Admission.ClearWatchLine(line);
             if (yieldVehiclesToRelease != null)
             {
                 for (int i = 0; i < yieldVehiclesToRelease.Count; i++)
@@ -95,75 +97,46 @@ namespace RapidTransitMod.Bypass
             }
         }
 
-        internal void ExpireLine(Entity line)
+        internal List<Entity> ForgetBlocker(Entity blocker)
         {
-            if (line == Entity.Null)
-                return;
-
-            m_Runtime.ClearLineTimeProfiles();
-            m_Admission.InvalidateStaticSceneIndex();
-
-            List<Entity> expiredVehicles = m_Admission.ExpireLine(line);
-            if (expiredVehicles == null)
-            {
-                if (RtLog.CacheInvalidationDiagnosticsEnabled)
-                {
-                    m_Runtime.Log.Info("[BypassLineInvalidated] line=" + line.Index
-                        + " mode=expire-line"
-                        + " expiredVehicles=0"
-                        + " clearLineTimeProfiles=1"
-                        + " invalidateStaticSceneIndex=1");
-                }
-                return;
-            }
-
-            for (int i = 0; i < expiredVehicles.Count; i++)
-                RemoveVehicleLogs(expiredVehicles[i]);
-
-            if (RtLog.CacheInvalidationDiagnosticsEnabled)
-            {
-                int expiredVehicleCount = expiredVehicles.Count;
-                m_Runtime.Log.Info("[BypassLineInvalidated] line=" + line.Index
-                    + " mode=expire-line"
-                    + " expiredVehicles=" + expiredVehicleCount
-                    + " clearLineTimeProfiles=1"
-                    + " invalidateStaticSceneIndex=1");
-            }
+            return m_Admission.ForgetBlocker(blocker);
         }
 
-        internal void ForgetBlocker(Entity blocker)
+        internal void ClearRescue(Entity vehicle)
         {
-            m_Admission.ForgetBlocker(blocker);
+            if (vehicle != Entity.Null)
+                m_Admission.ClearRescue(vehicle);
         }
 
         internal void ClearVehicle(Entity vehicle, string releaseReason = null)
         {
-            ClearVehicle(vehicle, releaseReason, true);
-        }
-
-        internal void ClearVehiclePreservingBypassHoldSkipped(Entity vehicle, string releaseReason = null)
-        {
-            ClearVehicle(vehicle, releaseReason, false);
-        }
-
-        private void ClearVehicle(Entity vehicle, string releaseReason, bool clearBypassHoldSkipped)
-        {
             if (vehicle == Entity.Null)
                 return;
 
-            if (!m_Admission.TryGetLatchedBlocker(vehicle, out Entity blocker))
+            bool hadBypassHoldSkipped = m_Admission.TryGetBypassHoldSkipped(vehicle, out _);
+            bool hadEpisode = m_Admission.Get(vehicle, out BypassConflictEpisode _);
+            bool hadCadence = m_Admission.Get(vehicle, out BypassHoldCadenceSnapshot _);
+            bool hadBlocker = m_Admission.TryGetLatchedBlocker(vehicle, out Entity blocker);
+            m_Admission.ClearVehicle(vehicle);
+            if (hadBlocker)
+                m_Runtime.RecordRelease(vehicle, blocker, releaseReason);
+            if (hadBlocker || hadBypassHoldSkipped || hadEpisode || hadCadence)
             {
-                if (clearBypassHoldSkipped)
-                    m_Admission.ClearVehicle(vehicle);
-                else
-                    m_Admission.ClearVehiclePreservingBypassHoldSkipped(vehicle);
+                ((IControlContext)m_Runtime).RecordBypassFact(new BypassFact(
+                    BypassFactKind.Cleared,
+                    vehicle,
+                    m_Runtime.ResolveLine(vehicle),
+                    hadBlocker ? blocker : Entity.Null,
+                    -1,
+                    false,
+                    true,
+                    releaseReason));
+            }
+            if (!hadBlocker)
+            {
+                RemoveVehicleLogs(vehicle);
                 return;
             }
-
-            m_Admission.ClearBlocker(vehicle);
-            m_Admission.RemoveCadence(vehicle);
-            m_Admission.RemoveEpisode(vehicle);
-            m_Runtime.RecordRelease(vehicle, blocker, releaseReason);
             if (RtLog.VerboseEnabled)
             {
                 ((IControlContext)m_Runtime).LogVehicleStateOnce(
@@ -257,6 +230,35 @@ namespace RapidTransitMod.Bypass
             return m_Admission.IsStopSceneEligible(line, waypoints, waypointIndex, out known);
         }
 
+        internal void UpdateWatch(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            bool boarding,
+            bool sceneKnown,
+            bool sceneEligible)
+        {
+            m_Admission.UpdateWatch(
+                vehicle,
+                line,
+                waypoints,
+                waypointIndex,
+                boarding,
+                sceneKnown,
+                sceneEligible);
+        }
+
+        internal void HandleStopFact(StopFact fact)
+        {
+            if (fact.Kind == StopFactKind.Departed
+                || fact.Kind == StopFactKind.Cancelled
+                || fact.Kind == StopFactKind.Removed)
+            {
+                ClearVehicle(fact.Vehicle, fact.Reason);
+            }
+        }
+
         internal void ClearBypassHoldSkipped(Entity vehicle)
         {
             m_Admission.ClearBypassHoldSkipped(vehicle);
@@ -267,16 +269,28 @@ namespace RapidTransitMod.Bypass
             m_Admission.MarkBypassHoldSkipped(vehicle, blocker);
         }
 
-        internal Entity TickExpressVanillaBlockerRescue(Entity vehicle, Entity line, uint nowFrame)
+        internal bool TryResolveVanillaBlockerRescue(
+            Entity expressVehicle,
+            Entity line,
+            uint nowFrame,
+            out Entity localVehicle)
         {
-            if (m_Admission.TryFindBypassHeldLocalBlockingExpress(vehicle, line, nowFrame, out Entity localVehicle))
-            {
-                ClearVehicle(localVehicle, "vanilla-blocker-chain-stall");
-                m_Admission.MarkBypassHoldSkipped(localVehicle, vehicle);
-                return localVehicle;
-            }
+            return m_Admission.TryFindBypassHeldLocalBlockingExpress(
+                expressVehicle,
+                line,
+                nowFrame,
+                out localVehicle);
+        }
 
-            return Entity.Null;
+        internal void CommitVanillaBlockerRescue(Entity localVehicle, Entity expressVehicle)
+        {
+            ClearVehicle(localVehicle, "vanilla-blocker-chain-stall");
+            m_Admission.MarkBypassHoldSkipped(localVehicle, expressVehicle);
+        }
+
+        internal void ArmExpressRescue(Entity vehicle, Entity line, uint nowFrame)
+        {
+            m_Admission.ArmVanillaBlockerRescue(vehicle, line, nowFrame);
         }
 
         internal void LogDepartureGate(Entity vehicle, string key, string message)

@@ -51,6 +51,11 @@ namespace RapidTransitMod.TrackModel
             m_Profile.ClearLine(line);
         }
 
+        internal void InvalidateWaypointIndexLookup(Entity line)
+        {
+            m_State.RemoveWaypointLookup(line);
+        }
+
         internal void InvalidateAll()
         {
             m_State.ClearLines();
@@ -68,6 +73,7 @@ namespace RapidTransitMod.TrackModel
         internal bool TryInterval(Entity line, int intervalIndex, out BypassProtectedInterval interval) => m_Query.TryInterval(line, intervalIndex, out interval);
         internal bool TryScene(Entity line, int waypointIndex, out LocalBypassWaypointSceneBinding scene) => m_Query.TryScene(line, waypointIndex, out scene);
         internal bool TryGetWaypointIndexLookup(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineWaypointIndexLookup lookup) => m_Query.TryGetWaypointIndexLookup(line, waypoints, out lookup);
+        internal bool TryGetWaypointIndexLookup(Entity line, out LineWaypointIndexLookup lookup) => m_Query.TryGetWaypointIndexLookup(line, out lookup);
 
         internal void EnsureSharedTrackIndexCurrent() => m_Shared.EnsureSharedTrackIndexCurrent();
         internal void RefreshSharedRuns(LineTrackChain chain) => m_Shared.RefreshSharedRuns(chain);

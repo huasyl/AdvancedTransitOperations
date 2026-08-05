@@ -8,11 +8,15 @@ namespace RapidTransitMod.Broadcasting
     internal static class LineMigration
     {
         private static State s_State;
+        private static Action s_Invalidate;
 
         internal static void Attach(State state)
         {
             s_State = state;
+            s_Invalidate = null;
         }
+
+        internal static void SetInvalidator(Action invalidate) => s_Invalidate = invalidate;
 
         internal static void Run(LineAnchorCatalog catalog, MigrationReport report)
         {
@@ -20,6 +24,7 @@ namespace RapidTransitMod.Broadcasting
             if (catalog == null || report == null || state == null)
                 return;
 
+            int firstEntry = report.Count;
             MigrateBindingDict(state.AppliedBindings, catalog, report);
             MigrateBindingDict(state.DraftBindings, catalog, report);
             MigrateRuleDict(state.AppliedRules, catalog, report);
@@ -27,6 +32,18 @@ namespace RapidTransitMod.Broadcasting
             MigratePlatformDict(state.AppliedPlatforms, catalog, report);
             MigratePlatformDict(state.DraftPlatforms, catalog, report);
             MigrateAppliedLines(state.AppliedLines, catalog, report);
+
+            for (int i = firstEntry; i < report.Entries.Count; i++)
+            {
+                MigrationEntry entry = report.Entries[i];
+                if (entry.Result == MigrationResult.Migrated
+                    && entry.Domain != null
+                    && entry.Domain.StartsWith("broadcasting-", StringComparison.Ordinal))
+                {
+                    s_Invalidate?.Invoke();
+                    break;
+                }
+            }
         }
 
         private static string PromoteKey(

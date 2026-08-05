@@ -15,14 +15,14 @@ namespace RapidTransitMod.Dispatch.Persistence
         private const float SlowBlend = 0.5f;
         private const float SLOW_STEP_MAX_FRAMES = 728f;
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, string> m_LineId;
         private readonly Func<Entity, Entity> m_Depot;
         private readonly Func<Entity, string> m_DepotId;
         private readonly LineAnchorCatalog m_Catalog;
 
         public DispatchCache(
-            DispatchRuntimeSystem runtime,
+            ModRuntimeHostSystem runtime,
             Func<Entity, string> lineId,
             Func<Entity, Entity> depot,
             Func<Entity, string> depotId,

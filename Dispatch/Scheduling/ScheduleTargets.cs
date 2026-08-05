@@ -60,7 +60,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public static int Headway(IReadOnlyList<int> targets)
         {
             if (targets == null || targets.Count <= 1)
-                return DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES;
+                return ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES;
 
             int bestGap = 1440;
             for (int i = 0; i < targets.Count; i++)
@@ -74,7 +74,7 @@ namespace RapidTransitMod.Dispatch.Scheduling
                     bestGap = gap;
             }
 
-            return bestGap < 1440 ? bestGap : DispatchRuntimeSystem.SLOT_INTERVAL_MINUTES;
+            return bestGap < 1440 ? bestGap : ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES;
         }
     }
 }

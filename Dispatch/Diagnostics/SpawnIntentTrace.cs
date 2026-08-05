@@ -29,11 +29,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             public string NearReason = string.Empty;
         }
 
-        private readonly DispatchRuntimeSystem m_Runtime;
+        private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, Entry> m_Pending = new Dictionary<Entity, Entry>();
         private readonly Dictionary<Entity, Entry> m_Vehicles = new Dictionary<Entity, Entry>();
 
-        internal SpawnIntentTrace(DispatchRuntimeSystem runtime)
+        internal SpawnIntentTrace(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
@@ -175,7 +175,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         }
 
         private static string Id(Entity value) => value == Entity.Null ? "-" : value.Index.ToString();
-        private static string Slot(int value) => value < 0 ? "-" : DispatchRuntimeSystem.SlotStr(value);
+        private static string Slot(int value) => value < 0 ? "-" : ModRuntimeHostSystem.SlotStr(value);
         private static string Frames(float value) => value == float.MaxValue ? "-" : math.round(value).ToString();
         private static string Safe(string value) => string.IsNullOrWhiteSpace(value) ? "-" : value.Replace(' ', '_');
     }
