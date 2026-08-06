@@ -62,15 +62,15 @@ Lines built with bidirectional single-track railway sections are currently not s
 
 This mod does not use Harmony.
 
-**Xtended Transport Manager (XTM):** Full compatibility has been implemented. After using Set first stop, ATO will collect updated running data for the line, and dispatch may take some time to stabilize again.
+· **Xtended Transport Manager (XTM):** Full compatibility has been implemented. After using Set first stop, ATO will collect updated running data for the line, and dispatch may take some time to stabilize again.
 
-**Traffic Tool Essentials:** Its Depot Zone conflicts with ATO’s Depot Selection feature because both affect depot assignment. Please enable only one of these two features. Other features can coexist.
+· **Traffic Tool Essentials:** Its Depot Zone conflicts with ATO’s Depot Selection feature because both affect depot assignment. Please enable only one of these two features. Other features can coexist.
 
-**FastBoarding:** Can coexist, but using rail fast boarding or late-passenger skipping on rail lines controlled by ATO is not recommended.
+· **FastBoarding:** Can coexist, but using rail fast boarding or late-passenger skipping on rail lines controlled by ATO is not recommended.
 
-**Realistic Trips:** Compatible and can be used together with ATO.
+· **Realistic Trips:** Compatible and can be used together with ATO.
 
-**All Aboard!:** Incompatible. All Aboard! replaces the vanilla public transport vehicle systems that ATO relies on.
+· **All Aboard!:** Incompatible. All Aboard! replaces the vanilla public transport vehicle systems that ATO relies on.
 
 Other mods that automatically adjust vehicle count, departure intervals, boarding speed, the game’s time flow, or the public transport vehicle lifecycle may also cause conflicts. Please refer to GitHub for complete compatibility details.
 
@@ -83,9 +83,7 @@ GitHub: https://github.com/huasyl/AdvancedTransitOperations
 If you find ATO fun or helpful for operating your public transport network, please consider giving the mod a like. Thank you for playing and supporting ATO!
 
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-**中文版本 / CHINESE VERSION**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+——— 中文版 ———
 Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交通运营的调度 Mod。
 
 如果您已经厌倦了只靠车辆数量和间隔滑块控制公共交通，或者希望更精确地安排线路发车时间、设计快慢车运营方案、制作车辆和站台广播，ATO 可以为您的公共交通系统提供更多运营可能。
@@ -140,15 +138,15 @@ ATO 有两个界面。左键单击游戏右上角的 Mod 按钮打开工作台�
 
 本 Mod 未使用 Harmony。
 
-**Xtended Transport Manager（XTM）：** 已实现全面兼容。使用“设置首站”后，ATO 会重新观测线路运行数据，调度可能需要一点时间重新稳定。
+· **Xtended Transport Manager（XTM）：** 已实现全面兼容。使用“设置首站”后，ATO 会重新观测线路运行数据，调度可能需要一点时间重新稳定。
 
-**Traffic Tool Essentials：** 其 Depot Zone 功能与 ATO 的车库选择功能会同时影响车库分配，建议只启用其中一个；其他功能可以共存。
+· **Traffic Tool Essentials：** 其 Depot Zone 功能与 ATO 的车库选择功能会同时影响车库分配，建议只启用其中一个；其他功能可以共存。
 
-**FastBoarding：** 可以共存，但不建议在 ATO 接管的轨道线路上启用轨道快速上客或跳过迟到乘客。
+· **FastBoarding：** 可以共存，但不建议在 ATO 接管的轨道线路上启用轨道快速上客或跳过迟到乘客。
 
-**Realistic Trips：** 已实现兼容，可以共同使用。
+· **Realistic Trips：** 已实现兼容，可以共同使用。
 
-**All Aboard!：** 不兼容。该 Mod 会替换 ATO 所依赖的原版公共交通车辆运行系统。
+· **All Aboard!：** 不兼容。该 Mod 会替换 ATO 所依赖的原版公共交通车辆运行系统。
 
 自动调整车辆数、发车间隔、上客速度、游戏时间流速或车辆运行流程的其他 Mod 也可能产生冲突。完整兼容说明请参阅 GitHub。
 
