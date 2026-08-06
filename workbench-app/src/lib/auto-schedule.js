@@ -68,7 +68,9 @@ export function hasMinimumDepartureGapForOrigin(candidateMinute, candidateOrigin
       return true;
     }
 
-    return Math.abs(row.minute - candidateMinute) >= MIN_DEPARTURE_INTERVAL_MINUTES;
+    const directGap = Math.abs(row.minute - candidateMinute);
+    const circularGap = Math.min(directGap, (24 * 60) - directGap);
+    return circularGap >= MIN_DEPARTURE_INTERVAL_MINUTES;
   });
 }
 

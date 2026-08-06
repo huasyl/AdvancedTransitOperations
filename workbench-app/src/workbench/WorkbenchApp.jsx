@@ -33,6 +33,7 @@ export default function WorkbenchApp({ registerHostActions }) {
   const { locale, script, t } = useNativeScheduleI18n();
   const [activePage, setActivePage] = useState(DEFAULT_NATIVE_WORKBENCH_PAGE);
   const [renderedPage, setRenderedPage] = useState(DEFAULT_NATIVE_WORKBENCH_PAGE);
+  const [previousPage, setPreviousPage] = useState("");
   const [activeTransportMode, setActiveTransportMode] = useState(DEFAULT_TRANSPORT_MODE);
   const [pageTransportModes, setPageTransportModes] = useState({
     schedule: DEFAULT_TRANSPORT_MODE,
@@ -118,34 +119,50 @@ export default function WorkbenchApp({ registerHostActions }) {
     }
 
     traceWorkbench("app.page.transition.begin", { activePage, renderedPage });
+    traceWorkbench("app.page.transition.swap", { next: activePage, from: renderedPage });
+    setPreviousPage(renderedPage === "broadcast" ? "" : renderedPage);
+    setRenderedPage(activePage);
+    if (activePage === "planner") {
+      setPlannerEnterSequence((current) => current + 1);
+    }
     if (activePage === "broadcast") {
-      setRenderedPage(activePage);
       setBroadcastEnterSequence((current) => current + 1);
-      setPageStage("entered");
-      traceWorkbench("app.page.transition.direct", { activePage });
+    }
+    setPageStage("armed");
+    return undefined;
+  }, [activePage, renderedPage]);
+
+  useLayoutEffect(() => {
+    if (pageStage !== "armed") {
       return undefined;
     }
 
-    setPageStage("exiting");
-    const timer = window.setTimeout(() => {
-      traceWorkbench("app.page.transition.swap", { next: activePage, from: renderedPage });
-      setRenderedPage(activePage);
-      if (activePage === "planner") {
-        setPlannerEnterSequence((current) => current + 1);
-      }
-      if (activePage === "broadcast") {
-        setBroadcastEnterSequence((current) => current + 1);
-      }
-      setPageStage("entering");
-      const raf = window.requestAnimationFrame(() => {
-        traceWorkbench("app.page.transition.entered", { page: activePage });
-        setPageStage("entered");
+    let innerRaf = 0;
+    const outerRaf = window.requestAnimationFrame(() => {
+      innerRaf = window.requestAnimationFrame(() => {
+        setPageStage("running");
       });
-      return () => window.cancelAnimationFrame(raf);
-    }, WORKBENCH_PAGE_TRANSITION_MS);
+    });
+    return () => {
+      window.cancelAnimationFrame(outerRaf);
+      if (innerRaf) {
+        window.cancelAnimationFrame(innerRaf);
+      }
+    };
+  }, [pageStage, renderedPage]);
 
+  useLayoutEffect(() => {
+    if (pageStage !== "running") {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      traceWorkbench("app.page.transition.entered", { page: renderedPage });
+      setPreviousPage("");
+      setPageStage("entered");
+    }, WORKBENCH_PAGE_TRANSITION_MS);
     return () => window.clearTimeout(timer);
-  }, [activePage, renderedPage]);
+  }, [pageStage, renderedPage]);
 
   useLayoutEffect(() => {
     if (renderedPage !== "overview" && renderedPage !== "passenger") {
@@ -169,6 +186,20 @@ export default function WorkbenchApp({ registerHostActions }) {
       ? activeTransportMode
       : pageTransportModes[pageKey] || DEFAULT_TRANSPORT_MODE
   );
+
+  function pageClassName(pageKey) {
+    if (renderedPage === pageKey) {
+      const stageClass = pageStage === "armed" ? "is-entering" : "is-entered";
+      return `dw-native-workbench-page is-active ${stageClass}`;
+    }
+
+    if (previousPage === pageKey) {
+      const stageClass = pageStage === "armed" ? "is-entered" : "is-exiting";
+      return `dw-native-workbench-page is-leaving ${stageClass}`;
+    }
+
+    return "dw-native-workbench-page is-inactive is-entered";
+  }
 
   function handleTabClick(tabKey) {
     if (tabKey === "planner" && !debugToolsEnabled) {
@@ -211,7 +242,7 @@ export default function WorkbenchApp({ registerHostActions }) {
 
       <div className="dw-native-workbench-pages">
         <div
-          className={`dw-native-workbench-page ${renderedPage === "schedule" ? "is-active" : "is-inactive"} is-${pageStage}`}
+          className={pageClassName("schedule")}
           data-workbench-page="schedule"
         >
           <SchedulePage
@@ -221,7 +252,7 @@ export default function WorkbenchApp({ registerHostActions }) {
           />
         </div>
         <div
-          className={`dw-native-workbench-page ${renderedPage === "planner" ? "is-active" : "is-inactive"} is-${pageStage}`}
+          className={pageClassName("planner")}
           data-workbench-page="planner"
         >
           {debugToolsEnabled ? (
@@ -229,13 +260,13 @@ export default function WorkbenchApp({ registerHostActions }) {
           ) : null}
         </div>
         <div
-          className={`dw-native-workbench-page ${renderedPage === "broadcast" ? "is-active" : "is-inactive"} is-${pageStage}`}
+          className={pageClassName("broadcast")}
           data-workbench-page="broadcast"
         >
           <BroadcastPage pageEnterSequence={broadcastEnterSequence} activeTransportMode={modeForPage("broadcast")} />
         </div>
         <div
-          className={`dw-native-workbench-page ${renderedPage === "overview" ? "is-active" : "is-inactive"} is-${pageStage}`}
+          className={pageClassName("overview")}
           data-workbench-page="overview"
         >
           {shouldMountOverview ? (
@@ -248,7 +279,7 @@ export default function WorkbenchApp({ registerHostActions }) {
           ) : null}
         </div>
         <div
-          className={`dw-native-workbench-page ${renderedPage === "passenger" ? "is-active" : "is-inactive"} is-${pageStage}`}
+          className={pageClassName("passenger")}
           data-workbench-page="passenger"
         >
           {shouldMountPassenger ? (

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Publish>
   <!--Id must be set in order to update existed mod. it is not required for publishing mod for the first time-->
   <ModId Value="149883" />
@@ -12,254 +12,152 @@ Advanced Transit Operations (ATO) is a public transit dispatch mod for Cities: S
 
 If you are tired of controlling public transit only with sliders, or if you want more precise control over when a line departs, how Rapid and Local services operate, and what broadcasts play on vehicles and platforms, ATO gives your public transit system more operational possibilities.
 
-Supported languages: English, Simplified Chinese, and Japanese.
+The current version mainly supports Train and Subway. Supported languages: English, Simplified Chinese, and Japanese.
 
----
+## Version 0.2.1 — Compatibility &amp; Improvements
 
-## Version 0.2.0 — Performance Overhaul 🚀
-
-This update introduces a major refactor of the mod’s update loop, eliminating most redundant calculations and significantly improving performance, while also laying the groundwork for future support for other transport types. In relatively complex test scenarios, the mod’s CPU workload has been reduced by approximately 70%–80% compared with its initial release, resulting in much smoother gameplay.
-
-It also increases the maximum broadcast volume and improves passenger handling when vehicles return to the depot.
+This update adds compatibility with Realistic Trips, improves Workbench performance and automatic timetable previews, and fixes issues with timetable reapply prompts and minimum departure-gap checks across midnight.
 
 Please refer to the Update History for the complete changelog.
 
-If you find ATO fun or helpful for operating your public transport network, please consider giving the mod a like. Your support helps more players discover ATO and encourages the continued development of future features.
+## Version 0.2.0 — Performance Overhaul 🚀
 
----
+Version 0.2.0 introduced a major refactor of the mod’s update loop, eliminating most redundant calculations. In relatively complex test scenarios, the mod’s CPU workload was reduced by approximately 70%–80% compared with its initial release, while also laying the groundwork for future support for other transport types.
+
+It also increased the maximum broadcast volume and improved passenger handling when vehicles return to the depot.
 
 ## Core Gameplay
 
 ### Operate Lines with Your Own Timetables
 
-Public transport no longer has to be controlled only through vehicle-count and interval sliders. You can assign specific departure times to each Train or Subway line and create separate timetables for morning and evening peaks, off-peak periods, and final services, allowing vehicles to depart from their origin stations according to an actual operating plan.
+Assign specific departure times to each Train or Subway line, with separate timetables for peak, off-peak, and final services.
 
-When multiple lines share the same origin station, their departures can also be checked and adjusted together. This helps prevent different lines from departing at the same time and allows you to design more orderly operations at major terminals.
+### Run Passing Operations
 
-### Run Rapid, Local, and Passing Services
-
-Configure Rapid and Local lines along the same corridor, then choose which stations can be used for passing operations.
-
-ATO continuously evaluates whether a rapid train is catching up with a local train ahead. When necessary, the local train will wait at a Bypass Station for the rapid train to pass. You can experiment with alternating Rapid and Local departures, through services across lines of the same transport type, limited-stop services, and other operating patterns instead of having every train stop at every station.
+Configure Rapid and Local lines along the same corridor, then choose which stations can be used for passing operations. When a rapid train catches up with a local train ahead, ATO will have the local train wait at a Bypass Station for the rapid train to pass.
 
 ### Create Broadcasts for Your City
 
-Import your own audio files and combine them into broadcast rules for vehicles and platforms. Broadcasts can be triggered automatically when a vehicle is approaching a station, stopping, departing, or travelling between stations. Dynamic variables can insert the current station, next station, terminal station, or Forward Turnback according to the vehicle’s current position.
+Import your own audio files and create automatically triggered broadcasts for vehicles and platforms. Use dynamic station names and multilingual audio to create a distinctive announcement system for your city.
 
-By binding station-name audio in different languages, you can also create multilingual announcements, terminal notices, or broadcasts with a distinctive identity for your city.
+### Observe Real Passenger Flow
 
-### Discover Problems Through Real Passenger Flow
-
-ATO records actual boardings, alightings, section loads, and completed OD data generated during vehicle operation, rather than displaying only theoretical travel demand.
-
-You can observe which sections are the most crowded, which stations have the highest boarding and alighting volumes, and where passengers are travelling from and to. This information can then be used to adjust service frequency, Rapid and Local stopping patterns, and line layouts.
-
-### Build a Complete Operating Cycle
-
-Design your timetables and Rapid/Local service patterns, observe whether trains run on time, whether Rapid trains pass successfully, and how passenger flow changes, then continue refining your schedules and operating patterns.
-
----
-
-## Quick Start
-
-1. Build a line and place the depot close to the origin station.
-2. Open the Workbench and add/apply a timetable on the Departure Control page.
-3. For Rapid/Local operation, configure Rapid and Local lines first, then mark Bypass Stations in the Selection panel.
-4. For broadcasts, import audio assets, configure broadcast rules, and bind station-name audio.
-
----
+ATO records actual boardings, alightings, section loads, and completed OD data, helping you adjust service frequency, Rapid and Local stopping patterns, and line layouts based on actual operating results.
 
 ## Gameplay Guide
 
 For the complete gameplay guide, interface instructions, recommended line layouts, detailed configuration steps, and frequently asked questions, please visit GitHub:
 
-**GitHub Gameplay Guide: https://github.com/huasyl/AdvancedTransitOperations/blob/main/docs/player-guide.en-US.md**
+GitHub Gameplay Guide: https://github.com/huasyl/AdvancedTransitOperations/blob/main/docs/player-guide.en-US.md
 
-ATO has two in-game interfaces: the Workbench panel and the Selection panel.
+ATO has two in-game interfaces. Left-click the mod button in the upper-right corner to open the Workbench panel, and right-click it to open the Selection panel.
 
-* Left-click the mod button in the upper-right corner to open the Workbench panel.
-* Right-click the mod button in the upper-right corner to open the Selection panel.
+## Before You Start
 
----
+After the first load or a line structure change, ATO needs to collect running data again, and dispatch may take several in-game hours to stabilize.
 
-## Limitations &amp; Known Issues
-
-* Most in-game systems make decisions based on observed statistics. After first loading, initialization may take several in-game hours depending on line length and vehicle state. Before initialization is complete, some lines may not depart exactly as scheduled.
-* Resetting stations, rebuilding tracks, or adding new waypoints is treated as a line structure change, and related runtime data may need to be collected again. It is recommended to fine-tune dispatch only after the line layout is stable.
-* Enabling Rapid/Local bypass operation on many lines, or on complex shared sections, may reduce performance.
-* After renaming buildings or lines, the Workbench may not update immediately. If it still does not update after some time, save and reload the game.
-* Lines built with bidirectional single-track railway sections are currently not supported.
-* The current version mainly supports Train and Subway.
-
----
+Lines built with bidirectional single-track railway sections are currently not supported, but depot access tracks and junction areas in front of stations are not affected.
 
 ## Compatibility &amp; Save Safety
 
 This mod does not use Harmony.
 
-The following conclusions are based on the current version’s feature scope and limited testing. They do not guarantee that every version or every settings combination is problem-free.
+- **Xtended Transport Manager (XTM):** Full compatibility has been implemented. After using Set first stop, ATO will collect updated running data for the line, and dispatch may take some time to stabilize again.
 
-* **FastBoarding**: Can coexist, but using rail fast boarding or late-passenger skipping on rail lines controlled by this mod is not recommended; these features affect dwell time and Passenger Flow statistics.
-* **Realistic Trips**: Changes the in-game time model. Not recommended for use together.
-* **Smart Transportation**: Fares, colors, and line naming generally coexist; automatic vehicle count / automatic interval adjustment is not recommended on lines controlled by this mod, because both systems control departure intervals.
-* **Transport Policy Adjuster**: Adjusts line vehicle count / interval. Not recommended for controlling the same line together.
-* **Traffic Tool Essentials**: Its Depot Area conflicts with this mod’s Depot Selection feature. Please enable only one of these two features. Other features can coexist.
-* **Xtended Transport Manager (XTM)**: **Full compatibility with Xtended Transport Manager (XTM) has been implemented.** XTM’s Route identifier, Internal route number, colors, naming, Set first stop, and other line-management features can all be used together with ATO. **The compatibility issue involving the Internal route number feature has now been resolved. If you still encounter related problems, please report them on the forum or GitHub.** After using XTM’s **Set first stop** feature, ATO will recognize the operation as a line structure change and collect updated lap times and other operational data for the modified line. Dispatch may briefly refresh and may require some time to stabilize again. The **Route identifier** feature only changes the display name generated by XTM. It does not change the internal route number used by ATO to identify the line and can be used normally.
-* **All Aboard!**: **Incompatible.** This mod disables and replaces the vanilla public transport vehicle systems; ATO relies on the vanilla flow for departures, stops, and depot returns, so using both together may cause dispatch issues.
-* **Other Mods**: Mods not listed here do not yet have dedicated conclusions. In general, UI, name, and color changes are lower risk. Mods that change vehicle count, departure intervals, boarding speed, game time flow, or the public transport lifecycle are more likely to conflict.
+- **Traffic Tool Essentials:** Its Depot Zone conflicts with ATO’s Depot Selection feature because both affect depot assignment. Please enable only one of these two features. Other features can coexist.
 
----
+- **FastBoarding:** Can coexist, but using rail fast boarding or late-passenger skipping on rail lines controlled by ATO is not recommended.
 
-## Save Safety
+- **Realistic Trips:** Compatible and can be used together with ATO.
 
-To save configuration and runtime data, ATO writes its own mod data into the save file. This is used to restore applied timetables, broadcast settings, bypass settings, and Passenger Flow sampling state.
+- **All Aboard!:** Incompatible. All Aboard! replaces the vanilla public transport vehicle systems that ATO relies on.
 
-This data is not used to modify vanilla line, station, or vehicle assets themselves. If the mod is disabled or removed, vanilla public transport will continue to run according to the game’s own logic. As with any beta mod, backing up important saves before use is recommended.
+Other mods that automatically adjust vehicle count, departure intervals, boarding speed, the game’s time flow, or the public transport vehicle lifecycle may also cause conflicts. Please refer to GitHub for complete compatibility details.
 
----
+ATO writes only its own configuration and runtime data into the save file and does not permanently modify vanilla line, station, or vehicle assets. If the mod is disabled or removed, vanilla public transport will continue to run according to the game’s own logic. Backing up important saves is still recommended.
 
-## Future Plans
+ATO is still in beta. If you encounter an issue, or have any feedback or suggestions, you are welcome to report it on the forum or GitHub:
 
-* Fix reported issues.
-* Improve performance.
-* Add timetable optimization features.
+GitHub: https://github.com/huasyl/AdvancedTransitOperations
 
-ATO is still in beta. If you encounter an issue, or have any feedback or suggestions, you are welcome to report it on the forum or GitHub.
+If you find ATO fun or helpful for operating your public transport network, please consider giving the mod a like. Thank you for playing and supporting ATO!
 
-**GitHub: https://github.com/huasyl/AdvancedTransitOperations**
 
-Thank you for playing and supporting ATO. Have fun!
-
+**———————— 中文版 / CHINESE VERSION ————————**
 
 Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交通运营的调度 Mod。
 
 如果您已经厌倦了只靠车辆数量和间隔滑块控制公共交通，或者希望更精确地安排线路发车时间、设计快慢车运营方案、制作车辆和站台广播，ATO 可以为您的公共交通系统提供更多运营可能。
 
-支持语言：英语、简体中文、日语。
+当前主要支持火车和地铁。支持语言：英语、简体中文、日语。
 
----
+## V0.2.1——兼容性与细节优化
 
-## V0.1.2更新
+本次更新增加了对 Realistic Trips 的兼容支持，优化了工作台打开时的性能和自动时刻表预览，并修复了时刻表重新应用提示及跨午夜最小发车间隔判断问题。
 
-本次更新实现了与 **Xtended Transport Manager（XTM）** 的全面兼容。XTM 是一款成熟且广受使用的公共交通管理模组，现在，玩家可以同时使用 XTM 的线路管理与展示功能，以及 ATO 的时刻表、快慢车和运营调度功能。相关使用注意事项请参阅下方的兼容性说明。
+完整内容请参阅更新历史。
 
-与 **Realistic Trips** 的兼容适配也已接近完成，但实机测试中发现了一个预期之外的问题。目前仍在确认该问题属于两个 Mod 之间的兼容性问题，还是一个独立问题。
+## V0.2.0——性能重构 🚀
 
-同时，本次更新还：
+V0.2.0 重构了 Mod 的更新循环，消除了大部分重复计算。在较复杂的测试场景中，CPU 开销相较初始版本降低约 70%—80%，同时为未来支持其他交通类型打下了基础。
 
-* 优化了列车回库及运行数据观测的性能，大幅减少稳定线路上不必要的持续采样。
-* 改进了列车从车库出发时的到达时间预测，使新线路最初几班车的调度更加稳定。
-* 修复了站台广播规则、车库选择与存档恢复、待避列车强制发车以及详细运行数据恢复等问题。
-
-完整更新内容请参阅更新历史。
-
----
+该版本还提高了广播最大音量，并改善了车辆回库时的乘客处理。
 
 ## 核心玩法
 
 ### 按自己的时刻表运营线路
 
-不再只靠车辆数量和间隔滑块控制公共交通。您可以为每条火车或地铁线路安排具体发车时刻，分别设置早晚高峰、平峰和末班车等时刻表，让车辆按照真正的运营计划从始发站发车。
-
-多条线路共用始发站时，还可以将它们的班次放在一起检查和调整，避免不同线路同时发车，设计更有秩序的枢纽运营。
+为火车和地铁线路安排具体发车时刻，并分别设置高峰、平峰和末班服务。
 
 ### 开行快车、慢车与越行服务
 
-为同一走廊设置快线和普通线，选择哪些车站可以进行待避。
-
-ATO 会持续判断快车是否正在追上前方慢车，并在有需要时让慢车进入待避站等待快车通过。您可以尝试设计快慢车交错发车、同一制式跨线直通、区间快车等更复杂的运营模式，而不只是让所有列车逐站停靠。
+为同一走廊设置快线、普通线和待避站。当快车追上前方慢车时，ATO 会让慢车在待避站等待快车通过。
 
 ### 制作属于自己城市的广播
 
-导入自己的音频，为列车和站台组合广播规则。广播可以在即将到站、停车、离站或运行途中自动触发，并根据车辆当前位置动态插入当前站、下一站、终点站和前方折返站。
+导入自己的音频，为车辆和站台设置自动触发的广播，并通过动态站名和多语言音频制作具有城市特色的报站系统。
 
-通过绑定不同语言的站名音频，您还可以为线路制作多语言报站、终点提示或具有城市特色的运营广播。
+### 观测真实客流
 
-### 从真实客流中发现问题
-
-ATO 会记录车辆实际运行中产生的上车、下车、区间载客量和已完成 OD 数据，而不只是显示理论上的出行需求。
-
-您可以观察哪一段线路最拥挤、哪些车站乘降人数较大、乘客从哪里来到哪里去，再据此调整班次、快慢车停站方案和线路结构。
-
-### 建立完整的运营循环
-
-先设计时刻表和快慢车方案，再观察列车是否准点、快车能否顺利越行以及客流如何变化，最后继续调整班次和服务模式。
-
----
-
-## 快速开始
-
-1. 建好线路，并将车库放置在靠近始发站的位置。
-2. 打开工作台，在发车控制页面为线路添加并应用时刻表。
-3. 需要快慢车时，先设置快线 / 普通线，再在选择面板中指定待避站。
-4. 需要广播时，导入音频资产，设置广播规则并绑定站名音频。
-
----
+ATO 会记录实际乘降、区间载客量和已完成 OD 数据，帮助您根据真实运营结果调整班次、快慢车停站方案和线路结构。
 
 ## 游玩指引
 
 完整游玩指引、界面说明、线路搭建方式、详细配置方法及常见问题请参阅 GitHub：
 
-**GitHub 游玩指引：https://github.com/huasyl/AdvancedTransitOperations/blob/main/docs/player-guide.zh-CN.md**
+GitHub 游玩指引：https://github.com/huasyl/AdvancedTransitOperations/blob/main/docs/player-guide.zh-CN.md
 
-ATO 有两个游戏内界面：工作台面板和选择面板。
+ATO 有两个界面。左键单击游戏右上角的 Mod 按钮打开工作台面板，右键单击打开选择面板。
 
-* 左键单击游戏右上角的 Mod 按钮可打开工作台面板。
-* 右键单击游戏右上角的 Mod 按钮可打开选择面板。
+## 使用前须知
 
----
+第一次载入或线路结构发生变化后，ATO 需要重新收集运行数据，调度可能需要几个游戏小时逐步稳定。
 
-## 限制与已知问题
-
-* 游戏内大部分系统会依据观测得到的统计数据作出决策。第一次载入后需要几个游戏小时进行初始化，具体时间取决于线路长度和车辆运行状态。初始化完成前，部分线路可能暂时无法按预期发车。
-* 重设站点、重建轨道或增加新的导航点会被视为线路结构发生变化，相关运行数据可能需要重新统计。因此，建议在线路结构稳定后再进行精细调度。
-* 启用快慢车待避的线路较多，或共享区间结构较复杂时，可能带来性能下降。
-* 更改建筑名称、线路名称等信息后，工作台可能不会立即更新。如果等待一段时间后仍未更新，请保存游戏并重新载入。
-* 目前不支持使用单线双向铁路区间构建的线路，但出入库线和站前分岔区域不受此限制。
-* 当前版本主要支持火车和地铁。
-
----
+目前不支持使用单线双向铁路区间构建的线路，但出入库线和站前分岔区域不受此限制。
 
 ## 兼容性与存档安全
 
 本 Mod 未使用 Harmony。
 
-以下结论基于当前版本的功能范围和有限测试，不代表所有游戏版本、Mod 版本及设置组合下均不会出现问题。
+- **Xtended Transport Manager（XTM）：** 已实现全面兼容。使用“设置首站”后，ATO 会重新观测线路运行数据，调度可能需要一点时间重新稳定。
 
-* **FastBoarding**：可以共存，但不建议在 ATO 接管的轨道线路上启用轨道快速上客或跳过迟到乘客。这些功能会影响停站时间和客流统计。
-* **Realistic Trips**：更改了游戏内的时间定义，目前不建议共同使用。
-* **Smart Transportation**：票价、配色和线路命名等功能基本可以共存。不建议在 ATO 接管的线路上启用自动车辆数或自动间隔调整，因为两个 Mod 都会控制发车间隔。
-* **Transport Policy Adjuster**：会调整线路车辆数和发车间隔，不建议与 ATO 同时控制同一条线路。
-* **Traffic Tool Essentials**：其车库区域功能与 ATO 的车库选择功能会同时影响车库分配，建议只启用其中一个。其他功能可以共存。
-* **Xtended Transport Manager（XTM）**：**Xtended Transport Manager（XTM）：已实现全面兼容。** XTM 的线路显示标识、内部线路编号、配色、命名、设置首站及其他线路管理功能均可与 ATO 同时使用。**内部线路编号（Internal route number）功能的兼容问题现已解决。如果您仍然遇到问题，欢迎到论坛或 GitHub 反馈。** 使用 XTM 的 **设置首站（Set first stop）** 功能后，ATO 会将其识别为线路结构发生变化，并根据更新后的线路重新观测圈时等信息。调度可能会短暂刷新，并需要一点时间重新稳定。**线路显示标识（Route identifier）** 只会改变 XTM 生成的线路显示名称，不会改变 ATO 用于识别线路的内部编号，可以正常使用。
-* **All Aboard!**：**不兼容。** 该 Mod 会禁用并替换原版公共交通车辆运行系统。ATO 的发车、停站和回库控制依赖原版系统流程，同时使用可能导致调度异常。
-* **其他 Mod**：未列出的 Mod 暂无专项测试结论。一般来说，修改 UI、名称和颜色的 Mod 风险较低；修改车辆数、发车间隔、上客速度、游戏时间流速或公共交通车辆运行流程的 Mod 更容易产生冲突。
+- **Traffic Tool Essentials：** 其 Depot Zone 功能与 ATO 的车库选择功能会同时影响车库分配，建议只启用其中一个；其他功能可以共存。
 
----
+- **FastBoarding：** 可以共存，但不建议在 ATO 接管的轨道线路上启用轨道快速上客或跳过迟到乘客。
 
-## 存档安全
+- **Realistic Trips：** 已实现兼容，可以共同使用。
 
-为了保存配置和运行数据，ATO 会向存档写入自己的 Mod 数据，用于恢复已应用的时刻表、广播配置、待避设置和客流采样状态。
+- **All Aboard!：** 不兼容。该 Mod 会替换 ATO 所依赖的原版公共交通车辆运行系统。
 
-这些数据不会修改原版线路、车站或车辆资产。关闭或移除 ATO 后，原版公共交通仍会按照游戏自身的逻辑运行。
+自动调整车辆数、发车间隔、上客速度、游戏时间流速或车辆运行流程的其他 Mod 也可能产生冲突。完整兼容说明请参阅 GitHub。
 
-和安装其他测试版 Mod 一样，建议在重要存档中使用前做好备份。
+ATO 只向存档写入自身的配置和运行数据，不会永久修改原版线路、车站或车辆资产。关闭或移除后，公共交通仍会按照游戏自身的逻辑运行。重要存档仍建议提前备份。
 
----
+ATO 目前仍处于 Beta 阶段。如果您遇到问题，或有任何意见和建议，欢迎通过论坛或 GitHub 反馈：
 
-## 未来计划
+GitHub：https://github.com/huasyl/AdvancedTransitOperations
 
-* 修复玩家反馈的问题。
-* 继续优化性能表现。
-* 推出更多时刻表规划与优化功能。
-
-ATO 目前仍处于 Beta 阶段。如果您遇到问题，或对功能有任何意见和建议，欢迎通过论坛或 GitHub 反馈。
-
-**GitHub：https://github.com/huasyl/AdvancedTransitOperations**
-
-如果您觉得 ATO 好玩，或者它对您的公共交通运营有所帮助，欢迎为本 Mod 点个赞。您的支持可以帮助更多玩家发现 ATO，也会鼓励后续功能的持续开发。
-
-感谢您的游玩与支持，祝您玩得开心！
+如果您觉得 ATO 好玩，或者它对您的公共交通运营有所帮助，欢迎为本 Mod 点个赞。感谢您的游玩与支持！
 </LongDescription>
   <!--Thumbnail-->
   <Thumbnail Value="Properties/Cover.png" />
@@ -280,7 +178,7 @@ ATO 目前仍处于 Beta 阶段。如果您遇到问题，或对功能有任何�
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.2.0" />
+  <ModVersion Value="0.2.1" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -289,17 +187,16 @@ ATO 目前仍处于 Beta 阶段。如果您遇到问题，或对功能有任何�
   <RequiredDLC Value="" />
   <!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
   <ChangeLog>
-## Performance
-
-- Refactored the mod’s main per-frame update loop and adjusted its execution order so that it runs after the relevant vanilla systems have updated. This significantly reduced redundant updates, as many mod systems previously ran every frame while receiving the same data. After several rounds of optimization, the mod’s CPU workload has been reduced by approximately 70%–80% compared with its initial release in relatively complex test scenarios.
-
 ## Improvements
 
-- Increased the maximum broadcast volume in response to community feedback.
+- Added compatibility with Realistic Trips.
+- Improved workbench performance while open, reducing its impact on game framerate and improving page transitions and animation smoothness.
+- Improved automatic timetable previews: incomplete or invalid time input no longer reuses stale preview results.
 
 ## Bug Fixes
 
-- When dispatch control requires a vehicle to return to the depot, the mod now allows extra time for the vanilla system to handle passengers getting off. This resolves most cases, although a few passengers may still remain on board. Since waiting for everyone to leave can take too long, the mod will still close the doors and send the vehicle back to the depot once the waiting threshold is reached.
+- Fixed an issue where timetable changes were not marked as pending after changing the origin waiting limit, maximum station dwell time, or depot selection on the Dispatch Control page.
+- Fixed incorrect five-minute minimum departure-gap detection for same-origin departures across midnight.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />

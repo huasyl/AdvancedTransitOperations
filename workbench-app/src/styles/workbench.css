@@ -261,7 +261,7 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
-  display: block;
+  display: none;
   opacity: 1;
   transform: none;
   visibility: hidden;
@@ -269,13 +269,22 @@
 }
 
 .dw-native-workbench-page.is-active {
+  display: block;
   visibility: visible;
   pointer-events: auto;
   z-index: 2;
 }
 
 .dw-native-workbench-page.is-inactive {
+  display: none;
   visibility: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.dw-native-workbench-page.is-leaving {
+  display: block;
+  visibility: visible;
   pointer-events: none;
   z-index: 1;
 }
@@ -988,17 +997,29 @@
 .dw-demo-section-status-ring {
   stroke-dasharray: 64;
   stroke-dashoffset: 64;
+}
+
+.dw-native-workbench-page.is-active .dw-demo-section-status-ring,
+.dw-native-workbench-page.is-leaving .dw-demo-section-status-ring {
   animation: dw-section-ring-draw 360ms ease forwards;
 }
 
 .dw-demo-section-status-mark {
   stroke-dasharray: 18;
   stroke-dashoffset: 18;
+}
+
+.dw-native-workbench-page.is-active .dw-demo-section-status-mark,
+.dw-native-workbench-page.is-leaving .dw-demo-section-status-mark {
   animation: dw-section-mark-draw 260ms ease 120ms forwards;
 }
 
 .dw-demo-section-status-dot {
   opacity: 0;
+}
+
+.dw-native-workbench-page.is-active .dw-demo-section-status-dot,
+.dw-native-workbench-page.is-leaving .dw-demo-section-status-dot {
   animation: dw-section-dot-fade 180ms ease 180ms forwards;
 }
 
@@ -1074,6 +1095,12 @@
   min-height: 100%;
 }
 
+.dw-demo-summary-spacer {
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
+}
+
 .dw-demo-empty-state {
   display: flex;
   flex-direction: column;
@@ -1137,14 +1164,16 @@
 }
 
 .dw-demo-summary-row {
-  min-height: 51rem;
+  height: 52rem;
+  min-height: 52rem;
+  flex: 0 0 52rem;
   padding: 0 18rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  box-sizing: border-box;
   font-family: inherit;
   font-size: 15rem;
   line-height: 20rem;
   transition: background-color 180ms ease, box-shadow 180ms ease, opacity 180ms ease, transform 180ms ease;
-  animation: dw-row-settle 220ms ease;
 }
 
 .dw-demo-summary-row:hover {

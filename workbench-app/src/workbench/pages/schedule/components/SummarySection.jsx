@@ -1,9 +1,14 @@
+import { useEffect, useState } from "react";
 import { useNativeScheduleI18n } from "../../../shared/workbench-i18n";
 import WorkbenchDropdown from "../../../shared/WorkbenchDropdown";
 import WorkbenchScrollArea from "../../../shared/WorkbenchScrollArea";
 import { SummaryBadge } from "./ScheduleFields";
 import { DemoAlertIcon, DemoAppliedStateIcon, DemoEmptyScheduleIcon, DemoPlayIcon } from "./ScheduleIcons";
 import { DemoSectionHeader } from "./ScheduleMessages";
+
+const SUMMARY_ROW_HEIGHT = 52;
+const SUMMARY_FALLBACK_VISIBLE_ROWS = 12;
+const SUMMARY_OVERSCAN_ROWS = 6;
 
 function SummaryTable({
   rows,
@@ -16,6 +21,75 @@ function SummaryTable({
 }) {
   const { t, script } = useNativeScheduleI18n();
   const isLatin = script === "latin";
+  const [rowWindow, setRowWindow] = useState(() => ({
+    start: 0,
+    end: Math.min(rows.length, SUMMARY_FALLBACK_VISIBLE_ROWS + (SUMMARY_OVERSCAN_ROWS * 2))
+  }));
+
+  useEffect(() => {
+    const scrollElement = summaryScrollRef?.current;
+    if (!scrollElement) {
+      setRowWindow({
+        start: 0,
+        end: Math.min(rows.length, SUMMARY_FALLBACK_VISIBLE_ROWS + (SUMMARY_OVERSCAN_ROWS * 2))
+      });
+      return undefined;
+    }
+
+    let frameId = 0;
+    let resizeObserver = null;
+
+    function updateRowWindow() {
+      frameId = 0;
+      const viewportHeight = scrollElement.clientHeight;
+      const visibleCount = viewportHeight > 0
+        ? Math.ceil(viewportHeight / SUMMARY_ROW_HEIGHT)
+        : SUMMARY_FALLBACK_VISIBLE_ROWS;
+      const start = Math.max(
+        0,
+        Math.floor(scrollElement.scrollTop / SUMMARY_ROW_HEIGHT) - SUMMARY_OVERSCAN_ROWS
+      );
+      const end = Math.min(rows.length, start + visibleCount + (SUMMARY_OVERSCAN_ROWS * 2));
+
+      setRowWindow((current) => (
+        current.start === start && current.end === end
+          ? current
+          : { start, end }
+      ));
+    }
+
+    function scheduleUpdate() {
+      if (frameId) {
+        return;
+      }
+      frameId = window.requestAnimationFrame(updateRowWindow);
+    }
+
+    scrollElement.addEventListener("scroll", scheduleUpdate);
+    window.addEventListener("resize", scheduleUpdate);
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(scheduleUpdate);
+      resizeObserver.observe(scrollElement);
+    }
+    scheduleUpdate();
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      scrollElement.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [rows.length, summaryScrollRef]);
+
+  const windowStart = Math.min(rowWindow.start, rows.length);
+  const windowEnd = Math.min(Math.max(rowWindow.end, windowStart), rows.length);
+  const visibleRows = rows.slice(windowStart, windowEnd);
+  const topSpacerHeight = windowStart * SUMMARY_ROW_HEIGHT;
+  const bottomSpacerHeight = (rows.length - windowEnd) * SUMMARY_ROW_HEIGHT;
 
   return (
     <>
@@ -55,7 +129,7 @@ function SummaryTable({
       </div>
 
       <WorkbenchScrollArea className="dw-demo-summary-scroll" metricsKey={rows.length} externalScrollRef={summaryScrollRef}>
-        <div className="dw-demo-summary-table">
+        <div className="dw-demo-summary-table" data-row-height={SUMMARY_ROW_HEIGHT}>
           {rows.length === 0 ? (
             <div className="dw-demo-empty-state">
               <div className="dw-demo-empty-icon-wrap" aria-hidden="true">
@@ -66,7 +140,11 @@ function SummaryTable({
               <div className="dw-demo-empty-text">{t("nativeSchedule.summary.empty.next")}</div>
             </div>
           ) : (
-            rows.map((row) => (
+            <>
+              {topSpacerHeight > 0 ? (
+                <div className="dw-demo-summary-spacer" style={{ height: `${topSpacerHeight}px` }} aria-hidden="true" />
+              ) : null}
+              {visibleRows.map((row) => (
               <div key={row.id} className={`dw-demo-summary-row ${row.isConflict ? "is-conflict" : ""} ${row.isExpress ? "is-express" : ""}`}>
                 <div className="is-time">{row.time}</div>
                 <div className="is-line">
@@ -116,7 +194,11 @@ function SummaryTable({
                   </button>
                 </div>
               </div>
-            ))
+              ))}
+              {bottomSpacerHeight > 0 ? (
+                <div className="dw-demo-summary-spacer" style={{ height: `${bottomSpacerHeight}px` }} aria-hidden="true" />
+              ) : null}
+            </>
           )}
         </div>
       </WorkbenchScrollArea>
