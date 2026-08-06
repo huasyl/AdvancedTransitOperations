@@ -280,7 +280,7 @@ ATO 目前仍处于 Beta 阶段。如果您遇到问题，或对功能有任何�
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.2.0" />
+  <ModVersion Value="0.2.1" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -289,17 +289,16 @@ ATO 目前仍处于 Beta 阶段。如果您遇到问题，或对功能有任何�
   <RequiredDLC Value="" />
   <!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
   <ChangeLog>
-## Performance
-
-- Refactored the mod’s main per-frame update loop and adjusted its execution order so that it runs after the relevant vanilla systems have updated. This significantly reduced redundant updates, as many mod systems previously ran every frame while receiving the same data. After several rounds of optimization, the mod’s CPU workload has been reduced by approximately 70%–80% compared with its initial release in relatively complex test scenarios.
-
 ## Improvements
 
-- Increased the maximum broadcast volume in response to community feedback.
+- Added compatibility with Realistic Trips.
+- Improved workbench performance while open, reducing its impact on game framerate and improving page transitions and animation smoothness.
+- Improved automatic timetable previews: incomplete or invalid time input no longer reuses stale preview results.
 
 ## Bug Fixes
 
-- When dispatch control requires a vehicle to return to the depot, the mod now allows extra time for the vanilla system to handle passengers getting off. This resolves most cases, although a few passengers may still remain on board. Since waiting for everyone to leave can take too long, the mod will still close the doors and send the vehicle back to the depot once the waiting threshold is reached.
+- Fixed an issue where timetable changes were not marked as pending after changing the origin waiting limit, maximum station dwell time, or depot selection on the Dispatch Control page.
+- Fixed incorrect five-minute minimum departure-gap detection for same-origin departures across midnight.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />
