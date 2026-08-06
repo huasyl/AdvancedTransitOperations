@@ -78,8 +78,8 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
         portalHostRef={refs.dropdownPortalHostRef}
       />
 
-      <DemoTextField label={topbar.holdMinutesTooSmall ? t("nativeSchedule.topbar.minimumFiveMinutes") : t("nativeSchedule.topbar.holdMinutes")} value={topbar.holdMinutes} onCommit={actions.changeHoldMinutes} onDraftChange={actions.setHoldMinutes} className={`is-hold${topbar.holdMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
-      <DemoTextField label={topbar.dwellMinutesTooSmall ? t("nativeSchedule.topbar.minimumFiveMinutes") : t("nativeSchedule.topbar.dwellMinutes")} value={topbar.dwellMinutes} onCommit={actions.changeDwellMinutes} onDraftChange={actions.setDwellMinutes} className={`is-dwell${topbar.dwellMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
+      <DemoTextField label={topbar.holdMinutesTooSmall ? t("nativeSchedule.topbar.minimumFiveMinutes") : t("nativeSchedule.topbar.holdMinutes")} value={topbar.holdMinutes} onCommit={actions.changeHoldMinutes} onDraftChange={actions.changeHoldMinutes} className={`is-hold${topbar.holdMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
+      <DemoTextField label={topbar.dwellMinutesTooSmall ? t("nativeSchedule.topbar.minimumFiveMinutes") : t("nativeSchedule.topbar.dwellMinutes")} value={topbar.dwellMinutes} onCommit={actions.changeDwellMinutes} onDraftChange={actions.changeDwellMinutes} className={`is-dwell${topbar.dwellMinutesTooSmall ? " is-error" : ""}`} suffix={t("nativeSchedule.unit.minutes")} />
     </div>
   );
 }

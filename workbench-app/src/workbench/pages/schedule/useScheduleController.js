@@ -112,9 +112,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const holdMinutesValue = Number(holdMinutes);
   const dwellMinutesValue = Number(dwellMinutes);
   const holdMinutesTooSmall =
-    holdMinutes !== "" && Number.isFinite(holdMinutesValue) && holdMinutesValue < MIN_LINE_SETTING_MINUTES;
+    !Number.isFinite(holdMinutesValue) || holdMinutesValue < MIN_LINE_SETTING_MINUTES;
   const dwellMinutesTooSmall =
-    dwellMinutes !== "" && Number.isFinite(dwellMinutesValue) && dwellMinutesValue < MIN_LINE_SETTING_MINUTES;
+    !Number.isFinite(dwellMinutesValue) || dwellMinutesValue < MIN_LINE_SETTING_MINUTES;
   const [summaryEntries, setSummaryEntries] = useState(() => normalizeSummaryEntries([], t));
   const [autoRules, setAutoRules] = useState([]);
   const [manualDrafts, setManualDrafts] = useState([]);
@@ -126,6 +126,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const [autoOffsetDirection, setAutoOffsetDirection] = useState("");
   const [autoOffsetMinutesText, setAutoOffsetMinutesText] = useState("");
   const [appliedSummarySignature, setAppliedSummarySignature] = useState("");
+  const [appliedLineSettingsSignature, setAppliedLineSettingsSignature] = useState("");
   const [appliedSummaryRowKeys, setAppliedSummaryRowKeys] = useState([]);
   const [isApplyingSchedule, setIsApplyingSchedule] = useState(false);
   const [summaryFilter, setSummaryFilter] = useState("all");
@@ -236,6 +237,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
     [currentAutoPlan.hasKindConflict, currentAutoPlan.previewsByRule, currentAutoRules, t]
   );
   const liveAutoPreview = useMemo(() => {
+    if (String(editorStart || "").length < 5 || String(editorEnd || "").length < 5) {
+      return { times: [], entries: [], meta: "" };
+    }
+
     const previewRule = {
       id: "editor-preview",
       lineId: selectedLine.id,
@@ -279,11 +284,19 @@ export default function useScheduleController({ registerHostActions, activeTrans
     () => getSummaryRowsSignature(summaryEntries),
     [summaryEntries]
   );
+  const currentLineSettingsSignature = useMemo(
+    () => JSON.stringify(serializeNativeLineSettings(LINE_OPTIONS)),
+    [catalogRevision]
+  );
   const appliedSummaryRowKeySet = useMemo(
     () => new Set(Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []),
     [appliedSummaryRowKeys]
   );
-  const hasAppliedSchedule = currentSummarySignature === appliedSummarySignature && pendingRemovedLineIds.length === 0;
+  const hasAppliedSchedule = currentSummarySignature === appliedSummarySignature
+    && currentLineSettingsSignature === appliedLineSettingsSignature
+    && !holdMinutesTooSmall
+    && !dwellMinutesTooSmall
+    && pendingRemovedLineIds.length === 0;
   const summaryRows = useMemo(
     () => buildSummaryRowsWithConflicts(summaryEntries, t, appliedSummaryRowKeySet),
     [appliedSummaryRowKeySet, summaryEntries, t]
@@ -497,6 +510,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setAutoOffsetDirection("");
     setAutoOffsetMinutesText("");
     setAppliedSummarySignature(nextSummarySignature);
+    setAppliedLineSettingsSignature(JSON.stringify(serializeNativeLineSettings(runtimeCatalog.lineOptions)));
     setAppliedSummaryRowKeys(currentSummaryRowKeys);
     setSummaryFilter("all");
     setPanelMessage(null);
@@ -583,6 +597,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setManualDrafts([]);
     setPendingRemovedLineIds([]);
     setAppliedSummarySignature("");
+    setAppliedLineSettingsSignature("");
     setAppliedSummaryRowKeys([]);
     setSummaryFilter("all");
     setPanelMessage(null);
@@ -916,7 +931,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function handleHoldMinutesChange(value) {
     const numeric = Number(value);
-    if (value !== "" && Number.isFinite(numeric) && numeric < MIN_LINE_SETTING_MINUTES) {
+    if (!Number.isFinite(numeric) || numeric < MIN_LINE_SETTING_MINUTES) {
       setHoldMinutes(value);
       return;
     }
@@ -927,7 +942,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function handleDwellMinutesChange(value) {
     const numeric = Number(value);
-    if (value !== "" && Number.isFinite(numeric) && numeric < MIN_LINE_SETTING_MINUTES) {
+    if (!Number.isFinite(numeric) || numeric < MIN_LINE_SETTING_MINUTES) {
       setDwellMinutes(value);
       return;
     }
@@ -938,16 +953,12 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function handleEditorStartChange(value) {
     clearPanelMessage();
-    if (!value || (value.length === 5 && isValidTimeValue(value))) {
-      setEditorStart(value);
-    }
+    setEditorStart(value);
   }
 
   function handleEditorEndChange(value) {
     clearPanelMessage();
-    if (!value || (value.length === 5 && isValidTimeValue(value))) {
-      setEditorEnd(value);
-    }
+    setEditorEnd(value);
   }
 
   function handleAutoFrequencyChange(value) {
@@ -1223,6 +1234,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   async function handleApplySchedule() {
+    if (holdMinutesTooSmall || dwellMinutesTooSmall) {
+      setPanelMessage({ scope: "summary", tone: "error", text: t("nativeSchedule.topbar.minimumFiveMinutes") });
+      return;
+    }
+
     const unsupportedRow = summaryEntries.find((row) => {
       const rowLineId = row?.lineId || row?.serviceId;
       const lineOption = LINE_OPTIONS.find((line) => line?.id === rowLineId);
@@ -1266,6 +1282,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       setPanelMessage(null);
       if (!result?.snapshot) {
         setAppliedSummarySignature(getSummaryRowsSignature(summaryEntries));
+        setAppliedLineSettingsSignature(currentLineSettingsSignature);
         setAppliedSummaryRowKeys(summaryEntries.map((row) => getSummaryRowKey(row)));
       }
     } catch (error) {
@@ -1288,17 +1305,17 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
     window.setTimeout(() => {
       const scrollContainer = summaryScrollRef.current;
-      const firstConflictRow = scrollContainer?.querySelector(".dw-demo-summary-row.is-conflict");
-      if (!scrollContainer || !firstConflictRow) {
+      const firstConflictIndex = summaryRows.findIndex((row) => row.isConflict);
+      if (!scrollContainer || firstConflictIndex < 0) {
         return;
       }
 
-      const containerRect = scrollContainer.getBoundingClientRect();
-      const rowRect = firstConflictRow.getBoundingClientRect();
-      const deltaTop = rowRect.top - containerRect.top;
+      const summaryTable = scrollContainer.querySelector(".dw-demo-summary-table");
+      const rowHeight = Number(summaryTable?.getAttribute("data-row-height")) || 52;
       const nextScrollTop =
-        scrollContainer.scrollTop + deltaTop - Math.max(0, Math.round((scrollContainer.clientHeight - firstConflictRow.clientHeight) / 2));
+        (firstConflictIndex * rowHeight) - Math.max(0, Math.round((scrollContainer.clientHeight - rowHeight) / 2));
       scrollContainer.scrollTop = Math.max(0, nextScrollTop);
+      scrollContainer.dispatchEvent(new Event("scroll"));
     }, 0);
   }
 

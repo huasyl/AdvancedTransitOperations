@@ -205,6 +205,7 @@ export default function WorkbenchScrollArea({
     const nextThumbTop = Math.max(0, Math.min(maxThumbTop, rawTop));
     const nextScrollTop = maxThumbTop <= 0 ? 0 : (nextThumbTop / maxThumbTop) * scrollRange;
     scrollElement.scrollTop = nextScrollTop;
+    scrollElement.dispatchEvent(new Event("scroll"));
 
     applyScrollMetrics({
       visible: true,
