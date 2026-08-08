@@ -4,6 +4,7 @@ using Game.Common;
 using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 using Unity.Mathematics;
 

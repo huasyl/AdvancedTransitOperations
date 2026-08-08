@@ -202,6 +202,50 @@ namespace RapidTransitMod.Dispatch
             }
         }
 
+        internal string[] ChangedDepotLines(
+            TransitMode mode,
+            IEnumerable<DispatchWorkbenchLineSettingDto> settings)
+        {
+            if (mode == TransitMode.Unknown)
+                return Array.Empty<string>();
+
+            Dictionary<LineKey, string> previous = new Dictionary<LineKey, string>();
+            foreach (KeyValuePair<LineKey, LineConfigState> entry in m_Store.GetAll(mode))
+            {
+                if (LineKey.IsStableGuidKey(entry.Key) && entry.Value != null)
+                    previous[entry.Key] = m_NormDepot(entry.Value.AllowedDepotId);
+            }
+
+            Dictionary<LineKey, string> next = new Dictionary<LineKey, string>();
+            bool anyInput = false;
+            foreach (DispatchWorkbenchLineSettingDto setting in settings ?? Array.Empty<DispatchWorkbenchLineSettingDto>())
+            {
+                if (setting == null || string.IsNullOrEmpty(setting.lineId))
+                    continue;
+
+                anyInput = true;
+                LineKey key = LineIdentityService.GetKey(setting.lineId, mode);
+                if (AcceptsWriteKey(key) && key.Mode == mode)
+                    next[key] = m_NormDepot(setting.allowedDepotId);
+            }
+
+            if (anyInput && next.Count == 0)
+                return Array.Empty<string>();
+
+            HashSet<LineKey> keys = new HashSet<LineKey>(previous.Keys);
+            keys.UnionWith(next.Keys);
+            List<string> changed = new List<string>();
+            foreach (LineKey key in keys)
+            {
+                string oldDepot = previous.TryGetValue(key, out string oldValue) ? oldValue : string.Empty;
+                string newDepot = next.TryGetValue(key, out string newValue) ? newValue : string.Empty;
+                if (!string.Equals(oldDepot, newDepot, StringComparison.Ordinal))
+                    changed.Add(m_IdByKey(key));
+            }
+
+            return changed.ToArray();
+        }
+
         internal bool Same(IEnumerable<DispatchWorkbenchLineSettingDto> settings)
         {
             Dictionary<string, DispatchWorkbenchLineSettingDto> requested =

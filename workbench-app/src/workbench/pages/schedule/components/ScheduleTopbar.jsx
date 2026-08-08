@@ -27,25 +27,27 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
         portalHostRef={refs.dropdownPortalHostRef}
       />
 
-      <div className="dw-demo-field is-kind">
-        <label className="dw-demo-label">{t("nativeSchedule.topbar.kind")}</label>
-        <div className="dw-demo-toggle-group">
-          <button
-            type="button"
-            className={`dw-demo-toggle ${topbar.selectedLineType === "local" ? "is-active" : ""}`}
-            onClick={() => actions.selectLineType("local")}
-          >
-            {t("nativeSchedule.type.local")}
-          </button>
-          <button
-            type="button"
-            className={`dw-demo-toggle ${topbar.selectedLineType === "express" ? "is-active is-express" : ""}`}
-            onClick={() => actions.selectLineType("express")}
-          >
-            {t("nativeSchedule.type.express")}
-          </button>
+      {topbar.supportsExpress ? (
+        <div className="dw-demo-field is-kind">
+          <label className="dw-demo-label">{t("nativeSchedule.topbar.kind")}</label>
+          <div className="dw-demo-toggle-group">
+            <button
+              type="button"
+              className={`dw-demo-toggle ${topbar.selectedLineType === "local" ? "is-active" : ""}`}
+              onClick={() => actions.selectLineType("local")}
+            >
+              {t("nativeSchedule.type.local")}
+            </button>
+            <button
+              type="button"
+              className={`dw-demo-toggle ${topbar.selectedLineType === "express" ? "is-active is-express" : ""}`}
+              onClick={() => actions.selectLineType("express")}
+            >
+              {t("nativeSchedule.type.express")}
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <DemoDisplayField
         label={t("nativeSchedule.topbar.origin")}

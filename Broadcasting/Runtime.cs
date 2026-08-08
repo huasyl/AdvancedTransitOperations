@@ -53,6 +53,15 @@ namespace RapidTransitMod.Broadcasting
             m_Vehicles.ServiceEnded(vehicle, line, waypoints, previousWaypointIndex);
         }
 
+        internal void BusDeparted(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex)
+        {
+            m_Vehicles.BusDeparted(vehicle, line, waypoints, waypointIndex);
+        }
+
         internal void BypassWaiting(
             Entity vehicle,
             Entity line,

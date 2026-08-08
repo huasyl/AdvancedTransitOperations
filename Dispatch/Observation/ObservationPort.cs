@@ -8,6 +8,7 @@ using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
@@ -18,16 +19,20 @@ namespace RapidTransitMod.Dispatch.Observation
 {
     internal sealed class ObservationPort
     {
-        private const float DispatchSampleOutlierFactor = 1.5f;
+        private const float RailDispatchSampleOutlierFactor = 1.5f;
+        private const float RoadDispatchSampleOutlierFactor = 3.0f;
         private const uint DISPATCH_SAMPLE_MIN_FRAMES = 365u;
 
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Capture m_Capture;
         private readonly SliceAdmission m_Admission;
+        private readonly BusSegCapture m_BusSeg;
         private readonly Dictionary<Entity, DwellDeadlineCacheEntry> m_DwellDeadlineCache =
             new Dictionary<Entity, DwellDeadlineCacheEntry>();
         private readonly Dictionary<Entity, DispatchEtaRequest> m_DispatchEtaRequests =
             new Dictionary<Entity, DispatchEtaRequest>();
+        private readonly Dictionary<Entity, uint> m_DispatchTimingCutoffs =
+            new Dictionary<Entity, uint>();
 
         private sealed class DispatchEtaRequest
         {
@@ -60,11 +65,16 @@ namespace RapidTransitMod.Dispatch.Observation
             }
         }
 
-        public ObservationPort(ModRuntimeHostSystem runtime, Capture capture, SliceAdmission admission)
+        public ObservationPort(
+            ModRuntimeHostSystem runtime,
+            Capture capture,
+            SliceAdmission admission,
+            BusSegCapture busSeg)
         {
             m_Runtime = runtime;
             m_Capture = capture;
             m_Admission = admission;
+            m_BusSeg = busSeg;
             m_Runtime.m_SimClock.ClockChanged += OnClockChanged;
         }
 
@@ -253,6 +263,59 @@ namespace RapidTransitMod.Dispatch.Observation
         public bool TrySlice(ulong key, out TraversalSliceObservation observation)
         {
             return m_Runtime.m_ObsQuery.TrySlice(key, out observation);
+        }
+
+        public void BeginBusSeg(Entity vehicle, Entity line, int waypointIndex, uint nowFrame)
+        {
+            m_BusSeg.Begin(vehicle, line, waypointIndex, nowFrame);
+        }
+
+        public bool TryEndBusSeg(
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            uint nowFrame,
+            out BusSegSample sample)
+        {
+            return m_BusSeg.TryEnd(vehicle, line, waypointIndex, nowFrame, out sample);
+        }
+
+        public void CancelBusSeg(Entity vehicle)
+        {
+            m_BusSeg.Cancel(vehicle);
+        }
+
+        public void RemoveBusSegVehicle(Entity vehicle)
+        {
+            m_BusSeg.RemoveVehicle(vehicle);
+        }
+
+        public bool TryBusSegFrames(
+            Entity line,
+            Entity fromWaypoint,
+            Entity fromStop,
+            Entity toWaypoint,
+            Entity toStop,
+            out float frames)
+        {
+            frames = 0f;
+            return m_Runtime.m_ObsQuery.TryBusSeg(
+                new BusSegKey(line, fromWaypoint, fromStop, toWaypoint, toStop),
+                out BusSegObservation observation)
+                && (frames = observation.EstimatedFrames) > 0f;
+        }
+
+        public void InvalidateBusRoute(
+            Entity line,
+            LineProfile.RoadRouteSnapshot oldRoute,
+            LineProfile.RoadRouteSnapshot newRoute)
+        {
+            m_BusSeg.InvalidateRoute(line, oldRoute, newRoute);
+        }
+
+        public void ClearBusSeg()
+        {
+            m_BusSeg.Clear();
         }
 
         public bool TryLapFrames(Entity vehicle, out uint lapFrames)
@@ -529,15 +592,18 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             uint sampleFrames = 0;
+            uint sampleStart = 0;
             bool hasSample = false;
             if (m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out uint dispatchRequestStart))
             {
                 sampleFrames = nowFrame - dispatchRequestStart;
+                sampleStart = dispatchRequestStart;
                 hasSample = true;
             }
             else if (m_Runtime.m_VehicleView.TryGetPreparing(vehicle, out uint prepStart))
             {
                 sampleFrames = nowFrame - prepStart;
+                sampleStart = prepStart;
                 hasSample = true;
             }
 
@@ -545,6 +611,8 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_VehicleRegistry.ClearDispatch(vehicle);
             m_DispatchEtaRequests.Remove(vehicle);
             if (!hasSample || sampleFrames == 0)
+                return;
+            if (IsDispatchTimingInvalid(line, sampleStart))
                 return;
 
             ClockSnapshot clockSnapshot = m_Runtime.m_SimClock.Snapshot;
@@ -560,7 +628,8 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             float cachedFrames = m_Runtime.m_DispatchCache.Read(line);
-            if (cachedFrames > 0f && sampleFrames > cachedFrames * DispatchSampleOutlierFactor)
+            float outlierFactor = DispatchSampleOutlierFactor(line);
+            if (cachedFrames > 0f && sampleFrames > cachedFrames * outlierFactor)
             {
                 if (RtLog.VerboseEnabled)
                 {
@@ -579,7 +648,11 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void BeginDispatchEta(Entity vehicle, Entity line, uint dispatchFrame)
         {
-            if (vehicle == Entity.Null || m_DispatchEtaRequests.ContainsKey(vehicle))
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle != LifecycleKind.Rail
+                || m_DispatchEtaRequests.ContainsKey(vehicle))
                 return;
             m_DispatchEtaRequests[vehicle] = new DispatchEtaRequest
             {
@@ -595,6 +668,14 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             if (!m_DispatchEtaRequests.TryGetValue(vehicle, out DispatchEtaRequest request))
                 return;
+            if (line == Entity.Null
+                || IsDispatchTimingInvalid(line, request.DispatchFrame)
+                || TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle != LifecycleKind.Rail)
+            {
+                m_DispatchEtaRequests.Remove(vehicle);
+                return;
+            }
             if (!m_Runtime.m_VehicleView.TryGetDispatch(vehicle, out _))
                 return;
             if (vehicle == Entity.Null || line == Entity.Null || waypoints.Length == 0 || !m_Runtime.EntityManager.Exists(vehicle))
@@ -645,6 +726,41 @@ namespace RapidTransitMod.Dispatch.Observation
         public void ClearDispatchEta()
         {
             m_DispatchEtaRequests.Clear();
+            m_DispatchTimingCutoffs.Clear();
+        }
+
+        public void InvalidateDispatchTiming(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_DispatchTimingCutoffs[line] = m_Runtime.m_SimulationSystem.frameIndex;
+            m_Runtime.m_DispatchCache.RemoveDepotTiming(line);
+        }
+
+        public void RemoveLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_BusSeg.RemoveLine(line);
+            m_DispatchTimingCutoffs.Remove(line);
+            m_Runtime.m_DispatchCache.RemoveLine(line);
+        }
+
+        private bool IsDispatchTimingInvalid(Entity line, uint sampleStart)
+        {
+            return line != Entity.Null
+                && m_DispatchTimingCutoffs.TryGetValue(line, out uint cutoff)
+                && sampleStart <= cutoff;
+        }
+
+        private float DispatchSampleOutlierFactor(Entity line)
+        {
+            return TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle == LifecycleKind.Road
+                ? RoadDispatchSampleOutlierFactor
+                : RailDispatchSampleOutlierFactor;
         }
 
         public string Json()
@@ -1014,14 +1130,28 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
             }
 
-            StationAnchorObservationSummaryDto coverage = m_Runtime.m_StationAnchorDiagnostics.Build().summary;
+            StationAnchorObservationDiagnosticsDto diagnostics = m_Runtime.m_StationAnchorDiagnostics.Build();
+            StationAnchorObservationSummaryDto coverage = diagnostics.summary;
+            string standaloneStops = string.Join(",", diagnostics.anchorGroups
+                .Where(group => group.buildingEntityIndex < 0)
+                .SelectMany(group => group.stopEntityIndices)
+                .Distinct()
+                .OrderBy(entityIndex => entityIndex));
+            string attachedStops = string.Join(",", diagnostics.anchorGroups
+                .Where(group => group.buildingEntityIndex >= 0)
+                .SelectMany(group => group.stopEntityIndices.Select(
+                    stopEntityIndex => stopEntityIndex + "->" + group.buildingEntityIndex))
+                .Distinct()
+                .OrderBy(mapping => mapping, StringComparer.Ordinal));
             m_Runtime.log.Info("[StationAnchorDiag] intervalFrames=" + ModRuntimeHostSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
                 + " lines=" + coverage.lineCount
                 + " stopWaypoints=" + coverage.stopWaypointCount
                 + " anchorResolved=" + coverage.anchorResolvedCount
                 + " anchorMissing=" + coverage.anchorMissingCount
                 + " uniqueAnchors=" + coverage.uniqueAnchorCount
-                + " duplicateAnchorOccurrences=" + coverage.duplicateAnchorOccurrenceCount);
+                + " duplicateAnchorOccurrences=" + coverage.duplicateAnchorOccurrenceCount
+                + " standaloneStops=[" + standaloneStops + "]"
+                + " attachedStops=[" + attachedStops + "]");
 
             m_Runtime.log.Info("[StopDwellAnchorDiag] intervalFrames=" + ModRuntimeHostSystem.STATION_ANCHOR_OBSERVATION_DIAG_INTERVAL_FRAMES
                 + " accepted=" + m_Runtime.m_StationAnchorDiagAcceptedSamples

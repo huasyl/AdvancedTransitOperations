@@ -28,7 +28,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string LoadBroadcastAssetBrowserJson(string requestJson)
                 {
-                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadBroadcastAssetBrowser");
+                    ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "loadBroadcastAssetBrowser");
                     using (UseScope(scope))
                     {
                         return global::RapidTransitMod.Workbenches.Json.Write(
@@ -48,7 +48,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "importBroadcastExternalAssets");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "importBroadcastExternalAssets");
                         using (UseScope(scope))
                         {
                         BroadcastWorkbenchImportExternalAssetsRequest request =
@@ -152,7 +152,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "deleteBroadcastAsset");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "deleteBroadcastAsset");
                         using (UseScope(scope))
                         {
                         catalogSnapshot = Catalog.Select(CloneAsset).ToList();
@@ -205,7 +205,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "deleteAllBroadcastAssets");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "deleteAllBroadcastAssets");
                         using (UseScope(scope))
                         {
                         LoadWorkbench();
@@ -247,7 +247,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                     try
                     {
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "openBroadcastAssetDirectoryPicker");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "openBroadcastAssetDirectoryPicker");
                         MainThreadDispatcher.RunOnMainThread(() =>
                         {
                             using (UseScope(scope))

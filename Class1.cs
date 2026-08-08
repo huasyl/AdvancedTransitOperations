@@ -64,6 +64,7 @@ namespace RapidTransitMod
             log.Info(nameof(OnLoad));
 #if RT_DEBUG_TOOLS
             TryEnableCohtmlDebugger();
+            updateSystem.UpdateAfter<TramTrainNetPatchSystem, Game.Prefabs.NetInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
 #endif
             updateSystem.UpdateAfter<RailTravel.QuerySystem, PathfindSetupSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Dispatch.Runtime.BoardingFirstFrameGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
@@ -77,6 +78,7 @@ namespace RapidTransitMod
             updateSystem.UpdateAfter<DepotSourceLockSystem, RtManagedVehicleRequestSystem>(SystemUpdatePhase.GameSimulation);
 #if RT_DEBUG_TOOLS
             updateSystem.UpdateAfter<DevSightRaycastCollectorSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
+            updateSystem.UpdateAfter<TramTrainSurfaceProbeSystem, ToolRaycastSystem>(SystemUpdatePhase.Raycast);
 #endif
             updateSystem.UpdateBefore<RapidTransitPanelUISystem>(SystemUpdatePhase.Rendering);
 #if RT_DEBUG_TOOLS

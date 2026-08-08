@@ -52,7 +52,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 && mode != TransitMode.Unknown)
             {
                 ModeScope scope = new ModeScope(mode);
-                return scope.IsSupportedWorkbenchMode ? scope : ModeScope.DefaultWorkbench;
+                return scope.SupportsBroadcast ? scope : ModeScope.DefaultWorkbench;
             }
 
             return ModeScope.DefaultWorkbench;

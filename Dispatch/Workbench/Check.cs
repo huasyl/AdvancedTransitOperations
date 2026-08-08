@@ -8,6 +8,7 @@ namespace RapidTransitMod.Dispatch.Workbench
     {
         internal static List<string> Request(
             DispatchWorkbenchSaveRequest request,
+            TransitMode mode,
             List<WorkbenchLineRuntime> runtimeLines,
             bool validateApplyOnlyConstraints,
             List<DispatchWorkbenchDepotDto> depots,
@@ -34,6 +35,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                 errors.Add("Merged view is required.");
                 return errors;
             }
+
+            if (mode == TransitMode.Bus)
+                ValidateBusRequest(request, errors);
 
             List<string> localIds = normalizeLineIdList(
                 request.mergedView.localLineIds,
@@ -297,6 +301,232 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             return errors;
+        }
+
+        private static void ValidateBusRequest(
+            DispatchWorkbenchSaveRequest request,
+            List<string> errors)
+        {
+            DispatchWorkbenchMergedView view = request.mergedView;
+            if (string.Equals(request.selectedEditLine, "express", StringComparison.Ordinal)
+                || !string.IsNullOrEmpty(view.expressLineId)
+                || (view.expressLineIds != null && view.expressLineIds.Length > 0))
+            {
+                errors.Add("Bus schedule does not support express lines.");
+            }
+
+            ValidateBusPlanContract(request.plannerImportContract, errors, "plannerImportContract");
+            if (request.planRefs != null)
+            {
+                for (int i = 0; i < request.planRefs.Length; i++)
+                {
+                    ValidateBusPlanContract(
+                        request.planRefs[i]?.contract,
+                        errors,
+                        "planRefs[" + i + "].contract");
+                }
+            }
+
+            ValidateBusRows(request.manualRows, errors, "manual row");
+            ValidateBusRules(request.autoRules, errors);
+            ValidateBusRows(request.lineDraftRows, errors, "staged row");
+            if (request.lineDraftRowsByLineId != null)
+            {
+                for (int i = 0; i < request.lineDraftRowsByLineId.Length; i++)
+                {
+                    ValidateBusRows(
+                        request.lineDraftRowsByLineId[i]?.lineDraftRows,
+                        errors,
+                        "staged row");
+                }
+            }
+
+            if (request.lineSettings != null)
+            {
+                for (int i = 0; i < request.lineSettings.Length; i++)
+                {
+                    if (request.lineSettings[i] != null && !IsLocal(request.lineSettings[i].serviceKind))
+                        errors.Add("Bus line settings only support local service.");
+                }
+            }
+        }
+
+        private static void ValidateBusPlanContract(
+            DispatchWorkbenchPlannerImportContractDto contract,
+            List<string> errors,
+            string fieldName)
+        {
+            if (contract == null)
+                return;
+
+            if (HasValues(contract.selectedBypassStationIds))
+                errors.Add("Bus " + fieldName + " does not support bypass stations.");
+
+            DispatchPlannerRequestEchoDto echo = contract.requestEcho;
+            if (echo != null
+                && (!string.IsNullOrEmpty(echo.expressLineId)
+                    || !string.IsNullOrEmpty(echo.virtualExpressBaseLineId)
+                    || HasValues(echo.expressStopStationIds)
+                    || HasValues(echo.forcedBypassStationIds)
+                    || HasBusPlannerMode(echo.expressSourceMode)
+                    || HasBusPlannerMode(echo.departureMode)
+                    || !string.IsNullOrEmpty(echo.phaseTime)
+                    || echo.expressTripsPerHour != 0
+                    || echo.expressOffsetMinutes != 0
+                    || echo.maxOffsetMinutes != 0
+                    || echo.offsetStepMinutes != 0
+                    || echo.maxAdditionalBypassStations != 0))
+            {
+                errors.Add("Bus " + fieldName + " contains unsupported express, offset, or bypass planning data.");
+            }
+
+            ValidateBusChangedRows(contract.changedRows, errors, fieldName);
+            ValidateBusActions(contract.structuredActions, errors, fieldName);
+            ValidateBusRiskItems(contract.riskItems, errors, fieldName);
+        }
+
+        private static bool HasBusPlannerMode(string value)
+        {
+            return !string.IsNullOrEmpty(value)
+                && !string.Equals(value, "local", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(value, "none", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasBusBlockedPlannerTerm(string value)
+        {
+            return !string.IsNullOrEmpty(value)
+                && (value.IndexOf("express", StringComparison.OrdinalIgnoreCase) >= 0
+                    || value.IndexOf("offset", StringComparison.OrdinalIgnoreCase) >= 0
+                    || value.IndexOf("bypass", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static void ValidateBusChangedRows(
+            DispatchPlannerChangedRowDto[] rows,
+            List<string> errors,
+            string fieldName)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                DispatchPlannerChangedRowDto row = rows[i];
+                if (row != null && (!IsLocal(row.kind) || HasBusBlockedPlannerTerm(row.changeType)))
+                    errors.Add("Bus " + fieldName + " contains unsupported planner row data.");
+            }
+        }
+
+        private static void ValidateBusActions(
+            DispatchPlannerScheduleActionDto[] actions,
+            List<string> errors,
+            string fieldName)
+        {
+            if (actions == null)
+                return;
+
+            for (int i = 0; i < actions.Length; i++)
+            {
+                DispatchPlannerScheduleActionDto action = actions[i];
+                if (action != null
+                    && (action.deltaOffsetMinutes != 0f
+                        || HasBusBlockedPlannerTerm(action.actionType)
+                        || HasBusBlockedPlannerTerm(action.type)))
+                {
+                    errors.Add("Bus " + fieldName + " contains unsupported planner action data.");
+                }
+            }
+        }
+
+        private static void ValidateBusRiskItems(
+            DispatchPlannerRiskItemDto[] items,
+            List<string> errors,
+            string fieldName)
+        {
+            if (items == null)
+                return;
+
+            for (int i = 0; i < items.Length; i++)
+            {
+                if (items[i] != null && !string.IsNullOrEmpty(items[i].selectedBypassStationId))
+                    errors.Add("Bus " + fieldName + " contains unsupported bypass risk data.");
+            }
+        }
+
+        private static bool HasValues(string[] values)
+        {
+            if (values == null)
+                return false;
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (!string.IsNullOrEmpty(values[i]))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void ValidateBusRows(
+            DispatchWorkbenchManualRowDto[] rows,
+            List<string> errors,
+            string rowKind)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                DispatchWorkbenchManualRowDto row = rows[i];
+                if (row != null
+                    && (!IsLocal(row.kind)
+                        || !string.IsNullOrEmpty(row.offsetMode)
+                        || !string.IsNullOrEmpty(row.offsetMinutes)))
+                {
+                    errors.Add("Bus " + rowKind + " only supports local service without offset.");
+                }
+            }
+        }
+
+        private static void ValidateBusRows(
+            DispatchWorkbenchStagedRowDto[] rows,
+            List<string> errors,
+            string rowKind)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                if (rows[i] != null && !IsLocal(rows[i].kind))
+                    errors.Add("Bus " + rowKind + " only supports local service.");
+            }
+        }
+
+        private static void ValidateBusRules(
+            DispatchWorkbenchAutoRuleDto[] rules,
+            List<string> errors)
+        {
+            if (rules == null)
+                return;
+
+            for (int i = 0; i < rules.Length; i++)
+            {
+                DispatchWorkbenchAutoRuleDto rule = rules[i];
+                if (rule != null
+                    && (!IsLocal(rule.kind)
+                        || rule.expressPerHour != 0d
+                        || !string.IsNullOrEmpty(rule.expressOffsetMode)
+                        || rule.expressOffsetMinutes != 0))
+                {
+                    errors.Add("Bus auto rule only supports local service without express offset.");
+                }
+            }
+        }
+
+        private static bool IsLocal(string kind)
+        {
+            return string.IsNullOrEmpty(kind)
+                || string.Equals(kind, "local", StringComparison.Ordinal);
         }
 
         internal static List<string> AppliedRows(

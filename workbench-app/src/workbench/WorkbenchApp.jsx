@@ -13,6 +13,10 @@ const WORKBENCH_PAGE_TRANSITION_MS = 220;
 const DEFAULT_TRANSPORT_MODE = "train";
 const WORKBENCH_DEBUG_FLAGS_EVENT = "rt-native-workbench-debug-flags";
 
+function isBusTransportMode(mode) {
+  return String(mode || "").trim().toLowerCase() === "bus";
+}
+
 function getWorkbenchDebugToolsEnabled() {
   return typeof window !== "undefined" && window.__RT_DEBUG_TOOLS__ === true;
 }
@@ -186,6 +190,7 @@ export default function WorkbenchApp({ registerHostActions }) {
       ? activeTransportMode
       : pageTransportModes[pageKey] || DEFAULT_TRANSPORT_MODE
   );
+  const showPlannerModeUnsupported = isBusTransportMode(activeTransportMode);
 
   function pageClassName(pageKey) {
     if (renderedPage === pageKey) {
@@ -255,8 +260,12 @@ export default function WorkbenchApp({ registerHostActions }) {
           className={pageClassName("planner")}
           data-workbench-page="planner"
         >
-          {debugToolsEnabled ? (
+          {debugToolsEnabled && !showPlannerModeUnsupported ? (
             <PlannerPage pageEnterSequence={plannerEnterSequence} activeTransportMode={modeForPage("planner")} />
+          ) : showPlannerModeUnsupported ? (
+            <div className="rtw-overview-root">
+              <div className="rtw-overview-error">{t("nativeWorkbench.modeUnsupported")}</div>
+            </div>
           ) : null}
         </div>
         <div

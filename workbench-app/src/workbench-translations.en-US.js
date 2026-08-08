@@ -136,6 +136,7 @@ export const nativeScheduleTranslationsEnUs = {
   "nativeWorkbench.tab.broadcast": "Broadcast",
   "nativeWorkbench.tab.overview": "Overview",
   "nativeWorkbench.tab.passenger": "Passenger Flow",
+  "nativeWorkbench.modeUnsupported": "This transport mode is not supported on this page.",
   "nativeWorkbench.overview.mode.train": "Train",
   "nativeWorkbench.overview.mode.subway": "Subway",
   "nativeWorkbench.overview.mode.tram": "Tram",

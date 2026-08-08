@@ -8,12 +8,14 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly LapStore m_Laps;
         private readonly DwellStore m_Dwell;
         private readonly SliceStore m_Slices;
+        private readonly BusSegStore m_BusSeg;
 
-        internal Query(LapStore laps, DwellStore dwell, SliceStore slices)
+        internal Query(LapStore laps, DwellStore dwell, SliceStore slices, BusSegStore busSeg)
         {
             m_Laps = laps;
             m_Dwell = dwell;
             m_Slices = slices;
+            m_BusSeg = busSeg;
         }
 
         internal bool TryLapStart(Entity vehicle, out float odometer) =>
@@ -43,6 +45,9 @@ namespace RapidTransitMod.Dispatch.Observation
         internal bool TrySlice(ulong key, out TraversalSliceObservation observation) =>
             m_Slices.TryObservation(key, out observation);
 
+        internal bool TryBusSeg(BusSegKey key, out BusSegObservation observation) =>
+            m_BusSeg.TryObservation(key, out observation);
+
         internal int WaypointDwellCount => m_Dwell.Waypoints.Count;
 
         internal int StationDwellCount => m_Dwell.Stations.Count;
@@ -50,6 +55,8 @@ namespace RapidTransitMod.Dispatch.Observation
         internal IEnumerable<DwellObservation> WaypointDwells => m_Dwell.Waypoints.Values;
 
         internal IEnumerable<StationDwellObservation> StationDwells => m_Dwell.Stations.Values;
+
+        internal IEnumerable<KeyValuePair<BusSegKey, BusSegObservation>> BusSegs => m_BusSeg.Observations;
 
         internal IReadOnlyList<TraversalSliceActualSample> ActualSamples => m_Slices.RecentActualSamples;
 

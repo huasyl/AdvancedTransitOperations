@@ -7,6 +7,7 @@ using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 using Unity.Mathematics;
 

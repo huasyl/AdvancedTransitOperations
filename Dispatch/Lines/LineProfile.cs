@@ -4,6 +4,7 @@ using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Diagnostics;
+using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -14,11 +15,21 @@ namespace RapidTransitMod.Dispatch.Lines
 {
     internal sealed class LineProfile
     {
+        internal sealed class RoadRouteSnapshot
+        {
+            internal Entity[] Waypoints = System.Array.Empty<Entity>();
+            internal Entity[] Stops = System.Array.Empty<Entity>();
+        }
+
         private readonly ModRuntimeHostSystem m_Runtime;
         private NativeHashMap<Entity, ulong> m_LineWaypointSignature;
         private NativeHashMap<Entity, uint> m_LineStableSinceFrame;
         private NativeHashSet<Entity> m_DiagnosedLines;
         private readonly Dictionary<Entity, Entity> m_OriginStopByWaypoint = new Dictionary<Entity, Entity>();
+        private readonly Dictionary<Entity, RoadRouteSnapshot> m_RoadSnapshots = new Dictionary<Entity, RoadRouteSnapshot>();
+        private readonly Dictionary<Entity, uint> m_LifecycleFailureFrames = new Dictionary<Entity, uint>();
+
+        private const uint LIFECYCLE_FAILURE_LOG_COOLDOWN_FRAMES = 1800;
 
         public LineProfile(ModRuntimeHostSystem runtime)
         {
@@ -339,6 +350,17 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public bool IsStable(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
         {
+            if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, line, out LifecycleKind lifecycle))
+            {
+                LogLifecycleFailure(line);
+                return false;
+            }
+
+            if (lifecycle == LifecycleKind.Road)
+                return ObserveRoadRouteSnapshot(line, waypoints);
+            if (lifecycle != LifecycleKind.Rail)
+                return false;
+
             ulong signature = ComputeWaypointSignature(waypoints);
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
 
@@ -369,6 +391,90 @@ namespace RapidTransitMod.Dispatch.Lines
             return nowFrame - stableSince >= ModRuntimeHostSystem.NEW_LINE_STABLE_FRAMES;
         }
 
+        private void LogLifecycleFailure(Entity line)
+        {
+            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
+            if (m_LifecycleFailureFrames.TryGetValue(line, out uint lastFrame)
+                && nowFrame - lastFrame < LIFECYCLE_FAILURE_LOG_COOLDOWN_FRAMES)
+            {
+                return;
+            }
+
+            m_LifecycleFailureFrames[line] = nowFrame;
+            m_Runtime.log.Info("[LineProfile] 线路" + line.Index + " 生命周期解析失败，拒绝稳定性判断");
+        }
+
+        private bool ObserveRoadRouteSnapshot(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
+            if (!m_RoadSnapshots.TryGetValue(line, out RoadRouteSnapshot previous))
+            {
+                m_RoadSnapshots[line] = CaptureRoadRoute(waypoints);
+                m_LineWaypointSignature[line] = 0;
+                m_LineStableSinceFrame[line] = nowFrame;
+                m_DiagnosedLines.Remove(line);
+                return false;
+            }
+
+            if (!MatchesRoadRoute(previous, waypoints))
+            {
+                RoadRouteSnapshot current = CaptureRoadRoute(waypoints);
+                m_Runtime.m_LineStructureInvalidator.RequestRoadRoute(line, previous, current);
+                m_RoadSnapshots[line] = current;
+                m_LineStableSinceFrame[line] = nowFrame;
+                m_DiagnosedLines.Remove(line);
+                return false;
+            }
+
+            if (!m_LineStableSinceFrame.TryGetValue(line, out uint stableSince))
+            {
+                m_LineStableSinceFrame[line] = nowFrame;
+                return false;
+            }
+
+            return nowFrame - stableSince >= ModRuntimeHostSystem.NEW_LINE_STABLE_FRAMES;
+        }
+
+        private RoadRouteSnapshot CaptureRoadRoute(DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            var snapshot = new RoadRouteSnapshot
+            {
+                Waypoints = new Entity[waypoints.Length],
+                Stops = new Entity[waypoints.Length]
+            };
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                snapshot.Waypoints[i] = waypoint;
+                snapshot.Stops[i] = waypoint == Entity.Null
+                    ? Entity.Null
+                    : m_Runtime.m_Resolve.Stop(waypoint);
+            }
+
+            return snapshot;
+        }
+
+        private bool MatchesRoadRoute(RoadRouteSnapshot snapshot, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (snapshot.Waypoints.Length != waypoints.Length)
+                return false;
+
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                if (snapshot.Waypoints[i] != waypoint)
+                    return false;
+
+                Entity stop = waypoint == Entity.Null
+                    ? Entity.Null
+                    : m_Runtime.m_Resolve.Stop(waypoint);
+                if (snapshot.Stops[i] != stop)
+                    return false;
+            }
+
+            return true;
+        }
+
         public bool IsDiagnosed(Entity line)
         {
             return line != Entity.Null && m_DiagnosedLines.Contains(line);
@@ -393,6 +499,8 @@ namespace RapidTransitMod.Dispatch.Lines
             m_LineWaypointSignature.Remove(line);
             m_LineStableSinceFrame.Remove(line);
             m_DiagnosedLines.Remove(line);
+            m_RoadSnapshots.Remove(line);
+            m_LifecycleFailureFrames.Remove(line);
             m_OriginStopByWaypoint.Clear();
         }
 
@@ -401,6 +509,8 @@ namespace RapidTransitMod.Dispatch.Lines
             if (m_LineWaypointSignature.IsCreated) m_LineWaypointSignature.Clear();
             if (m_LineStableSinceFrame.IsCreated) m_LineStableSinceFrame.Clear();
             if (m_DiagnosedLines.IsCreated) m_DiagnosedLines.Clear();
+            m_RoadSnapshots.Clear();
+            m_LifecycleFailureFrames.Clear();
             m_OriginStopByWaypoint.Clear();
         }
 

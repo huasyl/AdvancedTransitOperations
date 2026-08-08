@@ -9,6 +9,7 @@ export default function BroadcastToolbar({ toolbar, refs, actions }) {
     lineOptions,
     selectedLine,
     selectedLineId,
+    supportsPlatforms,
     broadcastWarnings,
   } = toolbar;
 
@@ -36,17 +37,19 @@ export default function BroadcastToolbar({ toolbar, refs, actions }) {
           >
             {labels.mappingTab}
           </button>
-          <button
-            type="button"
-            className={`dw-bc-tab ${activeTab === "platform" ? "is-active" : ""}`}
-            onClick={() => {
-              actions.setActiveTab("platform");
-              actions.setTrayContext(null);
-              actions.setMappingTray(null);
-            }}
-          >
-            {labels.platformTab}
-          </button>
+          {supportsPlatforms ? (
+            <button
+              type="button"
+              className={`dw-bc-tab ${activeTab === "platform" ? "is-active" : ""}`}
+              onClick={() => {
+                actions.setActiveTab("platform");
+                actions.setTrayContext(null);
+                actions.setMappingTray(null);
+              }}
+            >
+              {labels.platformTab}
+            </button>
+          ) : null}
         </div>
 
         <div className="dw-bc-main-tools">

@@ -506,6 +506,41 @@ namespace RapidTransitMod.Dispatch.Persistence
             }
         }
 
+        public void RemoveDepotTiming(Entity line)
+        {
+            if (line == Entity.Null || !m_Runtime.m_DispatchCacheBufferReady)
+                return;
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            string lineId = m_LineId(line);
+            if (city == Entity.Null || string.IsNullOrEmpty(lineId))
+                return;
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotCacheElement>(city))
+            {
+                DynamicBuffer<LineDispatchDepotCacheElement> cache =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchDepotCacheElement>(city);
+                for (int i = cache.Length - 1; i >= 0; i--)
+                    if (LineIdMatches(cache[i].m_LineId, lineId)) cache.RemoveAt(i);
+            }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchDepotHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchDepotHistoryElement> history =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchDepotHistoryElement>(city);
+                for (int i = history.Length - 1; i >= 0; i--)
+                    if (LineIdMatches(history[i].m_LineId, lineId)) history.RemoveAt(i);
+            }
+
+            if (m_Runtime.EntityManager.HasBuffer<LineDispatchPrepHistoryElement>(city))
+            {
+                DynamicBuffer<LineDispatchPrepHistoryElement> prep =
+                    m_Runtime.EntityManager.GetBuffer<LineDispatchPrepHistoryElement>(city);
+                for (int i = prep.Length - 1; i >= 0; i--)
+                    if (LineIdMatches(prep[i].m_LineId, lineId)) prep.RemoveAt(i);
+            }
+        }
+
         private static List<uint> ReadPrepSamples(LineDispatchPrepHistoryElement value)
         {
             var samples = new List<uint>(HistoryLimit);

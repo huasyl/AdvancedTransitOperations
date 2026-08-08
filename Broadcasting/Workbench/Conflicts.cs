@@ -38,7 +38,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "autoBindBroadcastStationMappings");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "autoBindBroadcastStationMappings");
                         using (UseScope(scope))
                         {
 

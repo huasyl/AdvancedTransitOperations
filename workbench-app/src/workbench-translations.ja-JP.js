@@ -136,6 +136,7 @@ export const nativeScheduleTranslationsJaJp = {
   "nativeWorkbench.tab.broadcast": "放送システム",
   "nativeWorkbench.tab.overview": "システム概要",
   "nativeWorkbench.tab.passenger": "旅客流動データ",
+  "nativeWorkbench.modeUnsupported": "この交通方式はこのページに対応していません。",
   "nativeWorkbench.overview.mode.train": "鉄道",
   "nativeWorkbench.overview.mode.subway": "地下鉄",
   "nativeWorkbench.overview.mode.tram": "路面電車",

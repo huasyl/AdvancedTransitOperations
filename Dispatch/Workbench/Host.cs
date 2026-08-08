@@ -52,6 +52,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<IEnumerable<DispatchWorkbenchLineSettingDto>, bool> m_SameLineCfg;
         private readonly Action<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>> m_LineCfgForMode;
         private readonly Func<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>, bool> m_SameLineCfgForMode;
+        private readonly Func<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>, IEnumerable<string>> m_ChangedDepotLines;
+        private readonly Action<IEnumerable<string>> m_InvalidateDispatchTiming;
         private readonly Action m_ClearLineCfg;
         private readonly Action m_DropDepotCache;
         private readonly Func<RuntimeFeatureSettingsDto> m_FeatureDto;
@@ -74,6 +76,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<IEnumerable<DispatchWorkbenchLineSettingDto>, bool> sameLineCfg,
             Action<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>> lineCfgForMode,
             Func<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>, bool> sameLineCfgForMode,
+            Func<TransitMode, IEnumerable<DispatchWorkbenchLineSettingDto>, IEnumerable<string>> changedDepotLines,
+            Action<IEnumerable<string>> invalidateDispatchTiming,
             Action clearLineCfg,
             Action dropDepotCache,
             Func<RuntimeFeatureSettingsDto> featureDto,
@@ -95,6 +99,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_SameLineCfg = sameLineCfg ?? throw new ArgumentNullException(nameof(sameLineCfg));
             m_LineCfgForMode = lineCfgForMode ?? throw new ArgumentNullException(nameof(lineCfgForMode));
             m_SameLineCfgForMode = sameLineCfgForMode ?? throw new ArgumentNullException(nameof(sameLineCfgForMode));
+            m_ChangedDepotLines = changedDepotLines ?? throw new ArgumentNullException(nameof(changedDepotLines));
+            m_InvalidateDispatchTiming = invalidateDispatchTiming ?? throw new ArgumentNullException(nameof(invalidateDispatchTiming));
             m_ClearLineCfg = clearLineCfg ?? throw new ArgumentNullException(nameof(clearLineCfg));
             m_DropDepotCache = dropDepotCache ?? throw new ArgumentNullException(nameof(dropDepotCache));
             m_FeatureDto = featureDto ?? throw new ArgumentNullException(nameof(featureDto));
@@ -139,6 +145,18 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal bool SameLineCfg(ModeScope scope, IEnumerable<DispatchWorkbenchLineSettingDto> settings)
         {
             return m_SameLineCfgForMode(scope.Mode, settings);
+        }
+
+        internal IEnumerable<string> ChangedDepotLines(
+            ModeScope scope,
+            IEnumerable<DispatchWorkbenchLineSettingDto> settings)
+        {
+            return m_ChangedDepotLines(scope.Mode, settings);
+        }
+
+        internal void InvalidateDispatchTiming(IEnumerable<string> lineIds)
+        {
+            m_InvalidateDispatchTiming(lineIds);
         }
 
         internal void ClearLineCfg()

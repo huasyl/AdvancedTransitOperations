@@ -158,6 +158,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Entity = line,
                 Id = m_LineId(m_LineKey(line)),
                 Name = name,
+                Kind = TransportModeProfile.GetProfile(m_LineKey(line)).Lifecycle == LifecycleKind.Road
+                    ? "local"
+                    : string.Empty,
                 RouteNumber = routeNumber,
                 StationCount = CountStops(line),
                 TransportType = m_TransportType(line),

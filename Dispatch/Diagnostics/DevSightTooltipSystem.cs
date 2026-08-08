@@ -78,6 +78,7 @@ namespace RapidTransitMod
         private DevSightRaycastCollectorSystem m_RaycastCollectorSystem = null!;
         private CameraUpdateSystem m_CameraUpdateSystem = null!;
         private bool m_ToggleArmed = true;
+        private bool m_ExportArmed = true;
         private bool m_Enabled;
         private Entity m_LastMoveItEntity = Entity.Null;
         private static DevSightPanelState s_PanelState;
@@ -185,6 +186,9 @@ namespace RapidTransitMod
         {
             bool modifierDown = Input.GetKey(KeyCode.LeftControl) && Input.GetKey(KeyCode.LeftAlt);
             bool toggleDown = Input.GetKey(KeyCode.BackQuote);
+            bool exportDown = modifierDown && Input.GetKey(KeyCode.E);
+            if (!exportDown)
+                m_ExportArmed = true;
             if (!toggleDown)
             {
                 m_ToggleArmed = true;
@@ -292,6 +296,14 @@ namespace RapidTransitMod
             DevSightProbe probe = ProbeTrackLane(result);
             string summary = BuildTooltipText(result, probe);
             SetPanelState(true, hasMoveItResult ? "MoveIt raw" : "collector", summary);
+            if (exportDown && m_ExportArmed)
+            {
+                m_ExportArmed = false;
+                if (TrackMeshExporter.TryExport(World, probe.NetEntity, out string exportPath, out string error))
+                    Mod.log.Info("[TrackMeshExport] completed path=" + exportPath);
+                else
+                    Mod.log.Info("[TrackMeshExport] skipped reason=" + error);
+            }
         }
 
         private bool TryGetMoveItOverlayOwner(out Entity entity)

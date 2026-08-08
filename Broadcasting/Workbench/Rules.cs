@@ -36,7 +36,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveBroadcastRules");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "saveBroadcastRules");
                         using (UseScope(scope))
                         {
                         BroadcastWorkbenchSaveRulesRequest request =
@@ -55,6 +55,10 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                         List<BroadcastWorkbenchRuleDto> normalizedRules = Normalize(request?.rules);
                         ValidateCatalog(normalizedRules);
+                        if (scope.Mode == TransitMode.Bus)
+                        {
+                            ValidateBusRules(normalizedRules);
+                        }
                         if (normalizedRules.Count == 0)
                         {
                             DraftRules.Remove(lineId);
@@ -191,6 +195,20 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     foreach (BroadcastWorkbenchRuleDto rule in rules)
                     {
                         ValidateNodeCatalog(rule?.nodes);
+                    }
+                }
+
+                private static void ValidateBusRules(IEnumerable<BroadcastWorkbenchRuleDto> rules)
+                {
+                    foreach (BroadcastWorkbenchRuleDto rule in rules ?? Array.Empty<BroadcastWorkbenchRuleDto>())
+                    {
+                        string trigger = rule?.triggerId ?? rule?.trigger ?? string.Empty;
+                        if (!string.Equals(trigger, "stop_and_open", StringComparison.Ordinal)
+                            && !string.Equals(trigger, "leave_station", StringComparison.Ordinal))
+                        {
+                            throw new InvalidOperationException(
+                                "Bus broadcast only supports stop_and_open and leave_station rules.");
+                        }
                     }
                 }
 

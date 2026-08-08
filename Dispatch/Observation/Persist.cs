@@ -8,13 +8,20 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly DwellStore m_Dwell;
         private readonly SliceStore m_Slices;
         private readonly SliceAdmission m_Admission;
+        private readonly BusSegStore m_BusSeg;
 
-        internal Persist(LapStore laps, DwellStore dwell, SliceStore slices, SliceAdmission admission)
+        internal Persist(
+            LapStore laps,
+            DwellStore dwell,
+            SliceStore slices,
+            SliceAdmission admission,
+            BusSegStore busSeg)
         {
             m_Laps = laps;
             m_Dwell = dwell;
             m_Slices = slices;
             m_Admission = admission;
+            m_BusSeg = busSeg;
         }
 
         internal void ClearWaypointDwell() => m_Dwell.Waypoints.Clear();
@@ -28,6 +35,11 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Dwell.RecordStation(key, observation);
 
         internal void ClearSliceObservations() => m_Slices.ClearObservations();
+
+        internal void ClearBusSeg() => m_BusSeg.Clear();
+
+        internal void PutBusSeg(BusSegKey key, BusSegObservation observation) =>
+            m_BusSeg.Put(key, observation);
 
         internal void PutSlice(Entity line, ulong key, TraversalSliceObservation observation) =>
             m_Slices.Record(line, key, observation);

@@ -197,6 +197,7 @@ namespace RapidTransitMod.Workbenches
                 return false;
             }
 
+            Bind(view, ApiHost.Prefix + "loadOverviewSnapshot", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Overview));
             Bind(view, ApiHost.Prefix + "startOverviewFeatureSettingsOperation", new Func<string, string>(global::RapidTransitMod.Overview.FeatureSettingsApi.Start));
             Bind(view, ApiHost.Prefix + "getOverviewFeatureSettingsOperationStatus", new Func<string, string>(global::RapidTransitMod.Overview.FeatureSettingsApi.Status));
             return true;

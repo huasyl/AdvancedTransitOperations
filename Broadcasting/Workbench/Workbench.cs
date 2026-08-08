@@ -103,7 +103,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         public string ApplyBroadcastConfigJson(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "applyBroadcastConfig", allowLegacyDefault: true);
+            ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "applyBroadcastConfig", allowLegacyDefault: true);
             return global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchApplyResult
             {
                 mode = scope.Token,
@@ -130,7 +130,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         public string SetBroadcastPreviewVolumeJson(string volumeJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(volumeJson, "setBroadcastPreviewVolume", allowLegacyDefault: true);
+            ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(volumeJson, "setBroadcastPreviewVolume", allowLegacyDefault: true);
             int draftVolume = State.GetDraftVolume(scope);
             int appliedVolume = State.GetAppliedVolume(scope);
             return global::RapidTransitMod.Workbenches.Json.Write(new BroadcastWorkbenchVolumeResult

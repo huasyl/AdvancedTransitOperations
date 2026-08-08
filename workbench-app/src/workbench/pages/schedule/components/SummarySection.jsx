@@ -16,6 +16,7 @@ function SummaryTable({
   onRemoveRow,
   summaryScrollRef,
   summaryFilter,
+  supportsExpress,
   onSummaryFilterChange,
   dropdownPortalHostRef
 }) {
@@ -102,7 +103,7 @@ function SummaryTable({
             { value: "all", label: t("nativeSchedule.summary.filter.all"), active: summaryFilter === "all" },
             { value: "current", label: t("nativeSchedule.summary.filter.current"), active: summaryFilter === "current" },
             { value: "local", label: t("nativeSchedule.summary.filter.local"), active: summaryFilter === "local" },
-            { value: "express", label: t("nativeSchedule.summary.filter.express"), active: summaryFilter === "express" }
+            ...(supportsExpress ? [{ value: "express", label: t("nativeSchedule.summary.filter.express"), active: summaryFilter === "express" }] : [])
           ]}
           onSelect={onSummaryFilterChange}
           className="is-line dw-demo-summary-head-line"
@@ -214,6 +215,7 @@ export default function SummarySection({
   earliestStart,
   conflictCount,
   summaryFilter,
+  supportsExpress,
   onSummaryFilterChange,
   summaryScrollRef,
   onRemoveRow,
@@ -246,6 +248,7 @@ export default function SummarySection({
         editableLineId={editableLineId}
         summaryScrollRef={summaryScrollRef}
         summaryFilter={summaryFilter}
+        supportsExpress={supportsExpress}
         onSummaryFilterChange={onSummaryFilterChange}
         onRemoveRow={onRemoveRow}
         dropdownPortalHostRef={dropdownPortalHostRef}

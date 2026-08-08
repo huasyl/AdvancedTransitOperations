@@ -485,6 +485,15 @@ namespace RapidTransitMod.Broadcasting
             EmitBroadcastWaypointTrigger(vehicle, line, waypoints, currentWaypointIndex, "stop_and_open");
         }
 
+        internal void BusDeparted(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex)
+        {
+            EmitBroadcastWaypointTrigger(vehicle, line, waypoints, waypointIndex, "leave_station");
+        }
+
 
         private void HandleBroadcastLeaveStationTrigger(
             Entity vehicle,
@@ -843,20 +852,69 @@ namespace RapidTransitMod.Broadcasting
                 return false;
             }
 
+            bool isBus = RtLog.VerboseEnabled
+                && line != Entity.Null
+                && (string.Equals(triggerId, "stop_and_open", StringComparison.Ordinal)
+                    || string.Equals(triggerId, "leave_station", StringComparison.Ordinal))
+                && TransportModeResolver.Resolve(m_Access.EntityManager, line) == TransitMode.Bus;
             if (!m_Stations.TryTriggerContext(vehicle, line, waypoints, waypointIndex, out context, out stationContext))
             {
+                if (isBus)
+                    LogBusTrigger(vehicle, line, waypointIndex, triggerId, string.Empty, "context_missing");
                 return false;
             }
 
             if (IsDuplicateBroadcastTrigger(vehicle, triggerId, stationContext.CurrentStationId))
             {
+                if (isBus)
+                    LogBusTrigger(vehicle, line, waypointIndex, triggerId, stationContext.CurrentStationId, "duplicate");
                 return false;
             }
 
+            if (isBus)
+            {
+                bool hasRules = LineHasBroadcastRulesForTrigger(context.LineId, triggerId);
+                LogBusTrigger(
+                    vehicle,
+                    line,
+                    waypointIndex,
+                    triggerId,
+                    stationContext.CurrentStationId,
+                    hasRules ? "rule_matched" : "rule_missing");
+            }
             RememberBroadcastTriggerStop(vehicle, triggerId, stationContext.CurrentStationId);
             m_Stations.UpdatePanelState(vehicle, context.CurrentStationName, context.NextStationName);
-            m_Playback.Start(vehicle, context, triggerId);
+            bool submitted = m_Playback.Start(vehicle, context, triggerId);
+            if (isBus)
+            {
+                LogBusTrigger(
+                    vehicle,
+                    line,
+                    waypointIndex,
+                    triggerId,
+                    stationContext.CurrentStationId,
+                    submitted ? "sequence_submitted" : "sequence_skipped");
+            }
             return true;
+        }
+
+        private void LogBusTrigger(
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            string triggerId,
+            string stationId,
+            string reason)
+        {
+            if (!RtLog.VerboseEnabled)
+                return;
+
+            m_Access.Log.Info("[BusBroadcast] phase=trigger vehicle=" + vehicle.Index
+                + " line=" + line.Index
+                + " waypoint=" + waypointIndex
+                + " station=" + (stationId ?? string.Empty)
+                + " trigger=" + triggerId
+                + " reason=" + reason);
         }
 
 

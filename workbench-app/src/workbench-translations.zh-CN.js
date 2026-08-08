@@ -136,6 +136,7 @@ export const nativeScheduleTranslationsZhCn = {
   "nativeWorkbench.tab.broadcast": "广播系统",
   "nativeWorkbench.tab.overview": "系统总览",
   "nativeWorkbench.tab.passenger": "客流数据",
+  "nativeWorkbench.modeUnsupported": "当前交通方式暂不支持此页面。",
   "nativeWorkbench.overview.mode.train": "火车",
   "nativeWorkbench.overview.mode.subway": "地铁",
   "nativeWorkbench.overview.mode.tram": "现代电车",

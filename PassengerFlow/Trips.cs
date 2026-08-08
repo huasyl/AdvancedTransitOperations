@@ -8,6 +8,7 @@ namespace RapidTransitMod.PassengerFlow
         private readonly Dictionary<Entity, ActiveTrip> m_ActiveTrips = new Dictionary<Entity, ActiveTrip>();
         private readonly Dictionary<Entity, PendingTransfer> m_Pending = new Dictionary<Entity, PendingTransfer>();
         private readonly Queue<PendingExpiry> m_ExpiryQueue = new Queue<PendingExpiry>();
+        private readonly List<Entity> m_RemoveKeys = new List<Entity>();
         private int m_NextGeneration;
 
         internal int ActiveTripCount => m_ActiveTrips.Count;
@@ -18,6 +19,7 @@ namespace RapidTransitMod.PassengerFlow
             m_ActiveTrips.Clear();
             m_Pending.Clear();
             m_ExpiryQueue.Clear();
+            m_RemoveKeys.Clear();
             m_NextGeneration = 0;
         }
 
@@ -30,6 +32,22 @@ namespace RapidTransitMod.PassengerFlow
         internal bool HasActiveTrip(Entity passenger)
         {
             return passenger != Entity.Null && m_ActiveTrips.ContainsKey(passenger);
+        }
+
+        internal void RemoveVehicle(Entity vehicle)
+        {
+            if (vehicle == Entity.Null)
+                return;
+
+            m_RemoveKeys.Clear();
+            foreach (KeyValuePair<Entity, ActiveTrip> entry in m_ActiveTrips)
+            {
+                if (entry.Value.Vehicle == vehicle && !m_Pending.ContainsKey(entry.Key))
+                    m_RemoveKeys.Add(entry.Key);
+            }
+
+            for (int i = 0; i < m_RemoveKeys.Count; i++)
+                m_ActiveTrips.Remove(m_RemoveKeys[i]);
         }
 
         internal void OnBoard(

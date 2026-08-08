@@ -160,4 +160,63 @@ namespace RapidTransitMod
             reader.Read(out m_LastObservedFrame);
         }
     }
+
+    [InternalBufferCapacity(1)]
+    public struct BusSegObservationElement : IBufferElementData, ISerializable
+    {
+        public Entity m_LineEntity;
+        public Entity m_FromWaypointEntity;
+        public Entity m_FromStopEntity;
+        public Entity m_ToWaypointEntity;
+        public Entity m_ToStopEntity;
+        public float m_EstimatedFrames;
+        public int m_SampleCount;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_LineEntity);
+            writer.Write(m_FromWaypointEntity);
+            writer.Write(m_FromStopEntity);
+            writer.Write(m_ToWaypointEntity);
+            writer.Write(m_ToStopEntity);
+            writer.Write(m_EstimatedFrames);
+            writer.Write(m_SampleCount);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_LineEntity);
+            reader.Read(out m_FromWaypointEntity);
+            reader.Read(out m_FromStopEntity);
+            reader.Read(out m_ToWaypointEntity);
+            reader.Read(out m_ToStopEntity);
+            reader.Read(out m_EstimatedFrames);
+            reader.Read(out m_SampleCount);
+        }
+    }
+
+    [InternalBufferCapacity(1)]
+    public struct BusRouteSnapshotElement : IBufferElementData, ISerializable
+    {
+        public Entity m_LineEntity;
+        public int m_Order;
+        public Entity m_WaypointEntity;
+        public Entity m_ResolvedStopEntity;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_LineEntity);
+            writer.Write(m_Order);
+            writer.Write(m_WaypointEntity);
+            writer.Write(m_ResolvedStopEntity);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_LineEntity);
+            reader.Read(out m_Order);
+            reader.Read(out m_WaypointEntity);
+            reader.Read(out m_ResolvedStopEntity);
+        }
+    }
 }

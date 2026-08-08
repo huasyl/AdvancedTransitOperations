@@ -145,6 +145,7 @@ export default function AutoRuleSection({
   autoFrequencyText,
   autoFrequencyPerHour,
   selectedLineType,
+  supportsExpress,
   autoOffsetDirection,
   autoOffsetMinutesText,
   liveAutoPreview,
@@ -170,7 +171,7 @@ export default function AutoRuleSection({
         editorEnd={editorEnd}
         autoFrequencyText={autoFrequencyText}
         autoFrequencyPerHour={autoFrequencyPerHour}
-        showOffsetField={selectedLineType === "express"}
+        showOffsetField={supportsExpress && selectedLineType === "express"}
         autoOffsetDirection={autoOffsetDirection}
         autoOffsetMinutesText={autoOffsetMinutesText}
         liveAutoPreview={liveAutoPreview}
@@ -186,7 +187,7 @@ export default function AutoRuleSection({
 
       <AutoRuleTable
         autoRules={autoRules}
-        showOffsetColumn={selectedLineType === "express"}
+        showOffsetColumn={supportsExpress && selectedLineType === "express"}
         onRemoveAutoRule={onRemoveAutoRule}
       />
 

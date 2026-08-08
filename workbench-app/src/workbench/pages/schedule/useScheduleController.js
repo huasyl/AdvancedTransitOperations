@@ -45,10 +45,18 @@ import {
 import { runNativeSaveOperation } from "./schedule-save-operation";
 
 const DEFAULT_SCHEDULE_MODE = "train";
+const EMPTY_LINE_OPTION = {
+  id: "",
+  kind: "local",
+  depotId: "",
+  originId: "",
+  hold: "",
+  dwell: ""
+};
 
 function normalizeScheduleMode(mode) {
   const token = String(mode || "").trim().toLowerCase();
-  return token || DEFAULT_SCHEDULE_MODE;
+  return token === "subway" || token === "bus" ? token : DEFAULT_SCHEDULE_MODE;
 }
 
 function getPayloadMode(payload) {
@@ -99,6 +107,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   const { t } = useNativeScheduleI18n();
   const scheduleMode = normalizeScheduleMode(activeTransportMode);
+  const supportsExpress = scheduleMode !== "bus";
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
   const [catalogRevision, setCatalogRevision] = useState(0);
@@ -154,8 +163,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
   );
 
   const selectedLine = useMemo(
-    () => LINE_OPTIONS.find((line) => line?.id === selectedLineId) ?? LINE_OPTIONS[0] ?? DEFAULT_LINE_OPTIONS[0],
-    [catalogRevision, selectedLineId]
+    () => LINE_OPTIONS.find((line) => line?.id === selectedLineId)
+      ?? LINE_OPTIONS[0]
+      ?? (scheduleMode === DEFAULT_SCHEDULE_MODE ? DEFAULT_LINE_OPTIONS[0] : EMPTY_LINE_OPTION),
+    [catalogRevision, scheduleMode, selectedLineId]
   );
   const availableDepots = useMemo(() => {
     if (!selectedLine?.transportType) {
@@ -172,7 +183,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
     () => resolveOffsetMinutes(autoOffsetDirection, autoOffsetMinutesText),
     [autoOffsetDirection, autoOffsetMinutesText]
   );
-  const currentKind = useMemo(() => normalizeKind(selectedLineType), [selectedLineType]);
+  const currentKind = useMemo(
+    () => (supportsExpress ? normalizeKind(selectedLineType) : "local"),
+    [selectedLineType, supportsExpress]
+  );
   const normalizedManualInput = useMemo(
     () => normalizeTimeInput(String(manualInput || "").trim()),
     [manualInput]
@@ -310,12 +324,12 @@ export default function useScheduleController({ registerHostActions, activeTrans
       return summaryRows.filter((row) => row.kind === "local");
     }
 
-    if (summaryFilter === "express") {
+    if (supportsExpress && summaryFilter === "express") {
       return summaryRows.filter((row) => row.kind === "express");
     }
 
     return summaryRows;
-  }, [selectedLine.id, summaryFilter, summaryRows]);
+  }, [selectedLine.id, summaryFilter, summaryRows, supportsExpress]);
   const conflictCount = summaryRows.filter((row) => row.isConflict).length;
   const earliestStart = visibleSummaryRows[0]?.time || "--:--";
   const summaryStateLabel = hasAppliedSchedule ? t("nativeSchedule.summary.section.applied") : t("nativeSchedule.summary.section.pending");
@@ -461,6 +475,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       origins: runtimeCatalog.originOptions
     });
     bumpCatalogRevision();
+    const fallbackLine = targetMode === DEFAULT_SCHEDULE_MODE ? DEFAULT_LINE_OPTIONS[0] : EMPTY_LINE_OPTION;
     const sourceLineId =
       (snapshot?.selectedEditLine && runtimeCatalog.lineOptions.some((line) => line?.id === snapshot.selectedEditLine)
         ? snapshot.selectedEditLine
@@ -469,11 +484,11 @@ export default function useScheduleController({ registerHostActions, activeTrans
         ? snapshot.selectedLineId
         : "") ||
       runtimeCatalog.lineOptions[0]?.id ||
-      DEFAULT_LINE_OPTIONS[0].id;
+      fallbackLine.id;
     const sourceLine =
       runtimeCatalog.lineOptions.find((line) => line?.id === sourceLineId) ??
       runtimeCatalog.lineOptions[0] ??
-      DEFAULT_LINE_OPTIONS[0];
+      fallbackLine;
 
     const restoredDraftRows = flattenSnapshotLineDraftRowsByLineId(snapshot?.lineDraftRowsByLineId);
     const nextSummaryEntries = normalizeSummaryEntries(
@@ -777,7 +792,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       mode: requestMode,
       selectedLineId,
       selectedEditLine: selectedLineId,
-      mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView),
+      mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView, scheduleMode),
       lineDraftRowsByLineId,
       lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
       clientRequestSequence: requestSequence,
@@ -888,6 +903,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function handleLineTypeSelect(nextType) {
     if (nextType !== "local" && nextType !== "express") {
+      return;
+    }
+
+    if (!supportsExpress && nextType !== "local") {
       return;
     }
 
@@ -1009,7 +1028,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
         start: editorStart,
         end: editorEnd,
         departuresPerHour: autoFrequencyPerHour,
-        expressOffsetMode: offsetModeFromDirection(autoOffsetDirection),
+        expressOffsetMode: supportsExpress ? offsetModeFromDirection(autoOffsetDirection) : "",
         expressOffsetMinutes: currentKind === "express" ? Math.abs(autoOffsetMinutes) : 0
       }
     ]));
@@ -1331,7 +1350,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
       holdMinutesTooSmall,
       dwellMinutesTooSmall,
       availableDepots,
-      lineOptions: LINE_OPTIONS
+      lineOptions: LINE_OPTIONS,
+      supportsExpress
     },
     summary: {
       summaryStateLabel,
@@ -1341,6 +1361,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       earliestStart,
       conflictCount,
       summaryFilter,
+      supportsExpress,
       footerNote: summaryFooterNote,
       isApplyingSchedule
     },
@@ -1351,6 +1372,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       autoFrequencyText,
       autoFrequencyPerHour,
       selectedLineType,
+      supportsExpress,
       autoOffsetDirection,
       autoOffsetMinutesText,
       liveAutoPreview,

@@ -4,11 +4,18 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Commands
 {
+    internal interface IPublicTransportWritePort
+    {
+        uint Frame { get; }
+        PublicTransport ReadPublicTransport(Entity vehicle);
+        void AppendPublicTransportWrite(Entity vehicle, PublicTransport value);
+    }
+
     internal sealed class DispatchActions
     {
-        private readonly CommandHost m_Host;
+        private readonly IPublicTransportWritePort m_Host;
 
-        public DispatchActions(CommandHost host)
+        public DispatchActions(IPublicTransportWritePort host)
         {
             m_Host = host;
         }
@@ -16,7 +23,7 @@ namespace RapidTransitMod.Dispatch.Commands
         public void CommitAssignedSlotHold(Entity vehicle, int slot, EntityCommandBuffer ecb)
         {
             PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
-            publicTransport.m_DepartureFrame = m_Host.SimulationSystem.frameIndex + 9999;
+            publicTransport.m_DepartureFrame = m_Host.Frame + 9999;
             CommitPublicTransport(vehicle, publicTransport, ecb);
         }
 
@@ -66,6 +73,13 @@ namespace RapidTransitMod.Dispatch.Commands
             PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
             publicTransport.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
             publicTransport.m_State &= ~PublicTransportFlags.Boarding;
+            CommitPublicTransport(vehicle, publicTransport, ecb);
+        }
+
+        public void ReleaseDeparture(Entity vehicle, uint nowFrame, EntityCommandBuffer ecb)
+        {
+            PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
+            publicTransport.m_DepartureFrame = nowFrame > 0 ? nowFrame - 1 : 0;
             CommitPublicTransport(vehicle, publicTransport, ecb);
         }
 

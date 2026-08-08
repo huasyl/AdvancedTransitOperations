@@ -675,63 +675,66 @@ namespace RapidTransitMod.Dispatch.Runtime
             return TryGetWaypointsForRoute(m_FrameRows[rowIndex].CurrentRoute, out route, out waypoints);
         }
 
-        public void BuildStopInput(RuntimeFramePlan framePlan, IReadOnlyList<FramePlanEntry> entries, uint nowFrame, Func<Entity, bool> hasOpenStopSession,
-            Func<Entity, bool> hasInvalidatedRecovery, Func<Entity, bool> isDeparturePending,
-            Func<Entity, uint, bool> forcedMidStopGraceActive, List<StopInput> inputs)
+        public bool TryBuildStopInput(
+            RuntimeFramePlan framePlan,
+            FramePlanEntry entry,
+            uint nowFrame,
+            Func<Entity, bool> hasOpenStopSession,
+            Func<Entity, bool> hasInvalidatedRecovery,
+            Func<Entity, bool> isDeparturePending,
+            Func<Entity, uint, bool> forcedMidStopGraceActive,
+            out StopInput input)
         {
-            inputs.Clear();
-            for (int i = 0; i < entries.Count; i++)
+            input = default;
+            if (!TryGetRow(entry, out RailFrameRow row) || !row.IsCompilable)
+                return false;
+            if (framePlan.IsDeadlineDue(
+                    row.Vehicle,
+                    DeadlineKind.ForcedMidStopBoardingGrace,
+                    nowFrame))
             {
-                FramePlanEntry entry = entries[i];
-                if (!TryGetRow(entry, out RailFrameRow row) || !row.IsCompilable)
-                    continue;
-                if (framePlan.IsDeadlineDue(
-                        row.Vehicle,
-                        DeadlineKind.ForcedMidStopBoardingGrace,
-                        nowFrame))
-                {
-                    RefreshGracePublicTransport(ref row);
-                    m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
-                    UpdateBaseline(row);
-                }
-                row.WaypointCount = TryGetWaypointCount(row.CurrentRoute, out int routeWaypointCount)
-                    ? routeWaypointCount
-                    : 0;
-                int previousWaypoint = row.CachedWaypoint;
-                int currentWaypoint = previousWaypoint;
-                bool boarding = OfficialBoarding(row);
-                if (boarding && !hasOpenStopSession(row.Vehicle) && (row.RegistryState != VehicleState.Idle || hasInvalidatedRecovery(row.Vehicle))
-                    && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> waypoints))
-                {
-                    currentWaypoint = m_Runtime.m_WaypointIndex.Compute(row.Vehicle, waypoints);
-                    row.WaypointCount = waypoints.Length;
-                    m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
-                }
-
-                int lastStopWaypoint = m_Runtime.m_TrackModel.TryGetWaypointIndexLookup(
-                    row.RegisteredLine,
-                    out LineWaypointIndexLookup lookup)
-                    ? lookup.LastStopWaypointIndex
-                    : -1;
-
-                bool suppressBoardingGhost = false;
-                if (boarding
-                    && forcedMidStopGraceActive(row.Vehicle, nowFrame)
-                    && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> ghostWaypoints))
-                {
-                    ReadWriteComponent(ref row, RailFrameWriteMask.Target);
-                    suppressBoardingGhost = SuppressBoardingGhost(row, ghostWaypoints);
-                }
+                RefreshGracePublicTransport(ref row);
                 m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
-                inputs.Add(new StopInput(row.Vehicle, row.RegisteredLine, row.SourceFrame == 0 ? nowFrame : row.SourceFrame,
-                    row.RegistryState, row.InputValid && row.CurrentRoute == row.RegisteredLine && row.WaypointCount >= 2,
-                    boarding, m_Runtime.m_VehicleView.TryGetCooldown(row.Vehicle, out uint cooldown) && nowFrame < cooldown,
-                    previousWaypoint, currentWaypoint, currentWaypoint, row.WaypointCount,
-                    lastStopWaypoint,
-                    isDeparturePending(row.Vehicle) && row.MovingKnown,
-                    isDeparturePending(row.Vehicle) && row.Moving,
-                    suppressBoardingGhost));
+                UpdateBaseline(row);
             }
+            row.WaypointCount = TryGetWaypointCount(row.CurrentRoute, out int routeWaypointCount)
+                ? routeWaypointCount
+                : 0;
+            int previousWaypoint = row.CachedWaypoint;
+            int currentWaypoint = previousWaypoint;
+            bool boarding = OfficialBoarding(row);
+            if (boarding && !hasOpenStopSession(row.Vehicle) && (row.RegistryState != VehicleState.Idle || hasInvalidatedRecovery(row.Vehicle))
+                && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> waypoints))
+            {
+                currentWaypoint = m_Runtime.m_WaypointIndex.Compute(row.Vehicle, waypoints);
+                row.WaypointCount = waypoints.Length;
+                m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
+            }
+
+            int lastStopWaypoint = m_Runtime.m_TrackModel.TryGetWaypointIndexLookup(
+                row.RegisteredLine,
+                out LineWaypointIndexLookup lookup)
+                ? lookup.LastStopWaypointIndex
+                : -1;
+
+            bool suppressBoardingGhost = false;
+            if (boarding
+                && forcedMidStopGraceActive(row.Vehicle, nowFrame)
+                && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> ghostWaypoints))
+            {
+                ReadWriteComponent(ref row, RailFrameWriteMask.Target);
+                suppressBoardingGhost = SuppressBoardingGhost(row, ghostWaypoints);
+            }
+            m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
+            input = new StopInput(row.Vehicle, row.RegisteredLine, row.SourceFrame == 0 ? nowFrame : row.SourceFrame,
+                row.RegistryState, row.InputValid && row.CurrentRoute == row.RegisteredLine && row.WaypointCount >= 2,
+                boarding, m_Runtime.m_VehicleView.TryGetCooldown(row.Vehicle, out uint cooldown) && nowFrame < cooldown,
+                previousWaypoint, currentWaypoint, currentWaypoint, row.WaypointCount,
+                lastStopWaypoint,
+                isDeparturePending(row.Vehicle) && row.MovingKnown,
+                isDeparturePending(row.Vehicle) && row.Moving,
+                suppressBoardingGhost);
+            return true;
         }
 
         private bool SuppressBoardingGhost(RailFrameRow row, DynamicBuffer<RouteWaypoint> waypoints)
@@ -776,14 +779,16 @@ namespace RapidTransitMod.Dispatch.Runtime
             return math.distance(vehiclePosition, stopPosition) > ModRuntimeHostSystem.AT_STOP_MAX_DIST;
         }
 
-        public void BuildDispatchInput(IReadOnlyList<FramePlanEntry> entries, uint nowFrame, IReadOnlyDictionary<Entity, StopFrameState> stopStates,
-            IReadOnlyDictionary<Entity, RapidTransitMod.Bypass.BypassControlResult> bypassControls, List<DispatchInput> inputs)
+        public bool TryBuildDispatchInput(
+            FramePlanEntry entry,
+            uint nowFrame,
+            IReadOnlyDictionary<Entity, StopFrameState> stopStates,
+            IReadOnlyDictionary<Entity, RapidTransitMod.Bypass.BypassControlResult> bypassControls,
+            out DispatchInput input)
         {
-            inputs.Clear();
-            for (int i = 0; i < entries.Count; i++)
-            {
-                if (!TryGetRow(entries[i], out RailFrameRow row) || !row.IsCompilable || row.RegistryState == VehicleState.Retiring)
-                    continue;
+            input = default;
+            if (!TryGetRow(entry, out RailFrameRow row) || !row.IsCompilable || row.RegistryState == VehicleState.Retiring)
+                return false;
 
                 bool hasWaypoints = TryGetWaypointsForRoute(row.CurrentRoute, out Entity route, out DynamicBuffer<RouteWaypoint> waypoints);
                 int waypointCount = hasWaypoints ? waypoints.Length : 0;
@@ -919,13 +924,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                     m_Runtime.m_Observation.TryRequestDispatchEta(row.Vehicle, row.RegisteredLine, waypoints, nowFrame);
                 RapidTransitMod.Bypass.BypassControlResult bypass = bypassControls.TryGetValue(row.Vehicle, out RapidTransitMod.Bypass.BypassControlResult control)
                     ? control : new RapidTransitMod.Bypass.BypassControlResult(false, row.Vehicle, route, currentWaypoint, false, false, Entity.Null, true, null);
-                inputs.Add(new DispatchInput(row.Vehicle, row.RegisteredLine, route,
-                    row.InputValid && row.HasPublicTransport && row.HasTarget && route == row.RegisteredLine && waypointCount >= 2,
-                    boarding, previousWaypoint, currentWaypoint, waypointCount,
-                    atOrigin, preparingAtOrigin, originBusy, preparingRouteNeedsRepair, shouldEvaluateOriginSettle,
-                    settledAtOrigin, forcedAtOrigin, brokenRecoveredRun, row.Moving,
-                    runDistanceReady, travelledDistance, observedLapDistance, stop.HadStopSession, stop.BoardingChanged, bypass));
-            }
+            input = new DispatchInput(row.Vehicle, row.RegisteredLine, route,
+                row.InputValid && row.HasPublicTransport && row.HasTarget && route == row.RegisteredLine && waypointCount >= 2,
+                boarding, previousWaypoint, currentWaypoint, waypointCount,
+                atOrigin, targetAtOrigin, preparingAtOrigin, originBusy, preparingRouteNeedsRepair, shouldEvaluateOriginSettle,
+                false, false,
+                settledAtOrigin, forcedAtOrigin, brokenRecoveredRun, row.Moving,
+                runDistanceReady, travelledDistance, observedLapDistance, stop.HadStopSession, stop.BoardingChanged, bypass);
+            return true;
         }
 
         public void ResetTracking()

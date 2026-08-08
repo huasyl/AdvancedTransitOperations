@@ -4,6 +4,7 @@ using Game.Prefabs;
 using Game.Routes;
 using Game.UI;
 using Game.UI.InGame;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.Core;
 using Unity.Collections;

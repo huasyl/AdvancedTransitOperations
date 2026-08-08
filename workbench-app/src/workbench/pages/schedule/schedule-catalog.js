@@ -273,7 +273,7 @@ export function getLocalizedLineName(line, t) {
     return line.name;
   }
 
-  return t(line?.nameKey || LINE_OPTIONS[0]?.nameKey || "nativeSchedule.data.line.local");
+  return line?.nameKey ? t(line.nameKey) : "";
 }
 
 export function directionFromOffsetMode(offsetMode) {

@@ -7,6 +7,7 @@ using Game.Net;
 using Game.Objects;
 using Game.Routes;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.TrackModel;

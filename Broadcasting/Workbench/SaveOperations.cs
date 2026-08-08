@@ -280,7 +280,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 try
                 {
                     return Workbenches.ModeRequest
-                        .ReadScope(requestJson, "startBroadcastApplyOperation", allowLegacyDefault: true)
+                        .ReadBroadcastScope(requestJson, "startBroadcastApplyOperation", allowLegacyDefault: true)
                         .Token;
                 }
                 catch

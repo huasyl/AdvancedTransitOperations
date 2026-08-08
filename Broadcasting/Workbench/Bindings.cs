@@ -37,7 +37,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadBroadcastBindingSlotHints");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "loadBroadcastBindingSlotHints");
                         string resolvedLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadLine(requestJson));
                         if (string.IsNullOrEmpty(resolvedLineId))
                         {
@@ -73,7 +73,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveBroadcastStationBinding");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "saveBroadcastStationBinding");
                         using (UseScope(scope))
                         {
                         BroadcastWorkbenchSaveStationBindingRequest request =
@@ -142,7 +142,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveBroadcastStationBindings");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "saveBroadcastStationBindings");
                         using (UseScope(scope))
                         {
                         BroadcastWorkbenchSaveStationBindingsRequest request =

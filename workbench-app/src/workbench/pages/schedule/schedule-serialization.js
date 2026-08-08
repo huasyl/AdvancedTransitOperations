@@ -6,21 +6,23 @@ import {
   normalizeRuntimeFeatureSettings
 } from "./schedule-catalog";
 
-export function createNativeMergedViewForSave(selectedLineId, snapshotMergedView = null) {
+export function createNativeMergedViewForSave(selectedLineId, snapshotMergedView = null, mode = "train") {
   const sourceView =
     snapshotMergedView && typeof snapshotMergedView === "object"
       ? snapshotMergedView
       : {};
+  const isBus = String(mode || "").trim().toLowerCase() === "bus";
 
   return {
     localLineId: typeof sourceView.localLineId === "string" ? sourceView.localLineId : (selectedLineId || ""),
-    expressLineId: typeof sourceView.expressLineId === "string" ? sourceView.expressLineId : "",
+    expressLineId: isBus ? "" : (typeof sourceView.expressLineId === "string" ? sourceView.expressLineId : ""),
     localLineIds:
       Array.isArray(sourceView.localLineIds) && sourceView.localLineIds.length > 0
         ? sourceView.localLineIds.filter((lineId) => typeof lineId === "string" && lineId.length > 0)
         : (selectedLineId ? [selectedLineId] : []),
-    expressLineIds:
-      Array.isArray(sourceView.expressLineIds)
+    expressLineIds: isBus
+      ? []
+      : Array.isArray(sourceView.expressLineIds)
         ? sourceView.expressLineIds.filter((lineId) => typeof lineId === "string" && lineId.length > 0)
         : [],
     isLoop: typeof sourceView.isLoop === "boolean" ? sourceView.isLoop : true,

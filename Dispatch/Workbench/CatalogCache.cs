@@ -167,6 +167,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     PushInvalidations();
                     Push(TransitMode.Train);
                     Push(TransitMode.Subway);
+                    Push(TransitMode.Bus);
                 }
                 else if (m_CanPushSnapshot())
                 {
@@ -176,6 +177,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     Push(TransitMode.Train);
                     Push(TransitMode.Subway);
+                    Push(TransitMode.Bus);
                 }
             }
         }
@@ -494,6 +496,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             payload.mode = TransitModeCodec.Format(TransitMode.Train);
             m_PushInvalidation(payload);
             payload.mode = TransitModeCodec.Format(TransitMode.Subway);
+            m_PushInvalidation(payload);
+            payload.mode = TransitModeCodec.Format(TransitMode.Bus);
             m_PushInvalidation(payload);
             m_PendingInvalidationReasons.Clear();
         }

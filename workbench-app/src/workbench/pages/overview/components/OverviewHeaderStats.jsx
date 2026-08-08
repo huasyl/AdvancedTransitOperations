@@ -11,12 +11,12 @@ function withSoftBreaks(value) {
     .replace(/([/_-])/g, "$1\u200b");
 }
 
-export default function OverviewHeaderStats({ summary }) {
+export default function OverviewHeaderStats({ summary, showSectionLoad = true }) {
   const { t } = useNativeScheduleI18n();
   const items = [
     { label: t("nativeWorkbench.overview.stats.totalBoardings"), value: formatNumber(summary.totalBoardingsAlightings24h), unit: "" },
     { label: t("nativeWorkbench.overview.stats.busiestStation"), value: summary.busiestStationName || t("nativeWorkbench.overview.empty.noData"), unit: "", isText: true },
-    { label: t("nativeWorkbench.overview.stats.peakSectionLoad"), value: formatNumber(summary.peakSectionLoad), unit: "" },
+    ...(showSectionLoad ? [{ label: t("nativeWorkbench.overview.stats.peakSectionLoad"), value: formatNumber(summary.peakSectionLoad), unit: "" }] : []),
     { label: t("nativeWorkbench.overview.stats.peakQuarterHourFlow"), value: formatNumber(summary.peakQuarterHourFlow), unit: "" }
   ];
 

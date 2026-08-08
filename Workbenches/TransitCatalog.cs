@@ -20,7 +20,7 @@ namespace RapidTransitMod.Workbenches
 
         private static string Refresh(string requestJson, string callName)
         {
-            ModeScope scope = ModeRequest.ReadScope(requestJson, callName);
+            ModeScope scope = ModeRequest.ReadScheduleScope(requestJson, callName);
             string preferredLineId = scope.NormalizeLineId(ModeRequest.ReadPreferredLine(requestJson));
             ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
             uint frame = runtime?.m_SimulationSystem != null ? runtime.m_SimulationSystem.frameIndex : 0u;

@@ -15,7 +15,7 @@ namespace RapidTransitMod.Planner
 
         internal string Load(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadPlannerContext");
+            ModeScope scope = Workbenches.ModeRequest.ReadPlannerScope(requestJson, "loadPlannerContext");
             return Workbenches.Json.Write(m_Export.Load(scope));
         }
 
@@ -26,7 +26,7 @@ namespace RapidTransitMod.Planner
 
         internal string Run(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "runPlanner");
+            ModeScope scope = Workbenches.ModeRequest.ReadPlannerScope(requestJson, "runPlanner");
             DispatchPlannerRequest request = Workbenches.Json.Read<DispatchPlannerRequest>(requestJson);
             return Workbenches.Json.Write(m_Jobs.Run(scope, request));
         }
@@ -35,7 +35,7 @@ namespace RapidTransitMod.Planner
         {
             try
             {
-                ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "startPlannerJob");
+                ModeScope scope = Workbenches.ModeRequest.ReadPlannerScope(requestJson, "startPlannerJob");
                 DispatchPlannerRequest request = Workbenches.Json.Read<DispatchPlannerRequest>(requestJson);
                 return Workbenches.Json.Write(m_Jobs.Start(scope, request));
             }
@@ -44,7 +44,7 @@ namespace RapidTransitMod.Planner
                 ModeScope scope = ModeScope.DefaultWorkbench;
                 try
                 {
-                    scope = Workbenches.ModeRequest.ReadScope(requestJson, "startPlannerJob", allowLegacyDefault: true);
+                    scope = Workbenches.ModeRequest.ReadPlannerScope(requestJson, "startPlannerJob", allowLegacyDefault: true);
                 }
                 catch
                 {

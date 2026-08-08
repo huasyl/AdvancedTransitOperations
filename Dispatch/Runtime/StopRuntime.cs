@@ -412,6 +412,9 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal bool TryGetSessionWaypoint(Entity vehicle, out int waypoint)
             => m_State.StopSessionWaypointIndex.TryGetValue(vehicle, out waypoint);
 
+        internal bool TryGetSessionArrivalFrame(Entity vehicle, out uint frame)
+            => m_State.StopSessionArrivalFrame.TryGetValue(vehicle, out frame);
+
         internal bool IsDeparturePending(Entity vehicle) => m_State.DeparturePendingSinceFrame.ContainsKey(vehicle);
 
         internal bool HasInvalidatedRecovery(Entity vehicle) => m_State.InvalidatedMidStopRecoveryPending.Contains(vehicle);
