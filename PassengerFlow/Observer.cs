@@ -162,9 +162,10 @@ namespace RapidTransitMod.PassengerFlow
             TransitMode mode = TransitMode.Unknown;
             string lineId = string.Empty;
             bool hasMetadata = port != null && port.TryLineMetadata(line, out mode, out lineId);
-            if (!hasMetadata || !SamplingSystem.SupportsMode(mode))
+            bool supportsMode = mode == TransitMode.Tram || SamplingSystem.SupportsMode(mode);
+            if (!hasMetadata || !supportsMode)
             {
-                if (!SamplingSystem.SupportsMode(mode))
+                if (!supportsMode)
                 {
                     state.Aggregates.RecordWarning(
                         mode,

@@ -138,6 +138,10 @@ namespace RapidTransitMod.PassengerFlow
                 ? m_Runtime.m_Resolve.StationName(stopEntity)
                 : string.Empty;
 
+        internal bool IsTransportStop(Entity entity)
+            => entity != Entity.Null
+                && m_Runtime.EntityManager.HasComponent<TransportStop>(entity);
+
         internal string EnsureSak(Entity anchor)
             => m_Runtime.m_Resolve != null ? m_Runtime.m_Resolve.EnsureSak(anchor) : string.Empty;
 

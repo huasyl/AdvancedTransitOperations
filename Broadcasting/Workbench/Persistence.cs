@@ -28,6 +28,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         {
             new ModeScope(TransitMode.Train),
             new ModeScope(TransitMode.Subway),
+            new ModeScope(TransitMode.Tram),
             new ModeScope(TransitMode.Bus)
         };
 

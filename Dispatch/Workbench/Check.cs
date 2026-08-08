@@ -36,9 +36,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return errors;
             }
 
-            if (mode == TransitMode.Bus)
-                ValidateBusRequest(request, errors);
-
             List<string> localIds = normalizeLineIdList(
                 request.mergedView.localLineIds,
                 request.mergedView.localLineId,
@@ -303,19 +300,61 @@ namespace RapidTransitMod.Dispatch.Workbench
             return errors;
         }
 
+        internal static List<string> RawModeContract(
+            DispatchWorkbenchSaveRequest request,
+            TransitMode mode)
+        {
+            List<string> errors = new List<string>();
+            if (request == null)
+                return errors;
+
+            if (mode == TransitMode.Bus)
+                ValidateBusRequest(request, errors);
+            else if (mode == TransitMode.Tram)
+                ValidateTramRequest(request, errors);
+            return errors;
+        }
+
         private static void ValidateBusRequest(
             DispatchWorkbenchSaveRequest request,
             List<string> errors)
         {
-            DispatchWorkbenchMergedView view = request.mergedView;
-            if (string.Equals(request.selectedEditLine, "express", StringComparison.Ordinal)
-                || !string.IsNullOrEmpty(view.expressLineId)
-                || (view.expressLineIds != null && view.expressLineIds.Length > 0))
+            ValidateLocalOnlyRequest(request, errors, "Bus");
+        }
+
+        private static void ValidateTramRequest(
+            DispatchWorkbenchSaveRequest request,
+            List<string> errors)
+        {
+            if (request.plannerImportContract != null)
+                errors.Add("Tram schedule does not support planner contracts.");
+            if (request.planRefs != null)
             {
-                errors.Add("Bus schedule does not support express lines.");
+                for (int i = 0; i < request.planRefs.Length; i++)
+                {
+                    if (request.planRefs[i]?.contract != null)
+                        errors.Add("Tram schedule does not support planner contracts.");
+                }
             }
 
-            ValidateBusPlanContract(request.plannerImportContract, errors, "plannerImportContract");
+            ValidateLocalOnlyRequest(request, errors, "Tram");
+        }
+
+        private static void ValidateLocalOnlyRequest(
+            DispatchWorkbenchSaveRequest request,
+            List<string> errors,
+            string modeLabel)
+        {
+            DispatchWorkbenchMergedView view = request.mergedView;
+            if (string.Equals(request.selectedEditLine, "express", StringComparison.Ordinal)
+                || (view != null
+                    && (!string.IsNullOrEmpty(view.expressLineId)
+                        || (view.expressLineIds != null && view.expressLineIds.Length > 0))))
+            {
+                errors.Add(modeLabel + " schedule does not support express lines.");
+            }
+
+            ValidateBusPlanContract(request.plannerImportContract, errors, "plannerImportContract", modeLabel);
             if (request.planRefs != null)
             {
                 for (int i = 0; i < request.planRefs.Length; i++)
@@ -323,13 +362,14 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ValidateBusPlanContract(
                         request.planRefs[i]?.contract,
                         errors,
-                        "planRefs[" + i + "].contract");
+                        "planRefs[" + i + "].contract",
+                        modeLabel);
                 }
             }
 
-            ValidateBusRows(request.manualRows, errors, "manual row");
-            ValidateBusRules(request.autoRules, errors);
-            ValidateBusRows(request.lineDraftRows, errors, "staged row");
+            ValidateBusRows(request.manualRows, errors, "manual row", modeLabel);
+            ValidateBusRules(request.autoRules, errors, modeLabel);
+            ValidateBusRows(request.lineDraftRows, errors, "staged row", modeLabel);
             if (request.lineDraftRowsByLineId != null)
             {
                 for (int i = 0; i < request.lineDraftRowsByLineId.Length; i++)
@@ -337,16 +377,17 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ValidateBusRows(
                         request.lineDraftRowsByLineId[i]?.lineDraftRows,
                         errors,
-                        "staged row");
+                        "staged row",
+                        modeLabel);
                 }
             }
 
             if (request.lineSettings != null)
             {
                 for (int i = 0; i < request.lineSettings.Length; i++)
-                {
-                    if (request.lineSettings[i] != null && !IsLocal(request.lineSettings[i].serviceKind))
-                        errors.Add("Bus line settings only support local service.");
+            {
+                if (request.lineSettings[i] != null && !IsLocal(request.lineSettings[i].serviceKind))
+                        errors.Add(modeLabel + " line settings only support local service.");
                 }
             }
         }
@@ -354,13 +395,14 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static void ValidateBusPlanContract(
             DispatchWorkbenchPlannerImportContractDto contract,
             List<string> errors,
-            string fieldName)
+            string fieldName,
+            string modeLabel)
         {
             if (contract == null)
                 return;
 
             if (HasValues(contract.selectedBypassStationIds))
-                errors.Add("Bus " + fieldName + " does not support bypass stations.");
+                errors.Add(modeLabel + " " + fieldName + " does not support bypass stations.");
 
             DispatchPlannerRequestEchoDto echo = contract.requestEcho;
             if (echo != null
@@ -377,12 +419,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                     || echo.offsetStepMinutes != 0
                     || echo.maxAdditionalBypassStations != 0))
             {
-                errors.Add("Bus " + fieldName + " contains unsupported express, offset, or bypass planning data.");
+                errors.Add(modeLabel + " " + fieldName + " contains unsupported express, offset, or bypass planning data.");
             }
 
-            ValidateBusChangedRows(contract.changedRows, errors, fieldName);
-            ValidateBusActions(contract.structuredActions, errors, fieldName);
-            ValidateBusRiskItems(contract.riskItems, errors, fieldName);
+            ValidateBusChangedRows(contract.changedRows, errors, fieldName, modeLabel);
+            ValidateBusActions(contract.structuredActions, errors, fieldName, modeLabel);
+            ValidateBusRiskItems(contract.riskItems, errors, fieldName, modeLabel);
         }
 
         private static bool HasBusPlannerMode(string value)
@@ -403,7 +445,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static void ValidateBusChangedRows(
             DispatchPlannerChangedRowDto[] rows,
             List<string> errors,
-            string fieldName)
+            string fieldName,
+            string modeLabel)
         {
             if (rows == null)
                 return;
@@ -412,14 +455,15 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 DispatchPlannerChangedRowDto row = rows[i];
                 if (row != null && (!IsLocal(row.kind) || HasBusBlockedPlannerTerm(row.changeType)))
-                    errors.Add("Bus " + fieldName + " contains unsupported planner row data.");
+                    errors.Add(modeLabel + " " + fieldName + " contains unsupported planner row data.");
             }
         }
 
         private static void ValidateBusActions(
             DispatchPlannerScheduleActionDto[] actions,
             List<string> errors,
-            string fieldName)
+            string fieldName,
+            string modeLabel)
         {
             if (actions == null)
                 return;
@@ -432,7 +476,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                         || HasBusBlockedPlannerTerm(action.actionType)
                         || HasBusBlockedPlannerTerm(action.type)))
                 {
-                    errors.Add("Bus " + fieldName + " contains unsupported planner action data.");
+                    errors.Add(modeLabel + " " + fieldName + " contains unsupported planner action data.");
                 }
             }
         }
@@ -440,7 +484,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static void ValidateBusRiskItems(
             DispatchPlannerRiskItemDto[] items,
             List<string> errors,
-            string fieldName)
+            string fieldName,
+            string modeLabel)
         {
             if (items == null)
                 return;
@@ -448,7 +493,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             for (int i = 0; i < items.Length; i++)
             {
                 if (items[i] != null && !string.IsNullOrEmpty(items[i].selectedBypassStationId))
-                    errors.Add("Bus " + fieldName + " contains unsupported bypass risk data.");
+                    errors.Add(modeLabel + " " + fieldName + " contains unsupported bypass risk data.");
             }
         }
 
@@ -469,7 +514,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static void ValidateBusRows(
             DispatchWorkbenchManualRowDto[] rows,
             List<string> errors,
-            string rowKind)
+            string rowKind,
+            string modeLabel)
         {
             if (rows == null)
                 return;
@@ -482,7 +528,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                         || !string.IsNullOrEmpty(row.offsetMode)
                         || !string.IsNullOrEmpty(row.offsetMinutes)))
                 {
-                    errors.Add("Bus " + rowKind + " only supports local service without offset.");
+                    errors.Add(modeLabel + " " + rowKind + " only supports local service without offset.");
                 }
             }
         }
@@ -490,7 +536,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private static void ValidateBusRows(
             DispatchWorkbenchStagedRowDto[] rows,
             List<string> errors,
-            string rowKind)
+            string rowKind,
+            string modeLabel)
         {
             if (rows == null)
                 return;
@@ -498,13 +545,14 @@ namespace RapidTransitMod.Dispatch.Workbench
             for (int i = 0; i < rows.Length; i++)
             {
                 if (rows[i] != null && !IsLocal(rows[i].kind))
-                    errors.Add("Bus " + rowKind + " only supports local service.");
+                    errors.Add(modeLabel + " " + rowKind + " only supports local service.");
             }
         }
 
         private static void ValidateBusRules(
             DispatchWorkbenchAutoRuleDto[] rules,
-            List<string> errors)
+            List<string> errors,
+            string modeLabel)
         {
             if (rules == null)
                 return;
@@ -518,7 +566,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                         || !string.IsNullOrEmpty(rule.expressOffsetMode)
                         || rule.expressOffsetMinutes != 0))
                 {
-                    errors.Add("Bus auto rule only supports local service without express offset.");
+                    errors.Add(modeLabel + " auto rule only supports local service without express offset.");
                 }
             }
         }
@@ -696,6 +744,52 @@ namespace RapidTransitMod.Dispatch.Workbench
                 normalizeWorkbenchServiceKind,
                 getWorkbenchConfiguredLineServiceKind,
                 configuredKinds);
+            if (string.Equals(request.mode, "tram", StringComparison.OrdinalIgnoreCase))
+                NormalizeTramView(request);
+        }
+
+        private static void NormalizeTramView(DispatchWorkbenchSaveRequest request)
+        {
+            DispatchWorkbenchMergedView view = request.mergedView;
+            view.localLineIds = (view.localLineIds ?? Array.Empty<string>())
+                .Concat(view.expressLineIds ?? Array.Empty<string>())
+                .Where(lineId => !string.IsNullOrEmpty(lineId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            view.localLineId = view.localLineIds.FirstOrDefault() ?? string.Empty;
+            view.expressLineId = string.Empty;
+            view.expressLineIds = Array.Empty<string>();
+            NormalizeTramSettings(request.lineSettings);
+            NormalizeTramRows(request.lineDraftRows);
+            if (request.lineDraftRowsByLineId != null)
+            {
+                for (int i = 0; i < request.lineDraftRowsByLineId.Length; i++)
+                    NormalizeTramRows(request.lineDraftRowsByLineId[i]?.lineDraftRows);
+            }
+        }
+
+        private static void NormalizeTramSettings(DispatchWorkbenchLineSettingDto[] settings)
+        {
+            if (settings == null)
+                return;
+
+            for (int i = 0; i < settings.Length; i++)
+            {
+                if (settings[i] != null)
+                    settings[i].serviceKind = "local";
+            }
+        }
+
+        private static void NormalizeTramRows(DispatchWorkbenchStagedRowDto[] rows)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                if (rows[i] != null)
+                    rows[i].kind = "local";
+            }
         }
 
         internal static void SplitKinds(

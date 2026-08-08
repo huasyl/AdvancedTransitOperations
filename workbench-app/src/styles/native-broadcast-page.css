@@ -137,6 +137,7 @@
 .dw-bc-import-parent-button {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   margin-right: 18rem;
   border: 1px solid rgba(255, 255, 255, 0.20);
   padding: 8rem 15rem;
@@ -170,7 +171,9 @@
 .dw-bc-import-breadcrumbs {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   min-width: 0;
+  margin-right: 24rem;
   border: 1px solid rgba(255, 255, 255, 0.10);
   padding: 8rem 15rem;
   background: rgba(0, 0, 0, 0.20);
@@ -192,6 +195,7 @@
 .dw-bc-import-breadcrumb-copy {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   min-width: 0;
   flex-wrap: wrap;
 }
@@ -224,13 +228,10 @@
   line-height: 18rem;
 }
 
-.dw-bc-import-toolbar-spacer {
-  flex: 1 1 auto;
-}
-
 .dw-bc-import-select-all {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   border: 0;
   background: transparent;
   color: #ffffff;

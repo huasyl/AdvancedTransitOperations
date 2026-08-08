@@ -17,6 +17,9 @@ function toOverviewMode(mode) {
   if (token === "subway") {
     return "Subway";
   }
+  if (token === "tram") {
+    return "Tram";
+  }
   if (token === "bus") {
     return "Bus";
   }
@@ -25,7 +28,7 @@ function toOverviewMode(mode) {
 
 function toTransportMode(mode) {
   const token = String(mode || "").toLowerCase();
-  if (token === "subway" || token === "bus") {
+  if (token === "subway" || token === "tram" || token === "bus") {
     return token;
   }
   return "train";
@@ -52,7 +55,7 @@ function buildOverviewSystems(featureSettings, t, mode) {
     { key: "depotLockEnabled", title: t("nativeWorkbench.overview.system.depotLock"), enabled: featureSettings?.depotLockEnabled !== false }
   ];
 
-  if (mode !== "Bus") {
+  if (mode !== "Tram" && mode !== "Bus") {
     systems.splice(1, 0, { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false });
   }
 
@@ -65,6 +68,7 @@ function buildEmptyOverviewViewModel(featureSettings, t, activeMode) {
     modes: [
       { mode: "Subway", label: t("nativeWorkbench.overview.mode.subway"), lineCount: 0, appliedDepartureCount: 0 },
       { mode: "Train", label: t("nativeWorkbench.overview.mode.train"), lineCount: 0, appliedDepartureCount: 0 },
+      { mode: "Tram", label: t("nativeWorkbench.overview.mode.tram"), lineCount: 0, appliedDepartureCount: 0 },
       { mode: "Bus", label: t("nativeWorkbench.overview.mode.bus"), lineCount: 0, appliedDepartureCount: 0 }
     ],
     activeMode,

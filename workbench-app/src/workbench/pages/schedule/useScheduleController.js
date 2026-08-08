@@ -56,7 +56,7 @@ const EMPTY_LINE_OPTION = {
 
 function normalizeScheduleMode(mode) {
   const token = String(mode || "").trim().toLowerCase();
-  return token === "subway" || token === "bus" ? token : DEFAULT_SCHEDULE_MODE;
+  return token === "subway" || token === "tram" || token === "bus" ? token : DEFAULT_SCHEDULE_MODE;
 }
 
 function getPayloadMode(payload) {
@@ -107,7 +107,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   const { t } = useNativeScheduleI18n();
   const scheduleMode = normalizeScheduleMode(activeTransportMode);
-  const supportsExpress = scheduleMode !== "bus";
+  const supportsExpress = scheduleMode === "train" || scheduleMode === "subway";
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
   const [catalogRevision, setCatalogRevision] = useState(0);
@@ -299,8 +299,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
     [summaryEntries]
   );
   const currentLineSettingsSignature = useMemo(
-    () => JSON.stringify(serializeNativeLineSettings(LINE_OPTIONS)),
-    [catalogRevision]
+    () => JSON.stringify(serializeNativeLineSettings(LINE_OPTIONS, scheduleMode)),
+    [catalogRevision, scheduleMode]
   );
   const appliedSummaryRowKeySet = useMemo(
     () => new Set(Array.isArray(appliedSummaryRowKeys) ? appliedSummaryRowKeys : []),
@@ -490,15 +490,15 @@ export default function useScheduleController({ registerHostActions, activeTrans
       runtimeCatalog.lineOptions[0] ??
       fallbackLine;
 
-    const restoredDraftRows = flattenSnapshotLineDraftRowsByLineId(snapshot?.lineDraftRowsByLineId);
+    const restoredDraftRows = flattenSnapshotLineDraftRowsByLineId(snapshot?.lineDraftRowsByLineId, targetMode);
     const nextSummaryEntries = normalizeSummaryEntries(
       restoredDraftRows.length > 0
         ? restoredDraftRows
-        : mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
+        : mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : [], targetMode),
       t
     );
     const appliedSummaryEntries = normalizeSummaryEntries(
-      mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : []),
+      mapSnapshotSummaryRows(Array.isArray(snapshot?.appliedRows) ? snapshot.appliedRows : [], targetMode),
       t
     );
     const nextSummarySignature = getSummaryRowsSignature(appliedSummaryEntries);
@@ -507,7 +507,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
     setActiveRightTab((current) => (current === "manual" ? "manual" : "auto"));
     setSelectedLineId(sourceLine.id);
-    setSelectedLineType(sourceLine.kind);
+    setSelectedLineType(supportsExpress ? sourceLine.kind : "local");
     setSelectedDepot(sourceLine.depotId);
     setOrigin(sourceLine.originId);
     setHoldMinutes(sourceLine.hold);
@@ -525,7 +525,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setAutoOffsetDirection("");
     setAutoOffsetMinutesText("");
     setAppliedSummarySignature(nextSummarySignature);
-    setAppliedLineSettingsSignature(JSON.stringify(serializeNativeLineSettings(runtimeCatalog.lineOptions)));
+    setAppliedLineSettingsSignature(JSON.stringify(serializeNativeLineSettings(runtimeCatalog.lineOptions, targetMode)));
     setAppliedSummaryRowKeys(currentSummaryRowKeys);
     setSummaryFilter("all");
     setPanelMessage(null);
@@ -576,7 +576,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const changedLine = nextLine.id !== selectedLineId || selectedLineReplaced;
     if (changedLine) {
       setSelectedLineId(nextLine.id);
-      setSelectedLineType(nextLine.kind);
+      setSelectedLineType(supportsExpress ? nextLine.kind : "local");
       setSelectedDepot(nextLine.depotId);
       setOrigin(nextLine.originId);
       setHoldMinutes(nextLine.hold);
@@ -784,7 +784,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       latestDraftSaveOperationRunIdRef.current += 1;
     }
 
-    const lineDraftRowsByLineId = serializeNativeLineDraftRowsByLineId(summaryEntries);
+    const lineDraftRowsByLineId = serializeNativeLineDraftRowsByLineId(summaryEntries, scheduleMode);
     if (applyDraft && selectedLineId && !lineDraftRowsByLineId.some((block) => block?.lineId === selectedLineId)) {
       lineDraftRowsByLineId.push({ lineId: selectedLineId, lineDraftRows: [] });
     }
@@ -794,7 +794,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       selectedEditLine: selectedLineId,
       mergedView: createNativeMergedViewForSave(selectedLineId, lastHydratedSnapshotRef.current?.mergedView, scheduleMode),
       lineDraftRowsByLineId,
-      lineSettings: serializeNativeLineSettings(LINE_OPTIONS),
+      lineSettings: serializeNativeLineSettings(LINE_OPTIONS, scheduleMode),
       clientRequestSequence: requestSequence,
       applyDraft,
       nativeScheduleWriter: true,
@@ -881,7 +881,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     }
 
     setSelectedLineId(nextLine.id);
-    setSelectedLineType(nextLine.kind);
+    setSelectedLineType(supportsExpress ? nextLine.kind : "local");
     setSelectedDepot(nextLine.depotId);
     setOrigin(nextLine.originId);
     setHoldMinutes(nextLine.hold);

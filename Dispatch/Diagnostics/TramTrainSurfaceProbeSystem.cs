@@ -32,7 +32,6 @@ namespace RapidTransitMod
         private TextureStreamingSystem m_TextureSystem = null!;
         private EntityQuery m_PieceQuery;
         private GameObject m_Root;
-        private bool m_KeyArmed = true;
         private bool m_Pending;
 
         protected override void OnCreate()
@@ -54,6 +53,7 @@ namespace RapidTransitMod
                     ComponentType.ReadOnly<Deleted>()
                 }
             });
+            Mod.log.Info("[TramTrainSurfaceProbe] system created");
         }
 
         protected override void OnDestroy()
@@ -64,18 +64,6 @@ namespace RapidTransitMod
 
         protected override void OnUpdate()
         {
-            bool modifierDown = Input.GetKey(KeyCode.LeftControl) && Input.GetKey(KeyCode.LeftAlt);
-            bool triggerDown = modifierDown && Input.GetKey(KeyCode.M);
-            if (!triggerDown)
-            {
-                m_KeyArmed = true;
-            }
-            else if (m_KeyArmed)
-            {
-                m_KeyArmed = false;
-                ToggleProbe();
-            }
-
             if (!m_Pending)
                 return;
 
@@ -101,7 +89,7 @@ namespace RapidTransitMod
             });
         }
 
-        private void ToggleProbe()
+        public void ToggleProbe()
         {
             if (m_Root != null)
             {

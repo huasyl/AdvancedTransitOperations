@@ -682,7 +682,11 @@ namespace RapidTransitMod.Broadcasting
                 m_Diagnostics.Anchor("trigger-approach", vehicle, line, waypoints, stationContext, state, true);
             }
 
-            state.LastCurrentStopWindowRelation = currentStopWindowRelation;
+            if (state.LastCurrentStopWindowRelation != CursorAtomWindowRelation.Inside
+                || currentStopWindowRelation != CursorAtomWindowRelation.Before)
+            {
+                state.LastCurrentStopWindowRelation = currentStopWindowRelation;
+            }
             m_Diagnostics.Anchor("tick", vehicle, line, waypoints, stationContext, state, false);
             m_ProgressStateByVehicle[vehicle] = state;
         }
@@ -777,6 +781,8 @@ namespace RapidTransitMod.Broadcasting
                 && existingState.CurrentStopWaypointIndex == stationContext.CurrentStopWaypointIndex
                 && existingState.NextStopWaypointIndex == stationContext.NextStopWaypointIndex)
             {
+                existingState.LastCurrentStopWindowRelation = CursorAtomWindowRelation.Inside;
+                m_ProgressStateByVehicle[vehicle] = existingState;
                 return;
             }
 
@@ -789,21 +795,6 @@ namespace RapidTransitMod.Broadcasting
                 out int broadcastLeaveAtomIndex,
                 out int broadcastApproachAtomIndex);
 
-            CursorAtomWindowRelation currentStopWindowRelation = CursorAtomWindowRelation.Unknown;
-            if (m_Access.TryChain(line, waypoints, out LineTrackChain relationChain)
-                && relationChain != null
-                && m_Access.TryCursor(vehicle, line, waypoints, relationChain, out VehicleTrackCursor relationCursor)
-                && m_Access.TryRelation(
-                    relationChain,
-                    stationContext.CurrentStopWaypointIndex,
-                    relationCursor.AtomCursorIndex,
-                    out CursorAtomWindowRelation liveRelation,
-                    out _,
-                    out _))
-            {
-                currentStopWindowRelation = liveRelation;
-            }
-
             m_ProgressStateByVehicle[vehicle] = new ProgressState
             {
                 CurrentStopWaypointIndex = stationContext.CurrentStopWaypointIndex,
@@ -814,9 +805,7 @@ namespace RapidTransitMod.Broadcasting
                 IdleRouteBlockedUntilFrame = 0u,
                 IdleRouteBlockedUntilRealtime = 0f,
                 IdleRouteWaitingForLeaveSequenceEnd = false,
-                LastCurrentStopWindowRelation = currentStopWindowRelation == CursorAtomWindowRelation.Unknown
-                    ? CursorAtomWindowRelation.Inside
-                    : currentStopWindowRelation,
+                LastCurrentStopWindowRelation = CursorAtomWindowRelation.Inside,
                 LeaveTriggeredFrame = 0u,
                 LeaveTriggered = false,
                 MidRouteTriggered = false,

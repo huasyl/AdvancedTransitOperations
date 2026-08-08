@@ -16,11 +16,11 @@ namespace RapidTransitMod
         public TransitMode Mode { get; }
         public string Token { get; }
         public bool IsSupportedWorkbenchMode => Mode == TransitMode.Train || Mode == TransitMode.Subway;
-        public bool SupportsSchedule => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Bus;
-        public bool SupportsBroadcast => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Bus;
-        public bool SupportsOverview => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Bus;
+        public bool SupportsSchedule => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Tram || Mode == TransitMode.Bus;
+        public bool SupportsBroadcast => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Tram || Mode == TransitMode.Bus;
+        public bool SupportsOverview => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Tram || Mode == TransitMode.Bus;
         public bool SupportsPlanner => Mode == TransitMode.Train || Mode == TransitMode.Subway;
-        public bool SupportsPassenger => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Bus;
+        public bool SupportsPassenger => Mode == TransitMode.Train || Mode == TransitMode.Subway || Mode == TransitMode.Tram || Mode == TransitMode.Bus;
 
         public static bool TryParseWorkbench(string modeToken, out ModeScope scope)
         {

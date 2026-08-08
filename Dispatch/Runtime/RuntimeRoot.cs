@@ -309,6 +309,22 @@ namespace RapidTransitMod.Dispatch.Runtime
                     vehicle,
                     RuntimeDemandMask.DeparturePending,
                     active));
+            runtime.m_StopRuntime.BindDwell(
+                line => runtime.m_LineView.Dwell(line),
+                minutes => runtime.m_SimClock.Snapshot.ToFramesCeil(minutes),
+                runtime.m_Observation.TryGetObservedWaypointStopFrames,
+                vehicle =>
+                {
+                    if (!runtime.m_ObsQuery.TryDwellStart(vehicle, out uint legacyStart))
+                        return null;
+
+                    runtime.m_ObsPersist.RemoveDwellStart(vehicle);
+                    return (uint?)legacyStart;
+                });
+            runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
+            {
+                runtime.m_StopRuntime.ReprojectDwell();
+            };
             runtime.m_BoardingFirstFrameGuardState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);
             runtime.m_StationContextQuery = new VehicleStationContextQuery(

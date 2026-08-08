@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Game.Routes;
+using Game.Vehicles;
 using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackModel;
 using Unity.Entities;
@@ -161,28 +162,39 @@ namespace RapidTransitMod.Bypass
             RemoveVehicleLogs(vehicle);
         }
 
-        internal BypassControlResult TickVehicle<TTransport, TCommandBuffer>(
+        internal BypassControlResult UpdateVehicle(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             int waypointIndex,
             bool boarding,
-            ref TTransport publicTransport,
-            TCommandBuffer ecb,
-            string lineTag,
-            bool midStopDwellTimedOut,
             uint nowFrame)
         {
-            return m_Control.TickVehicle(
+            return m_Control.Update(
                 vehicle,
                 line,
                 waypoints,
                 waypointIndex,
                 boarding,
+                nowFrame);
+        }
+
+        internal void ApplyControl(
+            BypassControlResult control,
+            bool boarding,
+            ref PublicTransport publicTransport,
+            EntityCommandBuffer ecb,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            string lineTag,
+            uint nowFrame)
+        {
+            m_Control.Apply(
+                control,
+                boarding,
                 ref publicTransport,
                 ecb,
+                waypoints,
                 lineTag,
-                midStopDwellTimedOut,
                 nowFrame);
         }
 

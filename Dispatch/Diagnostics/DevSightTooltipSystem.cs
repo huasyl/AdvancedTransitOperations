@@ -76,9 +76,15 @@ namespace RapidTransitMod
         private ToolSystem m_ToolSystem = null!;
         private ToolRaycastSystem m_ToolRaycastSystem = null!;
         private DevSightRaycastCollectorSystem m_RaycastCollectorSystem = null!;
+#if RT_DEBUG_TOOLS
+        private TramTrainSurfaceProbeSystem m_SurfaceProbeSystem = null!;
+#endif
         private CameraUpdateSystem m_CameraUpdateSystem = null!;
         private bool m_ToggleArmed = true;
         private bool m_ExportArmed = true;
+#if RT_DEBUG_TOOLS
+        private bool m_SurfaceProbeArmed = true;
+#endif
         private bool m_Enabled;
         private Entity m_LastMoveItEntity = Entity.Null;
         private static DevSightPanelState s_PanelState;
@@ -178,6 +184,9 @@ namespace RapidTransitMod
             m_ToolSystem = World.GetOrCreateSystemManaged<ToolSystem>();
             m_ToolRaycastSystem = World.GetOrCreateSystemManaged<ToolRaycastSystem>();
             m_RaycastCollectorSystem = World.GetOrCreateSystemManaged<DevSightRaycastCollectorSystem>();
+#if RT_DEBUG_TOOLS
+            m_SurfaceProbeSystem = World.GetOrCreateSystemManaged<TramTrainSurfaceProbeSystem>();
+#endif
             m_CameraUpdateSystem = World.GetOrCreateSystemManaged<CameraUpdateSystem>();
         }
 
@@ -187,6 +196,18 @@ namespace RapidTransitMod
             bool modifierDown = Input.GetKey(KeyCode.LeftControl) && Input.GetKey(KeyCode.LeftAlt);
             bool toggleDown = Input.GetKey(KeyCode.BackQuote);
             bool exportDown = modifierDown && Input.GetKey(KeyCode.E);
+#if RT_DEBUG_TOOLS
+            bool surfaceProbeDown = modifierDown && Input.GetKey(KeyCode.M);
+            if (!surfaceProbeDown)
+            {
+                m_SurfaceProbeArmed = true;
+            }
+            else if (m_SurfaceProbeArmed)
+            {
+                m_SurfaceProbeArmed = false;
+                m_SurfaceProbeSystem.ToggleProbe();
+            }
+#endif
             if (!exportDown)
                 m_ExportArmed = true;
             if (!toggleDown)

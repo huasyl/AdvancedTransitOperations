@@ -189,8 +189,6 @@ export default function BroadcastAssetExplorer({
           </div>
         </div>
 
-        <div className="dw-bc-import-toolbar-spacer" />
-
         <button
           type="button"
           className="dw-bc-import-select-all"

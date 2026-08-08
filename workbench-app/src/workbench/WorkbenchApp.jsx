@@ -13,8 +13,9 @@ const WORKBENCH_PAGE_TRANSITION_MS = 220;
 const DEFAULT_TRANSPORT_MODE = "train";
 const WORKBENCH_DEBUG_FLAGS_EVENT = "rt-native-workbench-debug-flags";
 
-function isBusTransportMode(mode) {
-  return String(mode || "").trim().toLowerCase() === "bus";
+function isModeUnsupportedForPlanner(mode) {
+  const token = String(mode || "").trim().toLowerCase();
+  return token === "bus" || token === "tram";
 }
 
 function getWorkbenchDebugToolsEnabled() {
@@ -190,7 +191,7 @@ export default function WorkbenchApp({ registerHostActions }) {
       ? activeTransportMode
       : pageTransportModes[pageKey] || DEFAULT_TRANSPORT_MODE
   );
-  const showPlannerModeUnsupported = isBusTransportMode(activeTransportMode);
+  const showPlannerModeUnsupported = isModeUnsupportedForPlanner(activeTransportMode);
 
   function pageClassName(pageKey) {
     if (renderedPage === pageKey) {

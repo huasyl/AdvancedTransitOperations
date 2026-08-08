@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Game.Routes;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
@@ -258,15 +259,76 @@ namespace RapidTransitMod.Dispatch.Observation
                 m_Store.Cancel(staleSessions[i]);
 
             var staleObservations = new List<BusSegKey>();
+            var keptObservations = new List<BusSegKey>();
             foreach (KeyValuePair<BusSegKey, BusSegObservation> pair in m_Store.Observations)
             {
-                if (pair.Key.Line == line && !MatchesSegment(pair.Key, oldRoute, newRoute))
+                if (pair.Key.Line != line)
+                    continue;
+
+                if (MatchesSegment(pair.Key, oldRoute, newRoute))
+                    keptObservations.Add(pair.Key);
+                else
                     staleObservations.Add(pair.Key);
             }
             for (int i = 0; i < staleObservations.Count; i++)
                 m_Store.Remove(staleObservations[i]);
 
+            if (RtLog.CacheInvalidationDiagnosticsEnabled)
+            {
+                m_Runtime.log.Info("[BusSegRouteInvalidated] line=" + line.Index
+                    + " oldWaypoints=" + oldRoute.Waypoints.Length
+                    + " newWaypoints=" + newRoute.Waypoints.Length
+                    + " cancelledSessions=" + staleSessions.Count
+                    + " cancelledVehicles=" + FormatVehicles(staleSessions)
+                    + " removedObservations=" + staleObservations.Count
+                    + " removedSegments=" + FormatSegments(staleObservations)
+                    + " keptObservations=" + keptObservations.Count
+                    + " keptSegments=" + FormatSegments(keptObservations));
+            }
+
             m_OnChanged?.Invoke(line);
+        }
+
+        private static string FormatVehicles(List<Entity> vehicles)
+        {
+            if (vehicles == null || vehicles.Count == 0)
+                return "[]";
+
+            var text = new StringBuilder();
+            text.Append('[');
+            for (int i = 0; i < vehicles.Count; i++)
+            {
+                if (i > 0)
+                    text.Append(',');
+                text.Append(vehicles[i].Index);
+            }
+            text.Append(']');
+            return text.ToString();
+        }
+
+        private static string FormatSegments(List<BusSegKey> segments)
+        {
+            if (segments == null || segments.Count == 0)
+                return "[]";
+
+            var text = new StringBuilder();
+            text.Append('[');
+            for (int i = 0; i < segments.Count; i++)
+            {
+                if (i > 0)
+                    text.Append(',');
+
+                BusSegKey key = segments[i];
+                text.Append(key.FromWaypoint.Index);
+                text.Append('/');
+                text.Append(key.FromStop.Index);
+                text.Append("->");
+                text.Append(key.ToWaypoint.Index);
+                text.Append('/');
+                text.Append(key.ToStop.Index);
+            }
+            text.Append(']');
+            return text.ToString();
         }
 
         internal static bool MatchesSegment(

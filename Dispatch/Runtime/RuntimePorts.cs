@@ -27,6 +27,14 @@ namespace RapidTransitMod.Dispatch.Runtime
 
     internal static class RuntimePorts
     {
+        private static bool CanBypass(ModRuntimeHostSystem runtime, Entity line)
+        {
+            return runtime != null
+                && line != Entity.Null
+                && TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(runtime.EntityManager, line)).CanBypass;
+        }
+
         public static TrackModelContext.IBuffers Buffers(ModRuntimeHostSystem runtime)
         {
             return new TrackBuffers(runtime);
@@ -277,13 +285,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_TrackProjection,
                 Buffers(runtime),
                 () => runtime.m_Features.BypassRun(),
-                line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
-                line => runtime.m_LineView.Local(line),
-                line => runtime.m_LineView.Express(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Local(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Express(line),
                 runtime.m_Resolve,
                 ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
                 runtime.m_WaypointIndex,
                 runtime.m_Observation,
+                (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
+                    runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
                 runtime.m_SharedCorridor,
                 runtime.m_RuntimeLog.Once,
                 runtime.m_VehicleView,
@@ -305,13 +315,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_TrackProjection,
                 Buffers(runtime),
                 () => runtime.m_Features.BypassRun(),
-                line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
-                line => runtime.m_LineView.Local(line),
-                line => runtime.m_LineView.Express(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Local(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Express(line),
                 runtime.m_Resolve,
                 ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
                 runtime.m_WaypointIndex,
                 runtime.m_Observation,
+                (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
+                    runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
                 runtime.m_SharedCorridor,
                 runtime.m_RuntimeLog.Once,
                 runtime.m_VehicleView,

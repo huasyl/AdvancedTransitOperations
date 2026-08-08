@@ -662,6 +662,30 @@ namespace RapidTransitMod.Dispatch.Lines
             if (building == Entity.Null)
                 return null;
 
+            if (m_EntityManager.HasComponent<TransportStop>(building))
+            {
+                Entity anchorEntity = m_AnchorFromStop(building);
+                if (anchorEntity == Entity.Null)
+                    anchorEntity = building;
+
+                string stopStationId = m_Sak(anchorEntity);
+                if (string.IsNullOrWhiteSpace(stopStationId))
+                    stopStationId = m_EnsureSak(anchorEntity);
+
+                string stopStationName = m_StationName(building);
+
+                return new ResolvedStation
+                {
+                    StopEntity = building,
+                    AnchorEntity = anchorEntity,
+                    WaypointIndex = -1,
+                    Order = -building.Index - 1,
+                    StationId = stopStationId,
+                    LegacyStationId = stopStationId,
+                    Name = stopStationName
+                };
+            }
+
             string stationId = "physical:" + building.Index + ":" + traversalEvent.PassIndex;
 
             string stationName = m_Name(building);

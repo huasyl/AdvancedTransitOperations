@@ -111,7 +111,7 @@ namespace RapidTransitMod.PassengerFlow
         }
 
         internal static bool SupportsMode(TransitMode mode)
-            => mode == TransitMode.Train || mode == TransitMode.Subway || mode == TransitMode.Bus;
+            => mode == TransitMode.Train || mode == TransitMode.Subway || mode == TransitMode.Tram || mode == TransitMode.Bus;
 
         private void ClearLineMetadata()
         {

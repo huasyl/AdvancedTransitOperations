@@ -6,7 +6,7 @@ const MODE_LABEL_KEYS = {
   Unknown: "nativeWorkbench.overview.mode.unknown"
 };
 
-const MODE_ORDER = ["Subway", "Train", "Bus"];
+const MODE_ORDER = ["Subway", "Train", "Tram", "Bus"];
 const OVERVIEW_VISIBLE_MODES = new Set(MODE_ORDER);
 
 function asArray(value) {
@@ -49,7 +49,7 @@ function buildOverviewSystems(featureSettings, t, mode) {
     { key: "depotLockEnabled", title: t("nativeWorkbench.overview.system.depotLock"), enabled: featureSettings?.depotLockEnabled !== false }
   ];
 
-  if (mode !== "Bus") {
+  if (mode !== "Tram" && mode !== "Bus") {
     systems.splice(1, 0, { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false });
   }
 

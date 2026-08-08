@@ -14,6 +14,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal NativeHashMap<Entity, uint> StopSessionBoardingChangeCount;
         internal NativeHashMap<Entity, uint> DeparturePendingSinceFrame;
         internal NativeHashSet<Entity> InvalidatedMidStopRecoveryPending;
+        internal NativeHashMap<Entity, uint> DwellDeadlineFrame;
+        internal NativeHashSet<Entity> DwellTimeoutPending;
         internal NativeHashSet<Entity> DwellTimedOutLatched;
         internal NativeHashMap<Entity, uint> ForcedMidStopBoardingGraceUntil;
 
@@ -27,6 +29,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             StopSessionBoardingChangeCount = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             DeparturePendingSinceFrame = new NativeHashMap<Entity, uint>(1024, Allocator.Persistent);
             InvalidatedMidStopRecoveryPending = new NativeHashSet<Entity>(256, Allocator.Persistent);
+            DwellDeadlineFrame = new NativeHashMap<Entity, uint>(256, Allocator.Persistent);
+            DwellTimeoutPending = new NativeHashSet<Entity>(256, Allocator.Persistent);
             DwellTimedOutLatched = new NativeHashSet<Entity>(256, Allocator.Persistent);
         }
 
@@ -66,6 +70,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal void ClearDwellTimeoutLatches()
         {
+            DwellDeadlineFrame.Clear();
+            DwellTimeoutPending.Clear();
             DwellTimedOutLatched.Clear();
         }
 
@@ -105,6 +111,8 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal void DisposeDwellTimeoutLatches()
         {
+            if (DwellDeadlineFrame.IsCreated) DwellDeadlineFrame.Dispose();
+            if (DwellTimeoutPending.IsCreated) DwellTimeoutPending.Dispose();
             if (DwellTimedOutLatched.IsCreated) DwellTimedOutLatched.Dispose();
         }
 

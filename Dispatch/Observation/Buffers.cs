@@ -4,6 +4,7 @@ using Game.Routes;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Persistence;
+using RapidTransitMod.TrackModel;
 using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -1062,7 +1063,47 @@ namespace RapidTransitMod.Dispatch.Observation
                 geometry = m_Runtime.m_LineProfile.MixSignature(geometry, distance);
             }
 
+            if (TransportModeResolver.Resolve(m_Runtime.EntityManager, line) != TransitMode.Tram)
+                return geometry != 0UL && legacyFull != 0UL;
+
+            if (m_Runtime.m_TrackModel == null
+                || !m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || chain.TraversalProfile == null)
+            {
+                geometry = 0UL;
+                legacyFull = 0UL;
+                return false;
+            }
+
+            MixTraversalEvents(chain, ref geometry);
+            MixTraversalEvents(chain, ref legacyFull);
+
             return geometry != 0UL && legacyFull != 0UL;
+        }
+
+        private void MixTraversalEvents(LineTrackChain chain, ref ulong signature)
+        {
+            signature = m_Runtime.m_LineProfile.MixSignature(signature, chain.TraversalProfile.Events.Count);
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.EventIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, (int)traversalEvent.Kind);
+                signature = m_Runtime.m_LineProfile.MixSignature(
+                    signature,
+                    traversalEvent.Building == Entity.Null ? -1 : traversalEvent.Building.Index);
+                signature = m_Runtime.m_LineProfile.MixSignature(
+                    signature,
+                    traversalEvent.Building == Entity.Null ? -1 : traversalEvent.Building.Version);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.WaypointIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.PassIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.StartAtomIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.EndAtomIndexExclusive);
+                signature = m_Runtime.m_LineProfile.MixSignature(
+                    signature,
+                    (int)math.round(traversalEvent.StopFrames * 10f));
+            }
         }
 
         private bool TryGetSignature(Entity line, out ulong signature)

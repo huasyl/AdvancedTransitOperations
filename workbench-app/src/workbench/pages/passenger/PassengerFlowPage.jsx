@@ -22,7 +22,7 @@ function ChartPanel({ title, children, large = false }) {
 
 function normalizePassengerMode(mode) {
   const token = String(mode || "").trim().toLowerCase();
-  return token === "subway" || token === "bus" ? token : "train";
+  return token === "subway" || token === "tram" || token === "bus" ? token : "train";
 }
 
 const PASSENGER_FLOW_POLL_INTERVAL_MS = 5000;

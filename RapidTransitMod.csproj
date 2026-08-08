@@ -54,6 +54,10 @@
     <None Include="mod.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="tools\TramTrainAssets\output\tramtrain_transition_v03.obj" Condition="'$(Configuration)'=='Debug'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Assets\TramTrain\tramtrain_transition_v03.obj</TargetPath>
+    </None>
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)'=='Debug'">

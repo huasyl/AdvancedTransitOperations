@@ -35,7 +35,7 @@ namespace RapidTransitMod
                 case TransitMode.Bus:
                     return new TransportModeProfile(mode, canDispatch: true, canBypass: false, lifecycle: LifecycleKind.Road);
                 case TransitMode.Tram:
-                    return new TransportModeProfile(mode, canDispatch: false, canBypass: false, lifecycle: LifecycleKind.Unknown);
+                    return new TransportModeProfile(mode, canDispatch: true, canBypass: false, lifecycle: LifecycleKind.Rail);
                 default:
                     return new TransportModeProfile(TransitMode.Unknown, canDispatch: false, canBypass: false, lifecycle: LifecycleKind.Unknown);
             }

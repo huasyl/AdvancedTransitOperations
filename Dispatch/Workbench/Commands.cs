@@ -72,7 +72,16 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     request.mode = prepared.Scope.Token;
                 }
-                List<string> errors = NormalizeRequestForScope(request, prepared.Scope);
+                List<string> errors = Check.RawModeContract(request, prepared.Scope.Mode);
+                if (errors.Count > 0)
+                {
+                    prepared.Request = request;
+                    prepared.Errors = errors;
+                    prepared.ShouldReturnSnapshot = ReturnSnapshot(request);
+                    return prepared;
+                }
+
+                errors.AddRange(NormalizeRequestForScope(request, prepared.Scope));
                 List<WorkbenchLineRuntime> runtimeLines = (context?.RuntimeLines ?? new List<WorkbenchLineRuntime>())
                     .Select(CloneWorkbenchLineRuntime)
                     .ToList();

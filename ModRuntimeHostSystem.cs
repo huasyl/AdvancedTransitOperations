@@ -200,6 +200,7 @@ namespace RapidTransitMod
         private Func<Entity, bool> m_IsDeparturePending = null!;
         private Func<Entity, uint, bool> m_IsForcedMidStopGraceActive = null!;
         private readonly Dictionary<Entity, BypassControlResult> m_BypassControls = new Dictionary<Entity, BypassControlResult>();
+        private readonly HashSet<Entity> m_BypassAttempts = new HashSet<Entity>();
         private readonly List<RescueCandidate> m_RescueCandidates = new List<RescueCandidate>();
         private readonly HashSet<Entity> m_RescueLocalVehicles = new HashSet<Entity>();
         private readonly HashSet<Entity> m_BypassReleaseConsumers = new HashSet<Entity>();
@@ -711,7 +712,9 @@ namespace RapidTransitMod
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Bypass);
             IReadOnlyList<FramePlanEntry> bypassEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Bypass);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Bypass, bypassEntries.Count);
-            RunBypassPhase(commandBuffer, m_BypassControls, simulationFrame, bypassEntries);
+            RunBypassPhase(commandBuffer, m_BypassControls, m_BypassAttempts, simulationFrame, bypassEntries);
+            m_StopRuntime.ResolveDwell(m_BypassControls, m_BypassAttempts, simulationFrame);
+            CommitDwellTimeouts(commandBuffer);
             m_StopRuntime.ResolveDeparture(m_BypassControls, simulationFrame);
             CommitStopDepartures();
             if (fullMinuteSweep)
@@ -827,7 +830,8 @@ namespace RapidTransitMod
                         ApplyRecheckCommand(new RecheckCommand(command.Entity));
                         break;
                     case UiCommandKind.Depart:
-                        m_RuntimeFramePlan.AddStage(command.Entity, RuntimeStageMask.Bypass);
+                        if (CanVehicleBypass(command.Entity))
+                            m_RuntimeFramePlan.AddStage(command.Entity, RuntimeStageMask.Bypass);
                         ApplyDepartCommand(new DepartCommand(command.Entity), commandBuffer);
                         break;
                     case UiCommandKind.Spawn:
@@ -849,10 +853,20 @@ namespace RapidTransitMod
                 switch (entry.Kind)
                 {
                     case DeadlineKind.Dwell:
-                        m_RuntimeFramePlan.AddStage(entry.Vehicle, RuntimeStageMask.Bypass);
+                        m_StopRuntime.QueueDwellTimeout(entry.Vehicle);
+                        m_RuntimeFramePlan.AddStage(
+                            entry.Vehicle,
+                            CanVehicleBypass(entry.Vehicle)
+                                ? RuntimeStageMask.Stop | RuntimeStageMask.Bypass
+                                : RuntimeStageMask.Stop);
                         break;
                     case DeadlineKind.ForcedMidStopBoardingGrace:
-                        m_RuntimeFramePlan.AddStage(entry.Vehicle, RuntimeStageMask.Stop | RuntimeStageMask.Bypass);
+                        m_StopRuntime.QueueDwellTimeout(entry.Vehicle);
+                        m_RuntimeFramePlan.AddStage(
+                            entry.Vehicle,
+                            CanVehicleBypass(entry.Vehicle)
+                                ? RuntimeStageMask.Stop | RuntimeStageMask.Bypass
+                                : RuntimeStageMask.Stop);
                         break;
                     case DeadlineKind.RetireBoundary:
                     case DeadlineKind.RetireHardAck:
@@ -868,6 +882,18 @@ namespace RapidTransitMod
                         break;
                 }
             }
+        }
+
+        private bool CanVehicleBypass(Entity vehicle)
+        {
+            return m_VehicleView.TryGetLine(vehicle, out Entity line) && CanLineBypass(line);
+        }
+
+        private bool CanLineBypass(Entity line)
+        {
+            return line != Entity.Null
+                && TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(EntityManager, line)).CanBypass;
         }
 
         private bool TryResolveEntryLifecycle(
@@ -935,6 +961,8 @@ namespace RapidTransitMod
                 && state == VehicleState.Running)
             {
                 RuntimeStageMask stages = RuntimeStageMask.Dispatch;
+                if (fact.Kind == StopFactKind.Restored)
+                    stages |= RuntimeStageMask.Stop;
                 if (canBypass && fact.WaypointIndex > 0)
                     stages |= RuntimeStageMask.Bypass;
                 m_RuntimeFramePlan.AddStage(fact.Vehicle, stages);
@@ -955,6 +983,30 @@ namespace RapidTransitMod
             {
                 StopControlResult control = controls[i];
                 ApplyStopControl(control.Vehicle, control.WaypointIndex, control);
+            }
+        }
+
+        private void CommitDwellTimeouts(EntityCommandBuffer commandBuffer)
+        {
+            IReadOnlyList<StopDwellTimeout> timeouts = m_StopRuntime.ResolvedDwellTimeouts;
+            uint nowFrame = m_SimulationSystem.frameIndex;
+            for (int i = 0; i < timeouts.Count; i++)
+            {
+                StopDwellTimeout timeout = timeouts[i];
+                StopControlResult control = timeout.Control;
+                m_CommandApplier.ForceDepart(control.Vehicle, nowFrame, commandBuffer);
+                ApplyStopControl(control.Vehicle, control.WaypointIndex, control);
+                if (!timeout.Fact.Exists)
+                    continue;
+
+                PublishStopFact(timeout.Fact);
+                PublishStopFact(new StopFact(
+                    StopFactKind.StopAssistActive,
+                    timeout.Fact.Vehicle,
+                    timeout.Fact.Line,
+                    timeout.Fact.WaypointIndex,
+                    nowFrame,
+                    reason: "midstop-dwell-timeout"));
             }
         }
 
@@ -993,13 +1045,14 @@ namespace RapidTransitMod
                 CommitSourceWaypoint(commit.Vehicle, -1);
                 bool isRail = RuntimePorts.TryResolveVehicleLifecycle(this, commit.Vehicle, out LifecycleKind lifecycle)
                     && lifecycle == LifecycleKind.Rail;
+                bool canBypass = CanLineBypass(commit.Line);
                 if (isRail && commit.ClearRescue)
                     m_Bypass.ClearRescue(commit.Vehicle);
-                if (isRail && commit.Line != Entity.Null && commit.ArmExpressRescue)
+                if (canBypass && commit.Line != Entity.Null && commit.ArmExpressRescue)
                 {
                     m_Bypass.ArmExpressRescue(commit.Vehicle, commit.Line, m_SimulationSystem.frameIndex);
                 }
-                if (isRail && commit.Line != Entity.Null && commit.RefreshLine)
+                if (canBypass && commit.Line != Entity.Null && commit.RefreshLine)
                 {
                     m_Bypass.RequestLineOrderedRuntimeForceRefresh(commit.Line, "launch-confirmed");
                 }
@@ -1050,11 +1103,12 @@ namespace RapidTransitMod
                 }
                 bool isRail = RuntimePorts.TryResolveVehicleLifecycle(this, commit.Vehicle, out LifecycleKind lifecycle)
                     && lifecycle == LifecycleKind.Rail;
+                bool canBypass = CanLineBypass(commit.Line);
                 if (isRail && commit.ClearRescue)
                     m_Bypass.ClearRescue(commit.Vehicle);
-                if (isRail && commit.Line != Entity.Null && commit.ArmExpressRescue)
+                if (canBypass && commit.Line != Entity.Null && commit.ArmExpressRescue)
                     m_Bypass.ArmExpressRescue(commit.Vehicle, commit.Line, m_SimulationSystem.frameIndex);
-                if (isRail && commit.Line != Entity.Null && commit.RefreshLine)
+                if (canBypass && commit.Line != Entity.Null && commit.RefreshLine)
                     m_Bypass.RequestLineOrderedRuntimeForceRefresh(commit.Line, "running-commit");
             }
             m_RuntimeEngine.ClearRunningCommits();
@@ -1374,6 +1428,7 @@ namespace RapidTransitMod
         private void RunBypassPhase(
             EntityCommandBuffer commandBuffer,
             Dictionary<Entity, BypassControlResult> bypassControls,
+            HashSet<Entity> bypassAttempts,
             uint nowFrame,
             IReadOnlyList<FramePlanEntry> entries)
         {
@@ -1387,12 +1442,16 @@ namespace RapidTransitMod
                     continue;
                 }
 
+                if (!CanLineBypass(line))
+                    continue;
+
                 if (state != VehicleState.Running)
                 {
                     m_Bypass.ClearVehicle(vehicle);
                     continue;
                 }
 
+                bypassAttempts.Add(vehicle);
                 if (!m_RailEventSource.TryGetBypassInput(
                         vehicle,
                         out Entity route,
@@ -1404,21 +1463,6 @@ namespace RapidTransitMod
 
                 m_RuntimeHotPathProbe.CountStageExecuted(RuntimeStageMask.Bypass, 1);
                 bool boarding = m_StopRuntime.ReadEffectiveBoarding(vehicle);
-                if (m_RuntimeFramePlan.IsDeadlineDue(
-                        vehicle,
-                        DeadlineKind.ForcedMidStopBoardingGrace,
-                        nowFrame))
-                {
-                    if (boarding)
-                    {
-                        m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, commandBuffer);
-                        m_StopRuntime.SetForcedMidStopGrace(vehicle, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
-                    }
-                    else
-                    {
-                        m_StopRuntime.ClearForcedMidStop(vehicle);
-                    }
-                }
                 bool cachedWaypointKnown = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex);
                 int waypointIndex = cachedWaypointKnown ? cachedWaypointIndex : -1;
                 int controlWaypointIndex = waypointIndex;
@@ -1470,24 +1514,6 @@ namespace RapidTransitMod
                     skipBypass = sceneKnown && !sceneEligible;
                 }
 
-                uint midStopDwellSinceFrame = 0;
-                uint midStopDwellDeadlineFrame = 0;
-                int maxStationDwellMinutes = 0;
-                bool midStopDwellTimedOut = false;
-                if (boarding && controlWaypointIndex > 0)
-                {
-                    midStopDwellTimedOut = m_Observation.Dwell(
-                        vehicle,
-                        line,
-                        controlWaypointIndex,
-                        boarding,
-                        nowFrame,
-                        waypoints.Length,
-                        out midStopDwellSinceFrame,
-                        out midStopDwellDeadlineFrame,
-                        out maxStationDwellMinutes);
-                }
-
                 BypassControlResult control = skipBypass
                     ? new BypassControlResult(
                         false,
@@ -1499,17 +1525,24 @@ namespace RapidTransitMod
                         Entity.Null,
                         true,
                         null)
-                    : m_Bypass.TickVehicle(
+                    : m_Bypass.UpdateVehicle(
                         vehicle,
                         route,
                         waypoints,
                         controlWaypointIndex,
                         boarding,
+                        nowFrame);
+                if (!skipBypass)
+                {
+                    m_Bypass.ApplyControl(
+                        control,
+                        boarding,
                         ref publicTransport,
                         commandBuffer,
+                        waypoints,
                         "线路" + line.Index,
-                        midStopDwellTimedOut,
                         nowFrame);
+                }
                 bypassControls[vehicle] = control;
                 if (control.ShouldHold
                     && m_Bypass.TryGetHoldCadence(vehicle, out BypassHoldCadenceSnapshot heldCadence)
@@ -1524,60 +1557,6 @@ namespace RapidTransitMod
                         true,
                         control.CanClearAfterExit,
                         control.ReleaseReason), nowFrame);
-                }
-                if (midStopDwellTimedOut
-                    && !control.ShouldHold)
-                {
-                    bool firstTimeout = m_StopRuntime.TryLatchDwellTimedOut(vehicle);
-                    bool hasGrace = m_StopRuntime.TryGetForcedMidStopGrace(vehicle, out uint graceUntil);
-                    bool forcedDeparture = !hasGrace || nowFrame >= graceUntil;
-                    if (forcedDeparture)
-                    {
-                        m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, commandBuffer);
-                        m_StopRuntime.SetForcedMidStopGrace(vehicle, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
-                        if (RtLog.VerboseEnabled)
-                        {
-                            m_RuntimeLog.Once(
-                                m_RuntimeLog.m_MidStopTimeoutLogCache,
-                                vehicle,
-                                midStopDwellSinceFrame.ToString(),
-                                "[停站超时] 线路" + line.Index + " 车辆" + vehicle.Index
-                                    + " 停站超时" + maxStationDwellMinutes + "分钟"
-                                    + " sinceFrame=" + midStopDwellSinceFrame
-                                    + " deadlineFrame=" + midStopDwellDeadlineFrame
-                                    + " curWpIdx=" + waypointIndex);
-                        }
-                    }
-
-                    if (firstTimeout)
-                    {
-                        string releaseReason = !string.IsNullOrWhiteSpace(control.ReleaseReason)
-                            ? control.ReleaseReason
-                            : "timeout-close:no-bypass-release-reason";
-                        m_Bypass.ClearVehicle(vehicle, releaseReason);
-                        m_Bypass.MarkBypassHoldSkipped(vehicle, control.Blocker);
-                        StopFact timeoutFact = new StopFact(
-                            StopFactKind.DwellTimedOut,
-                            vehicle,
-                            line,
-                            controlWaypointIndex,
-                            nowFrame,
-                            dwellDeadlineFrame: midStopDwellDeadlineFrame,
-                            forcedDeparture: forcedDeparture,
-                            blocker: control.Blocker,
-                            reason: releaseReason);
-                        PublishStopFact(timeoutFact);
-                        if (forcedDeparture)
-                        {
-                            PublishStopFact(new StopFact(
-                                StopFactKind.StopAssistActive,
-                                vehicle,
-                                line,
-                                controlWaypointIndex,
-                                nowFrame,
-                                reason: "midstop-dwell-timeout"));
-                        }
-                    }
                 }
             }
         }
@@ -1618,25 +1597,31 @@ namespace RapidTransitMod
             if (line == Entity.Null || !EntityManager.HasBuffer<RouteWaypoint>(line))
                 return;
 
-            Game.Vehicles.PublicTransport publicTransport = ReadRailPublicTransport(vehicle);
+            Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
             if ((publicTransport.m_State & PublicTransportFlags.Boarding) == 0)
                 return;
 
-            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            int waypointIndex = m_WaypointIndex.Compute(vehicle, waypoints);
-            if (waypointIndex < 0)
-                waypointIndex = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
-                    ? cachedWaypointIndex
-                    : -1;
+            int waypointIndex = m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypointIndex)
+                ? cachedWaypointIndex
+                : -1;
+            if (CanLineBypass(line))
+            {
+                DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                waypointIndex = m_WaypointIndex.Compute(vehicle, waypoints);
+                if (waypointIndex < 0)
+                    waypointIndex = m_CachedWpIdx.TryGetValue(vehicle, out cachedWaypointIndex)
+                        ? cachedWaypointIndex
+                        : -1;
 
-            Entity blocker = m_Bypass.TryGetLatchedBlocker(vehicle, out Entity latchedBlocker)
-                ? latchedBlocker
-                : Entity.Null;
-            m_Bypass.ClearVehicle(vehicle, "UI强制发车");
-            m_Bypass.MarkBypassHoldSkipped(vehicle, blocker);
+                Entity blocker = m_Bypass.TryGetLatchedBlocker(vehicle, out Entity latchedBlocker)
+                    ? latchedBlocker
+                    : Entity.Null;
+                m_Bypass.ClearVehicle(vehicle, "UI强制发车");
+                m_Bypass.MarkBypassHoldSkipped(vehicle, blocker);
+            }
             uint nowFrame = m_SimulationSystem.frameIndex;
             m_StopRuntime.SetForcedMidStopGrace(vehicle, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
-            m_CommandApplier.ForceDepart(vehicle, ref publicTransport, nowFrame, commandBuffer);
+            m_CommandApplier.ForceDepart(vehicle, nowFrame, commandBuffer);
             m_StopRuntime.StartDeparturePending(vehicle, nowFrame);
             PublishStopFact(new StopFact(
                 StopFactKind.BoardingCloseRequested,
@@ -2471,6 +2456,7 @@ namespace RapidTransitMod
         internal void ClearFrameBuffers()
         {
             m_BypassControls.Clear();
+            m_BypassAttempts.Clear();
             m_RescueCandidates.Clear();
             m_RescueLocalVehicles.Clear();
         }
