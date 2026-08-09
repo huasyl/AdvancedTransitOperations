@@ -39,6 +39,11 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Buffers.LoadSlice();
         }
 
+        public void LoadBusSeg()
+        {
+            m_Buffers.LoadBusSeg();
+        }
+
         public void Clear()
         {
             m_Runtime.m_DwellObservationBufferReady = false;
@@ -47,6 +52,8 @@ namespace RapidTransitMod.Dispatch.Persistence
             m_Runtime.m_StationDwellObservationCacheLoaded = false;
             m_Runtime.m_TraversalSliceObservationBufferReady = false;
             m_Runtime.m_TraversalSliceObservationCacheLoaded = false;
+            m_Runtime.m_BusSegObservationBufferReady = false;
+            m_Runtime.m_BusSegObservationCacheLoaded = false;
         }
 
         public void Ensure()

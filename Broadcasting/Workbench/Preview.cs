@@ -39,7 +39,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string PlayBroadcastAssetPreviewJson(string requestJson)
                 {
-                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "playBroadcastAssetPreview");
+                    ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "playBroadcastAssetPreview");
                     string assetName = Workbenches.ModeRequest.ReadAssetName(requestJson);
                     BroadcastWorkbenchAssetPreviewResult result = new BroadcastWorkbenchAssetPreviewResult
                     {
@@ -95,7 +95,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string PlayBroadcastRulePreviewJson(string requestJson)
                 {
-                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "playBroadcastRulePreview");
+                    ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "playBroadcastRulePreview");
                     BroadcastWorkbenchRulePreviewResult result = new BroadcastWorkbenchRulePreviewResult
                     {
                         success = false,
@@ -152,7 +152,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string StopBroadcastAssetPreviewJson(string requestJson)
                 {
-                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "stopBroadcastAssetPreview");
+                    ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "stopBroadcastAssetPreview");
                     string assetName = Workbenches.ModeRequest.ReadAssetName(requestJson);
                     BroadcastWorkbenchAssetPreviewResult result = new BroadcastWorkbenchAssetPreviewResult
                     {
@@ -184,7 +184,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string StopBroadcastRulePreviewJson(string requestJson)
                 {
-                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "stopBroadcastRulePreview");
+                    ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "stopBroadcastRulePreview");
                     string ruleId = Workbenches.ModeRequest.ReadRuleId(requestJson);
                     BroadcastWorkbenchRulePreviewResult result = new BroadcastWorkbenchRulePreviewResult
                     {
@@ -228,7 +228,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "setBroadcastPreviewVolume");
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "setBroadcastPreviewVolume");
                         using (UseScope(scope))
                         {
                             int nextVolume = Clamp(Workbenches.ModeRequest.ReadVolume(requestJson, DraftVol));
@@ -453,7 +453,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     int playbackToken = unchecked(++m_RuleToken);
                     m_RuleId = ruleId;
                     NotifyRule(modeToken, ruleId, "started", string.Empty);
-                    bool playedAnyClip = false;
                     bool skippedMissingAsset = false;
 
                     for (int nodeIndex = 0; nodeIndex < rule.nodes.Length; nodeIndex++)
@@ -499,7 +498,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             continue;
                         }
 
-                        playedAnyClip = true;
                         RuleSource();
                         ReleaseRule();
                         m_RuleClip = clip;

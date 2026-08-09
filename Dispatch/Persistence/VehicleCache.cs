@@ -10,6 +10,9 @@ namespace RapidTransitMod.Dispatch.Persistence
 {
     internal sealed class VehicleCache
     {
+        internal delegate PublicTransport ReadPublicTransport(Entity vehicle);
+        internal delegate void CommitPublicTransport(Entity vehicle, PublicTransport value);
+
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, float> m_ReadLap;
         private readonly Func<Entity, float> m_ReadDist;
@@ -74,7 +77,8 @@ namespace RapidTransitMod.Dispatch.Persistence
             Entity v,
             Entity line,
             bool allowRunningRestore,
-            bool publishRailWrite = true,
+            ReadPublicTransport readPublicTransport = null,
+            CommitPublicTransport commitPublicTransport = null,
             bool registryOnly = false)
         {
             if (!m_Runtime.m_VehicleCacheBufferReady) return false;
@@ -97,13 +101,14 @@ namespace RapidTransitMod.Dispatch.Persistence
                     if (!registryOnly && m_Runtime.EntityManager.HasComponent<PublicTransport>(v))
                     {
                         uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-                        PublicTransport pt = m_Runtime.m_RailEventSource.TryGetWrittenPublicTransport(v, out PublicTransport written)
-                            ? written
+                        PublicTransport pt = readPublicTransport != null
+                            ? readPublicTransport(v)
                             : m_Runtime.EntityManager.GetComponentData<PublicTransport>(v);
                         pt.m_DepartureFrame = frame + 99999;
-                        if (publishRailWrite)
-                            m_Runtime.m_RailEventSource.AppendPublicTransportWrite(v, pt, frame);
-                        m_Runtime.EntityManager.SetComponentData(v, pt);
+                        if (commitPublicTransport != null)
+                            commitPublicTransport(v, pt);
+                        else
+                            m_Runtime.EntityManager.SetComponentData(v, pt);
                     }
                     if (RtLog.VerboseEnabled && !m_Runtime.m_VehicleRegistry.IsSilentRestore)
                     {
@@ -224,5 +229,6 @@ namespace RapidTransitMod.Dispatch.Persistence
                     : currentOdometer;
             m_Runtime.m_ObsPersist.SetLapStartOdo(vehicle, lapStartOdometer);
         }
+
     }
 }

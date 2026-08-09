@@ -1,7 +1,10 @@
 using Game.Common;
 using Game.Pathfind;
 using Game.Routes;
+using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Persistence;
+using RapidTransitMod.TrackModel;
 using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -23,6 +26,7 @@ namespace RapidTransitMod.Dispatch.Observation
             EnsureDwell();
             EnsureStationDwell();
             EnsureSlice();
+            EnsureBusSeg();
         }
 
         public void EnsureDwell()
@@ -40,11 +44,17 @@ namespace RapidTransitMod.Dispatch.Observation
             EnsureSliceCore();
         }
 
+        public void EnsureBusSeg()
+        {
+            EnsureBusSegCore();
+        }
+
         public void Load()
         {
             LoadDwell();
             LoadStationDwell();
             LoadSlice();
+            LoadBusSeg();
         }
 
         public void LoadDwell()
@@ -60,6 +70,11 @@ namespace RapidTransitMod.Dispatch.Observation
         public void LoadSlice()
         {
             RestoreSliceCore();
+        }
+
+        public void LoadBusSeg()
+        {
+            RestoreBusSegCore();
         }
 
         internal bool TrySliceSignature(Entity line, out ulong signature)
@@ -206,6 +221,76 @@ namespace RapidTransitMod.Dispatch.Observation
                 m_SampleCount = observation.SampleCount,
                 m_LastObservedFrame = observation.LastObservedFrame
             });
+        }
+
+        public void SyncBusSeg(Entity line)
+        {
+            if (!ModRuntimeHostSystem.IsBusSegObservationPersistenceEnabled()
+                || line == Entity.Null
+                || !m_Runtime.m_BusSegObservationBufferReady)
+            {
+                return;
+            }
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null
+                || !m_Runtime.EntityManager.HasBuffer<BusSegObservationElement>(city)
+                || !m_Runtime.EntityManager.HasBuffer<BusRouteSnapshotElement>(city))
+            {
+                return;
+            }
+
+            DynamicBuffer<BusSegObservationElement> observations =
+                m_Runtime.EntityManager.GetBuffer<BusSegObservationElement>(city);
+            for (int i = observations.Length - 1; i >= 0; i--)
+            {
+                if (observations[i].m_LineEntity == line)
+                    observations.RemoveAt(i);
+            }
+
+            if (IsBusLine(line))
+            {
+                foreach (KeyValuePair<BusSegKey, BusSegObservation> pair in m_Runtime.m_ObsQuery.BusSegs)
+                {
+                    BusSegKey key = pair.Key;
+                    BusSegObservation observation = pair.Value;
+                    if (key.Line != line || !ValidBusObservation(key, observation))
+                        continue;
+
+                    observations.Add(new BusSegObservationElement
+                    {
+                        m_LineEntity = key.Line,
+                        m_FromWaypointEntity = key.FromWaypoint,
+                        m_FromStopEntity = key.FromStop,
+                        m_ToWaypointEntity = key.ToWaypoint,
+                        m_ToStopEntity = key.ToStop,
+                        m_EstimatedFrames = observation.EstimatedFrames,
+                        m_SampleCount = observation.SampleCount
+                    });
+                }
+            }
+
+            DynamicBuffer<BusRouteSnapshotElement> routes =
+                m_Runtime.EntityManager.GetBuffer<BusRouteSnapshotElement>(city);
+            for (int i = routes.Length - 1; i >= 0; i--)
+            {
+                if (routes[i].m_LineEntity == line)
+                    routes.RemoveAt(i);
+            }
+
+            if (!TryBusRoute(line, out LineProfile.RoadRouteSnapshot snapshot))
+                return;
+
+            for (int i = 0; i < snapshot.Waypoints.Length; i++)
+            {
+                routes.Add(new BusRouteSnapshotElement
+                {
+                    m_LineEntity = line,
+                    m_Order = i,
+                    m_WaypointEntity = snapshot.Waypoints[i],
+                    m_ResolvedStopEntity = snapshot.Stops[i]
+                });
+            }
         }
 
         public void RemoveSliceLine(Entity line)
@@ -496,6 +581,26 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_TraversalSliceObservationBufferReady = true;
         }
 
+        private void EnsureBusSegCore()
+        {
+            if (!ModRuntimeHostSystem.IsBusSegObservationPersistenceEnabled()
+                || m_Runtime.m_BusSegObservationBufferReady)
+            {
+                return;
+            }
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null)
+                return;
+
+            if (!m_Runtime.EntityManager.HasBuffer<BusSegObservationElement>(city))
+                m_Runtime.EntityManager.AddBuffer<BusSegObservationElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<BusRouteSnapshotElement>(city))
+                m_Runtime.EntityManager.AddBuffer<BusRouteSnapshotElement>(city);
+
+            m_Runtime.m_BusSegObservationBufferReady = true;
+        }
+
         private void RestoreSliceCore()
         {
             if (!ModRuntimeHostSystem.IsTraversalSliceObservationPersistenceEnabled())
@@ -654,6 +759,186 @@ namespace RapidTransitMod.Dispatch.Observation
             }
         }
 
+        private void RestoreBusSegCore()
+        {
+            if (!ModRuntimeHostSystem.IsBusSegObservationPersistenceEnabled()
+                || m_Runtime.m_BusSegObservationCacheLoaded
+                || !m_Runtime.m_BusSegObservationBufferReady)
+            {
+                return;
+            }
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null
+                || !m_Runtime.EntityManager.HasBuffer<BusSegObservationElement>(city)
+                || !m_Runtime.EntityManager.HasBuffer<BusRouteSnapshotElement>(city))
+            {
+                return;
+            }
+
+            m_Runtime.m_ObsPersist.ClearBusSeg();
+            DynamicBuffer<BusSegObservationElement> observations =
+                m_Runtime.EntityManager.GetBuffer<BusSegObservationElement>(city, true);
+            DynamicBuffer<BusRouteSnapshotElement> routeEntries =
+                m_Runtime.EntityManager.GetBuffer<BusRouteSnapshotElement>(city, true);
+            var savedRoutes = new Dictionary<Entity, List<BusRouteSnapshotElement>>();
+            for (int i = 0; i < routeEntries.Length; i++)
+            {
+                BusRouteSnapshotElement entry = routeEntries[i];
+                if (entry.m_LineEntity == Entity.Null || entry.m_Order < 0)
+                    continue;
+
+                if (!savedRoutes.TryGetValue(entry.m_LineEntity, out List<BusRouteSnapshotElement> entries))
+                {
+                    entries = new List<BusRouteSnapshotElement>();
+                    savedRoutes[entry.m_LineEntity] = entries;
+                }
+                entries.Add(entry);
+            }
+
+            var currentRoutes = new Dictionary<Entity, LineProfile.RoadRouteSnapshot>();
+            var invalidLines = new HashSet<Entity>();
+            int restored = 0;
+            for (int i = 0; i < observations.Length; i++)
+            {
+                BusSegObservationElement entry = observations[i];
+                BusSegKey key = new BusSegKey(
+                    entry.m_LineEntity,
+                    entry.m_FromWaypointEntity,
+                    entry.m_FromStopEntity,
+                    entry.m_ToWaypointEntity,
+                    entry.m_ToStopEntity);
+                BusSegObservation observation = new BusSegObservation(
+                    entry.m_EstimatedFrames,
+                    entry.m_SampleCount);
+                if (!ValidBusObservation(key, observation)
+                    || !savedRoutes.TryGetValue(key.Line, out List<BusRouteSnapshotElement> entries)
+                    || !TrySnapshot(entries, out LineProfile.RoadRouteSnapshot saved))
+                {
+                    continue;
+                }
+
+                if (!currentRoutes.TryGetValue(key.Line, out LineProfile.RoadRouteSnapshot current))
+                {
+                    if (invalidLines.Contains(key.Line) || !TryBusRoute(key.Line, out current))
+                    {
+                        invalidLines.Add(key.Line);
+                        continue;
+                    }
+                    currentRoutes[key.Line] = current;
+                }
+
+                if (!BusSegCapture.MatchesSegment(key, saved, current))
+                    continue;
+
+                m_Runtime.m_ObsPersist.PutBusSeg(key, observation);
+                restored++;
+            }
+
+            m_Runtime.m_BusSegObservationCacheLoaded = true;
+            if (RtLog.VerboseEnabled)
+            {
+                m_Runtime.log.Info("[恢复] BusSegObservations buffer=" + observations.Length
+                    + " restored=" + restored);
+            }
+        }
+
+        private bool IsBusLine(Entity line)
+        {
+            return line != Entity.Null
+                && m_Runtime.EntityManager.Exists(line)
+                && TransportModeResolver.Resolve(m_Runtime.EntityManager, line) == TransitMode.Bus;
+        }
+
+        private bool ValidBusObservation(BusSegKey key, BusSegObservation observation)
+        {
+            return IsBusLine(key.Line)
+                && key.FromWaypoint != Entity.Null
+                && key.FromStop != Entity.Null
+                && key.ToWaypoint != Entity.Null
+                && key.ToStop != Entity.Null
+                && m_Runtime.EntityManager.Exists(key.FromWaypoint)
+                && m_Runtime.EntityManager.Exists(key.FromStop)
+                && m_Runtime.EntityManager.Exists(key.ToWaypoint)
+                && m_Runtime.EntityManager.Exists(key.ToStop)
+                && math.isfinite(observation.EstimatedFrames)
+                && observation.EstimatedFrames > 0f
+                && observation.SampleCount > 0
+                && observation.SampleCount <= 32;
+        }
+
+        private bool TryBusRoute(Entity line, out LineProfile.RoadRouteSnapshot snapshot)
+        {
+            snapshot = null;
+            if (!IsBusLine(line) || !m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+
+            DynamicBuffer<RouteWaypoint> waypoints =
+                m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypoints.Length < 2)
+                return false;
+
+            snapshot = new LineProfile.RoadRouteSnapshot
+            {
+                Waypoints = new Entity[waypoints.Length],
+                Stops = new Entity[waypoints.Length]
+            };
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                Entity waypoint = waypoints[i].m_Waypoint;
+                if (waypoint == Entity.Null || !m_Runtime.EntityManager.Exists(waypoint))
+                    return false;
+
+                snapshot.Waypoints[i] = waypoint;
+                snapshot.Stops[i] = m_Runtime.m_Resolve.Stop(waypoint);
+            }
+
+            return true;
+        }
+
+        private bool TrySnapshot(
+            List<BusRouteSnapshotElement> entries,
+            out LineProfile.RoadRouteSnapshot snapshot)
+        {
+            snapshot = null;
+            if (entries == null || entries.Count < 2)
+                return false;
+
+            int last = -1;
+            for (int i = 0; i < entries.Count; i++)
+                last = math.max(last, entries[i].m_Order);
+            if (last != entries.Count - 1)
+                return false;
+
+            var seen = new bool[entries.Count];
+            snapshot = new LineProfile.RoadRouteSnapshot
+            {
+                Waypoints = new Entity[entries.Count],
+                Stops = new Entity[entries.Count]
+            };
+            for (int i = 0; i < entries.Count; i++)
+            {
+                BusRouteSnapshotElement entry = entries[i];
+                if (entry.m_Order < 0
+                    || entry.m_Order >= entries.Count
+                    || seen[entry.m_Order]
+                    || entry.m_WaypointEntity == Entity.Null
+                    || !m_Runtime.EntityManager.Exists(entry.m_WaypointEntity)
+                    || (entry.m_ResolvedStopEntity != Entity.Null
+                        && !m_Runtime.EntityManager.Exists(entry.m_ResolvedStopEntity)))
+                {
+                    snapshot = null;
+                    return false;
+                }
+
+                seen[entry.m_Order] = true;
+                snapshot.Waypoints[entry.m_Order] = entry.m_WaypointEntity;
+                snapshot.Stops[entry.m_Order] = entry.m_ResolvedStopEntity;
+            }
+
+            return true;
+        }
+
         private static bool IsBetterSlice(
             TraversalSliceObservationElement candidate,
             TraversalSliceObservationElement current,
@@ -778,7 +1063,47 @@ namespace RapidTransitMod.Dispatch.Observation
                 geometry = m_Runtime.m_LineProfile.MixSignature(geometry, distance);
             }
 
+            if (TransportModeResolver.Resolve(m_Runtime.EntityManager, line) != TransitMode.Tram)
+                return geometry != 0UL && legacyFull != 0UL;
+
+            if (m_Runtime.m_TrackModel == null
+                || !m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
+                || chain == null
+                || chain.TraversalProfile == null)
+            {
+                geometry = 0UL;
+                legacyFull = 0UL;
+                return false;
+            }
+
+            MixTraversalEvents(chain, ref geometry);
+            MixTraversalEvents(chain, ref legacyFull);
+
             return geometry != 0UL && legacyFull != 0UL;
+        }
+
+        private void MixTraversalEvents(LineTrackChain chain, ref ulong signature)
+        {
+            signature = m_Runtime.m_LineProfile.MixSignature(signature, chain.TraversalProfile.Events.Count);
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.EventIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, (int)traversalEvent.Kind);
+                signature = m_Runtime.m_LineProfile.MixSignature(
+                    signature,
+                    traversalEvent.Building == Entity.Null ? -1 : traversalEvent.Building.Index);
+                signature = m_Runtime.m_LineProfile.MixSignature(
+                    signature,
+                    traversalEvent.Building == Entity.Null ? -1 : traversalEvent.Building.Version);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.WaypointIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.PassIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.StartAtomIndex);
+                signature = m_Runtime.m_LineProfile.MixSignature(signature, traversalEvent.EndAtomIndexExclusive);
+                signature = m_Runtime.m_LineProfile.MixSignature(
+                    signature,
+                    (int)math.round(traversalEvent.StopFrames * 10f));
+            }
         }
 
         private bool TryGetSignature(Entity line, out ulong signature)

@@ -17,6 +17,7 @@ namespace RapidTransitMod
     {
         internal delegate bool Progress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
         internal delegate bool Blocker(Entity vehicle, out Entity blockerVehicle);
+        internal delegate bool SessionArrival(Entity vehicle, out uint arrivalFrame);
         internal delegate void StationText(
             Entity vehicle,
             Entity line,
@@ -63,6 +64,7 @@ namespace RapidTransitMod
         internal Func<Entity, Entity, DynamicBuffer<RouteWaypoint>, uint, float, bool, float> RunEta;
         internal Progress TryProgress;
         internal Blocker TryBlocker;
+        internal SessionArrival TrySessionArrival;
         internal Action<Entity, string> ClearBypass;
         internal StationText Stations;
     }

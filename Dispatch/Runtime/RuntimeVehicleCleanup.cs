@@ -37,6 +37,7 @@ namespace RapidTransitMod
                 if (!EntityManager.Exists(kv.Key)) m_DeadVehicles.Add(kv.Key);
             }
             Dictionary<Entity, int> removedCountByLine = null;
+            bool removedRail = false;
             foreach (Entity dead in m_DeadVehicles)
             {
                 VehicleState deadState = m_Runtime.m_VehicleView.TryGetState(dead, out VehicleState removedState)
@@ -45,6 +46,13 @@ namespace RapidTransitMod
                 Entity mappedLine = m_Runtime.m_VehicleView.TryGetLine(dead, out Entity removedLine)
                     ? removedLine
                     : Entity.Null;
+                bool hasLifecycle = RuntimePorts.TryResolveLineLifecycle(
+                    m_Runtime,
+                    mappedLine,
+                    out LifecycleKind lifecycle);
+                bool isRail = hasLifecycle && lifecycle == LifecycleKind.Rail;
+                bool isRoad = hasLifecycle && lifecycle == LifecycleKind.Road;
+                removedRail |= isRail;
                 if (deadState == VehicleState.Preparing)
                 {
                     int removedTargetMin = m_Runtime.m_VehicleView.TryGetTarget(dead, out int removedTarget)
@@ -68,6 +76,7 @@ namespace RapidTransitMod
                 m_Runtime.m_StationContextQuery.RemoveVehicle(dead);
                 m_Runtime.m_CommandApplier.FlushRetireShadowSnapshots(dead, "entity-removed");
                 m_Runtime.m_CommandApplier.ResetRetireShadowSnapshots(dead);
+                m_Runtime.m_CommandApplier.RemoveRoadCommandLog(dead);
                 StopCancelResult cancelledStop = m_Runtime.m_StopRuntime.CancelStopSession(
                     dead,
                     m_Runtime.m_SimulationSystem.frameIndex);
@@ -77,28 +86,48 @@ namespace RapidTransitMod
                     m_ApplyStopControl(dead, cancelledStop.Control.WaypointIndex, cancelledStop.Control);
                 }
                 m_Runtime.m_VehicleRegistry.Remove(dead);
+                if (isRail)
+                    m_Runtime.m_RailEventSource.RemoveVehicle(dead);
+                else if (isRoad)
+                    m_Runtime.m_RoadEventSource.RemoveVehicle(dead);
+                else
+                {
+                    m_Runtime.m_RailEventSource.RemoveVehicle(dead);
+                    m_Runtime.m_RoadEventSource.RemoveVehicle(dead);
+                }
                 m_Runtime.m_ObsPersist.ClearLap(dead);
                 m_Runtime.m_UICache.Remove(dead);
-                m_Runtime.m_BoardingFirstFrameGuardState.Remove(dead);
+                if (isRail)
+                    m_Runtime.m_BoardingFirstFrameGuardState.Remove(dead);
                 m_Runtime.m_StopRuntime.RemoveVehicle(dead);
                 m_Runtime.m_CachedWpIdx.Remove(dead);
-                m_Runtime.TrackProjection.ClearVehicle(dead);
-                m_Runtime.m_WaypointIndex.Remove(dead);
+                if (isRail)
+                {
+                    m_Runtime.TrackProjection.ClearVehicle(dead);
+                    m_Runtime.m_WaypointIndex.Remove(dead);
+                }
                 m_Runtime.m_RouteProgress.Remove(dead);
-                m_Runtime.Bypass.ClearVehicle(dead);
-                m_Runtime.TrackProjection.ClearVehicleProgressSuspect(dead, "vehicle-removed");
+                if (isRail)
+                {
+                    m_Runtime.Bypass.ClearVehicle(dead);
+                    m_Runtime.TrackProjection.ClearVehicleProgressSuspect(dead, "vehicle-removed");
+                }
                 m_Runtime.m_Observation.ClearForcedMidStop(dead);
                 m_Runtime.m_CommandApplier.RemoveRetireHandoff(dead);
                 m_Runtime.m_PreparingFixCooldownUntil.Remove(dead);
                 m_ClearAssistLaunchPending(dead);
                 m_Runtime.m_Observation.ClearDwellDeadlineCache(dead);
                 m_Runtime.m_Observation.ClearDispatchEta(dead);
+                m_Runtime.m_Observation.RemoveBusSegVehicle(dead);
                 m_Runtime.m_SpawnIntentTrace?.Remove(dead);
                 m_Runtime.m_ObsPersist.ClearDwell(dead);
-                m_Runtime.m_Observation.ClearVehicleSlices(dead);
+                if (isRail)
+                    m_Runtime.m_Observation.ClearVehicleSlices(dead);
                 m_Runtime.m_Observation.ClearDebug(dead);
                 m_Runtime.m_RuntimeLog.ClearVehicle(dead);
-                List<Entity> affectedLocals = m_Runtime.Bypass.ForgetBlocker(dead);
+                List<Entity> affectedLocals = isRail
+                    ? m_Runtime.Bypass.ForgetBlocker(dead)
+                    : null;
                 if (affectedLocals != null)
                 {
                     for (int i = 0; i < affectedLocals.Count; i++)
@@ -121,11 +150,11 @@ namespace RapidTransitMod
             {
                 m_LineSpawnControl.ApplyCleanupTargetReduction(removedCountByLine);
             }
-            if (m_DeadVehicles.Count > 0)
+            if (removedRail)
                 m_Runtime.m_WaypointIndex.Clear();
             if (m_DeadVehicles.Count > 0)
                 m_Runtime.m_RouteProgress.Clear();
-            if (m_DeadVehicles.Count > 0)
+            if (removedRail)
                 m_Runtime.TrackProjection.ClearLineRunningVehicleSnapshots();
             if (m_DeadVehicles.Count > 0 && RtLog.CacheInvalidationDiagnosticsEnabled)
             {

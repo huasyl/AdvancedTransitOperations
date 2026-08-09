@@ -38,20 +38,25 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const broadcastApplyOperation = useBroadcastApplyOperation(workbenchApi);
   const draftStore = useBroadcastDraftStore();
+  const broadcastMode = normalizeBroadcastMode(activeTransportMode);
+  const supportsPlatforms = broadcastMode !== "bus";
   const delayLibrary = useMemo(() => DELAY_LIBRARY.map((delay) => ({ ...delay, name: t(delay.nameKey), desc: t(delay.descKey) })), [t]);
   const triggerOptions = useMemo(
     () =>
       TRIGGER_OPTIONS.filter(
-        (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id),
+        (option) => !RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS.includes(option.id)
+          && (supportsPlatforms || option.id === "stop_and_open" || option.id === "leave_station"),
       ).map((option) => ({ ...option, label: t(option.labelKey) })),
-    [t],
+    [supportsPlatforms, t],
   );
   const platformTriggerOptions = useMemo(
     () =>
-      PLATFORM_TRIGGER_OPTIONS.filter(
-        (option) => !RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS.includes(option.id),
-      ).map((option) => ({ ...option, label: t(option.labelKey) })),
-    [t],
+      supportsPlatforms
+        ? PLATFORM_TRIGGER_OPTIONS.filter(
+            (option) => !RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS.includes(option.id),
+          ).map((option) => ({ ...option, label: t(option.labelKey) }))
+        : [],
+    [supportsPlatforms, t],
   );
   const fallbackLineOptions = useMemo(() => LINE_OPTIONS.map((line) => ({ ...line, label: t(line.labelKey) })), [t]);
   const [activeTab, setActiveTab] = useState("sequence");
@@ -130,6 +135,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const platformRuleIdMemoryRef = useRef({});
   const dirtyPlatformStationIdsRef = useRef([]);
   const skipNextRulesSaveRef = useRef(false);
+  const namesRefreshRef = useRef(false);
   const pendingAssetDeletionLookup = useMemo(
     () => pendingAssetDeletionNamesByMode[normalizeBroadcastMode(activeTransportMode)] || {},
     [activeTransportMode, pendingAssetDeletionNamesByMode],
@@ -156,7 +162,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const currentExternalFiles = Array.isArray(externalAssetBrowser?.files) ? externalAssetBrowser.files : [];
   const currentExternalAllowedExtensions =
     Array.isArray(externalAssetBrowser?.allowedExtensions) && externalAssetBrowser.allowedExtensions.length > 0 ? externalAssetBrowser.allowedExtensions : [".wav", ".mp3", ".ogg"];
-  const selectedLine = lineOptions.find((line) => line.id === selectedLineId) ?? lineOptions[0];
+  const selectedLine = lineOptions.find((line) => line.id === selectedLineId) ?? lineOptions[0] ?? { id: "", label: "" };
   const availableBroadcastTriggerOptions = useMemo(() => {
     const usedTriggerIds = new Set(rules.map((rule) => (typeof rule?.triggerId === "string" ? rule.triggerId : "")));
     return triggerOptions.filter((option) => !usedTriggerIds.has(option.id));
@@ -494,14 +500,20 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     await stopBroadcastPreviewsForRestore(mode);
 
     try {
-      snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
+      snapshot = await workbenchApi.refreshBroadcastSnapshot?.({
+        preferredLineId: selectedLineIdRef.current || "",
+        mode,
+      });
     } catch (error) {
       refreshError = error;
     }
 
     if (!snapshot) {
       try {
-        snapshot = await workbenchApi.loadBroadcastSnapshot?.(selectedLineIdRef.current || "");
+        snapshot = await workbenchApi.loadBroadcastSnapshot?.({
+          preferredLineId: selectedLineIdRef.current || "",
+          mode,
+        });
       } catch (error) {
         refreshError = refreshError || error;
       }
@@ -554,7 +566,9 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
             assetName: audio.assetName,
           })),
       ),
-      platformAnnouncements: cloneBroadcastPlatformAnnouncementsForDraft(overrides.platformAnnouncements ?? platformAnnouncements),
+      platformAnnouncements: supportsPlatforms
+        ? cloneBroadcastPlatformAnnouncementsForDraft(overrides.platformAnnouncements ?? platformAnnouncements)
+        : [],
       stationsForUi,
     };
   }
@@ -615,7 +629,9 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
     skipNextRulesSaveRef.current = true;
     setRules(cloneBroadcastRules(draft.rules));
-    setPlatformAnnouncements(cloneBroadcastPlatformAnnouncementsForDraft(draft.platformAnnouncements));
+    setPlatformAnnouncements(
+      supportsPlatforms ? cloneBroadcastPlatformAnnouncementsForDraft(draft.platformAnnouncements) : []
+    );
     setStations(cloneBroadcastStationsForDraft(draft.stationsForUi));
     setBroadcastPreviewVolume(draftStore.getVolumeDraft(broadcastAppliedVolume, activeTransportMode));
     setBroadcastContentLineId(lineId);
@@ -635,14 +651,67 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     }
   }
 
+  async function refreshNames() {
+    if (namesRefreshRef.current) {
+      return;
+    }
+
+    const requestMode = normalizeBroadcastMode(activeTransportModeRef.current);
+    const requestLineId = selectedLineIdRef.current || "";
+    namesRefreshRef.current = true;
+    try {
+      const snapshot = await workbenchApi.refreshBroadcastSnapshot?.({
+        preferredLineId: requestLineId,
+        mode: requestMode,
+        namesOnly: true,
+      });
+      if (!snapshot
+        || normalizeBroadcastMode(activeTransportModeRef.current) !== requestMode
+        || !matchesBroadcastMode(snapshot, requestMode)) {
+        return;
+      }
+
+      const nextLineNames = new Map(
+        extractBackendLineOptions(snapshot).map((line) => [line.id, line.label]),
+      );
+      setLineOptions((current) => current.map((line) => ({
+        ...line,
+        label: nextLineNames.get(line.id) || line.label,
+      })));
+
+      if (!requestLineId || selectedLineIdRef.current !== requestLineId) {
+        return;
+      }
+
+      const stationNames = new Map(
+        (Array.isArray(snapshot?.stations) ? snapshot.stations : [])
+          .filter((station) => station?.id && station?.name)
+          .map((station) => [station.id, station.name]),
+      );
+      setStations((current) => current.map((station) => ({
+        ...station,
+        name: stationNames.get(station.id) || station.name,
+      })));
+      draftStore.patchStationNames(requestLineId, stationNames);
+    } catch {
+    } finally {
+      namesRefreshRef.current = false;
+    }
+  }
+
   function applyBroadcastSnapshot(snapshot) {
     if (snapshot && !matchesBroadcastMode(snapshot)) {
       return;
     }
 
+    const snapshotSupportsPlatforms = normalizeBroadcastMode(snapshot?.mode || activeTransportMode) !== "bus";
     const backendLines = extractBackendLineOptions(snapshot);
     const hasBackendLines = backendLines.length > 0;
-    const nextLineOptions = hasBackendLines ? backendLines : hasBackendLineHydratedRef.current ? lineOptionsRef.current : fallbackLineOptions;
+    const nextLineOptions = hasBackendLines
+      ? backendLines
+      : hasBackendLineHydratedRef.current
+        ? lineOptionsRef.current
+        : snapshotSupportsPlatforms ? fallbackLineOptions : [];
     const fallbackSelectedLineId = nextLineOptions[0]?.id ?? "";
     const preservedSelectedLineId = selectedLineIdRef.current && nextLineOptions.some((line) => line.id === selectedLineIdRef.current) ? selectedLineIdRef.current : "";
     const nextSelectedLineId =
@@ -678,7 +747,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       setBroadcastApplyError("");
     }
     setTurnbackPoints(
-      Array.isArray(snapshot?.turnbackPoints)
+      snapshotSupportsPlatforms && Array.isArray(snapshot?.turnbackPoints)
         ? snapshot.turnbackPoints.map((point) => ({
             index: Number.isFinite(Number(point?.index)) ? Number(point.index) : 0,
             stationId: typeof point?.stationId === "string" ? point.stationId : "",
@@ -689,14 +758,16 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     );
 
     const hasBackendRules = Array.isArray(snapshot?.rules);
-    const nextRules = cloneBroadcastRules(hasBackendRules ? snapshot.rules : []);
+    const nextRules = cloneBroadcastRules(hasBackendRules ? snapshot.rules : []).filter((rule) => (
+      snapshotSupportsPlatforms || rule?.triggerId === "stop_and_open" || rule?.triggerId === "leave_station"
+    ));
     if (!preserveLocalDraft) {
       skipNextRulesSaveRef.current = hasBackendRules;
       hasBroadcastRulesHydratedRef.current = true;
       lastHydratedRulesLineIdRef.current = nextSelectedLineId;
       setRules(nextRules);
       setPlatformAnnouncements(
-        Array.isArray(snapshot?.platformAnnouncements)
+        snapshotSupportsPlatforms && Array.isArray(snapshot?.platformAnnouncements)
           ? snapshot.platformAnnouncements
               .map((entry) => ({
                 lineId: typeof entry?.lineId === "string" ? entry.lineId : nextSelectedLineId,
@@ -968,6 +1039,15 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   }
 
   useEffect(() => {
+    if (supportsPlatforms || (activeTab !== "platform" && renderedTab !== "platform")) {
+      return;
+    }
+
+    setActiveTab("sequence");
+    setRenderedTab("sequence");
+  }, [activeTab, renderedTab, supportsPlatforms]);
+
+  useEffect(() => {
     const unsubscribe = workbenchApi.onBroadcastAssetPreviewStateChanged?.((payload) => {
       const assetName = payload?.assetName || "";
       const state = payload?.state || "";
@@ -1016,7 +1096,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     async function hydrateBroadcastSnapshot() {
       try {
         const requestMode = activeTransportMode;
-        const snapshot = await workbenchApi.loadBroadcastSnapshot?.(selectedLineIdRef.current);
+        const snapshot = await workbenchApi.loadBroadcastSnapshot?.({
+          preferredLineId: selectedLineIdRef.current,
+          mode: requestMode,
+        });
         if (disposed) {
           return;
         }
@@ -1029,7 +1112,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
         if (extractBackendLineOptions(snapshot).length === 0) {
           try {
-            const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current);
+            const refreshedSnapshot = await workbenchApi.refreshBroadcastSnapshot?.({
+              preferredLineId: selectedLineIdRef.current,
+              mode: requestMode,
+            });
             if (!disposed && matchesBroadcastMode(refreshedSnapshot, requestMode) && extractBackendLineOptions(refreshedSnapshot).length > 0) {
               applyBroadcastSnapshot(refreshedSnapshot);
             }
@@ -1071,7 +1157,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
       async function refreshLines() {
         try {
-          const snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
+          const snapshot = await workbenchApi.refreshBroadcastSnapshot?.({
+            preferredLineId: selectedLineIdRef.current || "",
+            mode: requestMode,
+          });
           if (!disposed && isCurrentBroadcastMode(requestMode) && matchesBroadcastMode(snapshot, requestMode)) {
             applyBroadcastSnapshot(snapshot);
           }
@@ -1104,7 +1193,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
     async function refreshBroadcastSnapshot() {
       try {
-        const snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineId);
+        const snapshot = await workbenchApi.refreshBroadcastSnapshot?.({
+          preferredLineId: selectedLineId,
+          mode: activeTransportMode,
+        });
         if (!disposed && matchesBroadcastMode(snapshot)) {
           applyBroadcastSnapshot(snapshot);
         }
@@ -1133,7 +1225,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
 
     async function refreshBindingSlotHints() {
       try {
-        const result = await workbenchApi.loadBroadcastBindingSlotHints?.(lineId);
+        const result = await workbenchApi.loadBroadcastBindingSlotHints?.({
+          lineId,
+          mode: activeTransportMode,
+        });
         if (!disposed) {
           setBindingSlotHints(Array.isArray(result?.slotHints) ? result.slotHints : []);
         }
@@ -1187,7 +1282,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
         }
 
         try {
-          const snapshot = await workbenchApi.refreshBroadcastSnapshot?.(selectedLineIdRef.current || "");
+          const snapshot = await workbenchApi.refreshBroadcastSnapshot?.({
+            preferredLineId: selectedLineIdRef.current || "",
+            mode: activeTransportMode,
+          });
           if (disposed || !snapshot) {
             return;
           }
@@ -1469,7 +1567,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
     const pendingAssetNameSet = new Set(pendingAssetNames);
     if (previewingAssetName && pendingAssetNameSet.has(previewingAssetName)) {
       try {
-        await workbenchApi.stopBroadcastAssetPreview?.(previewingAssetName);
+        await workbenchApi.stopBroadcastAssetPreview?.({ assetName: previewingAssetName, mode });
       } catch (error) {
         console.error("[RT Broadcast Workbench] stop asset preview before apply delete failed", error);
       }
@@ -1706,6 +1804,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       lineOptions,
       selectedLine,
       selectedLineId,
+      supportsPlatforms,
       lineDropdownOpen,
       triggerDropdownOpen,
       broadcastWarnings,
@@ -1798,6 +1897,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       handleLocateBroadcastMappingIssue,
       commitBroadcastPreviewVolume,
       setActiveTab,
+      refreshNames,
       setMappingTray,
       setTrayContext,
       setLineDropdownOpen,

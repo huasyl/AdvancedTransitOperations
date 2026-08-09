@@ -46,11 +46,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     try
                     {
                         LoadWorkbench();
-                        ModeScope scope = Workbenches.ModeRequest.ReadScope(
+                        ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(
                             requestJson,
                             copyToAllStations
                                 ? "copyBroadcastPlatformAnnouncementToAllStations"
                                 : "saveBroadcastPlatformAnnouncement");
+                        if (scope.Mode == TransitMode.Bus)
+                        {
+                            throw new InvalidOperationException("Bus broadcast does not support platform announcements.");
+                        }
                         using (UseScope(scope))
                         {
                         BroadcastWorkbenchSavePlatformAnnouncementRequest request =

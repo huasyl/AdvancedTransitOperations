@@ -356,9 +356,30 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Depots,
                 m_Runtime.m_LineView,
                 Applied,
-                () => CatalogCache().MarkDirty());
+                () => CatalogCache().MarkDirty(),
+                InvalidateDispatchTiming);
             m_Run = m_RunHooks.Port();
             return m_Run;
+        }
+
+        private void InvalidateDispatchTiming(IEnumerable<string> lineIds)
+        {
+            if (lineIds == null)
+                return;
+
+            HashSet<string> changed = new HashSet<string>(
+                lineIds.Where(lineId => !string.IsNullOrEmpty(lineId)),
+                StringComparer.Ordinal);
+            if (changed.Count == 0)
+                return;
+
+            List<WorkbenchLineRuntime> runtimeLines = Catalog().RuntimeLines();
+            for (int i = 0; i < runtimeLines.Count; i++)
+            {
+                WorkbenchLineRuntime line = runtimeLines[i];
+                if (line != null && changed.Contains(line.Id))
+                    m_Runtime.m_Observation.InvalidateDispatchTiming(line.Entity);
+            }
         }
 
         internal Host Host()
@@ -538,20 +559,26 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal string Load(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadSnapshot");
+            ModeScope scope = Workbenches.ModeRequest.ReadScheduleScope(requestJson, "loadSnapshot");
+            return Root().Load(scope);
+        }
+
+        internal string Overview(string requestJson)
+        {
+            ModeScope scope = Workbenches.ModeRequest.ReadOverviewScope(requestJson, "loadOverviewSnapshot");
             return Root().Load(scope);
         }
 
         internal string Refresh(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "refreshSnapshot");
+            ModeScope scope = Workbenches.ModeRequest.ReadScheduleScope(requestJson, "refreshSnapshot");
             string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
             return Root().Refresh(scope, preferredLineId);
         }
 
         internal string Meta(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "refreshMetadata");
+            ModeScope scope = Workbenches.ModeRequest.ReadScheduleScope(requestJson, "refreshMetadata");
             string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
             return Root().Meta(scope, preferredLineId);
         }

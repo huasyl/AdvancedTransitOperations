@@ -27,9 +27,79 @@ namespace RapidTransitMod.Dispatch.Runtime
 
     internal static class RuntimePorts
     {
+        private static bool CanBypass(ModRuntimeHostSystem runtime, Entity line)
+        {
+            return runtime != null
+                && line != Entity.Null
+                && TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(runtime.EntityManager, line)).CanBypass;
+        }
+
         public static TrackModelContext.IBuffers Buffers(ModRuntimeHostSystem runtime)
         {
             return new TrackBuffers(runtime);
+        }
+
+        internal static bool TryResolveVehicleLifecycle(
+            ModRuntimeHostSystem runtime,
+            Entity vehicle,
+            out LifecycleKind lifecycle)
+        {
+            lifecycle = LifecycleKind.Unknown;
+            if (runtime == null
+                || vehicle == Entity.Null
+                || !runtime.m_VehicleView.TryGetLine(vehicle, out Entity line))
+            {
+                return false;
+            }
+
+            return TryResolveLineLifecycle(runtime, line, out lifecycle);
+        }
+
+        internal static bool TryResolveLineLifecycle(
+            ModRuntimeHostSystem runtime,
+            Entity line,
+            out LifecycleKind lifecycle)
+        {
+            lifecycle = LifecycleKind.Unknown;
+            if (runtime == null || line == Entity.Null)
+                return false;
+
+            lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(runtime.EntityManager, line)).Lifecycle;
+            return lifecycle == LifecycleKind.Rail || lifecycle == LifecycleKind.Road;
+        }
+
+        internal static void SetSourceDemand(
+            ModRuntimeHostSystem runtime,
+            Entity vehicle,
+            RuntimeDemandMask demand,
+            bool active)
+        {
+            if (!TryResolveVehicleLifecycle(runtime, vehicle, out LifecycleKind lifecycle))
+                return;
+
+            if (lifecycle == LifecycleKind.Rail)
+                runtime.m_RailEventSource.SetDemand(vehicle, demand, active);
+            else if (lifecycle == LifecycleKind.Road)
+            {
+                RuntimeDemandMask roadDemand = demand & ~RuntimeDemandMask.InboundWatch;
+                if (roadDemand != RuntimeDemandMask.None)
+                    runtime.m_RoadEventSource.SetDemand(vehicle, roadDemand, active);
+            }
+        }
+
+        internal static void SetRailDemand(
+            ModRuntimeHostSystem runtime,
+            Entity vehicle,
+            RuntimeDemandMask demand,
+            bool active)
+        {
+            if (TryResolveVehicleLifecycle(runtime, vehicle, out LifecycleKind lifecycle)
+                && lifecycle == LifecycleKind.Rail)
+            {
+                runtime.m_RailEventSource.SetDemand(vehicle, demand, active);
+            }
         }
 
         public static void Build(ModRuntimeHostSystem runtime)
@@ -92,6 +162,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                     if (line == Entity.Null)
                         return 0f;
 
+                    if (TransportModeResolver.Resolve(runtime.EntityManager, line) == TransitMode.Bus)
+                        return runtime.m_LineTimes.Duration(line) * 60f;
+
                     var routeWaypoints = runtime.GetBufferLookup<RouteWaypoint>(true);
                     if (routeWaypoints.TryGetBuffer(line, out var waypoints)
                         && waypoints.Length > 0
@@ -117,6 +190,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 RunEta = runtime.m_LineTimes.Run,
                 TryProgress = runtime.m_RouteProgress.Try,
                 TryBlocker = (Entity vehicle, out Entity blocker) => runtime.m_Bypass.TryGetLatchedBlocker(vehicle, out blocker),
+                TrySessionArrival = runtime.m_StopRuntime.TryGetSessionArrivalFrame,
                 ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
                 Stations = (Entity vehicle, Entity line, out string current, out string nextPhysical, out string nextStop, out bool nextPhysicalIsPass) =>
                 {
@@ -139,6 +213,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Times = new LineTimesPort
                 {
                     EntityManager = runtime.EntityManager,
+                    Log = message => runtime.log.Info(message),
                     MixSignature = runtime.m_LineProfile.MixSignature,
                     ClockSnapshot = () => runtime.m_SimClock.Snapshot,
                     ProfileStopStartBufferMinutes = ModRuntimeHostSystem.PROFILE_STOP_START_BUFFER_MINUTES,
@@ -157,7 +232,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                     CachedWaypointIndex = entity => runtime.m_CachedWpIdx.TryGetValue(entity, out int waypointIndex) ? waypointIndex : -1,
                     IsPreparingKnown = entity => runtime.m_VehicleStateStore.PreparingStartFrame.ContainsKey(entity),
                     TryLapFrames = (Entity vehicle, out uint lapFrames) => runtime.m_Observation.TryLapFrames(vehicle, out lapFrames),
-                    TryLapStartFrame = (Entity vehicle, out uint lapStartFrame) => runtime.m_Observation.TryLapStartFrame(vehicle, out lapStartFrame)
+                    TryLapStartFrame = (Entity vehicle, out uint lapStartFrame) => runtime.m_Observation.TryLapStartFrame(vehicle, out lapStartFrame),
+                    TryBusSegFrames = (Entity line, Entity fromWaypoint, Entity fromStop, Entity toWaypoint, Entity toStop, out float frames) =>
+                        runtime.m_Observation.TryBusSegFrames(line, fromWaypoint, fromStop, toWaypoint, toStop, out frames),
+                    ResolveMode = line => TransportModeResolver.Resolve(runtime.EntityManager, line)
                 },
                 Mileage = new LineMileagePort
                 {
@@ -207,13 +285,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_TrackProjection,
                 Buffers(runtime),
                 () => runtime.m_Features.BypassRun(),
-                line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
-                line => runtime.m_LineView.Local(line),
-                line => runtime.m_LineView.Express(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Local(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Express(line),
                 runtime.m_Resolve,
                 ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
                 runtime.m_WaypointIndex,
                 runtime.m_Observation,
+                (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
+                    runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
                 runtime.m_SharedCorridor,
                 runtime.m_RuntimeLog.Once,
                 runtime.m_VehicleView,
@@ -235,13 +315,15 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_TrackProjection,
                 Buffers(runtime),
                 () => runtime.m_Features.BypassRun(),
-                line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
-                line => runtime.m_LineView.Local(line),
-                line => runtime.m_LineView.Express(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Local(line),
+                line => CanBypass(runtime, line) && runtime.m_LineView.Express(line),
                 runtime.m_Resolve,
                 ModRuntimeHostSystem.IsLineOrderedRuntimeLoggingEnabled,
                 runtime.m_WaypointIndex,
                 runtime.m_Observation,
+                (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
+                    runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
                 runtime.m_SharedCorridor,
                 runtime.m_RuntimeLog.Once,
                 runtime.m_VehicleView,
@@ -287,9 +369,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_RuntimeFramePlan.SetDeadline,
                 runtime.m_RuntimeFramePlan.ClearDeadline,
                 runtime.m_RuntimeFramePlan.ClearDeadlines,
-                (vehicle, active) => runtime.m_RailEventSource.SetDemand(vehicle, RuntimeDemandMask.BypassActive, active),
+                (vehicle, active) => SetRailDemand(runtime, vehicle, RuntimeDemandMask.BypassActive, active),
                 () => runtime.m_RailEventSource.ClearDemands(RuntimeDemandMask.BypassActive),
-                (vehicle, active) => runtime.m_RailEventSource.SetDemand(vehicle, RuntimeDemandMask.BypassWatch, active),
+                (vehicle, active) => SetRailDemand(runtime, vehicle, RuntimeDemandMask.BypassWatch, active),
                 () => runtime.m_RailEventSource.ClearDemands(RuntimeDemandMask.BypassWatch));
         }
 

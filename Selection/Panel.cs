@@ -5,6 +5,7 @@ using Game.Pathfind;
 using Game.Routes;
 using Game.UI.InGame;
 using Game.Vehicles;
+using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Scheduling;
 using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
@@ -304,7 +305,7 @@ namespace RapidTransitMod
                     m_Port.Sim,
                     m_Port.ClockSnapshot,
                     m_Port.Vehicles,
-                    m_Port.Obs,
+                    m_Port.TrySessionArrival,
                     m_Port.Spawns,
                     m_LineLastSpawnTriggerSummary,
                     m_LineLastVehicleRegisterSummary,
@@ -659,30 +660,59 @@ namespace RapidTransitMod
             if (line == Entity.Null || !m_Port.Lines.Applied(line))
                 return "-";
 
-            float lineDurationFrames = m_Port.ReadLineDuration(line);
-            bool lineHasHistory = lineDurationFrames > 0f;
-            uint nowFrame = m_Port.Sim.frameIndex;
-            float etaFrames = float.MaxValue;
-
             if (vehicleState == VehicleState.Preparing)
             {
                 var routeWaypoints = m_Port.RouteWaypoints(true);
                 if (routeWaypoints.TryGetBuffer(line, out var waypoints))
-                    etaFrames = m_Port.PrepEta(vehicle, line, waypoints, nowFrame, lineDurationFrames);
+                {
+                    bool isBus = TransportModeResolver.Resolve(m_Port.EntityManager, line) == TransitMode.Bus;
+                    float lineDurationFrames = isBus ? 0f : m_Port.ReadLineDuration(line);
+                    float etaFrames = m_Port.PrepEta(
+                        vehicle,
+                        line,
+                        waypoints,
+                        m_Port.Sim.frameIndex,
+                        lineDurationFrames);
+                    return EtaText(etaFrames, false, line);
+                }
+                return "-";
             }
-            else if (vehicleState == VehicleState.Running)
+
+            if (vehicleState == VehicleState.Running)
             {
                 var routeWaypoints = m_Port.RouteWaypoints(true);
                 if (routeWaypoints.TryGetBuffer(line, out var waypoints))
-                    etaFrames = m_Port.RunEta(vehicle, line, waypoints, nowFrame, lineDurationFrames, lineHasHistory);
-            }
-            else if (vehicleState == VehicleState.Holding)
-            {
-                etaFrames = 0f;
+                {
+                    float lineDurationFrames = m_Port.ReadLineDuration(line);
+                    float etaFrames = m_Port.RunEta(
+                        vehicle,
+                        line,
+                        waypoints,
+                        m_Port.Sim.frameIndex,
+                        lineDurationFrames,
+                        lineDurationFrames > 0f);
+                    return EtaText(etaFrames, true, line);
+                }
+                return "-";
             }
 
+            if (vehicleState == VehicleState.Holding)
+                return EtaText(0f, false, line);
+
+            return "-";
+        }
+
+        private string EtaText(float etaFrames, bool running, Entity line)
+        {
             if (etaFrames == float.MaxValue)
+            {
+                if (running
+                    && TransportModeResolver.Resolve(m_Port.EntityManager, line) == TransitMode.Bus)
+                {
+                    return IsChineseLocale() ? "未知" : "unknown";
+                }
                 return "-";
+            }
 
             double etaMinutes = m_Port.ClockSnapshot().ToMinutes(etaFrames);
             return etaMinutes.ToString("F1") + " min";

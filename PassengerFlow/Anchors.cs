@@ -20,6 +20,22 @@ namespace RapidTransitMod.PassengerFlow
             m_Stations.Clear();
         }
 
+        internal void InvalidateLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            List<WaypointAnchorCacheKey> keys = new List<WaypointAnchorCacheKey>();
+            foreach (KeyValuePair<WaypointAnchorCacheKey, WaypointAnchorCacheEntry> entry in m_WaypointCache)
+            {
+                if (entry.Key.IsLine(line))
+                    keys.Add(entry.Key);
+            }
+
+            for (int i = 0; i < keys.Count; i++)
+                m_WaypointCache.Remove(keys[i]);
+        }
+
         internal bool TryRegister(StationDwellAnchor anchor, out StationKey key)
         {
             return TryRegisterSak(
@@ -259,6 +275,8 @@ namespace RapidTransitMod.PassengerFlow
                 return (m_Line.GetHashCode() * 397) ^ m_WaypointIndex;
             }
         }
+
+        internal bool IsLine(Entity line) => m_Line == line;
     }
 
     internal readonly struct WaypointAnchorCacheEntry

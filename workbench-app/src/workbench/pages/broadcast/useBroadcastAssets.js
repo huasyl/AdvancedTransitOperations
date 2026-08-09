@@ -220,7 +220,10 @@ export default function useBroadcastAssets(context) {
 
   async function loadExternalAssetBrowser(path = "") {
     try {
-      const browserSnapshot = await workbenchApi.loadBroadcastAssetBrowser?.(path || currentExternalPath || "");
+      const browserSnapshot = await workbenchApi.loadBroadcastAssetBrowser?.({
+        path: path || currentExternalPath || "",
+        mode: activeTransportMode,
+      });
       if (!browserSnapshot) {
         return;
       }
@@ -249,7 +252,7 @@ export default function useBroadcastAssets(context) {
 
     if (previewingAssetName === assetName) {
       try {
-        await workbenchApi.stopBroadcastAssetPreview?.(assetName);
+        await workbenchApi.stopBroadcastAssetPreview?.({ assetName, mode: activeTransportMode });
       } catch (error) {
         console.error("[RT Broadcast Workbench] stop asset preview failed", error);
       }
@@ -258,7 +261,7 @@ export default function useBroadcastAssets(context) {
     }
 
     try {
-      await workbenchApi.playBroadcastAssetPreview?.(assetName);
+      await workbenchApi.playBroadcastAssetPreview?.({ assetName, mode: activeTransportMode });
     } catch (error) {
       console.error("[RT Broadcast Workbench] play asset preview failed", error);
     }
@@ -273,7 +276,7 @@ export default function useBroadcastAssets(context) {
 
     if (previewingRuleId === ruleId) {
       try {
-        await workbenchApi.stopBroadcastRulePreview?.(ruleId);
+        await workbenchApi.stopBroadcastRulePreview?.({ ruleId, mode: activeTransportMode });
       } catch (error) {
         console.error("[RT Broadcast Workbench] stop rule preview failed", error);
       }
@@ -285,6 +288,7 @@ export default function useBroadcastAssets(context) {
       await workbenchApi.playBroadcastRulePreview?.({
         lineId: selectedLineIdRef.current || "",
         ruleId,
+        mode: activeTransportMode,
         rule: (Array.isArray(rules) ? rules : []).find((rule) => rule?.id === ruleId) || null,
       });
     } catch (error) {
@@ -368,7 +372,7 @@ export default function useBroadcastAssets(context) {
 
     try {
       if (previewingAssetName === assetName) {
-        await workbenchApi.stopBroadcastAssetPreview?.(assetName);
+        await workbenchApi.stopBroadcastAssetPreview?.({ assetName, mode: activeTransportMode });
       }
     } catch (error) {
       console.error("[RT Broadcast Workbench] stop asset preview before delete failed", error);
@@ -393,7 +397,7 @@ export default function useBroadcastAssets(context) {
 
     try {
       if (previewingAssetName) {
-        await workbenchApi.stopBroadcastAssetPreview?.(previewingAssetName);
+        await workbenchApi.stopBroadcastAssetPreview?.({ assetName: previewingAssetName, mode: activeTransportMode });
       }
     } catch (error) {
       console.error("[RT Broadcast Workbench] stop asset preview before delete all failed", error);
@@ -575,6 +579,7 @@ export default function useBroadcastAssets(context) {
       const result = await workbenchApi.importBroadcastExternalAssets?.({
         currentPath: currentExternalPath,
         selectedPaths: selectedExternalFiles,
+        mode: activeTransportMode,
       });
 
       if (result?.success) {

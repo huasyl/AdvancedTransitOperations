@@ -63,7 +63,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             catch (Exception ex)
             {
                 m_LogException("Save", ex);
-                ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveNativeWorkbenchDraft", allowLegacyDefault: true);
+                ModeScope scope = Workbenches.ModeRequest.ReadScheduleScope(requestJson, "saveNativeWorkbenchDraft", allowLegacyDefault: true);
                 DispatchWorkbenchSaveResult result = CreateWorkbenchSaveFailureResult(
                     scope,
                     m_GetSnapshotVersion(),

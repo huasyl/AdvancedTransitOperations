@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Game.Routes;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Collections;
 using Unity.Entities;
 

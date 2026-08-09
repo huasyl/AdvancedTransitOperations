@@ -228,7 +228,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     if (preferred == null
                         || string.IsNullOrEmpty(preferred.lineId)
                         || !ModeScope.TryParseWorkbench(preferred.mode, out ModeScope scope)
-                        || !scope.IsSupportedWorkbenchMode)
+                        || !scope.SupportsSchedule)
                     {
                         continue;
                     }

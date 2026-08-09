@@ -11,6 +11,13 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal delegate bool TryLineLapFrames(Entity vehicle, out uint lapFrames);
     internal delegate bool TryLineLapStartFrame(Entity vehicle, out uint lapStartFrame);
     internal delegate bool TryLineObservedWaypointStopFrames(Entity line, int waypointIndex, out float dwellFrames);
+    internal delegate bool TryLineBusSegFrames(
+        Entity line,
+        Entity fromWaypoint,
+        Entity fromStop,
+        Entity toWaypoint,
+        Entity toStop,
+        out float frames);
     internal delegate ulong ComputeLineWaypointSignature(DynamicBuffer<RouteWaypoint> waypoints);
     internal delegate Entity ResolveLineWaypointBuilding(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
 
@@ -23,6 +30,7 @@ namespace RapidTransitMod.Dispatch.Runtime
     internal sealed class LineTimesPort
     {
         public EntityManager EntityManager;
+        public Action<string> Log = null!;
         public Func<ulong, int, ulong> MixSignature = null!;
         public Func<ClockSnapshot> ClockSnapshot = null!;
         public float ProfileStopStartBufferMinutes;
@@ -41,6 +49,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         public Func<Entity, bool> IsPreparingKnown = null!;
         public TryLineLapFrames TryLapFrames = null!;
         public TryLineLapStartFrame TryLapStartFrame = null!;
+        public TryLineBusSegFrames TryBusSegFrames = null!;
+        public Func<Entity, TransitMode> ResolveMode = null!;
     }
 
     internal sealed class LineMileagePort

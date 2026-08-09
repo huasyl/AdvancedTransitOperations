@@ -19,6 +19,9 @@ namespace RapidTransitMod.PassengerFlow
         internal uint Frame()
             => m_Runtime.m_SimulationSystem != null ? m_Runtime.m_SimulationSystem.frameIndex : 0u;
 
+        internal ClockSnapshot Clock()
+            => m_Runtime.m_SimClock.Snapshot;
+
         internal int NowMinute()
             => m_Runtime.m_SimClock.Snapshot.NowMinute;
 
@@ -60,6 +63,9 @@ namespace RapidTransitMod.PassengerFlow
 
         internal void RemoveVehicle(Entity vehicle)
             => Observer.RemoveVehicle(this, SamplingSystem.CurrentState, vehicle);
+
+        internal void InvalidateAnchors(Entity line)
+            => SamplingSystem.CurrentState?.Anchors.InvalidateLine(line);
 
         internal bool HasWaypoints(Entity line)
             => line != Entity.Null && m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line);
@@ -131,6 +137,10 @@ namespace RapidTransitMod.PassengerFlow
             => stopEntity != Entity.Null && m_Runtime.m_Resolve != null
                 ? m_Runtime.m_Resolve.StationName(stopEntity)
                 : string.Empty;
+
+        internal bool IsTransportStop(Entity entity)
+            => entity != Entity.Null
+                && m_Runtime.EntityManager.HasComponent<TransportStop>(entity);
 
         internal string EnsureSak(Entity anchor)
             => m_Runtime.m_Resolve != null ? m_Runtime.m_Resolve.EnsureSak(anchor) : string.Empty;

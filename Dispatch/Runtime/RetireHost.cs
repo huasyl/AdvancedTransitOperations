@@ -19,6 +19,46 @@ namespace RapidTransitMod.Dispatch.Runtime
         out bool hadSpawnTarget,
         out int oldSpawnTarget);
 
+    internal readonly struct RetireStartInput
+    {
+        internal readonly Entity Vehicle;
+        internal readonly Entity SourceLine;
+        internal readonly PublicTransport PublicTransport;
+        internal readonly Target Target;
+        internal readonly Owner Owner;
+        internal readonly string Reason;
+
+        internal RetireStartInput(
+            Entity vehicle,
+            Entity sourceLine,
+            PublicTransport publicTransport,
+            Target target,
+            Owner owner,
+            string reason)
+        {
+            Vehicle = vehicle;
+            SourceLine = sourceLine;
+            PublicTransport = publicTransport;
+            Target = target;
+            Owner = owner;
+            Reason = reason ?? string.Empty;
+        }
+    }
+
+    internal readonly struct RetireStartContext
+    {
+        internal readonly Entity Vehicle;
+        internal readonly Entity SourceLine;
+        internal readonly string SpawnIntent;
+
+        internal RetireStartContext(Entity vehicle, Entity sourceLine, string spawnIntent)
+        {
+            Vehicle = vehicle;
+            SourceLine = sourceLine;
+            SpawnIntent = spawnIntent ?? string.Empty;
+        }
+    }
+
     internal sealed class RetireHost
     {
         private readonly EntityManager m_EntityManager;
@@ -41,6 +81,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity> m_ClearLap;
         private readonly Action<Entity> m_ClearDwell;
         private readonly Action<Entity> m_ClearDwellDeadlineCache;
+        private readonly Action<Entity> m_CancelBusSeg;
         private readonly Action<Entity> m_ClearTrackProjectionVehicle;
         private readonly Action<Entity, string> m_ClearTrackProjectionVehicleProgressSuspect;
         private readonly Action<Entity, string> m_ClearBypassVehicle;
@@ -49,7 +90,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly NativeHashMap<Entity, uint> m_PreparingFixCooldownUntil;
         private readonly RuntimeFramePlan m_FramePlan;
         private readonly FrameEvents m_Events;
-        private readonly RailEventSource m_RailEvents;
         private readonly Action<StopFact> m_PublishStopFact;
         private readonly Action<Entity, int, StopControlResult> m_ApplyStopControl;
 
@@ -75,6 +115,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ClearLap = runtime.m_ObsPersist.ClearLap;
             m_ClearDwell = runtime.m_ObsPersist.ClearDwell;
             m_ClearDwellDeadlineCache = runtime.m_Observation.ClearDwellDeadlineCache;
+            m_CancelBusSeg = runtime.m_Observation.CancelBusSeg;
             m_ClearTrackProjectionVehicle = runtime.TrackProjection.ClearVehicle;
             m_ClearTrackProjectionVehicleProgressSuspect = runtime.TrackProjection.ClearVehicleProgressSuspect;
             m_ClearBypassVehicle = (vehicle, reason) => runtime.Bypass.ClearVehicle(vehicle, reason);
@@ -83,12 +124,53 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_PreparingFixCooldownUntil = runtime.m_PreparingFixCooldownUntil;
             m_FramePlan = runtime.m_RuntimeFramePlan;
             m_Events = runtime.m_FrameEvents;
-            m_RailEvents = runtime.m_RailEventSource;
             m_PublishStopFact = runtime.PublishStopFact;
             m_ApplyStopControl = runtime.ApplyStopControl;
         }
 
         public string RetireIntent(Entity vehicle) => m_SpawnIntentTrace.Retire(vehicle, Frame);
+
+        public bool BeginRetire(RetireStartInput input, out RetireStartContext context)
+        {
+            context = default;
+            Entity vehicle = ResolveVehicle(input.Vehicle);
+            if (vehicle == Entity.Null
+                || !m_EntityManager.Exists(vehicle)
+                || HasRetireDispatchLock(vehicle)
+                || (TryVehicleState(vehicle, out VehicleState state) && state == VehicleState.Retiring))
+            {
+                return false;
+            }
+
+            Entity sourceLine = input.SourceLine;
+            int preActive = 0;
+            bool hadSpawnTarget = false;
+            int oldSpawnTarget = 0;
+            if (sourceLine != Entity.Null)
+            {
+                CaptureRetireSpawnTarget(
+                    sourceLine,
+                    out preActive,
+                    out hadSpawnTarget,
+                    out oldSpawnTarget);
+            }
+
+            string spawnIntent = RetireIntent(vehicle);
+            RecordRetireRequested(vehicle, sourceLine, input.Reason);
+            RetireRuntimeVehicle(vehicle);
+            ClearRetireRequestState(vehicle);
+            if (sourceLine != Entity.Null)
+            {
+                ApplyRetireSpawnTarget(
+                    sourceLine,
+                    preActive,
+                    hadSpawnTarget,
+                    oldSpawnTarget);
+            }
+
+            context = new RetireStartContext(vehicle, sourceLine, spawnIntent);
+            return true;
+        }
 
         public void RecordRetireRequested(Entity vehicle, Entity line, string reason)
         {
@@ -99,21 +181,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public EntityManager EntityManager => m_EntityManager;
         public TimedLogger Log => m_Log;
         public uint Frame => m_Frame();
-        public PublicTransport ReadPublicTransport(Entity vehicle) => m_RailEvents.TryReadPublicTransportForWrite(vehicle, out PublicTransport value)
-            ? value
-            : m_EntityManager.GetComponentData<PublicTransport>(vehicle);
-        public Target ReadTarget(Entity vehicle) => m_RailEvents.TryReadTargetForWrite(vehicle, out Target value)
-            ? value
-            : m_EntityManager.GetComponentData<Target>(vehicle);
-        public PathOwner ReadPath(Entity vehicle) => m_RailEvents.TryReadPathForWrite(vehicle, out PathOwner value)
-            ? value
-            : m_EntityManager.GetComponentData<PathOwner>(vehicle);
-        public int ReadPathElementCount(Entity vehicle) => m_RailEvents.TryReadPathElementCountForWrite(vehicle, out int value)
-            ? value
-            : m_EntityManager.Exists(vehicle) && m_EntityManager.HasBuffer<PathElement>(vehicle)
-                ? m_EntityManager.GetBuffer<PathElement>(vehicle, true).Length
-                : 0;
-
         public void SetRetireDeadline(Entity vehicle, DeadlineKind kind, uint frame)
         {
             m_FramePlan.ClearDeadline(vehicle, kind == DeadlineKind.RetireBoundary
@@ -198,6 +265,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void ClearRetireRequestState(Entity vehicle)
         {
             m_ClearBypassVehicle(vehicle, "retire-request");
+            m_CancelBusSeg(vehicle);
             ClearStopSessionState(vehicle);
             m_PreparingFixCooldownUntil.Remove(vehicle);
             m_FramePlan.ClearDeadline(vehicle, DeadlineKind.PreparingCooldown);
@@ -218,23 +286,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ClearDwell(vehicle);
         }
 
-        public void ProjectRetireDispatchLock(Entity vehicle, out int clearedDispatchCount)
-        {
-            if (!m_EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
-                m_EntityManager.AddComponent<RtRetireDispatchLock>(vehicle);
-
-            if (m_EntityManager.HasComponent<PublicTransport>(vehicle))
-            {
-                PublicTransport publicTransport = ReadPublicTransport(vehicle);
-                if (publicTransport.m_RequestCount != 1)
-                {
-                    publicTransport.m_RequestCount = 1;
-                    SetPublicTransport(vehicle, publicTransport);
-                }
-            }
-            ClearServiceDispatch(vehicle, out clearedDispatchCount);
-        }
-
         public bool HasRetireDispatchLock(Entity vehicle)
         {
             return vehicle != Entity.Null
@@ -252,28 +303,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             count = dispatchBuffer.Length;
             if (dispatchBuffer.Length > 0)
                 dispatchBuffer.Clear();
-        }
-
-        public void SetPublicTransport(Entity vehicle, PublicTransport value)
-        {
-            m_RailEvents.AppendPublicTransportWrite(vehicle, value, Frame);
-            m_EntityManager.SetComponentData(vehicle, value);
-        }
-
-        public bool HasConsumedPath(Entity entity)
-        {
-            if (entity == Entity.Null
-                || !m_EntityManager.Exists(entity)
-                || !HasNoTrainNavigation(entity)
-                || !m_EntityManager.HasBuffer<PathElement>(entity)
-                || !m_EntityManager.HasComponent<PathOwner>(entity))
-            {
-                return false;
-            }
-
-            PathOwner pathOwner = ReadPath(entity);
-            int pathElementCount = ReadPathElementCount(entity);
-            return pathElementCount >= 0 && pathOwner.m_ElementIndex >= pathElementCount;
         }
 
         public bool HasNoTrainNavigation(Entity entity)
@@ -410,6 +439,16 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FramePlan.ClearDeadline(vehicle, DeadlineKind.PreparingCooldown);
             m_ClearBypassVehicle(vehicle, reason);
             m_ClearTrackProjectionVehicleProgressSuspect(vehicle, reason);
+        }
+
+        public void ReleaseRoadRetireRuntimeOwnership(Entity vehicle)
+        {
+            m_VehicleRegistry.Remove(vehicle);
+            m_ClearLap(vehicle);
+            m_CachedWaypoint.Remove(vehicle);
+            m_UICache.Remove(vehicle);
+            m_PreparingFixCooldownUntil.Remove(vehicle);
+            m_FramePlan.ClearDeadline(vehicle, DeadlineKind.PreparingCooldown);
         }
     }
 }

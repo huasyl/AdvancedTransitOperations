@@ -1,7 +1,6 @@
 using Game.Routes;
 using Game.Simulation;
 using Game.Vehicles;
-using RapidTransitMod.Dispatch.Observation;
 using System;
 using System.Collections.Generic;
 using RapidTransitMod.Core;
@@ -83,7 +82,7 @@ namespace RapidTransitMod
         private readonly EntityManager m_EntityManager;
         private readonly Game.Simulation.SimulationSystem m_SimulationSystem;
         private readonly VehicleView m_VehicleView;
-        private readonly Query m_ObsQuery;
+        private readonly SelectPort.SessionArrival m_TrySessionArrival;
         private readonly Unity.Collections.NativeHashMap<Entity, int> m_SpawningLines;
         private readonly Dictionary<Entity, string> m_LineLastSpawnTriggerSummary;
         private readonly Dictionary<Entity, string> m_LineLastVehicleRegisterSummary;
@@ -122,7 +121,7 @@ namespace RapidTransitMod
             SimulationSystem simulationSystem,
             Func<ClockSnapshot> clockSnapshot,
             VehicleView vehicleView,
-            Query obsQuery,
+            SelectPort.SessionArrival trySessionArrival,
             Unity.Collections.NativeHashMap<Entity, int> spawningLines,
             Dictionary<Entity, string> lineLastSpawnTriggerSummary,
             Dictionary<Entity, string> lineLastVehicleRegisterSummary,
@@ -159,7 +158,7 @@ namespace RapidTransitMod
             m_SimulationSystem = simulationSystem;
             m_ClockSnapshot = clockSnapshot;
             m_VehicleView = vehicleView;
-            m_ObsQuery = obsQuery;
+            m_TrySessionArrival = trySessionArrival;
             m_SpawningLines = spawningLines;
             m_LineLastSpawnTriggerSummary = lineLastSpawnTriggerSummary;
             m_LineLastVehicleRegisterSummary = lineLastVehicleRegisterSummary;
@@ -371,13 +370,11 @@ namespace RapidTransitMod
 
         private string BuildStopDwellValue(Entity vehicle)
         {
-            if (!m_ObsQuery.TryDwellStart(vehicle, out uint dwellSinceFrame))
+            if (!m_TrySessionArrival(vehicle, out uint dwellSinceFrame))
                 return "-";
 
             uint nowFrame = m_SimulationSystem.frameIndex;
-            uint elapsedFrames = nowFrame > dwellSinceFrame
-                ? nowFrame - dwellSinceFrame
-                : 0u;
+            uint elapsedFrames = unchecked(nowFrame - dwellSinceFrame);
             return m_ClockSnapshot().ToMinutes(elapsedFrames).ToString("F1") + " min";
         }
 

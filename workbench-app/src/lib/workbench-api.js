@@ -6,6 +6,7 @@ import { createEmptySnapshot } from "./workbench-defaults";
 
 const CALLS = {
   loadSnapshot: "suhua::rt.workbench.loadSnapshot",
+  loadOverviewSnapshot: "suhua::rt.workbench.loadOverviewSnapshot",
   refreshSnapshot: "suhua::rt.workbench.refreshSnapshot",
   loadBroadcastSnapshot: "suhua::rt.workbench.loadBroadcastSnapshot",
   refreshBroadcastSnapshot: "suhua::rt.workbench.refreshBroadcastSnapshot",
@@ -373,19 +374,30 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.loadSnapshot, requestJson(request));
       return parsePayload(payload, createEmptySnapshot());
     },
+    async loadOverviewSnapshot(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadOverviewSnapshot, requestJson(request));
+      return parsePayload(payload, createEmptySnapshot());
+    },
     async refreshSnapshot(request = {}) {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.refreshSnapshot, requestJson(request));
       return parsePayload(payload, createEmptySnapshot());
     },
-    async loadBroadcastSnapshot(selectedLineId = "") {
+    async loadBroadcastSnapshot(request = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadBroadcastSnapshot, requestJson({ preferredLineId: selectedLineId || "" }));
+      const scopedRequest = request && typeof request === "object" && !Array.isArray(request)
+        ? request
+        : { preferredLineId: request || "" };
+      const payload = await engineCall(CALLS.loadBroadcastSnapshot, requestJson(scopedRequest));
       return parsePayload(payload, createEmptyBroadcastSnapshot());
     },
-    async refreshBroadcastSnapshot(selectedLineId = "") {
+    async refreshBroadcastSnapshot(request = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.refreshBroadcastSnapshot, requestJson({ preferredLineId: selectedLineId || "" }));
+      const scopedRequest = request && typeof request === "object" && !Array.isArray(request)
+        ? request
+        : { preferredLineId: request || "" };
+      const payload = await engineCall(CALLS.refreshBroadcastSnapshot, requestJson(scopedRequest));
       return parsePayload(payload, createEmptyBroadcastSnapshot());
     },
     async loadPassengerFlowSnapshot(request = {}) {
@@ -394,14 +406,20 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.loadPassengerFlowSnapshot, requestJson(scopedRequest));
       return parsePayload(payload, createEmptyPassengerFlowSnapshot(scopedRequest.mode));
     },
-    async loadBroadcastBindingSlotHints(lineId = "") {
+    async loadBroadcastBindingSlotHints(request = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadBroadcastBindingSlotHints, requestJson({ lineId: lineId || "" }));
+      const scopedRequest = request && typeof request === "object" && !Array.isArray(request)
+        ? request
+        : { lineId: request || "" };
+      const payload = await engineCall(CALLS.loadBroadcastBindingSlotHints, requestJson(scopedRequest));
       return parsePayload(payload, createEmptyBroadcastBindingSlotHints());
     },
-    async loadBroadcastAssetBrowser(path = "") {
+    async loadBroadcastAssetBrowser(request = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.loadBroadcastAssetBrowser, requestJson({ path: path || "" }));
+      const scopedRequest = request && typeof request === "object" && !Array.isArray(request)
+        ? request
+        : { path: request || "" };
+      const payload = await engineCall(CALLS.loadBroadcastAssetBrowser, requestJson(scopedRequest));
       return parsePayload(payload, createEmptyBroadcastAssetBrowser());
     },
     async importBroadcastExternalAssets(request) {
@@ -463,9 +481,12 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.openBroadcastAssetDirectoryPicker, requestJson());
       return parsePayload(payload, createBroadcastDirectoryPickerResult());
     },
-    async playBroadcastAssetPreview(assetName = "") {
+    async playBroadcastAssetPreview(request = "") {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.playBroadcastAssetPreview, requestJson({ assetName: assetName || "" }));
+      const scopedRequest = request && typeof request === "object" && !Array.isArray(request)
+        ? request
+        : { assetName: request || "" };
+      const payload = await engineCall(CALLS.playBroadcastAssetPreview, requestJson(scopedRequest));
       return parsePayload(payload, createBroadcastAssetPreviewResult());
     },
     async stopBroadcastAssetPreview(requestOrAssetName = "") {
@@ -491,9 +512,12 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.stopBroadcastRulePreview, requestJson(request));
       return parsePayload(payload, createBroadcastRulePreviewResult());
     },
-    async setBroadcastPreviewVolume(volume = 80) {
+    async setBroadcastPreviewVolume(request = 80) {
       const engineCall = getEngineCall();
-      const payload = await engineCall(CALLS.setBroadcastPreviewVolume, requestJson({ volume: volume ?? 80 }));
+      const scopedRequest = request && typeof request === "object" && !Array.isArray(request)
+        ? request
+        : { volume: request ?? 80 };
+      const payload = await engineCall(CALLS.setBroadcastPreviewVolume, requestJson(scopedRequest));
       return parsePayload(payload, createBroadcastVolumeResult());
     },
     async startBroadcastApplyOperation(request) {
@@ -718,4 +742,3 @@ function createLiveApi() {
 export function getWorkbenchApi() {
   return createLiveApi();
 }
-

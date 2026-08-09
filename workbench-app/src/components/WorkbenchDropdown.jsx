@@ -24,6 +24,7 @@ export default function WorkbenchDropdown({
   positioning = "local",
   open: controlledOpen,
   onOpenChange,
+  onOpen,
   closeOnSelect = true
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
@@ -147,7 +148,12 @@ export default function WorkbenchDropdown({
           type="button"
           className={`dw-demo-input dw-demo-dropdown-trigger ${triggerClassName} ${open ? "is-open" : ""}`.trim()}
           title={title || value}
-          onClick={() => setOpen(!open)}
+          onClick={() => {
+            if (!open) {
+              onOpen?.();
+            }
+            setOpen(!open);
+          }}
         >
           {triggerContent || (
             <>

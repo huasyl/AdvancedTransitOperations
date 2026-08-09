@@ -13,6 +13,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             return snapshotJson;
         }
 
+        internal static string Overview(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.Overview(requestJson) ?? string.Empty;
+        }
+
         internal static string Refresh(string requestJson)
         {
             string snapshotJson = ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.Refresh(requestJson) ?? string.Empty;

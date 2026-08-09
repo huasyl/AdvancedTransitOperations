@@ -137,7 +137,6 @@ namespace RapidTransitMod.Bypass
         internal void LogHoldFrame(
             BypassControlResult control,
             bool boarding,
-            bool midStopDwellTimedOut,
             uint departureFrame,
             uint nowFrame)
         {
@@ -147,7 +146,7 @@ namespace RapidTransitMod.Bypass
 
             string holdFrameAction = control.ShouldHold
                 ? "hold"
-                : (midStopDwellTimedOut ? "timeout-close" : "release");
+                : "release";
             m_Runtime.LogVehicleStateOnce(
                 m_HoldFrameLogCache,
                 control.Vehicle,
@@ -156,7 +155,6 @@ namespace RapidTransitMod.Bypass
                     + "|" + control.HadLatchedYield
                     + "|" + control.ShouldHold
                     + "|" + control.CanClearAfterExit
-                    + "|" + midStopDwellTimedOut
                     + "|" + control.Blocker.Index
                     + "|" + holdFrameAction
                     + "|" + (control.ReleaseReason ?? "-"),
@@ -168,7 +166,6 @@ namespace RapidTransitMod.Bypass
                     + " shouldHold=" + control.ShouldHold
                     + " blocker=" + control.Blocker.Index
                     + " canClear=" + control.CanClearAfterExit
-                    + " midTimeout=" + midStopDwellTimedOut
                     + " depBefore=" + departureFrame
                     + " frame=" + nowFrame
                     + " action=" + holdFrameAction
@@ -216,69 +213,25 @@ namespace RapidTransitMod.Bypass
             m_Runtime.RecordRelease(control.Vehicle, blocker, control.ReleaseReason);
         }
 
-        internal BypassControlResult TickVehicle(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int waypointIndex,
+        internal void Apply(
+            BypassControlResult control,
             bool boarding,
             ref PublicTransport publicTransport,
             EntityCommandBuffer ecb,
+            DynamicBuffer<RouteWaypoint> waypoints,
             string lineTag,
-            bool midStopDwellTimedOut,
             uint nowFrame)
         {
-            BypassControlResult control = Update(
-                vehicle,
-                line,
-                waypoints,
-                waypointIndex,
-                boarding,
-                nowFrame);
-            LogHoldFrame(control, boarding, midStopDwellTimedOut, publicTransport.m_DepartureFrame, nowFrame);
+            LogHoldFrame(control, boarding, publicTransport.m_DepartureFrame, nowFrame);
 
-            if (waypointIndex > 0 && control.ShouldHold)
+            if (control.WaypointIndex > 0 && control.ShouldHold)
             {
                 Hold(control, ref publicTransport, ecb, waypoints, lineTag, nowFrame);
             }
-            else if (!midStopDwellTimedOut && control.ShouldRelease)
+            else if (control.ShouldRelease)
             {
                 Release(control);
             }
-            return control;
-        }
-
-        internal BypassControlResult TickVehicle<TTransport, TCommandBuffer>(
-            Entity vehicle,
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            int waypointIndex,
-            bool boarding,
-            ref TTransport publicTransport,
-            TCommandBuffer ecb,
-            string lineTag,
-            bool midStopDwellTimedOut,
-            uint nowFrame)
-        {
-            if (!(publicTransport is PublicTransport typedPublicTransport)
-                || !(ecb is EntityCommandBuffer typedEcb))
-            {
-                return Update(vehicle, line, waypoints, waypointIndex, boarding, nowFrame);
-            }
-
-            BypassControlResult control = TickVehicle(
-                vehicle,
-                line,
-                waypoints,
-                waypointIndex,
-                boarding,
-                ref typedPublicTransport,
-                typedEcb,
-                lineTag,
-                midStopDwellTimedOut,
-                nowFrame);
-            publicTransport = (TTransport)(object)typedPublicTransport;
-            return control;
         }
     }
 }

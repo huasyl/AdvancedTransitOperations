@@ -17,47 +17,74 @@ function toOverviewMode(mode) {
   if (token === "subway") {
     return "Subway";
   }
+  if (token === "tram") {
+    return "Tram";
+  }
+  if (token === "bus") {
+    return "Bus";
+  }
   return "Train";
 }
 
 function toTransportMode(mode) {
   const token = String(mode || "").toLowerCase();
-  return token === "subway" ? "subway" : "train";
+  if (token === "subway" || token === "tram" || token === "bus") {
+    return token;
+  }
+  return "train";
 }
 
 function hasScopedLines(snapshot) {
   return Array.isArray(snapshot?.lines) && snapshot.lines.length > 0;
 }
 
-function buildOverviewSystems(featureSettings, t) {
-  return [
+function snapshotForMode(snapshot, cachedSnapshot, mode) {
+  const snapshotMode = String(snapshot?.mode || "").trim().toLowerCase();
+  if (snapshotMode === mode) {
+    return snapshot;
+  }
+
+  const cachedMode = String(cachedSnapshot?.mode || "").trim().toLowerCase();
+  return cachedMode === mode ? cachedSnapshot : null;
+}
+
+function buildOverviewSystems(featureSettings, t, mode) {
+  const systems = [
     { key: "dispatchEnabled", title: t("nativeWorkbench.overview.system.dispatch"), enabled: featureSettings?.dispatchEnabled !== false },
-    { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false },
     { key: "broadcastEnabled", title: t("nativeWorkbench.overview.system.broadcast"), enabled: featureSettings?.broadcastEnabled !== false },
     { key: "depotLockEnabled", title: t("nativeWorkbench.overview.system.depotLock"), enabled: featureSettings?.depotLockEnabled !== false }
   ];
+
+  if (mode !== "Tram" && mode !== "Bus") {
+    systems.splice(1, 0, { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false });
+  }
+
+  return systems;
 }
 
-function buildEmptyOverviewViewModel(featureSettings, t) {
+function buildEmptyOverviewViewModel(featureSettings, t, activeMode) {
   return {
     generatedAtGameMinute: 0,
     modes: [
       { mode: "Subway", label: t("nativeWorkbench.overview.mode.subway"), lineCount: 0, appliedDepartureCount: 0 },
-      { mode: "Train", label: t("nativeWorkbench.overview.mode.train"), lineCount: 0, appliedDepartureCount: 0 }
+      { mode: "Train", label: t("nativeWorkbench.overview.mode.train"), lineCount: 0, appliedDepartureCount: 0 },
+      { mode: "Tram", label: t("nativeWorkbench.overview.mode.tram"), lineCount: 0, appliedDepartureCount: 0 },
+      { mode: "Bus", label: t("nativeWorkbench.overview.mode.bus"), lineCount: 0, appliedDepartureCount: 0 }
     ],
-    activeMode: "Train",
+    activeMode,
     network: {
       lines: [],
       stations: [],
       vehicles: []
     },
-    systems: buildOverviewSystems(featureSettings, t),
+    systems: buildOverviewSystems(featureSettings, t, activeMode),
     warnings: []
   };
 }
 
 export default function OverviewPage({ activeTransportMode = "train", isActive = false, registerHostActions, onTransportModeChange }) {
   const { t } = useNativeScheduleI18n();
+  const activeMode = toTransportMode(activeTransportMode);
   const [snapshot, setSnapshot] = useState(null);
   const [metadataSnapshot, setMetadataSnapshot] = useState(null);
   const [passengerSnapshot, setPassengerSnapshot] = useState(null);
@@ -65,12 +92,16 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
   const [refreshNonce, setRefreshNonce] = useState(0);
   const modeCacheRef = useRef({});
   const loadGenerationRef = useRef(0);
-  const activeModeRef = useRef(toTransportMode(activeTransportMode));
-  activeModeRef.current = toTransportMode(activeTransportMode);
+  const activeModeRef = useRef(activeMode);
+  activeModeRef.current = activeMode;
   const hasActivatedRef = useRef(false);
+  const activeCache = modeCacheRef.current[activeMode] || null;
+  const scopedSnapshot = snapshotForMode(snapshot, activeCache?.snapshot, activeMode);
+  const scopedMetadataSnapshot = snapshotForMode(metadataSnapshot, activeCache?.metadataSnapshot, activeMode);
+  const scopedPassengerSnapshot = snapshotForMode(passengerSnapshot, activeCache?.passengerSnapshot, activeMode);
 
   useEffect(() => {
-    const mode = toTransportMode(activeTransportMode);
+    const mode = activeMode;
     const generation = loadGenerationRef.current + 1;
     loadGenerationRef.current = generation;
     traceWorkbench("overview.mount", { mode });
@@ -99,30 +130,29 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
       };
     }
 
-    const snapshotPromise = shouldForceRefresh || !cached?.snapshot ? api.loadSnapshot({ mode }) : Promise.resolve(cached.snapshot);
-    const metadataPromise = shouldForceRefresh || !cached?.metadataSnapshot ? api.refreshMetadata({ mode }) : Promise.resolve(cached.metadataSnapshot);
+    const snapshotPromise = shouldForceRefresh || !cached?.snapshot ? api.loadOverviewSnapshot({ mode }) : Promise.resolve(cached.snapshot);
     const passengerPromise = shouldRefreshPassenger || !cached?.passengerSnapshot
       ? api.loadPassengerFlowSnapshot({ mode })
       : Promise.resolve(cached.passengerSnapshot);
 
-    Promise.all([snapshotPromise, metadataPromise, passengerPromise])
-      .then(([nextSnapshot, nextMetadata, nextPassengerSnapshot]) => {
+    Promise.all([snapshotPromise, passengerPromise])
+      .then(([nextSnapshot, nextPassengerSnapshot]) => {
         if (cancelled || loadGenerationRef.current !== generation || activeModeRef.current !== mode) {
           return;
         }
         modeCacheRef.current[mode] = {
           snapshot: nextSnapshot,
-          metadataSnapshot: nextMetadata,
+          metadataSnapshot: nextSnapshot,
           passengerSnapshot: nextPassengerSnapshot,
           passengerLoadedAtMs: Date.now()
         };
         setSnapshot(nextSnapshot);
-        setMetadataSnapshot(nextMetadata);
+        setMetadataSnapshot(nextSnapshot);
         setPassengerSnapshot(nextPassengerSnapshot);
         setError("");
         traceWorkbench("overview.load.done", {
           mode,
-          lines: Array.isArray(nextMetadata?.lines) ? nextMetadata.lines.length : 0,
+          lines: Array.isArray(nextSnapshot?.lines) ? nextSnapshot.lines.length : 0,
           stationVolumes: Array.isArray(nextPassengerSnapshot?.stationVolumes) ? nextPassengerSnapshot.stationVolumes.length : 0
         });
       })
@@ -140,22 +170,22 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
       cancelled = true;
       traceWorkbench("overview.unmount");
     };
-  }, [activeTransportMode, isActive, refreshNonce, t]);
+  }, [activeMode, isActive, refreshNonce, t]);
 
-  const snapshotFeatureSettings = snapshot?.featureSettings || null;
+  const snapshotFeatureSettings = scopedSnapshot?.featureSettings || null;
 
   const viewModel = useMemo(
     () => (
-      hasScopedLines(snapshot) || hasScopedLines(metadataSnapshot)
-        ? buildOverviewViewModel(snapshot || {}, metadataSnapshot || {}, t)
-        : buildEmptyOverviewViewModel(snapshotFeatureSettings, t)
+      hasScopedLines(scopedSnapshot) || hasScopedLines(scopedMetadataSnapshot)
+        ? buildOverviewViewModel(scopedSnapshot || {}, scopedMetadataSnapshot || {}, t)
+        : buildEmptyOverviewViewModel(snapshotFeatureSettings, t, toOverviewMode(activeMode))
     ),
-    [metadataSnapshot, snapshot, snapshotFeatureSettings, t]
+    [activeMode, scopedMetadataSnapshot, scopedSnapshot, t]
   );
 
   const overviewMetrics = useMemo(
-    () => buildOverviewMetrics(passengerSnapshot || {}),
-    [passengerSnapshot]
+    () => buildOverviewMetrics(scopedPassengerSnapshot || {}),
+    [scopedPassengerSnapshot]
   );
 
   const selectedMode = toOverviewMode(activeTransportMode || viewModel.activeMode);
@@ -173,7 +203,7 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
       }
     });
     return viewModel.modes.map((mode) => summariesByMode.get(mode.mode) || mode);
-  }, [selectedMode, snapshot, metadataSnapshot, t, viewModel.modes]);
+  }, [selectedMode, scopedSnapshot, scopedMetadataSnapshot, t, viewModel.modes]);
   const modeSummary = modeRailModes.find((mode) => mode.mode === selectedMode) || modeRailModes[0] || {
     lineCount: 0,
     appliedDepartureCount: 0
@@ -286,7 +316,7 @@ export default function OverviewPage({ activeTransportMode = "train", isActive =
           </div>
         </aside>
         <main className="rtw-overview-main">
-          <OverviewHeaderStats summary={summary} />
+          <OverviewHeaderStats summary={summary} showSectionLoad={selectedMode !== "Bus"} />
           <OverviewNetworkDiagram
             lines={viewModel.network.lines}
             stations={viewModel.network.stations}

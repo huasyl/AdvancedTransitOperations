@@ -31,6 +31,16 @@ namespace RapidTransitMod.PassengerFlow
             if (state == null || !state.OpenStops.TryGetValue(vehicle, out OpenStop openStop))
                 return;
 
+            Entity runtimeVehicle = port != null ? port.RuntimeVehicle(openStop.Vehicle) : openStop.Vehicle;
+            Entity baselineKey = runtimeVehicle != Entity.Null ? runtimeVehicle : openStop.Vehicle;
+            if (RtLog.VerboseEnabled
+                && state.Baselines.TryGetValue(baselineKey, out PassengerBaseline baseline)
+                && baseline.Passengers.Count > 0
+                && !state.LastProbeFrames.ContainsKey(openStop.Vehicle))
+            {
+                SamplingSystem.ReportMissingProbe();
+            }
+
             EnqueueDepartureSample(port, state, frame, openStop);
             state.OpenStops.Remove(vehicle);
             state.LastProbeFrames.Remove(vehicle);
@@ -83,7 +93,16 @@ namespace RapidTransitMod.PassengerFlow
             state.LastLaunchFrames.Remove(vehicle);
             state.Baselines.Remove(vehicle);
             if (runtimeVehicle != Entity.Null)
+            {
+                state.OpenStops.Remove(runtimeVehicle);
+                state.LastProbeFrames.Remove(runtimeVehicle);
+                state.LastLaunchFrames.Remove(runtimeVehicle);
                 state.Baselines.Remove(runtimeVehicle);
+            }
+
+            state.Trips.RemoveVehicle(vehicle);
+            if (runtimeVehicle != Entity.Null && runtimeVehicle != vehicle)
+                state.Trips.RemoveVehicle(runtimeVehicle);
 
             if (state.PendingSamples.Count == 0)
                 return;
@@ -93,6 +112,7 @@ namespace RapidTransitMod.PassengerFlow
             {
                 PendingSample sample = state.PendingSamples.Dequeue();
                 if (sample.Vehicle != vehicle
+                    && sample.Vehicle != runtimeVehicle
                     && sample.RuntimeVehicle != vehicle
                     && sample.RuntimeVehicle != runtimeVehicle)
                 {
@@ -141,17 +161,20 @@ namespace RapidTransitMod.PassengerFlow
             openStop = default;
             TransitMode mode = TransitMode.Unknown;
             string lineId = string.Empty;
-            if (port == null
-                || !port.TryLineMetadata(line, out mode, out lineId)
-                || (mode != TransitMode.Train && mode != TransitMode.Subway))
+            bool hasMetadata = port != null && port.TryLineMetadata(line, out mode, out lineId);
+            bool supportsMode = mode == TransitMode.Tram || SamplingSystem.SupportsMode(mode);
+            if (!hasMetadata || !supportsMode)
             {
-                state.Aggregates.RecordWarning(
-                    mode,
-                    Aggregates.WarningUnsupportedMode,
-                    lineId,
-                    -1,
-                    state.CurrentBucket,
-                    frame);
+                if (!supportsMode)
+                {
+                    state.Aggregates.RecordWarning(
+                        mode,
+                        Aggregates.WarningUnsupportedMode,
+                        lineId,
+                        -1,
+                        state.CurrentBucket,
+                        frame);
+                }
                 return false;
             }
 
@@ -185,22 +208,26 @@ namespace RapidTransitMod.PassengerFlow
             uint currentFrame,
             OpenStop openStop)
         {
-            int nextWaypointIndex = ResolveNextWaypoint(port, openStop.Line, openStop.OpenWaypointIndex);
+            int nextWaypointIndex = -1;
             int nextStationSakIndex = -1;
-            if (nextWaypointIndex < 0
-                || !state.Anchors.TryForWaypoint(port, openStop.Line, nextWaypointIndex, out StationKey nextStation))
+            if (Sections.Supports(openStop.Mode))
             {
-                state.Aggregates.RecordWarning(
-                    openStop.Mode,
-                    Aggregates.WarningSectionAnchorMissing,
-                    openStop.LineId,
-                    openStop.OpenStationSakIndex,
-                    state.CurrentBucket,
-                    currentFrame);
-            }
-            else
-            {
-                nextStationSakIndex = nextStation.Index;
+                nextWaypointIndex = ResolveNextWaypoint(port, openStop.Line, openStop.OpenWaypointIndex);
+                if (nextWaypointIndex < 0
+                    || !state.Anchors.TryForWaypoint(port, openStop.Line, nextWaypointIndex, out StationKey nextStation))
+                {
+                    state.Aggregates.RecordWarning(
+                        openStop.Mode,
+                        Aggregates.WarningSectionAnchorMissing,
+                        openStop.LineId,
+                        openStop.OpenStationSakIndex,
+                        state.CurrentBucket,
+                        currentFrame);
+                }
+                else
+                {
+                    nextStationSakIndex = nextStation.Index;
+                }
             }
 
             state.PendingSamples.Enqueue(new PendingSample(

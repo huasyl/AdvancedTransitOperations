@@ -10,7 +10,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
         internal PreparedApply Prepare(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "applyBroadcastConfig");
+            ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "applyBroadcastConfig");
             ApplyRequest request =
                 global::RapidTransitMod.Workbenches.Json.Read<ApplyRequest>(requestJson ?? string.Empty);
             if (request != null)
@@ -39,6 +39,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     throw new InvalidOperationException("Duplicate line apply payload was provided.");
                 }
 
+                if (scope.Mode == TransitMode.Bus)
+                {
+                    ValidateBusLine(line);
+                }
+
                 preparedLines.Add(new PreparedLine
                 {
                     LineId = lineId,
@@ -61,6 +66,24 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             }
 
             return new PreparedApply(scope, preparedLines, volumeDirty, volume);
+        }
+
+        private static void ValidateBusLine(ApplyLineConfig line)
+        {
+            if ((line?.platformAnnouncements ?? Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>()).Length > 0)
+            {
+                throw new InvalidOperationException("Bus broadcast does not support platform announcements.");
+            }
+
+            foreach (BroadcastWorkbenchRuleDto rule in line?.rules ?? Array.Empty<BroadcastWorkbenchRuleDto>())
+            {
+                string trigger = rule?.triggerId ?? rule?.trigger ?? string.Empty;
+                if (!string.Equals(trigger, "stop_and_open", StringComparison.Ordinal)
+                    && !string.Equals(trigger, "leave_station", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("Bus broadcast only supports stop_and_open and leave_station rules.");
+                }
+            }
         }
 
         internal ApplyResult Commit(PreparedApply prepared)

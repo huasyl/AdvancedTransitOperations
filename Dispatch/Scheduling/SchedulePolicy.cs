@@ -97,6 +97,13 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         public float SpawnLead(Entity line, float lineDurationFrames)
         {
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle;
+            if (lifecycle == LifecycleKind.Road)
+            {
+                float roadCachedFrames = m_ReadDispatchCache(line);
+                return roadCachedFrames > 0f ? ClampSpawnLeadFrames(roadCachedFrames) : 0f;
+            }
             if (m_Runtime.m_SpawnLeadTheory != null && m_Runtime.m_SpawnLeadTheory.TryRead(line, out float theoryFrames))
                 return ClampSpawnLeadFrames(theoryFrames);
             float cachedFrames = m_ReadDispatchCache(line);
@@ -111,6 +118,10 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         public string SpawnLeadSource(Entity line)
         {
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle;
+            if (lifecycle == LifecycleKind.Road)
+                return m_ReadDispatchCache(line) > 0f ? "bus-history" : "bus-immediate";
             if (m_Runtime.m_SpawnLeadTheory != null && m_Runtime.m_SpawnLeadTheory.TryRead(line, out _))
                 return "rail-eta-theory";
             return m_ReadDispatchCache(line) > 0f ? "legacy-dispatch-cache" : "lap-duration-fallback";

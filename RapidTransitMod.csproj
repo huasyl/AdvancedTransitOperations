@@ -23,6 +23,8 @@
 
   <PropertyGroup Condition="'$(Configuration)'=='Release'">
     <DefineConstants>$(DefineConstants);RT_RELEASE</DefineConstants>
+    <!-- 性能探针默认关闭；临时诊断时使用 -p:EnablePerfLogs=true 重新启用。 -->
+    <DefineConstants Condition="'$(EnablePerfLogs)'=='true'">$(DefineConstants);RT_PERF_LOGS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -170,12 +172,6 @@
     <Copy Condition="'$(Configuration)'!='Debug'" SourceFiles="@(RapidTransitDeployFiles)" DestinationFolder="$(RapidTransitDeployDir)" SkipUnchangedFiles="true" />
     <Copy Condition="'$(Configuration)'!='Debug'" SourceFiles="@(RapidTransitDeployUiFiles)" DestinationFiles="@(RapidTransitDeployUiFiles->'$(RapidTransitDeployDir)\UI\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Copy Condition="'$(Configuration)'!='Debug'" SourceFiles="@(RapidTransitDeployLocaleFiles)" DestinationFiles="@(RapidTransitDeployLocaleFiles->'$(RapidTransitDeployDir)\Locales\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
-  </Target>
-
-  <Target Name="DeployRailEtaHotDebug" AfterTargets="DeployRapidTransitMod" Condition="'$(Configuration)'=='Debug'">
-    <MSBuild Projects="hot\RailEta.Hot\RapidTransitMod.RailEta.Hot.csproj"
-             Targets="Restore;Build"
-             Properties="Configuration=$(Configuration);RapidTransitDeployDir=$(RapidTransitDeployDir)" />
   </Target>
 
   <Target Name="StripSymbolsFromPackage" AfterTargets="RunModPostProcessor" BeforeTargets="DeployWIP" Condition="'$(StripSymbolsForPackage)'=='true'">

@@ -823,10 +823,12 @@ namespace RapidTransitMod
                             bool shouldEvaluateOriginSettle = input.ShouldEvaluateOriginSettle;
                             bool settleAtOrigin = input.SettledAtOrigin;
                             bool forcedAtOrigin = input.ForcedAtOrigin;
-                            if (shouldEvaluateOriginSettle && (atA || forcedAtOrigin) && !inCooldown)
+                            if (shouldEvaluateOriginSettle
+                                && (atA || forcedAtOrigin)
+                                && (!inCooldown || input.IgnoreOriginCooldown))
                             {
                                 bool brokenRecoveredRunning = input.BrokenRecoveredRun;
-                                bool hasMoved = input.RunDistanceReady;
+                                bool hasMoved = input.RunDistanceReady || input.OriginSettleReady;
                                 bool moving = input.Moving;
                                 float travelledDistance = input.TravelledDistance;
                                 float observedLapDistance = input.ObservedLapDistance;

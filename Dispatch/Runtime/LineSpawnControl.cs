@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Game.Pathfind;
 using Game.Prefabs;
 using Game.Routes;
 using Unity.Collections;
@@ -137,10 +138,11 @@ namespace RapidTransitMod
             if (!EntityManager.HasComponent<TransportLineData>(prefab)) return;
             if (!modBuffers.TryGetBuffer(line, out DynamicBuffer<RouteModifier> mods)) return;
 
-            float iDefault = EntityManager.GetComponentData<TransportLineData>(prefab).m_DefaultVehicleInterval;
-            float lineDuration = m_Runtime.m_LineTimes.Duration(line);
-            if (lineDuration <= 0f) lineDuration = iDefault;
-            if (lineDuration <= 0f) return;
+            TransportLineData lineData = EntityManager.GetComponentData<TransportLineData>(prefab);
+            float iDefault = lineData.m_DefaultVehicleInterval;
+            if (!TryGetVanillaStableDuration(line, wps, lineData, out float stableDuration))
+                stableDuration = iDefault;
+            if (stableDuration <= 0f) return;
 
             int actualCount = m_Runtime.m_LineVehicles.Count(line, rvBuffers);
             int targetCount = actualCount;
@@ -161,10 +163,54 @@ namespace RapidTransitMod
             }
 
             float targetInterval = targetCount <= 0
-                ? math.max(iDefault, lineDuration) * 64f
-                : lineDuration / targetCount;
+                ? math.max(iDefault, stableDuration) * 64f
+                : stableDuration / targetCount;
 
             InjectModifier(mods, targetInterval - iDefault);
+        }
+
+        private bool TryGetVanillaStableDuration(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            TransportLineData lineData,
+            out float stableDuration)
+        {
+            stableDuration = 0f;
+            if (!EntityManager.HasBuffer<RouteSegment>(line))
+                return false;
+
+            DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
+            if (segments.Length < waypoints.Length)
+                return false;
+
+            int firstTimedWaypoint = 0;
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                if (!EntityManager.HasComponent<VehicleTiming>(waypoints[i].m_Waypoint))
+                    continue;
+
+                firstTimedWaypoint = i;
+                break;
+            }
+
+            for (int i = 0; i < waypoints.Length; i++)
+            {
+                int segmentIndex = firstTimedWaypoint + i;
+                if (segmentIndex >= waypoints.Length)
+                    segmentIndex -= waypoints.Length;
+                int waypointIndex = segmentIndex + 1;
+                if (waypointIndex >= waypoints.Length)
+                    waypointIndex -= waypoints.Length;
+
+                Entity segment = segments[segmentIndex].m_Segment;
+                if (EntityManager.HasComponent<PathInformation>(segment))
+                    stableDuration += EntityManager.GetComponentData<PathInformation>(segment).m_Duration;
+
+                if (EntityManager.HasComponent<VehicleTiming>(waypoints[waypointIndex].m_Waypoint))
+                    stableDuration += lineData.m_StopDuration;
+            }
+
+            return stableDuration > 0f;
         }
 
         private void ApplyCleanupTargetReductionForLine(

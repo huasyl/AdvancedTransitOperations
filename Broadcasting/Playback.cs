@@ -37,7 +37,7 @@ namespace RapidTransitMod.Broadcasting
 
         internal bool HasActive => m_Sequences.HasActive;
 
-        internal void Start(Entity vehicle, TriggerContext context, string triggerId)
+        internal bool Start(Entity vehicle, TriggerContext context, string triggerId)
             => m_Sequences.Start(vehicle, context, triggerId);
 
         internal bool StartPlatform(
@@ -108,18 +108,18 @@ namespace RapidTransitMod.Broadcasting
         internal IEnumerable<Sequence> PlatformSequences => m_ByPlatformKey.Values;
         internal bool HasActive => m_ByVehicle.Count > 0 || m_ByPlatformKey.Count > 0;
 
-        internal void Start(Entity vehicle, TriggerContext context, string triggerId)
+        internal bool Start(Entity vehicle, TriggerContext context, string triggerId)
         {
             if (vehicle == Entity.Null || string.IsNullOrEmpty(context.LineId) || string.IsNullOrEmpty(triggerId))
             {
-                return;
+                return false;
             }
 
             if (!m_Config.RulesByLine.TryGetValue(context.LineId, out List<BroadcastWorkbenchRuleDto> rules)
                 || rules == null
                 || rules.Count == 0)
             {
-                return;
+                return false;
             }
 
             List<BroadcastWorkbenchRuleDto> matchedRules = rules
@@ -132,7 +132,7 @@ namespace RapidTransitMod.Broadcasting
                 .ToList();
             if (matchedRules.Count == 0)
             {
-                return;
+                return false;
             }
 
             uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
@@ -152,6 +152,7 @@ namespace RapidTransitMod.Broadcasting
             m_LastEventTextByVehicle[vehicle] = BuildEventText(triggerId, context);
             m_Access.InvalidatePanel();
             Advance(state, nowFrame);
+            return true;
         }
 
         internal bool StartPlatform(
@@ -713,6 +714,18 @@ namespace RapidTransitMod.Broadcasting
             AudioManager.AudioSourcePool.Play(audioSource);
             state.ActiveAudioSource = audioSource;
             state.ActiveAudioAssetName = assetName ?? string.Empty;
+            if (RtLog.VerboseEnabled
+                && state.Vehicle != Entity.Null
+                && (string.Equals(state.TriggerId, "stop_and_open", StringComparison.Ordinal)
+                    || string.Equals(state.TriggerId, "leave_station", StringComparison.Ordinal))
+                && m_Access.VehicleView.TryGetLine(state.Vehicle, out Entity line)
+                && TransportModeResolver.Resolve(m_Access.EntityManager, line) == TransitMode.Bus)
+            {
+                m_Access.Log.Info("[BusBroadcast] phase=play vehicle=" + state.Vehicle.Index
+                    + " line=" + state.LineId
+                    + " trigger=" + state.TriggerId
+                    + " asset=" + state.ActiveAudioAssetName);
+            }
             return true;
         }
 

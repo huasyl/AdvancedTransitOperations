@@ -38,7 +38,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal WorkbenchSavePrepareContext Capture(string requestJson)
         {
-            ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "saveNativeWorkbenchDraft");
+            ModeScope scope = Workbenches.ModeRequest.ReadScheduleScope(requestJson, "saveNativeWorkbenchDraft");
             return new WorkbenchSavePrepareContext
             {
                 RequestJson = requestJson ?? string.Empty,
@@ -72,7 +72,16 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     request.mode = prepared.Scope.Token;
                 }
-                List<string> errors = NormalizeRequestForScope(request, prepared.Scope);
+                List<string> errors = Check.RawModeContract(request, prepared.Scope.Mode);
+                if (errors.Count > 0)
+                {
+                    prepared.Request = request;
+                    prepared.Errors = errors;
+                    prepared.ShouldReturnSnapshot = ReturnSnapshot(request);
+                    return prepared;
+                }
+
+                errors.AddRange(NormalizeRequestForScope(request, prepared.Scope));
                 List<WorkbenchLineRuntime> runtimeLines = (context?.RuntimeLines ?? new List<WorkbenchLineRuntime>())
                     .Select(CloneWorkbenchLineRuntime)
                     .ToList();
@@ -89,6 +98,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     context?.ServiceKinds);
                 errors.AddRange(ValidateRequest(
                     request,
+                    prepared.Scope.Mode,
                     runtimeLines,
                     request?.applyDraft == true,
                     depots));
@@ -213,8 +223,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return result;
             }
 
+            string[] changedDepotLines = Array.Empty<string>();
             if (request.lineSettings != null)
             {
+                changedDepotLines = m_Run.ChangedDepotLines(prepared.Scope, request.lineSettings)
+                    .Where(lineId => !string.IsNullOrEmpty(lineId))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
                 m_Run.LineCfg(prepared.Scope, request.lineSettings);
             }
 
@@ -277,6 +292,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_Run.Invalidate();
                 }
             }
+            if (changedDepotLines.Length > 0)
+                m_Run.InvalidateDispatchTiming(changedDepotLines);
             if (persistImmediately)
             {
                 m_Persist.Save();
@@ -546,12 +563,14 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         private List<string> ValidateRequest(
             DispatchWorkbenchSaveRequest request,
+            TransitMode mode,
             List<WorkbenchLineRuntime> runtimeLines,
             bool validateApplyOnlyConstraints,
             List<DispatchWorkbenchDepotDto> depots)
         {
             return Check.Request(
                 request,
+                mode,
                 runtimeLines,
                 validateApplyOnlyConstraints,
                 depots,

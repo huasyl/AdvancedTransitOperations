@@ -6,7 +6,7 @@ const MODE_LABEL_KEYS = {
   Unknown: "nativeWorkbench.overview.mode.unknown"
 };
 
-const MODE_ORDER = ["Subway", "Train"];
+const MODE_ORDER = ["Subway", "Train", "Tram", "Bus"];
 const OVERVIEW_VISIBLE_MODES = new Set(MODE_ORDER);
 
 function asArray(value) {
@@ -42,13 +42,18 @@ function getOverviewModeLabel(mode, t) {
   return t(MODE_LABEL_KEYS[mode] || MODE_LABEL_KEYS.Unknown);
 }
 
-function buildOverviewSystems(featureSettings, t) {
-  return [
+function buildOverviewSystems(featureSettings, t, mode) {
+  const systems = [
     { key: "dispatchEnabled", title: t("nativeWorkbench.overview.system.dispatch"), enabled: featureSettings?.dispatchEnabled !== false },
-    { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false },
     { key: "broadcastEnabled", title: t("nativeWorkbench.overview.system.broadcast"), enabled: featureSettings?.broadcastEnabled !== false },
     { key: "depotLockEnabled", title: t("nativeWorkbench.overview.system.depotLock"), enabled: featureSettings?.depotLockEnabled !== false }
   ];
+
+  if (mode !== "Tram" && mode !== "Bus") {
+    systems.splice(1, 0, { key: "bypassEnabled", title: t("nativeWorkbench.overview.system.bypass"), enabled: featureSettings?.bypassEnabled !== false });
+  }
+
+  return systems;
 }
 
 function getLineName(line, index, t) {
@@ -175,7 +180,7 @@ export function buildOverviewViewModel(snapshot, metadataSnapshot, t) {
         speedKmh: Number(vehicle?.speedKmh || 0)
       }))
     },
-    systems: buildOverviewSystems(snapshot?.featureSettings, t),
+    systems: buildOverviewSystems(snapshot?.featureSettings, t, activeMode),
     warnings: []
   };
 }

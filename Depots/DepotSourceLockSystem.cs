@@ -966,6 +966,13 @@ namespace RapidTransitMod
                         continue;
                     }
 
+                    if (IsRoadLine(line))
+                    {
+                        m_ConfiguredDepotBlockedRequests.Remove(requestEntity);
+                        ClearConfiguredSourceRetry(requestEntity);
+                        continue;
+                    }
+
                     if (!IsConfiguredDepotOutboundPathBlocked(requestEntity, configuredDepot, out Entity blocker, out Entity blockedLane))
                         continue;
 
@@ -1029,13 +1036,14 @@ namespace RapidTransitMod
                 lineVehicleModels = EntityManager.GetBuffer<VehicleModel>(line, true);
             }
 
+            bool road = IsRoadLine(line);
             ComponentLookup<PrefabRef> prefabLookup = GetComponentLookup<PrefabRef>(true);
             ComponentLookup<MultipleUnitTrainData> multipleUnitTrainLookup = GetComponentLookup<MultipleUnitTrainData>(true);
 
             for (int i = 0; i < ownedVehicles.Length; i++)
             {
                 Entity source = ResolveTransportVehicleController(ownedVehicles[i].m_Vehicle);
-                if (CanReuseConfiguredDepotVehicle(source, configuredDepot, lineVehicleModels, hasLineVehicleModels, ref prefabLookup, ref multipleUnitTrainLookup))
+                if (CanReuseConfiguredDepotVehicle(source, configuredDepot, lineVehicleModels, hasLineVehicleModels, road, ref prefabLookup, ref multipleUnitTrainLookup))
                 {
                     return source;
                 }
@@ -1079,6 +1087,7 @@ namespace RapidTransitMod
             Entity configuredDepot,
             DynamicBuffer<VehicleModel> lineVehicleModels,
             bool hasLineVehicleModels,
+            bool road,
             ref ComponentLookup<PrefabRef> prefabLookup,
             ref ComponentLookup<MultipleUnitTrainData> multipleUnitTrainLookup)
         {
@@ -1095,6 +1104,16 @@ namespace RapidTransitMod
             if (owner != configuredDepot)
                 return false;
 
+            if (road)
+            {
+                return CanReuseRoadVehicle(
+                    vehicle,
+                    lineVehicleModels,
+                    hasLineVehicleModels,
+                    ref prefabLookup,
+                    ref multipleUnitTrainLookup);
+            }
+
             bool parked = EntityManager.HasComponent<ParkedCar>(vehicle) || EntityManager.HasComponent<ParkedTrain>(vehicle);
             if (!parked)
                 return false;
@@ -1102,13 +1121,14 @@ namespace RapidTransitMod
             if (EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
             {
                 Game.Vehicles.PublicTransport publicTransport = EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+                PublicTransportFlags blockedFlags = PublicTransportFlags.EnRoute
+                    | PublicTransportFlags.Evacuating
+                    | PublicTransportFlags.PrisonerTransport
+                    | PublicTransportFlags.RequiresMaintenance
+                    | PublicTransportFlags.DummyTraffic
+                    | PublicTransportFlags.Disabled;
                 if (publicTransport.m_RequestCount > 0
-                    || (publicTransport.m_State & (PublicTransportFlags.EnRoute
-                        | PublicTransportFlags.Evacuating
-                        | PublicTransportFlags.PrisonerTransport
-                        | PublicTransportFlags.RequiresMaintenance
-                        | PublicTransportFlags.DummyTraffic
-                        | PublicTransportFlags.Disabled)) != 0)
+                    || (publicTransport.m_State & blockedFlags) != 0)
                 {
                     return false;
                 }
@@ -1130,14 +1150,56 @@ namespace RapidTransitMod
                 return false;
             }
 
+            return MatchesVehicleModel(
+                vehicle,
+                lineVehicleModels,
+                hasLineVehicleModels,
+                ref prefabLookup,
+                ref multipleUnitTrainLookup);
+        }
+
+        private bool CanReuseRoadVehicle(
+            Entity vehicle,
+            DynamicBuffer<VehicleModel> lineVehicleModels,
+            bool hasLineVehicleModels,
+            ref ComponentLookup<PrefabRef> prefabLookup,
+            ref ComponentLookup<MultipleUnitTrainData> multipleUnitTrainLookup)
+        {
+            if (!MatchesVehicleModel(
+                    vehicle,
+                    lineVehicleModels,
+                    hasLineVehicleModels,
+                    ref prefabLookup,
+                    ref multipleUnitTrainLookup)
+                || !EntityManager.HasComponent<ParkedCar>(vehicle)
+                || !EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle))
+            {
+                return false;
+            }
+
+            Game.Vehicles.PublicTransport publicTransport =
+                EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
+            return publicTransport.m_RequestCount == 0
+                && (publicTransport.m_State & (PublicTransportFlags.EnRoute
+                    | PublicTransportFlags.Returning
+                    | PublicTransportFlags.RequiresMaintenance
+                    | PublicTransportFlags.DummyTraffic
+                    | PublicTransportFlags.Disabled)) == 0;
+        }
+
+        private bool MatchesVehicleModel(
+            Entity vehicle,
+            DynamicBuffer<VehicleModel> lineVehicleModels,
+            bool hasLineVehicleModels,
+            ref ComponentLookup<PrefabRef> prefabLookup,
+            ref ComponentLookup<MultipleUnitTrainData> multipleUnitTrainLookup)
+        {
             if (!hasLineVehicleModels || lineVehicleModels.Length == 0)
                 return true;
 
             DynamicBuffer<LayoutElement> layout = default;
             if (EntityManager.HasBuffer<LayoutElement>(vehicle))
-            {
                 layout = EntityManager.GetBuffer<LayoutElement>(vehicle, true);
-            }
 
             return RouteUtils.CheckVehicleModel(
                 lineVehicleModels,
@@ -1145,6 +1207,14 @@ namespace RapidTransitMod
                 layout,
                 ref prefabLookup,
                 ref multipleUnitTrainLookup);
+        }
+
+        private bool IsRoadLine(Entity line)
+        {
+            return line != Entity.Null
+                && EntityManager.Exists(line)
+                && TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(EntityManager, line)).Lifecycle == LifecycleKind.Road;
         }
 
         private void EnsurePendingRequestPathContainer(Entity request)
@@ -1183,6 +1253,18 @@ namespace RapidTransitMod
                 return false;
             }
 
+            if (IsRoadLine(line))
+            {
+                if (!RouteWaypointEndpointResolver.TryGetRoadOrigin(EntityManager, line, out destinationWaypoint))
+                {
+                    LogInvalidRoadOrigin(line);
+                    return false;
+                }
+
+                destinationWaypointIndex = 0;
+                return true;
+            }
+
             DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
             for (int i = 0; i < waypoints.Length; i++)
             {
@@ -1196,6 +1278,20 @@ namespace RapidTransitMod
             }
 
             return false;
+        }
+
+        private void LogInvalidRoadOrigin(Entity line)
+        {
+            const string key = "invalid-road-origin";
+            if (m_RequestDecisionLogCache.TryGetValue(line, out string existing)
+                && string.Equals(existing, key, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            m_RequestDecisionLogCache[line] = key;
+            Mod.log.Info("[RoadPreparing] action=invalid-origin line=" + line.Index
+                + " wp0不满足Connected/BoardingVehicle始发契约，拒绝配置车库请求");
         }
 
         private bool TryGetRouteConnectionData(Entity line, out RouteConnectionData routeConnectionData, out PathMethod pathMethods)

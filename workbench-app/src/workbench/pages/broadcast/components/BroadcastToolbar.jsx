@@ -9,6 +9,7 @@ export default function BroadcastToolbar({ toolbar, refs, actions }) {
     lineOptions,
     selectedLine,
     selectedLineId,
+    supportsPlatforms,
     broadcastWarnings,
   } = toolbar;
 
@@ -30,23 +31,26 @@ export default function BroadcastToolbar({ toolbar, refs, actions }) {
             type="button"
             className={`dw-bc-tab ${activeTab === "mapping" ? "is-active" : ""}`}
             onClick={() => {
+              actions.refreshNames();
               actions.setActiveTab("mapping");
               actions.setTrayContext(null);
             }}
           >
             {labels.mappingTab}
           </button>
-          <button
-            type="button"
-            className={`dw-bc-tab ${activeTab === "platform" ? "is-active" : ""}`}
-            onClick={() => {
-              actions.setActiveTab("platform");
-              actions.setTrayContext(null);
-              actions.setMappingTray(null);
-            }}
-          >
-            {labels.platformTab}
-          </button>
+          {supportsPlatforms ? (
+            <button
+              type="button"
+              className={`dw-bc-tab ${activeTab === "platform" ? "is-active" : ""}`}
+              onClick={() => {
+                actions.setActiveTab("platform");
+                actions.setTrayContext(null);
+                actions.setMappingTray(null);
+              }}
+            >
+              {labels.platformTab}
+            </button>
+          ) : null}
         </div>
 
         <div className="dw-bc-main-tools">
@@ -54,6 +58,9 @@ export default function BroadcastToolbar({ toolbar, refs, actions }) {
             open={lineDropdownOpen}
             onOpenChange={(next) => {
               actions.setTriggerDropdownOpen(false);
+              if (next) {
+                actions.refreshNames();
+              }
               actions.setLineDropdownOpen(next);
             }}
             onSelect={(value) => {

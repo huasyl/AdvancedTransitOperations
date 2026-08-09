@@ -167,6 +167,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     PushInvalidations();
                     Push(TransitMode.Train);
                     Push(TransitMode.Subway);
+                    Push(TransitMode.Tram);
+                    Push(TransitMode.Bus);
                 }
                 else if (m_CanPushSnapshot())
                 {
@@ -176,6 +178,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     Push(TransitMode.Train);
                     Push(TransitMode.Subway);
+                    Push(TransitMode.Tram);
+                    Push(TransitMode.Bus);
                 }
             }
         }
@@ -247,6 +251,53 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_StationsStale = false;
             }
             return CopyStations(stations);
+        }
+
+        internal void UpdateNames(
+            IEnumerable<DispatchWorkbenchLineDto> lines,
+            IEnumerable<DispatchWorkbenchDepotDto> depots)
+        {
+            Dictionary<string, DispatchWorkbenchLineDto> linesById =
+                new Dictionary<string, DispatchWorkbenchLineDto>(StringComparer.Ordinal);
+            foreach (DispatchWorkbenchLineDto line in lines ?? Enumerable.Empty<DispatchWorkbenchLineDto>())
+            {
+                if (line != null && !string.IsNullOrEmpty(line.id))
+                {
+                    linesById[line.id] = line;
+                }
+            }
+            for (int i = 0; i < m_Lines.Count; i++)
+            {
+                WorkbenchLineRuntime cached = m_Lines[i];
+                if (cached == null
+                    || !linesById.TryGetValue(cached.Id ?? string.Empty, out DispatchWorkbenchLineDto current))
+                {
+                    continue;
+                }
+
+                cached.Name = current.name ?? cached.Name ?? string.Empty;
+                cached.OriginStationId = current.originStationId ?? cached.OriginStationId ?? string.Empty;
+                cached.OriginStationName = current.originStationName ?? cached.OriginStationName ?? string.Empty;
+            }
+
+            Dictionary<string, DispatchWorkbenchDepotDto> depotsById =
+                new Dictionary<string, DispatchWorkbenchDepotDto>(StringComparer.Ordinal);
+            foreach (DispatchWorkbenchDepotDto depot in depots ?? Enumerable.Empty<DispatchWorkbenchDepotDto>())
+            {
+                if (depot != null && !string.IsNullOrEmpty(depot.id))
+                {
+                    depotsById[depot.id] = depot;
+                }
+            }
+            for (int i = 0; i < m_Depots.Count; i++)
+            {
+                DispatchWorkbenchDepotDto cached = m_Depots[i];
+                if (cached != null
+                    && depotsById.TryGetValue(cached.id ?? string.Empty, out DispatchWorkbenchDepotDto current))
+                {
+                    cached.name = current.name ?? cached.name ?? string.Empty;
+                }
+            }
         }
 
         private bool TickLines()
@@ -494,6 +545,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             payload.mode = TransitModeCodec.Format(TransitMode.Train);
             m_PushInvalidation(payload);
             payload.mode = TransitModeCodec.Format(TransitMode.Subway);
+            m_PushInvalidation(payload);
+            payload.mode = TransitModeCodec.Format(TransitMode.Tram);
+            m_PushInvalidation(payload);
+            payload.mode = TransitModeCodec.Format(TransitMode.Bus);
             m_PushInvalidation(payload);
             m_PendingInvalidationReasons.Clear();
         }

@@ -29,12 +29,40 @@ function TrainIcon() {
   );
 }
 
+function TramIcon() {
+  return (
+    <svg className="rtw-overview-mode-svg rtw-overview-tram-svg" viewBox="0 0 32 32" aria-hidden="true">
+      <path className="rtw-overview-tram-path" stroke="none" d="M21 6h-4V4h6V2H9v2h6v2h-4a5.006 5.006 0 0 0-5 5v11a4.99 4.99 0 0 0 3.582 4.77L8.198 30h2.176l1.285-3h8.682l1.286 3h2.175l-1.384-3.23A4.99 4.99 0 0 0 26 22V11a5.006 5.006 0 0 0-5-5M11 8h10a2.995 2.995 0 0 1 2.816 2H8.184A2.995 2.995 0 0 1 11 8m13 13h-3v2h2.816A2.995 2.995 0 0 1 21 25H11a2.995 2.995 0 0 1-2.816-2H11v-2H8v-2h16Zm0-4H8v-5h16Z" />
+    </svg>
+  );
+}
+
+function BusIcon() {
+  return (
+    <svg className="rtw-overview-mode-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 6v6" />
+      <path d="M15 6v6" />
+      <path d="M2 12h19.6" />
+      <path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3" />
+      <circle cx="7" cy="18" r="2" />
+      <path d="M9 18h5" />
+      <circle cx="16" cy="18" r="2" />
+    </svg>
+  );
+}
+
 function getModeIcon(mode, label) {
   if (mode === "Subway") {
     return <SubwayIcon />;
   }
   if (mode === "Train") {
     return <TrainIcon />;
+  }
+  if (mode === "Tram") {
+    return <TramIcon />;
+  }
+  if (mode === "Bus") {
+    return <BusIcon />;
   }
   return label.slice(0, 1);
 }

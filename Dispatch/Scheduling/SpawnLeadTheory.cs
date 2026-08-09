@@ -38,6 +38,8 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         internal void Ensure(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
         {
+            if (!IsRailLine(line))
+                return;
             if (!TryFacts(line, waypoints, out Entry facts, out string failure))
             {
                 Invalidate(line, failure);
@@ -99,6 +101,11 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         internal bool TryRead(Entity line, out float frames)
         {
+            if (!IsRailLine(line))
+            {
+                frames = 0f;
+                return false;
+            }
             if (m_Entries.TryGetValue(line, out Entry entry) && entry.Ready)
             {
                 frames = entry.TheoryFrames + m_Runtime.m_DispatchCache.ReadPrep(line);
@@ -260,6 +267,14 @@ namespace RapidTransitMod.Dispatch.Scheduling
         }
 
         private static long Pack(Entity value) => ((long)(uint)value.Index << 32) | (uint)value.Version;
+
+        private bool IsRailLine(Entity line)
+        {
+            return line != Entity.Null
+                && m_Runtime.EntityManager.Exists(line)
+                && TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle == LifecycleKind.Rail;
+        }
 
         private static ulong Mix(ulong hash, Entity value)
         {

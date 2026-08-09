@@ -1,4 +1,4 @@
-namespace RapidTransitMod
+namespace RapidTransitMod.Dispatch.Lines
 {
     internal struct LineTimeProfileHeader
     {

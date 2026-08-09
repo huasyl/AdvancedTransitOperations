@@ -12,25 +12,21 @@ Advanced Transit Operations (ATO) is a public transit dispatch mod for Cities: S
 
 If you are tired of controlling public transit only with sliders, or if you want more precise control over when a line departs, how Rapid and Local services operate, and what broadcasts play on vehicles and platforms, ATO gives your public transit system more operational possibilities.
 
-The current version mainly supports Train and Subway. Supported languages: English, Simplified Chinese, and Japanese.
+The current version supports Train, Subway, Tram, and Bus. Supported languages: English, Simplified Chinese, and Japanese.
 
-## Version 0.2.1 — Compatibility &amp; Improvements
+## 🚋🚌 The wait is over!
 
-This update adds compatibility with Realistic Trips, improves Workbench performance and automatic timetable previews, and fixes issues with timetable reapply prompts and minimum departure-gap checks across midnight.
+This update adds support for trams and buses, bringing ATO’s scheduling, timetables, broadcast system, and other features to more types of public transport.
+
+Whether it’s trams running through city streets or buses handling everyday local service, they can now be managed within the same operations system.
 
 Please refer to the Update History for the complete changelog.
-
-## Version 0.2.0 — Performance Overhaul 🚀
-
-Version 0.2.0 introduced a major refactor of the mod’s update loop, eliminating most redundant calculations. In relatively complex test scenarios, the mod’s CPU workload was reduced by approximately 70%–80% compared with its initial release, while also laying the groundwork for future support for other transport types.
-
-It also increased the maximum broadcast volume and improved passenger handling when vehicles return to the depot.
 
 ## Core Gameplay
 
 ### Operate Lines with Your Own Timetables
 
-Assign specific departure times to each Train or Subway line, with separate timetables for peak, off-peak, and final services.
+Assign specific departure times to each Train, Subway, Tram, or Bus line, with separate timetables for peak, off-peak, and final services.
 
 ### Run Passing Operations
 
@@ -89,25 +85,21 @@ Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交
 
 如果您已经厌倦了只靠车辆数量和间隔滑块控制公共交通，或者希望更精确地安排线路发车时间、设计快慢车运营方案、制作车辆和站台广播，ATO 可以为您的公共交通系统提供更多运营可能。
 
-当前主要支持火车和地铁。支持语言：英语、简体中文、日语。
+当前支持火车、地铁、有轨电车和公交。支持语言：英语、简体中文、日语。
 
-## V0.2.1——兼容性与细节优化
+## 🚋🚌 久等了！
 
-本次更新增加了对 Realistic Trips 的兼容支持，优化了工作台打开时的性能和自动时刻表预览，并修复了时刻表重新应用提示及跨午夜最小发车间隔判断问题。
+此次更新加入了对有轨电车和公交的支持，ATO 现在可以将调度、时刻表、广播等功能应用到更多类型的公共交通线路。
+
+无论是穿行于城市街道的有轨电车，还是承担日常接驳的公交线路，现在都可以纳入同一套运营体系。
 
 完整内容请参阅更新历史。
-
-## V0.2.0——性能重构 🚀
-
-V0.2.0 重构了 Mod 的更新循环，消除了大部分重复计算。在较复杂的测试场景中，CPU 开销相较初始版本降低约 70%—80%，同时为未来支持其他交通类型打下了基础。
-
-该版本还提高了广播最大音量，并改善了车辆回库时的乘客处理。
 
 ## 核心玩法
 
 ### 按自己的时刻表运营线路
 
-为火车和地铁线路安排具体发车时刻，并分别设置高峰、平峰和末班服务。
+为火车、地铁、有轨电车和公交线路安排具体发车时刻，并分别设置高峰、平峰和末班服务。
 
 ### 开行快车、慢车与越行服务
 
@@ -178,7 +170,7 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.2.1" />
+  <ModVersion Value="0.3.1" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -187,16 +179,14 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <RequiredDLC Value="" />
   <!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
   <ChangeLog>
+## Performance
+
+- Improved performance during the initial period after loading a save.
+
 ## Improvements
 
-- Added compatibility with Realistic Trips.
-- Improved workbench performance while open, reducing its impact on game framerate and improving page transitions and animation smoothness.
-- Improved automatic timetable previews: incomplete or invalid time input no longer reuses stale preview results.
-
-## Bug Fixes
-
-- Fixed an issue where timetable changes were not marked as pending after changing the origin waiting limit, maximum station dwell time, or depot selection on the Dispatch Control page.
-- Fixed incorrect five-minute minimum departure-gap detection for same-origin departures across midnight.
+1. Line, depot, and stop names now refresh automatically when opening the corresponding dropdowns and interfaces.
+2. Improved parts of the layout on the Broadcast page.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />

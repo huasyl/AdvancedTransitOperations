@@ -43,7 +43,7 @@ namespace RapidTransitMod
                 m_TypeMask = TypeMask.StaticObjects | TypeMask.Net | TypeMask.Areas | TypeMask.Lanes,
                 m_Flags = RaycastFlags.Markers | RaycastFlags.Decals,
                 m_CollisionMask = CollisionMask.OnGround | CollisionMask.Overground | CollisionMask.ExclusiveGround,
-                m_NetLayerMask = Layer.TrainTrack
+                m_NetLayerMask = Layer.TrainTrack | Layer.TramTrack
             };
             m_RaycastSystem.AddInput(this, input);
         }

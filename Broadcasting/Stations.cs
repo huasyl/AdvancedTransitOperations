@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Game.Common;
 using Game.Routes;
+using RapidTransitMod.Core;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
@@ -445,12 +446,26 @@ namespace RapidTransitMod.Broadcasting
             return false;
         }
 
+        TransportModeProfile profile = TransportModeProfile.GetProfile(
+            TransportModeResolver.Resolve(m_Access.EntityManager, line));
+        LifecycleKind lifecycle = profile.Lifecycle;
+        if (lifecycle != LifecycleKind.Rail && lifecycle != LifecycleKind.Road)
+        {
+            m_LineCaches.Remove(line);
+            return false;
+        }
+
         ulong signature = m_Access.Signature(waypoints);
         if (m_LineCaches.TryGetValue(line, out cache)
             && cache != null
             && cache.Signature == signature)
         {
-            return cache.Stations.Length > 0;
+            if (lifecycle == LifecycleKind.Rail
+                || cache.TurnbackStations == null
+                || cache.TurnbackStations.Length == 0)
+            {
+                return cache.Stations.Length > 0;
+            }
         }
 
         int waypointCount = waypoints.Length;
@@ -552,7 +567,9 @@ namespace RapidTransitMod.Broadcasting
                 ? stationArray[0].WaypointIndex
                 : -1
         };
-        cache.TurnbackStations = ResolveTurnbackStations(line, waypoints, cache);
+        cache.TurnbackStations = lifecycle == LifecycleKind.Rail
+            ? ResolveTurnbackStations(line, waypoints, cache)
+            : Array.Empty<ResolvedStation>();
         m_LineCaches[line] = cache;
         return stationArray.Length > 0;
     }
@@ -872,14 +889,16 @@ namespace RapidTransitMod.Broadcasting
         }
 
         ResolvedStation terminalStation = cache.Stations[0];
-        ResolvedStation turnbackStation = TryTurnback(
-            vehicle,
-            line,
-            waypoints,
-            cache,
-            out ResolvedStation resolvedTurnbackStation)
-            ? resolvedTurnbackStation
-            : null;
+        ResolvedStation turnbackStation = IsBus(line)
+            ? null
+            : (TryTurnback(
+                vehicle,
+                line,
+                waypoints,
+                cache,
+                out ResolvedStation resolvedTurnbackStation)
+                ? resolvedTurnbackStation
+                : null);
         string lineId = m_Access.DraftKey(m_Access.LineId(line));
         context = new VehicleStation(
             lineId,
@@ -912,6 +931,13 @@ namespace RapidTransitMod.Broadcasting
         }
 
         return true;
+    }
+
+    private bool IsBus(Entity line)
+    {
+        return line != Entity.Null
+            && m_Access.EntityManager.Exists(line)
+            && TransportModeResolver.Resolve(m_Access.EntityManager, line) == TransitMode.Bus;
     }
 
     private bool TryTurnback(

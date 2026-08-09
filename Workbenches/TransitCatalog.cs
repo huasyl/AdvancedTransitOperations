@@ -20,7 +20,7 @@ namespace RapidTransitMod.Workbenches
 
         private static string Refresh(string requestJson, string callName)
         {
-            ModeScope scope = ModeRequest.ReadScope(requestJson, callName);
+            ModeScope scope = ModeRequest.ReadScheduleScope(requestJson, callName);
             string preferredLineId = scope.NormalizeLineId(ModeRequest.ReadPreferredLine(requestJson));
             ModRuntimeHostSystem runtime = ModRuntimeHostSystem.Instance;
             uint frame = runtime?.m_SimulationSystem != null ? runtime.m_SimulationSystem.frameIndex : 0u;
@@ -28,7 +28,42 @@ namespace RapidTransitMod.Workbenches
             if (runtime == null || runtime.m_WorkbenchCatalogCache == null)
                 return Json.Write(Empty(scope, frame));
 
-            return Json.Write(Build(runtime, scope, preferredLineId, frame));
+            return Json.Write(ModeRequest.ReadNamesOnly(requestJson)
+                ? BuildNames(runtime, scope, preferredLineId, frame)
+                : Build(runtime, scope, preferredLineId, frame));
+        }
+
+        private static TransitCatalogSnapshot BuildNames(
+            ModRuntimeHostSystem runtime,
+            ModeScope scope,
+            string preferredLineId,
+            uint frame)
+        {
+            List<WorkbenchLineRuntime> runtimeLines = runtime.m_WorkbenchCatalogCache.RuntimeLines()
+                .Where(line => line != null && scope.MatchesLineId(line.Id))
+                .ToList();
+            Catalog catalog = runtime.m_WorkbenchBridge.Catalog();
+            DispatchWorkbenchLineDto[] lines = runtimeLines
+                .Select(line => ToNameDto(catalog, line))
+                .Where(line => line != null)
+                .ToArray();
+            WorkbenchLineRuntime activeLine = ResolveActiveLine(runtimeLines, preferredLineId);
+            DispatchWorkbenchDepotDto[] depots = FilterDepots(catalog.Depots(), runtimeLines);
+            runtime.m_WorkbenchCatalogCache.UpdateNames(lines, depots);
+
+            return new TransitCatalogSnapshot
+            {
+                mode = scope.Token,
+                selectedLineId = activeLine?.Id ?? preferredLineId ?? string.Empty,
+                selectedEditLine = activeLine?.Id ?? preferredLineId ?? string.Empty,
+                mergedView = new DispatchWorkbenchMergedView(),
+                lines = lines,
+                depots = depots,
+                stations = Array.Empty<DispatchWorkbenchStationDto>(),
+                version = runtime.m_WorkbenchBridge.Version.ToString(),
+                sourceMode = "transit-catalog-names",
+                generatedAtFrame = frame
+            };
         }
 
         private static TransitCatalogSnapshot Build(
@@ -121,6 +156,29 @@ namespace RapidTransitMod.Workbenches
                 unsupportedReason = line.UnsupportedReason ?? string.Empty,
                 originStatus = line.OriginStatus ?? string.Empty,
                 originMessageKey = line.OriginMessageKey ?? string.Empty
+            };
+        }
+
+        private static DispatchWorkbenchLineDto ToNameDto(
+            Catalog catalog,
+            WorkbenchLineRuntime line)
+        {
+            if (catalog == null || line == null)
+                return null;
+
+            catalog.LineOrigin(line.Entity, out string originId, out string originName);
+            string name = catalog.Name(line.Entity);
+            return new DispatchWorkbenchLineDto
+            {
+                id = line.Id ?? string.Empty,
+                name = string.IsNullOrEmpty(name) ? line.Name ?? string.Empty : name,
+                originStationId = string.IsNullOrEmpty(originId)
+                    ? line.OriginStationId ?? string.Empty
+                    : originId,
+                originStationName = string.IsNullOrEmpty(originName)
+                    ? line.OriginStationName ?? string.Empty
+                    : originName,
+                transportType = line.TransportType ?? string.Empty
             };
         }
 

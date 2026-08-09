@@ -27,7 +27,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string LoadBroadcastWorkbenchSnapshotJson(string requestJson)
                 {
-                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "loadBroadcastSnapshot");
+                    ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "loadBroadcastSnapshot");
                     string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
                     LoadWorkbench();
                     using (UseScope(scope))
@@ -38,13 +38,55 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 public string RefreshBroadcastWorkbenchSnapshotJson(string requestJson)
                 {
-                    ModeScope scope = Workbenches.ModeRequest.ReadScope(requestJson, "refreshBroadcastSnapshot");
+                    ModeScope scope = Workbenches.ModeRequest.ReadBroadcastScope(requestJson, "refreshBroadcastSnapshot");
                     string preferredLineId = scope.NormalizeLineId(Workbenches.ModeRequest.ReadPreferredLine(requestJson));
+                    if (Workbenches.ModeRequest.ReadNamesOnly(requestJson))
+                    {
+                        using (UseScope(scope))
+                        {
+                            return global::RapidTransitMod.Workbenches.Json.Write(BuildNames(scope, preferredLineId));
+                        }
+                    }
+
                     LoadWorkbench();
                     using (UseScope(scope))
                     {
                         return global::RapidTransitMod.Workbenches.Json.Write(Build(scope, preferredLineId));
                     }
+                }
+
+                private BroadcastWorkbenchSnapshot BuildNames(ModeScope scope, string lineId)
+                {
+                    List<WorkbenchLineRuntime> runtimeLines = Lines()
+                        .Where(line => line != null && scope.MatchesLineId(line.Id))
+                        .ToList();
+                    WorkbenchLineRuntime activeRuntime = FindLine(runtimeLines, lineId);
+                    List<StationGroup> stationGroups = activeRuntime != null
+                        ? Groups(activeRuntime.Entity)
+                        : new List<StationGroup>();
+
+                    return new BroadcastWorkbenchSnapshot
+                    {
+                        mode = scope.Token,
+                        selectedLineId = activeRuntime?.Id ?? string.Empty,
+                        lines = runtimeLines.Select(Line).ToArray(),
+                        stations = stationGroups
+                            .Where(group => group?.Representative != null)
+                            .Select(group => CloneDispatchWorkbenchStationDto(
+                                group.Representative,
+                                group.StopEntity,
+                                group.AnchorEntity))
+                            .ToArray(),
+                        turnbackPoints = Array.Empty<BroadcastWorkbenchTurnbackPointDto>(),
+                        stationBindings = Array.Empty<BroadcastWorkbenchStationBindingDto>(),
+                        rules = Array.Empty<BroadcastWorkbenchRuleDto>(),
+                        platformAnnouncements = Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>(),
+                        assetDirectory = string.Empty,
+                        assets = Array.Empty<BroadcastWorkbenchAssetDto>(),
+                        version = m_WorkbenchSnapshotVersion.ToString(),
+                        sourceMode = "game-backend-names",
+                        warnings = Array.Empty<string>()
+                    };
                 }
 
                 internal BroadcastWorkbenchSnapshot Build(string lineId)
@@ -81,7 +123,8 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     BroadcastWorkbenchRuleDto[] rules = activeRuntime != null
                         ? m_Ctx.Rules.DraftRows(activeRuntime.Id)
                         : Array.Empty<BroadcastWorkbenchRuleDto>();
-                    BroadcastWorkbenchPlatformAnnouncementDto[] platformAnnouncements = activeRuntime != null
+                    bool supportsPlatforms = scope.Mode != TransitMode.Bus;
+                    BroadcastWorkbenchPlatformAnnouncementDto[] platformAnnouncements = supportsPlatforms && activeRuntime != null
                         ? m_Ctx.Platforms.DraftRows(activeRuntime.Id, stationGroups)
                         : Array.Empty<BroadcastWorkbenchPlatformAnnouncementDto>();
                     string activeLineId = activeRuntime?.Id ?? string.Empty;
@@ -105,7 +148,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                 group.StopEntity,
                                 group.AnchorEntity))
                             .ToArray(),
-                        turnbackPoints = activeRuntime != null
+                        turnbackPoints = supportsPlatforms && activeRuntime != null
                             ? Turnbacks(activeRuntime.Entity, stationGroups)
                             : Array.Empty<BroadcastWorkbenchTurnbackPointDto>(),
                         stationBindings = stationBindings,
@@ -423,11 +466,12 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         return new DispatchWorkbenchLineDto();
                     }
 
+                    string liveName = m_Access.Name(runtime.Entity);
                     return new DispatchWorkbenchLineDto
                     {
                         id = runtime.Id,
                         sourceLineId = runtime.Entity.Index.ToString(),
-                        name = runtime.Name,
+                        name = string.IsNullOrEmpty(liveName) ? runtime.Name : liveName,
                         kind = runtime.Kind,
                         direction = "up",
                         stationCount = runtime.StationCount,

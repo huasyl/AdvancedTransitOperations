@@ -2,6 +2,7 @@ using System;
 using Game.Net;
 using Game.Prefabs;
 using Game.Routes;
+using Game.Vehicles;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -58,6 +59,7 @@ namespace RapidTransitMod
     {
         public const string ReasonOriginOutsideEndpoint = "origin-outside-endpoint";
         public const string ReasonOriginNotPassengerStop = "origin-not-passenger-stop";
+        public const string ReasonRoadOriginInvalid = "road-origin-invalid";
 
         public readonly bool Supported;
         public readonly string Reason;
@@ -131,7 +133,17 @@ namespace RapidTransitMod
             if (waypoints.Length < 2)
                 return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonOriginNotPassengerStop);
 
+            bool isRoad = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(entityManager, route)).Lifecycle == LifecycleKind.Road;
             Entity firstWaypoint = waypoints[0].m_Waypoint;
+            if (isRoad && IsOutsideRoadOrigin(entityManager, firstWaypoint))
+                return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonOriginOutsideEndpoint);
+
+            if (isRoad && !TryGetRoadOrigin(entityManager, waypoints, out _))
+            {
+                return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonRoadOriginInvalid);
+            }
+
             if (TryResolveRouteWaypointEndpoint(entityManager, firstWaypoint, out _))
                 return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonOriginOutsideEndpoint);
 
@@ -141,6 +153,53 @@ namespace RapidTransitMod
                 return LineDispatchSupport.CreateSupported();
 
             return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonOriginNotPassengerStop);
+        }
+
+        internal static bool TryGetRoadOrigin(
+            EntityManager entityManager,
+            Entity route,
+            out Entity origin)
+        {
+            origin = Entity.Null;
+            if (route == Entity.Null
+                || !entityManager.Exists(route)
+                || !entityManager.HasBuffer<RouteWaypoint>(route))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = entityManager.GetBuffer<RouteWaypoint>(route, true);
+            return TryGetRoadOrigin(entityManager, waypoints, out origin);
+        }
+
+        internal static bool TryGetRoadOrigin(
+            EntityManager entityManager,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out Entity origin)
+        {
+            origin = Entity.Null;
+            if (waypoints.Length == 0)
+                return false;
+
+            origin = waypoints[0].m_Waypoint;
+            if (origin == Entity.Null
+                || !entityManager.Exists(origin)
+                || !entityManager.HasComponent<Connected>(origin))
+            {
+                origin = Entity.Null;
+                return false;
+            }
+
+            Entity stop = entityManager.GetComponentData<Connected>(origin).m_Connected;
+            if (stop == Entity.Null
+                || !entityManager.Exists(stop)
+                || !entityManager.HasComponent<BoardingVehicle>(stop))
+            {
+                origin = Entity.Null;
+                return false;
+            }
+
+            return true;
         }
 
         internal static uint ComputeRouteEndpointSignature(EntityManager entityManager, Entity route, Func<Entity, Entity> resolveStop)
@@ -290,6 +349,38 @@ namespace RapidTransitMod
                 return false;
 
             return (connectionLane.m_TrackTypes & TrackTypes.Train) != 0;
+        }
+
+        private static bool IsOutsideRoadOrigin(EntityManager entityManager, Entity waypoint)
+        {
+            if (IsConnectedOutsideConnection(entityManager, waypoint))
+                return true;
+
+            if (waypoint == Entity.Null
+                || !entityManager.Exists(waypoint)
+                || !entityManager.HasComponent<RouteLane>(waypoint))
+            {
+                return false;
+            }
+
+            RouteLane routeLane = entityManager.GetComponentData<RouteLane>(waypoint);
+            return IsOutsideRoadConnection(entityManager, routeLane.m_StartLane)
+                || IsOutsideRoadConnection(entityManager, routeLane.m_EndLane);
+        }
+
+        private static bool IsOutsideRoadConnection(EntityManager entityManager, Entity lane)
+        {
+            if (lane == Entity.Null
+                || !entityManager.Exists(lane)
+                || !entityManager.HasComponent<Game.Net.ConnectionLane>(lane))
+            {
+                return false;
+            }
+
+            Game.Net.ConnectionLane connectionLane =
+                entityManager.GetComponentData<Game.Net.ConnectionLane>(lane);
+            return (connectionLane.m_Flags & ConnectionLaneFlags.Outside) != 0
+                && (connectionLane.m_Flags & ConnectionLaneFlags.Road) != 0;
         }
 
         private static bool IsConnectedOutsideConnection(EntityManager entityManager, Entity waypoint)

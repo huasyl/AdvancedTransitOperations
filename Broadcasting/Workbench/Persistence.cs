@@ -27,7 +27,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
         private static readonly ModeScope[] s_PersistedAssetScopes =
         {
             new ModeScope(TransitMode.Train),
-            new ModeScope(TransitMode.Subway)
+            new ModeScope(TransitMode.Subway),
+            new ModeScope(TransitMode.Tram),
+            new ModeScope(TransitMode.Bus)
         };
 
         internal Persistence(Context context) : base(context) { }
@@ -207,6 +209,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             RapidTransitMod.Broadcasting.WorkbenchBackend.Platforms.RestoreInto(
                 m_State.AppliedPlatforms,
                 persistedPlatformAnnouncements);
+            RemoveUnsupportedBusData();
 
             if (persistedAppliedState?.lineIds != null)
             {
@@ -247,7 +250,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 BroadcastWorkbenchPersistedVolumeState state = persistedVolumeStates[i];
                 if (state == null
                     || !ModeScope.TryParseWorkbench(state.mode, out ModeScope scope)
-                    || !scope.IsSupportedWorkbenchMode)
+                    || !scope.SupportsBroadcast)
                 {
                     continue;
                 }
@@ -272,7 +275,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 BroadcastWorkbenchPersistedAssetCatalogState state = persistedAssetStates[i];
                 if (state == null
                     || !ModeScope.TryParseWorkbench(state.mode, out ModeScope scope)
-                    || !scope.IsSupportedWorkbenchMode)
+                    || !scope.SupportsBroadcast)
                 {
                     continue;
                 }
@@ -370,7 +373,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     lineId = entry.Key ?? string.Empty,
                     rules = entry.Value?
                         .Select(RapidTransitMod.Broadcasting.WorkbenchBackend.Rules.Clone)
-                        .Where(rule => rule != null)
+                        .Where(rule => rule != null && (!IsBusLine(entry.Key) || IsBusRule(rule)))
                         .ToArray()
                         ?? Array.Empty<BroadcastWorkbenchRuleDto>()
                 })
@@ -388,8 +391,59 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     lineId = entry.Key ?? string.Empty,
                     announcements = RapidTransitMod.Broadcasting.WorkbenchBackend.Platforms.Flatten(entry.Value)
                 })
-                .Where(entry => !string.IsNullOrWhiteSpace(entry.lineId) && entry.announcements.Length > 0)
+                .Where(entry => !IsBusLine(entry.lineId)
+                    && !string.IsNullOrWhiteSpace(entry.lineId)
+                    && entry.announcements.Length > 0)
                 .ToArray();
+        }
+
+        private void RemoveUnsupportedBusData()
+        {
+            RemoveBusPlatforms(m_State.AppliedPlatforms);
+            RemoveBusPlatforms(m_State.DraftPlatforms);
+
+            foreach (KeyValuePair<string, List<BroadcastWorkbenchRuleDto>> entry in m_State.AppliedRules.ToArray())
+            {
+                if (!IsBusLine(entry.Key))
+                {
+                    continue;
+                }
+
+                List<BroadcastWorkbenchRuleDto> allowed = (entry.Value ?? new List<BroadcastWorkbenchRuleDto>())
+                    .Where(IsBusRule)
+                    .Select(RapidTransitMod.Broadcasting.WorkbenchBackend.Rules.Clone)
+                    .ToList();
+                if (allowed.Count == 0)
+                {
+                    m_State.AppliedRules.Remove(entry.Key);
+                }
+                else
+                {
+                    m_State.AppliedRules[entry.Key] = allowed;
+                }
+            }
+        }
+
+        private static void RemoveBusPlatforms(
+            Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> platforms)
+        {
+            foreach (string lineId in platforms.Keys.Where(IsBusLine).ToArray())
+            {
+                platforms.Remove(lineId);
+            }
+        }
+
+        private static bool IsBusLine(string lineId)
+        {
+            return LineIdentityService.TryGetMode(lineId, out TransitMode mode)
+                && mode == TransitMode.Bus;
+        }
+
+        private static bool IsBusRule(BroadcastWorkbenchRuleDto rule)
+        {
+            string trigger = rule?.triggerId ?? rule?.trigger ?? string.Empty;
+            return string.Equals(trigger, "stop_and_open", StringComparison.Ordinal)
+                || string.Equals(trigger, "leave_station", StringComparison.Ordinal);
         }
     }
 }

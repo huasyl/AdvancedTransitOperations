@@ -17,6 +17,9 @@ namespace RapidTransitMod.PassengerFlow
             m_Cache.Clear();
         }
 
+        internal static bool Supports(TransitMode mode)
+            => mode == TransitMode.Train || mode == TransitMode.Subway || mode == TransitMode.Tram;
+
         internal SectionLoadEvent[] Expand(
             Port port,
             State state,
@@ -24,6 +27,9 @@ namespace RapidTransitMod.PassengerFlow
             DepartureLoadEvent loadEvent,
             uint frame)
         {
+            if (!Supports(sample.Mode))
+                return Array.Empty<SectionLoadEvent>();
+
             if (port == null
                 || state == null
                 || sample.Line == Entity.Null
@@ -195,7 +201,20 @@ namespace RapidTransitMod.PassengerFlow
                 if (traversalEvent.Building != Entity.Null)
                 {
                     string sak = port.EnsureSak(traversalEvent.Building);
-                    if (state.Anchors.TryRegisterSak(sak, traversalEvent.Building, Entity.Null, traversalEvent.Building, out station))
+                    if (port.IsTransportStop(traversalEvent.Building))
+                    {
+                        if (state.Anchors.TryRegisterSak(
+                                sak,
+                                traversalEvent.Building,
+                                traversalEvent.Building,
+                                Entity.Null,
+                                out station))
+                        {
+                            return true;
+                        }
+                    }
+
+                    else if (state.Anchors.TryRegisterSak(sak, traversalEvent.Building, Entity.Null, traversalEvent.Building, out station))
                         return true;
                 }
 

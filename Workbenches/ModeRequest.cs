@@ -28,7 +28,70 @@ namespace RapidTransitMod.Workbenches
             if (!ModeScope.TryParseWorkbench(modeToken, out ModeScope scope))
                 throw new InvalidOperationException("Invalid workbench mode: " + modeToken);
 
-            scope.EnsureSupportedWorkbenchMode();
+            return scope;
+        }
+
+        internal static ModeScope ReadScheduleScope(
+            string requestJson,
+            string apiName,
+            bool allowLegacyDefault = false)
+        {
+            if (!TryReadJson(requestJson, out ModeRequestDto request))
+            {
+                if (allowLegacyDefault)
+                    return ModeScope.DefaultWorkbench;
+
+                return ModeScope.DefaultWorkbench;
+            }
+
+            string modeToken = request?.mode;
+            if (string.IsNullOrWhiteSpace(modeToken))
+                return ModeScope.DefaultWorkbench;
+
+            if (!ModeScope.TryParseWorkbench(modeToken, out ModeScope scope))
+                throw new InvalidOperationException("Invalid schedule mode: " + modeToken);
+
+            scope.EnsureSupportsSchedule();
+            return scope;
+        }
+
+        internal static ModeScope ReadBroadcastScope(
+            string requestJson,
+            string apiName,
+            bool allowLegacyDefault = false)
+        {
+            ModeScope scope = ReadScope(requestJson, apiName, allowLegacyDefault);
+            scope.EnsureSupportsBroadcast();
+            return scope;
+        }
+
+        internal static ModeScope ReadOverviewScope(
+            string requestJson,
+            string apiName,
+            bool allowLegacyDefault = false)
+        {
+            ModeScope scope = ReadScope(requestJson, apiName, allowLegacyDefault);
+            scope.EnsureSupportsOverview();
+            return scope;
+        }
+
+        internal static ModeScope ReadPlannerScope(
+            string requestJson,
+            string apiName,
+            bool allowLegacyDefault = false)
+        {
+            ModeScope scope = ReadScope(requestJson, apiName, allowLegacyDefault);
+            scope.EnsureSupportsPlanner();
+            return scope;
+        }
+
+        internal static ModeScope ReadPassengerScope(
+            string requestJson,
+            string apiName,
+            bool allowLegacyDefault = false)
+        {
+            ModeScope scope = ReadScope(requestJson, apiName, allowLegacyDefault);
+            scope.EnsureSupportsPassenger();
             return scope;
         }
 
@@ -84,6 +147,12 @@ namespace RapidTransitMod.Workbenches
                 : fallback;
         }
 
+        internal static bool ReadNamesOnly(string requestJson)
+        {
+            return TryReadJson(requestJson, out ModeRequestDto request)
+                && request?.namesOnly == true;
+        }
+
         private static bool TryReadJson(string requestJson, out ModeRequestDto request)
         {
             request = null;
@@ -120,6 +189,8 @@ namespace RapidTransitMod.Workbenches
             public string ruleId = string.Empty;
             [DataMember]
             public int? volume = null;
+            [DataMember]
+            public bool namesOnly = false;
         }
     }
 }

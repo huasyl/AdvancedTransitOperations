@@ -22,7 +22,7 @@ function ChartPanel({ title, children, large = false }) {
 
 function normalizePassengerMode(mode) {
   const token = String(mode || "").trim().toLowerCase();
-  return token === "subway" ? "subway" : "train";
+  return token === "subway" || token === "tram" || token === "bus" ? token : "train";
 }
 
 const PASSENGER_FLOW_POLL_INTERVAL_MS = 5000;
@@ -58,6 +58,7 @@ function buildEmptyPassengerFlowViewModel() {
 
 export default function PassengerFlowPage({ activeTransportMode = "train", isActive = false, registerHostActions }) {
   const { t } = useNativeScheduleI18n();
+  const supportsSections = normalizePassengerMode(activeTransportMode) !== "bus";
   const [snapshot, setSnapshot] = useState(null);
   const [lineCatalogSnapshot, setLineCatalogSnapshot] = useState(null);
   const [selectedLineId, setSelectedLineId] = useState("ALL");
@@ -290,7 +291,7 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
             <h2 className="rtw-passenger-title">{t("nativeWorkbench.passenger.title")}</h2>
             <PassengerLineTabs lines={viewModel.lines} selectedLineId={selectedLineId} onSelect={handleLineSelect} />
           </div>
-          <PassengerMetricCards data={filteredData} />
+          <PassengerMetricCards data={filteredData} showSections={supportsSections} />
           <div className="rtw-passenger-panels">
             <ChartPanel title={selectedLineId === "ALL" ? t("nativeWorkbench.passenger.chart.systemTrend") : t("nativeWorkbench.passenger.chart.lineTrend")}>
               <div className="rtw-passenger-chart is-trend">
@@ -307,11 +308,13 @@ export default function PassengerFlowPage({ activeTransportMode = "train", isAct
                 <PassengerOdFlowDiagram flows={filteredData.odFlows} lines={viewModel.lines} isActive={isActive} />
               </div>
             </ChartPanel>
-            <ChartPanel title={t("nativeWorkbench.passenger.chart.sectionRanking")} large>
-              <div className="rtw-passenger-chart is-ranking">
-                <PassengerSectionRanking sections={filteredData.sectionVolumes} lines={viewModel.lines} />
-              </div>
-            </ChartPanel>
+            {supportsSections ? (
+              <ChartPanel title={t("nativeWorkbench.passenger.chart.sectionRanking")} large>
+                <div className="rtw-passenger-chart is-ranking">
+                  <PassengerSectionRanking sections={filteredData.sectionVolumes} lines={viewModel.lines} />
+                </div>
+              </ChartPanel>
+            ) : null}
           </div>
         </div>
       </WorkbenchScrollArea>

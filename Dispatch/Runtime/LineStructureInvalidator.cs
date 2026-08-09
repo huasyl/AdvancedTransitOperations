@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Collections;
 using Unity.Entities;
 
@@ -8,6 +9,7 @@ namespace RapidTransitMod.Dispatch.Runtime
     {
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, PendingInvalidation> m_Pending = new Dictionary<Entity, PendingInvalidation>();
+        private readonly Dictionary<Entity, PendingRoadInvalidation> m_PendingRoadLines = new Dictionary<Entity, PendingRoadInvalidation>();
 
         private readonly struct PendingInvalidation
         {
@@ -37,6 +39,28 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
+        private readonly struct PendingRoadInvalidation
+        {
+            internal readonly Entity Line;
+            internal readonly LineProfile.RoadRouteSnapshot OldRoute;
+            internal readonly LineProfile.RoadRouteSnapshot NewRoute;
+
+            internal PendingRoadInvalidation(
+                Entity line,
+                LineProfile.RoadRouteSnapshot oldRoute,
+                LineProfile.RoadRouteSnapshot newRoute)
+            {
+                Line = line;
+                OldRoute = oldRoute;
+                NewRoute = newRoute;
+            }
+
+            internal PendingRoadInvalidation WithLatest(LineProfile.RoadRouteSnapshot newRoute)
+            {
+                return new PendingRoadInvalidation(Line, OldRoute, newRoute);
+            }
+        }
+
         internal LineStructureInvalidator(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
@@ -58,22 +82,115 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Pending[line] = new PendingInvalidation(line, oldSignature, newSignature, oldAtomCount, newAtomCount);
         }
 
+        internal void RequestRoadRoute(
+            Entity line,
+            LineProfile.RoadRouteSnapshot oldRoute,
+            LineProfile.RoadRouteSnapshot newRoute)
+        {
+            if (line == Entity.Null || oldRoute == null || newRoute == null || !m_Runtime.m_SystemReady)
+                return;
+
+            if (m_PendingRoadLines.TryGetValue(line, out PendingRoadInvalidation pending))
+            {
+                m_PendingRoadLines[line] = pending.WithLatest(newRoute);
+                return;
+            }
+
+            m_PendingRoadLines[line] = new PendingRoadInvalidation(line, oldRoute, newRoute);
+        }
+
         internal void Drain()
         {
-            if (m_Pending.Count == 0)
+            if (m_Pending.Count == 0 && m_PendingRoadLines.Count == 0)
                 return;
 
             List<PendingInvalidation> pending = new List<PendingInvalidation>(m_Pending.Values);
             m_Pending.Clear();
 
-            m_Runtime.m_LineTimes.Clear();
-            m_Runtime.m_LineMileage.Clear();
-            m_Runtime.m_LineView.Clear();
-            m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots();
-            m_Runtime.m_StationContextQuery.Clear();
+            List<PendingRoadInvalidation> roadLines = new List<PendingRoadInvalidation>(m_PendingRoadLines.Values);
+            m_PendingRoadLines.Clear();
+
+            if (pending.Count > 0)
+            {
+                m_Runtime.m_LineTimes.Clear();
+                m_Runtime.m_LineMileage.Clear();
+                m_Runtime.m_LineView.Clear();
+                m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots();
+                m_Runtime.m_StationContextQuery.Clear();
+            }
 
             for (int i = 0; i < pending.Count; i++)
                 DrainLine(pending[i]);
+            for (int i = 0; i < roadLines.Count; i++)
+                DrainRoadLine(roadLines[i]);
+        }
+
+        private void DrainRoadLine(PendingRoadInvalidation pending)
+        {
+            Entity line = pending.Line;
+            RapidTransitMod.PassengerFlow.Runtime.Current?.InvalidateAnchors(line);
+            m_Runtime.m_Observation.InvalidateBusRoute(line, pending.OldRoute, pending.NewRoute);
+            m_Runtime.m_LineTimes.InvalidateLine(line);
+            if (RoadEntryChanged(pending.OldRoute, pending.NewRoute))
+                m_Runtime.m_Observation.InvalidateDispatchTiming(line);
+            m_Runtime.m_RoadEventSource.InvalidateLine(line);
+            m_Runtime.m_LineProfile.RemoveStability(line);
+
+            NativeArray<Entity> vehicles = m_Runtime.m_VehicleView.Keys(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < vehicles.Length; i++)
+                {
+                    Entity vehicle = vehicles[i];
+                    if (!m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity vehicleLine)
+                        || vehicleLine != line)
+                    {
+                        continue;
+                    }
+
+                    m_Runtime.m_RoadEventSource.CommitWaypoint(vehicle, -1);
+                    m_Runtime.m_RouteProgress.Remove(vehicle);
+                    m_Runtime.m_StopRuntime.InvalidateVehiclePosition(vehicle);
+                    RapidTransitMod.PassengerFlow.Runtime.Current?.RemoveVehicle(vehicle);
+                    m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RuntimeStageMask.Stop);
+                }
+            }
+            finally
+            {
+                vehicles.Dispose();
+            }
+        }
+
+        private static bool RoadEntryChanged(
+            LineProfile.RoadRouteSnapshot oldRoute,
+            LineProfile.RoadRouteSnapshot newRoute)
+        {
+            Entity oldWaypoint = oldRoute != null && oldRoute.Waypoints.Length > 0
+                ? oldRoute.Waypoints[0]
+                : Entity.Null;
+            Entity newWaypoint = newRoute != null && newRoute.Waypoints.Length > 0
+                ? newRoute.Waypoints[0]
+                : Entity.Null;
+            if (oldWaypoint != newWaypoint)
+                return true;
+
+            Entity oldStop = FirstResolvedStop(oldRoute);
+            Entity newStop = FirstResolvedStop(newRoute);
+            return oldStop != newStop;
+        }
+
+        private static Entity FirstResolvedStop(LineProfile.RoadRouteSnapshot route)
+        {
+            if (route == null)
+                return Entity.Null;
+
+            for (int i = 0; i < route.Stops.Length; i++)
+            {
+                if (route.Stops[i] != Entity.Null)
+                    return route.Stops[i];
+            }
+
+            return Entity.Null;
         }
 
         private void DrainLine(PendingInvalidation pending)
@@ -82,7 +199,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_RailEventSource.InvalidateLine(line);
             m_Runtime.m_TrackModel.InvalidateWaypointIndexLookup(line);
             m_Runtime.m_LapCache.RemoveLine(line);
-            m_Runtime.m_DispatchCache.RemoveLine(line);
+            m_Runtime.m_Observation.RemoveLine(line);
             m_Runtime.m_Observation.InvalidateSliceLine(line);
             m_Runtime.m_LineProfile.RemoveStability(line);
             m_Runtime.m_Bypass.ClearLine(line);

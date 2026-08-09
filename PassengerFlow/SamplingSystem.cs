@@ -2,6 +2,7 @@ using Game;
 using Game.Serialization;
 using Game.Vehicles;
 using PassengerFlowJobs = RapidTransitMod.PassengerFlow.Jobs;
+using RapidTransitMod.Core;
 using System;
 using System.Collections.Generic;
 using Unity.Collections;
@@ -21,9 +22,22 @@ namespace RapidTransitMod.PassengerFlow
         internal const int MaxDueSamplesPerTick = 32;
         internal const int MaxOpenStopProbeRequestsPerTick = 32;
         internal const int MaxPendingTransfers = 20000;
+        private const int MidnightGuardStartMinute = 23 * 60;
+        private const int MidnightGuardEndMinute = 60;
         private static SamplingSystem s_Current;
         internal static State CurrentState { get; private set; }
         private readonly Dictionary<Entity, LineSampleMetadata> m_LineMetadata = new Dictionary<Entity, LineSampleMetadata>();
+        private readonly List<PendingSample> m_ReadySamples = new List<PendingSample>(MaxDueSamplesPerTick);
+        private readonly List<OpenStop> m_ProbeStops = new List<OpenStop>(MaxOpenStopProbeRequestsPerTick);
+        private readonly HashSet<Entity> m_ProbePassengers = new HashSet<Entity>();
+        private readonly List<Entity> m_NextBaseline = new List<Entity>();
+        private readonly bool[] m_OkRequests = new bool[MaxDueSamplesPerTick];
+        private uint m_LastLoadLogFrame;
+        private uint m_MaxProbeGap;
+        private uint m_MaxSampleDelay;
+        private int m_MaxOpenStops;
+        private int m_MaxPendingSamples;
+        private int m_DeparturesWithoutProbe;
 
         private readonly struct LineSampleMetadata
         {
@@ -54,11 +68,13 @@ namespace RapidTransitMod.PassengerFlow
                 return;
 
             uint frame = port.Frame();
-            UpdateBucketIfNeeded(state, port.NowDate(), port.NowMinute());
+            ClockSnapshot clock = port.Clock();
+            UpdateBucketIfNeeded(state, clock.NowDate, clock.NowMinute);
             RunPendingCleanup(state, frame);
             ExpirePendingSamples(port, state, frame);
 
             RunProbes(port, state, frame);
+            UpdateLoad(port, state, frame);
         }
 
         protected override void OnDestroy()
@@ -75,6 +91,7 @@ namespace RapidTransitMod.PassengerFlow
         {
             CurrentState?.Clear();
             s_Current?.ClearLineMetadata();
+            s_Current?.ClearLoadDiagnostics();
         }
 
         public void PreSerialize(Colossal.Serialization.Entities.Context context)
@@ -93,12 +110,82 @@ namespace RapidTransitMod.PassengerFlow
             }
         }
 
-        private static bool IsSupportedMode(TransitMode mode)
-            => mode == TransitMode.Train || mode == TransitMode.Subway;
+        internal static bool SupportsMode(TransitMode mode)
+            => mode == TransitMode.Train || mode == TransitMode.Subway || mode == TransitMode.Tram || mode == TransitMode.Bus;
 
         private void ClearLineMetadata()
         {
             m_LineMetadata.Clear();
+        }
+
+        internal static void ReportMissingProbe()
+        {
+            if (RtLog.VerboseEnabled)
+                s_Current?.RecordMissingProbe();
+        }
+
+        private void ClearLoadDiagnostics()
+        {
+            m_LastLoadLogFrame = 0;
+            m_MaxProbeGap = 0;
+            m_MaxSampleDelay = 0;
+            m_MaxOpenStops = 0;
+            m_MaxPendingSamples = 0;
+            m_DeparturesWithoutProbe = 0;
+        }
+
+        private void RecordProbeGap(OpenStop openStop, uint lastProbe, uint frame)
+        {
+            if (!RtLog.VerboseEnabled)
+                return;
+
+            uint gap = lastProbe == 0
+                ? frame - openStop.OpenFrame
+                : frame - lastProbe;
+            if (gap > m_MaxProbeGap)
+                m_MaxProbeGap = gap;
+        }
+
+        private void RecordSampleDelay(uint delay)
+        {
+            if (RtLog.VerboseEnabled && delay > m_MaxSampleDelay)
+                m_MaxSampleDelay = delay;
+        }
+
+        private void RecordMissingProbe()
+        {
+            m_DeparturesWithoutProbe++;
+        }
+
+        private void UpdateLoad(Port port, State state, uint frame)
+        {
+            if (!RtLog.VerboseEnabled)
+                return;
+
+            if (state.OpenStops.Count > m_MaxOpenStops)
+                m_MaxOpenStops = state.OpenStops.Count;
+            if (state.PendingSamples.Count > m_MaxPendingSamples)
+                m_MaxPendingSamples = state.PendingSamples.Count;
+
+            if (m_LastLoadLogFrame == 0)
+            {
+                m_LastLoadLogFrame = frame;
+                return;
+            }
+            if (frame - m_LastLoadLogFrame < 1800u)
+                return;
+
+            port.Log("[PassengerFlowLoad] probeGap=" + m_MaxProbeGap
+                + " sampleDelay=" + m_MaxSampleDelay
+                + " openStopsPeak=" + m_MaxOpenStops
+                + " pendingSamplesPeak=" + m_MaxPendingSamples
+                + " departuresWithoutProbe=" + m_DeparturesWithoutProbe);
+            m_LastLoadLogFrame = frame;
+            m_MaxProbeGap = 0;
+            m_MaxSampleDelay = 0;
+            m_MaxOpenStops = 0;
+            m_MaxPendingSamples = 0;
+            m_DeparturesWithoutProbe = 0;
         }
 
         private LineSampleMetadata GetLineMetadata(Port port, Entity line)
@@ -121,7 +208,7 @@ namespace RapidTransitMod.PassengerFlow
             metadata = new LineSampleMetadata(
                 mode,
                 lineId,
-                IsSupportedMode(mode));
+                SupportsMode(mode));
             m_LineMetadata[line] = metadata;
             return metadata;
         }
@@ -133,12 +220,16 @@ namespace RapidTransitMod.PassengerFlow
                 return;
 
             state.Trips.ClearPending();
-            UpdateBucket(state, port.NowDate(), port.NowMinute());
+            ClockSnapshot clock = port.Clock();
+            UpdateBucketIfNeeded(state, clock.NowDate, clock.NowMinute);
         }
 
         private static void UpdateBucketIfNeeded(State state, DateTime nowDate, int nowMinute)
         {
             int serviceDayKey = ServiceDayKey(nowDate);
+            if (IsMidnightMismatch(state, serviceDayKey, nowMinute))
+                return;
+
             if (state.ServiceDayKey == serviceDayKey
                 && state.LastBucketUpdateMinute == nowMinute
                 && state.LastMinute == nowMinute)
@@ -148,6 +239,20 @@ namespace RapidTransitMod.PassengerFlow
 
             UpdateBucket(state, nowDate, nowMinute);
             state.LastBucketUpdateMinute = nowMinute;
+        }
+
+        private static bool IsMidnightMismatch(State state, int serviceDayKey, int nowMinute)
+        {
+            if (state.ServiceDayKey <= 0
+                || state.LastMinute < MidnightGuardStartMinute)
+            {
+                return false;
+            }
+
+            bool dateAdvanced = serviceDayKey > state.ServiceDayKey;
+            return dateAdvanced
+                ? nowMinute >= MidnightGuardStartMinute
+                : nowMinute <= MidnightGuardEndMinute;
         }
 
         private static void UpdateBucket(State state, DateTime nowDate, int nowMinute)
@@ -232,12 +337,13 @@ namespace RapidTransitMod.PassengerFlow
 
         private void ExpirePendingSamples(Port port, State state, uint frame)
         {
-            List<PendingSample> readySamples = null;
+            m_ReadySamples.Clear();
             while (state.PendingSamples.Count > 0
                 && state.PendingSamples.Peek().SampleFrame <= frame
-                && (readySamples == null || readySamples.Count < MaxDueSamplesPerTick))
+                && m_ReadySamples.Count < MaxDueSamplesPerTick)
             {
                 PendingSample sample = state.PendingSamples.Dequeue();
+                RecordSampleDelay(frame - sample.SampleFrame);
                 if (!IsPendingSampleStillValid(port, sample))
                 {
                     state.Aggregates.RecordWarning(
@@ -250,15 +356,13 @@ namespace RapidTransitMod.PassengerFlow
                     continue;
                 }
 
-                if (readySamples == null)
-                    readySamples = new List<PendingSample>();
-                readySamples.Add(sample);
+                m_ReadySamples.Add(sample);
             }
 
-            if (readySamples == null || readySamples.Count == 0)
+            if (m_ReadySamples.Count == 0)
                 return;
 
-            RunPassengerSampleJobs(port, state, frame, readySamples);
+            RunPassengerSampleJobs(port, state, frame, m_ReadySamples);
         }
 
         private static bool IsPendingSampleStillValid(Port port, PendingSample request)
@@ -299,7 +403,7 @@ namespace RapidTransitMod.PassengerFlow
             }
 
             state.LastProbeScanFrame = frame;
-            List<OpenStop> openStops = null;
+            m_ProbeStops.Clear();
             foreach (OpenStop openStop in state.OpenStops.Values)
             {
                 Entity baselineKey = BaselineKey(port, openStop);
@@ -309,24 +413,24 @@ namespace RapidTransitMod.PassengerFlow
                     continue;
                 }
 
-                if (state.LastProbeFrames.TryGetValue(openStop.Vehicle, out uint lastProbe)
+                uint lastProbe = 0;
+                if (state.LastProbeFrames.TryGetValue(openStop.Vehicle, out lastProbe)
                     && frame < lastProbe + OpenStopProbeIntervalFrames)
                 {
                     continue;
                 }
 
-                if (openStops == null)
-                    openStops = new List<OpenStop>();
-                openStops.Add(openStop);
+                m_ProbeStops.Add(openStop);
+                RecordProbeGap(openStop, lastProbe, frame);
                 state.LastProbeFrames[openStop.Vehicle] = frame;
-                if (openStops.Count >= MaxOpenStopProbeRequestsPerTick)
+                if (m_ProbeStops.Count >= MaxOpenStopProbeRequestsPerTick)
                     break;
             }
 
-            if (openStops == null || openStops.Count == 0)
+            if (m_ProbeStops.Count == 0)
                 return;
 
-            RunProbeJobs(port, state, frame, openStops);
+            RunProbeJobs(port, state, frame, m_ProbeStops);
         }
 
         private void RunProbeJobs(Port port, State state, uint frame, List<OpenStop> openStops)
@@ -468,7 +572,7 @@ namespace RapidTransitMod.PassengerFlow
             }
         }
 
-        private static void CommitProbes(
+        private void CommitProbes(
             State state,
             uint frame,
             List<OpenStop> openStops,
@@ -496,14 +600,14 @@ namespace RapidTransitMod.PassengerFlow
                     continue;
                 }
 
-                HashSet<Entity> currentSet = new HashSet<Entity>();
+                m_ProbePassengers.Clear();
                 NativeParallelMultiHashMapIterator<int> iterator;
                 Entity passenger;
                 if (currentPassengers.TryGetFirstValue(i, out passenger, out iterator))
                 {
                     do
                     {
-                        currentSet.Add(passenger);
+                        m_ProbePassengers.Add(passenger);
                         state.Trips.TryCancelReturn(
                             passenger,
                             openStop.Vehicle,
@@ -530,7 +634,7 @@ namespace RapidTransitMod.PassengerFlow
                 for (int p = 0; p < baseline.Passengers.Count; p++)
                 {
                     Entity baselinePassenger = baseline.Passengers[p];
-                    if (currentSet.Contains(baselinePassenger) || !state.Trips.HasActiveTrip(baselinePassenger))
+                    if (m_ProbePassengers.Contains(baselinePassenger) || !state.Trips.HasActiveTrip(baselinePassenger))
                         continue;
 
                     state.Trips.TryCreatePending(
@@ -596,7 +700,7 @@ namespace RapidTransitMod.PassengerFlow
             return passengerCountEstimate;
         }
 
-        private static void CommitPassengerSampleResults(
+        private void CommitPassengerSampleResults(
             Port port,
             State state,
             uint frame,
@@ -609,7 +713,7 @@ namespace RapidTransitMod.PassengerFlow
             NativeList<PassengerFlowJobs.DepartureLoadEvent> departureLoadEvents,
             NativeParallelMultiHashMap<int, Entity> nextBaseline)
         {
-            bool[] okRequests = new bool[samples.Count];
+            Array.Clear(m_OkRequests, 0, samples.Count);
             for (int i = 0; i < results.Length; i++)
             {
                 PendingSample sample = samples[i];
@@ -638,7 +742,7 @@ namespace RapidTransitMod.PassengerFlow
                     continue;
                 }
 
-                okRequests[i] = true;
+                m_OkRequests[i] = true;
                 if (hasPreviousBaseline[i] == 0)
                 {
                     state.Aggregates.RecordWarning(
@@ -654,7 +758,7 @@ namespace RapidTransitMod.PassengerFlow
             for (int i = 0; i < boardEvents.Length; i++)
             {
                 PassengerFlowJobs.BoardEvent boardEvent = boardEvents[i];
-                if (!okRequests[boardEvent.RequestIndex] || hasPreviousBaseline[boardEvent.RequestIndex] == 0)
+                if (!m_OkRequests[boardEvent.RequestIndex] || hasPreviousBaseline[boardEvent.RequestIndex] == 0)
                     continue;
 
                 PendingSample sample = samples[boardEvent.RequestIndex];
@@ -678,7 +782,7 @@ namespace RapidTransitMod.PassengerFlow
             for (int i = 0; i < alightEvents.Length; i++)
             {
                 PassengerFlowJobs.AlightEvent alightEvent = alightEvents[i];
-                if (!okRequests[alightEvent.RequestIndex] || hasPreviousBaseline[alightEvent.RequestIndex] == 0)
+                if (!m_OkRequests[alightEvent.RequestIndex] || hasPreviousBaseline[alightEvent.RequestIndex] == 0)
                     continue;
 
                 PendingSample sample = samples[alightEvent.RequestIndex];
@@ -701,7 +805,7 @@ namespace RapidTransitMod.PassengerFlow
             for (int i = 0; i < departureLoadEvents.Length; i++)
             {
                 PassengerFlowJobs.DepartureLoadEvent loadEvent = departureLoadEvents[i];
-                if (!okRequests[loadEvent.RequestIndex])
+                if (!m_OkRequests[loadEvent.RequestIndex] || !Sections.Supports(samples[loadEvent.RequestIndex].Mode))
                     continue;
 
                 PendingSample sample = samples[loadEvent.RequestIndex];
@@ -722,17 +826,17 @@ namespace RapidTransitMod.PassengerFlow
 
             for (int i = 0; i < requests.Length; i++)
             {
-                if (!okRequests[i])
+                if (!m_OkRequests[i])
                     continue;
 
-                List<Entity> passengers = new List<Entity>();
+                m_NextBaseline.Clear();
                 NativeParallelMultiHashMapIterator<int> iterator;
                 Entity passenger;
                 if (nextBaseline.TryGetFirstValue(i, out passenger, out iterator))
                 {
                     do
                     {
-                        passengers.Add(passenger);
+                        m_NextBaseline.Add(passenger);
                     }
                     while (nextBaseline.TryGetNextValue(out passenger, ref iterator));
                 }
@@ -744,7 +848,7 @@ namespace RapidTransitMod.PassengerFlow
                     state.Baselines[baselineKey] = baseline;
                 }
 
-                baseline.Replace(passengers);
+                baseline.Replace(m_NextBaseline);
             }
         }
     }

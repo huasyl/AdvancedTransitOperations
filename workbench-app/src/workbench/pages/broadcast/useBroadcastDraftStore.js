@@ -38,16 +38,23 @@ function buildStationBindingsFromStations(stationsForUi) {
   );
 }
 
-function cloneDraft(draft) {
+function isBusLineId(lineId) {
+  return String(lineId || "").trim().toLowerCase().startsWith("bus:");
+}
+
+function cloneDraft(draft, lineId) {
   if (!draft) {
     return null;
   }
 
   const stationsForUi = cloneStationsForUi(draft.stationsForUi);
+  const isBus = isBusLineId(lineId);
   return {
-    rules: cloneBroadcastRules(draft.rules),
+    rules: cloneBroadcastRules(draft.rules).filter((rule) => (
+      !isBus || rule?.triggerId === "stop_and_open" || rule?.triggerId === "leave_station"
+    )),
     stationBindings: cloneStationBindings(draft.stationBindings?.length ? draft.stationBindings : buildStationBindingsFromStations(stationsForUi)),
-    platformAnnouncements: clonePlatformAnnouncements(draft.platformAnnouncements),
+    platformAnnouncements: isBus ? [] : clonePlatformAnnouncements(draft.platformAnnouncements),
     stationsForUi,
   };
 }
@@ -73,7 +80,7 @@ export default function useBroadcastDraftStore() {
       return;
     }
 
-    const nextDraft = cloneDraft(draft);
+    const nextDraft = cloneDraft(draft, lineId);
     if (!nextDraft) {
       return;
     }
@@ -102,6 +109,32 @@ export default function useBroadcastDraftStore() {
       stationsForUi: [],
     };
     setLineDraft(lineId, { ...current, ...(patch || {}) });
+  }
+
+  function patchStationNames(lineId, namesById) {
+    const current = getLineDraft(lineId);
+    if (!current || !(namesById instanceof Map) || namesById.size === 0) {
+      return;
+    }
+
+    let changed = false;
+    const stationsForUi = current.stationsForUi.map((station) => {
+      const nextName = namesById.get(station?.id);
+      if (!nextName || nextName === station.name) {
+        return station;
+      }
+
+      changed = true;
+      return { ...station, name: nextName };
+    });
+    if (!changed) {
+      return;
+    }
+
+    lineDraftsRef.current = {
+      ...lineDraftsRef.current,
+      [lineId]: { ...current, stationsForUi },
+    };
   }
 
   function clearLineDrafts(lineIds) {
@@ -209,7 +242,9 @@ export default function useBroadcastDraftStore() {
 
   function buildApplyRequest(mode = "train") {
     const modeKey = normalizeMode(mode);
+    const isBus = modeKey === "bus";
     return {
+      mode: modeKey,
       lines: getDirtyLineIds()
         .filter((lineId) => lineMatchesMode(lineId, modeKey))
         .map((lineId) => {
@@ -222,10 +257,12 @@ export default function useBroadcastDraftStore() {
             lineId,
             stationBindings: cloneStationBindings(draft.stationBindings),
             rules: cloneBroadcastRules(draft.rules),
-            platformAnnouncements: clonePlatformAnnouncements(draft.platformAnnouncements).map((announcement) => ({
-              ...announcement,
-              lineId,
-            })),
+            platformAnnouncements: isBus
+              ? []
+              : clonePlatformAnnouncements(draft.platformAnnouncements).map((announcement) => ({
+                ...announcement,
+                lineId,
+              })),
           };
         })
         .filter(Boolean),
@@ -238,6 +275,7 @@ export default function useBroadcastDraftStore() {
     getLineDraft,
     setLineDraft,
     patchLineDraft,
+    patchStationNames,
     clearLineDrafts,
     setVolumeDraft,
     clearVolumeDraft,

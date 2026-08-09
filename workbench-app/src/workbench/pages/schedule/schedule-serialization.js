@@ -6,21 +6,28 @@ import {
   normalizeRuntimeFeatureSettings
 } from "./schedule-catalog";
 
-export function createNativeMergedViewForSave(selectedLineId, snapshotMergedView = null) {
+function isLocalOnlyMode(mode) {
+  const token = String(mode || "").trim().toLowerCase();
+  return token === "bus" || token === "tram";
+}
+
+export function createNativeMergedViewForSave(selectedLineId, snapshotMergedView = null, mode = "train") {
   const sourceView =
     snapshotMergedView && typeof snapshotMergedView === "object"
       ? snapshotMergedView
       : {};
+  const localOnly = isLocalOnlyMode(mode);
 
   return {
     localLineId: typeof sourceView.localLineId === "string" ? sourceView.localLineId : (selectedLineId || ""),
-    expressLineId: typeof sourceView.expressLineId === "string" ? sourceView.expressLineId : "",
+    expressLineId: localOnly ? "" : (typeof sourceView.expressLineId === "string" ? sourceView.expressLineId : ""),
     localLineIds:
       Array.isArray(sourceView.localLineIds) && sourceView.localLineIds.length > 0
         ? sourceView.localLineIds.filter((lineId) => typeof lineId === "string" && lineId.length > 0)
         : (selectedLineId ? [selectedLineId] : []),
-    expressLineIds:
-      Array.isArray(sourceView.expressLineIds)
+    expressLineIds: localOnly
+      ? []
+      : Array.isArray(sourceView.expressLineIds)
         ? sourceView.expressLineIds.filter((lineId) => typeof lineId === "string" && lineId.length > 0)
         : [],
     isLoop: typeof sourceView.isLoop === "boolean" ? sourceView.isLoop : true,
@@ -31,7 +38,8 @@ export function createNativeMergedViewForSave(selectedLineId, snapshotMergedView
   };
 }
 
-export function serializeNativeLineSettings(lines = LINE_OPTIONS) {
+export function serializeNativeLineSettings(lines = LINE_OPTIONS, mode = "train") {
+  const localOnly = isLocalOnlyMode(mode);
   return (Array.isArray(lines) ? lines : [])
     .filter((line) => line && typeof line === "object" && line.id)
     .map((line) => ({
@@ -39,7 +47,7 @@ export function serializeNativeLineSettings(lines = LINE_OPTIONS) {
       originHoldLimitMinutes: clampPositiveMinutes(line.hold, 20),
       maxStationDwellMinutes: clampPositiveMinutes(line.dwell, 10),
       allowedDepotId: line.depotId === "any-depot" ? "" : (line.depotId || ""),
-      serviceKind: normalizeKind(line.kind)
+      serviceKind: localOnly ? "local" : normalizeKind(line.kind)
     }));
 }
 
@@ -53,7 +61,8 @@ export function serializeRuntimeFeatureSettings(featureSettings) {
   };
 }
 
-export function serializeNativeLineDraftRows(rows = []) {
+export function serializeNativeLineDraftRows(rows = [], mode = "train") {
+  const localOnly = isLocalOnlyMode(mode);
   return [...(Array.isArray(rows) ? rows : [])]
     .filter((row) => row?.lineId)
     .sort((left, right) => {
@@ -77,13 +86,13 @@ export function serializeNativeLineDraftRows(rows = []) {
       id: String(row?.id || `staged-${index + 1}`),
       lineId: row.lineId,
       time: row?.time || "",
-      kind: normalizeKind(row?.kind),
+      kind: localOnly ? "local" : normalizeKind(row?.kind),
       source: row?.source || "manual",
       note: row?.note || ""
     }));
 }
 
-export function serializeNativeLineDraftRowsByLineId(rows = []) {
+export function serializeNativeLineDraftRowsByLineId(rows = [], mode = "train") {
   const rowsByLineId = new Map();
   (Array.isArray(rows) ? rows : []).forEach((row) => {
     const lineId = row?.lineId || row?.serviceId || "";
@@ -99,11 +108,12 @@ export function serializeNativeLineDraftRowsByLineId(rows = []) {
 
   return [...rowsByLineId.entries()].map(([lineId, lineRows]) => ({
     lineId,
-    lineDraftRows: serializeNativeLineDraftRows(lineRows)
+    lineDraftRows: serializeNativeLineDraftRows(lineRows, mode)
   }));
 }
 
-export function flattenSnapshotLineDraftRowsByLineId(blocks = []) {
+export function flattenSnapshotLineDraftRowsByLineId(blocks = [], mode = "train") {
+  const localOnly = isLocalOnlyMode(mode);
   const flattened = [];
   (Array.isArray(blocks) ? blocks : []).forEach((block) => {
     const lineId = String(block?.lineId || "");
@@ -117,7 +127,7 @@ export function flattenSnapshotLineDraftRowsByLineId(blocks = []) {
         lineId: row?.lineId || lineId,
         serviceId: row?.lineId || lineId,
         time: row?.time || "",
-        kind: row?.kind === "express" ? "express" : "local",
+        kind: localOnly ? "local" : (row?.kind === "express" ? "express" : "local"),
         source: row?.source || "manual",
         note: row?.note || ""
       });
@@ -143,21 +153,23 @@ export function serializeRuntimeLineRefs(lines = LINE_OPTIONS) {
     .sort((left, right) => left.lineId.localeCompare(right.lineId));
 }
 
-export function mapSnapshotManualRows(rows = [], fallbackLineId = "") {
+export function mapSnapshotManualRows(rows = [], fallbackLineId = "", mode = "train") {
+  const localOnly = isLocalOnlyMode(mode);
   return (Array.isArray(rows) ? rows : []).map((row, index) => ({
     id: row?.id || `manual-${index + 1}`,
     lineId: row?.lineId || fallbackLineId,
     serviceId: row?.lineId || fallbackLineId,
     time: row?.time || "",
-    kind: row?.kind === "express" ? "express" : "local",
-    offsetMode: row?.offsetMode || "none",
-    offsetMinutes: row?.offsetMinutes === 0 ? "0" : String(row?.offsetMinutes || "")
+    kind: localOnly ? "local" : (row?.kind === "express" ? "express" : "local"),
+    offsetMode: localOnly ? "none" : (row?.offsetMode || "none"),
+    offsetMinutes: localOnly ? "" : (row?.offsetMinutes === 0 ? "0" : String(row?.offsetMinutes || ""))
   }));
 }
 
-export function mapSnapshotAutoRules(rows = [], fallbackLineId = "") {
+export function mapSnapshotAutoRules(rows = [], fallbackLineId = "", mode = "train") {
+  const localOnly = isLocalOnlyMode(mode);
   return (Array.isArray(rows) ? rows : []).map((rule, index) => {
-    const kind = rule?.kind === "express" ? "express" : "local";
+    const kind = localOnly ? "local" : (rule?.kind === "express" ? "express" : "local");
     const departuresPerHour =
       Number(rule?.departuresPerHour) > 0
         ? Number(rule.departuresPerHour)
@@ -174,21 +186,22 @@ export function mapSnapshotAutoRules(rows = [], fallbackLineId = "") {
       start: rule?.start || "08:00",
       end: rule?.end || "10:00",
       departuresPerHour,
-      expressOffsetMode: rule?.expressOffsetMode || "after",
-      expressOffsetMinutes: Number(rule?.expressOffsetMinutes) || 0,
+      expressOffsetMode: localOnly ? "" : (rule?.expressOffsetMode || "after"),
+      expressOffsetMinutes: localOnly ? 0 : (Number(rule?.expressOffsetMinutes) || 0),
       localPerHour: kind === "local" ? departuresPerHour : 0,
       expressPerHour: kind === "express" ? departuresPerHour : 0
     };
   });
 }
 
-export function mapSnapshotSummaryRows(rows = []) {
+export function mapSnapshotSummaryRows(rows = [], mode = "train") {
+  const localOnly = isLocalOnlyMode(mode);
   return (Array.isArray(rows) ? rows : []).map((row, index) => ({
     id: row?.id || `summary-${index + 1}`,
     serviceId: row?.lineId || "",
     lineId: row?.lineId || "",
     time: row?.time || "",
-    kind: row?.kind === "express" ? "express" : "local",
+    kind: localOnly ? "local" : (row?.kind === "express" ? "express" : "local"),
     source: row?.source || "manual",
     note: row?.note || ""
   }));

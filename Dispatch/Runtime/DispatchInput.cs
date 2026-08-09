@@ -14,10 +14,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly int CurrentWaypoint;
         public readonly int WaypointCount;
         public readonly bool AtOrigin;
+        public readonly bool TargetAtOrigin;
         public readonly bool PreparingAtOrigin;
         public readonly bool OriginBusy;
         public readonly bool PreparingRouteNeedsRepair;
         public readonly bool ShouldEvaluateOriginSettle;
+        public readonly bool IgnoreOriginCooldown;
+        public readonly bool OriginSettleReady;
         public readonly bool SettledAtOrigin;
         public readonly bool ForcedAtOrigin;
         public readonly bool BrokenRecoveredRun;
@@ -39,10 +42,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             int currentWaypoint,
             int waypointCount,
             bool atOrigin,
+            bool targetAtOrigin,
             bool preparingAtOrigin,
             bool originBusy,
             bool preparingRouteNeedsRepair,
             bool shouldEvaluateOriginSettle,
+            bool ignoreOriginCooldown,
+            bool originSettleReady,
             bool settledAtOrigin,
             bool forcedAtOrigin,
             bool brokenRecoveredRun,
@@ -63,10 +69,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             CurrentWaypoint = currentWaypoint;
             WaypointCount = waypointCount;
             AtOrigin = atOrigin;
+            TargetAtOrigin = targetAtOrigin;
             PreparingAtOrigin = preparingAtOrigin;
             OriginBusy = originBusy;
             PreparingRouteNeedsRepair = preparingRouteNeedsRepair;
             ShouldEvaluateOriginSettle = shouldEvaluateOriginSettle;
+            IgnoreOriginCooldown = ignoreOriginCooldown;
+            OriginSettleReady = originSettleReady;
             SettledAtOrigin = settledAtOrigin;
             ForcedAtOrigin = forcedAtOrigin;
             BrokenRecoveredRun = brokenRecoveredRun;

@@ -7,6 +7,8 @@ using Game.Pathfind;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Bypass;
+using RapidTransitMod.Dispatch.Lines;
+using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -68,7 +70,7 @@ namespace RapidTransitMod.TrackModel
 
             bool hasTimeProfile = m_Support.TryGetLineTimeProfile(line, waypoints, out LineTimeProfileHeader timeProfile);
             float lineFrames = m_Support.GetLineLoopFramesEstimate(line, waypoints);
-            List<StationPassRange> stationPasses = CollectStationPassRanges(chain, line, waypoints);
+            List<StationPassRange> stationPasses = CollectStationPassRanges(chain, line, waypoints, true);
             if (stationPasses.Count == 0)
                 return;
 
@@ -1145,7 +1147,7 @@ namespace RapidTransitMod.TrackModel
                 return;
             }
 
-            List<StationPassRange> stationPasses = CollectStationPassRanges(chain, line, waypoints);
+            List<StationPassRange> stationPasses = CollectStationPassRanges(chain, line, waypoints, false);
             List<string> candidateNotes = new List<string>();
             for (int stationPassIndex = 0; stationPassIndex < stationPasses.Count; stationPassIndex++)
             {
@@ -1295,7 +1297,8 @@ namespace RapidTransitMod.TrackModel
         private List<StationPassRange> CollectStationPassRanges(
             LineTrackChain chain,
             Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints)
+            DynamicBuffer<RouteWaypoint> waypoints,
+            bool includeTramPasses)
         {
             List<StationPassRange> stationPasses = new List<StationPassRange>();
             if (chain == null || chain.TrackAtoms.Count == 0)
@@ -1303,7 +1306,6 @@ namespace RapidTransitMod.TrackModel
 
             bool hasLinePrefabData = TryGetTraversalProfileLineData(line, out Game.Prefabs.TransportLineData prefabLineData);
             Dictionary<Entity, int> passCountByBuilding = new Dictionary<Entity, int>();
-
             for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count;)
             {
                 Entity building = m_Support.ResolvePassingStationBuilding(chain.TrackAtoms[atomIndex].SourceTarget);
@@ -1322,11 +1324,6 @@ namespace RapidTransitMod.TrackModel
                 }
 
                 int endAtomIndexExclusive = atomIndex;
-                int passIndex = passCountByBuilding.TryGetValue(building, out int existingPassCount)
-                    ? existingPassCount
-                    : 0;
-                passCountByBuilding[building] = passIndex + 1;
-
                 int waypointIndex = -1;
                 float stopFrames = 0f;
                 if (TryFindTraversalStopWaypointIndex(chain, building, startAtomIndex, endAtomIndexExclusive, out int matchedWaypointIndex))
@@ -1335,6 +1332,11 @@ namespace RapidTransitMod.TrackModel
                     if (hasLinePrefabData)
                         stopFrames = m_Support.GetProfileWaypointStopFrames(line, waypoints, matchedWaypointIndex, prefabLineData);
                 }
+
+                int passIndex = passCountByBuilding.TryGetValue(building, out int existingPassCount)
+                    ? existingPassCount
+                    : 0;
+                passCountByBuilding[building] = passIndex + 1;
 
                 stationPasses.Add(new StationPassRange(
                     building,
@@ -1345,7 +1347,371 @@ namespace RapidTransitMod.TrackModel
                     passIndex));
             }
 
+            if (TransportModeResolver.Resolve(EntityManager, line) == TransitMode.Tram)
+            {
+                int originalRangeCount = stationPasses.Count;
+                AppendTramCurrentStops(
+                    chain,
+                    line,
+                    waypoints,
+                    stationPasses,
+                    originalRangeCount,
+                    hasLinePrefabData,
+                    prefabLineData);
+                if (includeTramPasses)
+                {
+                    AppendTramPasses(chain, line, stationPasses, originalRangeCount);
+                }
+
+                stationPasses.Sort(CompareTramRanges);
+                ReassignTramPassIndices(stationPasses);
+            }
+
             return stationPasses;
+        }
+
+        private void AppendTramCurrentStops(
+            LineTrackChain chain,
+            Entity currentLine,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            List<StationPassRange> stationPasses,
+            int originalRangeCount,
+            bool hasLinePrefabData,
+            Game.Prefabs.TransportLineData prefabLineData)
+        {
+            for (int waypointIndex = 0; waypointIndex < waypoints.Length; waypointIndex++)
+            {
+                Entity stop = m_Support.Stop(waypoints[waypointIndex].m_Waypoint);
+                if (!IsStopOnly(stop, waypoints, waypointIndex)
+                    || !TryFindStopControlPoint(chain, waypointIndex, stop, out int atomIndex))
+                {
+                    continue;
+                }
+
+                if (IsCoveredByRanges(stationPasses, originalRangeCount, atomIndex)
+                    || HasStopRange(stationPasses, stop, atomIndex)
+                    || atomIndex < 0
+                    || atomIndex >= chain.TrackAtoms.Count)
+                {
+                    continue;
+                }
+
+                float stopFrames = hasLinePrefabData
+                    ? m_Support.GetProfileWaypointStopFrames(currentLine, waypoints, waypointIndex, prefabLineData)
+                    : 0f;
+                stationPasses.Add(new StationPassRange(
+                    stop,
+                    atomIndex,
+                    atomIndex + 1,
+                    waypointIndex,
+                    stopFrames,
+                    0));
+            }
+        }
+
+        private void AppendTramPasses(
+            LineTrackChain chain,
+            Entity currentLine,
+            List<StationPassRange> stationPasses,
+            int originalRangeCount)
+        {
+            Dictionary<int, Entity> externalStopByAtom = new Dictionary<int, Entity>();
+            HashSet<int> ambiguousExternalAtoms = new HashSet<int>();
+            NativeArray<Entity> lines = m_Support.GetLineEntities(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    Entity line = lines[i];
+                    if (line == Entity.Null
+                        || line == currentLine
+                        || !EntityManager.Exists(line)
+                        || !EntityManager.HasBuffer<RouteWaypoint>(line)
+                        || TransportModeResolver.Resolve(EntityManager, line) != TransitMode.Tram)
+                    {
+                        continue;
+                    }
+
+                    DynamicBuffer<RouteWaypoint> sourceWaypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                    for (int waypointIndex = 0; waypointIndex < sourceWaypoints.Length; waypointIndex++)
+                    {
+                        Entity stop = m_Support.Stop(sourceWaypoints[waypointIndex].m_Waypoint);
+                        if (!IsStopOnly(stop, sourceWaypoints, waypointIndex))
+                            continue;
+
+                        if (!TryProjectStopRange(
+                                chain,
+                                sourceWaypoints[waypointIndex].m_Waypoint,
+                                out List<int> atomIndices))
+                        {
+                            LogProjectionSkip(currentLine, line, waypointIndex, "unmatched-physical-lane-or-curve");
+                            continue;
+                        }
+
+                        for (int atomIndex = 0; atomIndex < atomIndices.Count; atomIndex++)
+                        {
+                            int projectedAtomIndex = atomIndices[atomIndex];
+                            if (IsCoveredByRanges(stationPasses, originalRangeCount, projectedAtomIndex)
+                                || HasCurrentStop(stationPasses, projectedAtomIndex)
+                                || ambiguousExternalAtoms.Contains(projectedAtomIndex)
+                                || HasStopRange(stationPasses, stop, projectedAtomIndex))
+                            {
+                                continue;
+                            }
+
+                            if (externalStopByAtom.TryGetValue(projectedAtomIndex, out Entity existingStop)
+                                && existingStop != stop)
+                            {
+                                RemoveProjectedPasses(stationPasses, originalRangeCount, projectedAtomIndex);
+                                ambiguousExternalAtoms.Add(projectedAtomIndex);
+                                LogProjectionSkip(currentLine, line, waypointIndex, "ambiguous-different-stop-same-atom");
+                                continue;
+                            }
+
+                            externalStopByAtom[projectedAtomIndex] = stop;
+                            stationPasses.Add(new StationPassRange(
+                                stop,
+                                projectedAtomIndex,
+                                projectedAtomIndex + 1,
+                                -1,
+                                0f,
+                                0));
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                lines.Dispose();
+            }
+        }
+
+        private bool IsStopOnly(
+            Entity stop,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex)
+        {
+            return stop != Entity.Null
+                && EntityManager.HasComponent<TransportStop>(stop)
+                && m_Support.StationOf(stop) == Entity.Null
+                && m_Support.GetStationBuildingForWaypoint(waypoints, waypointIndex) == Entity.Null;
+        }
+
+        private bool TryFindStopControlPoint(
+            LineTrackChain chain,
+            int waypointIndex,
+            Entity stop,
+            out int atomIndex)
+        {
+            atomIndex = -1;
+            for (int i = 0; i < chain.ControlPoints.Count; i++)
+            {
+                ControlPointMarker marker = chain.ControlPoints[i];
+                if (marker.WaypointIndex == waypointIndex
+                    && marker.Kind == ControlPointKind.Stop
+                    && marker.Building == stop)
+                {
+                    atomIndex = marker.AtomIndex;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryProjectStopRange(
+            LineTrackChain chain,
+            Entity waypoint,
+            out List<int> atomIndices)
+        {
+            atomIndices = null;
+            if (waypoint == Entity.Null || !EntityManager.HasComponent<RouteLane>(waypoint))
+                return false;
+
+            RouteLane routeLane = EntityManager.GetComponentData<RouteLane>(waypoint);
+            Entity lane = routeLane.m_StartLane;
+            float curvePos = routeLane.m_StartCurvePos;
+            if (lane == Entity.Null)
+            {
+                lane = routeLane.m_EndLane;
+                curvePos = routeLane.m_EndCurvePos;
+            }
+
+            return TryProjectEndpoint(chain, lane, curvePos, out atomIndices);
+        }
+
+        private bool TryProjectEndpoint(
+            LineTrackChain chain,
+            Entity lane,
+            float curvePos,
+            out List<int> atomIndices)
+        {
+            atomIndices = null;
+            if (lane == Entity.Null
+                || chain?.AtomIndicesByLane == null
+                || !chain.AtomIndicesByLane.TryGetValue(lane, out List<int> indexedAtomIndices))
+            {
+                return false;
+            }
+
+            HashSet<int> seen = new HashSet<int>();
+            List<int> matches = new List<int>();
+            for (int i = 0; i < indexedAtomIndices.Count; i++)
+            {
+                int candidateIndex = indexedAtomIndices[i];
+                if (!seen.Add(candidateIndex)
+                    || candidateIndex < 0
+                    || candidateIndex >= chain.TrackAtoms.Count)
+                {
+                    continue;
+                }
+
+                TrackAtom atom = chain.TrackAtoms[candidateIndex];
+                if (atom.Key.PhysicalLaneKey != lane
+                    || atom.AtomClass != TrackAtomClass.PrimaryLane)
+                {
+                    continue;
+                }
+
+                float low = math.min(atom.TargetDelta.x, atom.TargetDelta.y);
+                float high = math.max(atom.TargetDelta.x, atom.TargetDelta.y);
+                if (curvePos < low - 0.001f || curvePos > high + 0.001f)
+                    continue;
+
+                matches.Add(candidateIndex);
+            }
+
+            if (matches.Count == 0)
+                return false;
+
+            atomIndices = matches;
+            return true;
+        }
+
+        private void ReassignTramPassIndices(List<StationPassRange> stationPasses)
+        {
+            Dictionary<Entity, int> passCounts = new Dictionary<Entity, int>();
+            for (int i = 0; i < stationPasses.Count; i++)
+            {
+                StationPassRange range = stationPasses[i];
+                if (!EntityManager.HasComponent<TransportStop>(range.Building))
+                    continue;
+
+                int passIndex = passCounts.TryGetValue(range.Building, out int count) ? count : 0;
+                passCounts[range.Building] = passIndex + 1;
+                stationPasses[i] = new StationPassRange(
+                    range.Building,
+                    range.StartAtomIndex,
+                    range.EndAtomIndexExclusive,
+                    range.WaypointIndex,
+                    range.StopFrames,
+                    passIndex);
+            }
+        }
+
+        private static bool IsCoveredByRanges(
+            List<StationPassRange> stationPasses,
+            int rangeCount,
+            int atomIndex)
+        {
+            int count = math.min(rangeCount, stationPasses.Count);
+            for (int i = 0; i < count; i++)
+            {
+                StationPassRange range = stationPasses[i];
+                if (atomIndex >= range.StartAtomIndex
+                    && atomIndex < range.EndAtomIndexExclusive)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasStopRange(
+            List<StationPassRange> stationPasses,
+            Entity stop,
+            int atomIndex)
+        {
+            for (int i = 0; i < stationPasses.Count; i++)
+            {
+                StationPassRange range = stationPasses[i];
+                if (range.Building == stop
+                    && range.StartAtomIndex == atomIndex
+                    && range.EndAtomIndexExclusive == atomIndex + 1)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool HasCurrentStop(List<StationPassRange> stationPasses, int atomIndex)
+        {
+            for (int i = 0; i < stationPasses.Count; i++)
+            {
+                StationPassRange range = stationPasses[i];
+                if (range.WaypointIndex >= 0
+                    && range.StartAtomIndex == atomIndex
+                    && range.EndAtomIndexExclusive == atomIndex + 1
+                    && EntityManager.HasComponent<TransportStop>(range.Building))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void RemoveProjectedPasses(
+            List<StationPassRange> stationPasses,
+            int originalRangeCount,
+            int atomIndex)
+        {
+            for (int i = stationPasses.Count - 1; i >= originalRangeCount; i--)
+            {
+                StationPassRange range = stationPasses[i];
+                if (range.WaypointIndex < 0
+                    && range.StartAtomIndex == atomIndex
+                    && range.EndAtomIndexExclusive == atomIndex + 1)
+                {
+                    stationPasses.RemoveAt(i);
+                }
+            }
+        }
+
+        private static int CompareTramRanges(StationPassRange left, StationPassRange right)
+        {
+            int compare = left.StartAtomIndex.CompareTo(right.StartAtomIndex);
+            if (compare != 0)
+                return compare;
+
+            compare = left.EndAtomIndexExclusive.CompareTo(right.EndAtomIndexExclusive);
+            if (compare != 0)
+                return compare;
+
+            bool leftStop = left.WaypointIndex >= 0;
+            bool rightStop = right.WaypointIndex >= 0;
+            if (leftStop != rightStop)
+                return leftStop ? -1 : 1;
+
+            compare = left.WaypointIndex.CompareTo(right.WaypointIndex);
+            if (compare != 0)
+                return compare;
+
+            return left.PassIndex.CompareTo(right.PassIndex);
+        }
+
+        private void LogProjectionSkip(Entity currentLine, Entity sourceLine, int waypointIndex, string reason)
+        {
+            if (!RtLog.CacheInvalidationDiagnosticsEnabled)
+                return;
+
+            log.Info("[TrackStopProjectionSkipped] currentLine=" + currentLine.Index
+                + " sourceLine=" + sourceLine.Index
+                + " wp=" + waypointIndex
+                + " reason=" + reason);
         }
 
         private bool TryGetTraversalProfileLineData(Entity line, out Game.Prefabs.TransportLineData prefabLineData)

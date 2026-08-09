@@ -4,6 +4,7 @@ using Game.Common;
 using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -206,16 +207,20 @@ namespace RapidTransitMod.TrackModel
 
                 int endAtomIndexExclusive = chain.TrackAtoms.Count;
                 chain.SegmentRanges.Add(new TrackSegmentRange(startAtomIndex, endAtomIndexExclusive));
-                TryAppendControlPoint(chain.ControlPoints, waypoints, waypointIndex, startAtomIndex);
+                TryAppendControlPoint(chain.ControlPoints, line, waypoints, waypointIndex, startAtomIndex);
                 TryAppendEndpointMarker(chain.EndpointMarkers, waypoints, waypointIndex, startAtomIndex);
             }
 
             BuildAtomStationBuildings(chain);
             BuildControlEdges(chain, line, waypoints);
+            TransitMode mode = TransportModeResolver.Resolve(EntityManager, line);
+            if (mode == TransitMode.Tram)
+                BuildAtomIndicesByLane(chain);
             m_Profile.BuildTraversalProfile(chain, line, waypoints);
             m_Profile.BuildTurnbackBoundaries(chain, line, waypoints);
             m_Profile.LogTrackModelTurnbackBuild(chain);
-            BuildAtomIndicesByLane(chain);
+            if (mode != TransitMode.Tram)
+                BuildAtomIndicesByLane(chain);
             return chain;
         }
 
@@ -326,18 +331,27 @@ namespace RapidTransitMod.TrackModel
 
         private void TryAppendControlPoint(
             List<ControlPointMarker> controlPoints,
+            Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             int waypointIndex,
             int atomIndex)
         {
             Entity building = m_Support.GetStationBuildingForWaypoint(waypoints, waypointIndex);
-            if (building == Entity.Null)
+            if (building != Entity.Null)
+            {
+                ControlPointKind kind = m_Support.IsBypassStation(building)
+                    ? ControlPointKind.Bypass
+                    : ControlPointKind.Stop;
+                controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, kind));
+                return;
+            }
+
+            if (TransportModeResolver.Resolve(EntityManager, line) != TransitMode.Tram)
                 return;
 
-            ControlPointKind kind = m_Support.IsBypassStation(building)
-                ? ControlPointKind.Bypass
-                : ControlPointKind.Stop;
-            controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, kind));
+            Entity stop = m_Support.Stop(waypoints[waypointIndex].m_Waypoint);
+            if (stop != Entity.Null && EntityManager.HasComponent<TransportStop>(stop))
+                controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, stop, ControlPointKind.Stop));
         }
 
         private void TryAppendEndpointMarker(
@@ -353,7 +367,7 @@ namespace RapidTransitMod.TrackModel
             }
         }
 
-        private static void BuildAtomStationBuildings(LineTrackChain chain)
+        private void BuildAtomStationBuildings(LineTrackChain chain)
         {
             if (chain == null || chain.TrackAtoms.Count == 0)
             {
@@ -368,6 +382,8 @@ namespace RapidTransitMod.TrackModel
             {
                 ControlPointMarker controlPoint = chain.ControlPoints[controlPointIndex];
                 if (controlPoint.Building == Entity.Null)
+                    continue;
+                if (EntityManager.HasComponent<TransportStop>(controlPoint.Building))
                     continue;
 
                 int start = math.max(0, controlPoint.AtomIndex - stationWindowAtoms);

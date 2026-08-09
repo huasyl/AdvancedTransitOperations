@@ -55,20 +55,39 @@ namespace RapidTransitMod.Dispatch.Runtime
 
                     if (!boarding
                         || wasBoarding
-                        || !runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
-                        || state != VehicleState.Running)
+                        || !runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state))
                     {
                         continue;
                     }
 
-                    if (!IsOfficialBoardingAtTargetStop(vehicle))
+                    if (state == VehicleState.Running)
+                    {
+                        if (!IsOfficialBoardingAtTargetStop(vehicle))
+                            continue;
+
+                        uint protectedUntil = nowFrame + GuardFrames;
+                        if (publicTransport.m_DepartureFrame > protectedUntil)
+                            continue;
+
+                        publicTransport.m_DepartureFrame = protectedUntil;
+                        m_PublicTransportLookup[vehicle] = publicTransport;
+                        continue;
+                    }
+
+                    if (state != VehicleState.Idle
+                        || !runtime.m_VehicleView.TryGetIdle(vehicle, out _)
+                        || !RuntimePorts.TryResolveVehicleLifecycle(runtime, vehicle, out LifecycleKind lifecycle)
+                        || lifecycle != LifecycleKind.Rail
+                        || !IsOfficialBoardingAtOriginStop(runtime, vehicle))
+                    {
+                        continue;
+                    }
+
+                    uint heldUntil = nowFrame + 9999;
+                    if (publicTransport.m_DepartureFrame > heldUntil)
                         continue;
 
-                    uint protectedUntil = nowFrame + GuardFrames;
-                    if (publicTransport.m_DepartureFrame > protectedUntil)
-                        continue;
-
-                    publicTransport.m_DepartureFrame = protectedUntil;
+                    publicTransport.m_DepartureFrame = heldUntil;
                     m_PublicTransportLookup[vehicle] = publicTransport;
                 }
             }
@@ -92,6 +111,26 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return false;
 
             return EntityManager.GetComponentData<BoardingVehicle>(targetStop).m_Vehicle == vehicle;
+        }
+
+        private bool IsOfficialBoardingAtOriginStop(ModRuntimeHostSystem runtime, Entity vehicle)
+        {
+            if (!runtime.m_VehicleView.TryGetLine(vehicle, out Entity line)
+                || line == Entity.Null
+                || !EntityManager.HasBuffer<RouteWaypoint>(line)
+                || !EntityManager.HasComponent<Target>(vehicle))
+            {
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypoints.Length == 0
+                || EntityManager.GetComponentData<Target>(vehicle).m_Target != waypoints[0].m_Waypoint)
+            {
+                return false;
+            }
+
+            return IsOfficialBoardingAtTargetStop(vehicle);
         }
     }
 }
