@@ -317,6 +317,7 @@ namespace RapidTransitMod
             DevSightProbe probe = ProbeTrackLane(result);
             string summary = BuildTooltipText(result, probe);
             SetPanelState(true, hasMoveItResult ? "MoveIt raw" : "collector", summary);
+#if RT_DEBUG_TOOLS
             if (exportDown && m_ExportArmed)
             {
                 m_ExportArmed = false;
@@ -325,6 +326,7 @@ namespace RapidTransitMod
                 else
                     Mod.log.Info("[TrackMeshExport] skipped reason=" + error);
             }
+#endif
         }
 
         private bool TryGetMoveItOverlayOwner(out Entity entity)

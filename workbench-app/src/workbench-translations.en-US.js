@@ -449,7 +449,7 @@ export const nativeScheduleTranslationsEnUs = {
   "broadcast.sidebar.title": "Audio Broadcast Settings",
   "broadcast.sidebar.localAssets": "Local Audio Assets",
   "broadcast.sidebar.fileName": "File Name",
-  "broadcast.sidebar.duration": "Time",
+  "broadcast.sidebar.duration": "Duration",
   "broadcast.sidebar.import": "Import External Asset",
   "broadcast.sidebar.deleteAsset": "Delete Asset",
   "broadcast.sidebar.deleteAllAssets": "Delete All Assets",

@@ -2428,11 +2428,17 @@
 }
 
 .rtw-overview-tram-svg {
-  width: 20rem;
-  height: 20rem;
+  width: 28rem;
+  height: 28rem;
+  stroke: none;
+}
+
+.rtw-overview-tram-path {
   fill: #a1a1aa;
   stroke: none;
   transition-property: fill;
+  transition-duration: 180ms;
+  transition-timing-function: ease-out;
 }
 
 .rtw-overview-mode-button.is-active .rtw-overview-mode-icon {
@@ -2444,7 +2450,7 @@
   stroke: #0369a1;
 }
 
-.rtw-overview-mode-button.is-active .rtw-overview-tram-svg {
+.rtw-overview-mode-button.is-active .rtw-overview-tram-path {
   fill: #0369a1;
 }
 
@@ -2457,7 +2463,7 @@
   stroke: #d4d4d8;
 }
 
-.rtw-overview-mode-button:hover .rtw-overview-tram-svg {
+.rtw-overview-mode-button:hover .rtw-overview-tram-path {
   fill: #d4d4d8;
 }
 
@@ -2470,7 +2476,7 @@
   stroke: #0369a1;
 }
 
-.rtw-overview-mode-button.is-active:hover .rtw-overview-tram-svg {
+.rtw-overview-mode-button.is-active:hover .rtw-overview-tram-path {
   fill: #0369a1;
 }
 

@@ -450,7 +450,7 @@ export const nativeScheduleTranslationsZhCn = {
   "broadcast.sidebar.title": "音频广播设置",
   "broadcast.sidebar.localAssets": "本地资产",
   "broadcast.sidebar.fileName": "文件名称",
-  "broadcast.sidebar.duration": "时间",
+  "broadcast.sidebar.duration": "时长",
   "broadcast.sidebar.import": "导入外部资产",
   "broadcast.sidebar.deleteAsset": "删除资产",
   "broadcast.sidebar.deleteAllAssets": "删除全部资产",

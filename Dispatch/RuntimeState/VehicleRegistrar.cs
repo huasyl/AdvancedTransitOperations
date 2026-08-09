@@ -29,6 +29,16 @@ namespace RapidTransitMod
             public int Order;
         }
 
+        private enum StartupLineState
+        {
+            Ineligible,
+            WaitingStable,
+            Stable
+        }
+
+        private const int STARTUP_BUCKET_COUNT = 16;
+        private const int STARTUP_BUCKET_MASK = STARTUP_BUCKET_COUNT - 1;
+
         [BurstCompile]
         private struct FilterVehiclesJob : IJobParallelFor
         {
@@ -99,7 +109,14 @@ namespace RapidTransitMod
         // 启动期索引只保存当前批次的实体、线路和稳定线路序号。
         private readonly List<StartupCandidate> m_StartupCandidates = new List<StartupCandidate>();
         private readonly List<Entity> m_StartupLines = new List<Entity>();
+        private readonly List<Entity> m_StartupWaitingLines = new List<Entity>();
+        private readonly List<Entity> m_StartupOrderedLines = new List<Entity>();
+        private readonly List<Entity> m_StartupOrderedVehicles = new List<Entity>();
+        private readonly HashSet<Entity> m_StartupSeenVehicles = new HashSet<Entity>();
+        private readonly List<StartupCandidate> m_StartupCheckCandidates = new List<StartupCandidate>();
+        private readonly List<Entity> m_StartupCheckLines = new List<Entity>();
         private bool m_StartupGate;
+        private bool m_StartupAwaitingStable;
         private bool m_StartupAwaitingBaseline;
         private int m_StartupBucket;
         private readonly System.Action<StopFact> m_PublishStopFact;
@@ -116,6 +133,7 @@ namespace RapidTransitMod
         internal IReadOnlyCollection<Entity> PendingRebindCandidates => m_PendingRebindCandidates;
         internal bool StartupGateActive => m_StartupGate;
         internal bool IsStartupActivationFrame(uint frame) => m_StartupGate
+            && !m_StartupAwaitingStable
             && m_StartupAwaitingBaseline
             && (frame & 15u) == 3u;
 
@@ -132,7 +150,14 @@ namespace RapidTransitMod
         {
             m_StartupCandidates.Clear();
             m_StartupLines.Clear();
+            m_StartupWaitingLines.Clear();
+            m_StartupOrderedLines.Clear();
+            m_StartupOrderedVehicles.Clear();
+            m_StartupSeenVehicles.Clear();
+            m_StartupCheckCandidates.Clear();
+            m_StartupCheckLines.Clear();
             m_StartupGate = false;
+            m_StartupAwaitingStable = false;
             m_StartupAwaitingBaseline = false;
             m_StartupBucket = 0;
         }
@@ -140,20 +165,31 @@ namespace RapidTransitMod
         internal void BeginStartupGate()
         {
             ClearStartupGate();
-            CollectStartupIndex(m_StartupCandidates, m_StartupLines);
+            m_StartupAwaitingStable = !CollectStartupIndex(m_StartupCandidates, m_StartupLines);
             m_StartupGate = true;
         }
 
         internal void TickStartupGate()
         {
-            if (!m_StartupGate || m_StartupAwaitingBaseline || m_StartupBucket >= 8)
+            if (!m_StartupGate || m_StartupAwaitingBaseline || m_StartupBucket >= STARTUP_BUCKET_COUNT)
                 return;
+
+            if (m_StartupAwaitingStable)
+            {
+                uint frame = m_Runtime.m_SimulationSystem.frameIndex;
+                if ((frame & 15u) != 3u)
+                    return;
+                if (!CollectStartupIndex(m_StartupCandidates, m_StartupLines))
+                    return;
+                m_StartupAwaitingStable = false;
+                m_StartupBucket = 0;
+            }
 
             int bucket = m_StartupBucket;
             for (int i = 0; i < m_StartupCandidates.Count; i++)
             {
                 StartupCandidate candidate = m_StartupCandidates[i];
-                if ((candidate.Order & 7) != bucket)
+                if ((candidate.Order & STARTUP_BUCKET_MASK) != bucket)
                     continue;
 
                 if (!TryStartupRoute(candidate.Line, candidate.Vehicle, out DynamicBuffer<RouteWaypoint> waypoints))
@@ -163,7 +199,7 @@ namespace RapidTransitMod
             }
 
             m_StartupBucket++;
-            if (m_StartupBucket == 8)
+            if (m_StartupBucket == STARTUP_BUCKET_COUNT)
                 m_StartupAwaitingBaseline = true;
         }
 
@@ -172,14 +208,24 @@ namespace RapidTransitMod
             if (!IsStartupActivationFrame(frame))
                 return false;
 
-            var currentCandidates = new List<StartupCandidate>();
-            var currentLines = new List<Entity>();
-            CollectStartupIndex(currentCandidates, currentLines);
-            if (!StartupIndexMatches(currentCandidates, currentLines))
+            bool currentIndexReady = CollectStartupIndex(m_StartupCheckCandidates, m_StartupCheckLines);
+            if (!currentIndexReady)
             {
-                PruneStartupVehicles(currentCandidates);
-                ReplaceStartupIndex(currentCandidates, currentLines);
+                PruneStartupVehicles(m_StartupCheckCandidates);
+                m_StartupCandidates.Clear();
+                m_StartupLines.Clear();
                 m_StartupBucket = 0;
+                m_StartupAwaitingStable = true;
+                m_StartupAwaitingBaseline = false;
+                return false;
+            }
+
+            if (!StartupIndexMatches(m_StartupCheckCandidates, m_StartupCheckLines))
+            {
+                PruneStartupVehicles(m_StartupCheckCandidates);
+                ReplaceStartupIndex(m_StartupCheckCandidates, m_StartupCheckLines);
+                m_StartupBucket = 0;
+                m_StartupAwaitingStable = false;
                 m_StartupAwaitingBaseline = false;
                 return false;
             }
@@ -193,6 +239,7 @@ namespace RapidTransitMod
                     || line != candidate.Line)
                 {
                     m_StartupBucket = 0;
+                    m_StartupAwaitingStable = false;
                     m_StartupAwaitingBaseline = false;
                     return false;
                 }
@@ -283,44 +330,51 @@ namespace RapidTransitMod
             return true;
         }
 
-        private void CollectStartupIndex(List<StartupCandidate> candidates, List<Entity> lines)
+        private bool CollectStartupIndex(List<StartupCandidate> candidates, List<Entity> lines)
         {
             candidates.Clear();
             lines.Clear();
+            m_StartupWaitingLines.Clear();
+            m_StartupOrderedLines.Clear();
+            m_StartupSeenVehicles.Clear();
             NativeArray<Entity> queriedLines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
             try
             {
-                var orderedLines = new List<Entity>(queriedLines.Length);
                 for (int i = 0; i < queriedLines.Length; i++)
-                    orderedLines.Add(queriedLines[i]);
-                orderedLines.Sort(CompareEntity);
-                var seenVehicles = new HashSet<Entity>();
-                for (int i = 0; i < orderedLines.Count; i++)
+                    m_StartupOrderedLines.Add(queriedLines[i]);
+                m_StartupOrderedLines.Sort(CompareEntity);
+                for (int i = 0; i < m_StartupOrderedLines.Count; i++)
                 {
-                    Entity line = orderedLines[i];
-                    if (!TryStartupLine(line, out DynamicBuffer<RouteVehicle> members, out _))
+                    Entity line = m_StartupOrderedLines[i];
+                    StartupLineState lineState = TryStartupLine(line, out DynamicBuffer<RouteVehicle> members, out _);
+                    if (lineState == StartupLineState.WaitingStable)
+                    {
+                        m_StartupWaitingLines.Add(line);
+                        continue;
+                    }
+                    if (lineState != StartupLineState.Stable)
                         continue;
 
                     int order = lines.Count;
                     lines.Add(line);
-                    var orderedVehicles = new List<Entity>(members.Length);
+                    m_StartupOrderedVehicles.Clear();
                     for (int memberIndex = 0; memberIndex < members.Length; memberIndex++)
                     {
                         Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(members[memberIndex].m_Vehicle);
                         if (vehicle != Entity.Null)
-                            orderedVehicles.Add(vehicle);
+                            m_StartupOrderedVehicles.Add(vehicle);
                     }
-                    orderedVehicles.Sort(CompareEntity);
-                    for (int vehicleIndex = 0; vehicleIndex < orderedVehicles.Count; vehicleIndex++)
+                    m_StartupOrderedVehicles.Sort(CompareEntity);
+                    for (int vehicleIndex = 0; vehicleIndex < m_StartupOrderedVehicles.Count; vehicleIndex++)
                     {
-                        Entity vehicle = orderedVehicles[vehicleIndex];
-                        if (seenVehicles.Contains(vehicle)
+                        Entity vehicle = m_StartupOrderedVehicles[vehicleIndex];
+                        if (m_StartupSeenVehicles.Contains(vehicle)
                             || !TryStartupRoute(line, vehicle, out _))
                         {
                             continue;
                         }
 
-                        seenVehicles.Add(vehicle);
+                        m_StartupSeenVehicles.Add(vehicle);
                         candidates.Add(new StartupCandidate
                         {
                             Line = line,
@@ -329,6 +383,15 @@ namespace RapidTransitMod
                         });
                     }
                 }
+
+                if (m_StartupWaitingLines.Count != 0)
+                {
+                    candidates.Clear();
+                    lines.Clear();
+                    return false;
+                }
+
+                return true;
             }
             finally
             {
@@ -336,7 +399,7 @@ namespace RapidTransitMod
             }
         }
 
-        private bool TryStartupLine(
+        private StartupLineState TryStartupLine(
             Entity line,
             out DynamicBuffer<RouteVehicle> members,
             out DynamicBuffer<RouteWaypoint> waypoints)
@@ -350,14 +413,20 @@ namespace RapidTransitMod
                 || !m_Runtime.EntityManager.HasBuffer<RouteVehicle>(line)
                 || !m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line))
             {
-                return false;
+                return StartupLineState.Ineligible;
             }
 
             members = m_Runtime.EntityManager.GetBuffer<RouteVehicle>(line, true);
             waypoints = m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            return waypoints.Length >= 2
-                && m_Runtime.m_LineProfile.IsStable(line, waypoints)
-                && m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch());
+            if (waypoints.Length < 2
+                || !m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch()))
+            {
+                return StartupLineState.Ineligible;
+            }
+
+            return m_Runtime.m_LineProfile.IsStable(line, waypoints)
+                ? StartupLineState.Stable
+                : StartupLineState.WaitingStable;
         }
 
         private bool TryStartupRoute(
@@ -366,7 +435,7 @@ namespace RapidTransitMod
             out DynamicBuffer<RouteWaypoint> waypoints)
         {
             waypoints = default;
-            if (!TryStartupLine(line, out DynamicBuffer<RouteVehicle> members, out waypoints)
+            if (TryStartupLine(line, out DynamicBuffer<RouteVehicle> members, out waypoints) != StartupLineState.Stable
                 || vehicle == Entity.Null
                 || !m_Runtime.EntityManager.Exists(vehicle)
                 || m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle)

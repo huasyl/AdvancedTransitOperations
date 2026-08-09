@@ -647,7 +647,7 @@
 
 .dw-bc-asset-time {
   width: 39rem;
-  color: rgba(255, 255, 255, 0.34);
+  color: rgba(255, 255, 255, 0.55);
   font-size: 11rem;
   line-height: 15rem;
   text-align: right;
@@ -2670,13 +2670,13 @@
   stroke: rgba(255, 255, 255, 0.72);
 }
 
-.dw-bc-asset-delete:hover {
+.dw-bc-asset-row:hover .dw-bc-asset-delete:hover {
   color: #f08f8f;
-  transform: scale(1.08);
+  transform: scale(1);
 }
 
-.dw-bc-asset-delete:hover .dw-bc-action-icon,
-.dw-bc-asset-delete:hover .dw-bc-action-icon * {
+.dw-bc-asset-row:hover .dw-bc-asset-delete:hover .dw-bc-action-icon,
+.dw-bc-asset-row:hover .dw-bc-asset-delete:hover .dw-bc-action-icon * {
   color: #f08f8f;
   stroke: #f08f8f;
 }

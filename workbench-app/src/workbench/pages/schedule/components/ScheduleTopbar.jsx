@@ -21,6 +21,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
           active: line?.id === topbar.selectedLineId
         }))}
         onSelect={actions.selectLine}
+        onOpen={actions.refreshNames}
         className="is-line"
         variant="field"
         positioning="portal"
@@ -74,6 +75,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
           }))
         ]}
         onSelect={actions.changeDepot}
+        onOpen={actions.refreshNames}
         className="is-depot"
         variant="field"
         positioning="portal"

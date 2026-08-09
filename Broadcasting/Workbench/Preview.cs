@@ -453,7 +453,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     int playbackToken = unchecked(++m_RuleToken);
                     m_RuleId = ruleId;
                     NotifyRule(modeToken, ruleId, "started", string.Empty);
-                    bool playedAnyClip = false;
                     bool skippedMissingAsset = false;
 
                     for (int nodeIndex = 0; nodeIndex < rule.nodes.Length; nodeIndex++)
@@ -499,7 +498,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             continue;
                         }
 
-                        playedAnyClip = true;
                         RuleSource();
                         ReleaseRule();
                         m_RuleClip = clip;

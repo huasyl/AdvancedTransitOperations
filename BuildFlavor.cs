@@ -13,5 +13,11 @@ namespace RapidTransitMod
 #else
         internal const bool VerboseLogs = false;
 #endif
+
+#if RT_PERF_LOGS
+        internal const bool PerfLogs = true;
+#else
+        internal const bool PerfLogs = false;
+#endif
     }
 }

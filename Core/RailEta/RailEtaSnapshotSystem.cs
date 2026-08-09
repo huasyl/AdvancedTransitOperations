@@ -473,7 +473,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 IsVehicleTarget = 1,
                 NeedsGeometry = 1
             };
-            IReadOnlyDictionary<Entity, List<RailEtaScopedLaneRow>> facts = BuildFrozenLaneFactIndex(m_Staging);
+            HashSet<Entity> targetLanes = CollectPathLanes(result.Path);
+            IReadOnlyDictionary<Entity, List<RailEtaScopedLaneRow>> facts = BuildFrozenLaneFactIndex(m_Staging, targetLanes);
             bool pathAppended = AppendResolvedPathForWorker(
                 m_Staging, facts, missing, result.Path, 0u, out string appendFailure);
             string vehicleFailure = string.Empty;
@@ -867,12 +868,12 @@ namespace RapidTransitMod.RailEta.BuiltIn
             {
                 RailTravel.Segment segment = path.Segments[i];
                 bool foundBase = false;
-                var copies = new List<RailEtaScopedLaneRow>();
                 if (!frozenFactsByLane.TryGetValue(segment.LaneEntity, out List<RailEtaScopedLaneRow> facts))
                 {
                     detail = "Query result lane has no request-frame geometry/reservation/signal fact.";
                     return false;
                 }
+                var copies = new List<RailEtaScopedLaneRow>(facts.Count);
                 for (int f = 0; f < facts.Count; f++)
                 {
                     RailEtaScopedLaneRow fact = facts[f];
@@ -1003,17 +1004,48 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return true;
         }
 
-        private static Dictionary<Entity, List<RailEtaScopedLaneRow>> BuildFrozenLaneFactIndex(RailEtaScopedStaging staging)
+        private static HashSet<Entity> CollectPathLanes(RailTravel.Path path)
         {
-            var result = new Dictionary<Entity, List<RailEtaScopedLaneRow>>();
+            var result = new HashSet<Entity>(path.Segments.Length);
+            for (int i = 0; i < path.Segments.Length; i++)
+            {
+                Entity lane = path.Segments[i].LaneEntity;
+                if (lane != Entity.Null) result.Add(lane);
+            }
+            return result;
+        }
+
+        private static HashSet<Entity> CollectPathLanes(ResolvedPathResult[] resolvedPaths)
+        {
+            int capacity = 0;
+            for (int i = 0; i < resolvedPaths.Length; i++)
+                capacity += resolvedPaths[i].Path.Segments.Length;
+
+            var result = new HashSet<Entity>(capacity);
+            for (int i = 0; i < resolvedPaths.Length; i++)
+            {
+                RailTravel.Segment[] segments = resolvedPaths[i].Path.Segments;
+                for (int segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
+                {
+                    Entity lane = segments[segmentIndex].LaneEntity;
+                    if (lane != Entity.Null) result.Add(lane);
+                }
+            }
+            return result;
+        }
+
+        private static Dictionary<Entity, List<RailEtaScopedLaneRow>> BuildFrozenLaneFactIndex(
+            RailEtaScopedStaging staging, HashSet<Entity> targetLanes)
+        {
+            var result = new Dictionary<Entity, List<RailEtaScopedLaneRow>>(targetLanes.Count);
             NativeArray<RailEtaScopedLaneRow> facts = staging.Lanes.AsArray();
             for (int i = 0; i < facts.Length; i++)
             {
                 RailEtaScopedLaneRow fact = facts[i];
-                if (fact.Lane == Entity.Null || (fact.Source != 6 && fact.Source != 3)) continue;
+                if (fact.Lane == Entity.Null || !targetLanes.Contains(fact.Lane) || (fact.Source != 6 && fact.Source != 3)) continue;
                 if (fact.Source == 3 && (fact.Line != Entity.Null || fact.Controller != Entity.Null)) continue;
                 if (!result.TryGetValue(fact.Lane, out List<RailEtaScopedLaneRow> laneFacts))
-                    result[fact.Lane] = laneFacts = new List<RailEtaScopedLaneRow>();
+                    result[fact.Lane] = laneFacts = new List<RailEtaScopedLaneRow>(4);
                 laneFacts.Add(fact);
             }
             return result;
@@ -1041,7 +1073,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 {
                     using (s_WorkerScope.Auto())
                     {
-                        IReadOnlyDictionary<Entity, List<RailEtaScopedLaneRow>> frozenFactsByLane = BuildFrozenLaneFactIndex(work.Staging);
+                        HashSet<Entity> targetLanes = CollectPathLanes(resolvedPaths);
+                        IReadOnlyDictionary<Entity, List<RailEtaScopedLaneRow>> frozenFactsByLane = BuildFrozenLaneFactIndex(work.Staging, targetLanes);
                         for (int i = 0; i < resolvedPaths.Length; i++)
                         {
                             if (AppendResolvedPathForWorker(work.Staging, frozenFactsByLane, resolvedPaths[i].Segment,

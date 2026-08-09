@@ -147,6 +147,12 @@ namespace RapidTransitMod.Workbenches
                 : fallback;
         }
 
+        internal static bool ReadNamesOnly(string requestJson)
+        {
+            return TryReadJson(requestJson, out ModeRequestDto request)
+                && request?.namesOnly == true;
+        }
+
         private static bool TryReadJson(string requestJson, out ModeRequestDto request)
         {
             request = null;
@@ -183,6 +189,8 @@ namespace RapidTransitMod.Workbenches
             public string ruleId = string.Empty;
             [DataMember]
             public int? volume = null;
+            [DataMember]
+            public bool namesOnly = false;
         }
     }
 }

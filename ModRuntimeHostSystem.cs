@@ -45,6 +45,7 @@ using WorkbenchTime = RapidTransitMod.Dispatch.Workbench.Time;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using Unity.Profiling;
 using UnityEngine;
 
 namespace RapidTransitMod
@@ -68,6 +69,15 @@ namespace RapidTransitMod
 
     public partial class ModRuntimeHostSystem : GameSystemBase, IPreSerialize
     {
+        private static readonly ProfilerMarker s_RailEtaMarker = new ProfilerMarker("ATO.Runtime.RailEta");
+        private static readonly ProfilerMarker s_SourceMarker = new ProfilerMarker("ATO.Runtime.Source");
+        private static readonly ProfilerMarker s_RegisterMarker = new ProfilerMarker("ATO.Runtime.Register");
+        private static readonly ProfilerMarker s_StopMarker = new ProfilerMarker("ATO.Runtime.Stop");
+        private static readonly ProfilerMarker s_BypassMarker = new ProfilerMarker("ATO.Runtime.Bypass");
+        private static readonly ProfilerMarker s_DispatchMarker = new ProfilerMarker("ATO.Runtime.Dispatch");
+        private static readonly ProfilerMarker s_SchedulerMarker = new ProfilerMarker("ATO.Runtime.Scheduler");
+        private static readonly ProfilerMarker s_SliceMarker = new ProfilerMarker("ATO.Runtime.Slice");
+
         private readonly struct RescueCandidate
         {
             public readonly Entity Express;
@@ -490,8 +500,16 @@ namespace RapidTransitMod
         protected override void OnUpdate()
         {
             uint simulationFrame = m_SimulationSystem.frameIndex;
-            m_SimClock.RefreshIfDue(simulationFrame);
-            Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
+            RuntimeCostFrame runtimeCost = m_RuntimeHotPathProbe.BeginCost(
+                simulationFrame,
+                m_SystemReady,
+                m_SimClock.Snapshot.ToFramesCeil(30d));
+            using (s_RailEtaMarker.Auto())
+            {
+                m_SimClock.RefreshIfDue(simulationFrame);
+                Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
+            }
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.RailEta);
             if (GameManager.instance.gameMode != GameMode.Game) return;
             m_SelectPanel.UpdateVersionBucket();
 
@@ -625,11 +643,16 @@ namespace RapidTransitMod
                 m_RuntimeFramePlan.DrainUiCommands();
                 ApplyUiCommands(commandBuffer, clockSnapshot);
             }
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Setup);
 
             if (!startupActivation)
             {
-                m_RailEventSource.CollectIfDue(simulationFrame);
-                m_RoadEventSource.Collect(simulationFrame);
+                using (s_SourceMarker.Auto())
+                {
+                    m_RailEventSource.CollectIfDue(simulationFrame);
+                    m_RoadEventSource.Collect(simulationFrame);
+                }
+                m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.SourceCollect);
 
                 bool runFullRegisterSweep = nowMinute != m_LastRegisterSweepMinute;
                 bool registerSourceFrame = m_RailEventSource.CollectedThisFrame(simulationFrame);
@@ -638,7 +661,8 @@ namespace RapidTransitMod
                 {
                     try
                     {
-                        m_VehicleRegistrar.Register(runFullRegisterSweep, scanSpawnLines);
+                        using (s_RegisterMarker.Auto())
+                            m_VehicleRegistrar.Register(runFullRegisterSweep, scanSpawnLines);
                         if (runFullRegisterSweep)
                             m_LastRegisterSweepMinute = nowMinute;
                     }
@@ -649,6 +673,7 @@ namespace RapidTransitMod
                     }
                 }
             }
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Register);
 
             railSourceFrame = m_RailEventSource.CollectedThisFrame(simulationFrame);
             m_LineStructureInvalidator.Drain();
@@ -666,6 +691,7 @@ namespace RapidTransitMod
             {
                 ApplyStartupActivationState(m_RuntimeFramePlan.Entries, simulationFrame);
             }
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.SourceRoute);
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Stop);
             IReadOnlyList<FramePlanEntry> stopEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Stop);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Stop, stopEntries.Count);
@@ -701,22 +727,28 @@ namespace RapidTransitMod
             }
             if (RuntimeHotPathProbe.Enabled())
                 m_RuntimeHotPathProbe.CountStageExecuted(RuntimeStageMask.Stop, CountValidStopInputs());
-            m_StopRuntime.Process(m_StopInputs, simulationFrame);
+            using (s_StopMarker.Auto())
+                m_StopRuntime.Process(m_StopInputs, simulationFrame);
             PublishStopFacts();
             ApplyStopControls();
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Stop);
             m_TrackProjection.ClearLineRunningVehicleSnapshots();
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Rescue);
             IReadOnlyList<FramePlanEntry> rescueEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Rescue);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Rescue, rescueEntries.Count);
             ResolveVanillaBlockerRescues(commandBuffer, rescueEntries);
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Rescue);
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Bypass);
             IReadOnlyList<FramePlanEntry> bypassEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Bypass);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Bypass, bypassEntries.Count);
-            RunBypassPhase(commandBuffer, m_BypassControls, m_BypassAttempts, simulationFrame, bypassEntries);
+            using (s_BypassMarker.Auto())
+                RunBypassPhase(commandBuffer, m_BypassControls, m_BypassAttempts, simulationFrame, bypassEntries);
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.BypassDecision);
             m_StopRuntime.ResolveDwell(m_BypassControls, m_BypassAttempts, simulationFrame);
             CommitDwellTimeouts(commandBuffer);
             m_StopRuntime.ResolveDeparture(m_BypassControls, simulationFrame);
             CommitStopDepartures();
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.DwellDeparture);
             if (fullMinuteSweep)
                 AddMinuteDispatchStages();
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Dispatch);
@@ -753,12 +785,15 @@ namespace RapidTransitMod
 
             try
             {
-                m_RuntimeEngine.ProcessFrame(
-                    commandBuffer,
-                    clockSnapshot,
-                    m_RuntimeFramePlan,
-                    m_FrameEvents,
-                    m_DispatchInputs);
+                using (s_DispatchMarker.Auto())
+                {
+                    m_RuntimeEngine.ProcessFrame(
+                        commandBuffer,
+                        clockSnapshot,
+                        m_RuntimeFramePlan,
+                        m_FrameEvents,
+                        m_DispatchInputs);
+                }
             }
             catch (Exception ex)
             {
@@ -770,6 +805,7 @@ namespace RapidTransitMod
             ApplyLaunchCommits();
             ApplyRunningCommits();
             m_CommandApplier.FinalizeRetireDispatchLockTerminals();
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Dispatch);
             if ((simulationFrame & 15u) == 3u)
                 m_RuntimeVehicleCleanup.Tick();
             TickLineSpawnControl(nowMinute);
@@ -778,11 +814,15 @@ namespace RapidTransitMod
             m_SchedulerApply.SealDirtyLines();
             if (!fullMinuteSweep)
                 m_RuntimeHotPathProbe.CountSchedulerExternalDirty(m_SchedulerApply.ResolvedDirtyLines.Count);
-            m_SchedulerApply.Tick(
-                commandBuffer,
-                clockSnapshot,
-                m_SchedulerApply.ResolvedDirtyLines,
-                fullMinuteSweep);
+            using (s_SchedulerMarker.Auto())
+            {
+                m_SchedulerApply.Tick(
+                    commandBuffer,
+                    clockSnapshot,
+                    m_SchedulerApply.ResolvedDirtyLines,
+                    fullMinuteSweep);
+            }
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Scheduler);
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Retire);
             IReadOnlyList<FramePlanEntry> retireEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Retire);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Retire, retireEntries.Count);
@@ -793,12 +833,17 @@ namespace RapidTransitMod
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Slice);
             IReadOnlyList<FramePlanEntry> sliceEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Slice);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Slice, sliceEntries.Count);
-            RunSlicePhase(simulationFrame, sliceEntries);
+            using (s_SliceMarker.Auto())
+                RunSlicePhase(simulationFrame, sliceEntries);
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.RetireSlice);
             PublishPreparingNotices(simulationFrame);
             PublishRunningNotices();
             ClearRunningExitBypass();
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Notices);
             ConsumeFrameEvents();
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Events);
             m_Announcements.Tick(simulationFrame, railSourceFrame);
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Announcements);
 
             uint nowFrame = m_SimulationSystem.frameIndex;
             if (nowFrame - m_LastVehicleCacheFlushFrame >= VEHICLE_CACHE_FLUSH_INTERVAL)
@@ -806,9 +851,25 @@ namespace RapidTransitMod
                 m_VehicleCache.Save();
                 m_LastVehicleCacheFlushFrame = nowFrame;
             }
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.VehicleCache);
 
             m_WorkbenchCatalogDirty.Check(nowFrame);
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.CatalogCheck);
             m_WorkbenchCatalogCache.Tick(nowFrame);
+            m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.CatalogTick);
+
+            m_RuntimeHotPathProbe.FinishCost(ref runtimeCost, new RuntimeCostContext
+            {
+                SourceFrame = railSourceFrame,
+                FullMinuteSweep = fullMinuteSweep,
+                Stop = stopEntries.Count,
+                Rescue = rescueEntries.Count,
+                Bypass = bypassEntries.Count,
+                Dispatch = dispatchEntries.Count,
+                Retire = retireEntries.Count,
+                Slice = sliceEntries.Count,
+                DirtyLines = m_SchedulerApply.ResolvedDirtyLines.Count
+            });
 
             m_Bypass.FlushProbeLogs(nowFrame);
             m_RuntimeHotPathProbe.FlushIfDue(nowFrame);

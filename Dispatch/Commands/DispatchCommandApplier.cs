@@ -237,6 +237,9 @@ namespace RapidTransitMod
 
         private void LogRoadCommand(Entity vehicle, string message)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             if (!ShouldLogRoadCommand(vehicle, "command"))
                 return;
 
@@ -248,6 +251,9 @@ namespace RapidTransitMod
             Entity line,
             RoadPreparingResult result)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             string action;
             string message;
             switch (result)
@@ -294,6 +300,9 @@ namespace RapidTransitMod
             Entity line,
             RoadOriginGuardResult result)
         {
+            if (!RtLog.VerboseEnabled)
+                return;
+
             string action;
             string message;
             switch (result)

@@ -135,6 +135,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const platformRuleIdMemoryRef = useRef({});
   const dirtyPlatformStationIdsRef = useRef([]);
   const skipNextRulesSaveRef = useRef(false);
+  const namesRefreshRef = useRef(false);
   const pendingAssetDeletionLookup = useMemo(
     () => pendingAssetDeletionNamesByMode[normalizeBroadcastMode(activeTransportMode)] || {},
     [activeTransportMode, pendingAssetDeletionNamesByMode],
@@ -647,6 +648,54 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       setPlatformAnnouncements([]);
       setStations([]);
       setSelectedLineLocalDraftDirty(lineId);
+    }
+  }
+
+  async function refreshNames() {
+    if (namesRefreshRef.current) {
+      return;
+    }
+
+    const requestMode = normalizeBroadcastMode(activeTransportModeRef.current);
+    const requestLineId = selectedLineIdRef.current || "";
+    namesRefreshRef.current = true;
+    try {
+      const snapshot = await workbenchApi.refreshBroadcastSnapshot?.({
+        preferredLineId: requestLineId,
+        mode: requestMode,
+        namesOnly: true,
+      });
+      if (!snapshot
+        || normalizeBroadcastMode(activeTransportModeRef.current) !== requestMode
+        || !matchesBroadcastMode(snapshot, requestMode)) {
+        return;
+      }
+
+      const nextLineNames = new Map(
+        extractBackendLineOptions(snapshot).map((line) => [line.id, line.label]),
+      );
+      setLineOptions((current) => current.map((line) => ({
+        ...line,
+        label: nextLineNames.get(line.id) || line.label,
+      })));
+
+      if (!requestLineId || selectedLineIdRef.current !== requestLineId) {
+        return;
+      }
+
+      const stationNames = new Map(
+        (Array.isArray(snapshot?.stations) ? snapshot.stations : [])
+          .filter((station) => station?.id && station?.name)
+          .map((station) => [station.id, station.name]),
+      );
+      setStations((current) => current.map((station) => ({
+        ...station,
+        name: stationNames.get(station.id) || station.name,
+      })));
+      draftStore.patchStationNames(requestLineId, stationNames);
+    } catch {
+    } finally {
+      namesRefreshRef.current = false;
     }
   }
 
@@ -1848,6 +1897,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
       handleLocateBroadcastMappingIssue,
       commitBroadcastPreviewVolume,
       setActiveTab,
+      refreshNames,
       setMappingTray,
       setTrayContext,
       setLineDropdownOpen,

@@ -111,6 +111,32 @@ export default function useBroadcastDraftStore() {
     setLineDraft(lineId, { ...current, ...(patch || {}) });
   }
 
+  function patchStationNames(lineId, namesById) {
+    const current = getLineDraft(lineId);
+    if (!current || !(namesById instanceof Map) || namesById.size === 0) {
+      return;
+    }
+
+    let changed = false;
+    const stationsForUi = current.stationsForUi.map((station) => {
+      const nextName = namesById.get(station?.id);
+      if (!nextName || nextName === station.name) {
+        return station;
+      }
+
+      changed = true;
+      return { ...station, name: nextName };
+    });
+    if (!changed) {
+      return;
+    }
+
+    lineDraftsRef.current = {
+      ...lineDraftsRef.current,
+      [lineId]: { ...current, stationsForUi },
+    };
+  }
+
   function clearLineDrafts(lineIds) {
     const nextDrafts = { ...lineDraftsRef.current };
     const nextDirtyIds = new Set(dirtyLineIdsRef.current);
@@ -249,6 +275,7 @@ export default function useBroadcastDraftStore() {
     getLineDraft,
     setLineDraft,
     patchLineDraft,
+    patchStationNames,
     clearLineDrafts,
     setVolumeDraft,
     clearVolumeDraft,

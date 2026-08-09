@@ -8,6 +8,7 @@ import {
   DEFAULT_LINE_OPTIONS,
   DEPOT_OPTIONS,
   LINE_OPTIONS,
+  ORIGIN_OPTIONS,
   MIN_LINE_SETTING_MINUTES,
   buildPlanLineOptions,
   buildCatalog,
@@ -153,6 +154,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const latestDraftSaveOperationRunIdRef = useRef(0);
   const latestApplySaveOperationRunIdRef = useRef(0);
   const applyingSaveOperationRef = useRef(false);
+  const namesRefreshRef = useRef(false);
   const activeModeRef = useRef(scheduleMode);
   const scheduleModeGenerationRef = useRef(0);
   activeModeRef.current = scheduleMode;
@@ -581,6 +583,74 @@ export default function useScheduleController({ registerHostActions, activeTrans
       setOrigin(nextLine.originId);
       setHoldMinutes(nextLine.hold);
       setDwellMinutes(nextLine.dwell);
+    }
+  }
+
+  async function refreshNames() {
+    if (namesRefreshRef.current) {
+      return;
+    }
+
+    const modeAtRequest = scheduleMode;
+    const generation = scheduleModeGenerationRef.current;
+    namesRefreshRef.current = true;
+    try {
+      const metadata = await workbenchApi.refreshMetadata?.({
+        mode: modeAtRequest,
+        preferredLineId: selectedLineId,
+        namesOnly: true
+      });
+      if (!isTrustedCatalogPayload(metadata, modeAtRequest)
+        || !isCurrentModeRequest(modeAtRequest, generation)) {
+        return;
+      }
+
+      const lineNames = new Map(
+        (Array.isArray(metadata?.lines) ? metadata.lines : [])
+          .filter((line) => line?.id)
+          .map((line) => [line.id, line])
+      );
+      LINE_OPTIONS.forEach((line) => {
+        const current = lineNames.get(line?.id);
+        if (!current) {
+          return;
+        }
+
+        patchRuntimeLineOption(line.id, {
+          name: current.name || line.name,
+          originStationName: current.originStationName || line.originStationName
+        });
+      });
+
+      const originNames = new Map(
+        (Array.isArray(metadata?.lines) ? metadata.lines : [])
+          .filter((line) => line?.originStationId && line?.originStationName)
+          .map((line) => [line.originStationId, line.originStationName])
+      );
+      for (let index = 0; index < ORIGIN_OPTIONS.length; index += 1) {
+        const originOption = ORIGIN_OPTIONS[index];
+        const nextName = originNames.get(originOption?.id);
+        if (nextName) {
+          ORIGIN_OPTIONS[index] = { ...originOption, label: nextName };
+        }
+      }
+
+      const depotNames = new Map(
+        (Array.isArray(metadata?.depots) ? metadata.depots : [])
+          .filter((depot) => depot?.id)
+          .map((depot) => [depot.id, depot.name || depot.id])
+      );
+      for (let index = 0; index < DEPOT_OPTIONS.length; index += 1) {
+        const depot = DEPOT_OPTIONS[index];
+        const nextName = depotNames.get(depot?.id);
+        if (nextName) {
+          DEPOT_OPTIONS[index] = { ...depot, label: nextName };
+        }
+      }
+      bumpCatalogRevision();
+    } catch {
+    } finally {
+      namesRefreshRef.current = false;
     }
   }
 
@@ -1397,6 +1467,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     actions: {
       setActiveRightTab,
       selectLine: handleSelectLine,
+      refreshNames,
       selectLineType: handleLineTypeSelect,
       changeDepot: handleDepotChange,
       changeHoldMinutes: handleHoldMinutesChange,

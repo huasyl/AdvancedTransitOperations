@@ -15,6 +15,16 @@ import {
   TrashIcon,
 } from "./BroadcastIcons";
 
+function formatAssetDuration(value) {
+  const match = /^0:(\d{2})$/.exec(value || "");
+  if (!match) {
+    return value;
+  }
+
+  const seconds = Number(match[1]);
+  return seconds > 0 ? `${seconds} s` : "< 1 s";
+}
+
 export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
   return (
     <aside className="dw-bc-sidebar">
@@ -38,8 +48,8 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
       <div className="dw-bc-asset-head">
         <div>{labels.assetFileName}</div>
         <div>
-          <span className="dw-bc-asset-time-head">{labels.assetDuration}</span>
-          <span className="dw-bc-asset-delete-spacer" />
+          <div className="dw-bc-asset-time-head">{labels.assetDuration}</div>
+          <div className="dw-bc-asset-delete-spacer" />
         </div>
       </div>
 
@@ -95,7 +105,7 @@ export function BroadcastAssetSidebar({ assets, preview, labels, actions }) {
               />
             </div>
             <div className="dw-bc-asset-meta">
-              <div className="dw-bc-asset-time">{asset.length}</div>
+              <div className="dw-bc-asset-time">{formatAssetDuration(asset.length)}</div>
               <button
                 type="button"
                 className={`dw-bc-asset-delete ${deleteBlocked ? "is-blocked" : ""}`}

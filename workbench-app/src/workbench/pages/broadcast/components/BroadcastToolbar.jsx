@@ -31,6 +31,7 @@ export default function BroadcastToolbar({ toolbar, refs, actions }) {
             type="button"
             className={`dw-bc-tab ${activeTab === "mapping" ? "is-active" : ""}`}
             onClick={() => {
+              actions.refreshNames();
               actions.setActiveTab("mapping");
               actions.setTrayContext(null);
             }}
@@ -57,6 +58,9 @@ export default function BroadcastToolbar({ toolbar, refs, actions }) {
             open={lineDropdownOpen}
             onOpenChange={(next) => {
               actions.setTriggerDropdownOpen(false);
+              if (next) {
+                actions.refreshNames();
+              }
               actions.setLineDropdownOpen(next);
             }}
             onSelect={(value) => {

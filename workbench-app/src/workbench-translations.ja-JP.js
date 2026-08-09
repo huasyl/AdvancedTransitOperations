@@ -449,7 +449,7 @@ export const nativeScheduleTranslationsJaJp = {
   "broadcast.sidebar.title": "音声放送設定",
   "broadcast.sidebar.localAssets": "ローカル音声アセット",
   "broadcast.sidebar.fileName": "ファイル名",
-  "broadcast.sidebar.duration": "時間",
+  "broadcast.sidebar.duration": "長さ",
   "broadcast.sidebar.import": "外部アセットを追加",
   "broadcast.sidebar.deleteAsset": "アセットを削除",
   "broadcast.sidebar.deleteAllAssets": "すべてのアセットを削除",
