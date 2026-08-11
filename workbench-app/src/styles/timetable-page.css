@@ -1,0 +1,1068 @@
+.rtw-timetable-root,
+.rtw-timetable-root * {
+  box-sizing: border-box;
+  font-family: var(--dw-native-font-family);
+}
+
+.rtw-timetable-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: #edf5f9;
+  background: transparent;
+}
+
+.rtw-timetable-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.rtw-timetable-view-tabs,
+.rtw-timetable-line-row,
+.rtw-timetable-panel-title,
+.rtw-timetable-schedule-copy,
+.rtw-timetable-station-cell {
+  display: flex;
+  align-items: center;
+}
+
+.rtw-timetable-view-tab + .rtw-timetable-view-tab {
+  margin-left: 30rem;
+}
+
+.rtw-timetable-view-tab {
+  position: relative;
+  border: 0;
+  padding: 0 0 8rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 15rem;
+  line-height: 18rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 180ms ease, text-shadow 180ms ease;
+}
+
+.rtw-timetable-view-tab:hover {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.rtw-timetable-view-tab.is-active {
+  color: #74c1c1;
+  text-shadow: 0 0 7px rgba(116, 193, 193, 0.16);
+}
+
+.rtw-timetable-view-tab.is-active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 2rem;
+  left: 0;
+  height: 2px;
+  background: #74c1c1;
+  box-shadow: 0 0 7px rgba(116, 193, 193, 0.34);
+}
+
+.rtw-timetable-sidebar {
+  position: relative;
+  z-index: 1;
+  width: 300rem;
+  flex: 0 0 300rem;
+  min-height: 0;
+  padding: 24rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.10);
+  overflow-y: auto;
+}
+
+.rtw-timetable-sidebar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(11, 16, 18, 0.10);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.rtw-timetable-sidebar > * {
+  position: relative;
+  z-index: 1;
+}
+
+.rtw-timetable-sidebar-scene {
+  width: 100%;
+}
+
+.rtw-timetable-sidebar-section + .rtw-timetable-sidebar-section {
+  margin-top: 24rem;
+  padding-top: 24rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.rtw-timetable-sidebar-title {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16rem;
+}
+
+.rtw-timetable-sidebar-title .rtw-timetable-icon,
+.rtw-timetable-panel-title .rtw-timetable-icon {
+  width: 20rem;
+  height: 20rem;
+  flex: 0 0 20rem;
+  margin-right: 8rem;
+  color: #74c1c1;
+}
+
+.rtw-timetable-sidebar-title h2,
+.rtw-timetable-panel-title {
+  margin: 0;
+  color: #f0fbff;
+  font-size: 18rem;
+  line-height: 24rem;
+  font-weight: 700;
+}
+
+.rtw-timetable-sidebar .rtw-timetable-sidebar-field + .rtw-timetable-sidebar-field {
+  margin-top: 12rem;
+  margin-left: 0;
+}
+
+.rtw-timetable-sidebar .rtw-timetable-sidebar-field.dw-demo-field {
+  width: 100%;
+  margin-left: 0;
+}
+
+.rtw-timetable-sidebar-field .dw-demo-label {
+  margin-bottom: 8rem;
+  padding-left: 0;
+  color: #aebdc7;
+  font-size: 12rem;
+  line-height: 15rem;
+  font-weight: 600;
+}
+
+.rtw-timetable-sidebar-field .dw-demo-input {
+  height: 35rem;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 0;
+  padding-top: 8rem;
+  padding-right: 8rem;
+  padding-bottom: 2px;
+  padding-left: 8rem;
+  background: transparent;
+  color: #edf5f9;
+  font-size: 15rem;
+  line-height: 20rem;
+}
+
+.rtw-timetable-line-item {
+  padding: 12rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.rtw-timetable-line-item + .rtw-timetable-line-item {
+  margin-top: 16rem;
+}
+
+.rtw-timetable-line-item:hover,
+.rtw-timetable-line-item.is-editing {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.rtw-timetable-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20rem;
+  height: 20rem;
+  flex: 0 0 20rem;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  border-radius: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.rtw-timetable-check .rtw-timetable-icon {
+  width: 14rem;
+  height: 14rem;
+  color: #ffffff;
+}
+
+.rtw-timetable-line-dot {
+  width: 10rem;
+  height: 10rem;
+  flex: 0 0 10rem;
+  margin-left: 12rem;
+}
+
+.rtw-timetable-line-name {
+  min-width: 0;
+  margin-left: 12rem;
+  overflow: hidden;
+  color: #d8e3e9;
+  font-size: 14rem;
+  line-height: 18rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rtw-timetable-line-mode.dw-demo-field {
+  margin-top: 8rem;
+  margin-left: 32rem;
+}
+
+.rtw-timetable-line-mode .dw-demo-input {
+  height: 34rem;
+  border: 0;
+  border-bottom: 1px solid rgba(116, 193, 193, 0.45);
+  border-radius: 0;
+  padding-top: 8rem;
+  padding-right: 8rem;
+  padding-bottom: 2px;
+  padding-left: 8rem;
+  background: transparent;
+  color: #81d4d4;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
+}
+
+.rtw-timetable-secondary-button,
+.rtw-timetable-primary-button {
+  min-height: 39rem;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 0;
+  padding-right: 16rem;
+  padding-left: 16rem;
+  color: #edf5f9;
+  font-size: 14rem;
+  line-height: 18rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rtw-timetable-secondary-button {
+  width: 100%;
+  margin-top: 8rem;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.rtw-timetable-secondary-button:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.rtw-timetable-primary-button {
+  flex: 0 0 auto;
+  border-color: rgba(129, 212, 212, 0.50);
+  background: #74c1c1;
+  color: #11191c;
+}
+
+.rtw-timetable-sidebar-empty,
+.rtw-timetable-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.20);
+  color: #758792;
+  font-size: 14rem;
+  line-height: 20rem;
+  text-align: center;
+}
+
+.rtw-timetable-sidebar-empty {
+  min-height: 72rem;
+  padding: 16rem;
+}
+
+.rtw-timetable-legend {
+  margin-top: 24rem;
+  padding-top: 24rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.rtw-timetable-legend-title {
+  margin-bottom: 12rem;
+  color: #758792;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
+}
+
+.rtw-timetable-legend-row {
+  display: flex;
+  align-items: center;
+  color: #8fa0aa;
+  font-size: 12rem;
+  line-height: 16rem;
+}
+
+.rtw-timetable-legend-row + .rtw-timetable-legend-row {
+  margin-top: 8rem;
+}
+
+.rtw-timetable-legend-row > span:first-child {
+  width: 10rem;
+  height: 10rem;
+  flex: 0 0 10rem;
+  margin-right: 8rem;
+}
+
+.rtw-timetable-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: transparent;
+}
+
+.rtw-timetable-main::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(11, 16, 18, 0.42);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.rtw-timetable-main-header,
+.rtw-timetable-main-scroll {
+  position: relative;
+  z-index: 1;
+}
+
+.rtw-timetable-main-header {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 52rem;
+  padding-top: 9rem;
+  padding-right: 24rem;
+  padding-left: 24rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  background: transparent;
+}
+
+.rtw-timetable-main-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rtw-timetable-view-scene {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+
+.rtw-timetable-view-scene.is-entering {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+.rtw-timetable-view-scene.is-exiting {
+  opacity: 0;
+  transform: translateY(-5px);
+  pointer-events: none;
+}
+
+.rtw-timetable-sidebar-scene > * {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 520ms cubic-bezier(0.19, 1, 0.22, 1),
+    transform 520ms cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.rtw-timetable-sidebar-scene.is-entering > * {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+.rtw-timetable-sidebar-scene.is-exiting > * {
+  opacity: 0;
+  transform: translateY(-8px);
+  transition-delay: 0ms;
+  transition-duration: 300ms;
+  transition-timing-function: ease;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > *:nth-child(1) {
+  transition-delay: 0ms;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > *:nth-child(2) {
+  transition-delay: 70ms;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > *:nth-child(3) {
+  transition-delay: 140ms;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > *:nth-child(4) {
+  transition-delay: 210ms;
+}
+
+.rtw-timetable-sidebar-scene.is-exiting {
+  pointer-events: none;
+}
+
+.rtw-timetable-content-enter {
+  animation: rtw-timetable-content-enter 300ms ease both;
+}
+
+.rtw-timetable-stagger-row {
+  animation: rtw-timetable-row-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.rtw-timetable-chart-section {
+  height: 390rem;
+  min-height: 0;
+  padding: 24rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.rtw-timetable-chart-section.is-collapsed {
+  height: 72rem;
+}
+
+.rtw-timetable-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16rem;
+}
+
+.rtw-timetable-chart-section.is-collapsed .rtw-timetable-chart-head {
+  margin-bottom: 0;
+}
+
+.rtw-timetable-chart-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34rem;
+  height: 34rem;
+  flex: 0 0 34rem;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8rem;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.04);
+  color: #81d4d4;
+  cursor: pointer;
+}
+
+.rtw-timetable-chart-toggle:hover {
+  border-color: rgba(116, 193, 193, 0.40);
+  background: rgba(116, 193, 193, 0.08);
+}
+
+.rtw-timetable-chart-toggle .rtw-timetable-icon {
+  width: 18rem;
+  height: 18rem;
+}
+
+.rtw-timetable-chart-svg,
+.rtw-timetable-chart-empty {
+  display: block;
+  width: 100%;
+  height: 326rem;
+}
+
+.rtw-timetable-chart-grid {
+  stroke: rgba(203, 213, 225, 0.18);
+  stroke-width: 1;
+}
+
+.rtw-timetable-chart-grid.is-time {
+  stroke: rgba(203, 213, 225, 0.08);
+}
+
+.rtw-timetable-chart-time,
+.rtw-timetable-chart-station {
+  fill: #899ba6;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--dw-native-font-family);
+}
+
+.rtw-timetable-chart-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.rtw-timetable-chart-point {
+  stroke: rgba(13, 20, 27, 0.90);
+  stroke-width: 1;
+}
+
+.rtw-timetable-schedule-section {
+  display: flex;
+  flex-direction: column;
+  height: 500rem;
+  min-height: 500rem;
+  padding: 16rem;
+}
+
+.rtw-timetable-schedule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  margin-bottom: 12rem;
+  padding-bottom: 12rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.rtw-timetable-schedule-copy {
+  min-width: 0;
+}
+
+.rtw-timetable-current-line {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 16rem;
+  padding-left: 16rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.20);
+  color: #8fa0aa;
+  font-size: 14rem;
+  line-height: 18rem;
+  white-space: nowrap;
+}
+
+.rtw-timetable-current-line strong {
+  margin-left: 6rem;
+  color: #edf5f9;
+}
+
+.rtw-timetable-count {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  padding-top: 4rem;
+  padding-right: 8rem;
+  padding-bottom: 4rem;
+  padding-left: 8rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: #aebdc7;
+  font-size: 12rem;
+  line-height: 16rem;
+}
+
+.rtw-timetable-count {
+  margin-left: 12rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.rtw-timetable-count.is-custom {
+  border-color: rgba(116, 193, 193, 0.35);
+  background: rgba(116, 193, 193, 0.10);
+  color: #81d4d4;
+}
+
+.rtw-timetable-count.is-custom {
+  border: 0;
+  background: transparent;
+}
+
+.rtw-timetable-theory-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 36rem;
+  flex: 0 0 auto;
+  min-width: 126rem;
+  border: 1px solid rgba(192, 132, 252, 0.56);
+  padding-right: 16rem;
+  padding-left: 16rem;
+  background: rgba(192, 132, 252, 0.16);
+  color: #c084fc;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.rtw-timetable-theory-button:hover {
+  border-color: rgba(192, 132, 252, 0.78);
+  background: rgba(192, 132, 252, 0.24);
+  color: #d8b4fe;
+}
+
+.rtw-timetable-theory-button.is-preparing {
+  cursor: default;
+  animation: rtw-timetable-theory-pulse 900ms ease-in-out infinite alternate;
+}
+
+.rtw-timetable-theory-spinner {
+  width: 13rem;
+  height: 13rem;
+  flex: 0 0 13rem;
+  margin-right: 8rem;
+  border: 2rem solid rgba(216, 180, 254, 0.30);
+  border-top-color: #d8b4fe;
+  border-radius: 999rem;
+  animation: rtw-timetable-theory-spin 700ms linear infinite;
+}
+
+.rtw-timetable-arrival-source {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: #8fa0aa;
+  font-size: 12rem;
+  line-height: 16rem;
+}
+
+.rtw-timetable-arrival-source button {
+  height: 24rem;
+  margin-left: 6rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999rem;
+  padding-right: 9rem;
+  padding-left: 9rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: #aebdc7;
+  font-size: 11rem;
+  line-height: 15rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rtw-timetable-arrival-source button.is-active {
+  border-color: rgba(192, 132, 252, 0.30);
+  background: rgba(192, 132, 252, 0.12);
+  color: #c084fc;
+}
+
+.rtw-timetable-table-scroll,
+.rtw-timetable-monitor-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+.rtw-timetable-table {
+  width: 100%;
+  min-width: 780rem;
+  color: #d8e3e9;
+  font-size: 14rem;
+  line-height: 18rem;
+  white-space: nowrap;
+}
+
+.rtw-timetable-table-head,
+.rtw-timetable-table-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.rtw-timetable-table-head {
+  min-height: 35rem;
+  padding-right: 18rem;
+  padding-left: 18rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.20);
+  background: rgba(8, 11, 13, 0.44);
+  color: #bcc8d1;
+  font-size: 12rem;
+  line-height: 15rem;
+  font-weight: 600;
+}
+
+.rtw-timetable-table-row {
+  min-height: 52rem;
+  padding-right: 18rem;
+  padding-left: 18rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 15rem;
+  line-height: 20rem;
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.rtw-timetable-table-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rtw-timetable-table-head > div,
+.rtw-timetable-table-row > div {
+  min-width: 0;
+  padding-right: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rtw-timetable-table .is-trip,
+.rtw-timetable-table .is-section,
+.rtw-timetable-table .is-station {
+  flex: 1 1 auto;
+}
+
+.rtw-timetable-table .is-time {
+  width: 120rem;
+  flex: 0 0 120rem;
+  color: #d8e3e9;
+  font-variant-numeric: tabular-nums;
+}
+
+.rtw-timetable-table .is-mode {
+  width: 120rem;
+  flex: 0 0 120rem;
+}
+
+.rtw-timetable-table-row .is-mode {
+  display: flex;
+  align-items: center;
+}
+
+.rtw-timetable-table .is-duration {
+  width: 170rem;
+  flex: 0 0 170rem;
+}
+
+.rtw-timetable-table.is-monitor .is-planned {
+  width: 140rem;
+  flex: 0 0 140rem;
+  text-align: center;
+}
+
+.rtw-timetable-table.is-monitor .is-actual {
+  width: 180rem;
+  flex: 0 0 180rem;
+  text-align: center;
+}
+
+.rtw-timetable-table.is-detail .is-pair {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 190rem;
+  flex: 0 0 190rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.rtw-timetable-table.is-detail .rtw-timetable-table-head {
+  background: transparent;
+}
+
+.rtw-timetable-table.is-detail .is-delta {
+  width: 120rem;
+  flex: 0 0 120rem;
+}
+
+.rtw-timetable-table.is-detail .is-status {
+  width: 90rem;
+  flex: 0 0 90rem;
+}
+
+.rtw-timetable-table .is-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 110rem;
+  flex: 0 0 110rem;
+  padding-right: 0;
+  text-align: center;
+}
+
+.rtw-timetable-table .is-strong {
+  color: #f0fbff;
+  font-weight: 700;
+}
+
+.rtw-timetable-table .is-muted {
+  color: #8fa0aa;
+}
+
+.rtw-timetable-section-route {
+  display: flex;
+  align-items: center;
+  margin-left: 32rem;
+}
+
+.rtw-timetable-section-from {
+  color: #8fa0aa;
+  font-size: 14rem;
+  line-height: 18rem;
+  font-weight: 600;
+}
+
+.rtw-timetable-section-route .rtw-timetable-icon {
+  width: 18rem;
+  height: 18rem;
+  flex: 0 0 18rem;
+  margin-right: 12rem;
+  margin-left: 12rem;
+  color: #74c1c1;
+}
+
+.rtw-timetable-section-to,
+.rtw-timetable-origin-name {
+  color: #edf5f9;
+  font-size: 15rem;
+  line-height: 20rem;
+  font-weight: 700;
+}
+
+.rtw-timetable-origin-name {
+  color: #81d4d4;
+}
+
+.rtw-timetable-table.is-edit .is-arrival {
+  color: #8294aa;
+  font-size: 15rem;
+  line-height: 20rem;
+  font-weight: 600;
+}
+
+.rtw-timetable-table.is-edit .is-departure {
+  display: flex;
+  align-items: center;
+}
+
+.rtw-timetable-table.is-edit .is-departure > .rtw-timetable-icon {
+  width: 18rem;
+  height: 18rem;
+  flex: 0 0 18rem;
+  margin-right: 8rem;
+  color: #74c1c1;
+}
+
+.rtw-timetable-table.is-edit .rtw-timetable-table-row .is-duration {
+  color: #9dacbe;
+  font-size: 15rem;
+  line-height: 20rem;
+  font-weight: 400;
+}
+
+.rtw-timetable-table.is-edit .rtw-timetable-time-input.dw-demo-input {
+  width: 82rem;
+  height: 35rem;
+  flex: 0 0 82rem;
+  padding-top: 8rem;
+  padding-right: 8rem;
+  padding-bottom: 2px;
+  padding-left: 8rem;
+  color: #edf5f9;
+  font-size: 15rem;
+  line-height: 20rem;
+  font-weight: 700;
+}
+
+.rtw-timetable-table.is-edit .rtw-timetable-time-input.dw-demo-input:focus {
+  border-bottom-color: #74c1c1;
+  background: rgba(116, 193, 193, 0.08);
+}
+
+.rtw-timetable-link {
+  min-width: 84rem;
+  height: 32rem;
+  border: 1px solid rgba(116, 193, 193, 0.36);
+  padding-right: 12rem;
+  padding-left: 12rem;
+  background: transparent;
+  color: #74c1c1;
+  font-size: 11rem;
+  line-height: 14rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.rtw-timetable-link:hover {
+  border-color: rgba(116, 193, 193, 0.62);
+  background: rgba(116, 193, 193, 0.10);
+  color: #9bd7d7;
+}
+
+.rtw-timetable-monitor {
+  display: flex;
+  flex-direction: column;
+  height: 720rem;
+  min-height: 720rem;
+}
+
+.rtw-timetable-metrics {
+  display: flex;
+  flex: 0 0 auto;
+  padding: 24rem;
+}
+
+.rtw-timetable-metric {
+  width: 25%;
+  min-width: 0;
+  padding-right: 24rem;
+}
+
+.rtw-timetable-metric + .rtw-timetable-metric {
+  margin-left: 0;
+}
+
+.rtw-timetable-metric-label {
+  color: #71717a;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+}
+
+.rtw-timetable-metric-value {
+  margin-top: 8rem;
+  color: #f0fbff;
+  font-size: 24rem;
+  line-height: 30rem;
+  font-weight: 700;
+}
+
+.rtw-timetable-metric-value.is-good {
+  color: #7fd5ad;
+}
+
+.rtw-timetable-metric-value.is-accent,
+.rtw-timetable-table .is-accent {
+  color: #81d4d4;
+}
+
+.rtw-timetable-metric-value.is-warning,
+.rtw-timetable-table .is-warning {
+  color: #e3b97a;
+}
+
+.rtw-timetable-table .is-good {
+  color: #7fd5ad;
+}
+
+.rtw-timetable-monitor-table-wrap {
+  margin-right: 24rem;
+  margin-bottom: 24rem;
+  margin-left: 24rem;
+  background: transparent;
+}
+
+.rtw-timetable-monitor-row {
+  cursor: pointer;
+}
+
+.rtw-timetable-summary-row {
+  cursor: pointer;
+}
+
+.rtw-timetable-monitor-row.is-expanded {
+  box-shadow: inset 2px 0 0 #74c1c1;
+  background: rgba(116, 193, 193, 0.06);
+}
+
+.rtw-timetable-table-action {
+  min-height: 34rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding-right: 16rem;
+  padding-left: 16rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: #b7c5cd;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rtw-timetable-table-action.is-active {
+  border-color: rgba(116, 193, 193, 0.48);
+  background: rgba(116, 193, 193, 0.12);
+  color: #81d4d4;
+}
+
+.rtw-timetable-expanded-row {
+  background: transparent;
+}
+
+.rtw-timetable-expanded-scroll {
+  max-height: 400rem;
+  padding: 8rem 16rem;
+  overflow-y: auto;
+}
+
+.rtw-timetable-table.is-detail {
+  font-size: 15rem;
+  line-height: 20rem;
+}
+
+.rtw-timetable-table.is-detail .rtw-timetable-table-row {
+  min-height: 52rem;
+  font-size: 15rem;
+  line-height: 20rem;
+}
+
+.rtw-timetable-station-cell .rtw-timetable-icon,
+.rtw-timetable-station-end {
+  width: 12rem;
+  height: 12rem;
+  flex: 0 0 12rem;
+  margin-right: 8rem;
+  color: #758792;
+}
+
+.rtw-timetable-time-sep {
+  margin-right: 6rem;
+  margin-left: 6rem;
+  color: #566872;
+}
+
+@keyframes rtw-timetable-theory-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rtw-timetable-theory-pulse {
+  from {
+    background: rgba(192, 132, 252, 0.12);
+  }
+  to {
+    background: rgba(192, 132, 252, 0.24);
+  }
+}
+
+@keyframes rtw-timetable-content-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes rtw-timetable-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

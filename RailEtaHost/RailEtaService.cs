@@ -109,6 +109,68 @@ namespace RapidTransitMod.RailEtaHost
             return ticket;
         }
 
+        internal RailEtaPublicTicket RequestTheorySegments(
+            int lineIndex,
+            int lineVersion,
+            int modelIndex,
+            int modelVersion,
+            RailEtaTheorySegmentRequest[] segments,
+            int secondaryModelIndex = 0,
+            int secondaryModelVersion = 0,
+            ulong routeSignature = 0,
+            ulong pathSignature = 0,
+            ulong modelSignature = 0)
+        {
+            if (IsDisposed || WorkerLost || segments == null || segments.Length == 0 || segments.Length > 256)
+                return default;
+
+            RailEtaPublicTicket ticket = new RailEtaPublicTicket(Interlocked.Increment(ref m_NextTicket));
+            RailEtaHotRuntime.Selection selection = m_HotRuntime?.Current;
+            RailEtaTheorySegmentRequest last = segments[segments.Length - 1];
+            var status = new RailEtaPublicStatus
+            {
+                Ticket = ticket,
+                State = selection == null ? "Unavailable" : "Queued",
+                TargetVehicle = ((long)(uint)lineIndex << 32) | (uint)lineVersion,
+                TargetWaypoint = ((long)(uint)last.ToWaypointIndex << 32) | (uint)last.ToWaypointVersion,
+                Mode = RailEtaMode.Theory,
+                Generation = selection?.Generation ?? 0,
+                ClockEpoch = m_ClockSnapshot().ClockEpoch
+            };
+            m_Status[ticket.Value] = status;
+            if (selection == null)
+            {
+                status.Failure = "HotModuleUnavailable";
+                status.Detail = "Rail ETA hot module is not loaded.";
+                return ticket;
+            }
+
+            if (!m_HotRuntime.Submit(new RailEtaHotCommand(
+                ticket.Value,
+                checked((int)selection.Generation),
+                lineIndex,
+                lineVersion,
+                status.TargetWaypoint,
+                RailEtaMode.Theory,
+                0,
+                0,
+                modelIndex,
+                modelVersion,
+                secondaryModelIndex,
+                secondaryModelVersion,
+                segments,
+                routeSignature,
+                pathSignature,
+                modelSignature)))
+            {
+                status.State = "Busy";
+                status.Failure = "Busy";
+                status.Detail = "Rail ETA hot reload is active.";
+            }
+
+            return ticket;
+        }
+
         public bool TryGetState(RailEtaPublicTicket ticket, out RailEtaPublicStatus status)
         {
             if (!m_Status.TryGetValue(ticket.Value, out status)) return false;
@@ -127,6 +189,14 @@ namespace RapidTransitMod.RailEtaHost
             m_HotRuntime?.Cancel(ticket.Value);
             status.State = "Cancelled";
             status.Failure = "Cancelled";
+            return true;
+        }
+
+        public bool Release(RailEtaPublicTicket ticket)
+        {
+            if (!m_Status.TryRemove(ticket.Value, out RailEtaPublicStatus status)) return false;
+            if (!IsTerminal(status.State)) m_HotRuntime?.Cancel(ticket.Value);
+            Interlocked.CompareExchange(ref m_LastTerminalTicket, 0, ticket.Value);
             return true;
         }
 
@@ -181,6 +251,11 @@ namespace RapidTransitMod.RailEtaHost
             status.Generation = result.Generation;
             status.Incomplete = result.Incomplete;
             status.Mode = result.Mode;
+            status.TheorySegments = result.TheorySegments ?? new RailEtaTheorySegmentResult[0];
+            status.TheoryFailure = result.TheoryFailure;
+            status.RouteSignature = result.RouteSignature;
+            status.PathSignature = result.PathSignature;
+            status.ModelSignature = result.ModelSignature;
             if (!String.IsNullOrEmpty(result.ComparisonSummary)) status.ComparisonSummary = result.ComparisonSummary;
         }
 

@@ -58,6 +58,11 @@ namespace RapidTransitMod.RailEtaHost
         public long ClockEpoch { get; internal set; }
         public bool Incomplete { get; internal set; }
         public RailEtaMode Mode { get; internal set; }
+        public RailEtaTheorySegmentResult[] TheorySegments { get; internal set; } = new RailEtaTheorySegmentResult[0];
+        public RailEtaTheoryFailure TheoryFailure { get; internal set; }
+        public ulong RouteSignature { get; internal set; }
+        public ulong PathSignature { get; internal set; }
+        public ulong ModelSignature { get; internal set; }
         public string ComparisonSummary { get; internal set; } = string.Empty;
     }
 }

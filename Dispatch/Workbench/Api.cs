@@ -58,6 +58,32 @@ namespace RapidTransitMod.Dispatch.Workbench
             return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.Status(operationId) ?? string.Empty;
         }
 
+        internal static string StartRunChart(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.StartRunChart(requestJson) ?? string.Empty;
+        }
+
+        internal static string StatusRunChart(string queryId)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.StatusRunChart(queryId) ?? string.Empty;
+        }
+
+        internal static string CancelRunChart(string queryId)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.CancelRunChart(queryId) ?? string.Empty;
+        }
+
+        internal static string ConsumeRunChart(string queryId)
+        {
+            ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.ConsumeRunChart(queryId);
+            return string.Empty;
+        }
+
+        internal static string Monitor()
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.Monitor() ?? string.Empty;
+        }
+
         internal static string Legacy(string requestJson)
         {
             string resultJson = BuildLegacy();

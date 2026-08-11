@@ -65,12 +65,21 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public RailEtaTicket Ticket;
         public RailEtaRequestDescriptor Descriptor;
         public Entity ExpectedTarget;
+        public int SegmentIndex = -1;
+        public int FromWaypointIndex = -1;
+        public int ToWaypointIndex = -1;
+        public ulong ActualPathSignature;
+        public int PathSourceElementCount;
+        public int PathSkippedElementCount;
+        public RailEtaTheoryPathFact[] PathFacts = Array.Empty<RailEtaTheoryPathFact>();
+        public readonly List<RailEtaTheorySegmentRequest> PathSlots = new List<RailEtaTheorySegmentRequest>();
     }
 
     internal sealed class RailEtaScopeWork
     {
         public RailEtaMode Mode;
         public long BatchId;
+        public long BatchStartTicks;
         public uint IndexOriginFrame;
         public int Generation;
         public List<RailEtaBatchRequest> Requests;
@@ -155,6 +164,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public RailEtaScopeResult Scope;
         public uint OriginFrame;
         public long IndexWallTicks;
+        public long BatchStartTicks;
     }
 
     internal sealed class RailEtaMaterializeResult
@@ -171,11 +181,13 @@ namespace RapidTransitMod.RailEta.BuiltIn
     internal sealed class RailEtaPredictionWork
     {
         public RailEtaScopeResult Scope;
+        public long BatchStartTicks;
         public RailEtaWorldSnapshot Snapshot;
         public long IndexWallTicks;
         public long ScopedWallTicks;
         public long MaterializeWallTicks;
         public RailEtaFrozenWorld FrozenWorld;
+        public bool TheoryBatch;
     }
 
     internal sealed class RailEtaRequestFrameFacts
@@ -211,6 +223,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public RailEtaScopeResult Scope;
         public RailEtaFrozenWorld FrozenWorld;
         public List<RailEtaTicketPrediction> Predictions;
+        public RailEtaTheorySegmentResult[] TheorySegments;
+        public RailEtaTheoryFailure TheoryFailure;
         public RailEtaFailure Failure;
         public string Detail;
     }

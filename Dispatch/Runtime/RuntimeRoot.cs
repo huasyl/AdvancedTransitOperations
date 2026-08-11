@@ -297,7 +297,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 },
                 RapidTransitMod.Dispatch.Workbench.Time.Slot,
                 message => Mod.log.Info(message),
-                runtime.m_WorkbenchBridge.Ids().StableKey);
+                runtime.m_WorkbenchBridge.Ids().StableKey,
+                runtime.m_WorkbenchBridge.RoutePlans().TryGet);
 
             runtime.m_UICache = new NativeHashMap<Entity, FixedString64Bytes>(1024, Allocator.Persistent);
             runtime.m_StopRuntimeState = new StopRuntimeState();
@@ -321,9 +322,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime.m_ObsPersist.RemoveDwellStart(vehicle);
                     return (uint?)legacyStart;
                 });
+            runtime.m_StopRuntime.BindClock(
+                () => runtime.m_SimClock.Snapshot,
+                () => runtime.m_SimulationSystem.frameIndex);
             runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
             {
                 runtime.m_StopRuntime.ReprojectDwell();
+                runtime.m_StopRuntime.ReprojectTimedStops(oldClockSnapshot, newClockSnapshot);
             };
             runtime.m_BoardingFirstFrameGuardState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);

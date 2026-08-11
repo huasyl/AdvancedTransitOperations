@@ -4,7 +4,7 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    [InternalBufferCapacity(1)]
+    [InternalBufferCapacity(0)]
     public struct WorkbenchTimetableStateElement : IBufferElementData, ISerializable
     {
         public int m_ChunkIndex;

@@ -74,6 +74,12 @@ namespace RapidTransitMod
                 actions.HoldDeparture(vehicle, nowFrame, ecb);
         }
 
+        internal void HoldUntil(Entity vehicle, uint releaseFrame, EntityCommandBuffer ecb)
+        {
+            if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
+                actions.HoldUntil(vehicle, releaseFrame, ecb);
+        }
+
         internal void ForceDepart(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,

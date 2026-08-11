@@ -6,6 +6,7 @@ using Colossal.Core;
 using Game.Buildings;
 using Game.Common;
 using Game.UI;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
 using Unity.Entities;
@@ -27,6 +28,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private global::RapidTransitMod.Stops m_Stops;
         private DepotResolver m_Depots;
         private Config m_Config;
+        private RoutePlanQuery m_RoutePlans;
         private Catalog m_Catalog;
         private UiPort m_Ui;
         private RunPort m_Run;
@@ -37,6 +39,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private Lines m_Lines;
         private RunHooks m_RunHooks;
         private Query m_Query;
+        private RunChartQuery m_RunChart;
         private Snapshot m_Snapshot;
         private Persist m_Persist;
         private Commands m_Commands;
@@ -112,6 +115,21 @@ namespace RapidTransitMod.Dispatch.Workbench
             return m_Config;
         }
 
+        internal RoutePlanQuery RoutePlans()
+        {
+            if (m_RoutePlans != null)
+                return m_RoutePlans;
+
+            m_RoutePlans = new RoutePlanQuery(
+                m_Runtime.EntityManager,
+                m_Runtime.m_TrackModel,
+                m_Runtime.m_LineProfile,
+                StopSvc().Stop,
+                StopSvc().Anchor,
+                StopSvc().Key);
+            return m_RoutePlans;
+        }
+
         internal LineConfig LineCfg()
         {
             if (m_LineCfg != null)
@@ -178,7 +196,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Workbenches.UiEvents.Push,
                 Workbenches.UiEvents.Push,
                 Workbenches.UiEvents.Push,
-                reasons => Run().CleanupConfirmedInvalidatedLines(reasons),
+                reasons =>
+                {
+                    RunChart().CancelLines(reasons?.Keys);
+                    return Run().CleanupConfirmedInvalidatedLines(reasons);
+                },
                 runtimeLines =>
                 {
                     Persist().Load();
@@ -240,8 +262,16 @@ namespace RapidTransitMod.Dispatch.Workbench
                     Time.Parse,
                     Clock().Now,
                     m_Runtime.m_RouteProgress.Try,
-                    (Entity vehicle, out VehicleState state) => m_Runtime.m_VehicleView.TryGetState(vehicle, out state)));
+                    (Entity vehicle, out VehicleState state) => m_Runtime.m_VehicleView.TryGetState(vehicle, out state),
+                    () => m_Runtime.m_Observation.ActiveMonitorTrips,
+                    () => m_Runtime.m_Observation.MonitorDateSlots,
+                    Time.Slot));
             return m_Trips;
+        }
+
+        internal string Monitor()
+        {
+            return Workbenches.Json.Write(Trips().BuildMonitor());
         }
 
         internal Clock Clock()
@@ -330,6 +360,20 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Time.Slot,
                 Rows.Has);
             return m_Query;
+        }
+
+        internal RunChartQuery RunChart()
+        {
+            if (m_RunChart != null)
+                return m_RunChart;
+
+            m_RunChart = new RunChartQuery(
+                m_Runtime.EntityManager,
+                RoutePlans(),
+                m_Runtime.m_Observation,
+                ResolveRunChartLine,
+                () => m_Runtime.m_SimClock.Snapshot.FramesPerMinute);
+            return m_RunChart;
         }
 
         internal UiPort Ui()
@@ -501,6 +545,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Query(),
                 Snapshot(),
                 Persist(),
+                Config().BuildAppliedState,
+                m_Validator,
+                (lineId, mode) => m_AppliedStore.Get(lineId, mode),
+                RoutePlans(),
+                RunChart(),
                 () => Applied().ConsumeCleanupInfo());
             return m_Commands;
         }
@@ -541,11 +590,13 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal void Reset()
         {
+            m_RunChart?.Clear();
             Root().Reset();
         }
 
         internal void Clear()
         {
+            m_RunChart?.Clear();
             m_Drafts.Clear();
             Applied().Reset();
             LineCfg().Clear();
@@ -601,6 +652,28 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal string Status(string operationId)
         {
             return Root().Status(operationId);
+        }
+
+        internal string StartRunChart(string requestJson)
+        {
+            DispatchWorkbenchRunChartRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchRunChartRequestDto>(requestJson);
+            return Workbenches.Json.Write(RunChart().Start(request));
+        }
+
+        internal string StatusRunChart(string queryId)
+        {
+            return Workbenches.Json.Write(RunChart().Status(queryId));
+        }
+
+        internal string CancelRunChart(string queryId)
+        {
+            return Workbenches.Json.Write(RunChart().Cancel(queryId));
+        }
+
+        internal void ConsumeRunChart(string queryId)
+        {
+            RunChart().Consume(queryId);
         }
 
         internal ulong NextVersion()
@@ -715,6 +788,17 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             int nowMin = (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
             return nowMin < 0 ? nowMin + 1440 : nowMin;
+        }
+
+        private Entity ResolveRunChartLine(string lineId)
+        {
+            if (string.IsNullOrEmpty(lineId))
+                return Entity.Null;
+            List<WorkbenchLineRuntime> lines = Catalog().RuntimeLines();
+            for (int i = 0; i < lines.Count; i++)
+                if (lines[i] != null && string.Equals(lines[i].Id, lineId, StringComparison.Ordinal))
+                    return lines[i].Entity;
+            return Entity.Null;
         }
 
         private List<DispatchWorkbenchTripDto> BuildTrips(

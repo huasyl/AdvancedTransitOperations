@@ -1,3 +1,4 @@
+using System;
 using Unity.Mathematics;
 using RapidTransitMod.Core;
 
@@ -81,6 +82,56 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public static uint ReachFrames(ClockSnapshot clockSnapshot, int targetMinute)
         {
             return clockSnapshot.ToFramesCeil(Lead(clockSnapshot.NowMinute, targetMinute));
+        }
+
+        public static DateTime ServiceDate(ClockSnapshot clock, int targetMinute)
+        {
+            DateTime serviceDate = clock.NowDate.Date;
+            if (clock.NowMinute < targetMinute && CurrentOrRecent(clock.NowMinute, targetMinute))
+                serviceDate = serviceDate.AddDays(-1);
+            return serviceDate;
+        }
+
+        public static bool CrossedFinal(
+            DateTime previousDate,
+            int previousMinute,
+            DateTime currentDate,
+            int currentMinute,
+            int targetMinute,
+            DateTime serviceDate)
+        {
+            if (previousMinute < 0 || currentMinute < 0 || targetMinute < 0)
+                return false;
+
+            DateTime previous = previousDate.Date.AddMinutes(previousMinute);
+            DateTime current = currentDate.Date.AddMinutes(currentMinute);
+            if (current <= previous)
+                return false;
+
+            DateTime cutoff = serviceDate.Date.AddMinutes(targetMinute + FinalWindow() + 1);
+            return previous < cutoff && cutoff <= current;
+        }
+
+        public static bool FinalExpired(
+            ClockSnapshot clock,
+            int targetMinute,
+            DateTime serviceDate)
+        {
+            if (targetMinute < 0)
+                return false;
+            DateTime current = clock.NowDate.Date.AddMinutes(clock.NowMinute);
+            DateTime cutoff = serviceDate.Date.AddMinutes(targetMinute + FinalWindow() + 1);
+            return current >= cutoff;
+        }
+
+        public static int DateKey(DateTime date)
+        {
+            return date.Year * 10000 + date.Month * 100 + date.Day;
+        }
+
+        internal static int FinalWindow()
+        {
+            return math.max(ModRuntimeHostSystem.SLOT_GRACE_MINUTES, LateWindow());
         }
 
         private static int LateWindow()

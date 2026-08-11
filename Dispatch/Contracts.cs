@@ -8,6 +8,7 @@ namespace RapidTransitMod
     internal sealed class AppliedLine
     {
         public Entity LineEntity = Entity.Null;
+        public string StopSig = string.Empty;
         public int OriginHoldLimitMinutes = RuntimeConfigStoreDefaults.DefaultOriginHoldLimitMinutes;
         public int MaxStationDwellMinutes = RuntimeConfigStoreDefaults.DefaultMaxStationDwellMinutes;
         public List<DispatchWorkbenchStagedRowDto> AppliedRows = new List<DispatchWorkbenchStagedRowDto>();

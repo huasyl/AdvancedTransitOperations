@@ -128,6 +128,8 @@ namespace RapidTransitMod.Dispatch
             new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_RestoreOrphans =
             new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly HashSet<string> m_RestoredRowIdLines =
+            new HashSet<string>(StringComparer.Ordinal);
 
         internal AppliedTimetable(
             EntityManager entityManager,
@@ -157,6 +159,7 @@ namespace RapidTransitMod.Dispatch
             Loaded = false;
             m_Lines.Clear();
             m_PlanRefs.Clear();
+            m_RestoredRowIdLines.Clear();
             m_Store.Clear();
             m_RestoreOrphans.Clear();
             ClearCleanupInfo();
@@ -170,6 +173,7 @@ namespace RapidTransitMod.Dispatch
             }
 
             m_PlanRefs.Clear();
+            m_RestoredRowIdLines.Clear();
             Entity city = m_City();
             if (city == Entity.Null)
             {
@@ -349,6 +353,7 @@ namespace RapidTransitMod.Dispatch
                     line.DepartureMinutesCache = m_Host.BuildMinutes(line.StagedRows, lineId);
                 }
 
+                RestoreCompanions(city);
                 RecoverRows();
                 if (!CleanupDeletedOrReplacedAppliedLines(saveChanges: false))
                 {
@@ -375,6 +380,242 @@ namespace RapidTransitMod.Dispatch
             }
         }
 
+        private void RestoreCompanions(Entity city)
+        {
+            bool hasRowIds = m_EntityManager.HasBuffer<AppliedRowIdElement>(city);
+            bool hasStopSigs = m_EntityManager.HasBuffer<AppliedStopSigElement>(city);
+            bool hasTimedStops = m_EntityManager.HasBuffer<AppliedTimedStopElement>(city);
+            if (!hasRowIds && !hasStopSigs && !hasTimedStops)
+                return;
+
+            Dictionary<Entity, AppliedLine> linesByEntity = m_Lines.Values
+                .Where(line => line != null && line.LineEntity != Entity.Null)
+                .GroupBy(line => line.LineEntity)
+                .ToDictionary(group => group.Key, group => group.First());
+            Dictionary<Entity, Dictionary<int, string>> rowIds =
+                new Dictionary<Entity, Dictionary<int, string>>();
+            Dictionary<Entity, HashSet<string>> rowIdValues =
+                new Dictionary<Entity, HashSet<string>>();
+            HashSet<Entity> invalidRowIdLines = new HashSet<Entity>();
+            if (hasRowIds)
+            {
+                var buffer = m_EntityManager.GetBuffer<AppliedRowIdElement>(city, true);
+                for (int i = 0; i < buffer.Length; i++)
+                {
+                    AppliedRowIdElement element = buffer[i];
+                    string rowId = element.m_RowId.ToString();
+                    if (element.m_Version != 1
+                        || !linesByEntity.TryGetValue(element.m_LineEntity, out AppliedLine line)
+                        || element.m_Order < 0
+                        || element.m_Order >= line.StagedRows.Count
+                        || string.IsNullOrEmpty(rowId))
+                    {
+                        invalidRowIdLines.Add(element.m_LineEntity);
+                        continue;
+                    }
+
+                    if (!rowIds.TryGetValue(element.m_LineEntity, out Dictionary<int, string> lineIds))
+                    {
+                        lineIds = new Dictionary<int, string>();
+                        rowIds[element.m_LineEntity] = lineIds;
+                    }
+
+                    if (!rowIdValues.TryGetValue(element.m_LineEntity, out HashSet<string> lineIdValues))
+                    {
+                        lineIdValues = new HashSet<string>(StringComparer.Ordinal);
+                        rowIdValues[element.m_LineEntity] = lineIdValues;
+                    }
+
+                    if (lineIds.ContainsKey(element.m_Order) || !lineIdValues.Add(rowId))
+                        invalidRowIdLines.Add(element.m_LineEntity);
+                    else
+                        lineIds[element.m_Order] = rowId;
+                }
+            }
+
+            Dictionary<Entity, string> stopSigs = new Dictionary<Entity, string>();
+            HashSet<Entity> invalidStopSigLines = new HashSet<Entity>();
+            if (hasStopSigs)
+            {
+                var buffer = m_EntityManager.GetBuffer<AppliedStopSigElement>(city, true);
+                for (int i = 0; i < buffer.Length; i++)
+                {
+                    AppliedStopSigElement element = buffer[i];
+                    string stopSig = element.m_StopSig.ToString();
+                    if (element.m_Version != 1
+                        || !linesByEntity.ContainsKey(element.m_LineEntity)
+                        || string.IsNullOrEmpty(stopSig)
+                        || stopSigs.ContainsKey(element.m_LineEntity))
+                    {
+                        invalidStopSigLines.Add(element.m_LineEntity);
+                        continue;
+                    }
+
+                    stopSigs[element.m_LineEntity] = stopSig;
+                }
+            }
+
+            Dictionary<Entity, Dictionary<int, Dictionary<int, TimedStop>>> timedStops =
+                new Dictionary<Entity, Dictionary<int, Dictionary<int, TimedStop>>>();
+            HashSet<Entity> invalidTimedStopLines = new HashSet<Entity>();
+            if (hasTimedStops)
+            {
+                var buffer = m_EntityManager.GetBuffer<AppliedTimedStopElement>(city, true);
+                for (int i = 0; i < buffer.Length; i++)
+                {
+                    AppliedTimedStopElement element = buffer[i];
+                    string stopKey = element.m_StopKey.ToString();
+                    if (element.m_Version != 1
+                        || !linesByEntity.TryGetValue(element.m_LineEntity, out AppliedLine line)
+                        || element.m_RowOrder < 0
+                        || element.m_RowOrder >= line.StagedRows.Count
+                        || element.m_StopOrder < 0
+                        || element.m_Arrive < -1
+                        || element.m_Arrive >= 48 * 60
+                        || element.m_Depart < -1
+                        || element.m_Depart >= 48 * 60
+                        || string.IsNullOrEmpty(stopKey))
+                    {
+                        invalidTimedStopLines.Add(element.m_LineEntity);
+                        continue;
+                    }
+
+                    if (!timedStops.TryGetValue(element.m_LineEntity, out Dictionary<int, Dictionary<int, TimedStop>> lineStops))
+                    {
+                        lineStops = new Dictionary<int, Dictionary<int, TimedStop>>();
+                        timedStops[element.m_LineEntity] = lineStops;
+                    }
+
+                    if (!lineStops.TryGetValue(element.m_RowOrder, out Dictionary<int, TimedStop> rowStops))
+                    {
+                        rowStops = new Dictionary<int, TimedStop>();
+                        lineStops[element.m_RowOrder] = rowStops;
+                    }
+
+                    if (rowStops.ContainsKey(element.m_StopOrder))
+                    {
+                        invalidTimedStopLines.Add(element.m_LineEntity);
+                    }
+                    else
+                    {
+                        rowStops[element.m_StopOrder] = new TimedStop
+                        {
+                            StopKey = stopKey,
+                            Arrive = element.m_Arrive,
+                            Depart = element.m_Depart
+                        };
+                    }
+                }
+            }
+
+            Dictionary<Entity, string> lineKeysByEntity = m_Lines
+                .Where(entry => entry.Value != null && entry.Value.LineEntity != Entity.Null)
+                .GroupBy(entry => entry.Value.LineEntity)
+                .ToDictionary(group => group.Key, group => group.First().Key);
+            foreach (KeyValuePair<Entity, AppliedLine> entry in linesByEntity)
+            {
+                Entity lineEntity = entry.Key;
+                AppliedLine line = entry.Value;
+                if (!lineKeysByEntity.TryGetValue(lineEntity, out string lineKey))
+                    continue;
+
+                Dictionary<int, string> lineIds = null;
+                bool rowIdsValid = hasRowIds
+                    && !invalidRowIdLines.Contains(lineEntity)
+                    && rowIds.TryGetValue(lineEntity, out lineIds)
+                    && lineIds.Count == line.StagedRows.Count;
+                if (rowIdsValid)
+                {
+                    for (int i = 0; i < line.StagedRows.Count; i++)
+                    {
+                        if (!lineIds.ContainsKey(i))
+                        {
+                            rowIdsValid = false;
+                            break;
+                        }
+                    }
+                }
+
+                string stopSig = string.Empty;
+                bool stopSigValid = hasStopSigs
+                    && !invalidStopSigLines.Contains(lineEntity)
+                    && stopSigs.TryGetValue(lineEntity, out stopSig);
+                bool hasTimedData = timedStops.TryGetValue(
+                    lineEntity,
+                    out Dictionary<int, Dictionary<int, TimedStop>> lineStops)
+                    && lineStops.Count > 0;
+                bool timedValid = !invalidTimedStopLines.Contains(lineEntity);
+                if (timedValid && hasTimedData)
+                {
+                    foreach (Dictionary<int, TimedStop> rowStops in lineStops.Values)
+                    {
+                        for (int i = 0; i < rowStops.Count; i++)
+                        {
+                            if (!rowStops.ContainsKey(i))
+                            {
+                                timedValid = false;
+                                break;
+                            }
+                        }
+
+                        if (!timedValid)
+                            break;
+                    }
+                }
+
+                if (!timedValid)
+                    continue;
+
+                if (hasTimedData && (!rowIdsValid || !stopSigValid))
+                    continue;
+
+                if (!rowIdsValid)
+                    continue;
+
+                AppliedLine candidate = new AppliedLine
+                {
+                    LineEntity = line.LineEntity,
+                    StopSig = stopSigValid ? stopSig : string.Empty,
+                    StagedRows = line.StagedRows
+                        .Select(m_Host.CopyRow)
+                        .ToList()
+                };
+
+                for (int i = 0; i < candidate.StagedRows.Count; i++)
+                    candidate.StagedRows[i].id = lineIds[i];
+
+                if (hasTimedData)
+                {
+                    foreach (KeyValuePair<int, Dictionary<int, TimedStop>> rowEntry in lineStops)
+                    {
+                        Dictionary<int, TimedStop> rowStops = rowEntry.Value;
+                        candidate.StagedRows[rowEntry.Key].stopSig = stopSig;
+                        candidate.StagedRows[rowEntry.Key].timedStops = rowStops
+                            .OrderBy(item => item.Key)
+                            .Select(item => new DispatchWorkbenchTimedStopDto
+                            {
+                                stopKey = item.Value.StopKey,
+                                arrive = item.Value.Arrive >= 0 ? item.Value.Arrive : (int?)null,
+                                depart = item.Value.Depart >= 0 ? item.Value.Depart : (int?)null
+                            })
+                            .ToArray();
+                    }
+
+                    LineKey lineKeyValue = m_Cfg.GetLineKey(line.LineEntity, lineKey);
+                    AppliedTimetableState candidateState = m_Cfg.BuildAppliedState(lineKey, candidate);
+                    AppliedTimetableValidationResult validation = m_Cfg.ValidateApplied(
+                        lineKeyValue,
+                        candidateState);
+                    if (!validation.IsValid)
+                        continue;
+                }
+
+                line.StopSig = candidate.StopSig;
+                line.StagedRows = candidate.StagedRows;
+                m_RestoredRowIdLines.Add(lineKey);
+            }
+        }
+
         internal void Save()
         {
             Entity city = m_City();
@@ -383,7 +624,7 @@ namespace RapidTransitMod.Dispatch
                 return;
             }
 
-            Write(LineElems(), RowElems());
+            Write(LineElems(), RowElems(), RowIdElems(), StopSigElems(), TimedStopElems());
         }
 
         internal void Backfill()
@@ -680,6 +921,7 @@ namespace RapidTransitMod.Dispatch
                 }
 
                 string lineId = entry.Key;
+                bool preserveRowId = m_RestoredRowIdLines.Contains(lineId);
                 if (string.IsNullOrEmpty(lineId)
                     || !rowsByLineAndKey.TryGetValue(lineId, out Dictionary<string, Queue<DispatchWorkbenchStagedRowDto>> rowQueues))
                 {
@@ -697,7 +939,7 @@ namespace RapidTransitMod.Dispatch
                     }
 
                     DispatchWorkbenchStagedRowDto restored = queue.Dequeue();
-                    if (!string.IsNullOrEmpty(restored.id))
+                    if (!preserveRowId && !string.IsNullOrEmpty(restored.id))
                     {
                         row.id = restored.id;
                     }
@@ -771,6 +1013,71 @@ namespace RapidTransitMod.Dispatch
             }
         }
 
+        internal bool InvalidateDetails(Entity lineEntity, string stopSig)
+        {
+            if (lineEntity == Entity.Null || string.IsNullOrEmpty(stopSig))
+                return false;
+
+            bool changed = false;
+            foreach (AppliedLine line in m_Lines.Values)
+            {
+                if (line == null
+                    || line.LineEntity != lineEntity
+                    || string.IsNullOrEmpty(line.StopSig)
+                    || string.Equals(line.StopSig, stopSig, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                line.StopSig = stopSig;
+                for (int i = 0; i < line.StagedRows.Count; i++)
+                {
+                    DispatchWorkbenchStagedRowDto row = line.StagedRows[i];
+                    if (row == null)
+                        continue;
+                    row.stopSig = stopSig;
+                    row.timedStops = Array.Empty<DispatchWorkbenchTimedStopDto>();
+                }
+                changed = true;
+            }
+
+            if (!changed)
+                return false;
+
+            Sync(saveDrafts: false);
+            m_Host.SaveApplied();
+            return true;
+        }
+
+        internal bool ClearDetails(Entity lineEntity)
+        {
+            if (lineEntity == Entity.Null)
+                return false;
+
+            bool changed = false;
+            foreach (AppliedLine line in m_Lines.Values)
+            {
+                if (line == null || line.LineEntity != lineEntity)
+                    continue;
+
+                for (int i = 0; i < line.StagedRows.Count; i++)
+                {
+                    DispatchWorkbenchStagedRowDto row = line.StagedRows[i];
+                    if (row == null || (row.timedStops?.Length ?? 0) == 0)
+                        continue;
+                    row.timedStops = Array.Empty<DispatchWorkbenchTimedStopDto>();
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+                return false;
+
+            Sync(saveDrafts: false);
+            m_Host.SaveApplied();
+            return true;
+        }
+
         internal List<AppliedWorkbenchLineStateElement> LineElems()
         {
             List<AppliedWorkbenchLineStateElement> elems = new List<AppliedWorkbenchLineStateElement>();
@@ -792,6 +1099,25 @@ namespace RapidTransitMod.Dispatch
             return elems;
         }
 
+        private List<DispatchWorkbenchStagedRowDto> OrderedRows(AppliedLine line)
+        {
+            if (line?.StagedRows == null)
+                return new List<DispatchWorkbenchStagedRowDto>();
+
+            return line.StagedRows
+                .Where(row => row != null)
+                .Select(row => new
+                {
+                    Row = row,
+                    Minute = m_Host.Minutes(row.time)
+                })
+                .Where(item => item.Minute >= 0)
+                .OrderBy(item => item.Minute)
+                .ThenBy(item => item.Row.id ?? string.Empty, StringComparer.Ordinal)
+                .Select(item => item.Row)
+                .ToList();
+        }
+
         internal List<AppliedWorkbenchStagedRowElement> RowElems()
         {
             List<AppliedWorkbenchStagedRowElement> elems = new List<AppliedWorkbenchStagedRowElement>();
@@ -803,14 +1129,11 @@ namespace RapidTransitMod.Dispatch
                     continue;
                 }
 
-                for (int i = 0; i < line.StagedRows.Count; i++)
+                List<DispatchWorkbenchStagedRowDto> rows = OrderedRows(line);
+                for (int i = 0; i < rows.Count; i++)
                 {
-                    DispatchWorkbenchStagedRowDto row = line.StagedRows[i];
-                    int minute = m_Host.Minutes(row?.time);
-                    if (minute < 0)
-                    {
-                        continue;
-                    }
+                    DispatchWorkbenchStagedRowDto row = rows[i];
+                    int minute = m_Host.Minutes(row.time);
 
                     elems.Add(new AppliedWorkbenchStagedRowElement
                     {
@@ -826,9 +1149,115 @@ namespace RapidTransitMod.Dispatch
             return elems;
         }
 
+        internal List<AppliedRowIdElement> RowIdElems()
+        {
+            List<AppliedRowIdElement> elems = new List<AppliedRowIdElement>();
+            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                AppliedLine line = entry.Value;
+                if (line == null || line.LineEntity == Entity.Null || line.StagedRows == null)
+                    continue;
+
+                List<DispatchWorkbenchStagedRowDto> rows = OrderedRows(line);
+                for (int i = 0; i < rows.Count; i++)
+                {
+                    DispatchWorkbenchStagedRowDto row = rows[i];
+                    if (row == null || string.IsNullOrEmpty(row.id))
+                        continue;
+
+                    elems.Add(new AppliedRowIdElement
+                    {
+                        m_Version = 1,
+                        m_LineEntity = line.LineEntity,
+                        m_Order = i,
+                        m_RowId = row.id
+                    });
+                }
+            }
+
+            return elems;
+        }
+
+        internal List<AppliedStopSigElement> StopSigElems()
+        {
+            List<AppliedStopSigElement> elems = new List<AppliedStopSigElement>();
+            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                AppliedLine line = entry.Value;
+                string stopSig = line?.StopSig;
+                if (string.IsNullOrEmpty(stopSig))
+                {
+                    stopSig = line?.StagedRows?
+                        .Select(row => row?.stopSig)
+                        .FirstOrDefault(value => !string.IsNullOrEmpty(value));
+                }
+
+                if (line == null || line.LineEntity == Entity.Null || string.IsNullOrEmpty(stopSig))
+                    continue;
+
+                elems.Add(new AppliedStopSigElement
+                {
+                    m_Version = 1,
+                    m_LineEntity = line.LineEntity,
+                    m_StopSig = stopSig
+                });
+            }
+
+            return elems;
+        }
+
+        internal List<AppliedTimedStopElement> TimedStopElems()
+        {
+            List<AppliedTimedStopElement> elems = new List<AppliedTimedStopElement>();
+            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                AppliedLine line = entry.Value;
+                if (line == null || line.LineEntity == Entity.Null || line.StagedRows == null)
+                    continue;
+
+                List<DispatchWorkbenchStagedRowDto> rows = OrderedRows(line);
+                for (int rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+                {
+                    TimedStop[] stops = ToTimedStops(rows[rowIndex].timedStops);
+                    for (int stopIndex = 0; stopIndex < stops.Length; stopIndex++)
+                    {
+                        TimedStop stop = stops[stopIndex];
+                        elems.Add(new AppliedTimedStopElement
+                        {
+                            m_Version = 1,
+                            m_LineEntity = line.LineEntity,
+                            m_RowOrder = rowIndex,
+                            m_StopOrder = stopIndex,
+                            m_StopKey = stop.StopKey,
+                            m_Arrive = stop.Arrive,
+                            m_Depart = stop.Depart
+                        });
+                    }
+                }
+            }
+
+            return elems;
+        }
+
+        private static TimedStop[] ToTimedStops(DispatchWorkbenchTimedStopDto[] stops)
+        {
+            return (stops ?? Array.Empty<DispatchWorkbenchTimedStopDto>())
+                .Where(stop => stop != null)
+                .Select(stop => new TimedStop
+                {
+                    StopKey = stop.stopKey ?? string.Empty,
+                    Arrive = stop.arrive ?? -1,
+                    Depart = stop.depart ?? -1
+                })
+                .ToArray();
+        }
+
         internal void Write(
             List<AppliedWorkbenchLineStateElement> lineElems,
-            List<AppliedWorkbenchStagedRowElement> rowElems)
+            List<AppliedWorkbenchStagedRowElement> rowElems,
+            List<AppliedRowIdElement> rowIdElems,
+            List<AppliedStopSigElement> stopSigElems,
+            List<AppliedTimedStopElement> timedStopElems)
         {
             Entity city = m_City();
             if (city == Entity.Null)
@@ -839,8 +1268,14 @@ namespace RapidTransitMod.Dispatch
             EnsureBuffers(city);
             var lineBuffer = m_EntityManager.GetBuffer<AppliedWorkbenchLineStateElement>(city);
             var rowBuffer = m_EntityManager.GetBuffer<AppliedWorkbenchStagedRowElement>(city);
+            var rowIdBuffer = m_EntityManager.GetBuffer<AppliedRowIdElement>(city);
+            var stopSigBuffer = m_EntityManager.GetBuffer<AppliedStopSigElement>(city);
+            var timedStopBuffer = m_EntityManager.GetBuffer<AppliedTimedStopElement>(city);
             lineBuffer.Clear();
             rowBuffer.Clear();
+            rowIdBuffer.Clear();
+            stopSigBuffer.Clear();
+            timedStopBuffer.Clear();
 
             if (lineElems != null)
             {
@@ -856,6 +1291,24 @@ namespace RapidTransitMod.Dispatch
                 {
                     rowBuffer.Add(rowElems[i]);
                 }
+            }
+
+            if (rowIdElems != null)
+            {
+                for (int i = 0; i < rowIdElems.Count; i++)
+                    rowIdBuffer.Add(rowIdElems[i]);
+            }
+
+            if (stopSigElems != null)
+            {
+                for (int i = 0; i < stopSigElems.Count; i++)
+                    stopSigBuffer.Add(stopSigElems[i]);
+            }
+
+            if (timedStopElems != null)
+            {
+                for (int i = 0; i < timedStopElems.Count; i++)
+                    timedStopBuffer.Add(timedStopElems[i]);
             }
         }
 
@@ -1458,6 +1911,21 @@ namespace RapidTransitMod.Dispatch
             if (!m_EntityManager.HasBuffer<AppliedWorkbenchStagedRowElement>(city))
             {
                 m_EntityManager.AddBuffer<AppliedWorkbenchStagedRowElement>(city);
+            }
+
+            if (!m_EntityManager.HasBuffer<AppliedRowIdElement>(city))
+            {
+                m_EntityManager.AddBuffer<AppliedRowIdElement>(city);
+            }
+
+            if (!m_EntityManager.HasBuffer<AppliedStopSigElement>(city))
+            {
+                m_EntityManager.AddBuffer<AppliedStopSigElement>(city);
+            }
+
+            if (!m_EntityManager.HasBuffer<AppliedTimedStopElement>(city))
+            {
+                m_EntityManager.AddBuffer<AppliedTimedStopElement>(city);
             }
         }
 

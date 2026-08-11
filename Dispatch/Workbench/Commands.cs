@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using RapidTransitMod.Dispatch.Lines;
 
 namespace RapidTransitMod.Dispatch.Workbench
 {
@@ -14,15 +15,25 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Query m_Query;
         private readonly Snapshot m_Snap;
         private readonly Persist m_Persist;
+        private readonly Func<string, AppliedLine, AppliedTimetableState> m_BuildAppliedState;
+        private readonly AppliedTimetableValidator m_Validator;
+        private readonly Func<string, TransitMode, AppliedTimetableState> m_GetAppliedState;
+        private readonly RoutePlanQuery m_RoutePlans;
         private readonly Func<DispatchWorkbenchStagedRowDto, DispatchWorkbenchStagedRowDto> m_CopyRow;
         private readonly Func<List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> m_LastById;
         private readonly Func<DispatchWorkbenchCleanupInfoDto> m_ConsumeCleanupInfo;
+        private readonly RunChartQuery m_RunChart;
         internal Commands(
             Host host,
             Drafts drafts,
             Query query,
             Snapshot snap,
             Persist persist,
+            Func<string, AppliedLine, AppliedTimetableState> buildAppliedState,
+            AppliedTimetableValidator validator,
+            Func<string, TransitMode, AppliedTimetableState> getAppliedState,
+            RoutePlanQuery routePlans,
+            RunChartQuery runChart,
             Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo)
         {
             m_Host = host ?? throw new ArgumentNullException(nameof(host));
@@ -31,6 +42,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Query = query ?? throw new ArgumentNullException(nameof(query));
             m_Snap = snap ?? throw new ArgumentNullException(nameof(snap));
             m_Persist = persist ?? throw new ArgumentNullException(nameof(persist));
+            m_BuildAppliedState = buildAppliedState ?? throw new ArgumentNullException(nameof(buildAppliedState));
+            m_Validator = validator ?? throw new ArgumentNullException(nameof(validator));
+            m_GetAppliedState = getAppliedState ?? throw new ArgumentNullException(nameof(getAppliedState));
+            m_RoutePlans = routePlans ?? throw new ArgumentNullException(nameof(routePlans));
+            m_RunChart = runChart ?? throw new ArgumentNullException(nameof(runChart));
             m_CopyRow = Rows.CopyRow;
             m_LastById = Rows.LastById;
             m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
@@ -82,6 +98,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 }
 
                 errors.AddRange(NormalizeRequestForScope(request, prepared.Scope));
+                NormalizePartialTimetables(request);
                 List<WorkbenchLineRuntime> runtimeLines = (context?.RuntimeLines ?? new List<WorkbenchLineRuntime>())
                     .Select(CloneWorkbenchLineRuntime)
                     .ToList();
@@ -102,6 +119,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     runtimeLines,
                     request?.applyDraft == true,
                     depots));
+                errors.AddRange(ApplyRunChart(request, runtimeLines, prepared.Scope.Mode));
+                errors.AddRange(ValidateDetailedRows(request, runtimeLines, prepared.Scope.Mode));
                 prepared.Request = request;
                 prepared.RuntimeLines = runtimeLines;
                 prepared.Errors = errors;
@@ -220,6 +239,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 result.success = true;
                 result.version = m_Host.Version().ToString();
                 result.snapshot = null;
+                if (!string.IsNullOrEmpty(request.runChartQueryId))
+                    m_RunChart.Consume(request.runChartQueryId);
                 return result;
             }
 
@@ -323,6 +344,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 result.snapshot = null;
                 result.cleanupInfo = m_ConsumeCleanupInfo();
             }
+            if (!string.IsNullOrEmpty(request.runChartQueryId))
+                m_RunChart.Consume(request.runChartQueryId);
             return result;
         }
 
@@ -592,13 +615,408 @@ namespace RapidTransitMod.Dispatch.Workbench
             List<WorkbenchLineRuntime> runtimeLines,
             TransitMode mode)
         {
-            return Check.AppliedRows(
+            List<string> errors = Check.AppliedRows(
                 lineKey,
                 rows,
                 runtimeLines,
                 BuildAppliedState(mode),
                 Time.Parse,
                 Time.Slot);
+            foreach (IGrouping<string, DispatchWorkbenchStagedRowDto> group in (rows ?? new List<DispatchWorkbenchStagedRowDto>())
+                .Where(row => row != null && !string.IsNullOrEmpty(row.lineId))
+                .GroupBy(row => row.lineId, StringComparer.Ordinal))
+            {
+                AppliedLine applied = new AppliedLine
+                {
+                    StagedRows = group.Select(m_CopyRow).ToList()
+                };
+                AppliedTimetableState state = m_BuildAppliedState(group.Key, applied);
+                AppliedTimetableValidationResult validation = m_Validator.Validate(
+                    LineIdentityService.GetKey(group.Key, mode),
+                    state);
+                errors.AddRange(validation.Errors);
+            }
+
+            return errors;
+        }
+
+        private List<string> ApplyRunChart(
+            DispatchWorkbenchSaveRequest request,
+            List<WorkbenchLineRuntime> runtimeLines,
+            TransitMode mode)
+        {
+            List<string> errors = new List<string>();
+            if (request == null || string.IsNullOrEmpty(request.runChartQueryId))
+                return errors;
+            if (!m_RunChart.TryGetResult(request.runChartQueryId, out RunChartResult result)
+                || result == null || string.IsNullOrEmpty(result.RowId))
+            {
+                errors.Add("run-chart-result-unavailable");
+                return errors;
+            }
+            if (!string.Equals(request.selectedLineId ?? string.Empty, result.LineId ?? string.Empty, StringComparison.Ordinal))
+            {
+                errors.Add("run-chart-line-mismatch");
+                return errors;
+            }
+            WorkbenchLineRuntime runtimeLine = (runtimeLines ?? new List<WorkbenchLineRuntime>())
+                .FirstOrDefault(line => line != null && string.Equals(line.Id, result.LineId, StringComparison.Ordinal));
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                LineIdentityService.GetKey(result.LineId, mode)).Lifecycle;
+            if (runtimeLine == null
+                || runtimeLine.Entity != result.Line
+                || !m_RoutePlans.TryGet(runtimeLine.Entity, lifecycle, out RoutePlan route)
+                || !string.Equals(route.StopSig, result.StopSig, StringComparison.Ordinal))
+            {
+                errors.Add("run-chart-route-mismatch");
+                return errors;
+            }
+            if (string.Equals(result.Source, "theory", StringComparison.Ordinal)
+                && (RunChartSignatures.Route(m_Host.EntityManager, result.Line, route) != result.RouteSignature
+                    || RunChartSignatures.Path(m_Host.EntityManager, result.Line, result.WaypointIndices) != result.RequestPathSignature
+                    || RunChartSignatures.ModelPair(
+                        m_Host.EntityManager, result.Line, result.ModelEntryIndex,
+                        result.Model, result.SecondaryModel) != result.ModelPairSignature
+                    || RunChartSignatures.Model(m_Host.EntityManager, result.Model, result.SecondaryModel) != result.ModelSignature
+                    || !RunChartSignatures.ValidatePathFacts(
+                        m_Host.EntityManager, result.Line, result.TheorySegments, result.PathSignature)))
+            {
+                errors.Add("run-chart-signature-mismatch");
+                return errors;
+            }
+            if (!ValidWaypointSequence(result.WaypointIndices, route))
+            {
+                errors.Add("run-chart-waypoint-sequence-mismatch");
+                return errors;
+            }
+
+            List<DispatchWorkbenchStagedRowDto> rows = RequestRowsForLine(request, result.LineId);
+            DispatchWorkbenchStagedRowDto row = rows.FirstOrDefault(value => value != null
+                && string.Equals(value.id ?? string.Empty, result.RowId, StringComparison.Ordinal));
+            if (row == null)
+            {
+                errors.Add("run-chart-row-mismatch");
+                return errors;
+            }
+            if (!string.Equals(row.stopSig ?? string.Empty, result.StopSig, StringComparison.Ordinal))
+            {
+                errors.Add("run-chart-stop-sig-mismatch");
+                return errors;
+            }
+            if (row.timedStops == null || row.timedStops.Length == 0)
+            {
+                errors.Add("run-chart-timed-stops-required");
+                return errors;
+            }
+
+            int cursor = 0;
+            for (int segmentIndex = 0; segmentIndex < result.Segments.Length; segmentIndex++)
+            {
+                RunChartSegment segment = result.Segments[segmentIndex];
+                while (cursor < row.timedStops.Length
+                    && !string.Equals(row.timedStops[cursor]?.stopKey ?? string.Empty,
+                        segment.FromStopKey ?? string.Empty, StringComparison.Ordinal))
+                    cursor++;
+                if (cursor >= row.timedStops.Length || row.timedStops[cursor] == null)
+                {
+                    errors.Add("run-chart-stop-order-mismatch:" + segmentIndex);
+                    return errors;
+                }
+                if (row.timedStops[cursor].depart == null)
+                {
+                    if (segmentIndex != 0 || cursor != 0 || segment.FromWaypointIndex != 0)
+                        break;
+                    row.timedStops[cursor].depart = Time.Parse(row.time);
+                }
+                if (!row.timedStops[cursor].depart.HasValue || row.timedStops[cursor].depart.Value < 0)
+                {
+                    errors.Add("run-chart-origin-departure-required");
+                    return errors;
+                }
+                int targetIndex = cursor + 1;
+                if (targetIndex >= row.timedStops.Length
+                    || !string.Equals(row.timedStops[targetIndex]?.stopKey ?? string.Empty,
+                        segment.ToStopKey ?? string.Empty, StringComparison.Ordinal))
+                {
+                    errors.Add("run-chart-stop-order-mismatch:" + segmentIndex);
+                    return errors;
+                }
+                if (segment.Minutes <= 0)
+                {
+                    errors.Add("run-chart-segment-duration-invalid:" + segmentIndex);
+                    return errors;
+                }
+                try
+                {
+                    row.timedStops[targetIndex].arrive = checked(
+                        row.timedStops[cursor].depart.Value + segment.Minutes);
+                }
+                catch (OverflowException)
+                {
+                    errors.Add("run-chart-arrival-overflow:" + segmentIndex);
+                    return errors;
+                }
+                cursor = targetIndex;
+            }
+            return errors;
+        }
+
+        private static bool ValidWaypointSequence(int[] indices, RoutePlan route)
+        {
+            if (indices == null || indices.Length < 2 || route == null
+                || indices.Length > route.Waypoints.Length + 1)
+                return false;
+            for (int i = 0; i < indices.Length; i++)
+                if (indices[i] < 0 || indices[i] >= route.Waypoints.Length)
+                    return false;
+            for (int i = 0; i + 1 < indices.Length; i++)
+                if ((indices[i] + 1) % route.Waypoints.Length != indices[i + 1])
+                    return false;
+            return true;
+        }
+
+        private static List<DispatchWorkbenchStagedRowDto> RequestRowsForLine(
+            DispatchWorkbenchSaveRequest request,
+            string lineId)
+        {
+            var rows = new List<DispatchWorkbenchStagedRowDto>();
+            if (request?.lineDraftRowsByLineId != null && request.lineDraftRowsByLineId.Length > 0)
+            {
+                for (int i = 0; i < request.lineDraftRowsByLineId.Length; i++)
+                {
+                    DispatchWorkbenchLineDraftRowsDto block = request.lineDraftRowsByLineId[i];
+                    if (block == null || !string.Equals(block.lineId, lineId, StringComparison.Ordinal)) continue;
+                    rows.AddRange(block.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>());
+                }
+                return rows;
+            }
+            rows.AddRange((request?.lineDraftRows ?? Array.Empty<DispatchWorkbenchStagedRowDto>())
+                .Where(row => row != null && (string.IsNullOrEmpty(row.lineId)
+                    || string.Equals(row.lineId, lineId, StringComparison.Ordinal))));
+            return rows;
+        }
+
+        private List<string> ValidateDetailedRows(
+            DispatchWorkbenchSaveRequest request,
+            List<WorkbenchLineRuntime> runtimeLines,
+            TransitMode mode)
+        {
+            List<string> errors = new List<string>();
+            Dictionary<string, WorkbenchLineRuntime> runtimeById = (runtimeLines ?? new List<WorkbenchLineRuntime>())
+                .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
+                .GroupBy(line => line.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            Dictionary<string, List<DispatchWorkbenchStagedRowDto>> rowsByKey =
+                RowsByDraft(request, DraftStore.GetKey(request?.selectedLineId));
+            foreach (KeyValuePair<string, List<DispatchWorkbenchStagedRowDto>> entry in rowsByKey)
+            {
+                List<DispatchWorkbenchStagedRowDto> rows = entry.Value ?? new List<DispatchWorkbenchStagedRowDto>();
+                if (!rows.Any(row => row != null))
+                {
+                    continue;
+                }
+
+                bool hasDetailed = rows.Any(row => row != null
+                    && ((row.timedStops?.Length ?? 0) > 0 || !string.IsNullOrEmpty(row.stopSig)));
+                if (!hasDetailed)
+                {
+                    AppliedLine basicApplied = new AppliedLine
+                    {
+                        StagedRows = rows.Select(m_CopyRow).ToList()
+                    };
+                    AppliedTimetableValidationResult basicValidation = m_Validator.Validate(
+                        LineIdentityService.GetKey(entry.Key, mode),
+                        m_BuildAppliedState(entry.Key, basicApplied));
+                    errors.AddRange(basicValidation.Errors);
+                    continue;
+                }
+
+                if (!runtimeById.TryGetValue(entry.Key, out WorkbenchLineRuntime runtimeLine))
+                {
+                    errors.Add("runtime-line-required:" + entry.Key);
+                    continue;
+                }
+
+                LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                    LineIdentityService.GetKey(entry.Key, mode)).Lifecycle;
+                if (!m_RoutePlans.TryGet(runtimeLine.Entity, lifecycle, out RoutePlan route))
+                {
+                    errors.Add("route-plan-unavailable:" + entry.Key);
+                    continue;
+                }
+
+                AppliedTimetableState previous = m_GetAppliedState(entry.Key, mode);
+                bool stopSigChanged = previous != null
+                    && !string.IsNullOrEmpty(previous.StopSig)
+                    && !string.IsNullOrEmpty(route.StopSig)
+                    && !string.Equals(previous.StopSig, route.StopSig, StringComparison.Ordinal);
+
+                if (stopSigChanged)
+                {
+                    NormalizeChangedRows(request, entry.Key, route.StopSig);
+                    NormalizeChangedRows(rows, entry.Key, route.StopSig);
+                }
+
+                AppliedLine applied = new AppliedLine
+                {
+                    LineEntity = runtimeLine.Entity,
+                    StopSig = route.StopSig,
+                    StagedRows = rows.Select(m_CopyRow).ToList()
+                };
+                AppliedTimetableState state = m_BuildAppliedState(entry.Key, applied);
+                AppliedTimetableValidationResult validation = m_Validator.Validate(
+                    LineIdentityService.GetKey(entry.Key, mode),
+                    state,
+                    route);
+
+                StampStopSig(request, entry.Key, route.StopSig);
+                errors.AddRange(validation.Errors);
+            }
+
+            return errors;
+        }
+
+        private static void StampStopSig(
+            DispatchWorkbenchSaveRequest request,
+            string lineId,
+            string stopSig)
+        {
+            if (request == null || string.IsNullOrEmpty(lineId) || string.IsNullOrEmpty(stopSig))
+                return;
+
+            StampStopSig(request.lineDraftRows, lineId, stopSig);
+            if (request.lineDraftRowsByLineId == null)
+                return;
+
+            for (int i = 0; i < request.lineDraftRowsByLineId.Length; i++)
+            {
+                DispatchWorkbenchLineDraftRowsDto block = request.lineDraftRowsByLineId[i];
+                if (block != null && string.Equals(DraftStore.GetKey(block.lineId), lineId, StringComparison.Ordinal))
+                    StampStopSig(block.lineDraftRows, lineId, stopSig);
+            }
+        }
+
+        private static void StampStopSig(
+            DispatchWorkbenchStagedRowDto[] rows,
+            string lineId,
+            string stopSig)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                if (rows[i] != null
+                    && string.Equals(DraftStore.GetKey(rows[i].lineId), lineId, StringComparison.Ordinal))
+                {
+                    rows[i].stopSig = stopSig;
+                }
+            }
+        }
+
+        private static void NormalizeChangedRows(
+            DispatchWorkbenchSaveRequest request,
+            string lineId,
+            string stopSig)
+        {
+            if (request == null)
+                return;
+
+            NormalizeChangedRows(request.lineDraftRows, lineId, stopSig);
+            if (request.lineDraftRowsByLineId == null)
+                return;
+
+            for (int i = 0; i < request.lineDraftRowsByLineId.Length; i++)
+            {
+                DispatchWorkbenchLineDraftRowsDto block = request.lineDraftRowsByLineId[i];
+                if (block != null && string.Equals(DraftStore.GetKey(block.lineId), lineId, StringComparison.Ordinal))
+                    NormalizeChangedRows(block.lineDraftRows, lineId, stopSig);
+            }
+        }
+
+        private static void NormalizeChangedRows(
+            List<DispatchWorkbenchStagedRowDto> rows,
+            string lineId,
+            string stopSig)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Count; i++)
+            {
+                DispatchWorkbenchStagedRowDto row = rows[i];
+                if (row != null
+                    && string.Equals(DraftStore.GetKey(row.lineId), lineId, StringComparison.Ordinal))
+                {
+                    if ((row.timedStops?.Length ?? 0) > 0
+                        && !string.Equals(row.stopSig, stopSig, StringComparison.Ordinal))
+                    {
+                        row.timedStops = Array.Empty<DispatchWorkbenchTimedStopDto>();
+                    }
+
+                    row.stopSig = stopSig;
+                }
+            }
+        }
+
+        private static void NormalizeChangedRows(
+            DispatchWorkbenchStagedRowDto[] rows,
+            string lineId,
+            string stopSig)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                DispatchWorkbenchStagedRowDto row = rows[i];
+                if (row != null
+                    && string.Equals(DraftStore.GetKey(row.lineId), lineId, StringComparison.Ordinal))
+                {
+                    if ((row.timedStops?.Length ?? 0) > 0
+                        && !string.Equals(row.stopSig, stopSig, StringComparison.Ordinal))
+                    {
+                        row.timedStops = Array.Empty<DispatchWorkbenchTimedStopDto>();
+                    }
+
+                    row.stopSig = stopSig;
+                }
+            }
+        }
+
+        private static void NormalizePartialTimetables(DispatchWorkbenchSaveRequest request)
+        {
+            if (request == null || !request.clearPartialTimetable)
+                return;
+
+            NormalizePartialRows(request.lineDraftRows);
+            if (request.lineDraftRowsByLineId == null)
+                return;
+
+            for (int i = 0; i < request.lineDraftRowsByLineId.Length; i++)
+                NormalizePartialRows(request.lineDraftRowsByLineId[i]?.lineDraftRows);
+        }
+
+        private static void NormalizePartialRows(DispatchWorkbenchStagedRowDto[] rows)
+        {
+            if (rows == null)
+                return;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                DispatchWorkbenchStagedRowDto row = rows[i];
+                if (row?.timedStops == null)
+                    continue;
+
+                for (int stopIndex = 0; stopIndex < row.timedStops.Length; stopIndex++)
+                {
+                    if (row.timedStops[stopIndex]?.depart != null)
+                        continue;
+
+                    row.timedStops = row.timedStops.Take(stopIndex + 1).ToArray();
+                    break;
+                }
+            }
         }
 
         private Dictionary<string, AppliedLine> BuildAppliedState(TransitMode mode)

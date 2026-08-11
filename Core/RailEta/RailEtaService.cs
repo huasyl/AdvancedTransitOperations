@@ -48,14 +48,23 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         internal RailEtaTicket SubmitHot(long ticketValue, int generation, int vehicleIndex, int vehicleVersion, long checkpointId, RailEtaMode mode,
             int depotIndex = 0, int depotVersion = 0, int modelIndex = 0, int modelVersion = 0,
-            int secondaryModelIndex = 0, int secondaryModelVersion = 0)
+            int secondaryModelIndex = 0, int secondaryModelVersion = 0,
+            RailEtaTheorySegmentRequest[] theorySegments = null,
+            ulong routeSignature = 0, ulong pathSignature = 0, ulong modelSignature = 0)
         {
             Interlocked.Exchange(ref m_Generation, generation);
             RailEtaTicket ticket = new RailEtaTicket(ticketValue);
             RailEtaRequestDescriptor descriptor = new RailEtaRequestDescriptor(vehicleIndex, vehicleVersion, checkpointId, mode,
-                depotIndex, depotVersion, modelIndex, modelVersion, secondaryModelIndex, secondaryModelVersion);
+                depotIndex, depotVersion, modelIndex, modelVersion, secondaryModelIndex, secondaryModelVersion,
+                routeSignature, pathSignature, modelSignature);
             m_Tickets.Add(ticket, descriptor, generation);
-            if (!m_Ingress.TryEnqueue(new RailEtaRequestEnvelope { Ticket = ticket, Descriptor = descriptor, EnqueueGeneration = generation }))
+            if (!m_Ingress.TryEnqueue(new RailEtaRequestEnvelope
+            {
+                Ticket = ticket,
+                Descriptor = descriptor,
+                EnqueueGeneration = generation,
+                TheorySegments = theorySegments ?? Array.Empty<RailEtaTheorySegmentRequest>()
+            }))
                 m_Tickets.Transition(ticket, RailEtaRequestState.Busy, 0, 0, generation, RailEtaFailure.Busy, "ETA ingress queue is full.");
             return ticket;
         }
@@ -63,6 +72,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public bool TryGetState(RailEtaTicket ticket, out RailEtaTicketStatus status) => m_Tickets.TryGetStatus(ticket, out status);
         public bool TryGetSnapshot(RailEtaTicket ticket, out RailEtaWorldSnapshot snapshot) => m_Tickets.TryGetSnapshot(ticket, out snapshot);
         public bool TryGetPrediction(RailEtaTicket ticket, out RailEtaPrediction prediction) => m_Tickets.TryGetPrediction(ticket, out prediction);
+        internal bool TryGetTheorySegments(RailEtaTicket ticket, out RailEtaTheorySegmentResult[] segments) => m_Tickets.TryGetTheorySegments(ticket, out segments);
+        internal bool TryGetTheoryFailure(RailEtaTicket ticket, out RailEtaTheoryFailure failure) => m_Tickets.TryGetTheoryFailure(ticket, out failure);
         internal bool TryGetRequest(RailEtaTicket ticket, out RailEtaRequest request) => m_Tickets.TryGetRequest(ticket, out request);
         public bool Cancel(RailEtaTicket ticket) => m_Tickets.Cancel(ticket);
 
@@ -77,6 +88,11 @@ namespace RapidTransitMod.RailEta.BuiltIn
         internal void MarkIncomplete(RailEtaTicket ticket) { if (ticket.IsValid) m_IncompleteTickets[ticket.Value] = 1; }
         internal bool IsIncomplete(RailEtaTicket ticket) => ticket.IsValid && m_IncompleteTickets.ContainsKey(ticket.Value);
         internal void PublishPrediction(RailEtaTicket ticket, RailEtaPrediction prediction, int generation) => m_Tickets.PublishPrediction(ticket, prediction, generation, LastObservedFrame);
+        internal void PublishTheorySegments(RailEtaTicket ticket, RailEtaTheorySegmentResult[] segments, int generation,
+            RailEtaFailure failure, string detail, RailEtaTheoryFailure theoryFailure) =>
+            m_Tickets.PublishTheorySegments(ticket, segments, generation, LastObservedFrame, failure, detail, theoryFailure);
+        internal void SetTheoryFailure(RailEtaTicket ticket, RailEtaTheoryFailure failure, int generation) =>
+            m_Tickets.SetTheoryFailure(ticket, failure, generation);
 #if RT_DEBUG_TOOLS
         internal void StoreReplayWorld(RailEtaTicket ticket, RailEtaFrozenWorld world)
         {

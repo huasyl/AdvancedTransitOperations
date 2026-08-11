@@ -5,6 +5,7 @@ import { useNativeScheduleI18n } from "./shared/workbench-i18n";
 import OverviewPage from "./pages/overview/OverviewPage";
 import PassengerFlowPage from "./pages/passenger/PassengerFlowPage";
 import SchedulePage from "./pages/schedule/SchedulePage";
+import TimetablePage from "./pages/timetable/TimetablePage";
 import { setWorkbenchApiTransportMode } from "../lib/workbench-api";
 import { traceWorkbench } from "./shared/workbench-trace";
 
@@ -42,6 +43,7 @@ export default function WorkbenchApp({ registerHostActions }) {
   const [activeTransportMode, setActiveTransportMode] = useState(DEFAULT_TRANSPORT_MODE);
   const [pageTransportModes, setPageTransportModes] = useState({
     schedule: DEFAULT_TRANSPORT_MODE,
+    timetable: DEFAULT_TRANSPORT_MODE,
     planner: DEFAULT_TRANSPORT_MODE,
     broadcast: DEFAULT_TRANSPORT_MODE,
     overview: DEFAULT_TRANSPORT_MODE,
@@ -59,7 +61,8 @@ export default function WorkbenchApp({ registerHostActions }) {
     () => {
       const tabs = [
         { key: "overview", label: t("nativeWorkbench.tab.overview") },
-        { key: "schedule", label: t("nativeWorkbench.tab.schedule") }
+        { key: "schedule", label: t("nativeWorkbench.tab.schedule") },
+        { key: "timetable", label: t("timetable.page.tab") }
       ];
       if (debugToolsEnabled) {
         tabs.push({ key: "planner", label: t("nativeWorkbench.tab.planner") });
@@ -256,6 +259,12 @@ export default function WorkbenchApp({ registerHostActions }) {
             activeTransportMode={modeForPage("schedule")}
             isActive={renderedPage === "schedule"}
           />
+        </div>
+        <div
+          className={pageClassName("timetable")}
+          data-workbench-page="timetable"
+        >
+          <TimetablePage />
         </div>
         <div
           className={pageClassName("planner")}

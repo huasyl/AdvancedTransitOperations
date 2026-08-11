@@ -128,6 +128,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             new List<AppliedWorkbenchLineStateElement>();
         public List<AppliedWorkbenchStagedRowElement> AppliedRowElements =
             new List<AppliedWorkbenchStagedRowElement>();
+        public List<AppliedRowIdElement> AppliedRowIdElements =
+            new List<AppliedRowIdElement>();
+        public List<AppliedStopSigElement> AppliedStopSigElements =
+            new List<AppliedStopSigElement>();
+        public List<AppliedTimedStopElement> AppliedTimedStopElements =
+            new List<AppliedTimedStopElement>();
     }
 
     internal sealed class PreparedWorkbenchSavePersistence
@@ -137,6 +143,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             new List<AppliedWorkbenchLineStateElement>();
         public List<AppliedWorkbenchStagedRowElement> AppliedRowElements =
             new List<AppliedWorkbenchStagedRowElement>();
+        public List<AppliedRowIdElement> AppliedRowIdElements =
+            new List<AppliedRowIdElement>();
+        public List<AppliedStopSigElement> AppliedStopSigElements =
+            new List<AppliedStopSigElement>();
+        public List<AppliedTimedStopElement> AppliedTimedStopElements =
+            new List<AppliedTimedStopElement>();
     }
 
     internal sealed class WorkbenchSaveOperationState

@@ -272,7 +272,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                                 time = m_Slot(minute),
                                 kind = entry.Value?.ServiceKind ?? string.Empty,
                                 source = string.Empty,
-                                note = string.Empty
+                                note = string.Empty,
+                                stopSig = entry.Value?.StopSig
                             });
                     }
 
@@ -285,7 +286,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                         source = row.Source ?? string.Empty,
                         note = string.IsNullOrEmpty(row.Source)
                             ? string.Empty
-                            : m_BuildAppliedRowNote(EncodeAppliedRowSource(row.Source))
+                            : m_BuildAppliedRowNote(EncodeAppliedRowSource(row.Source)),
+                        stopSig = entry.Value?.StopSig,
+                        timedStops = CopyTimedStops(row.TimedStops)
                     });
                 })
                 .Where(row => row != null && !string.IsNullOrEmpty(row.lineId))
@@ -323,6 +326,22 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     lineId = entry.Key,
                     contract = m_ClonePlanRef(entry.Value.PlannerImportContract)
+                })
+                .ToArray();
+        }
+
+        private static DispatchWorkbenchTimedStopDto[] CopyTimedStops(TimedStop[] stops)
+        {
+            if (stops == null || stops.Length == 0)
+                return Array.Empty<DispatchWorkbenchTimedStopDto>();
+
+            return stops
+                .Where(stop => stop != null)
+                .Select(stop => new DispatchWorkbenchTimedStopDto
+                {
+                    stopKey = stop.StopKey ?? string.Empty,
+                    arrive = stop.Arrive >= 0 ? stop.Arrive : (int?)null,
+                    depart = stop.Depart >= 0 ? stop.Depart : (int?)null
                 })
                 .ToArray();
         }

@@ -302,7 +302,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 WorkbenchState = Build(),
                 AppliedLineElements = m_Applied.LineElems(),
-                AppliedRowElements = m_Applied.RowElems()
+                AppliedRowElements = m_Applied.RowElems(),
+                AppliedRowIdElements = m_Applied.RowIdElems(),
+                AppliedStopSigElements = m_Applied.StopSigElems(),
+                AppliedTimedStopElements = m_Applied.TimedStopElems()
             };
         }
 
@@ -313,7 +316,10 @@ namespace RapidTransitMod.Dispatch.Workbench
                 WorkbenchPersistenceChunks = WorkbenchBuffer.Split(
                     Workbenches.Json.Write(payload?.WorkbenchState)),
                 AppliedLineElements = payload?.AppliedLineElements ?? new List<AppliedWorkbenchLineStateElement>(),
-                AppliedRowElements = payload?.AppliedRowElements ?? new List<AppliedWorkbenchStagedRowElement>()
+                AppliedRowElements = payload?.AppliedRowElements ?? new List<AppliedWorkbenchStagedRowElement>(),
+                AppliedRowIdElements = payload?.AppliedRowIdElements ?? new List<AppliedRowIdElement>(),
+                AppliedStopSigElements = payload?.AppliedStopSigElements ?? new List<AppliedStopSigElement>(),
+                AppliedTimedStopElements = payload?.AppliedTimedStopElements ?? new List<AppliedTimedStopElement>()
             };
         }
 
@@ -322,7 +328,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             Write(prepared?.WorkbenchPersistenceChunks);
             m_Applied.Write(
                 prepared?.AppliedLineElements,
-                prepared?.AppliedRowElements);
+                prepared?.AppliedRowElements,
+                prepared?.AppliedRowIdElements,
+                prepared?.AppliedStopSigElements,
+                prepared?.AppliedTimedStopElements);
         }
 
         private bool Migrate(HashSet<string> preservedDrafts)

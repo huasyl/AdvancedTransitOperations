@@ -112,6 +112,11 @@ namespace RapidTransitMod.Workbenches
             Bind(view, ApiHost.Prefix + "startNativeSaveOperation", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Start));
             Bind(view, ApiHost.Prefix + "getNativeSaveOperationStatus", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Status));
             Bind(view, ApiHost.Prefix + "setWorkbenchHostState", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.HostState));
+            Bind(view, ApiHost.Prefix + "startRunChartQuery", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.StartRunChart));
+            Bind(view, ApiHost.Prefix + "getRunChartQueryStatus", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.StatusRunChart));
+            Bind(view, ApiHost.Prefix + "cancelRunChartQuery", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.CancelRunChart));
+            Bind(view, ApiHost.Prefix + "consumeRunChartQuery", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.ConsumeRunChart));
+            Bind(view, ApiHost.Prefix + "loadServiceMonitor", new Func<string>(global::RapidTransitMod.Dispatch.Workbench.Api.Monitor));
             return true;
         }
 

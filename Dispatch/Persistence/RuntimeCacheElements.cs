@@ -27,6 +27,103 @@ namespace RapidTransitMod
         }
     }
 
+    [InternalBufferCapacity(0)]
+    public struct TimedPlanCacheElement : IBufferElementData, ISerializable
+    {
+        public int m_Version;
+        public Entity m_VehicleEntity;
+        public Entity m_LineEntity;
+        public FixedString128Bytes m_RowId;
+        public FixedString64Bytes m_StopSig;
+        public long m_ServiceDateTicks;
+        public int m_SlotMinute;
+        public int m_NextStopOrder;
+        public int m_ActiveStopOrder;
+        public int m_StopCount;
+        public byte m_CanBypass;
+        public double m_ArrivalWaitMinutes;
+        public int m_ClockTicksPerDay;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_Version);
+            writer.Write(m_VehicleEntity);
+            writer.Write(m_LineEntity);
+            writer.Write(m_RowId.ToString());
+            writer.Write(m_StopSig.ToString());
+            writer.Write(m_ServiceDateTicks);
+            writer.Write(m_SlotMinute);
+            writer.Write(m_NextStopOrder);
+            writer.Write(m_ActiveStopOrder);
+            writer.Write(m_StopCount);
+            writer.Write(m_CanBypass);
+            writer.Write(m_ArrivalWaitMinutes);
+            writer.Write(m_ClockTicksPerDay);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_Version);
+            reader.Read(out m_VehicleEntity);
+            reader.Read(out m_LineEntity);
+            reader.Read(out string rowId);
+            reader.Read(out string stopSig);
+            reader.Read(out m_ServiceDateTicks);
+            reader.Read(out m_SlotMinute);
+            reader.Read(out m_NextStopOrder);
+            reader.Read(out m_ActiveStopOrder);
+            reader.Read(out m_StopCount);
+            reader.Read(out m_CanBypass);
+            if (m_Version == 1)
+            {
+                m_ArrivalWaitMinutes = double.NaN;
+                m_ClockTicksPerDay = 0;
+            }
+            else
+            {
+                reader.Read(out m_ArrivalWaitMinutes);
+                reader.Read(out m_ClockTicksPerDay);
+            }
+            m_RowId = rowId ?? string.Empty;
+            m_StopSig = stopSig ?? string.Empty;
+        }
+    }
+
+    [InternalBufferCapacity(0)]
+    public struct TimedStopCacheElement : IBufferElementData, ISerializable
+    {
+        public int m_Version;
+        public Entity m_VehicleEntity;
+        public int m_Order;
+        public FixedString64Bytes m_StopKey;
+        public int m_Arrive;
+        public int m_Depart;
+        public int m_WaypointIndex;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_Version);
+            writer.Write(m_VehicleEntity);
+            writer.Write(m_Order);
+            writer.Write(m_StopKey.ToString());
+            writer.Write(m_Arrive);
+            writer.Write(m_Depart);
+            writer.Write(m_WaypointIndex);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_Version);
+            reader.Read(out m_VehicleEntity);
+            reader.Read(out m_Order);
+            reader.Read(out string stopKey);
+            reader.Read(out m_Arrive);
+            reader.Read(out m_Depart);
+            reader.Read(out m_WaypointIndex);
+            m_StopKey = stopKey ?? string.Empty;
+        }
+    }
+
     [InternalBufferCapacity(32)]
     public struct LineLapCacheElement : IBufferElementData, ISerializable
     {

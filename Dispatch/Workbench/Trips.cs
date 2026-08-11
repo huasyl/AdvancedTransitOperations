@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Game.Routes;
 using RapidTransitMod.Dispatch.Observation;
+using System.Runtime.Serialization;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -18,6 +19,9 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<string> m_Clock;
         private readonly TryRouteProgress m_TryProgress;
         private readonly TryVehicleState m_TryState;
+        private readonly Func<IEnumerable<MonitorTrip>> m_ActiveTrips;
+        private readonly Func<IEnumerable<MonitorDateSlot>> m_DateSlots;
+        private readonly Func<int, string> m_Slot;
 
         internal delegate bool TryRouteProgress(Entity vehicle, out int nextWp, out float progress);
         internal delegate bool TryVehicleState(Entity vehicle, out VehicleState state);
@@ -32,7 +36,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<string, int> minutes,
             Func<string> clock,
             TryRouteProgress tryProgress,
-            TryVehicleState tryState)
+            TryVehicleState tryState,
+            Func<IEnumerable<MonitorTrip>> activeTrips,
+            Func<IEnumerable<MonitorDateSlot>> dateSlots,
+            Func<int, string> slot)
         {
             EntityManager = entityManager;
             Vehicles = vehicles ?? throw new ArgumentNullException(nameof(vehicles));
@@ -44,6 +51,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Clock = clock ?? throw new ArgumentNullException(nameof(clock));
             m_TryProgress = tryProgress ?? throw new ArgumentNullException(nameof(tryProgress));
             m_TryState = tryState ?? throw new ArgumentNullException(nameof(tryState));
+            m_ActiveTrips = activeTrips ?? throw new ArgumentNullException(nameof(activeTrips));
+            m_DateSlots = dateSlots ?? throw new ArgumentNullException(nameof(dateSlots));
+            m_Slot = slot ?? throw new ArgumentNullException(nameof(slot));
         }
 
         internal EntityManager EntityManager { get; }
@@ -57,6 +67,9 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal string Clock() => m_Clock();
         internal bool TryProgress(Entity vehicle, out int nextWp, out float progress) => m_TryProgress(vehicle, out nextWp, out progress);
         internal bool TryState(Entity vehicle, out VehicleState state) => m_TryState(vehicle, out state);
+        internal IEnumerable<MonitorTrip> ActiveTrips() => m_ActiveTrips();
+        internal IEnumerable<MonitorDateSlot> DateSlots() => m_DateSlots();
+        internal string Slot(int minute) => minute < 0 ? null : m_Slot(minute % 1440);
     }
 
     internal sealed class Trips
@@ -69,6 +82,14 @@ namespace RapidTransitMod.Dispatch.Workbench
         }
 
         internal List<DispatchWorkbenchTripDto> Build(
+            WorkbenchLineRuntime active,
+            List<DispatchWorkbenchStationDto> stations,
+            DispatchWorkbenchDraftState draft)
+        {
+            return BuildFormal(active, draft);
+        }
+
+        private List<DispatchWorkbenchTripDto> BuildLegacy(
             WorkbenchLineRuntime active,
             List<DispatchWorkbenchStationDto> stations,
             DispatchWorkbenchDraftState draft)
@@ -245,6 +266,106 @@ namespace RapidTransitMod.Dispatch.Workbench
             return trips;
         }
 
+        private List<DispatchWorkbenchTripDto> BuildFormal(
+            WorkbenchLineRuntime active,
+            DispatchWorkbenchDraftState draft)
+        {
+            List<DispatchWorkbenchTripDto> result = new List<DispatchWorkbenchTripDto>();
+            if (active == null)
+                return result;
+
+            IEnumerable<MonitorTrip> trips = m_Port.ActiveTrips()
+                .Concat(m_Port.DateSlots().SelectMany(slot => slot.Trips.Values));
+            foreach (MonitorTrip trip in trips
+                .Where(item => item != null && string.Equals(item.LineId, active.Id, StringComparison.Ordinal))
+                .OrderBy(item => item.ServiceDateKey)
+                .ThenBy(item => item.SlotMinute))
+            {
+                int count = math.clamp(trip.VisibleStopCount, 0, trip.Stops.Count);
+                DispatchWorkbenchTripStopDto[] stops = new DispatchWorkbenchTripStopDto[count];
+                for (int i = 0; i < count; i++)
+                {
+                    MonitorStop stop = trip.Stops[i];
+                    stops[i] = new DispatchWorkbenchTripStopDto
+                    {
+                        stationId = stop.StopKey,
+                        time = m_Port.Slot(stop.ActualDeparture >= 0 ? stop.ActualDeparture : stop.ActualArrival),
+                        arrivalTime = m_Port.Slot(stop.ActualArrival),
+                        departureTime = m_Port.Slot(stop.ActualDeparture),
+                        stopType = i == 0 ? "origin" : (stop.Cleared ? "cleared" : "normal")
+                    };
+                }
+                result.Add(new DispatchWorkbenchTripDto
+                {
+                    id = trip.Key,
+                    lineId = trip.LineId,
+                    kind = string.IsNullOrEmpty(trip.ServiceKind) ? "local" : trip.ServiceKind,
+                    depart = m_Port.Slot(trip.SlotMinute) ?? "--:--",
+                    stops = stops
+                });
+            }
+            return result;
+        }
+
+        internal MonitorSnapshotDto BuildMonitor()
+        {
+            MonitorTripDto[] active = m_Port.ActiveTrips()
+                .Where(trip => trip != null)
+                .Select(BuildMonitorTrip)
+                .ToArray();
+            MonitorDayDto[] days = m_Port.DateSlots()
+                .OrderByDescending(slot => slot.DateKey)
+                .Select(slot => new MonitorDayDto
+                {
+                    serviceDateKey = slot.DateKey,
+                    trips = slot.Trips.Values
+                        .OrderBy(trip => trip.LineKey, StringComparer.Ordinal)
+                        .ThenBy(trip => trip.SlotMinute)
+                        .Select(BuildMonitorTrip)
+                        .ToArray()
+                })
+                .ToArray();
+            return new MonitorSnapshotDto { activeTrips = active, days = days };
+        }
+
+        private MonitorTripDto BuildMonitorTrip(MonitorTrip trip)
+        {
+            int count = math.clamp(trip.VisibleStopCount, 0, trip.Stops.Count);
+            MonitorStopDto[] stops = new MonitorStopDto[count];
+            for (int i = 0; i < count; i++)
+            {
+                MonitorStop stop = trip.Stops[i];
+                bool plannedVisible = i < trip.SuppressPlanFrom;
+                stops[i] = new MonitorStopDto
+                {
+                    order = i,
+                    stopKey = stop.StopKey,
+                    waypointIndex = stop.WaypointIndex,
+                    plannedArrivalMinute = plannedVisible ? NullableMinute(stop.PlannedArrival) : null,
+                    plannedDepartureMinute = plannedVisible ? NullableMinute(stop.PlannedDeparture) : null,
+                    actualArrivalMinute = NullableMinute(stop.ActualArrival),
+                    actualDepartureMinute = NullableMinute(stop.ActualDeparture),
+                    cleared = stop.Cleared
+                };
+            }
+            return new MonitorTripDto
+            {
+                key = trip.Key,
+                lineKey = trip.LineKey,
+                lineId = trip.LineId,
+                rowId = trip.RowId,
+                serviceKind = trip.ServiceKind,
+                serviceDateKey = trip.ServiceDateKey,
+                slotMinute = trip.SlotMinute,
+                actualStartMinute = NullableMinute(trip.ActualStartMinute),
+                state = trip.State.ToString().ToLowerInvariant(),
+                vehicleIndex = trip.Vehicle == Entity.Null ? -1 : trip.Vehicle.Index,
+                stops = stops
+            };
+        }
+
+        private static int? NullableMinute(int minute) => minute < 0 ? (int?)null : minute;
+
         private static List<string> NormalizeLineIdList(string[] ids, string fallbackId)
         {
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
@@ -271,5 +392,48 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             return normalized;
         }
+    }
+
+    [DataContract]
+    internal sealed class MonitorSnapshotDto
+    {
+        [DataMember] public MonitorTripDto[] activeTrips = Array.Empty<MonitorTripDto>();
+        [DataMember] public MonitorDayDto[] days = Array.Empty<MonitorDayDto>();
+    }
+
+    [DataContract]
+    internal sealed class MonitorDayDto
+    {
+        [DataMember] public int serviceDateKey;
+        [DataMember] public MonitorTripDto[] trips = Array.Empty<MonitorTripDto>();
+    }
+
+    [DataContract]
+    internal sealed class MonitorTripDto
+    {
+        [DataMember] public string key;
+        [DataMember] public string lineKey;
+        [DataMember] public string lineId;
+        [DataMember] public string rowId;
+        [DataMember] public string serviceKind;
+        [DataMember] public int serviceDateKey;
+        [DataMember] public int slotMinute;
+        [DataMember] public int? actualStartMinute;
+        [DataMember] public string state;
+        [DataMember] public int vehicleIndex;
+        [DataMember] public MonitorStopDto[] stops = Array.Empty<MonitorStopDto>();
+    }
+
+    [DataContract]
+    internal sealed class MonitorStopDto
+    {
+        [DataMember] public int order;
+        [DataMember] public string stopKey;
+        [DataMember] public int waypointIndex;
+        [DataMember] public int? plannedArrivalMinute;
+        [DataMember] public int? plannedDepartureMinute;
+        [DataMember] public int? actualArrivalMinute;
+        [DataMember] public int? actualDepartureMinute;
+        [DataMember] public bool cleared;
     }
 }

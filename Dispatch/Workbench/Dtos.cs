@@ -139,6 +139,8 @@ namespace RapidTransitMod
         [DataMember]
         public bool applyDraft;
         [DataMember]
+        public bool clearPartialTimetable;
+        [DataMember]
         public bool nativeScheduleWriter;
         [DataMember]
         public bool? returnSnapshot;
@@ -152,6 +154,8 @@ namespace RapidTransitMod
         public DispatchWorkbenchLineRuntimeRefDto[] lineRuntimeRefs;
         [DataMember]
         public int clientRequestSequence;
+        [DataMember(EmitDefaultValue = false)]
+        public string runChartQueryId;
     }
 
     [DataContract]
@@ -518,6 +522,17 @@ namespace RapidTransitMod
     }
 
     [DataContract]
+    public class DispatchWorkbenchTimedStopDto
+    {
+        [DataMember]
+        public string stopKey;
+        [DataMember]
+        public int? arrive;
+        [DataMember]
+        public int? depart;
+    }
+
+    [DataContract]
     public class DispatchWorkbenchStagedRowDto
     {
         [DataMember]
@@ -532,5 +547,103 @@ namespace RapidTransitMod
         public string source;
         [DataMember]
         public string note;
+        [DataMember(EmitDefaultValue = false)]
+        public string stopSig;
+        [DataMember(EmitDefaultValue = false)]
+        public DispatchWorkbenchTimedStopDto[] timedStops;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartRequestDto
+    {
+        [DataMember]
+        public string queryId;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string fromStopKey;
+        [DataMember]
+        public string toStopKey;
+        [DataMember]
+        public string rowId;
+        [DataMember]
+        public string[] viaStopKeys;
+        [DataMember]
+        public string source;
+        [DataMember]
+        public int candidateIndex;
+        [DataMember]
+        public bool hasCandidate;
+        [DataMember]
+        public int modelIndex;
+        [DataMember]
+        public int modelVersion;
+        [DataMember]
+        public int secondaryModelIndex;
+        [DataMember]
+        public int secondaryModelVersion;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartCandidateDto
+    {
+        [DataMember]
+        public int candidateIndex;
+        [DataMember]
+        public int[] waypointIndices;
+        [DataMember]
+        public int[] stopWaypointIndices;
+        [DataMember]
+        public string[] stopKeys;
+        [DataMember]
+        public string direction;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartSegmentDto
+    {
+        [DataMember]
+        public string fromStopKey;
+        [DataMember]
+        public string toStopKey;
+        [DataMember]
+        public int fromWaypointIndex;
+        [DataMember]
+        public int toWaypointIndex;
+        [DataMember]
+        public uint segmentFrames;
+        [DataMember]
+        public int segmentMinutes;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartStatusDto
+    {
+        [DataMember]
+        public string queryId;
+        [DataMember]
+        public string state;
+        [DataMember]
+        public string source;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string stopSig;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public int failureSegmentIndex = -1;
+        [DataMember]
+        public int failureFromWaypointIndex = -1;
+        [DataMember]
+        public int failureToWaypointIndex = -1;
+        [DataMember]
+        public string failureCode;
+        [DataMember]
+        public string failureDetail;
+        [DataMember]
+        public DispatchWorkbenchRunChartCandidateDto[] candidates;
+        [DataMember]
+        public DispatchWorkbenchRunChartSegmentDto[] segments;
     }
 }

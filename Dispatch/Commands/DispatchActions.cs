@@ -52,6 +52,13 @@ namespace RapidTransitMod.Dispatch.Commands
             HoldDeparture(vehicle, ref publicTransport, nowFrame, ecb);
         }
 
+        public void HoldUntil(Entity vehicle, uint releaseFrame, EntityCommandBuffer ecb)
+        {
+            PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
+            publicTransport.m_DepartureFrame = releaseFrame;
+            CommitPublicTransport(vehicle, publicTransport, ecb);
+        }
+
         public void ForceDepart(
             Entity vehicle,
             ref PublicTransport publicTransport,

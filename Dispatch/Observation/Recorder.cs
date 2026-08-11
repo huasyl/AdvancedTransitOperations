@@ -3,12 +3,17 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Game.Routes;
+using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Observation
 {
     internal sealed class Recorder
     {
+        private const int MaxTripsPerDate = 4096;
+        private const int MaxActiveTrips = 1024;
+        private const int MaxStopsPerTrip = 256;
         private readonly Port m_Port;
         private TraceStore m_Store => m_Port.Store;
 
@@ -19,79 +24,550 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal string SnapshotJson()
         {
-            EnsureSeeded();
             return m_Port.Json(BuildSnapshot());
-        }
-
-        internal void EnsureSeeded()
-        {
-            if (m_Store.Session != null)
-                return;
-
-            m_Port.LoadApplied();
-            IReadOnlyDictionary<string, LinePlan> lines = m_Port.Lines();
-            if (lines == null || lines.Count == 0)
-                return;
-
-            bool hasAppliedRows = lines.Values.Any(
-                state => state != null && state.Rows != null && state.Rows.Count > 0);
-            if (!hasAppliedRows)
-                return;
-
-            Seed(m_Port.Preferred());
         }
 
         internal void Seed(string selectedLineId)
         {
-            DateTime appliedGameDate = GameDate();
-            m_Store.Session = new Session
-            {
-                SnapshotId = "runtime-observation-" + m_Port.Frame().ToString(),
-                Status = "active",
-                AppliedFrame = m_Port.Frame(),
-                UpdatedFrame = m_Port.Frame(),
-                AppliedDate = appliedGameDate
-            };
-            m_Store.ClearIndexes();
+            // 正式监控只在实际始发或最终漏发时创建记录，不预建全天 pending。
+        }
 
-            foreach (KeyValuePair<string, LinePlan> entry in m_Port.Lines())
+        internal bool TickDate(DateTime currentDate)
+        {
+            int currentKey = ScheduleClock.DateKey(currentDate.Date);
+            if (m_Store.MonitorCurrentDateKey == currentKey)
+                return false;
+            int previousKey = ScheduleClock.DateKey(currentDate.Date.AddDays(-1));
+            bool changed = false;
+            int[] existing = m_Store.DateSlots.Keys.ToArray();
+            for (int i = 0; i < existing.Length; i++)
             {
-                LinePlan lineState = entry.Value;
-                if (lineState == null || lineState.Line == Entity.Null || lineState.Rows == null)
+                if (existing[i] == currentKey || existing[i] == previousKey)
                     continue;
+                m_Store.DateSlots.Remove(existing[i]);
+                changed = true;
+            }
+            changed |= EnsureDateSlot(currentKey);
+            changed |= EnsureDateSlot(previousKey);
+            m_Store.MonitorCurrentDateKey = currentKey;
+            return changed;
+        }
 
-                string lineId = entry.Key;
-                foreach (RowPlan row in lineState.Rows)
+        internal string Launch(
+            Entity line,
+            Entity vehicle,
+            AppliedMonitorRow row,
+            ClockSnapshot clock,
+            uint launchFrame,
+            out string endedKey)
+        {
+            endedKey = string.Empty;
+            if (row.Stops != null && row.Stops.Length > MaxStopsPerTrip)
+            {
+                NoteOverflow("trip-stop-capacity");
+                return string.Empty;
+            }
+            if (!ValidRow(line, row) || vehicle == Entity.Null)
+                return string.Empty;
+
+            TickDate(clock.NowDate);
+            DateTime serviceDate = ScheduleClock.ServiceDate(clock, row.SlotMinute);
+            int serviceDateKey = ScheduleClock.DateKey(serviceDate);
+            string key = MonitorKey(row.LineKey.ToString(), row.RowId, serviceDateKey);
+            if (m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip active)
+                && string.Equals(active.Key, key, StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+            if (active != null)
+            {
+                endedKey = End(vehicle, launchFrame);
+                if (string.IsNullOrEmpty(endedKey))
+                    return string.Empty;
+            }
+
+            foreach (MonitorTrip existing in m_Store.ActiveTrips.Values)
+                if (string.Equals(existing?.Key, key, StringComparison.Ordinal))
+                    return string.Empty;
+
+            if (m_Store.ActiveTrips.Count >= MaxActiveTrips)
+            {
+                NoteOverflow("active-trip-capacity");
+                return string.Empty;
+            }
+
+            RemoveArchived(key, serviceDateKey);
+            MonitorTrip trip = BuildMonitorTrip(line, vehicle, row, serviceDateKey, MonitorTripState.Active, launchFrame);
+            trip.ActualStartMinute = EventMinute(clock, serviceDate);
+            trip.LaunchFrame = launchFrame;
+            trip.Stops[0].ActualDeparture = trip.ActualStartMinute;
+            m_Store.ActiveTrips[vehicle] = trip;
+            return trip.Key;
+        }
+
+        internal string MarkMissed(
+            Entity line,
+            AppliedMonitorRow row,
+            DateTime serviceDate,
+            uint frame)
+        {
+            if (row.Stops != null && row.Stops.Length > MaxStopsPerTrip)
+            {
+                NoteOverflow("trip-stop-capacity");
+                return string.Empty;
+            }
+            if (!ValidRow(line, row))
+                return string.Empty;
+
+            TickDate(GameDate());
+            if (!ScheduleClock.FinalExpired(m_Port.ClockSnapshot(), row.SlotMinute, serviceDate))
+                return string.Empty;
+            int serviceDateKey = ScheduleClock.DateKey(serviceDate);
+            string key = MonitorKey(row.LineKey.ToString(), row.RowId, serviceDateKey);
+            if (ContainsMonitorKey(key))
+                return string.Empty;
+
+            MonitorTrip trip = BuildMonitorTrip(
+                line,
+                Entity.Null,
+                row,
+                serviceDateKey,
+                MonitorTripState.Missed,
+                frame);
+            return Archive(trip) ? trip.Key : string.Empty;
+        }
+
+        internal string End(Entity vehicle, uint frame)
+        {
+            if (!m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip trip))
+                return string.Empty;
+            if (!CanArchive(trip))
+                return string.Empty;
+
+            int order = trip.NextArrivalOrder >= trip.Stops.Count
+                ? 0
+                : Math.Min(Math.Max(1, trip.NextArrivalOrder), trip.Stops.Count - 1);
+            if (order >= 0 && order < trip.Stops.Count)
+                trip.Stops[order].Cleared = true;
+            trip.VisibleStopCount = order == 0
+                ? trip.Stops.Count
+                : Math.Min(trip.Stops.Count, order + 1);
+            trip.State = MonitorTripState.Cleared;
+            trip.UpdatedFrame = frame;
+            return Archive(trip) ? trip.Key : string.Empty;
+        }
+
+        internal string SuppressPlan(Entity vehicle, string stopSig, uint frame)
+        {
+            if (string.IsNullOrEmpty(stopSig)
+                || !m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip trip)
+                || string.Equals(trip.StopSig, stopSig, StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+
+            trip.SuppressPlanFrom = Math.Min(trip.SuppressPlanFrom, trip.NextArrivalOrder);
+            trip.UpdatedFrame = frame;
+            return trip.Key;
+        }
+
+        internal string ReprojectPlan(
+            Entity vehicle,
+            string stopSig,
+            int[] waypointIndices,
+            uint frame)
+        {
+            if (string.IsNullOrEmpty(stopSig)
+                || !m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip trip))
+            {
+                return string.Empty;
+            }
+            if (!string.Equals(trip.StopSig, stopSig, StringComparison.Ordinal))
+                return SuppressPlan(vehicle, stopSig, frame);
+            if (waypointIndices == null || waypointIndices.Length != trip.Stops.Count)
+            {
+                NoteOverflow("monitor-layout-projection-mismatch");
+                return string.Empty;
+            }
+
+            bool changed = false;
+            for (int i = 0; i < trip.Stops.Count; i++)
+            {
+                if (trip.Stops[i].WaypointIndex == waypointIndices[i])
+                    continue;
+                trip.Stops[i].WaypointIndex = waypointIndices[i];
+                changed = true;
+            }
+            if (!changed)
+                return string.Empty;
+            trip.UpdatedFrame = frame;
+            return trip.Key;
+        }
+
+        internal List<string> ReleaseLinePlan(Entity line, uint frame)
+        {
+            List<string> changed = new List<string>();
+            foreach (MonitorTrip trip in m_Store.ActiveTrips.Values)
+            {
+                if (trip == null || trip.Line != line)
+                    continue;
+                trip.SuppressPlanFrom = 0;
+                trip.UpdatedFrame = frame;
+                changed.Add(trip.Key);
+            }
+            return changed;
+        }
+
+        internal IEnumerable<MonitorTrip> ActiveMonitorTrips => m_Store.ActiveTrips.Values;
+
+        internal IEnumerable<MonitorDateSlot> MonitorDateSlots => m_Store.DateSlots.Values;
+
+        internal bool MonitorOverflowed => m_Store.MonitorOverflowed;
+
+        internal string MonitorOverflowReason => m_Store.MonitorOverflowReason;
+
+        internal int MonitorOverflowCount => m_Store.MonitorOverflowCount;
+
+        internal void MonitorPersistFailed(string reason)
+        {
+            NoteOverflow(reason);
+        }
+
+        internal bool TryMonitor(string key, out MonitorTrip trip, out bool active)
+        {
+            foreach (MonitorTrip value in m_Store.ActiveTrips.Values)
+            {
+                if (string.Equals(value?.Key, key, StringComparison.Ordinal))
                 {
-                    if (row == null)
-                        continue;
-
-                    int targetMinute = m_Port.Parse(row.Time);
-                    if (targetMinute < 0)
-                        continue;
-
-                    string rowLineId = !string.IsNullOrEmpty(row.LineId) ? row.LineId : lineId;
-                    CreateTrip(
-                        lineState.Line,
-                        rowLineId,
-                        row.Id ?? string.Empty,
-                        row.Source ?? string.Empty,
-                        row.Kind ?? string.Empty,
-                        targetMinute,
-                        1,
-                        m_Store.Session.AppliedFrame,
-                        appliedGameDate);
+                    trip = value;
+                    active = true;
+                    return true;
                 }
             }
-
-            if (m_Store.Session.Trips.Count == 0)
+            foreach (MonitorDateSlot slot in m_Store.DateSlots.Values)
             {
-                m_Store.Session.Status = "empty";
+                if (slot.Trips.TryGetValue(key, out trip))
+                {
+                    active = false;
+                    return true;
+                }
+            }
+            trip = null;
+            active = false;
+            return false;
+        }
+
+        internal bool RestoreMonitor(MonitorTrip trip, bool active)
+        {
+            if (trip == null
+                || string.IsNullOrEmpty(trip.Key)
+                || string.IsNullOrEmpty(trip.LineKey)
+                || string.IsNullOrEmpty(trip.RowId)
+                || trip.Stops.Count == 0
+                || trip.Stops.Count > MaxStopsPerTrip)
+            {
+                if (trip != null && trip.Stops.Count > MaxStopsPerTrip)
+                    NoteOverflow("trip-stop-capacity");
+                return false;
             }
 
-            m_Port.Log("[Observation] seeded snapshot=" + m_Store.Session.SnapshotId
-                + " selectedLine=" + (selectedLineId ?? string.Empty)
-                + " trips=" + m_Store.Session.Trips.Count);
+            trip.NextArrivalOrder = Math.Max(1, Math.Min(trip.NextArrivalOrder, trip.Stops.Count));
+            trip.VisibleStopCount = Math.Max(1, Math.Min(trip.VisibleStopCount, trip.Stops.Count));
+            trip.SuppressPlanFrom = Math.Max(0, Math.Min(trip.SuppressPlanFrom, int.MaxValue));
+
+            if (active)
+            {
+                if (trip.Vehicle == Entity.Null)
+                    return false;
+                if (m_Store.ActiveTrips.Count >= MaxActiveTrips)
+                {
+                    NoteOverflow("active-trip-capacity");
+                    return false;
+                }
+                m_Store.ActiveTrips[trip.Vehicle] = trip;
+                return true;
+            }
+
+            return Archive(trip);
+        }
+
+        internal void RestoreDateSlot(int dateKey)
+        {
+            if (dateKey > 0)
+                EnsureDateSlot(dateKey);
+        }
+
+        internal void ClearMonitor()
+        {
+            m_Store.ActiveTrips.Clear();
+            m_Store.DateSlots.Clear();
+            m_Store.MonitorCurrentDateKey = 0;
+            m_Store.MonitorOverflowed = false;
+            m_Store.MonitorOverflowReason = string.Empty;
+            m_Store.MonitorOverflowCount = 0;
+        }
+
+        private bool EnsureDateSlot(int dateKey)
+        {
+            if (dateKey <= 0 || m_Store.DateSlots.ContainsKey(dateKey))
+                return false;
+            m_Store.DateSlots[dateKey] = new MonitorDateSlot { DateKey = dateKey };
+            return true;
+        }
+
+        private static bool ValidRow(Entity line, AppliedMonitorRow row)
+        {
+            return line != Entity.Null
+                && !row.LineKey.IsEmpty
+                && !string.IsNullOrEmpty(row.RowId)
+                && !string.IsNullOrEmpty(row.StopSig)
+                && row.SlotMinute >= 0
+                && row.SlotMinute < 1440
+                && row.Stops != null
+                && row.Stops.Length > 0
+                && row.Stops.Length <= MaxStopsPerTrip;
+        }
+
+        private static string MonitorKey(string lineKey, string rowId, int serviceDateKey)
+        {
+            return (lineKey ?? string.Empty)
+                + "|"
+                + (rowId ?? string.Empty)
+                + "|"
+                + serviceDateKey.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private MonitorTrip BuildMonitorTrip(
+            Entity line,
+            Entity vehicle,
+            AppliedMonitorRow row,
+            int serviceDateKey,
+            MonitorTripState state,
+            uint frame)
+        {
+            MonitorTrip trip = new MonitorTrip
+            {
+                Key = MonitorKey(row.LineKey.ToString(), row.RowId, serviceDateKey),
+                LineKey = row.LineKey.ToString(),
+                LineId = row.LineId,
+                RowId = row.RowId,
+                ServiceKind = row.ServiceKind,
+                StopSig = row.StopSig,
+                Line = line,
+                Vehicle = vehicle,
+                ServiceDateKey = serviceDateKey,
+                SlotMinute = row.SlotMinute,
+                State = state,
+                VisibleStopCount = row.Stops.Length,
+                UpdatedFrame = frame
+            };
+            for (int i = 0; i < row.Stops.Length; i++)
+            {
+                AppliedMonitorStop stop = row.Stops[i];
+                trip.Stops.Add(new MonitorStop
+                {
+                    Order = i,
+                    StopKey = stop.StopKey,
+                    Station = stop.Station,
+                    WaypointIndex = stop.WaypointIndex,
+                    PlannedArrival = stop.Arrive,
+                    PlannedDeparture = stop.Depart
+                });
+            }
+            return trip;
+        }
+
+        private bool ContainsMonitorKey(string key)
+        {
+            foreach (MonitorTrip trip in m_Store.ActiveTrips.Values)
+                if (string.Equals(trip?.Key, key, StringComparison.Ordinal))
+                    return true;
+            foreach (MonitorDateSlot slot in m_Store.DateSlots.Values)
+                if (slot.Trips.ContainsKey(key))
+                    return true;
+            return false;
+        }
+
+        private void RemoveArchived(string key, int dateKey)
+        {
+            if (m_Store.DateSlots.TryGetValue(dateKey, out MonitorDateSlot slot))
+                slot.Trips.Remove(key);
+        }
+
+        private bool Archive(MonitorTrip trip)
+        {
+            if (!CanArchive(trip))
+                return false;
+            MonitorDateSlot slot = m_Store.DateSlots[trip.ServiceDateKey];
+
+            if (trip.Vehicle != Entity.Null
+                && m_Store.ActiveTrips.TryGetValue(trip.Vehicle, out MonitorTrip active)
+                && ReferenceEquals(active, trip))
+            {
+                m_Store.ActiveTrips.Remove(trip.Vehicle);
+            }
+            slot.Trips[trip.Key] = trip;
+            return true;
+        }
+
+        private bool CanArchive(MonitorTrip trip)
+        {
+            if (trip == null)
+                return false;
+            if (!m_Store.DateSlots.TryGetValue(trip.ServiceDateKey, out MonitorDateSlot slot))
+            {
+                NoteOverflow("expired-date-slot");
+                return false;
+            }
+            if (!slot.Trips.ContainsKey(trip.Key) && slot.Trips.Count >= MaxTripsPerDate)
+            {
+                NoteOverflow("date-trip-capacity");
+                return false;
+            }
+            return true;
+        }
+
+        private void NoteOverflow(string reason)
+        {
+            m_Store.MonitorOverflowed = true;
+            m_Store.MonitorOverflowReason = reason ?? string.Empty;
+            m_Store.MonitorOverflowCount++;
+            m_Port.Log("[ServiceMonitorOverflow] reason=" + m_Store.MonitorOverflowReason
+                + " count=" + m_Store.MonitorOverflowCount);
+        }
+
+        private static int EventMinute(ClockSnapshot clock, DateTime serviceDate)
+        {
+            long days = (clock.NowDate.Date - serviceDate.Date).Days;
+            long minute = days * 1440L + clock.NowMinute;
+            if (minute < int.MinValue)
+                return int.MinValue;
+            if (minute > int.MaxValue)
+                return int.MaxValue;
+            return (int)minute;
+        }
+
+        private string RecordMonitorStop(
+            Entity vehicle,
+            Entity station,
+            string stopKey,
+            int waypointIndex,
+            bool arrival,
+            ClockSnapshot clock,
+            uint frame)
+        {
+            if (!m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip trip))
+                return string.Empty;
+            if (trip.LastFactFrame == frame
+                && trip.LastFactArrival == arrival
+                && string.Equals(trip.LastFactStopKey, stopKey, StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+            DateTime serviceDate = ParseDateKey(trip.ServiceDateKey);
+            int minute = EventMinute(clock, serviceDate);
+            bool exactLayout = trip.SuppressPlanFrom == int.MaxValue;
+            if (arrival
+                && trip.LaunchFrame > 0
+                && trip.NextArrivalOrder >= trip.Stops.Count
+                && MatchesMonitorStop(
+                    trip.Stops[0],
+                    stopKey,
+                    station,
+                    waypointIndex,
+                    exactLayout))
+            {
+                if (!CanArchive(trip))
+                    return string.Empty;
+                trip.Stops[0].ActualArrival = minute;
+                trip.State = MonitorTripState.Completed;
+                trip.UpdatedFrame = frame;
+                Archive(trip);
+                return trip.Key;
+            }
+
+            if (arrival)
+            {
+                int matched = Math.Max(1, trip.NextArrivalOrder);
+                if (matched >= trip.Stops.Count
+                    || trip.Stops[matched].ActualArrival >= 0
+                    || !MatchesMonitorStop(
+                        trip.Stops[matched],
+                        stopKey,
+                        station,
+                        waypointIndex,
+                        exactLayout))
+                {
+                    return string.Empty;
+                }
+                trip.Stops[matched].ActualArrival = minute;
+                trip.NextArrivalOrder = matched + 1;
+            }
+            else
+            {
+                int matched = Math.Min(trip.NextArrivalOrder - 1, trip.Stops.Count - 1);
+                if (matched < 1)
+                    return string.Empty;
+                MonitorStop stop = trip.Stops[matched];
+                if (stop.ActualArrival < 0
+                    || stop.ActualDeparture >= 0
+                    || !MatchesMonitorStop(
+                        stop,
+                        stopKey,
+                        station,
+                        waypointIndex,
+                        exactLayout))
+                {
+                    return string.Empty;
+                }
+                trip.Stops[matched].ActualDeparture = minute;
+            }
+            trip.UpdatedFrame = frame;
+            trip.LastFactStopKey = stopKey;
+            trip.LastFactFrame = frame;
+            trip.LastFactArrival = arrival;
+            return trip.Key;
+        }
+
+        private static bool MatchesMonitorStop(
+            MonitorStop stop,
+            string stopKey,
+            Entity station,
+            int waypointIndex,
+            bool exactLayout)
+        {
+            if (stop == null
+                || string.IsNullOrEmpty(stopKey)
+                || !string.Equals(stop.StopKey, stopKey, StringComparison.Ordinal))
+            {
+                return false;
+            }
+            if (!exactLayout)
+                return true;
+            if (stop.WaypointIndex >= 0 || waypointIndex >= 0)
+            {
+                return stop.WaypointIndex >= 0
+                    && waypointIndex >= 0
+                    && stop.WaypointIndex == waypointIndex;
+            }
+            return stop.Station != Entity.Null
+                && station != Entity.Null
+                && stop.Station == station;
+        }
+
+        private static DateTime ParseDateKey(int dateKey)
+        {
+            int year = dateKey / 10000;
+            int month = dateKey / 100 % 100;
+            int day = dateKey % 100;
+            try
+            {
+                return new DateTime(year, month, day);
+            }
+            catch
+            {
+                return DateTime.MinValue.Date;
+            }
         }
 
         private DateTime GameDate()
@@ -307,53 +783,162 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Store.Session.UpdatedFrame = launchFrame;
         }
 
-        internal void Stop(
+        internal void StartRailSegment(Entity vehicle, Entity line, int waypointIndex, uint frame)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || waypointIndex < 0
+                || !m_Port.HasWaypoints(line))
+            {
+                return;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = m_Port.Waypoints(line);
+            if (waypointIndex >= waypoints.Length)
+                return;
+
+            Entity waypoint = waypoints[waypointIndex].m_Waypoint;
+            Entity stop = m_Port.Stop(waypoint);
+            if (waypoint == Entity.Null || stop == Entity.Null)
+                return;
+
+            m_Store.RailSegmentSessions[vehicle] = new RailSegmentSession
+            {
+                Line = line,
+                FromWaypoint = waypoint,
+                FromStop = stop,
+                StartFrame = frame
+            };
+        }
+
+        internal void ClearRailSegmentVehicle(Entity vehicle)
+        {
+            if (vehicle != Entity.Null)
+                m_Store.RailSegmentSessions.Remove(vehicle);
+        }
+
+        internal void ClearRailSegmentLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+            List<Entity> remove = m_Store.RailSegmentSessions
+                .Where(pair => pair.Value != null && pair.Value.Line == line)
+                .Select(pair => pair.Key)
+                .ToList();
+            for (int i = 0; i < remove.Count; i++)
+                m_Store.RailSegmentSessions.Remove(remove[i]);
+        }
+
+        internal void RecordRailSegmentArrival(
+            Entity vehicle,
+            Entity line,
+            Entity toWaypoint,
+            Entity toStop,
+            uint frame,
+            bool eligible)
+        {
+            if (!m_Store.RailSegmentSessions.TryGetValue(vehicle, out RailSegmentSession session))
+                return;
+
+            m_Store.RailSegmentSessions.Remove(vehicle);
+            if (!eligible
+                || session.Line != line
+                || toWaypoint == Entity.Null
+                || toStop == Entity.Null
+                || frame <= session.StartFrame)
+            {
+                return;
+            }
+
+            RailSegmentKey key = new RailSegmentKey(
+                line,
+                session.FromWaypoint,
+                session.FromStop,
+                toWaypoint,
+                toStop);
+            uint frames = frame - session.StartFrame;
+            if (frames == 0u)
+                return;
+
+            if (!m_Store.RailSegments.TryGetValue(key, out RailSegmentObservation observation))
+            {
+                observation = new RailSegmentObservation
+                {
+                    AverageFrames = frames,
+                    SampleCount = 1,
+                    LastObservedFrame = frame
+                };
+                m_Store.RailSegments[key] = observation;
+                return;
+            }
+
+            int count = Math.Min(32, Math.Max(1, observation.SampleCount));
+            observation.AverageFrames = (observation.AverageFrames * count + frames) / (count + 1);
+            observation.SampleCount = Math.Min(32, count + 1);
+            observation.LastObservedFrame = frame;
+        }
+
+        internal bool TryRailSegment(
+            RailSegmentKey key,
+            out RailSegmentObservation observation)
+        {
+            if (m_Store.RailSegments.TryGetValue(key, out RailSegmentObservation value)
+                && value != null
+                && value.AverageFrames > 0f
+                && value.SampleCount > 0)
+            {
+                observation = value;
+                return true;
+            }
+
+            observation = null;
+            return false;
+        }
+
+        internal IEnumerable<KeyValuePair<RailSegmentKey, RailSegmentObservation>> RailSegmentValues =>
+            m_Store.RailSegments;
+
+        internal void RestoreRailSegment(
+            RailSegmentKey key,
+            float averageFrames,
+            int sampleCount,
+            uint lastObservedFrame)
+        {
+            if (key.Line == Entity.Null
+                || key.FromWaypoint == Entity.Null
+                || key.FromStop == Entity.Null
+                || key.ToWaypoint == Entity.Null
+                || key.ToStop == Entity.Null
+                || float.IsNaN(averageFrames)
+                || float.IsInfinity(averageFrames)
+                || averageFrames <= 0f
+                || sampleCount <= 0)
+            {
+                return;
+            }
+
+            m_Store.RailSegments[key] = new RailSegmentObservation
+            {
+                AverageFrames = averageFrames,
+                SampleCount = Math.Min(32, sampleCount),
+                LastObservedFrame = lastObservedFrame
+            };
+        }
+
+        internal string Stop(
             Entity vehicle,
             Entity line,
             Entity station,
+            string stopKey,
             ResolvedStopKind kind,
             int waypointIndex,
             bool isOrigin,
             bool arrival,
             string clockTime,
+            ClockSnapshot clock,
             uint frame)
         {
-            if (vehicle == Entity.Null || line == Entity.Null || station == Entity.Null || m_Store.Session == null)
-                return;
-
-            Trip observedTrip = ResolveTrip(
-                vehicle,
-                TryGetObservedVehicleTargetMin(vehicle),
-                line);
-            if (observedTrip == null)
-                return;
-
-            StopEvent stopEvent = new StopEvent
-            {
-                EventId = "stop|" + vehicle.Index + "|" + station.Index + "|" + frame,
-                EventType = arrival ? "arrival" : "departure",
-                TripId = observedTrip.Id,
-                RowId = observedTrip.RowId,
-                LineId = observedTrip.LineId,
-                ServiceDate = observedTrip.ServiceDate,
-                ServiceDayIndex = observedTrip.ServiceDayIndex,
-                OccurrenceIndex = observedTrip.OccurrenceIndex,
-                Line = line,
-                Vehicle = vehicle,
-                TargetMin = observedTrip.TargetMin,
-                Station = station,
-                Kind = kind,
-                WaypointIndex = waypointIndex,
-                IsOrigin = isOrigin,
-                ArrivalTime = arrival ? clockTime : string.Empty,
-                DepartureTime = arrival ? string.Empty : clockTime,
-                ArrivalFrame = arrival ? frame : 0,
-                DepartureFrame = arrival ? 0 : frame,
-                UpdatedFrame = frame
-            };
-            m_Store.Session.Stops.Add(stopEvent);
-            Dispatch.Observation.Trips.Trim(m_Store.Session.Stops, 256);
-            m_Store.Session.UpdatedFrame = frame;
+            return RecordMonitorStop(vehicle, station, stopKey, waypointIndex, arrival, clock, frame);
         }
 
         internal void Hold(
@@ -494,7 +1079,9 @@ namespace RapidTransitMod.Dispatch.Observation
             Session session = m_Store.Session;
             if (session == null)
             {
-                TripDto[] emptyTrips = Array.Empty<TripDto>();
+                TripDto[] formalTrips = FormalMonitorTrips()
+                    .Select(BuildMonitorTripDto)
+                    .ToArray();
                 StopDto[] emptyStops = Array.Empty<StopDto>();
                 BypassDto[] emptyBypassEvents = Array.Empty<BypassDto>();
                 CorridorDto[] emptyCorridors = Array.Empty<CorridorDto>();
@@ -502,9 +1089,9 @@ namespace RapidTransitMod.Dispatch.Observation
                 {
                     schemaVersion = 2,
                     snapshotId = string.Empty,
-                    status = "empty",
+                    status = MonitorSnapshotStatus(formalTrips.Length > 0 ? "active" : "empty"),
                     generatedAtFrame = m_Port.Frame(),
-                    appliedTrips = emptyTrips,
+                    appliedTrips = formalTrips,
                     stopEvents = emptyStops,
                     bypassEvents = emptyBypassEvents,
                     corridorPassages = emptyCorridors,
@@ -513,7 +1100,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     attainmentReport = BuildReport(
                         baselineRows,
                         plannerContracts,
-                        emptyTrips,
+                        formalTrips,
                         emptyBypassEvents)
                 };
             }
@@ -532,7 +1119,7 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 schemaVersion = 2,
                 snapshotId = session.SnapshotId,
-                status = session.Status,
+                status = MonitorSnapshotStatus(session.Status),
                 generatedAtFrame = m_Port.Frame(),
                 appliedAtFrame = session.AppliedFrame,
                 lastUpdatedFrame = session.UpdatedFrame,
@@ -548,6 +1135,61 @@ namespace RapidTransitMod.Dispatch.Observation
                     appliedTrips,
                     bypassEvents)
             };
+        }
+
+        private IEnumerable<MonitorTrip> FormalMonitorTrips()
+        {
+            foreach (MonitorTrip trip in m_Store.ActiveTrips.Values)
+                if (trip != null)
+                    yield return trip;
+            foreach (MonitorDateSlot slot in m_Store.DateSlots.Values)
+                foreach (MonitorTrip trip in slot.Trips.Values)
+                    if (trip != null)
+                        yield return trip;
+        }
+
+        private string MonitorSnapshotStatus(string normalStatus)
+        {
+            return m_Store.MonitorOverflowed ? "overflow" : normalStatus;
+        }
+
+        private TripDto BuildMonitorTripDto(MonitorTrip trip)
+        {
+            int actualMinute = trip.ActualStartMinute >= 0
+                ? trip.ActualStartMinute % 1440
+                : -1;
+            int delta = actualMinute >= 0
+                ? NormalizeMinuteDelta(actualMinute - trip.SlotMinute)
+                : 0;
+            return new TripDto
+            {
+                tripObservationId = trip.Key,
+                state = trip.State.ToString().ToLowerInvariant(),
+                lineId = trip.LineId,
+                rowId = trip.RowId,
+                serviceKind = trip.ServiceKind,
+                plannedTime = m_Port.Slot(trip.SlotMinute),
+                serviceDate = FormatDateKey(trip.ServiceDateKey),
+                serviceDayIndex = 0,
+                occurrenceIndex = 1,
+                actualDepartureTime = actualMinute >= 0 ? m_Port.Slot(actualMinute) : string.Empty,
+                targetMinute = trip.SlotMinute,
+                actualDepartureMinute = actualMinute,
+                deltaMinutes = delta,
+                vehicleIndex = trip.Vehicle != Entity.Null ? trip.Vehicle.Index : -1,
+                launchFrame = trip.LaunchFrame,
+                bindingConfidence = trip.State == MonitorTripState.Missed ? "final-missed" : "vehicle-launch",
+                reasonCode = trip.State.ToString().ToLowerInvariant(),
+                lastUpdatedFrame = trip.UpdatedFrame
+            };
+        }
+
+        private static string FormatDateKey(int dateKey)
+        {
+            DateTime date = ParseDateKey(dateKey);
+            return date == DateTime.MinValue.Date
+                ? string.Empty
+                : date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
 
         private TripDto BuildTripDto(Trip trip)
