@@ -209,6 +209,7 @@ namespace RapidTransitMod.TrackModel
         ApproachSplitBoundary = 3,
         DepartureSplitBoundary = 4,
         OutsideEndpointBoundary = 5,
+        BreakBoundary = 6,
     }
 
     internal readonly struct TraversalEvent
@@ -221,6 +222,7 @@ namespace RapidTransitMod.TrackModel
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
         public readonly float StopFrames;
+        public readonly string StationId;
 
         public TraversalEvent(
             int eventIndex,
@@ -230,7 +232,8 @@ namespace RapidTransitMod.TrackModel
             int passIndex,
             int startAtomIndex,
             int endAtomIndexExclusive,
-            float stopFrames)
+            float stopFrames,
+            string stationId = "")
         {
             EventIndex = eventIndex;
             Kind = kind;
@@ -240,6 +243,7 @@ namespace RapidTransitMod.TrackModel
             StartAtomIndex = startAtomIndex;
             EndAtomIndexExclusive = endAtomIndexExclusive;
             StopFrames = stopFrames;
+            StationId = stationId ?? string.Empty;
         }
     }
 
@@ -309,6 +313,23 @@ namespace RapidTransitMod.TrackModel
         }
     }
 
+    internal readonly struct RunChartTurnbackRegion
+    {
+        public readonly int BoundaryAtomIndex;
+        public readonly int StartAtomIndex;
+        public readonly int EndAtomIndexExclusive;
+
+        public RunChartTurnbackRegion(
+            int boundaryAtomIndex,
+            int startAtomIndex,
+            int endAtomIndexExclusive)
+        {
+            BoundaryAtomIndex = boundaryAtomIndex;
+            StartAtomIndex = startAtomIndex;
+            EndAtomIndexExclusive = endAtomIndexExclusive;
+        }
+    }
+
     internal readonly struct TrackTurnbackStationBoundary
     {
         public readonly Entity StationEntity;
@@ -347,6 +368,8 @@ namespace RapidTransitMod.TrackModel
     {
         public Entity LineEntity;
         public ulong Signature;
+        public ulong TraversalSignature;
+        public bool ChainComplete;
         public List<TrackAtom> TrackAtoms = new List<TrackAtom>();
         public Entity[] AtomStationBuildings = Array.Empty<Entity>();
         public Dictionary<Entity, List<int>> AtomIndicesByLane = new Dictionary<Entity, List<int>>();
@@ -362,6 +385,7 @@ namespace RapidTransitMod.TrackModel
         public List<ProtectedSharedInterval> ProtectedSharedIntervals = new List<ProtectedSharedInterval>();
         public List<ProtectedIntervalSummary> ProtectedIntervalSummaries = new List<ProtectedIntervalSummary>();
         public List<TurnbackBoundary> TurnbackBoundaries = new List<TurnbackBoundary>();
+        public List<RunChartTurnbackRegion> RunChartTurnbackRegions = new List<RunChartTurnbackRegion>();
         public LocalBypassWaypointSceneBinding[] LocalBypassWaypointScenes = Array.Empty<LocalBypassWaypointSceneBinding>();
         public uint LocalBypassWaypointScenesVersion;
         public uint SharedRunsVersion;

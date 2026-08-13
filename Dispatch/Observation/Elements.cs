@@ -276,6 +276,38 @@ namespace RapidTransitMod
         }
     }
 
+    [InternalBufferCapacity(1)]
+    public struct MonitorIntegrityElement : IBufferElementData, ISerializable
+    {
+        public int m_Version;
+        public int m_DataComplete;
+        public int m_DroppedTripCount;
+        public int m_PersistenceHealthy;
+        public FixedString64Bytes m_LastIssueCode;
+        public int m_IssueCount;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_Version);
+            writer.Write(m_DataComplete);
+            writer.Write(m_DroppedTripCount);
+            writer.Write(m_PersistenceHealthy);
+            writer.Write(m_LastIssueCode.ToString());
+            writer.Write(m_IssueCount);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_Version);
+            reader.Read(out m_DataComplete);
+            reader.Read(out m_DroppedTripCount);
+            reader.Read(out m_PersistenceHealthy);
+            reader.Read(out string issueCode);
+            m_LastIssueCode = issueCode ?? string.Empty;
+            reader.Read(out m_IssueCount);
+        }
+    }
+
     [InternalBufferCapacity(0)]
     public struct MonitorTripElement : IBufferElementData, ISerializable
     {
@@ -292,11 +324,11 @@ namespace RapidTransitMod
         public Entity m_Vehicle;
         public int m_ServiceDateKey;
         public int m_SlotMinute;
-        public int m_ActualStartMinute;
         public int m_NextArrivalOrder;
         public int m_VisibleStopCount;
         public int m_SuppressPlanFrom;
         public int m_State;
+        public int m_EndReason;
         public uint m_LaunchFrame;
         public uint m_UpdatedFrame;
         public int m_StopCount;
@@ -316,11 +348,14 @@ namespace RapidTransitMod
             writer.Write(m_Vehicle);
             writer.Write(m_ServiceDateKey);
             writer.Write(m_SlotMinute);
-            writer.Write(m_ActualStartMinute);
+            if (m_Version == 1)
+                writer.Write(0);
             writer.Write(m_NextArrivalOrder);
             writer.Write(m_VisibleStopCount);
             writer.Write(m_SuppressPlanFrom);
             writer.Write(m_State);
+            if (m_Version >= 3)
+                writer.Write(m_EndReason);
             writer.Write(m_LaunchFrame);
             writer.Write(m_UpdatedFrame);
             writer.Write(m_StopCount);
@@ -347,11 +382,15 @@ namespace RapidTransitMod
             reader.Read(out m_Vehicle);
             reader.Read(out m_ServiceDateKey);
             reader.Read(out m_SlotMinute);
-            reader.Read(out m_ActualStartMinute);
+            if (m_Version == 1)
+                reader.Read(out int legacyActualStartMinute);
             reader.Read(out m_NextArrivalOrder);
             reader.Read(out m_VisibleStopCount);
             reader.Read(out m_SuppressPlanFrom);
             reader.Read(out m_State);
+            m_EndReason = 0;
+            if (m_Version >= 3)
+                reader.Read(out m_EndReason);
             reader.Read(out m_LaunchFrame);
             reader.Read(out m_UpdatedFrame);
             reader.Read(out m_StopCount);

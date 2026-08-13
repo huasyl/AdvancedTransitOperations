@@ -27,6 +27,7 @@ namespace RapidTransitMod
         public Entity Entity;
         public string Id = string.Empty;
         public string StableSignature = string.Empty;
+        public string ModelSignature = string.Empty;
         public string Name = string.Empty;
         public string Kind = "local";
         public string TransportType = string.Empty;

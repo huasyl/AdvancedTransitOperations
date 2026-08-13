@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import PlannerPage from "./pages/planner/PlannerPage";
 import BroadcastPage from "./pages/broadcast/BroadcastPage";
 import { useNativeScheduleI18n } from "./shared/workbench-i18n";
@@ -53,6 +53,7 @@ export default function WorkbenchApp({ registerHostActions }) {
   const [plannerEnterSequence, setPlannerEnterSequence] = useState(0);
   const [broadcastEnterSequence, setBroadcastEnterSequence] = useState(0);
   const [debugToolsEnabled, setDebugToolsEnabled] = useState(getWorkbenchDebugToolsEnabled);
+  const [snapshotsByMode, setSnapshotsByMode] = useState({});
   const [stickyPages, setStickyPages] = useState({
     overview: false,
     passenger: false
@@ -195,6 +196,29 @@ export default function WorkbenchApp({ registerHostActions }) {
       : pageTransportModes[pageKey] || DEFAULT_TRANSPORT_MODE
   );
   const showPlannerModeUnsupported = isModeUnsupportedForPlanner(activeTransportMode);
+  const shareSnapshot = useCallback((mode, snapshot) => {
+    if (!mode) {
+      return;
+    }
+    if (!snapshot) {
+      setSnapshotsByMode((current) => {
+        if (!current[mode]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[mode];
+        return next;
+      });
+      return;
+    }
+    if (typeof snapshot !== "object"
+      || (snapshot.mode && snapshot.mode !== mode)) {
+      return;
+    }
+    setSnapshotsByMode((current) => current[mode] === snapshot
+      ? current
+      : { ...current, [mode]: snapshot });
+  }, []);
 
   function pageClassName(pageKey) {
     if (renderedPage === pageKey) {
@@ -258,13 +282,18 @@ export default function WorkbenchApp({ registerHostActions }) {
             registerHostActions={registerHostActions}
             activeTransportMode={modeForPage("schedule")}
             isActive={renderedPage === "schedule"}
+            onSnapshot={shareSnapshot}
           />
         </div>
         <div
           className={pageClassName("timetable")}
           data-workbench-page="timetable"
         >
-          <TimetablePage />
+          <TimetablePage
+            activeTransportMode={modeForPage("timetable")}
+            isActive={renderedPage === "timetable"}
+            sharedSnapshot={snapshotsByMode[modeForPage("timetable")] || null}
+          />
         </div>
         <div
           className={pageClassName("planner")}

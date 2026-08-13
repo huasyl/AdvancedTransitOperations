@@ -17,6 +17,7 @@ namespace RapidTransitMod.TrackModel
     {
         private readonly TrackSupport m_Support;
         private readonly TrackBuild m_Build;
+        private readonly TrackProfile m_Profile;
         private readonly SharedIndex m_Shared;
         private readonly TrackIntervals m_Intervals;
         private readonly TrackDiag m_Diag;
@@ -24,12 +25,14 @@ namespace RapidTransitMod.TrackModel
         internal TrackDump(
             TrackSupport support,
             TrackBuild build,
+            TrackProfile profile,
             SharedIndex shared,
             TrackIntervals intervals,
             TrackDiag diag)
         {
             m_Support = support;
             m_Build = build;
+            m_Profile = profile;
             m_Shared = shared;
             m_Intervals = intervals;
             m_Diag = diag;
@@ -635,6 +638,7 @@ namespace RapidTransitMod.TrackModel
             AppendReplayRawSegments(sb, line);
             AppendReplayOfficialSegmentStructures(sb, line, waypoints);
             AppendReplayTrackAtoms(sb, chain);
+            m_Profile.AppendRunChartTramDump(sb, chain, line);
             AppendReplaySegmentRanges(sb, chain);
             AppendReplayControlPoints(sb, chain);
             AppendReplayControlEdges(sb, chain);
@@ -980,8 +984,11 @@ namespace RapidTransitMod.TrackModel
                   .Append(" prev=").Append(atom.Key.PreviousTarget.Index)
                   .Append(" next=").Append(atom.Key.NextTarget.Index)
                   .Append(" source=").Append(atom.SourceTarget.Index)
+                  .Append(" delta=").Append(atom.TargetDelta.x.ToString("0.0000"))
+                  .Append("..").Append(atom.TargetDelta.y.ToString("0.0000"))
                   .Append(" flags=").Append(atom.SourceFlags)
-                  .Append(" class=").Append(atom.AtomClass);
+                  .Append(" class=").Append(atom.AtomClass)
+                  .Append(" dir=").Append(atom.TraversalDir);
             }
             sb.AppendLine();
         }

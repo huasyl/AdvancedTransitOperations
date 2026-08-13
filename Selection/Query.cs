@@ -74,6 +74,10 @@ namespace RapidTransitMod
         public string CurrentStationName;
         public string NextPhysicalStationName;
         public string NextStopStationName;
+        public int NextPlannedArrivalMinute;
+        public int PlannedArrivalMinute;
+        public int ActualArrivalMinute;
+        public int PlannedDepartureMinute;
         public string AlertText;
     }
 
@@ -83,6 +87,7 @@ namespace RapidTransitMod
         private readonly Game.Simulation.SimulationSystem m_SimulationSystem;
         private readonly VehicleView m_VehicleView;
         private readonly SelectPort.SessionArrival m_TrySessionArrival;
+        private readonly SelectPort.VehicleTimes m_TryVehicleTimes;
         private readonly Unity.Collections.NativeHashMap<Entity, int> m_SpawningLines;
         private readonly Dictionary<Entity, string> m_LineLastSpawnTriggerSummary;
         private readonly Dictionary<Entity, string> m_LineLastVehicleRegisterSummary;
@@ -122,6 +127,7 @@ namespace RapidTransitMod
             Func<ClockSnapshot> clockSnapshot,
             VehicleView vehicleView,
             SelectPort.SessionArrival trySessionArrival,
+            SelectPort.VehicleTimes tryVehicleTimes,
             Unity.Collections.NativeHashMap<Entity, int> spawningLines,
             Dictionary<Entity, string> lineLastSpawnTriggerSummary,
             Dictionary<Entity, string> lineLastVehicleRegisterSummary,
@@ -159,6 +165,7 @@ namespace RapidTransitMod
             m_ClockSnapshot = clockSnapshot;
             m_VehicleView = vehicleView;
             m_TrySessionArrival = trySessionArrival;
+            m_TryVehicleTimes = tryVehicleTimes;
             m_SpawningLines = spawningLines;
             m_LineLastSpawnTriggerSummary = lineLastSpawnTriggerSummary;
             m_LineLastVehicleRegisterSummary = lineLastVehicleRegisterSummary;
@@ -326,6 +333,19 @@ namespace RapidTransitMod
             int targetMinute = m_VehicleView.TryGetTarget(vehicle, out int targetSlotMinute) ? targetSlotMinute : -1;
             int currentMinute = m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute) ? currentSlotMinute : -1;
             (string currentStationName, string nextPhysicalStationName, string nextStopStationName) = m_GetStationContext(vehicle, line);
+            int nextPlannedArrivalMinute = -1;
+            int plannedArrivalMinute = -1;
+            int actualArrivalMinute = -1;
+            int plannedDepartureMinute = -1;
+            if (m_TryVehicleTimes != null)
+            {
+                m_TryVehicleTimes(
+                    vehicle,
+                    out nextPlannedArrivalMinute,
+                    out plannedArrivalMinute,
+                    out actualArrivalMinute,
+                    out plannedDepartureMinute);
+            }
 
             data = new VehicleSelectData
             {
@@ -351,6 +371,10 @@ namespace RapidTransitMod
                 CurrentStationName = currentStationName ?? string.Empty,
                 NextPhysicalStationName = nextPhysicalStationName ?? string.Empty,
                 NextStopStationName = nextStopStationName ?? string.Empty,
+                NextPlannedArrivalMinute = nextPlannedArrivalMinute,
+                PlannedArrivalMinute = plannedArrivalMinute,
+                ActualArrivalMinute = actualArrivalMinute,
+                PlannedDepartureMinute = plannedDepartureMinute,
                 AlertText = isManagedVehicle
                     ? m_BuildVehicleAlert(vehicle, line, nowMinute, targetMinute)
                     : (line != Entity.Null ? "using-native-fallback" : "vehicle-not-tracked")

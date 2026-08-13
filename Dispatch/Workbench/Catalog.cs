@@ -172,6 +172,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 OriginMessageKey = originMessageKey
             };
             runtimeLine.StableSignature = StableRuntimeSignature(runtimeLine);
+            runtimeLine.ModelSignature = ModelSignature(line);
             return true;
         }
 
@@ -429,6 +430,25 @@ namespace RapidTransitMod.Dispatch.Workbench
             sb.Append("|stations=").Append(runtimeLine.StationCount);
             sb.Append("|stops=");
             AppendStopOrderSignature(runtimeLine.Entity, sb);
+            return sb.ToString();
+        }
+
+        private string ModelSignature(Entity line)
+        {
+            if (line == Entity.Null || !m_EntityManager.HasBuffer<VehicleModel>(line))
+                return string.Empty;
+
+            DynamicBuffer<VehicleModel> models = m_EntityManager.GetBuffer<VehicleModel>(line, true);
+            StringBuilder sb = new StringBuilder(48 + models.Length * 24);
+            sb.Append(models.Length);
+            for (int i = 0; i < models.Length; i++)
+            {
+                VehicleModel model = models[i];
+                sb.Append('|').Append(model.m_PrimaryPrefab.Index).Append(':')
+                    .Append(model.m_PrimaryPrefab.Version).Append('/')
+                    .Append(model.m_SecondaryPrefab.Index).Append(':')
+                    .Append(model.m_SecondaryPrefab.Version);
+            }
             return sb.ToString();
         }
 

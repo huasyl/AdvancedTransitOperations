@@ -54,5 +54,13 @@ export default function TimetableIcon({ name, className = "" }) {
     return <svg {...common}><path d="m6 9 6 6 6-6" /></svg>;
   }
 
+  if (name === "chevron-left") {
+    return <svg {...common}><path d="m15 6-6 6 6 6" /></svg>;
+  }
+
+  if (name === "chevron-right") {
+    return <svg {...common}><path d="m9 6 6 6-6 6" /></svg>;
+  }
+
   return null;
 }

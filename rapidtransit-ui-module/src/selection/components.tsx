@@ -2,7 +2,7 @@ import { trigger } from "cs2/api";
 import React, { useState } from "react";
 import { GROUP } from "./selectionBindings";
 import { COLORS } from "./selectionStyles";
-import { formatValue } from "./selectionViewModel";
+import { formatServiceMinute, formatValue } from "./selectionViewModel";
 
 export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; dense?: boolean; first?: boolean; alert?: boolean }>) {
   const children = React.Children.toArray(props.children);
@@ -29,7 +29,7 @@ export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; 
 
 export function DetailRow(props: {
   label?: string;
-  value?: string;
+  value?: string | number;
   valueKind?: string;
   strong?: boolean;
   dense?: boolean;
@@ -73,6 +73,41 @@ export function DetailRow(props: {
         }}
       >
         {formatValue(props.value, props.valueKind, props.t)}
+      </div>
+    </div>
+  );
+}
+
+export function ArrivalTimesRow(props: {
+  plannedArrivalMinute?: number;
+  actualArrivalMinute?: number;
+  t: (key: string) => string;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        minHeight: "28rem"
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", flexShrink: 0 }}>
+        <div style={{ fontSize: "14rem", lineHeight: "20rem", color: COLORS.text }}>
+          {props.t("scheduledArrival")}
+        </div>
+        <div style={{ marginLeft: "8rem", fontSize: "15rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
+          {formatServiceMinute(props.plannedArrivalMinute)}
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", flexShrink: 0, marginLeft: "12rem" }}>
+        <div style={{ fontSize: "14rem", lineHeight: "20rem", color: COLORS.text }}>
+          {props.t("actualArrival")}
+        </div>
+        <div style={{ marginLeft: "8rem", fontSize: "15rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
+          {formatServiceMinute(props.actualArrivalMinute)}
+        </div>
       </div>
     </div>
   );

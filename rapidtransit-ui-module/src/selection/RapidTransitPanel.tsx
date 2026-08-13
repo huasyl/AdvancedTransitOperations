@@ -5,7 +5,7 @@ import { useLocalPanelOpen, panelDataJson$, devSightJson$, devSightVisible$, eta
 import { useT } from "./selectionI18n";
 import { COLORS } from "./selectionStyles";
 import { buildDetailRows, DevSightData, EtaHotStatusData, EtaSnapshotStatusData, formatAlertText, PanelData } from "./selectionViewModel";
-import { ActionButton, BypassToggleRow, DetailRow, DevSightBlock, PanelHeader, SectionCard } from "./components";
+import { ActionButton, ArrivalTimesRow, BypassToggleRow, DetailRow, DevSightBlock, PanelHeader, SectionCard } from "./components";
 
 export function RapidTransitPanel() {
   const t = useT();
@@ -153,13 +153,23 @@ export function RapidTransitPanel() {
                 </SectionCard>
                 <SectionCard dense={true}>
                   {detailRows.map((row, index) => (
-                    <DetailRow
-                      key={(row.label || "detail") + ":" + index}
-                      label={row.label}
-                      value={row.value}
-                      dense={true}
-                      t={t}
-                    />
+                    row.rowKind === "arrivalTimes" ? (
+                      <ArrivalTimesRow
+                        key={(row.label || "arrivalTimes") + ":" + index}
+                        plannedArrivalMinute={row.plannedArrivalMinute}
+                        actualArrivalMinute={row.actualArrivalMinute}
+                        t={t}
+                      />
+                    ) : (
+                      <DetailRow
+                        key={(row.label || "detail") + ":" + index}
+                        label={row.label}
+                        value={row.value}
+                        valueKind={row.valueKind}
+                        dense={true}
+                        t={t}
+                      />
+                    )
                   ))}
                 </SectionCard>
                 {panelData.showAlerts ? (

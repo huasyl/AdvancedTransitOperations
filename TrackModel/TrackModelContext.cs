@@ -48,6 +48,8 @@ namespace RapidTransitMod
             public DepartFrames GetDepartFrames;
             public Func<Entity, Entity> ResolveStop;
             public Func<Entity, Entity> FindStation;
+            public Func<Entity, string> StopName;
+            public Func<Entity, string> StopKey;
             public Func<Entity, Entity> ResolveStation;
             public Func<Entity, bool> IsLocal;
             public Func<Entity, bool> IsExpress;
@@ -122,6 +124,8 @@ namespace RapidTransitMod
         public float ComputeDepartureToWaypointFramesFromProfile(LineTimeProfileHeader profile, int fromWaypointIndex, int targetWaypointIndex) => m_Args.GetDepartFrames(profile, fromWaypointIndex, targetWaypointIndex);
         public Entity Stop(Entity waypoint) => m_Args.ResolveStop(waypoint);
         public Entity StationOf(Entity stop) => m_Args.FindStation(stop);
+        public string StopName(Entity stop) => m_Args.StopName?.Invoke(stop) ?? string.Empty;
+        public string StopKey(Entity stop) => m_Args.StopKey?.Invoke(stop) ?? string.Empty;
         public Entity ResolvePassingStation(Entity entity) => m_Args.ResolveStation(entity);
         public bool IsAppliedLocal(Entity line) => m_Args.IsLocal(line);
         public bool IsAppliedExpress(Entity line) => m_Args.IsExpress(line);

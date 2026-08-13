@@ -58,30 +58,54 @@ namespace RapidTransitMod.Dispatch.Workbench
             return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.Status(operationId) ?? string.Empty;
         }
 
-        internal static string StartRunChart(string requestJson)
+        internal static string StartRunTime(string requestJson)
         {
-            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.StartRunChart(requestJson) ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.StartRunTime(requestJson) ?? string.Empty;
         }
 
-        internal static string StatusRunChart(string queryId)
+        internal static string RunTimeStatus(string requestJson)
         {
-            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.StatusRunChart(queryId) ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.RunTimeStatus(requestJson) ?? string.Empty;
         }
 
-        internal static string CancelRunChart(string queryId)
+        internal static string CancelRunTime(string requestJson)
         {
-            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.CancelRunChart(queryId) ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.CancelRunTime(requestJson) ?? string.Empty;
         }
 
-        internal static string ConsumeRunChart(string queryId)
+        internal static string CloseRunTimeEditor(string requestJson)
         {
-            ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.ConsumeRunChart(queryId);
-            return string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.CloseRunTimeEditor(requestJson) ?? string.Empty;
         }
 
-        internal static string Monitor()
+        internal static string LoadTimetableLineLayout(string requestJson)
         {
-            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.Monitor() ?? string.Empty;
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.LoadTimetableLineLayout(requestJson) ?? string.Empty;
+        }
+
+        internal static string SaveScheduleBatch(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.SaveScheduleBatch(requestJson) ?? string.Empty;
+        }
+
+        internal static string RunChartSections(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.RunChartSections(requestJson) ?? string.Empty;
+        }
+
+        internal static string RunChartStations(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.RunChartStations(requestJson) ?? string.Empty;
+        }
+
+        internal static string MonitorHeaders(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.MonitorHeaders(requestJson) ?? string.Empty;
+        }
+
+        internal static string MonitorDetail(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.MonitorDetail(requestJson) ?? string.Empty;
         }
 
         internal static string Legacy(string requestJson)

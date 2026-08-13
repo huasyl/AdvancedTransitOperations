@@ -520,12 +520,147 @@ namespace RapidTransitMod.Dispatch.Lines
             if (bestWaypointIndex < 0)
                 return false;
 
+            if (boardingWaypointIndex >= 0 && bestWaypointIndex != boardingWaypointIndex)
+            {
+                TraceTrackMismatch(
+                    vehicle,
+                    ways,
+                    chain,
+                    cursor,
+                    targetWaypointIndex,
+                    boardingWaypointIndex,
+                    bestWaypointIndex,
+                    bestWindowStart,
+                    bestWindowEndExclusive);
+            }
+
             waypointIndex = bestWaypointIndex;
             segmentIndex = cursor.SegmentIndex;
             atomIndex = cursor.AtomCursorIndex;
             selectedWindowStart = bestWindowStart;
             selectedWindowEndExclusive = bestWindowEndExclusive;
             return true;
+        }
+
+        private void TraceTrackMismatch(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> ways,
+            LineTrackChain chain,
+            VehicleTrackCursor cursor,
+            int targetWaypointIndex,
+            int boardingWaypointIndex,
+            int selectedWaypointIndex,
+            int selectedWindowStart,
+            int selectedWindowEndExclusive)
+        {
+            if (!RtLog.VerboseEnabled)
+                return;
+
+            TryWindow(
+                chain,
+                boardingWaypointIndex,
+                cursor.AtomCursorIndex,
+                out int boardingWindowStart,
+                out int boardingWindowEndExclusive);
+            Entity frontLane = Entity.Null;
+            Entity rearLane = Entity.Null;
+            float frontCurve = -1f;
+            float rearCurve = -1f;
+            if (m_Runtime.EntityManager.HasComponent<TrainCurrentLane>(vehicle))
+            {
+                TrainCurrentLane currentLane = m_Runtime.EntityManager.GetComponentData<TrainCurrentLane>(vehicle);
+                frontLane = currentLane.m_Front.m_Lane;
+                rearLane = currentLane.m_Rear.m_Lane;
+                frontCurve = currentLane.m_Front.m_CurvePosition.x;
+                rearCurve = currentLane.m_Rear.m_CurvePosition.x;
+            }
+
+            Entity boardingWaypoint = boardingWaypointIndex >= 0 && boardingWaypointIndex < ways.Length
+                ? ways[boardingWaypointIndex].m_Waypoint
+                : Entity.Null;
+            Entity boardingStop = boardingWaypoint != Entity.Null
+                && m_Runtime.EntityManager.HasComponent<Connected>(boardingWaypoint)
+                    ? m_Runtime.EntityManager.GetComponentData<Connected>(boardingWaypoint).m_Connected
+                    : Entity.Null;
+            Entity stopVehicle = boardingStop != Entity.Null
+                && m_Runtime.EntityManager.HasComponent<BoardingVehicle>(boardingStop)
+                    ? m_Runtime.EntityManager.GetComponentData<BoardingVehicle>(boardingStop).m_Vehicle
+                    : Entity.Null;
+            RtLog.Diagnostics(
+                "[TrackAnchorMismatch] frame=" + m_Runtime.m_SimulationSystem.frameIndex
+                + " vehicle=" + vehicle.Index
+                + " line=" + m_Runtime.m_Resolve.Line(vehicle).Index
+                + " targetWp=" + targetWaypointIndex
+                + " boardingWp=" + boardingWaypointIndex
+                + " selectedWp=" + selectedWaypointIndex
+                + " cursorSource=" + cursor.Source
+                + " cursorConfidence=" + cursor.Confidence.ToString("0.00")
+                + " cursorSeg=" + cursor.SegmentIndex
+                + " cursorAtom=" + cursor.AtomCursorIndex
+                + " cursorPos=" + cursor.AtomPosition01.ToString("0.000")
+                + " boardingWindow=" + boardingWindowStart + ".." + boardingWindowEndExclusive
+                + " selectedWindow=" + selectedWindowStart + ".." + selectedWindowEndExclusive
+                + " frontLane=" + frontLane.Index
+                + " frontCurve=" + frontCurve.ToString("0.000")
+                + " rearLane=" + rearLane.Index
+                + " rearCurve=" + rearCurve.ToString("0.000")
+                + " boardingStop=" + boardingStop.Index
+                + " stopVehicle=" + stopVehicle.Index
+                + " frontLaneTrace=" + FormatLaneTrace(frontLane)
+                + " boardingLaneTrace=" + FormatWindowTrace(chain, boardingWindowStart, boardingWindowEndExclusive));
+        }
+
+        private string FormatLaneTrace(Entity lane)
+        {
+            if (lane == Entity.Null)
+                return "null";
+
+            string trace = string.Empty;
+            Entity current = lane;
+            for (int depth = 0; depth < 8 && current != Entity.Null; depth++)
+            {
+                if (!m_Runtime.EntityManager.Exists(current))
+                    return trace + (trace.Length == 0 ? string.Empty : ">") + current.Index + "[missing]";
+
+                Entity station = m_Runtime.m_Resolve.PassingStation(current);
+                trace += (trace.Length == 0 ? string.Empty : ">")
+                    + current.Index
+                    + "[track=" + (m_Runtime.EntityManager.HasComponent<Game.Net.TrackLane>(current) ? 1 : 0)
+                    + ",edgeLane=" + (m_Runtime.EntityManager.HasComponent<Game.Net.EdgeLane>(current) ? 1 : 0)
+                    + ",connection=" + (m_Runtime.EntityManager.HasComponent<Game.Net.ConnectionLane>(current) ? 1 : 0)
+                    + ",edge=" + (m_Runtime.EntityManager.HasComponent<Game.Net.Edge>(current) ? 1 : 0)
+                    + ",node=" + (m_Runtime.EntityManager.HasComponent<Game.Net.Node>(current) ? 1 : 0)
+                    + ",subLanes=" + (m_Runtime.EntityManager.HasBuffer<Game.Net.SubLane>(current) ? 1 : 0)
+                    + ",station=" + station.Index
+                    + "]";
+
+                if (!m_Runtime.EntityManager.HasComponent<Owner>(current))
+                    break;
+
+                Entity owner = m_Runtime.EntityManager.GetComponentData<Owner>(current).m_Owner;
+                if (owner == Entity.Null || owner == current)
+                    break;
+                current = owner;
+            }
+
+            return trace;
+        }
+
+        private string FormatWindowTrace(LineTrackChain chain, int startAtomIndex, int endAtomIndexExclusive)
+        {
+            if (chain == null || startAtomIndex < 0 || endAtomIndexExclusive <= startAtomIndex)
+                return "none";
+
+            string trace = string.Empty;
+            int end = math.min(endAtomIndexExclusive, chain.TrackAtoms.Count);
+            for (int atomIndex = startAtomIndex; atomIndex < end; atomIndex++)
+            {
+                TrackAtom atom = chain.TrackAtoms[atomIndex];
+                trace += (trace.Length == 0 ? string.Empty : ";")
+                    + atomIndex + ":" + FormatLaneTrace(atom.Key.PhysicalLaneKey);
+            }
+
+            return trace;
         }
 
         private bool Boarding(Entity vehicle)

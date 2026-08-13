@@ -713,12 +713,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return;
             }
 
-            DateTime serviceDate = clock.NowDate;
-            if (clock.NowMinute < row.SlotMinute
-                && RapidTransitMod.Dispatch.Scheduling.ScheduleClock.CanLate(clock.NowMinute, row.SlotMinute))
-            {
-                serviceDate = serviceDate.AddDays(-1);
-            }
+            DateTime serviceDate = RapidTransitMod.Dispatch.Scheduling.ScheduleClock.ServiceDate(
+                clock,
+                row.SlotMinute);
 
             TimedStop[] stops = new TimedStop[row.TimedStops.Length];
             int[] waypoints = new int[row.WaypointIndices.Length];
@@ -766,14 +763,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (string.IsNullOrEmpty(stopSig)
                 || !string.Equals(plan.StopSig, stopSig, StringComparison.Ordinal)
                 || waypointIndices == null
-                || waypointIndices.Length < plan.Stops.Length)
+                || !TryProjectPlanWaypoints(plan.Stops.Length, waypointIndices, out int[] projected))
             {
                 ClearTimedPlan(vehicle);
                 QueueExpiredDwell(vehicle, nowFrame);
                 return false;
             }
 
-            plan.WaypointIndices = waypointIndices.Take(plan.Stops.Length).ToArray();
+            plan.WaypointIndices = projected;
             if (plan.ActiveStopOrder >= 0)
                 SetTimedDeadline(vehicle, plan, nowFrame, m_Clock());
             return true;
@@ -825,7 +822,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 || currentWaypoints == null
                 || snapshot.Stops.Length == 0
                 || snapshot.Stops.Length != snapshot.WaypointIndices.Length
-                || snapshot.Stops.Length > currentWaypoints.Length
+                || snapshot.Stops.Length > currentWaypoints.Length + 1
                 || snapshot.NextStopOrder < 0
                 || snapshot.NextStopOrder > snapshot.Stops.Length
                 || snapshot.ActiveStopOrder < -1
@@ -839,6 +836,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 return false;
             }
+
+            if (!TryProjectPlanWaypoints(snapshot.Stops.Length, currentWaypoints, out int[] projected))
+                return false;
 
             TimedStop[] stops = new TimedStop[snapshot.Stops.Length];
             for (int i = 0; i < stops.Length; i++)
@@ -856,7 +856,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 ServiceDate = snapshot.ServiceDate.Date,
                 SlotMinute = snapshot.SlotMinute,
                 Stops = stops,
-                WaypointIndices = currentWaypoints.Take(snapshot.Stops.Length).ToArray(),
+                WaypointIndices = projected,
                 NextStopOrder = snapshot.NextStopOrder,
                 ActiveStopOrder = snapshot.ActiveStopOrder,
                 ClockEpoch = m_Clock().ClockEpoch,
@@ -868,6 +868,28 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.TimedPlans[snapshot.Vehicle] = plan;
             if (plan.ActiveStopOrder >= 0 && HasOpenStopSession(snapshot.Vehicle))
                 BindTimedRestore(snapshot.Vehicle, snapshot.Line, m_Frame());
+            return true;
+        }
+
+        private static bool TryProjectPlanWaypoints(
+            int stopCount,
+            int[] currentWaypoints,
+            out int[] projected)
+        {
+            projected = Array.Empty<int>();
+            if (stopCount <= 0 || currentWaypoints == null || currentWaypoints.Length == 0)
+                return false;
+            if (stopCount <= currentWaypoints.Length)
+            {
+                projected = currentWaypoints.Take(stopCount).ToArray();
+                return true;
+            }
+            if (stopCount != currentWaypoints.Length + 1)
+                return false;
+
+            projected = new int[stopCount];
+            Array.Copy(currentWaypoints, projected, currentWaypoints.Length);
+            projected[projected.Length - 1] = currentWaypoints[0];
             return true;
         }
 

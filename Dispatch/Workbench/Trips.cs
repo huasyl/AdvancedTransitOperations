@@ -1,75 +1,52 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Game.Routes;
+using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Observation;
-using System.Runtime.Serialization;
-using Unity.Entities;
+using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Mathematics;
 
 namespace RapidTransitMod.Dispatch.Workbench
 {
     internal sealed class TripPort
     {
-        private readonly Func<Entity, Entity> m_Stop;
-        private readonly Func<Entity, Entity> m_Building;
-        private readonly Func<Entity, string> m_LineId;
-        private readonly Func<Entity, string> m_Kind;
-        private readonly Func<string, int> m_Minutes;
-        private readonly Func<string> m_Clock;
-        private readonly TryRouteProgress m_TryProgress;
-        private readonly TryVehicleState m_TryState;
         private readonly Func<IEnumerable<MonitorTrip>> m_ActiveTrips;
         private readonly Func<IEnumerable<MonitorDateSlot>> m_DateSlots;
         private readonly Func<int, string> m_Slot;
-
-        internal delegate bool TryRouteProgress(Entity vehicle, out int nextWp, out float progress);
-        internal delegate bool TryVehicleState(Entity vehicle, out VehicleState state);
+        private readonly Func<bool> m_DataComplete;
+        private readonly Func<int> m_DroppedTripCount;
+        private readonly Func<bool> m_PersistenceHealthy;
+        private readonly Func<string> m_LastIssueCode;
+        private readonly Func<int> m_IssueCount;
 
         internal TripPort(
-            EntityManager entityManager,
-            IReadOnlyDictionary<Entity, VehicleTrace> vehicles,
-            Func<Entity, Entity> stop,
-            Func<Entity, Entity> building,
-            Func<Entity, string> lineId,
-            Func<Entity, string> kind,
-            Func<string, int> minutes,
-            Func<string> clock,
-            TryRouteProgress tryProgress,
-            TryVehicleState tryState,
             Func<IEnumerable<MonitorTrip>> activeTrips,
             Func<IEnumerable<MonitorDateSlot>> dateSlots,
-            Func<int, string> slot)
+            Func<int, string> slot,
+            Func<bool> dataComplete = null,
+            Func<int> droppedTripCount = null,
+            Func<bool> persistenceHealthy = null,
+            Func<string> lastIssueCode = null,
+            Func<int> issueCount = null)
         {
-            EntityManager = entityManager;
-            Vehicles = vehicles ?? throw new ArgumentNullException(nameof(vehicles));
-            m_Stop = stop ?? throw new ArgumentNullException(nameof(stop));
-            m_Building = building ?? throw new ArgumentNullException(nameof(building));
-            m_LineId = lineId ?? throw new ArgumentNullException(nameof(lineId));
-            m_Kind = kind ?? throw new ArgumentNullException(nameof(kind));
-            m_Minutes = minutes ?? throw new ArgumentNullException(nameof(minutes));
-            m_Clock = clock ?? throw new ArgumentNullException(nameof(clock));
-            m_TryProgress = tryProgress ?? throw new ArgumentNullException(nameof(tryProgress));
-            m_TryState = tryState ?? throw new ArgumentNullException(nameof(tryState));
             m_ActiveTrips = activeTrips ?? throw new ArgumentNullException(nameof(activeTrips));
             m_DateSlots = dateSlots ?? throw new ArgumentNullException(nameof(dateSlots));
             m_Slot = slot ?? throw new ArgumentNullException(nameof(slot));
+            m_DataComplete = dataComplete ?? (() => true);
+            m_DroppedTripCount = droppedTripCount ?? (() => 0);
+            m_PersistenceHealthy = persistenceHealthy ?? (() => true);
+            m_LastIssueCode = lastIssueCode ?? (() => string.Empty);
+            m_IssueCount = issueCount ?? (() => 0);
         }
 
-        internal EntityManager EntityManager { get; }
-        internal IReadOnlyDictionary<Entity, VehicleTrace> Vehicles { get; }
-
-        internal Entity Stop(Entity waypoint) => m_Stop(waypoint);
-        internal Entity Building(Entity stop) => m_Building(stop);
-        internal string LineId(Entity line) => m_LineId(line);
-        internal string Kind(Entity line) => m_Kind(line);
-        internal int Minutes(string time) => m_Minutes(time);
-        internal string Clock() => m_Clock();
-        internal bool TryProgress(Entity vehicle, out int nextWp, out float progress) => m_TryProgress(vehicle, out nextWp, out progress);
-        internal bool TryState(Entity vehicle, out VehicleState state) => m_TryState(vehicle, out state);
         internal IEnumerable<MonitorTrip> ActiveTrips() => m_ActiveTrips();
         internal IEnumerable<MonitorDateSlot> DateSlots() => m_DateSlots();
         internal string Slot(int minute) => minute < 0 ? null : m_Slot(minute % 1440);
+        internal bool DataComplete() => m_DataComplete();
+        internal int DroppedTripCount() => m_DroppedTripCount();
+        internal bool PersistenceHealthy() => m_PersistenceHealthy();
+        internal string LastIssueCode() => m_LastIssueCode() ?? string.Empty;
+        internal int IssueCount() => m_IssueCount();
     }
 
     internal sealed class Trips
@@ -87,183 +64,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             DispatchWorkbenchDraftState draft)
         {
             return BuildFormal(active, draft);
-        }
-
-        private List<DispatchWorkbenchTripDto> BuildLegacy(
-            WorkbenchLineRuntime active,
-            List<DispatchWorkbenchStationDto> stations,
-            DispatchWorkbenchDraftState draft)
-        {
-            List<DispatchWorkbenchTripDto> trips = new List<DispatchWorkbenchTripDto>();
-            if (active == null || stations == null || stations.Count == 0)
-            {
-                return trips;
-            }
-
-            if (!m_Port.EntityManager.HasBuffer<RouteWaypoint>(active.Entity))
-            {
-                return trips;
-            }
-
-            HashSet<string> allowed = new HashSet<string>(StringComparer.Ordinal);
-            foreach (string id in NormalizeLineIdList(draft?.MergedView?.localLineIds, draft?.MergedView?.localLineId))
-            {
-                allowed.Add(id);
-            }
-            foreach (string id in NormalizeLineIdList(draft?.MergedView?.expressLineIds, draft?.MergedView?.expressLineId))
-            {
-                allowed.Add(id);
-            }
-            allowed.Add(active.Id);
-            if (allowed.Count == 0)
-            {
-                allowed.Add(active.Id);
-            }
-
-            DynamicBuffer<RouteWaypoint> waypoints = m_Port.EntityManager.GetBuffer<RouteWaypoint>(active.Entity, true);
-            Dictionary<Entity, string> stationIds = new Dictionary<Entity, string>();
-            HashSet<Entity> seenStops = new HashSet<Entity>();
-            for (int i = 0; i < waypoints.Length && i < stations.Count + 8; i++)
-            {
-                Entity stop = m_Port.Stop(waypoints[i].m_Waypoint);
-                if (stop == Entity.Null || !seenStops.Add(stop))
-                {
-                    continue;
-                }
-
-                int stationIndex = stationIds.Count;
-                if (stationIndex >= stations.Count)
-                {
-                    break;
-                }
-
-                stationIds[stop] = stations[stationIndex].id;
-                Entity building = m_Port.Building(stop);
-                if (building != Entity.Null && !stationIds.ContainsKey(building))
-                {
-                    stationIds[building] = stations[stationIndex].id;
-                }
-            }
-
-            foreach (KeyValuePair<Entity, VehicleTrace> pair in m_Port.Vehicles)
-            {
-                Entity vehicle = pair.Key;
-                VehicleTrace record = pair.Value;
-                if (record == null || !m_Port.EntityManager.Exists(vehicle))
-                {
-                    continue;
-                }
-
-                if (record.Line == Entity.Null || !m_Port.EntityManager.Exists(record.Line))
-                {
-                    continue;
-                }
-
-                string lineId = m_Port.LineId(record.Line);
-                if (!allowed.Contains(lineId))
-                {
-                    continue;
-                }
-
-                string kind = string.Equals(m_Port.Kind(record.Line), "express", StringComparison.Ordinal)
-                    ? "express"
-                    : "local";
-
-                for (int tripIndex = 0; tripIndex < record.Trips.Count; tripIndex++)
-                {
-                    TripTrace trip = record.Trips[tripIndex];
-                    if (trip == null || trip.Stops.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    List<DispatchWorkbenchTripStopDto> stops = new List<DispatchWorkbenchTripStopDto>();
-                    int previousStopMin = -1;
-                    for (int i = 0; i < trip.Stops.Count; i++)
-                    {
-                        StopTrace stop = trip.Stops[i];
-                        if (!stationIds.TryGetValue(stop.Stop, out string stationId))
-                        {
-                            continue;
-                        }
-
-                        if (string.IsNullOrEmpty(stop.Arrival) && string.IsNullOrEmpty(stop.Departure))
-                        {
-                            continue;
-                        }
-
-                        string time = !string.IsNullOrEmpty(stop.Departure) ? stop.Departure : stop.Arrival;
-                        int stopMin = m_Port.Minutes(time);
-                        if (previousStopMin >= 0 && stopMin >= 0 && stopMin + 5 < previousStopMin)
-                        {
-                            break;
-                        }
-
-                        stops.Add(new DispatchWorkbenchTripStopDto
-                        {
-                            stationId = stationId,
-                            time = time,
-                            arrivalTime = string.IsNullOrEmpty(stop.Arrival) ? null : stop.Arrival,
-                            departureTime = string.IsNullOrEmpty(stop.Departure) ? null : stop.Departure,
-                            stopType = i == 0 ? "origin" : "normal"
-                        });
-                        previousStopMin = stopMin;
-                    }
-
-                    if (stops.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    string realtimeFromStationId = null;
-                    string realtimeToStationId = null;
-                    string realtimeTime = null;
-                    float realtimeProgress = 0f;
-                    bool latest = tripIndex == record.Trips.Count - 1;
-                    bool running = m_Port.TryState(vehicle, out VehicleState state)
-                        && state == VehicleState.Running;
-                    if (latest
-                        && running
-                        && record.Line == active.Entity
-                        && m_Port.TryProgress(vehicle, out int nextWp, out float progress))
-                    {
-                        int previousWp = nextWp == 0 ? waypoints.Length - 1 : nextWp - 1;
-                        Entity fromStop = previousWp >= 0 && previousWp < waypoints.Length
-                            ? m_Port.Stop(waypoints[previousWp].m_Waypoint)
-                            : Entity.Null;
-                        Entity toStop = nextWp >= 0 && nextWp < waypoints.Length
-                            ? m_Port.Stop(waypoints[nextWp].m_Waypoint)
-                            : Entity.Null;
-
-                        if (fromStop != Entity.Null && stationIds.TryGetValue(fromStop, out string fromStationId))
-                        {
-                            realtimeFromStationId = fromStationId;
-                        }
-                        if (toStop != Entity.Null && stationIds.TryGetValue(toStop, out string toStationId))
-                        {
-                            realtimeToStationId = toStationId;
-                        }
-                        realtimeProgress = math.saturate(progress);
-                        realtimeTime = m_Port.Clock();
-                    }
-
-                    trips.Add(new DispatchWorkbenchTripDto
-                    {
-                        id = "RT-" + vehicle.Index.ToString() + "-" + trip.Seq.ToString(),
-                        lineId = lineId,
-                        kind = kind,
-                        depart = stops.FirstOrDefault()?.departureTime ?? stops.FirstOrDefault()?.time ?? "--:--",
-                        realtimeSegment = 0,
-                        realtimeProgress = realtimeProgress,
-                        realtimeFromStationId = realtimeFromStationId,
-                        realtimeToStationId = realtimeToStationId,
-                        realtimeTime = realtimeTime,
-                        stops = stops.ToArray()
-                    });
-                }
-            }
-
-            return trips;
         }
 
         private List<DispatchWorkbenchTripDto> BuildFormal(
@@ -307,133 +107,166 @@ namespace RapidTransitMod.Dispatch.Workbench
             return result;
         }
 
-        internal MonitorSnapshotDto BuildMonitor()
+        internal DispatchWorkbenchMonitorListResponseDto BuildMonitorHeaders(
+            DispatchWorkbenchMonitorListRequestDto request,
+            ClockSnapshot clock)
         {
-            MonitorTripDto[] active = m_Port.ActiveTrips()
-                .Where(trip => trip != null)
-                .Select(BuildMonitorTrip)
-                .ToArray();
-            MonitorDayDto[] days = m_Port.DateSlots()
-                .OrderByDescending(slot => slot.DateKey)
-                .Select(slot => new MonitorDayDto
-                {
-                    serviceDateKey = slot.DateKey,
-                    trips = slot.Trips.Values
-                        .OrderBy(trip => trip.LineKey, StringComparer.Ordinal)
-                        .ThenBy(trip => trip.SlotMinute)
-                        .Select(BuildMonitorTrip)
-                        .ToArray()
-                })
-                .ToArray();
-            return new MonitorSnapshotDto { activeTrips = active, days = days };
-        }
-
-        private MonitorTripDto BuildMonitorTrip(MonitorTrip trip)
-        {
-            int count = math.clamp(trip.VisibleStopCount, 0, trip.Stops.Count);
-            MonitorStopDto[] stops = new MonitorStopDto[count];
-            for (int i = 0; i < count; i++)
-            {
-                MonitorStop stop = trip.Stops[i];
-                bool plannedVisible = i < trip.SuppressPlanFrom;
-                stops[i] = new MonitorStopDto
-                {
-                    order = i,
-                    stopKey = stop.StopKey,
-                    waypointIndex = stop.WaypointIndex,
-                    plannedArrivalMinute = plannedVisible ? NullableMinute(stop.PlannedArrival) : null,
-                    plannedDepartureMinute = plannedVisible ? NullableMinute(stop.PlannedDeparture) : null,
-                    actualArrivalMinute = NullableMinute(stop.ActualArrival),
-                    actualDepartureMinute = NullableMinute(stop.ActualDeparture),
-                    cleared = stop.Cleared
-                };
-            }
-            return new MonitorTripDto
-            {
-                key = trip.Key,
-                lineKey = trip.LineKey,
-                lineId = trip.LineId,
-                rowId = trip.RowId,
-                serviceKind = trip.ServiceKind,
-                serviceDateKey = trip.ServiceDateKey,
-                slotMinute = trip.SlotMinute,
-                actualStartMinute = NullableMinute(trip.ActualStartMinute),
-                state = trip.State.ToString().ToLowerInvariant(),
-                vehicleIndex = trip.Vehicle == Entity.Null ? -1 : trip.Vehicle.Index,
-                stops = stops
-            };
-        }
-
-        private static int? NullableMinute(int minute) => minute < 0 ? (int?)null : minute;
-
-        private static List<string> NormalizeLineIdList(string[] ids, string fallbackId)
-        {
+            List<DispatchWorkbenchMonitorTripHeaderDto> headers = new List<DispatchWorkbenchMonitorTripHeaderDto>();
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
-            List<string> normalized = new List<string>();
-
-            if (ids != null)
+            int currentServiceDateKey = ScheduleClock.DateKey(clock.NowDate.Date);
+            bool validRequest = request != null
+                && (request.dayOffset == 0 || request.dayOffset == -1)
+                && !string.IsNullOrWhiteSpace(request.lineId);
+            int serviceDateKey = validRequest
+                ? ScheduleClock.DateKey(clock.NowDate.Date.AddDays(request.dayOffset))
+                : 0;
+            if (validRequest)
             {
-                for (int i = 0; i < ids.Length; i++)
+                foreach (MonitorTrip trip in MonitorTrips())
                 {
-                    string id = ids[i];
-                    if (string.IsNullOrEmpty(id) || !seen.Add(id))
+                    if (trip == null
+                        || trip.ServiceDateKey != serviceDateKey
+                        || !string.Equals(trip.LineId, request.lineId, StringComparison.Ordinal)
+                        || string.IsNullOrEmpty(trip.Key)
+                        || !seen.Add(trip.Key))
                     {
                         continue;
                     }
 
-                    normalized.Add(id);
+                    headers.Add(BuildHeader(trip));
                 }
             }
 
-            if (!string.IsNullOrEmpty(fallbackId) && seen.Add(fallbackId))
+            headers = headers
+                .OrderBy(item => item.plannedStartMinute)
+                .ThenBy(item => item.tripKey, StringComparer.Ordinal)
+                .ToList();
+            return new DispatchWorkbenchMonitorListResponseDto
             {
-                normalized.Add(fallbackId);
+                success = validRequest,
+                error = validRequest
+                    ? string.Empty
+                    : "monitor-list-day-offset-and-line-required",
+                dataComplete = m_Port.DataComplete(),
+                droppedTripCount = Math.Max(0, m_Port.DroppedTripCount()),
+                persistenceHealthy = m_Port.PersistenceHealthy(),
+                lastIssueCode = m_Port.LastIssueCode(),
+                issueCount = Math.Max(0, m_Port.IssueCount()),
+                serviceDateKey = serviceDateKey,
+                currentServiceDateKey = currentServiceDateKey,
+                nowMinute = clock.NowMinute,
+                clockEpoch = clock.ClockEpoch,
+                summary = new DispatchWorkbenchMonitorSummaryDto(),
+                trips = headers.ToArray()
+            };
+        }
+
+        internal DispatchWorkbenchMonitorDetailResponseDto BuildMonitorDetail(
+            DispatchWorkbenchMonitorDetailRequestDto request)
+        {
+            MonitorTrip found = null;
+            if (request != null && !string.IsNullOrEmpty(request.tripKey))
+            {
+                found = MonitorTrips().FirstOrDefault(trip =>
+                    trip != null && string.Equals(trip.Key, request.tripKey, StringComparison.Ordinal));
             }
 
-            return normalized;
+            DispatchWorkbenchMonitorDetailResponseDto response = new DispatchWorkbenchMonitorDetailResponseDto
+            {
+                success = found != null,
+                error = found == null
+                    ? (request == null || string.IsNullOrEmpty(request.tripKey)
+                        ? "monitor-detail-trip-key-required"
+                        : "trip-not-found")
+                    : null,
+                dataComplete = m_Port.DataComplete(),
+                droppedTripCount = Math.Max(0, m_Port.DroppedTripCount()),
+                persistenceHealthy = m_Port.PersistenceHealthy(),
+                lastIssueCode = m_Port.LastIssueCode(),
+                issueCount = Math.Max(0, m_Port.IssueCount())
+            };
+            if (found == null)
+            {
+                return response;
+            }
+
+            response.header = BuildHeader(found);
+            int count = math.clamp(found.VisibleStopCount, 0, found.Stops.Count);
+            response.stops = new DispatchWorkbenchMonitorStopDto[count + (count > 0 ? 1 : 0)];
+            for (int i = 0; i < count; i++)
+            {
+                MonitorStop stop = found.Stops[i];
+                bool plannedVisible = i < found.SuppressPlanFrom;
+                response.stops[i] = new DispatchWorkbenchMonitorStopDto
+                {
+                    order = i,
+                    stopKey = stop.StopKey,
+                    waypointIndex = stop.WaypointIndex,
+                    plannedArrivalMinute = i == 0 ? null : plannedVisible ? NullableMinute(stop.PlannedArrival) : null,
+                    plannedDepartureMinute = plannedVisible ? NullableMinute(stop.PlannedDeparture) : null,
+                    actualArrivalMinute = i == 0 ? null : NullableMinute(stop.ActualArrival),
+                    actualDepartureMinute = NullableMinute(stop.ActualDeparture),
+                    cleared = stop.Cleared
+                };
+            }
+            if (count > 0)
+            {
+                MonitorStop origin = found.Stops[0];
+                response.stops[count] = new DispatchWorkbenchMonitorStopDto
+                {
+                    order = count,
+                    stopKey = origin.StopKey,
+                    waypointIndex = origin.WaypointIndex,
+                    plannedArrivalMinute = NullableMinute(origin.PlannedArrival),
+                    plannedDepartureMinute = null,
+                    actualArrivalMinute = NullableMinute(origin.ActualArrival),
+                    actualDepartureMinute = null,
+                    cleared = found.State == MonitorTripState.Cleared
+                };
+            }
+            return response;
         }
+
+        private IEnumerable<MonitorTrip> MonitorTrips()
+        {
+            foreach (MonitorTrip trip in m_Port.ActiveTrips())
+            {
+                yield return trip;
+            }
+            foreach (MonitorDateSlot slot in m_Port.DateSlots())
+            {
+                if (slot == null)
+                {
+                    continue;
+                }
+                foreach (MonitorTrip trip in slot.Trips.Values)
+                {
+                    yield return trip;
+                }
+            }
+        }
+
+        private static DispatchWorkbenchMonitorTripHeaderDto BuildHeader(MonitorTrip trip)
+        {
+            return new DispatchWorkbenchMonitorTripHeaderDto
+            {
+                tripKey = trip.Key,
+                lineId = trip.LineId,
+                serviceDateKey = trip.ServiceDateKey,
+                plannedStartMinute = trip.SlotMinute,
+                actualStartMinute = NullableMinute(trip.ActualStartMinute),
+                plannedEndMinute = trip.Stops.Count > 0 ? NullableMinute(trip.Stops[0].PlannedArrival) : null,
+                actualEndMinute = trip.Stops.Count > 0 ? NullableMinute(trip.Stops[0].ActualArrival) : null,
+                scheduleType = trip.Stops.Skip(1).Any(stop => stop.PlannedArrival >= 0 || stop.PlannedDeparture >= 0)
+                    ? "custom"
+                    : "default",
+                state = trip.State.ToString().ToLowerInvariant(),
+                endReason = trip.EndReason.ToString().ToLowerInvariant(),
+                serviceKind = trip.ServiceKind
+            };
+        }
+
+        private static int? NullableMinute(int minute) => minute < 0 ? (int?)null : minute;
     }
 
-    [DataContract]
-    internal sealed class MonitorSnapshotDto
-    {
-        [DataMember] public MonitorTripDto[] activeTrips = Array.Empty<MonitorTripDto>();
-        [DataMember] public MonitorDayDto[] days = Array.Empty<MonitorDayDto>();
-    }
-
-    [DataContract]
-    internal sealed class MonitorDayDto
-    {
-        [DataMember] public int serviceDateKey;
-        [DataMember] public MonitorTripDto[] trips = Array.Empty<MonitorTripDto>();
-    }
-
-    [DataContract]
-    internal sealed class MonitorTripDto
-    {
-        [DataMember] public string key;
-        [DataMember] public string lineKey;
-        [DataMember] public string lineId;
-        [DataMember] public string rowId;
-        [DataMember] public string serviceKind;
-        [DataMember] public int serviceDateKey;
-        [DataMember] public int slotMinute;
-        [DataMember] public int? actualStartMinute;
-        [DataMember] public string state;
-        [DataMember] public int vehicleIndex;
-        [DataMember] public MonitorStopDto[] stops = Array.Empty<MonitorStopDto>();
-    }
-
-    [DataContract]
-    internal sealed class MonitorStopDto
-    {
-        [DataMember] public int order;
-        [DataMember] public string stopKey;
-        [DataMember] public int waypointIndex;
-        [DataMember] public int? plannedArrivalMinute;
-        [DataMember] public int? plannedDepartureMinute;
-        [DataMember] public int? actualArrivalMinute;
-        [DataMember] public int? actualDepartureMinute;
-        [DataMember] public bool cleared;
-    }
 }

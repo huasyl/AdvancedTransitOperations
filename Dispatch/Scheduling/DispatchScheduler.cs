@@ -48,12 +48,18 @@ namespace RapidTransitMod
             public readonly Entity Line;
             public readonly AppliedMonitorRow Row;
             public readonly DateTime ServiceDate;
+            public readonly bool Final;
 
-            public MissedCandidate(Entity line, AppliedMonitorRow row, DateTime serviceDate)
+            public MissedCandidate(
+                Entity line,
+                AppliedMonitorRow row,
+                DateTime serviceDate,
+                bool final)
             {
                 Line = line;
                 Row = row;
                 ServiceDate = serviceDate.Date;
+                Final = final;
             }
         }
 
@@ -75,8 +81,6 @@ namespace RapidTransitMod
         private readonly List<SlotClaim> m_SlotClaims = new List<SlotClaim>();
         private readonly List<RetireDecision> m_RetireDecisions = new List<RetireDecision>();
         private readonly List<MissedCandidate> m_MissedCandidates = new List<MissedCandidate>();
-        private DateTime m_LastMonitorDate = DateTime.MinValue.Date;
-        private int m_LastMonitorMinute = -1;
 
         internal IReadOnlyList<SlotClaim> SlotClaims => m_SlotClaims;
         internal IReadOnlyList<RetireDecision> RetireDecisions => m_RetireDecisions;
@@ -125,13 +129,6 @@ namespace RapidTransitMod
             m_SlotClaims.Clear();
             m_RetireDecisions.Clear();
             m_MissedCandidates.Clear();
-            DateTime previousDate = m_LastMonitorDate;
-            int previousMinute = m_LastMonitorMinute;
-            if (fullMinuteSweep)
-            {
-                m_LastMonitorDate = clockSnapshot.NowDate.Date;
-                m_LastMonitorMinute = nowMinute;
-            }
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
 
@@ -145,8 +142,8 @@ namespace RapidTransitMod
                         continue;
                     if (!DispatchLineEligibility.IsDispatchTransportLine(m_Runtime.EntityManager, line))
                         continue;
-                    if (fullMinuteSweep && previousMinute >= 0)
-                        CollectMissed(line, previousDate, previousMinute, clockSnapshot);
+                    if (fullMinuteSweep)
+                        CollectMissed(line, clockSnapshot);
                     if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs))
                         continue;
                     if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2)
@@ -550,41 +547,41 @@ namespace RapidTransitMod
 
         internal void ResetMonitorClock(ClockSnapshot clock)
         {
-            m_LastMonitorDate = clock.NowDate.Date;
-            m_LastMonitorMinute = clock.NowMinute;
             m_MissedCandidates.Clear();
         }
 
-        private void CollectMissed(
-            Entity line,
-            DateTime previousDate,
-            int previousMinute,
-            ClockSnapshot clock)
+        private void CollectMissed(Entity line, ClockSnapshot clock)
         {
-            AppliedMonitorRow[] rows = m_Runtime.m_LineView.MonitorRows(line);
-            if (rows.Length == 0)
+            AddMissedBucket(
+                line,
+                ScheduleClock.MonitorBucket(
+                    clock.NowMinute,
+                    ScheduleClock.MonitorClaimMinutes + 1),
+                clock,
+                false);
+            AddMissedBucket(
+                line,
+                ScheduleClock.MonitorBucket(
+                    clock.NowMinute,
+                    ScheduleClock.MonitorFinalMinutes),
+                clock,
+                true);
+        }
+
+        private void AddMissedBucket(
+            Entity line,
+            int slotMinute,
+            ClockSnapshot clock,
+            bool final)
+        {
+            if (!m_Runtime.m_LineView.TryMonitorRow(line, slotMinute, out AppliedMonitorRow row))
                 return;
 
-            DateTime firstDate = clock.NowDate.Date.AddDays(-1);
-            for (int rowIndex = 0; rowIndex < rows.Length; rowIndex++)
-            {
-                for (int day = 0; day < 2; day++)
-                {
-                    DateTime serviceDate = firstDate.AddDays(day);
-                    if (!ScheduleClock.CrossedFinal(
-                            previousDate,
-                            previousMinute,
-                            clock.NowDate,
-                            clock.NowMinute,
-                            rows[rowIndex].SlotMinute,
-                            serviceDate))
-                    {
-                        continue;
-                    }
-
-                    m_MissedCandidates.Add(new MissedCandidate(line, rows[rowIndex], serviceDate));
-                }
-            }
+            m_MissedCandidates.Add(new MissedCandidate(
+                line,
+                row,
+                ScheduleClock.MonitorServiceDate(clock, slotMinute),
+                final));
         }
 
         public int NextSlotMin(int nowMinute)

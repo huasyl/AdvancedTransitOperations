@@ -221,7 +221,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                     QueueRetry(pending.WithRetry(m_Runtime.m_SimulationSystem.frameIndex));
                 return;
             }
-            m_Runtime.m_WorkbenchBridge.Applied().InvalidateDetails(line, stopSig);
+            m_Runtime.m_WorkbenchBridge.OnAuthoritativeLineInvalidated(
+                line,
+                pending.LineId,
+                pending.Mode,
+                stopSig,
+                "stop-sig-changed",
+                clearDetails: false,
+                publishEvent: true);
             RapidTransitMod.PassengerFlow.Runtime.Current?.InvalidateAnchors(line);
             m_Runtime.m_Observation.InvalidateBusRoute(line, pending.OldRoute, pending.NewRoute);
             m_Runtime.m_LineTimes.InvalidateLine(line);
@@ -325,7 +332,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return;
             }
             EnsureRailCachesCleared(ref railCachesCleared);
-            m_Runtime.m_WorkbenchBridge.Applied().InvalidateDetails(line, stopSig);
+            m_Runtime.m_WorkbenchBridge.OnAuthoritativeLineInvalidated(
+                line,
+                pending.LineId,
+                pending.Mode,
+                stopSig,
+                "stop-sig-changed",
+                clearDetails: false,
+                publishEvent: true);
             m_Runtime.m_RailEventSource.InvalidateLine(line);
             m_Runtime.m_TrackModel.InvalidateWaypointIndexLookup(line);
             m_Runtime.m_LapCache.RemoveLine(line);
@@ -434,7 +448,14 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             Entity line = pending.Line;
             uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            m_Runtime.m_WorkbenchBridge.Applied().ClearDetails(line);
+            m_Runtime.m_WorkbenchBridge.OnAuthoritativeLineInvalidated(
+                line,
+                pending.LineId,
+                pending.Mode,
+                string.Empty,
+                NoticeTrigger(reason),
+                clearDetails: true,
+                publishEvent: false);
             ReleaseTimedPlans(line);
             m_Runtime.m_Observation.ReleaseLineMonitor(line, frame);
             RapidTransitMod.PassengerFlow.Runtime.Current?.InvalidateAnchors(line);
@@ -478,7 +499,14 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             Entity line = pending.Line;
             uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            m_Runtime.m_WorkbenchBridge.Applied().ClearDetails(line);
+            m_Runtime.m_WorkbenchBridge.OnAuthoritativeLineInvalidated(
+                line,
+                pending.LineId,
+                pending.Mode,
+                string.Empty,
+                NoticeTrigger(reason),
+                clearDetails: true,
+                publishEvent: false);
             ReleaseTimedPlans(line);
             m_Runtime.m_Observation.ReleaseLineMonitor(line, frame);
             EnsureRailCachesCleared(ref railCachesCleared);

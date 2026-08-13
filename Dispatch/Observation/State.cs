@@ -49,6 +49,15 @@ namespace RapidTransitMod.Dispatch.Observation
         Cleared
     }
 
+    internal enum MonitorEndReason : byte
+    {
+        None,
+        Rebound,
+        Removed,
+        Retired,
+        Relaunched
+    }
+
     internal sealed class MonitorTrip
     {
         public string Key = string.Empty;
@@ -61,7 +70,12 @@ namespace RapidTransitMod.Dispatch.Observation
         public Entity Vehicle = Entity.Null;
         public int ServiceDateKey;
         public int SlotMinute = -1;
-        public int ActualStartMinute = -1;
+        // 持久元素仍保留旧字段；内存权威改由始发站实际离站表达。
+        public int ActualStartMinute
+        {
+            get => Stops.Count > 0 ? Stops[0].ActualDeparture : -1;
+            set { }
+        }
         public int NextArrivalOrder = 1;
         public int VisibleStopCount;
         public int SuppressPlanFrom = int.MaxValue;
@@ -69,6 +83,7 @@ namespace RapidTransitMod.Dispatch.Observation
         public uint LastFactFrame;
         public bool LastFactArrival;
         public MonitorTripState State;
+        public MonitorEndReason EndReason;
         public uint LaunchFrame;
         public uint UpdatedFrame;
         public readonly List<MonitorStop> Stops = new List<MonitorStop>();
@@ -76,7 +91,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
     internal sealed class MonitorStop
     {
-        public int Order;
         public string StopKey = string.Empty;
         public Entity Station = Entity.Null;
         public int WaypointIndex = -1;

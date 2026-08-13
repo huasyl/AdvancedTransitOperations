@@ -6,6 +6,9 @@ namespace RapidTransitMod.Dispatch.Scheduling
 {
     internal static class ScheduleClock
     {
+        internal const int MonitorClaimMinutes = 8;
+        internal const int MonitorFinalMinutes = 14;
+
         public static int NextSlot(int nowMinute)
         {
             return ((nowMinute / ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) + 1) * ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES % 1440;
@@ -87,51 +90,39 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public static DateTime ServiceDate(ClockSnapshot clock, int targetMinute)
         {
             DateTime serviceDate = clock.NowDate.Date;
-            if (clock.NowMinute < targetMinute && CurrentOrRecent(clock.NowMinute, targetMinute))
+            if (clock.NowMinute < targetMinute
+                && Overdue(clock.NowMinute, targetMinute) <= MonitorFinalMinutes)
                 serviceDate = serviceDate.AddDays(-1);
             return serviceDate;
         }
 
-        public static bool CrossedFinal(
-            DateTime previousDate,
-            int previousMinute,
-            DateTime currentDate,
-            int currentMinute,
-            int targetMinute,
-            DateTime serviceDate)
+        public static int MonitorBucket(int currentMinute, int delayMinutes)
         {
-            if (previousMinute < 0 || currentMinute < 0 || targetMinute < 0)
-                return false;
-
-            DateTime previous = previousDate.Date.AddMinutes(previousMinute);
-            DateTime current = currentDate.Date.AddMinutes(currentMinute);
-            if (current <= previous)
-                return false;
-
-            DateTime cutoff = serviceDate.Date.AddMinutes(targetMinute + FinalWindow() + 1);
-            return previous < cutoff && cutoff <= current;
+            int minute = (currentMinute - delayMinutes) % 1440;
+            return minute < 0 ? minute + 1440 : minute;
         }
 
-        public static bool FinalExpired(
-            ClockSnapshot clock,
-            int targetMinute,
-            DateTime serviceDate)
+        public static DateTime MonitorServiceDate(ClockSnapshot clock, int targetMinute)
         {
-            if (targetMinute < 0)
-                return false;
-            DateTime current = clock.NowDate.Date.AddMinutes(clock.NowMinute);
-            DateTime cutoff = serviceDate.Date.AddMinutes(targetMinute + FinalWindow() + 1);
-            return current >= cutoff;
+            return MonitorOccurrenceDate(clock, targetMinute);
+        }
+
+        public static DateTime MonitorOccurrenceDate(ClockSnapshot clock, int targetMinute)
+        {
+            DateTime currentDate = clock.NowDate.Date;
+            if (targetMinute < 0 || targetMinute >= 1440)
+                return currentDate;
+
+            int overdue = Overdue(clock.NowMinute, targetMinute);
+            if (overdue <= MonitorFinalMinutes)
+                return clock.NowMinute < targetMinute ? currentDate.AddDays(-1) : currentDate;
+
+            return targetMinute <= clock.NowMinute ? currentDate.AddDays(1) : currentDate;
         }
 
         public static int DateKey(DateTime date)
         {
             return date.Year * 10000 + date.Month * 100 + date.Day;
-        }
-
-        internal static int FinalWindow()
-        {
-            return math.max(ModRuntimeHostSystem.SLOT_GRACE_MINUTES, LateWindow());
         }
 
         private static int LateWindow()

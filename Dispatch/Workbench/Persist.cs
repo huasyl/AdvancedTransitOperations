@@ -298,14 +298,15 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal WorkbenchSavePersistencePayload Capture()
         {
+            AppliedTimetableElements elements = m_Applied.BuildElements();
             return new WorkbenchSavePersistencePayload
             {
                 WorkbenchState = Build(),
-                AppliedLineElements = m_Applied.LineElems(),
-                AppliedRowElements = m_Applied.RowElems(),
-                AppliedRowIdElements = m_Applied.RowIdElems(),
-                AppliedStopSigElements = m_Applied.StopSigElems(),
-                AppliedTimedStopElements = m_Applied.TimedStopElems()
+                AppliedLineElements = elements.Line,
+                AppliedRowElements = elements.Rows,
+                AppliedRowIdElements = elements.RowIds,
+                AppliedStopSigElements = elements.StopSigs,
+                AppliedTimedStopElements = elements.TimedStops
             };
         }
 

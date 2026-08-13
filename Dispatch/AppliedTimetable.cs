@@ -105,6 +105,20 @@ namespace RapidTransitMod.Dispatch
         internal LineKey StableKey(Entity line) => m_StableKey(line);
     }
 
+    internal sealed class AppliedTimetableElements
+    {
+        internal readonly List<AppliedWorkbenchLineStateElement> Line =
+            new List<AppliedWorkbenchLineStateElement>();
+        internal readonly List<AppliedWorkbenchStagedRowElement> Rows =
+            new List<AppliedWorkbenchStagedRowElement>();
+        internal readonly List<AppliedRowIdElement> RowIds =
+            new List<AppliedRowIdElement>();
+        internal readonly List<AppliedStopSigElement> StopSigs =
+            new List<AppliedStopSigElement>();
+        internal readonly List<AppliedTimedStopElement> TimedStops =
+            new List<AppliedTimedStopElement>();
+    }
+
     internal sealed class AppliedTimetable
     {
         private readonly EntityManager m_EntityManager;
@@ -624,7 +638,8 @@ namespace RapidTransitMod.Dispatch
                 return;
             }
 
-            Write(LineElems(), RowElems(), RowIdElems(), StopSigElems(), TimedStopElems());
+            AppliedTimetableElements elements = BuildElements();
+            Write(elements.Line, elements.Rows, elements.RowIds, elements.StopSigs, elements.TimedStops);
         }
 
         internal void Backfill()
@@ -1019,6 +1034,7 @@ namespace RapidTransitMod.Dispatch
                 return false;
 
             bool changed = false;
+            List<string> changedLineIds = new List<string>();
             foreach (AppliedLine line in m_Lines.Values)
             {
                 if (line == null
@@ -1044,7 +1060,16 @@ namespace RapidTransitMod.Dispatch
             if (!changed)
                 return false;
 
-            Sync(saveDrafts: false);
+            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines)
+            {
+                if (entry.Value != null
+                    && entry.Value.LineEntity == lineEntity
+                    && string.Equals(entry.Value.StopSig, stopSig, StringComparison.Ordinal))
+                {
+                    changedLineIds.Add(entry.Key);
+                }
+            }
+            SyncOperationalLines(changedLineIds);
             m_Host.SaveApplied();
             return true;
         }
@@ -1073,30 +1098,93 @@ namespace RapidTransitMod.Dispatch
             if (!changed)
                 return false;
 
-            Sync(saveDrafts: false);
+            List<string> changedLineIds = m_Lines
+                .Where(entry => entry.Value != null && entry.Value.LineEntity == lineEntity)
+                .Select(entry => entry.Key)
+                .ToList();
+            SyncOperationalLines(changedLineIds);
             m_Host.SaveApplied();
             return true;
         }
 
-        internal List<AppliedWorkbenchLineStateElement> LineElems()
+        internal bool TryApplyScheduleLines(
+            IReadOnlyDictionary<string, AppliedLine> replacements,
+            out string error)
         {
-            List<AppliedWorkbenchLineStateElement> elems = new List<AppliedWorkbenchLineStateElement>();
-            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            error = string.Empty;
+            if (replacements == null || replacements.Count == 0)
             {
-                AppliedLine line = entry.Value;
-                if (line == null || line.LineEntity == Entity.Null || line.StagedRows == null || line.StagedRows.Count == 0)
-                {
-                    continue;
-                }
-
-                elems.Add(new AppliedWorkbenchLineStateElement
-                {
-                    m_LineEntity = line.LineEntity,
-                    m_OriginHoldLimitMinutes = RuntimeConfigStoreDefaults.Hold(line.OriginHoldLimitMinutes)
-                });
+                error = "schedule-batch-lines-required";
+                return false;
+            }
+            if (m_City() == Entity.Null)
+            {
+                error = "schedule-batch-city-missing";
+                return false;
             }
 
-            return elems;
+            Dictionary<string, AppliedLine> backup = new Dictionary<string, AppliedLine>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, AppliedLine> entry in replacements)
+            {
+                if (string.IsNullOrEmpty(entry.Key) || entry.Value == null)
+                {
+                    error = "schedule-batch-line-invalid";
+                    return false;
+                }
+
+                backup[entry.Key] = m_Lines.TryGetValue(entry.Key, out AppliedLine existing)
+                    ? CloneAppliedLine(existing)
+                    : null;
+                m_Lines[entry.Key] = CloneAppliedLine(entry.Value);
+            }
+
+            try
+            {
+                SyncOperationalLines(replacements.Keys);
+                Save();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                foreach (KeyValuePair<string, AppliedLine> entry in backup)
+                {
+                    if (entry.Value == null)
+                        m_Lines.Remove(entry.Key);
+                    else
+                        m_Lines[entry.Key] = entry.Value;
+                }
+
+                try
+                {
+                    SyncOperationalLines(backup.Keys);
+                    Save();
+                }
+                catch
+                {
+                }
+
+                error = ex.GetType().Name + ":" + ex.Message;
+                return false;
+            }
+        }
+
+        private AppliedLine CloneAppliedLine(AppliedLine source)
+        {
+            if (source == null)
+                return null;
+
+            return new AppliedLine
+            {
+                LineEntity = source.LineEntity,
+                StopSig = source.StopSig ?? string.Empty,
+                OriginHoldLimitMinutes = source.OriginHoldLimitMinutes,
+                MaxStationDwellMinutes = source.MaxStationDwellMinutes,
+                DepartureMinutesCache = source.DepartureMinutesCache?.ToArray() ?? Array.Empty<int>(),
+                StagedRows = (source.StagedRows ?? new List<DispatchWorkbenchStagedRowDto>())
+                    .Where(row => row != null)
+                    .Select(m_Host.CopyRow)
+                    .ToList()
+            };
         }
 
         private List<DispatchWorkbenchStagedRowDto> OrderedRows(AppliedLine line)
@@ -1118,72 +1206,69 @@ namespace RapidTransitMod.Dispatch
                 .ToList();
         }
 
-        internal List<AppliedWorkbenchStagedRowElement> RowElems()
+        internal AppliedTimetableElements BuildElements()
         {
-            List<AppliedWorkbenchStagedRowElement> elems = new List<AppliedWorkbenchStagedRowElement>();
+            AppliedTimetableElements elements = new AppliedTimetableElements();
             foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 AppliedLine line = entry.Value;
-                if (line == null || line.LineEntity == Entity.Null || line.StagedRows == null)
+                if (line == null || line.LineEntity == Entity.Null)
                 {
                     continue;
                 }
 
-                List<DispatchWorkbenchStagedRowDto> rows = OrderedRows(line);
-                for (int i = 0; i < rows.Count; i++)
+                List<DispatchWorkbenchStagedRowDto> rows = line.StagedRows == null
+                    ? new List<DispatchWorkbenchStagedRowDto>()
+                    : OrderedRows(line);
+                if (line.StagedRows != null && line.StagedRows.Count > 0)
                 {
-                    DispatchWorkbenchStagedRowDto row = rows[i];
-                    int minute = m_Host.Minutes(row.time);
-
-                    elems.Add(new AppliedWorkbenchStagedRowElement
+                    elements.Line.Add(new AppliedWorkbenchLineStateElement
                     {
                         m_LineEntity = line.LineEntity,
-                        m_Order = i,
-                        m_Minute = minute,
-                        m_KindCode = EncodeKind(row?.kind),
-                        m_SourceCode = EncodeSource(row?.source)
+                        m_OriginHoldLimitMinutes = RuntimeConfigStoreDefaults.Hold(line.OriginHoldLimitMinutes)
                     });
-                }
-            }
 
-            return elems;
-        }
-
-        internal List<AppliedRowIdElement> RowIdElems()
-        {
-            List<AppliedRowIdElement> elems = new List<AppliedRowIdElement>();
-            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                AppliedLine line = entry.Value;
-                if (line == null || line.LineEntity == Entity.Null || line.StagedRows == null)
-                    continue;
-
-                List<DispatchWorkbenchStagedRowDto> rows = OrderedRows(line);
-                for (int i = 0; i < rows.Count; i++)
-                {
-                    DispatchWorkbenchStagedRowDto row = rows[i];
-                    if (row == null || string.IsNullOrEmpty(row.id))
-                        continue;
-
-                    elems.Add(new AppliedRowIdElement
+                    for (int i = 0; i < rows.Count; i++)
                     {
-                        m_Version = 1,
-                        m_LineEntity = line.LineEntity,
-                        m_Order = i,
-                        m_RowId = row.id
-                    });
+                        DispatchWorkbenchStagedRowDto row = rows[i];
+                        int minute = m_Host.Minutes(row.time);
+                        elements.Rows.Add(new AppliedWorkbenchStagedRowElement
+                        {
+                            m_LineEntity = line.LineEntity,
+                            m_Order = i,
+                            m_Minute = minute,
+                            m_KindCode = EncodeKind(row?.kind),
+                            m_SourceCode = EncodeSource(row?.source)
+                        });
+
+                        if (!string.IsNullOrEmpty(row?.id))
+                        {
+                            elements.RowIds.Add(new AppliedRowIdElement
+                            {
+                                m_Version = 1,
+                                m_LineEntity = line.LineEntity,
+                                m_Order = i,
+                                m_RowId = row.id
+                            });
+                        }
+
+                        TimedStop[] stops = ToTimedStops(row?.timedStops);
+                        for (int stopIndex = 0; stopIndex < stops.Length; stopIndex++)
+                        {
+                            TimedStop stop = stops[stopIndex];
+                            elements.TimedStops.Add(new AppliedTimedStopElement
+                            {
+                                m_Version = 1,
+                                m_LineEntity = line.LineEntity,
+                                m_RowOrder = i,
+                                m_StopOrder = stopIndex,
+                                m_StopKey = stop.StopKey,
+                                m_Arrive = stop.Arrive,
+                                m_Depart = stop.Depart
+                            });
+                        }
+                    }
                 }
-            }
-
-            return elems;
-        }
-
-        internal List<AppliedStopSigElement> StopSigElems()
-        {
-            List<AppliedStopSigElement> elems = new List<AppliedStopSigElement>();
-            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                AppliedLine line = entry.Value;
                 string stopSig = line?.StopSig;
                 if (string.IsNullOrEmpty(stopSig))
                 {
@@ -1195,7 +1280,7 @@ namespace RapidTransitMod.Dispatch
                 if (line == null || line.LineEntity == Entity.Null || string.IsNullOrEmpty(stopSig))
                     continue;
 
-                elems.Add(new AppliedStopSigElement
+                elements.StopSigs.Add(new AppliedStopSigElement
                 {
                     m_Version = 1,
                     m_LineEntity = line.LineEntity,
@@ -1203,40 +1288,7 @@ namespace RapidTransitMod.Dispatch
                 });
             }
 
-            return elems;
-        }
-
-        internal List<AppliedTimedStopElement> TimedStopElems()
-        {
-            List<AppliedTimedStopElement> elems = new List<AppliedTimedStopElement>();
-            foreach (KeyValuePair<string, AppliedLine> entry in m_Lines.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-            {
-                AppliedLine line = entry.Value;
-                if (line == null || line.LineEntity == Entity.Null || line.StagedRows == null)
-                    continue;
-
-                List<DispatchWorkbenchStagedRowDto> rows = OrderedRows(line);
-                for (int rowIndex = 0; rowIndex < rows.Count; rowIndex++)
-                {
-                    TimedStop[] stops = ToTimedStops(rows[rowIndex].timedStops);
-                    for (int stopIndex = 0; stopIndex < stops.Length; stopIndex++)
-                    {
-                        TimedStop stop = stops[stopIndex];
-                        elems.Add(new AppliedTimedStopElement
-                        {
-                            m_Version = 1,
-                            m_LineEntity = line.LineEntity,
-                            m_RowOrder = rowIndex,
-                            m_StopOrder = stopIndex,
-                            m_StopKey = stop.StopKey,
-                            m_Arrive = stop.Arrive,
-                            m_Depart = stop.Depart
-                        });
-                    }
-                }
-            }
-
-            return elems;
+            return elements;
         }
 
         private static TimedStop[] ToTimedStops(DispatchWorkbenchTimedStopDto[] stops)
@@ -1271,6 +1323,14 @@ namespace RapidTransitMod.Dispatch
             var rowIdBuffer = m_EntityManager.GetBuffer<AppliedRowIdElement>(city);
             var stopSigBuffer = m_EntityManager.GetBuffer<AppliedStopSigElement>(city);
             var timedStopBuffer = m_EntityManager.GetBuffer<AppliedTimedStopElement>(city);
+
+            // 五组目标缓冲必须全部预留成功后才允许清空旧内容。
+            lineBuffer.EnsureCapacity(lineElems?.Count ?? 0);
+            rowBuffer.EnsureCapacity(rowElems?.Count ?? 0);
+            rowIdBuffer.EnsureCapacity(rowIdElems?.Count ?? 0);
+            stopSigBuffer.EnsureCapacity(stopSigElems?.Count ?? 0);
+            timedStopBuffer.EnsureCapacity(timedStopElems?.Count ?? 0);
+
             lineBuffer.Clear();
             rowBuffer.Clear();
             rowIdBuffer.Clear();
@@ -1870,6 +1930,22 @@ namespace RapidTransitMod.Dispatch
                 m_Host.SaveDrafts();
             }
 
+            m_Host.MarkTrack();
+        }
+
+        private void SyncOperationalLines(IEnumerable<string> lineIds)
+        {
+            HashSet<string> keys = new HashSet<string>(
+                (lineIds ?? Array.Empty<string>())
+                    .Where(lineId => !string.IsNullOrEmpty(lineId)),
+                StringComparer.Ordinal);
+            foreach (string lineId in keys)
+            {
+                m_Lines.TryGetValue(lineId, out AppliedLine applied);
+                m_Cfg.SyncApplied(lineId, applied);
+            }
+
+            RefreshPlans();
             m_Host.MarkTrack();
         }
 

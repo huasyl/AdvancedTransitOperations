@@ -154,8 +154,6 @@ namespace RapidTransitMod
         public DispatchWorkbenchLineRuntimeRefDto[] lineRuntimeRefs;
         [DataMember]
         public int clientRequestSequence;
-        [DataMember(EmitDefaultValue = false)]
-        public string runChartQueryId;
     }
 
     [DataContract]
@@ -554,52 +552,6 @@ namespace RapidTransitMod
     }
 
     [DataContract]
-    public class DispatchWorkbenchRunChartRequestDto
-    {
-        [DataMember]
-        public string queryId;
-        [DataMember]
-        public string lineId;
-        [DataMember]
-        public string fromStopKey;
-        [DataMember]
-        public string toStopKey;
-        [DataMember]
-        public string rowId;
-        [DataMember]
-        public string[] viaStopKeys;
-        [DataMember]
-        public string source;
-        [DataMember]
-        public int candidateIndex;
-        [DataMember]
-        public bool hasCandidate;
-        [DataMember]
-        public int modelIndex;
-        [DataMember]
-        public int modelVersion;
-        [DataMember]
-        public int secondaryModelIndex;
-        [DataMember]
-        public int secondaryModelVersion;
-    }
-
-    [DataContract]
-    public class DispatchWorkbenchRunChartCandidateDto
-    {
-        [DataMember]
-        public int candidateIndex;
-        [DataMember]
-        public int[] waypointIndices;
-        [DataMember]
-        public int[] stopWaypointIndices;
-        [DataMember]
-        public string[] stopKeys;
-        [DataMember]
-        public string direction;
-    }
-
-    [DataContract]
     public class DispatchWorkbenchRunChartSegmentDto
     {
         [DataMember]
@@ -614,36 +566,421 @@ namespace RapidTransitMod
         public uint segmentFrames;
         [DataMember]
         public int segmentMinutes;
+        [DataMember]
+        public double segmentMinutesExact;
     }
 
     [DataContract]
-    public class DispatchWorkbenchRunChartStatusDto
+    public class DispatchWorkbenchRunChartDwellDto
+    {
+        [DataMember]
+        public string stopKey;
+        [DataMember]
+        public int waypointIndex;
+        [DataMember]
+        public float averageFrames;
+        [DataMember]
+        public int averageMinutes;
+        [DataMember]
+        public int sampleCount;
+        [DataMember]
+        public bool hasObservation;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunTimeQueryRequestDto
+    {
+        [DataMember]
+        public string editorSessionId;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string source;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunTimeQueryStatusDto
     {
         [DataMember]
         public string queryId;
         [DataMember]
+        public string editorSessionId;
+        [DataMember]
         public string state;
         [DataMember]
+        public string resultId;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public string detail;
+        [DataMember]
+        public string lineId;
+        [DataMember]
         public string source;
+        [DataMember]
+        public DispatchWorkbenchRunChartSegmentDto[] segments;
+        [DataMember]
+        public DispatchWorkbenchRunChartDwellDto[] dwells;
+    }
+
+    [DataContract]
+    public class RunTimeInvalidationDto
+    {
+        [DataMember]
+        public string editorSessionId;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string source;
+        [DataMember]
+        public string reason;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunTimeControlDto
+    {
+        [DataMember]
+        public string editorSessionId;
+        [DataMember]
+        public string queryId;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunTimeEditorDto
+    {
+        [DataMember]
+        public string editorSessionId;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchTimetableLineLayoutRequestDto
+    {
+        [DataMember]
+        public string lineId;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchTimetableLineStopDto
+    {
+        [DataMember]
+        public int order;
+        [DataMember]
+        public string stopKey;
+        [DataMember]
+        public string name;
+        [DataMember]
+        public int waypointIndex;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchTimetableLineLayoutDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public string stopSig;
+        [DataMember]
+        public DispatchWorkbenchTimetableLineStopDto[] stops;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchScheduleBatchRequestDto
+    {
+        [DataMember]
+        public string editorSessionId;
+        [DataMember]
+        public DispatchWorkbenchScheduleLineDto[] lines;
+        [DataMember]
+        public bool returnSnapshot = true;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchScheduleLineDto
+    {
         [DataMember]
         public string lineId;
         [DataMember]
         public string stopSig;
         [DataMember]
+        public string runtimeResultId;
+        [DataMember]
+        public DispatchWorkbenchScheduleRowDto[] rows;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchScheduleRowDto
+    {
+        [DataMember]
+        public string rowId;
+        [DataMember]
+        public int slotMinute;
+        [DataMember]
+        public string kind;
+        [DataMember]
+        public string source;
+        [DataMember]
+        public DispatchWorkbenchTimedStopDto[] timedStops;
+        [DataMember]
+        public int truncateFromStopIndex = -1;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchScheduleBatchResultDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string editorSessionId;
+        [DataMember]
+        public string[] errors;
+        [DataMember]
+        public DispatchWorkbenchSnapshot snapshot;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartSectionRequestDto
+    {
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public string fromStationId;
+        [DataMember]
+        public string toStationId;
+        [DataMember(EmitDefaultValue = false)]
+        public string sectionId;
+        [DataMember]
+        public ulong expectedIndexVersion;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartStationDirectoryRequestDto
+    {
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public ulong expectedIndexVersion;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartStationDirectoryResponseDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
         public string error;
         [DataMember]
-        public int failureSegmentIndex = -1;
+        public string status;
         [DataMember]
-        public int failureFromWaypointIndex = -1;
+        public ulong publishedIndexVersion;
         [DataMember]
-        public int failureToWaypointIndex = -1;
+        public DispatchWorkbenchRunChartStationDirectoryItemDto[] stations;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartStationDirectoryItemDto
+    {
         [DataMember]
-        public string failureCode;
+        public string stationId;
         [DataMember]
-        public string failureDetail;
+        public string name;
         [DataMember]
-        public DispatchWorkbenchRunChartCandidateDto[] candidates;
+        public bool passOnly;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartSectionResponseDto
+    {
         [DataMember]
-        public DispatchWorkbenchRunChartSegmentDto[] segments;
+        public bool success;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public ulong publishedIndexVersion;
+        [DataMember]
+        public string status;
+        [DataMember]
+        public DispatchWorkbenchRunChartSectionDto[] sections;
+        [DataMember]
+        public bool truncated;
+        [DataMember]
+        public string[] truncatedPairs;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartSectionDto
+    {
+        [DataMember]
+        public string sectionId;
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public DispatchWorkbenchRunChartStationDto[] stations;
+        [DataMember]
+        public DispatchWorkbenchRunChartCoverageDto[] coverages;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartStationDto
+    {
+        [DataMember]
+        public string stationId;
+        [DataMember]
+        public int sectionIndex;
+        [DataMember]
+        public string type;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchRunChartCoverageDto
+    {
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string lineIdentity;
+        [DataMember]
+        public string mode;
+        [DataMember]
+        public int directionPhase;
+        [DataMember]
+        public ulong chainSignature;
+        [DataMember]
+        public ulong traversalSignature;
+        [DataMember]
+        public int fromSectionIndex;
+        [DataMember]
+        public int toSectionIndex;
+        [DataMember]
+        public DispatchWorkbenchRunChartStationDto[] stops;
+        [DataMember]
+        public DispatchWorkbenchRunChartStationDto[] passes;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorListRequestDto
+    {
+        [DataMember]
+        public int dayOffset;
+        [DataMember]
+        public string lineId;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorListResponseDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public bool dataComplete;
+        [DataMember]
+        public int droppedTripCount;
+        [DataMember]
+        public bool persistenceHealthy;
+        [DataMember]
+        public string lastIssueCode;
+        [DataMember]
+        public int issueCount;
+        [DataMember]
+        public int serviceDateKey;
+        [DataMember]
+        public int currentServiceDateKey;
+        [DataMember]
+        public int nowMinute;
+        [DataMember]
+        public long clockEpoch;
+        [DataMember]
+        public DispatchWorkbenchMonitorSummaryDto summary;
+        [DataMember]
+        public DispatchWorkbenchMonitorTripHeaderDto[] trips = System.Array.Empty<DispatchWorkbenchMonitorTripHeaderDto>();
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorSummaryDto
+    {
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorTripHeaderDto
+    {
+        [DataMember]
+        public string tripKey;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public int serviceDateKey;
+        [DataMember]
+        public int plannedStartMinute;
+        [DataMember]
+        public int? actualStartMinute;
+        [DataMember]
+        public int? plannedEndMinute;
+        [DataMember]
+        public int? actualEndMinute;
+        [DataMember]
+        public string scheduleType;
+        [DataMember]
+        public string state;
+        [DataMember]
+        public string endReason;
+        [DataMember]
+        public string serviceKind;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorDetailRequestDto
+    {
+        [DataMember]
+        public string tripKey;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorDetailResponseDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public bool dataComplete;
+        [DataMember]
+        public int droppedTripCount;
+        [DataMember]
+        public bool persistenceHealthy;
+        [DataMember]
+        public string lastIssueCode;
+        [DataMember]
+        public int issueCount;
+        [DataMember]
+        public DispatchWorkbenchMonitorTripHeaderDto header;
+        [DataMember]
+        public DispatchWorkbenchMonitorStopDto[] stops = System.Array.Empty<DispatchWorkbenchMonitorStopDto>();
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorStopDto
+    {
+        [DataMember]
+        public int order;
+        [DataMember]
+        public string stopKey;
+        [DataMember]
+        public int waypointIndex;
+        [DataMember]
+        public int? plannedArrivalMinute;
+        [DataMember]
+        public int? plannedDepartureMinute;
+        [DataMember]
+        public int? actualArrivalMinute;
+        [DataMember]
+        public int? actualDepartureMinute;
+        [DataMember]
+        public bool cleared;
     }
 }

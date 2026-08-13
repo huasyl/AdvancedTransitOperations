@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { minutesToTime, timeToMinutes } from "./timetable-data";
+import { minutesToTime } from "./timetable-data";
 
 const WIDTH = 960;
 const HEIGHT = 300;
@@ -8,9 +8,15 @@ const RIGHT = 24;
 const TOP = 18;
 const BOTTOM = 34;
 
+function isChartPoint(point) {
+  return Number.isFinite(point?.arrivalTime)
+    && Number.isFinite(point?.departureTime)
+    && Number.isFinite(point?.distance);
+}
+
 export default function RunChart({ stations, series, emptyText }) {
   const model = useMemo(() => {
-    const points = series.flatMap((item) => item.points);
+    const points = series.flatMap((item) => item.points).filter(isChartPoint);
     if (stations.length === 0 || points.length === 0) {
       return null;
     }
@@ -45,15 +51,16 @@ export default function RunChart({ stations, series, emptyText }) {
           <text className="rtw-timetable-chart-time" x={model.x(tick)} y={HEIGHT - 10} textAnchor="middle">{minutesToTime(tick)}</text>
         </g>
       ))}
-      {stations.map((station) => (
-        <g key={station.id}>
+      {stations.map((station, index) => (
+        <g key={`${station.id}-${station.occurrence ?? index}`}>
           <line className="rtw-timetable-chart-grid" x1={LEFT} x2={WIDTH - RIGHT} y1={model.y(station.distance)} y2={model.y(station.distance)} />
           <text className="rtw-timetable-chart-station" x={LEFT - 12} y={model.y(station.distance) + 4} textAnchor="end">{station.name}</text>
         </g>
       ))}
       {series.map((item) => {
+        const points = item.points.filter(isChartPoint);
         const pathPoints = [];
-        item.points.forEach((point) => {
+        points.forEach((point) => {
           pathPoints.push(`${model.x(point.arrivalTime)},${model.y(point.distance)}`);
           if (point.departureTime !== point.arrivalTime) {
             pathPoints.push(`${model.x(point.departureTime)},${model.y(point.distance)}`);
@@ -62,8 +69,8 @@ export default function RunChart({ stations, series, emptyText }) {
         return (
           <g key={`${item.lineId}-${item.trainId}`}>
             <polyline className="rtw-timetable-chart-line" points={pathPoints.join(" ")} style={{ stroke: item.color }} />
-            {item.points.map((point) => (
-              <circle key={`${item.trainId}-${point.stationId}`} className="rtw-timetable-chart-point" cx={model.x(timeToMinutes(point.arrivalLabel))} cy={model.y(point.distance)} r="3" style={{ fill: item.color }} />
+            {points.map((point) => (
+              <circle key={`${item.trainId}-${point.stationId}-${point.occurrence ?? ""}`} className="rtw-timetable-chart-point" cx={model.x(point.arrivalTime)} cy={model.y(point.distance)} r="3" style={{ fill: item.color }} />
             ))}
           </g>
         );

@@ -191,6 +191,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 TryProgress = runtime.m_RouteProgress.Try,
                 TryBlocker = (Entity vehicle, out Entity blocker) => runtime.m_Bypass.TryGetLatchedBlocker(vehicle, out blocker),
                 TrySessionArrival = runtime.m_StopRuntime.TryGetSessionArrivalFrame,
+                TryVehicleTimes = runtime.m_ObsRecorder.TryVehicleTimes,
                 ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
                 Stations = (Entity vehicle, Entity line, out string current, out string nextPhysical, out string nextStop, out bool nextPhysicalIsPass) =>
                 {
@@ -447,7 +448,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Preferred = () => runtime.DraftStore().Preferred(),
                 LineId = runtime.LineStableId,
                 StationName = runtime.m_Resolve.StationName,
-                StopName = runtime.m_WorkbenchBridge.StopSvc().Name,
+                StopName = RuntimeRoot.StopService(runtime).Name,
                 StopId = runtime.m_Resolve.StopId,
                 OriginId = Stops.OriginId,
                 Origin = line =>

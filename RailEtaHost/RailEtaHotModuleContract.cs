@@ -143,7 +143,6 @@ namespace RapidTransitMod.RailEtaHost
         public int FromRouteLaneSide { get; set; } = -1;
         public int ToRouteLaneSide { get; set; } = -1;
         public int Direction { get; set; }
-        public float NextConnectionDistance { get; set; }
         public int FromWaypointIndex { get; set; }
         public int FromWaypointVersion { get; set; }
         public int FromWaypointEntityIndex { get; set; }
@@ -318,7 +317,6 @@ namespace RapidTransitMod.RailEtaHost
                 hash = Mix(hash, fact.FromRouteLaneSide);
                 hash = Mix(hash, fact.ToRouteLaneSide);
                 hash = Mix(hash, fact.Direction);
-                hash = Mix(hash, fact.NextConnectionDistance);
                 hash = Mix(hash, fact.FromWaypointIndex);
                 hash = Mix(hash, fact.FromWaypointVersion);
                 hash = Mix(hash, fact.FromWaypointEntityIndex);

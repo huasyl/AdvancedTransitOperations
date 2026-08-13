@@ -178,7 +178,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 Entity routeSegment = routeSegments[request.PathSlotIndex].m_Segment;
                 if (routeSegment != Entity.Null
                     && new RailTravel.PathQuery(m_Entities).TryBuild(routeSegment, out RailTravel.Path existing)
-                    && existing != null && !existing.IsEmpty)
+                    && existing != null && existing.Segments.Length != 0)
                 {
                     m_SegmentResults[request.PathSlotIndex] = new RailEtaTheorySegmentPathResult
                     {
@@ -297,21 +297,25 @@ namespace RapidTransitMod.RailEta.BuiltIn
                         || String.Equals(query.State, "pending", StringComparison.Ordinal))
                         continue;
                     (completed ?? (completed = new List<string>())).Add(pending.Key);
-                    if (!query.Success || !query.ProjectionSuccess || query.Path == null || query.Path.IsEmpty)
+                    if (!query.Success || !query.ProjectionSuccess || query.Path == null
+                        || query.Path.Segments.Length == 0)
                     {
-                        m_SegmentFailure = String.IsNullOrEmpty(query.Error)
-                            ? "TheorySegmentPathFailed"
-                            : query.Error;
+                        string code = !query.Success
+                            ? "segment-path-failed"
+                            : !query.ProjectionSuccess
+                                ? "segment-path-projection-failed"
+                                : "segment-path-empty";
                         if (m_SegmentFailureInfo == null)
                         {
                             RailEtaTheorySegmentRequest failedRequest = pending.Value;
+                            m_SegmentFailure = code;
                             m_SegmentFailureInfo = new RailEtaTheoryFailure
                             {
                                 SegmentIndex = failedRequest.SegmentIndex,
-                                FromWaypointIndex = failedRequest.SegmentFromWaypointIndex,
-                                ToWaypointIndex = failedRequest.SegmentToWaypointIndex,
-                                Failure = m_SegmentFailure,
-                                Detail = m_SegmentFailure
+                                FromWaypointIndex = failedRequest.FromWaypointIndex,
+                                ToWaypointIndex = failedRequest.ToWaypointIndex,
+                                Failure = code,
+                                Detail = SegmentFailureDetail(failedRequest, code, query.Error)
                             };
                         }
                         continue;
@@ -337,6 +341,20 @@ namespace RapidTransitMod.RailEta.BuiltIn
             results = new List<RailEtaTheorySegmentPathResult>(m_SegmentResults.Values);
             results.Sort((left, right) => left.Request.PathSlotIndex.CompareTo(right.Request.PathSlotIndex));
             return true;
+        }
+
+        private static string SegmentFailureDetail(
+            RailEtaTheorySegmentRequest request, string code, string reason)
+        {
+            string detail = "code=" + code
+                + ";seg=" + request.SegmentIndex
+                + ";from=" + request.FromWaypointIndex
+                + ";to=" + request.ToWaypointIndex
+                + ";slot=" + request.PathSlotIndex;
+            if (String.IsNullOrEmpty(reason)) return detail;
+            string token = reason.Replace(';', ',').Replace('\r', ' ').Replace('\n', ' ');
+            if (token.Length > 128) token = token.Substring(0, 128);
+            return detail + ";reason=" + token;
         }
 
         internal void Cancel()

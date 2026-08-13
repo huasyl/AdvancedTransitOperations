@@ -141,6 +141,10 @@ namespace RapidTransitMod
             public string Detail7Value;
             public string Detail8LabelKey;
             public string Detail8Value;
+            public int NextPlannedArrivalMinute;
+            public int PlannedArrivalMinute;
+            public int ActualArrivalMinute;
+            public int PlannedDepartureMinute;
             public string AlertText;
             public bool ShowRetireAction;
             public bool ShowForceDepartAction;
@@ -306,6 +310,7 @@ namespace RapidTransitMod
                     m_Port.ClockSnapshot,
                     m_Port.Vehicles,
                     m_Port.TrySessionArrival,
+                    m_Port.TryVehicleTimes,
                     m_Port.Spawns,
                     m_LineLastSpawnTriggerSummary,
                     m_LineLastVehicleRegisterSummary,

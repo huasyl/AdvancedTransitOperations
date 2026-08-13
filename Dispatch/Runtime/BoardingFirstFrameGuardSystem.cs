@@ -49,9 +49,12 @@ namespace RapidTransitMod.Dispatch.Runtime
                     PublicTransport publicTransport = m_PublicTransportLookup[vehicle];
                     bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
                     byte current = boarding ? (byte)1 : (byte)0;
-                    bool wasBoarding = runtime.m_BoardingFirstFrameGuardState.TryGetValue(vehicle, out byte previous)
+                    bool hadPrevious = runtime.m_BoardingFirstFrameGuardState.TryGetValue(vehicle, out byte previous);
+                    bool wasBoarding = hadPrevious
                         && previous != 0;
                     runtime.m_BoardingFirstFrameGuardState[vehicle] = current;
+                    if (!hadPrevious || previous != current)
+                        TraceBoarding(runtime, vehicle, publicTransport, hadPrevious, wasBoarding, boarding, nowFrame);
 
                     if (!boarding
                         || wasBoarding
@@ -95,6 +98,55 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 vehicles.Dispose();
             }
+        }
+
+        private void TraceBoarding(
+            ModRuntimeHostSystem runtime,
+            Entity vehicle,
+            PublicTransport publicTransport,
+            bool hadPrevious,
+            bool wasBoarding,
+            bool boarding,
+            uint frame)
+        {
+            if (!RtLog.VerboseEnabled)
+                return;
+
+            Entity target = Entity.Null;
+            Entity stop = Entity.Null;
+            Entity stopVehicle = Entity.Null;
+            int targetWaypoint = -1;
+            if (EntityManager.HasComponent<Target>(vehicle))
+            {
+                target = EntityManager.GetComponentData<Target>(vehicle).m_Target;
+                if (target != Entity.Null && EntityManager.HasComponent<Waypoint>(target))
+                    targetWaypoint = EntityManager.GetComponentData<Waypoint>(target).m_Index;
+                if (target != Entity.Null && EntityManager.HasComponent<Connected>(target))
+                {
+                    stop = EntityManager.GetComponentData<Connected>(target).m_Connected;
+                    if (stop != Entity.Null && EntityManager.HasComponent<BoardingVehicle>(stop))
+                        stopVehicle = EntityManager.GetComponentData<BoardingVehicle>(stop).m_Vehicle;
+                }
+            }
+
+            runtime.m_VehicleView.TryGetLine(vehicle, out Entity line);
+            runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state);
+            string change = !hadPrevious
+                ? "initial->" + (boarding ? 1 : 0)
+                : wasBoarding ? "fall" : "rise";
+            RtLog.Diagnostics(
+                "[StopTraceGuard] frame=" + frame
+                + " vehicle=" + vehicle.Index
+                + " line=" + line.Index
+                + " state=" + state
+                + " change=" + change
+                + " official=" + (boarding ? 1 : 0)
+                + " target=" + target.Index
+                + " targetWp=" + targetWaypoint
+                + " stop=" + stop.Index
+                + " stopVehicle=" + stopVehicle.Index
+                + " flags=" + publicTransport.m_State
+                + " departureFrame=" + publicTransport.m_DepartureFrame);
         }
 
         private bool IsOfficialBoardingAtTargetStop(Entity vehicle)

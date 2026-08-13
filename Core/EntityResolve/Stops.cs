@@ -240,6 +240,22 @@ namespace RapidTransitMod
             return m_Names.Get(stopEntity);
         }
 
+        internal string StationRenderedName(Entity stopEntity)
+        {
+            if (!Live(stopEntity))
+                return string.Empty;
+
+            Entity anchor = Anchor(stopEntity);
+            if (anchor != Entity.Null && anchor != stopEntity)
+            {
+                string rendered = m_Names.Rendered(anchor);
+                if (!string.IsNullOrEmpty(rendered))
+                    return rendered;
+            }
+
+            return m_Names.Rendered(stopEntity);
+        }
+
         internal Entity Owned(Entity entity)
         {
             Entity current = entity;

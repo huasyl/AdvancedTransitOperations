@@ -59,9 +59,10 @@ namespace RapidTransitMod.Dispatch.Lines
             if (line == Entity.Null || waypoints.Length == 0)
                 return false;
 
+            LineProfile.RoadRouteSnapshot roadSnapshot = null;
             if (lifecycle == LifecycleKind.Rail)
             {
-                if (!m_TrackModel.TryGetWaypointIndexLookup(line, out LineWaypointIndexLookup lookup)
+                if (!m_TrackModel.TryGetWaypointIndexLookup(line, waypoints, out LineWaypointIndexLookup lookup)
                     || lookup == null
                     || lookup.Signature != WaypointSignature(waypoints))
                 {
@@ -70,8 +71,8 @@ namespace RapidTransitMod.Dispatch.Lines
             }
             else if (lifecycle == LifecycleKind.Road)
             {
-                if (!m_LineProfile.TryReadRoadRoute(line, out LineProfile.RoadRouteSnapshot snapshot)
-                    || !MatchesRoadRoute(snapshot, waypoints))
+                if (!m_LineProfile.TryReadRoadRoute(line, out roadSnapshot)
+                    || !MatchesRoadRoute(roadSnapshot, waypoints))
                 {
                     return false;
                 }
@@ -89,7 +90,9 @@ namespace RapidTransitMod.Dispatch.Lines
                 if (waypoint == Entity.Null || !m_EntityManager.Exists(waypoint))
                     return false;
 
-                Entity stop = m_Stop(waypoint);
+                Entity stop = lifecycle == LifecycleKind.Road
+                    ? roadSnapshot.Stops[i]
+                    : m_Stop(waypoint);
                 string stopKey = string.Empty;
                 if (stop != Entity.Null)
                 {
@@ -122,6 +125,8 @@ namespace RapidTransitMod.Dispatch.Lines
             DynamicBuffer<RouteWaypoint> waypoints)
         {
             if (snapshot == null
+                || snapshot.Waypoints == null
+                || snapshot.Stops == null
                 || snapshot.Waypoints.Length != waypoints.Length
                 || snapshot.Stops.Length != waypoints.Length)
             {
@@ -131,8 +136,10 @@ namespace RapidTransitMod.Dispatch.Lines
             for (int i = 0; i < waypoints.Length; i++)
             {
                 Entity waypoint = waypoints[i].m_Waypoint;
+                Entity stop = snapshot.Stops[i];
                 if (snapshot.Waypoints[i] != waypoint
-                    || snapshot.Stops[i] != m_Stop(waypoint))
+                    || stop != m_Stop(waypoint)
+                    || (stop != Entity.Null && !m_EntityManager.Exists(stop)))
                 {
                     return false;
                 }

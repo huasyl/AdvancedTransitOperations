@@ -215,6 +215,10 @@ namespace RapidTransitMod
             AppendJsonString(sb, "detail7Value", snapshot.Detail7Value);
             AppendJsonString(sb, "detail8LabelKey", snapshot.Detail8LabelKey);
             AppendJsonString(sb, "detail8Value", snapshot.Detail8Value);
+            AppendJsonInt(sb, "nextPlannedArrivalMinute", snapshot.NextPlannedArrivalMinute);
+            AppendJsonInt(sb, "plannedArrivalMinute", snapshot.PlannedArrivalMinute);
+            AppendJsonInt(sb, "actualArrivalMinute", snapshot.ActualArrivalMinute);
+            AppendJsonInt(sb, "plannedDepartureMinute", snapshot.PlannedDepartureMinute);
             AppendJsonString(sb, "alertText", snapshot.AlertText);
             AppendJsonBool(sb, "showAlerts", snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);
@@ -256,6 +260,11 @@ namespace RapidTransitMod
         private static void AppendJsonBool(StringBuilder sb, string name, bool value)
         {
             sb.Append('"').Append(name).Append("\":").Append(value ? "true" : "false").Append(',');
+        }
+
+        private static void AppendJsonInt(StringBuilder sb, string name, int value)
+        {
+            sb.Append('"').Append(name).Append("\":").Append(value).Append(',');
         }
 
         private static void AppendEscapedJson(StringBuilder sb, string value)

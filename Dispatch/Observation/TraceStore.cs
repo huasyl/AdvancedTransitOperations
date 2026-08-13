@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Entities;
 
@@ -25,11 +26,20 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Dictionary<RailSegmentKey, RailSegmentObservation> RailSegments { get; } =
             new Dictionary<RailSegmentKey, RailSegmentObservation>();
 
+        internal Dictionary<Entity, int> RailSegmentLineCounts { get; } =
+            new Dictionary<Entity, int>();
+
         internal Dictionary<Entity, MonitorTrip> ActiveTrips { get; } =
             new Dictionary<Entity, MonitorTrip>();
 
         internal Dictionary<int, MonitorDateSlot> DateSlots { get; } =
             new Dictionary<int, MonitorDateSlot>();
+
+        internal Dictionary<MonitorSlotKey, MonitorClaim> MonitorClaims { get; } =
+            new Dictionary<MonitorSlotKey, MonitorClaim>();
+
+        internal Dictionary<Entity, MonitorSlotKey> VehicleMonitorClaims { get; } =
+            new Dictionary<Entity, MonitorSlotKey>();
 
         internal int MonitorCurrentDateKey { get; set; }
 
@@ -38,6 +48,12 @@ namespace RapidTransitMod.Dispatch.Observation
         internal string MonitorOverflowReason { get; set; } = string.Empty;
 
         internal int MonitorOverflowCount { get; set; }
+
+        internal string MonitorIssueCode { get; set; } = string.Empty;
+
+        internal int MonitorIssueCount { get; set; }
+
+        internal bool MonitorClaimsRestored { get; set; }
 
         internal void Clear()
         {
@@ -54,16 +70,22 @@ namespace RapidTransitMod.Dispatch.Observation
             RailSegmentSessions.Clear();
             ActiveTrips.Clear();
             DateSlots.Clear();
+            MonitorClaims.Clear();
+            VehicleMonitorClaims.Clear();
             MonitorCurrentDateKey = 0;
             MonitorOverflowed = false;
             MonitorOverflowReason = string.Empty;
             MonitorOverflowCount = 0;
+            MonitorIssueCode = string.Empty;
+            MonitorIssueCount = 0;
+            MonitorClaimsRestored = false;
         }
 
         internal void ClearTraces()
         {
             Vehicles.Clear();
             RailSegments.Clear();
+            RailSegmentLineCounts.Clear();
         }
     }
 
@@ -75,6 +97,51 @@ namespace RapidTransitMod.Dispatch.Observation
         internal uint StartFrame;
     }
 
+    internal readonly struct MonitorSlotKey : System.IEquatable<MonitorSlotKey>
+    {
+        internal readonly Entity Line;
+        internal readonly int SlotMinute;
+        internal readonly int ServiceDateKey;
+
+        internal MonitorSlotKey(Entity line, int slotMinute, int serviceDateKey)
+        {
+            Line = line;
+            SlotMinute = slotMinute;
+            ServiceDateKey = serviceDateKey;
+        }
+
+        public bool Equals(MonitorSlotKey other) =>
+            Line == other.Line
+                && SlotMinute == other.SlotMinute
+                && ServiceDateKey == other.ServiceDateKey;
+
+        public override bool Equals(object obj) =>
+            obj is MonitorSlotKey other && Equals(other);
+
+        public override int GetHashCode() =>
+            unchecked((Line.GetHashCode() * 397 ^ SlotMinute) * 397 ^ ServiceDateKey);
+    }
+
+    internal sealed class MonitorClaim
+    {
+        internal Entity Vehicle;
+    }
+
+    internal readonly struct MonitorClaimSeed
+    {
+        internal readonly Entity Vehicle;
+        internal readonly Entity Line;
+        internal readonly int SlotMinute;
+
+        internal MonitorClaimSeed(Entity vehicle, Entity line, int slotMinute)
+        {
+            Vehicle = vehicle;
+            Line = line;
+            SlotMinute = slotMinute;
+        }
+    }
+
+    // RailSegment 表示实际停站到下一实际停站的运行时间聚合，不是物理轨道段。
     internal readonly struct RailSegmentKey : System.IEquatable<RailSegmentKey>
     {
         internal readonly Entity Line;

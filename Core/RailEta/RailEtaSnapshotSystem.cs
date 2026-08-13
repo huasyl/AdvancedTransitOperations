@@ -84,6 +84,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
         private RailEtaTheorySegmentRequest[] m_TheorySegments = Array.Empty<RailEtaTheorySegmentRequest>();
         private List<RailEtaTheorySegmentPathResult> m_TheorySegmentPaths;
         private bool m_TheoryCapturePending;
+        private bool m_TheoryFailureLogged;
         private Entity m_TheoryLine;
         private long m_BatchId;
         private int m_Generation;
@@ -157,7 +158,10 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 {
                     Exception failure = service.Worker.LastFailure;
                     string detail = failure == null ? "Rail ETA worker is lost." : failure.GetType().Name + ": " + failure.Message;
+                    EnsureTheoryFailure(service, m_Requests, RailEtaFailure.WorkerLost, detail);
                     service.MarkWorkerLost(detail);
+                    LogTheoryFailure(service, m_Requests != null && m_Requests.Count > 0
+                        ? m_Requests[0].Ticket : default);
                     FinishBatch();
                 }
                 return;
@@ -172,9 +176,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 }
                 if (BatchExpired())
                 {
-                    FailRequests(service, m_Requests, RailEtaFailure.FuturePathfindFailed,
+                    FailBatch(service, RailEtaFailure.FuturePathfindFailed,
                         "Theory batch exceeded the 8-second wall-clock budget.");
-                    FinishBatch();
                     return;
                 }
             }
@@ -218,6 +221,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
             if (!service.TryDrain(out RailEtaRequestEnvelope envelope)) return;
             m_BatchId = service.NextBatchId();
             m_BatchStartTicks = Stopwatch.GetTimestamp();
+            m_TheoryFailureLogged = false;
             // HotModule admits one active ticket. Theory keeps adjacent path slots inside the
             // ticket, then creates one synthetic controller per actual stop-to-stop segment.
             List<RailEtaBatchRequest> requests;
@@ -239,6 +243,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                     }
                     service.Transition(envelope.Ticket, RailEtaRequestState.Failed, requestFrame, 0,
                         generation, RailEtaFailure.InvalidResult, theoryBatchFailure);
+                    LogTheoryFailure(service, envelope.Ticket);
                     return;
                 }
             }
@@ -658,7 +663,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 if (m_TheoryCapturePending)
                 {
                     m_TheoryCapturePending = false;
-                    if (!AppendTheoryPaths(out string appendFailure))
+                    if (!AppendTheoryPaths(service, out string appendFailure))
                     {
                         m_Staging.Dispose();
                         m_Staging = null;
@@ -753,12 +758,15 @@ namespace RapidTransitMod.RailEta.BuiltIn
             m_Phase = Phase.IndexJob;
         }
 
-        private bool AppendTheoryPaths(out string failure)
+        private bool AppendTheoryPaths(RailEtaService service, out string failure)
         {
             failure = string.Empty;
             if (m_Staging == null || m_TheorySegmentPaths == null || m_TheorySegmentPaths.Count == 0)
             {
-                failure = "Theory path staging is missing.";
+                RailEtaTheoryFailure failureInfo = TheoryFailure(null, null, null,
+                    "path-staging-missing", Entity.Null, Entity.Null, -1);
+                StoreTheoryFailure(service, failureInfo);
+                failure = failureInfo.Detail;
                 return false;
             }
 
@@ -790,7 +798,15 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 if (pathResult?.Request == null
                     || pathsBySlot.ContainsKey(pathResult.Request.PathSlotIndex))
                 {
-                    failure = "Theory segment request mapping is incomplete.";
+                    RailEtaTheorySegmentRequest slot = pathResult?.Request;
+                    RailEtaTheoryFailure failureInfo = TheoryFailure(null, slot,
+                        pathResult == null ? (bool?)null : pathResult.FormalPath,
+                        pathResult?.Request == null
+                            ? "path-result-request-missing"
+                            : "path-result-slot-duplicate",
+                        Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, failureInfo);
+                    failure = failureInfo.Detail;
                     return false;
                 }
                 pathsBySlot.Add(pathResult.Request.PathSlotIndex, pathResult);
@@ -803,23 +819,31 @@ namespace RapidTransitMod.RailEta.BuiltIn
             for (int i = 0; i < m_Requests.Count; i++)
             {
                 RailEtaBatchRequest batchRequest = m_Requests[i];
-                if (!TryCombineTheoryPaths(batchRequest, pathsBySlot, out RailTravel.Path combinedPath)
+                if (!TryCombineTheoryPaths(batchRequest, pathsBySlot, out RailTravel.Path combinedPath,
+                        out RailEtaTheoryFailure failureInfo)
                     || !TryBuildTheoryPathFacts(batchRequest, pathsBySlot, combinedPath,
-                        out RailEtaTheoryPathFact[] pathFacts))
+                        out RailEtaTheoryPathFact[] pathFacts, out failureInfo))
                 {
-                    failure = "Theory actual segment path validation facts are incomplete.";
+                    StoreTheoryFailure(service, failureInfo);
+                    failure = failureInfo?.Detail ?? "code=path-facts-missing";
                     return false;
                 }
                 totalPathSourceElements += combinedPath.SourceElementCount;
                 if (totalPathSourceElements > RailEtaLimits.MaxTheoryPathFacts)
                 {
-                    failure = "Theory source path elements exceeded the bounded query limit.";
+                    RailEtaTheoryFailure sourceLimitFailure = TheoryFailure(batchRequest, null, null,
+                        "batch-source-limit", Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, sourceLimitFailure);
+                    failure = sourceLimitFailure.Detail;
                     return false;
                 }
                 totalPathFacts += pathFacts.Length;
                 if (totalPathFacts > RailEtaLimits.MaxTheoryPathFacts)
                 {
-                    failure = "Theory path validation facts exceeded the bounded query limit.";
+                    RailEtaTheoryFailure factLimitFailure = TheoryFailure(batchRequest, null, null,
+                        "batch-fact-limit", Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, factLimitFailure);
+                    failure = factLimitFailure.Detail;
                     return false;
                 }
                 combinedPaths.Add(batchRequest.SegmentIndex, combinedPath);
@@ -838,7 +862,10 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 RailEtaBatchRequest batchRequest = m_Requests[i];
                 if (!combinedPaths.TryGetValue(batchRequest.SegmentIndex, out RailTravel.Path combinedPath))
                 {
-                    failure = "Theory actual segment path concatenation is incomplete.";
+                    RailEtaTheoryFailure failureInfo = TheoryFailure(batchRequest, null, null,
+                        "combined-path-missing", Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, failureInfo);
+                    failure = failureInfo.Detail;
                     return false;
                 }
                 Entity synthetic = RailEtaEntityId.ToEntity(batchRequest.Descriptor);
@@ -892,14 +919,78 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return true;
         }
 
+        private void StoreTheoryFailure(RailEtaService service, RailEtaTheoryFailure failure)
+        {
+            if (service == null || failure == null || m_Requests == null || m_Requests.Count == 0)
+                return;
+            RailEtaTheoryFailure existing;
+            RailEtaTicket ticket = m_Requests[0].Ticket;
+            if (!ticket.IsValid
+                || (service.TryGetTheoryFailure(ticket, out existing) && existing != null))
+                return;
+            service.SetTheoryFailure(ticket, failure, m_Generation);
+        }
+
+        private void LogTheoryFailure(RailEtaService service, RailEtaTicket ticket)
+        {
+            if (m_TheoryFailureLogged || service == null || !ticket.IsValid
+                || !service.TryGetTheoryFailure(ticket, out RailEtaTheoryFailure failure)
+                || failure == null)
+                return;
+            m_TheoryFailureLogged = true;
+            Mod.log.Info("[RailEtaTheoryFailure] ticket=" + ticket.Value
+                + ";failure=" + (failure.Failure ?? string.Empty)
+                + ";detail=" + (failure.Detail ?? string.Empty));
+        }
+
+        private static RailEtaTheoryFailure TheoryFailure(
+            RailEtaBatchRequest request,
+            RailEtaTheorySegmentRequest slot,
+            bool? formalPath,
+            string code,
+            Entity lane,
+            Entity nextLane,
+            int pathElementIndex)
+        {
+            int segmentIndex = request?.SegmentIndex ?? slot?.SegmentIndex ?? -1;
+            int fromWaypointIndex = request?.FromWaypointIndex
+                ?? slot?.SegmentFromWaypointIndex ?? -1;
+            int toWaypointIndex = request?.ToWaypointIndex
+                ?? slot?.SegmentToWaypointIndex ?? -1;
+            int pathSlotIndex = slot?.PathSlotIndex ?? -1;
+            string detail = "code=" + (code ?? "theory-path-failure")
+                + ";seg=" + segmentIndex
+                + ";from=" + fromWaypointIndex
+                + ";to=" + toWaypointIndex
+                + ";slot=" + pathSlotIndex
+                + ";formal=" + (formalPath.HasValue ? (formalPath.Value ? "1" : "0") : "-1")
+                + ";lane=" + lane.Index + ":" + lane.Version
+                + ";next=" + nextLane.Index + ":" + nextLane.Version
+                + ";element=" + pathElementIndex;
+            return new RailEtaTheoryFailure
+            {
+                SegmentIndex = segmentIndex,
+                FromWaypointIndex = fromWaypointIndex,
+                ToWaypointIndex = toWaypointIndex,
+                Failure = code ?? "theory-path-failure",
+                Detail = detail
+            };
+        }
+
         private static bool TryCombineTheoryPaths(
             RailEtaBatchRequest request,
             Dictionary<int, RailEtaTheorySegmentPathResult> pathsBySlot,
-            out RailTravel.Path combined)
+            out RailTravel.Path combined,
+            out RailEtaTheoryFailure failure)
         {
             combined = null;
+            failure = null;
             if (request == null || request.PathSlots.Count == 0)
+            {
+                failure = TheoryFailure(request, null, null, "combine-slots-missing",
+                    Entity.Null, Entity.Null, -1);
                 return false;
+            }
             var segments = new List<RailTravel.Segment>();
             int sourceElementCount = 0;
             int skippedElementCount = 0;
@@ -907,63 +998,136 @@ namespace RapidTransitMod.RailEta.BuiltIn
             for (int i = 0; i < request.PathSlots.Count; i++)
             {
                 RailEtaTheorySegmentRequest slot = request.PathSlots[i];
-                if (!pathsBySlot.TryGetValue(slot.PathSlotIndex, out RailEtaTheorySegmentPathResult pathResult)
-                    || pathResult.Path == null || pathResult.Path.IsEmpty)
+                if (slot == null)
+                {
+                    failure = TheoryFailure(request, null, null, "combine-slot-missing",
+                        Entity.Null, Entity.Null, -1);
                     return false;
+                }
+                if (!pathsBySlot.TryGetValue(slot.PathSlotIndex, out RailEtaTheorySegmentPathResult pathResult))
+                {
+                    failure = TheoryFailure(request, slot, null, "combine-slot-missing",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (pathResult.Path == null || pathResult.Path.Segments.Length == 0)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, "combine-path-empty",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
                 if (sourceEntity == Entity.Null) sourceEntity = pathResult.Path.SourceEntity;
-                if (pathResult.Path.SourceElementCount < 0
-                    || sourceElementCount > RailEtaLimits.MaxTheoryPathFacts - pathResult.Path.SourceElementCount)
+                if (pathResult.Path.SourceElementCount < 0)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath,
+                        "combine-source-count-negative", Entity.Null, Entity.Null, -1);
                     return false;
+                }
+                if (sourceElementCount > RailEtaLimits.MaxTheoryPathFacts - pathResult.Path.SourceElementCount)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath,
+                        "combine-source-count-limit", Entity.Null, Entity.Null, -1);
+                    return false;
+                }
                 sourceElementCount += pathResult.Path.SourceElementCount;
                 skippedElementCount += pathResult.Path.SkippedElementCount;
                 segments.AddRange(pathResult.Path.Segments);
             }
             if (segments.Count == 0 || sourceEntity == Entity.Null)
+            {
+                failure = TheoryFailure(request, null, null,
+                    segments.Count == 0 ? "combine-segments-empty" : "combine-source-missing",
+                    Entity.Null, Entity.Null, -1);
                 return false;
+            }
             combined = new RailTravel.Path(sourceEntity, segments.ToArray(), sourceElementCount, skippedElementCount);
-            return !combined.IsEmpty;
+            if (combined.IsEmpty)
+            {
+                failure = TheoryFailure(request, null, null, "combine-path-empty",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            return true;
         }
 
         private bool TryBuildTheoryPathFacts(
             RailEtaBatchRequest request,
             Dictionary<int, RailEtaTheorySegmentPathResult> pathsBySlot,
             RailTravel.Path combinedPath,
-            out RailEtaTheoryPathFact[] facts)
+            out RailEtaTheoryPathFact[] facts,
+            out RailEtaTheoryFailure failure)
         {
             facts = Array.Empty<RailEtaTheoryPathFact>();
-            if (request == null || combinedPath == null || combinedPath.IsEmpty
-                || combinedPath.Segments.Length == 0
-                || combinedPath.Segments.Length > RailEtaLimits.MaxTheoryPathFacts
-                || combinedPath.SourceElementCount > RailEtaLimits.MaxTheoryPathFacts)
+            failure = null;
+            if (request == null)
+            {
+                failure = TheoryFailure(null, null, null, "facts-request-missing",
+                    Entity.Null, Entity.Null, -1);
                 return false;
+            }
+            if (combinedPath == null || combinedPath.Segments.Length == 0)
+            {
+                failure = TheoryFailure(request, null, null, "facts-path-empty",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            if (combinedPath.Segments.Length > RailEtaLimits.MaxTheoryPathFacts
+                || combinedPath.SourceElementCount > RailEtaLimits.MaxTheoryPathFacts)
+            {
+                failure = TheoryFailure(request, null, null, "facts-count-limit",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
             var values = new List<RailEtaTheoryPathFact>(combinedPath.Segments.Length);
             for (int slotIndex = 0; slotIndex < request.PathSlots.Count; slotIndex++)
             {
                 RailEtaTheorySegmentRequest slot = request.PathSlots[slotIndex];
-                if (!pathsBySlot.TryGetValue(slot.PathSlotIndex, out RailEtaTheorySegmentPathResult pathResult)
-                    || pathResult?.Path == null || pathResult.Path.IsEmpty
-                    || !TryBuildTheoryRouteFact(slot, pathResult.FormalPath, out RailEtaTheoryPathFact routeFact)
-                    || !TryResolveRouteLaneSides(routeFact, pathResult.Path,
-                        out int fromRouteLaneSide, out int toRouteLaneSide))
+                if (slot == null)
+                {
+                    failure = TheoryFailure(request, null, null, "facts-slot-missing",
+                        Entity.Null, Entity.Null, -1);
                     return false;
-                int elementSearch = 0;
+                }
+                if (!pathsBySlot.TryGetValue(slot.PathSlotIndex, out RailEtaTheorySegmentPathResult pathResult))
+                {
+                    failure = TheoryFailure(request, slot, null, "facts-slot-missing",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (pathResult.Path == null || pathResult.Path.Segments.Length == 0)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, "facts-slot-path-empty",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (!TryBuildTheoryRouteFact(slot, pathResult.Path, pathResult.FormalPath,
+                    out RailEtaTheoryPathFact routeFact, out string routeFailure))
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, routeFailure,
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (!TryResolveRouteLaneSides(routeFact, pathResult.Path,
+                    out int fromRouteLaneSide, out int toRouteLaneSide,
+                    out Entity routeLane, out string routeLaneFailure))
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, routeLaneFailure,
+                        routeLane, Entity.Null, -1);
+                    return false;
+                }
                 for (int segmentIndex = 0; segmentIndex < pathResult.Path.Segments.Length; segmentIndex++)
                 {
                     RailTravel.Segment segment = pathResult.Path.Segments[segmentIndex];
-                    int pathElementIndex = pathResult.FormalPath
-                        ? FindPathElement(routeFact, segment, ref elementSearch)
-                        : -1;
+                    int pathElementIndex = segment.PathElementIndex;
                     if (pathResult.FormalPath && pathElementIndex < 0)
+                    {
+                        failure = TheoryFailure(request, slot, true, "formal-path-element-missing",
+                            segment.LaneEntity, Entity.Null, -1);
                         return false;
-                    if (segment.TargetDelta.x == segment.TargetDelta.y)
-                        return false;
+                    }
                     RailTravel.Segment next = segmentIndex + 1 < pathResult.Path.Segments.Length
                         ? pathResult.Path.Segments[segmentIndex + 1]
                         : default;
-                    float nextConnectionDistance = 0f;
-                    if (segmentIndex + 1 < pathResult.Path.Segments.Length
-                        && !TryConnectionDistance(segment, next, out nextConnectionDistance))
-                        return false;
                     RailEtaTheoryPathFact fact = new RailEtaTheoryPathFact
                     {
                         PathSlotIndex = routeFact.PathSlotIndex,
@@ -982,7 +1146,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
                         FromRouteLaneSide = fromRouteLaneSide,
                         ToRouteLaneSide = toRouteLaneSide,
                         Direction = segment.TargetDelta.y > segment.TargetDelta.x ? 1 : -1,
-                        NextConnectionDistance = nextConnectionDistance,
                         FromWaypointIndex = routeFact.FromWaypointIndex,
                         FromWaypointVersion = routeFact.FromWaypointVersion,
                         FromWaypointEntityIndex = routeFact.FromWaypointEntityIndex,
@@ -1022,40 +1185,68 @@ namespace RapidTransitMod.RailEta.BuiltIn
                         SpeedLimit = segment.SpeedLimit,
                         Curviness = segment.Curviness
                     };
-                    if (!FillTheoryPathPhysics(segment.LaneEntity, (int)segment.Kind, ref fact))
-                        return false;
+                    FillTheoryPathPhysics(segment, ref fact);
                     values.Add(fact);
                 }
             }
             if (values.Count != combinedPath.Segments.Length)
+            {
+                failure = TheoryFailure(request, null, null, "facts-count-mismatch",
+                    Entity.Null, Entity.Null, -1);
                 return false;
+            }
             facts = values.ToArray();
             return true;
         }
 
         private bool TryBuildTheoryRouteFact(
-            RailEtaTheorySegmentRequest slot, bool formalPath, out RailEtaTheoryPathFact fact)
+            RailEtaTheorySegmentRequest slot, RailTravel.Path path, bool formalPath,
+            out RailEtaTheoryPathFact fact,
+            out string failure)
         {
-            fact = new RailEtaTheoryPathFact { PathSlotIndex = slot.PathSlotIndex };
+            fact = new RailEtaTheoryPathFact { PathSlotIndex = slot?.PathSlotIndex ?? -1 };
+            failure = string.Empty;
+            if (slot == null || path == null || path.Segments.Length == 0)
+            {
+                failure = slot == null ? "route-slot-missing" : "route-path-missing";
+                return false;
+            }
             if (m_TheoryLine == Entity.Null
                 || !EntityManager.HasBuffer<RouteSegment>(m_TheoryLine)
                 || !EntityManager.HasBuffer<RouteWaypoint>(m_TheoryLine))
+            {
+                failure = "route-line-buffers-missing";
                 return false;
+            }
             DynamicBuffer<RouteSegment> routeSegments = EntityManager.GetBuffer<RouteSegment>(m_TheoryLine, true);
             DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(m_TheoryLine, true);
             if (slot.PathSlotIndex < 0 || slot.PathSlotIndex >= routeSegments.Length
                 || slot.FromWaypointIndex < 0 || slot.FromWaypointIndex >= waypoints.Length
                 || slot.ToWaypointIndex < 0 || slot.ToWaypointIndex >= waypoints.Length)
+            {
+                failure = "route-index-invalid";
                 return false;
+            }
             Entity from = waypoints[slot.FromWaypointIndex].m_Waypoint;
             Entity to = waypoints[slot.ToWaypointIndex].m_Waypoint;
             if (from == Entity.Null || to == Entity.Null
                 || from.Version != slot.FromWaypointVersion
                 || to.Version != slot.ToWaypointVersion)
+            {
+                failure = "route-waypoint-version-mismatch";
                 return false;
+            }
             Entity owner = routeSegments[slot.PathSlotIndex].m_Segment;
             if (owner != Entity.Null && !EntityManager.Exists(owner))
+            {
+                failure = "route-owner-missing";
                 return false;
+            }
+            if (formalPath && owner != path.SourceEntity)
+            {
+                failure = "formal-path-owner-mismatch";
+                return false;
+            }
             fact.PathOwnerIndex = owner.Index;
             fact.PathOwnerVersion = owner.Version;
             fact.FromWaypointIndex = slot.FromWaypointIndex;
@@ -1088,23 +1279,27 @@ namespace RapidTransitMod.RailEta.BuiltIn
             fact.ToEndLaneVersion = toEndVersion;
             fact.ToStartCurve = toStartCurve;
             fact.ToEndCurve = toEndCurve;
-            fact.PathElementsSignature = PathElementsSignature(EntityManager, owner,
-                out int pathElementsPresent, out int pathElementCount);
-            fact.PathElementsPresent = pathElementsPresent;
-            fact.PathElementCount = pathElementCount;
+            fact.PathElementsPresent = 1;
+            fact.PathElementCount = path.SourceElementCount;
+            fact.PathElementsSignature = path.SourceSignature;
             fact.RouteNetworkSignature = RailEtaTheorySignatures.RouteNetworkSignature(fact);
             return true;
         }
 
         private static bool TryResolveRouteLaneSides(
             RailEtaTheoryPathFact routeFact, RailTravel.Path path,
-            out int fromSide, out int toSide)
+            out int fromSide, out int toSide, out Entity failedLane, out string failure)
         {
             fromSide = -1;
             toSide = -1;
+            failedLane = Entity.Null;
+            failure = string.Empty;
             if (routeFact == null || path == null || path.Segments.Length == 0
                 || routeFact.FromRouteLanePresent == 0 || routeFact.ToRouteLanePresent == 0)
+            {
+                failure = "route-lane-facts-missing";
                 return false;
+            }
             Entity first = path.Segments[0].LaneEntity;
             Entity last = path.Segments[path.Segments.Length - 1].LaneEntity;
             fromSide = ResolveRouteLaneSide(
@@ -1113,7 +1308,19 @@ namespace RapidTransitMod.RailEta.BuiltIn
             toSide = ResolveRouteLaneSide(
                 last, routeFact.ToStartLaneIndex, routeFact.ToStartLaneVersion,
                 routeFact.ToEndLaneIndex, routeFact.ToEndLaneVersion);
-            return fromSide >= 0 && toSide >= 0;
+            if (fromSide < 0)
+            {
+                failedLane = first;
+                failure = "route-lane-from-mismatch";
+                return false;
+            }
+            if (toSide < 0)
+            {
+                failedLane = last;
+                failure = "route-lane-to-mismatch";
+                return false;
+            }
+            return true;
         }
 
         private static int ResolveRouteLaneSide(
@@ -1124,32 +1331,34 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return -1;
         }
 
-        private bool FillTheoryPathPhysics(Entity lane, int kind, ref RailEtaTheoryPathFact fact)
+        private static void FillTheoryPathPhysics(RailTravel.Segment segment,
+            ref RailEtaTheoryPathFact fact)
         {
-            if (lane == Entity.Null || !EntityManager.Exists(lane)
-                || !EntityManager.HasComponent<Curve>(lane))
-                return false;
-            Curve curve = EntityManager.GetComponentData<Curve>(lane);
-            fact.CurveLength = Math.Max(0f, curve.m_Length);
-            fact.CurveAX = curve.m_Bezier.a.x;
-            fact.CurveAY = curve.m_Bezier.a.y;
-            fact.CurveAZ = curve.m_Bezier.a.z;
-            fact.CurveBX = curve.m_Bezier.b.x;
-            fact.CurveBY = curve.m_Bezier.b.y;
-            fact.CurveBZ = curve.m_Bezier.b.z;
-            fact.CurveCX = curve.m_Bezier.c.x;
-            fact.CurveCY = curve.m_Bezier.c.y;
-            fact.CurveCZ = curve.m_Bezier.c.z;
-            fact.CurveDX = curve.m_Bezier.d.x;
-            fact.CurveDY = curve.m_Bezier.d.y;
-            fact.CurveDZ = curve.m_Bezier.d.z;
-            if (kind == 0)
+            fact.CurveLength = segment.CurveLength;
+            fact.CurveAX = segment.Curve.m_Bezier.a.x;
+            fact.CurveAY = segment.Curve.m_Bezier.a.y;
+            fact.CurveAZ = segment.Curve.m_Bezier.a.z;
+            fact.CurveBX = segment.Curve.m_Bezier.b.x;
+            fact.CurveBY = segment.Curve.m_Bezier.b.y;
+            fact.CurveBZ = segment.Curve.m_Bezier.b.z;
+            fact.CurveCX = segment.Curve.m_Bezier.c.x;
+            fact.CurveCY = segment.Curve.m_Bezier.c.y;
+            fact.CurveCZ = segment.Curve.m_Bezier.c.z;
+            fact.CurveDX = segment.Curve.m_Bezier.d.x;
+            fact.CurveDY = segment.Curve.m_Bezier.d.y;
+            fact.CurveDZ = segment.Curve.m_Bezier.d.z;
+            fact.TrackFlags = (uint)segment.TrackFlags;
+            fact.ConnectionFlags = (uint)segment.ConnectionFlags;
+            fact.ConnectionTrackTypes = (uint)segment.ConnectionTrackTypes;
+            fact.ConnectionRoadTypes = (uint)segment.ConnectionRoadTypes;
+            fact.AccessRestrictionIndex = segment.AccessRestriction.Index;
+            fact.AccessRestrictionVersion = segment.AccessRestriction.Version;
+            fact.EdgeDeltaStart = segment.EdgeDeltaStart;
+            fact.EdgeDeltaEnd = segment.EdgeDeltaEnd;
+            fact.EdgeConnectedStartCount = segment.EdgeConnectedStartCount;
+            fact.EdgeConnectedEndCount = segment.EdgeConnectedEndCount;
+            if (segment.IsTrackLane)
             {
-                if (!EntityManager.HasComponent<Game.Net.TrackLane>(lane)) return false;
-                Game.Net.TrackLane track = EntityManager.GetComponentData<Game.Net.TrackLane>(lane);
-                fact.TrackFlags = (uint)track.m_Flags;
-                fact.AccessRestrictionIndex = track.m_AccessRestriction.Index;
-                fact.AccessRestrictionVersion = track.m_AccessRestriction.Version;
                 fact.ConnectionFlags = 0;
                 fact.ConnectionTrackTypes = 0;
                 fact.ConnectionRoadTypes = 0;
@@ -1157,79 +1366,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 fact.EdgeDeltaEnd = 0f;
                 fact.EdgeConnectedStartCount = 0;
                 fact.EdgeConnectedEndCount = 0;
-                return fact.SpeedLimit == Math.Max(0f, track.m_SpeedLimit)
-                    && fact.Curviness == Math.Max(0f, track.m_Curviness);
             }
-            if (EntityManager.HasComponent<Game.Net.TrackLane>(lane)) return false;
-            fact.TrackFlags = 0;
-            fact.SpeedLimit = RailTravel.Calculator.ConnectionSpeed;
-            fact.Curviness = 0f;
-            if (EntityManager.HasComponent<Game.Net.ConnectionLane>(lane))
-            {
-                Game.Net.ConnectionLane connection = EntityManager.GetComponentData<Game.Net.ConnectionLane>(lane);
-                fact.ConnectionFlags = (uint)connection.m_Flags;
-                fact.ConnectionTrackTypes = (uint)connection.m_TrackTypes;
-                fact.ConnectionRoadTypes = (uint)connection.m_RoadTypes;
-                fact.AccessRestrictionIndex = connection.m_AccessRestriction.Index;
-                fact.AccessRestrictionVersion = connection.m_AccessRestriction.Version;
-            }
-            else
-            {
-                fact.ConnectionFlags = 0;
-                fact.ConnectionTrackTypes = 0;
-                fact.ConnectionRoadTypes = 0;
-                fact.AccessRestrictionIndex = Entity.Null.Index;
-                fact.AccessRestrictionVersion = Entity.Null.Version;
-            }
-            if (EntityManager.HasComponent<EdgeLane>(lane))
-            {
-                EdgeLane edge = EntityManager.GetComponentData<EdgeLane>(lane);
-                fact.EdgeDeltaStart = edge.m_EdgeDelta.x;
-                fact.EdgeDeltaEnd = edge.m_EdgeDelta.y;
-                fact.EdgeConnectedStartCount = edge.m_ConnectedStartCount;
-                fact.EdgeConnectedEndCount = edge.m_ConnectedEndCount;
-            }
-            else
-            {
-                fact.EdgeDeltaStart = 0f;
-                fact.EdgeDeltaEnd = 0f;
-                fact.EdgeConnectedStartCount = 0;
-                fact.EdgeConnectedEndCount = 0;
-            }
-            return true;
-        }
-
-        private bool TryConnectionDistance(
-            RailTravel.Segment current, RailTravel.Segment next, out float distance)
-        {
-            distance = 0f;
-            if (!TryGetCurve(current.LaneEntity, out Curve currentCurve)
-                || !TryGetCurve(next.LaneEntity, out Curve nextCurve))
-                return false;
-            float3 end = BezierPoint(currentCurve.m_Bezier, current.TargetDelta.y);
-            float3 start = BezierPoint(nextCurve.m_Bezier, next.TargetDelta.x);
-            distance = math.distance(end, start);
-            return !float.IsNaN(distance) && !float.IsInfinity(distance) && distance <= 0.5f;
-        }
-
-        private bool TryGetCurve(Entity lane, out Curve curve)
-        {
-            curve = default;
-            if (lane == Entity.Null || !EntityManager.Exists(lane)
-                || !EntityManager.HasComponent<Curve>(lane))
-                return false;
-            curve = EntityManager.GetComponentData<Curve>(lane);
-            return true;
-        }
-
-        private static float3 BezierPoint(Bezier4x3 bezier, float value)
-        {
-            float t = math.clamp(value, 0f, 1f);
-            float inverse = 1f - t;
-            return inverse * inverse * inverse * bezier.a
-                + 3f * inverse * inverse * t * bezier.b
-                + 3f * inverse * t * t * bezier.c
-                + t * t * t * bezier.d;
         }
 
         private static void FillRouteLaneFact(EntityManager entities, Entity waypoint,
@@ -1252,52 +1389,6 @@ namespace RapidTransitMod.RailEta.BuiltIn
             endVersion = lane.m_EndLane.Version;
             startCurve = lane.m_StartCurvePos;
             endCurve = lane.m_EndCurvePos;
-        }
-
-        private static ulong PathElementsSignature(EntityManager entities, Entity owner,
-            out int present, out int count)
-        {
-            present = 0;
-            count = 0;
-            ulong hash = RailEtaTheorySignatures.Seed;
-            if (owner == Entity.Null || !entities.HasBuffer<PathElement>(owner))
-                return hash;
-            DynamicBuffer<PathElement> elements = entities.GetBuffer<PathElement>(owner, true);
-            present = 1;
-            count = elements.Length;
-            for (int i = 0; i < elements.Length; i++)
-            {
-                PathElement element = elements[i];
-                hash = RailEtaTheorySignatures.MixPathElement(hash, i,
-                    element.m_Target.Index, element.m_Target.Version,
-                    element.m_TargetDelta.x, element.m_TargetDelta.y, (int)element.m_Flags);
-            }
-            return hash;
-        }
-
-        private int FindPathElement(RailEtaTheoryPathFact routeFact,
-            RailTravel.Segment segment, ref int search)
-        {
-            if (routeFact == null
-                || (routeFact.PathOwnerIndex == 0 && routeFact.PathOwnerVersion == 0))
-                return -1;
-            Entity owner = new Entity { Index = routeFact.PathOwnerIndex, Version = routeFact.PathOwnerVersion };
-            if (!EntityManager.HasBuffer<PathElement>(owner))
-                return -1;
-            DynamicBuffer<PathElement> elements = EntityManager.GetBuffer<PathElement>(owner, true);
-            for (int i = search; i < elements.Length; i++)
-            {
-                PathElement element = elements[i];
-                if (element.m_Target == segment.LaneEntity
-                    && element.m_TargetDelta.x == segment.TargetDelta.x
-                    && element.m_TargetDelta.y == segment.TargetDelta.y
-                    && (uint)element.m_Flags == (uint)segment.PathFlags)
-                {
-                    search = i + 1;
-                    return i;
-                }
-            }
-            return -1;
         }
 
         private void EnqueueScope(RailEtaService service)
@@ -2602,6 +2693,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 service.PublishTheorySegments(scope.Requests[0].Ticket,
                     theoryFailure == RailEtaFailure.None ? theorySegments : Array.Empty<RailEtaTheorySegmentResult>(),
                     scope.Generation, theoryFailure, theoryDetail, theoryFailureInfo);
+                LogTheoryFailure(service, scope.Requests[0].Ticket);
                 scope.Dispose();
                 FinishBatch();
                 return;
@@ -2708,6 +2800,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
             if (failure == RailEtaFailure.WorkerLost || service.WorkerLost)
             {
                 service.MarkWorkerLost(detail);
+                LogTheoryFailure(service, m_Requests != null && m_Requests.Count > 0
+                    ? m_Requests[0].Ticket : default);
                 FinishBatch();
                 return;
             }
@@ -2720,6 +2814,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
             EnsureTheoryFailure(service, requests, failure, detail);
             foreach (RailEtaBatchRequest request in requests)
                 service.Transition(request.Ticket, RailEtaRequestState.Failed, m_Simulation.frameIndex, m_BatchId, m_Generation, failure, detail);
+            if (requests.Count > 0)
+                LogTheoryFailure(service, requests[0].Ticket);
         }
 
         private void EnsureTheoryFailure(
@@ -2734,12 +2830,12 @@ namespace RapidTransitMod.RailEta.BuiltIn
             RailEtaTheoryFailure existing;
             if (service.TryGetTheoryFailure(requests[0].Ticket, out existing) && existing != null)
                 return;
-            RailEtaBatchRequest request = requests[0];
-            service.SetTheoryFailure(request.Ticket, new RailEtaTheoryFailure
+            RailEtaTicket ticket = requests[0].Ticket;
+            service.SetTheoryFailure(ticket, new RailEtaTheoryFailure
             {
-                SegmentIndex = request.SegmentIndex,
-                FromWaypointIndex = request.FromWaypointIndex,
-                ToWaypointIndex = request.ToWaypointIndex,
+                SegmentIndex = -1,
+                FromWaypointIndex = -1,
+                ToWaypointIndex = -1,
                 Failure = failure.ToString(),
                 Detail = detail ?? string.Empty
             }, m_Generation);

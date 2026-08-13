@@ -228,7 +228,7 @@ namespace RapidTransitMod
                 if (stops.Length == 0)
                     continue;
 
-                if (stops.Length > route.Stops.Length)
+                if (stops.Length > route.Stops.Length + 1)
                 {
                     errors.Add("timed-stop-count-exceeded:" + rowIndex);
                     continue;
@@ -236,9 +236,12 @@ namespace RapidTransitMod
 
                 for (int stopIndex = 0; stopIndex < stops.Length; stopIndex++)
                 {
+                    string expectedStopKey = stopIndex == route.Stops.Length
+                        ? route.Stops[0].StopKey
+                        : route.Stops[stopIndex].StopKey;
                     if (!string.Equals(
                         stops[stopIndex]?.StopKey ?? string.Empty,
-                        route.Stops[stopIndex].StopKey ?? string.Empty,
+                        expectedStopKey ?? string.Empty,
                         StringComparison.Ordinal))
                     {
                         errors.Add("timed-stop-order-mismatch:" + rowIndex + ":" + stopIndex);

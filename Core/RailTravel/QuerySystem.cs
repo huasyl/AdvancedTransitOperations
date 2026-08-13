@@ -99,7 +99,7 @@ namespace RapidTransitMod.RailTravel
                 && EntityManager.GetBuffer<PathElement>(state.Owner, true).Length != 0;
             bool projectionSuccess = theoryDepot
                 ? new PathQuery(EntityManager).TryBuildTheoryDepot(state.Owner, out path)
-                : new PathQuery(EntityManager).TryBuild(state.Owner, out path);
+                : new PathQuery(EntityManager).TryBuildTemporary(state.Owner, out path);
             bool success = theoryDepot ? rawSuccess : projectionSuccess;
             if (theoryDepot && !rawSuccess)
                 error = "rail-travel-query-no-path";

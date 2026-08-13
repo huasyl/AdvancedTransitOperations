@@ -1,114 +1,112 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { getWorkbenchApi } from "../../shared/workbench-api";
 import TimetableIcon from "./TimetableIcons";
-import { minutesToTime, timeToMinutes } from "./timetable-data";
+import { minutesToTime } from "./timetable-data";
 
-export default function OperationMonitor({ line, dateMode, t }) {
-  const [expandedTrainId, setExpandedTrainId] = useState("");
-  const actualData = useMemo(() => {
-    if (!line) {
-      return [];
-    }
-
-    return line.trains.map((train, index) => {
-      const originStop = train.stops[0];
-      const hash = train.id.length + dateMode.length + index;
-      const delay = hash % 3 === 0 ? 0 : hash % 4 === 1 ? (hash % 10) + 2 : -(hash % 3);
-      const plannedOrigin = timeToMinutes(originStop.departureTime);
-      const actualOrigin = plannedOrigin + (hash % 5 === 0 ? (hash % 5) + 1 : hash % 7 === 0 ? -1 : 0);
-      let runningDelay = actualOrigin - plannedOrigin;
-      const stops = train.stops.map((stop, stopIndex) => {
-        runningDelay += (hash + stopIndex) % 3 === 0 ? 0 : (hash + stopIndex) % 2 === 0 ? 1 : -1;
-        return {
-          stationId: stop.stationId,
-          stationName: line.stations.find((station) => station.id === stop.stationId)?.name || "",
-          plannedArrival: stop.arrivalTime,
-          plannedDeparture: stop.departureTime,
-          actualArrival: minutesToTime(timeToMinutes(stop.arrivalTime) + runningDelay),
-          actualDeparture: minutesToTime(timeToMinutes(stop.departureTime) + Math.max(0, runningDelay)),
-          delay: runningDelay,
-          isOrigin: stopIndex === 0,
-          isDestination: stopIndex === train.stops.length - 1
-        };
+export default function OperationMonitor({ line, dateMode, isActive, t }) {
+  const api = useMemo(() => getWorkbenchApi(), []);
+  const [trips, setTrips] = useState([]);
+  const [details, setDetails] = useState({});
+  const [expandedTripKey, setExpandedTripKey] = useState("");
+  const [error, setError] = useState("");
+  const stationNames = useMemo(
+    () => {
+      const names = new Map();
+      (line?.stations || []).forEach((station) => {
+        if (!station?.name) {
+          return;
+        }
+        if (station.stopKey) {
+          names.set(station.stopKey, station.name);
+        }
+        if (station.id) {
+          names.set(station.id, station.name);
+        }
       });
+      return names;
+    },
+    [line?.stations]
+  );
 
-      return {
-        trainId: train.id,
-        trainName: train.name,
-        delay,
-        departedCorrectly: actualOrigin <= plannedOrigin + 2,
-        plannedOriginDeparture: originStop.departureTime,
-        actualOriginArrival: minutesToTime(actualOrigin - 10 - (hash % 5)),
-        actualOriginDeparture: minutesToTime(actualOrigin),
-        stops
-      };
+  const loadDetail = useCallback(async (tripKey) => {
+    if (!tripKey) {
+      return null;
+    }
+    const response = await api.loadMonitorTripDetail({ tripKey });
+    if (!response?.success) {
+      setError(response?.error || "monitor-detail-load-failed");
+      return null;
+    }
+    setDetails((current) => ({ ...current, [tripKey]: response }));
+    return response;
+  }, [api]);
+
+  const loadHeaders = useCallback(async () => {
+    if (!isActive || !line?.id) {
+      return;
+    }
+    const response = await api.loadMonitorTripHeaders({
+      dayOffset: dateMode === "yesterday" ? -1 : 0,
+      lineId: line.id
     });
-  }, [dateMode, line]);
+    if (!response?.success) {
+      setError(response?.error || "monitor-list-load-failed");
+      return;
+    }
+    const nextTrips = Array.isArray(response.trips) ? response.trips : [];
+    setTrips(nextTrips);
+    setError("");
+  }, [dateMode, isActive, line?.id, api]);
 
-  const onTimeRate = actualData.length > 0
-    ? Math.round((actualData.filter((item) => item.delay <= 2).length / actualData.length) * 100)
-    : 0;
-  const originRate = actualData.length > 0
-    ? Math.round((actualData.filter((item) => item.departedCorrectly).length / actualData.length) * 100)
-    : 0;
-  const averageDelay = actualData.length > 0
-    ? Math.max(0, Math.round(actualData.reduce((sum, item) => sum + Math.max(0, item.delay), 0) / actualData.length))
-    : 0;
+  useEffect(() => {
+    setTrips([]);
+    setDetails({});
+    setExpandedTripKey("");
+  }, [dateMode, line?.id]);
+
+  useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+    loadHeaders().catch((loadError) => setError(loadError instanceof Error ? loadError.message : String(loadError)));
+  }, [isActive, loadHeaders]);
+
+  async function toggleTrip(tripKey) {
+    if (expandedTripKey === tripKey) {
+      setExpandedTripKey("");
+      return;
+    }
+    setExpandedTripKey(tripKey);
+    setDetails((current) => ({ ...current, [tripKey]: null }));
+    await loadDetail(tripKey);
+  }
 
   return (
     <div className="rtw-timetable-monitor">
-      <div className="rtw-timetable-metrics">
-        <Metric label={t("timetable.monitor.metric.total")} value={actualData.length} />
-        <Metric label={t("timetable.monitor.metric.onTime")} value={`${onTimeRate}%`} tone="good" />
-        <Metric label={t("timetable.monitor.metric.origin")} value={`${originRate}%`} tone="accent" />
-        <Metric label={t("timetable.monitor.metric.delay")} value={`${averageDelay} ${t("nativeSchedule.unit.minutes")}`} tone="warning" />
-      </div>
-
+      {error ? <div className="rtw-timetable-monitor-message is-error">{error}</div> : null}
+      {!error && trips.length === 0 ? <div className="rtw-timetable-monitor-message">{t("timetable.monitor.empty")}</div> : null}
       <div className="rtw-timetable-monitor-table-wrap">
         <div className="rtw-timetable-table is-monitor">
           <div className="rtw-timetable-table-head">
             <div className="is-trip">{t("timetable.monitor.head.trip")}</div>
             <div className="is-planned">{t("timetable.monitor.head.planned")}</div>
-            <div className="is-actual">{t("timetable.monitor.head.arrival")}</div>
             <div className="is-actual">{t("timetable.monitor.head.departure")}</div>
             <div className="is-action">{t("timetable.table.head.action")}</div>
           </div>
           <div className="rtw-timetable-table-body">
-            {actualData.map((item, index) => {
-              const expanded = expandedTrainId === item.trainId;
+            {trips.map((trip, index) => {
+              const expanded = expandedTripKey === trip.tripKey;
+              const detail = details[trip.tripKey];
               return (
-                <Fragment key={item.trainId}>
-                  <div className={`rtw-timetable-table-row rtw-timetable-monitor-row rtw-timetable-stagger-row ${expanded ? "is-expanded" : ""}`} style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }} onClick={() => setExpandedTrainId(expanded ? "" : item.trainId)}>
-                    <div className="is-trip is-strong">{item.trainName}</div>
-                    <div className="is-planned is-time">{item.plannedOriginDeparture}</div>
-                    <div className="is-actual is-time">{item.actualOriginArrival}</div>
-                    <div className="is-actual is-time">{item.actualOriginDeparture}</div>
+                <Fragment key={trip.tripKey}>
+                  <div className={`rtw-timetable-table-row rtw-timetable-monitor-row rtw-timetable-stagger-row ${expanded ? "is-expanded" : ""}`} style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }} onClick={() => toggleTrip(trip.tripKey)}>
+                    <div className="is-trip is-strong">{formatMinute(trip.plannedStartMinute)}</div>
+                    <div className="is-planned is-time">{formatMinute(trip.plannedStartMinute)}</div>
+                    <div className="is-actual is-time">{formatMinute(trip.actualStartMinute)}</div>
                     <div className="is-action"><button type="button" className={`rtw-timetable-table-action ${expanded ? "is-active" : ""}`}>{expanded ? t("timetable.action.collapse") : t("timetable.action.fullRoute")}</button></div>
                   </div>
                   {expanded ? (
-                    <div className="rtw-timetable-expanded-row">
-                      <div className="rtw-timetable-expanded-scroll">
-                        <div className="rtw-timetable-table is-detail rtw-timetable-content-enter">
-                          <div className="rtw-timetable-table-head">
-                            <div className="is-station">{t("timetable.table.head.station")}</div>
-                            <div className="is-pair">{t("timetable.monitor.head.plannedPair")}</div>
-                            <div className="is-pair">{t("timetable.monitor.head.actualPair")}</div>
-                            <div className="is-delta">{t("timetable.monitor.head.delta")}</div>
-                            <div className="is-status">{t("timetable.monitor.head.status")}</div>
-                          </div>
-                          <div className="rtw-timetable-table-body">
-                              {item.stops.map((stop, index) => (
-                                <div key={stop.stationId} className="rtw-timetable-table-row rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }}>
-                                  <div className="is-station"><span className="rtw-timetable-station-cell">{index < item.stops.length - 1 ? <TimetableIcon name="arrow-down" /> : <span className="rtw-timetable-station-end" />}{stop.stationName}</span></div>
-                                  <div className="is-pair is-time"><span>{stop.isOrigin ? "--" : stop.plannedArrival}</span><span className="rtw-timetable-time-sep">/</span><span>{stop.isDestination ? "--" : stop.plannedDeparture}</span></div>
-                                  <div className="is-pair is-time"><span>{stop.isOrigin ? "--" : stop.actualArrival}</span><span className="rtw-timetable-time-sep">/</span><span>{stop.isDestination ? "--" : stop.actualDeparture}</span></div>
-                                  <div className={`is-delta ${stop.delay > 0 ? "is-warning" : stop.delay < 0 ? "is-accent" : "is-good"}`}>{formatDelay(stop.delay, t)}</div>
-                                  <div className={`is-status ${stop.delay > 2 ? "is-warning" : "is-muted"}`}>{stop.delay > 2 ? t("timetable.status.abnormal") : t("timetable.status.normal")}</div>
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <TripDetail detail={detail} header={trip} stationNames={stationNames} t={t} />
                   ) : null}
                 </Fragment>
               );
@@ -120,8 +118,90 @@ export default function OperationMonitor({ line, dateMode, t }) {
   );
 }
 
-function Metric({ label, value, tone = "" }) {
-  return <div className="rtw-timetable-metric"><div className="rtw-timetable-metric-label">{label}</div><div className={`rtw-timetable-metric-value ${tone ? `is-${tone}` : ""}`}>{value}</div></div>;
+function TripDetail({ detail, header, stationNames, t }) {
+  if (!detail) {
+    return <div className="rtw-timetable-monitor-message">{t("timetable.monitor.loading")}</div>;
+  }
+  const stops = Array.isArray(detail.stops) ? detail.stops : [];
+  return (
+    <div className="rtw-timetable-expanded-row">
+      <div className="rtw-timetable-expanded-scroll">
+        <div className="rtw-timetable-table is-detail rtw-timetable-content-enter">
+          <div className="rtw-timetable-table-head">
+            <div className="is-station">{t("timetable.table.head.station")}</div>
+            <div className="is-pair">{t("timetable.monitor.head.plannedPair")}</div>
+            <div className="is-pair">{t("timetable.monitor.head.actualPair")}</div>
+            <div className="is-delta">{t("timetable.monitor.head.delta")}</div>
+            <div className="is-status">{t("timetable.monitor.head.status")}</div>
+          </div>
+          <div className="rtw-timetable-table-body">
+            {stops.map((stop, index) => {
+              const delta = getStopDelta(stop);
+              const status = getStopStatus(
+                stop,
+                index,
+                detail.header || header,
+                index === stops.length - 1);
+              return (
+                <div key={`${stop.stopKey}-${stop.order}`} className="rtw-timetable-table-row rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }}>
+                  <div className="is-station"><span className="rtw-timetable-station-cell">{index < stops.length - 1 ? <TimetableIcon name="arrow-down" /> : <span className="rtw-timetable-station-end" />}{stationNames.get(stop.stopKey) || stop.stopKey}</span></div>
+                  <TimePair arrival={stop.plannedArrivalMinute} departure={stop.plannedDepartureMinute} />
+                  <TimePair arrival={stop.actualArrivalMinute} departure={stop.actualDepartureMinute} />
+                  <div className={`is-delta ${delta > 0 ? "is-warning" : delta < 0 ? "is-accent" : "is-good"}`}>{delta == null ? "--" : formatDelay(delta, t)}</div>
+                  <div className={`is-status ${stop.cleared ? "is-muted" : "is-warning"}`}>{t(status)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TimePair({ arrival, departure }) {
+  return <div className="is-pair is-time"><span>{formatMinute(arrival)}</span><span className="rtw-timetable-time-sep">/</span><span>{formatMinute(departure)}</span></div>;
+}
+
+function getStopStatus(stop, index, trip, isClosing) {
+  if (stop.cleared) {
+    switch (String(trip?.endReason || "").toLowerCase()) {
+      case "rebound": return "timetable.status.interruptedRebound";
+      case "removed": return "timetable.status.interruptedRemoved";
+      case "retired": return "timetable.status.interruptedRetired";
+      case "relaunched": return "timetable.status.interruptedRelaunched";
+      default: return "timetable.status.interrupted";
+    }
+  }
+  if (String(trip?.state || "").toLowerCase() === "missed") {
+    return "timetable.status.missed";
+  }
+  if (String(trip?.state || "").toLowerCase() === "completed"
+    && isClosing
+    && stop.actualArrivalMinute != null) {
+    return "timetable.status.completed";
+  }
+  if (stop.actualDepartureMinute != null) {
+    return "timetable.status.departed";
+  }
+  if (stop.actualArrivalMinute != null) {
+    return "timetable.status.arrived";
+  }
+  return "timetable.status.awaitingArrival";
+}
+
+function getStopDelta(stop) {
+  if (stop.actualDepartureMinute != null && stop.plannedDepartureMinute != null) {
+    return stop.actualDepartureMinute - stop.plannedDepartureMinute;
+  }
+  if (stop.actualArrivalMinute != null && stop.plannedArrivalMinute != null) {
+    return stop.actualArrivalMinute - stop.plannedArrivalMinute;
+  }
+  return null;
+}
+
+function formatMinute(value) {
+  return value == null || value < 0 ? "--" : minutesToTime(value);
 }
 
 function formatDelay(value, t) {

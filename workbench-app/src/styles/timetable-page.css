@@ -6,6 +6,8 @@
 
 .rtw-timetable-root {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -15,10 +17,81 @@
 }
 
 .rtw-timetable-shell {
+  position: relative;
   display: flex;
   width: 100%;
-  height: 100%;
+  height: auto;
+  flex: 1 1 auto;
   min-height: 0;
+}
+
+.rtw-timetable-footer {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 57rem;
+  flex: 0 0 57rem;
+  padding-right: 12rem;
+  padding-left: 12rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(10, 13, 15, 0.50);
+}
+
+.rtw-timetable-footer-status {
+  min-width: 0;
+  padding-right: 16rem;
+  overflow: hidden;
+  color: #bccad3;
+  font-size: 11rem;
+  line-height: 14rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rtw-timetable-footer-status.is-dirty {
+  color: #bccad3;
+}
+
+.rtw-timetable-footer-status.is-saving {
+  color: #d3f6fb;
+}
+
+.rtw-timetable-footer-status.is-applied {
+  color: #cbe6cb;
+}
+
+.rtw-timetable-footer-status.is-error {
+  color: #e18b8b;
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button:disabled {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #71808a;
+  cursor: default;
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button {
+  height: 42rem;
+  min-height: 42rem;
+  min-width: 144rem;
+  border: 0;
+  background: #5ab4c5;
+  color: #0a1014;
+  font-weight: 700;
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button.is-saving {
+  background: #3d7f8c;
+  color: #d3f6fb;
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button.is-applied:disabled {
+  background: #2f5e3d;
+  color: #8fd3a0;
 }
 
 .rtw-timetable-view-tabs,
@@ -73,9 +146,22 @@
   width: 300rem;
   flex: 0 0 300rem;
   min-height: 0;
-  padding: 24rem;
+  padding-top: 24rem;
+  padding-right: 24rem;
+  padding-bottom: 24rem;
+  padding-left: 24rem;
   border-right: 1px solid rgba(255, 255, 255, 0.10);
+  overflow-x: hidden;
   overflow-y: auto;
+  transition: width 300ms cubic-bezier(0.2, 1, 0.3, 1), flex-basis 300ms cubic-bezier(0.2, 1, 0.3, 1), padding-right 300ms cubic-bezier(0.2, 1, 0.3, 1), padding-left 300ms cubic-bezier(0.2, 1, 0.3, 1);
+}
+
+.rtw-timetable-shell.is-sidebar-collapsed .rtw-timetable-sidebar {
+  width: 0;
+  flex-basis: 0;
+  padding-right: 0;
+  padding-left: 0;
+  overflow: hidden;
 }
 
 .rtw-timetable-sidebar::before {
@@ -96,7 +182,57 @@
 }
 
 .rtw-timetable-sidebar-scene {
-  width: 100%;
+  width: 252rem;
+  min-width: 252rem;
+}
+
+.rtw-timetable-sidebar-toggle {
+  position: absolute;
+  top: 50%;
+  left: 288rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24rem;
+  height: 52rem;
+  border: 1px solid rgba(174, 189, 199, 0.28);
+  border-radius: 999rem;
+  padding: 0;
+  background: #151f26;
+  color: #aebdc7;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: left 300ms cubic-bezier(0.2, 1, 0.3, 1), border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+}
+
+.rtw-timetable-shell.is-sidebar-collapsed .rtw-timetable-sidebar-toggle {
+  left: 0;
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.rtw-timetable-sidebar-toggle:hover {
+  border-color: rgba(116, 193, 193, 0.48);
+  background: #20373b;
+  color: #81d4d4;
+}
+
+.rtw-timetable-sidebar-toggle .rtw-timetable-icon {
+  width: 14rem;
+  height: 14rem;
+  color: #aebdc7;
+}
+
+.rtw-timetable-sidebar-toggle .rtw-timetable-icon path {
+  stroke: #aebdc7;
+}
+
+.rtw-timetable-sidebar-toggle:hover .rtw-timetable-icon,
+.rtw-timetable-sidebar-toggle:hover .rtw-timetable-icon path {
+  color: #81d4d4;
+  stroke: #81d4d4;
 }
 
 .rtw-timetable-sidebar-section + .rtw-timetable-sidebar-section {
@@ -161,6 +297,21 @@
   color: #edf5f9;
   font-size: 15rem;
   line-height: 20rem;
+}
+
+.rtw-timetable-sidebar-field .dw-demo-dropdown-trigger > span:first-child {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #edf5f9;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rtw-timetable-sidebar-field .dw-demo-dropdown-caret {
+  flex: 0 0 15rem;
 }
 
 .rtw-timetable-line-item {
@@ -363,7 +514,13 @@
 .rtw-timetable-main-scroll {
   flex: 1 1 auto;
   min-height: 0;
+  padding-left: 0;
   overflow-y: auto;
+  transition: padding-left 300ms cubic-bezier(0.2, 1, 0.3, 1);
+}
+
+.rtw-timetable-shell.is-sidebar-collapsed .rtw-timetable-main-scroll {
+  padding-left: 24rem;
 }
 
 .rtw-timetable-view-scene {
@@ -385,43 +542,154 @@
 
 .rtw-timetable-sidebar-scene > * {
   opacity: 1;
-  transform: translateY(0);
-  transition:
-    opacity 520ms cubic-bezier(0.19, 1, 0.22, 1),
-    transform 520ms cubic-bezier(0.19, 1, 0.22, 1);
+  transform: none;
 }
 
-.rtw-timetable-sidebar-scene.is-entering > * {
+.rtw-timetable-sidebar-scene.is-entering .rtw-timetable-sidebar-title,
+.rtw-timetable-sidebar-scene.is-entering .dw-demo-label,
+.rtw-timetable-sidebar-scene.is-entering .rtw-timetable-line-name,
+.rtw-timetable-sidebar-scene.is-entering .rtw-timetable-line-dot,
+.rtw-timetable-sidebar-scene.is-entering > .rtw-timetable-legend {
   opacity: 0;
   transform: translateY(12px);
 }
 
-.rtw-timetable-sidebar-scene.is-exiting > * {
+.rtw-timetable-sidebar-scene.is-entering .dw-demo-input,
+.rtw-timetable-sidebar-scene.is-entering .rtw-timetable-check,
+.rtw-timetable-sidebar-scene.is-entering .rtw-timetable-secondary-button {
   opacity: 0;
-  transform: translateY(-8px);
-  transition-delay: 0ms;
-  transition-duration: 300ms;
-  transition-timing-function: ease;
 }
 
-.rtw-timetable-sidebar-scene.is-entered > *:nth-child(1) {
-  transition-delay: 0ms;
+.rtw-timetable-sidebar-scene.is-entering .rtw-timetable-line-item.is-editing {
+  border-color: transparent;
+  background: transparent;
 }
 
-.rtw-timetable-sidebar-scene.is-entered > *:nth-child(2) {
-  transition-delay: 70ms;
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(1) .rtw-timetable-sidebar-title,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(1) .dw-demo-label,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(1) .rtw-timetable-line-name,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(1) .rtw-timetable-line-dot {
+  animation: rtw-timetable-sidebar-text-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 0ms backwards;
 }
 
-.rtw-timetable-sidebar-scene.is-entered > *:nth-child(3) {
-  transition-delay: 140ms;
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(1) .dw-demo-input,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(1) .rtw-timetable-check,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(1) .rtw-timetable-secondary-button {
+  animation: rtw-timetable-sidebar-control-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 0ms backwards;
 }
 
-.rtw-timetable-sidebar-scene.is-entered > *:nth-child(4) {
-  transition-delay: 210ms;
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .rtw-timetable-sidebar-title,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .dw-demo-label,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .rtw-timetable-line-name,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .rtw-timetable-line-dot {
+  animation: rtw-timetable-sidebar-text-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 70ms backwards;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .dw-demo-input,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .rtw-timetable-check,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .rtw-timetable-secondary-button {
+  animation: rtw-timetable-sidebar-control-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 70ms backwards;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(2) .rtw-timetable-line-item.is-editing {
+  animation: rtw-timetable-sidebar-frame-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 70ms backwards;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(3) .rtw-timetable-sidebar-title,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(3) .dw-demo-label,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(3) .rtw-timetable-line-name,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(3) .rtw-timetable-line-dot {
+  animation: rtw-timetable-sidebar-text-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 140ms backwards;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(3) .dw-demo-input,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(3) .rtw-timetable-check,
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-sidebar-section:nth-child(3) .rtw-timetable-secondary-button {
+  animation: rtw-timetable-sidebar-control-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 140ms backwards;
+}
+
+.rtw-timetable-sidebar-scene.is-entered > .rtw-timetable-legend {
+  animation: rtw-timetable-sidebar-text-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) 210ms backwards;
+}
+
+.rtw-timetable-sidebar-scene.is-exiting .rtw-timetable-sidebar-title,
+.rtw-timetable-sidebar-scene.is-exiting .dw-demo-label,
+.rtw-timetable-sidebar-scene.is-exiting .rtw-timetable-line-name,
+.rtw-timetable-sidebar-scene.is-exiting .rtw-timetable-line-dot,
+.rtw-timetable-sidebar-scene.is-exiting > .rtw-timetable-legend {
+  animation: rtw-timetable-sidebar-text-exit 300ms ease both;
+}
+
+.rtw-timetable-sidebar-scene.is-exiting .dw-demo-input,
+.rtw-timetable-sidebar-scene.is-exiting .rtw-timetable-check,
+.rtw-timetable-sidebar-scene.is-exiting .rtw-timetable-secondary-button {
+  animation: rtw-timetable-sidebar-control-exit 300ms ease both;
+}
+
+.rtw-timetable-sidebar-scene.is-exiting .rtw-timetable-line-item.is-editing {
+  animation: rtw-timetable-sidebar-frame-exit 300ms ease both;
 }
 
 .rtw-timetable-sidebar-scene.is-exiting {
   pointer-events: none;
+}
+
+@keyframes rtw-timetable-sidebar-text-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes rtw-timetable-sidebar-control-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes rtw-timetable-sidebar-frame-enter {
+  from {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  to {
+    border-color: rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+@keyframes rtw-timetable-sidebar-text-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes rtw-timetable-sidebar-control-exit {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes rtw-timetable-sidebar-frame-exit {
+  from {
+    border-color: rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  to {
+    border-color: transparent;
+    background: transparent;
+  }
 }
 
 .rtw-timetable-content-enter {
@@ -477,6 +745,17 @@
 .rtw-timetable-chart-toggle .rtw-timetable-icon {
   width: 18rem;
   height: 18rem;
+  color: #81d4d4;
+}
+
+.rtw-timetable-chart-toggle .rtw-timetable-icon path {
+  stroke: #81d4d4;
+}
+
+.rtw-timetable-chart-toggle:hover .rtw-timetable-icon,
+.rtw-timetable-chart-toggle:hover .rtw-timetable-icon path {
+  color: #edf5f9;
+  stroke: #edf5f9;
 }
 
 .rtw-timetable-chart-svg,
@@ -664,6 +943,17 @@
   overflow-y: auto;
 }
 
+.rtw-timetable-table-frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.rtw-timetable-fixed-head {
+  flex: 0 0 auto;
+}
+
 .rtw-timetable-table {
   width: 100%;
   min-width: 780rem;
@@ -685,7 +975,7 @@
   padding-right: 18rem;
   padding-left: 18rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.20);
-  background: rgba(8, 11, 13, 0.44);
+  background: #171b17;
   color: #bcc8d1;
   font-size: 12rem;
   line-height: 15rem;
@@ -788,6 +1078,22 @@
   text-align: center;
 }
 
+.rtw-timetable-table.is-summary .is-trip,
+.rtw-timetable-table.is-summary .is-mode,
+.rtw-timetable-table.is-summary .is-action {
+  width: 33.333%;
+  flex: 0 0 33.333%;
+}
+
+.rtw-timetable-table.is-summary .is-trip {
+  text-align: left;
+}
+
+.rtw-timetable-table.is-summary .is-mode {
+  justify-content: center;
+  text-align: center;
+}
+
 .rtw-timetable-table .is-strong {
   color: #f0fbff;
   font-weight: 700;
@@ -797,38 +1103,93 @@
   color: #8fa0aa;
 }
 
-.rtw-timetable-section-route {
+.rtw-timetable-table.is-edit .rtw-timetable-table-head,
+.rtw-timetable-table.is-edit .rtw-timetable-stop-row {
+  padding-right: 24rem;
+  padding-left: 24rem;
+}
+
+.rtw-timetable-table.is-edit {
+  min-width: 780rem;
+}
+
+.rtw-timetable-table.is-edit .is-section {
+  width: 160rem;
+  flex: 0 0 160rem;
+}
+
+.rtw-timetable-table.is-edit .is-time {
+  width: 112rem;
+  flex: 0 0 112rem;
+}
+
+.rtw-timetable-stop-cell,
+.rtw-timetable-table.is-edit .is-next {
   display: flex;
   align-items: center;
-  margin-left: 32rem;
 }
 
-.rtw-timetable-section-from {
-  color: #8fa0aa;
-  font-size: 14rem;
-  line-height: 18rem;
-  font-weight: 600;
+.rtw-timetable-table.is-edit .is-next {
+  width: 128rem;
+  flex: 0 0 128rem;
+  color: #c6d4dc;
 }
 
-.rtw-timetable-section-route .rtw-timetable-icon {
+.rtw-timetable-table.is-edit .is-runtime {
+  width: 220rem;
+  flex: 0 0 220rem;
+  min-width: 0;
+  overflow: hidden;
+  color: #9dacbe;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.rtw-timetable-table.is-edit .rtw-timetable-table-head .is-runtime {
+  color: #bcc8d1;
+}
+
+.rtw-timetable-table.is-edit .is-next .rtw-timetable-icon {
   width: 18rem;
   height: 18rem;
   flex: 0 0 18rem;
-  margin-right: 12rem;
-  margin-left: 12rem;
+  margin-right: 8rem;
   color: #74c1c1;
 }
 
-.rtw-timetable-section-to,
-.rtw-timetable-origin-name {
-  color: #edf5f9;
-  font-size: 15rem;
-  line-height: 20rem;
-  font-weight: 700;
+.rtw-timetable-table.is-edit .is-next > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.rtw-timetable-origin-name {
-  color: #81d4d4;
+.rtw-timetable-stop-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #edf5f9;
+  font-size: 14rem;
+  line-height: 20rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+.rtw-timetable-stop-tag {
+  display: flex;
+  align-items: center;
+  height: 24rem;
+  flex: 0 0 auto;
+  margin-left: 12rem;
+  border: 1px solid rgba(116, 193, 193, 0.34);
+  border-radius: 999rem;
+  padding-right: 8rem;
+  padding-left: 8rem;
+  background: rgba(116, 193, 193, 0.08);
+  color: #74c1c1;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
 }
 
 .rtw-timetable-table.is-edit .is-arrival {
