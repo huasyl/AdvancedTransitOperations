@@ -14,8 +14,6 @@ namespace RapidTransitMod.Dispatch.Observation
         private const int MaxTripsPerDate = 4096;
         private const int MaxActiveTrips = 1024;
         private const int MaxStopsPerTrip = 256;
-        private const int MaxRailSegments = 65536;
-        private const int MaxRailSegmentsPerLine = 4096;
         private readonly Port m_Port;
         private TraceStore m_Store => m_Port.Store;
 
@@ -225,11 +223,15 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal bool TryVehicleTimes(
             Entity vehicle,
+            out int currentWaypointIndex,
+            out int nextWaypointIndex,
             out int nextArrival,
             out int plannedArrival,
             out int actualArrival,
             out int plannedDeparture)
         {
+            currentWaypointIndex = -1;
+            nextWaypointIndex = -1;
             nextArrival = -1;
             plannedArrival = -1;
             actualArrival = -1;
@@ -244,28 +246,30 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             int currentOrder = Math.Min(trip.NextArrivalOrder - 1, trip.Stops.Count - 1);
+            bool hasCurrent = false;
             if (currentOrder >= 1 && currentOrder < trip.SuppressPlanFrom)
             {
                 MonitorStop current = trip.Stops[currentOrder];
                 if (current.ActualArrival >= 0
-                    && current.ActualDeparture < 0
-                    && current.PlannedArrival >= 0)
+                    && current.ActualDeparture < 0)
                 {
+                    currentWaypointIndex = current.WaypointIndex;
                     plannedArrival = current.PlannedArrival;
                     actualArrival = current.ActualArrival;
                     plannedDeparture = current.PlannedDeparture;
-                    return true;
+                    hasCurrent = true;
                 }
             }
 
             int nextOrder = Math.Max(1, trip.NextArrivalOrder);
             if (nextOrder >= trip.Stops.Count || nextOrder >= trip.SuppressPlanFrom)
-                return false;
+                return hasCurrent;
 
             MonitorStop next = trip.Stops[nextOrder];
             if (next.PlannedArrival < 0)
-                return false;
+                return hasCurrent;
 
+            nextWaypointIndex = next.WaypointIndex;
             nextArrival = next.PlannedArrival;
             return true;
         }
@@ -582,7 +586,7 @@ namespace RapidTransitMod.Dispatch.Observation
             return (int)minute;
         }
 
-        private string RecordMonitorStop(
+        private bool RecordMonitorStop(
             Entity vehicle,
             Entity station,
             string stopKey,
@@ -590,16 +594,18 @@ namespace RapidTransitMod.Dispatch.Observation
             bool isOrigin,
             bool arrival,
             ClockSnapshot clock,
-            uint frame)
+            uint frame,
+            out MonitorStopResult result)
         {
+            result = default;
             if (!m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip trip))
-                return string.Empty;
+                return false;
             if (trip.LastFactFrame == frame
                 && trip.LastFactArrival == arrival
                 && string.Equals(trip.LastFactStopKey, stopKey, StringComparison.Ordinal))
             {
                 TraceMonitor(trip, vehicle, frame, arrival, stopKey, waypointIndex, null, -1, "reject", "duplicate-fact", trip.SuppressPlanFrom == int.MaxValue);
-                return string.Empty;
+                return false;
             }
             DateTime serviceDate = ParseDateKey(trip.ServiceDateKey);
             int minute = EventMinute(clock, serviceDate);
@@ -614,7 +620,13 @@ namespace RapidTransitMod.Dispatch.Observation
                 trip.State = MonitorTripState.Completed;
                 trip.UpdatedFrame = frame;
                 Archive(trip);
-                return trip.Key;
+                result = new MonitorStopResult(
+                    true,
+                    trip.Line,
+                    trip.ServiceDateKey,
+                    trip.Key,
+                    originMatches ? BuildClosingSample(trip, minute) : default);
+                return true;
             }
 
             if (arrival)
@@ -631,7 +643,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     if (exactLayout)
                     {
                         TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, trip.Stops[matched], matched, "reject", "arrival-layout-mismatch", true);
-                        return string.Empty;
+                        return false;
                     }
                     matched++;
                 }
@@ -639,11 +651,17 @@ namespace RapidTransitMod.Dispatch.Observation
                 {
                     MonitorStop expected = matched < trip.Stops.Count ? trip.Stops[matched] : null;
                     TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, expected, matched, "reject", matched >= trip.Stops.Count ? "arrival-after-plan" : "arrival-duplicate", exactLayout);
-                    return string.Empty;
+                    return false;
                 }
                 trip.Stops[matched].ActualArrival = minute;
                 trip.NextArrivalOrder = matched + 1;
                 TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, trip.Stops[matched], matched, "accept", "arrival", exactLayout);
+                result = new MonitorStopResult(
+                    true,
+                    trip.Line,
+                    trip.ServiceDateKey,
+                    trip.Key,
+                    BuildIntervalSample(trip, matched, minute, exactLayout));
             }
             else
             {
@@ -651,7 +669,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 if (matched < 1)
                 {
                     TraceMonitor(trip, vehicle, frame, false, stopKey, waypointIndex, null, matched, "reject", "departure-without-arrival", exactLayout);
-                    return string.Empty;
+                    return false;
                 }
                 MonitorStop stop = trip.Stops[matched];
                 if (stop.ActualArrival < 0
@@ -669,7 +687,7 @@ namespace RapidTransitMod.Dispatch.Observation
                             ? "departure-duplicate"
                             : "departure-layout-mismatch";
                     TraceMonitor(trip, vehicle, frame, false, stopKey, waypointIndex, stop, matched, "reject", reason, exactLayout);
-                    return string.Empty;
+                    return false;
                 }
                 trip.Stops[matched].ActualDeparture = minute;
                 TraceMonitor(trip, vehicle, frame, false, stopKey, waypointIndex, stop, matched, "accept", "departure", exactLayout);
@@ -678,7 +696,67 @@ namespace RapidTransitMod.Dispatch.Observation
             trip.LastFactStopKey = stopKey;
             trip.LastFactFrame = frame;
             trip.LastFactArrival = arrival;
-            return trip.Key;
+            if (!arrival)
+            {
+                result = new MonitorStopResult(
+                    true,
+                    trip.Line,
+                    trip.ServiceDateKey,
+                    trip.Key,
+                    default);
+            }
+            return true;
+        }
+
+        private static MonitorIntervalSample BuildIntervalSample(
+            MonitorTrip trip,
+            int toOrder,
+            int arrivalMinute,
+            bool exactLayout)
+        {
+            int fromOrder = toOrder - 1;
+            if (!exactLayout
+                || trip == null
+                || string.IsNullOrEmpty(trip.StopSig)
+                || fromOrder < 0
+                || toOrder >= trip.Stops.Count
+                || trip.Stops[fromOrder].ActualDeparture < 0)
+            {
+                return default;
+            }
+
+            int minutes = arrivalMinute - trip.Stops[fromOrder].ActualDeparture;
+            return new MonitorIntervalSample(
+                trip.Line,
+                trip.StopSig,
+                trip.Stops.Count,
+                fromOrder,
+                toOrder,
+                minutes,
+                false);
+        }
+
+        private static MonitorIntervalSample BuildClosingSample(MonitorTrip trip, int arrivalMinute)
+        {
+            if (trip == null
+                || string.IsNullOrEmpty(trip.StopSig)
+                || trip.Stops.Count < 2
+                || trip.SuppressPlanFrom != int.MaxValue
+                || trip.Stops[trip.Stops.Count - 1].ActualDeparture < 0)
+            {
+                return default;
+            }
+
+            int fromOrder = trip.Stops.Count - 1;
+            int minutes = arrivalMinute - trip.Stops[fromOrder].ActualDeparture;
+            return new MonitorIntervalSample(
+                trip.Line,
+                trip.StopSig,
+                trip.Stops.Count,
+                fromOrder,
+                0,
+                minutes,
+                true);
         }
 
         private void TraceMonitor(
@@ -1037,209 +1115,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Store.Session.UpdatedFrame = launchFrame;
         }
 
-        internal void StartRailSegment(
-            Entity vehicle,
-            Entity line,
-            Entity waypoint,
-            Entity stop,
-            int waypointIndex,
-            uint frame)
-        {
-            if (vehicle == Entity.Null
-                || line == Entity.Null
-                || waypoint == Entity.Null
-                || stop == Entity.Null
-                || waypointIndex < 0)
-            {
-                return;
-            }
-
-            m_Store.RailSegmentSessions[vehicle] = new RailSegmentSession
-            {
-                Line = line,
-                FromWaypoint = waypoint,
-                FromStop = stop,
-                StartFrame = frame
-            };
-        }
-
-        internal void ClearRailSegmentVehicle(Entity vehicle)
-        {
-            if (vehicle != Entity.Null)
-                m_Store.RailSegmentSessions.Remove(vehicle);
-        }
-
-        internal void ClearRailSegmentLine(Entity line)
-        {
-            if (line == Entity.Null)
-                return;
-            List<Entity> remove = m_Store.RailSegmentSessions
-                .Where(pair => pair.Value != null && pair.Value.Line == line)
-                .Select(pair => pair.Key)
-                .ToList();
-            for (int i = 0; i < remove.Count; i++)
-                m_Store.RailSegmentSessions.Remove(remove[i]);
-
-            List<RailSegmentKey> removeSegments = m_Store.RailSegments.Keys
-                .Where(key => key.Line == line)
-                .ToList();
-            for (int i = 0; i < removeSegments.Count; i++)
-            {
-                RailSegmentKey key = removeSegments[i];
-                m_Store.RailSegments.Remove(key);
-                DecrementRailSegmentLineCount(key.Line);
-            }
-        }
-
-        internal void RecordRailSegmentArrival(
-            Entity vehicle,
-            Entity line,
-            Entity toWaypoint,
-            Entity toStop,
-            uint frame,
-            bool eligible)
-        {
-            if (!m_Store.RailSegmentSessions.TryGetValue(vehicle, out RailSegmentSession session))
-                return;
-
-            m_Store.RailSegmentSessions.Remove(vehicle);
-            if (!eligible
-                || session.Line != line
-                || toWaypoint == Entity.Null
-                || toStop == Entity.Null
-                || frame <= session.StartFrame)
-            {
-                return;
-            }
-
-            RailSegmentKey key = new RailSegmentKey(
-                line,
-                session.FromWaypoint,
-                session.FromStop,
-                toWaypoint,
-                toStop);
-            uint frames = frame - session.StartFrame;
-            if (frames == 0u)
-                return;
-
-            if (!m_Store.RailSegments.TryGetValue(key, out RailSegmentObservation observation))
-            {
-                if (!CanAddRailSegment(key.Line))
-                    return;
-
-                observation = new RailSegmentObservation
-                {
-                    AverageFrames = frames,
-                    SampleCount = 1,
-                    LastObservedFrame = frame
-                };
-                m_Store.RailSegments[key] = observation;
-                IncrementRailSegmentLineCount(key.Line);
-                return;
-            }
-
-            int count = Math.Min(32, Math.Max(1, observation.SampleCount));
-            observation.AverageFrames = (observation.AverageFrames * count + frames) / (count + 1);
-            observation.SampleCount = Math.Min(32, count + 1);
-            observation.LastObservedFrame = frame;
-        }
-
-        internal bool TryRailSegment(
-            RailSegmentKey key,
-            out RailSegmentObservation observation)
-        {
-            if (m_Store.RailSegments.TryGetValue(key, out RailSegmentObservation value)
-                && value != null
-                && value.AverageFrames > 0f
-                && value.SampleCount > 0)
-            {
-                observation = value;
-                return true;
-            }
-
-            observation = null;
-            return false;
-        }
-
-        internal IEnumerable<KeyValuePair<RailSegmentKey, RailSegmentObservation>> RailSegmentValues =>
-            m_Store.RailSegments;
-
-        internal void RestoreRailSegment(
-            RailSegmentKey key,
-            float averageFrames,
-            int sampleCount,
-            uint lastObservedFrame)
-        {
-            if (key.Line == Entity.Null
-                || key.FromWaypoint == Entity.Null
-                || key.FromStop == Entity.Null
-                || key.ToWaypoint == Entity.Null
-                || key.ToStop == Entity.Null
-                || float.IsNaN(averageFrames)
-                || float.IsInfinity(averageFrames)
-                || averageFrames <= 0f
-                || sampleCount <= 0)
-            {
-                return;
-            }
-
-            if (!m_Store.RailSegments.ContainsKey(key))
-            {
-                if (!CanAddRailSegment(key.Line))
-                    return;
-                m_Store.RailSegments[key] = new RailSegmentObservation
-                {
-                    AverageFrames = averageFrames,
-                    SampleCount = Math.Min(32, sampleCount),
-                    LastObservedFrame = lastObservedFrame
-                };
-                IncrementRailSegmentLineCount(key.Line);
-                return;
-            }
-
-            m_Store.RailSegments[key] = new RailSegmentObservation
-            {
-                AverageFrames = averageFrames,
-                SampleCount = Math.Min(32, sampleCount),
-                LastObservedFrame = lastObservedFrame
-            };
-        }
-
-        private bool CanAddRailSegment(Entity line)
-        {
-            if (m_Store.RailSegments.Count >= MaxRailSegments)
-            {
-                NoteIssue("rail-segment-global-capacity");
-                return false;
-            }
-
-            if (m_Store.RailSegmentLineCounts.TryGetValue(line, out int lineCount)
-                && lineCount >= MaxRailSegmentsPerLine)
-            {
-                NoteIssue("rail-segment-line-capacity");
-                return false;
-            }
-
-            return true;
-        }
-
-        private void IncrementRailSegmentLineCount(Entity line)
-        {
-            m_Store.RailSegmentLineCounts.TryGetValue(line, out int count);
-            m_Store.RailSegmentLineCounts[line] = count + 1;
-        }
-
-        private void DecrementRailSegmentLineCount(Entity line)
-        {
-            if (!m_Store.RailSegmentLineCounts.TryGetValue(line, out int count))
-                return;
-            if (count <= 1)
-                m_Store.RailSegmentLineCounts.Remove(line);
-            else
-                m_Store.RailSegmentLineCounts[line] = count - 1;
-        }
-
-        internal string Stop(
+        internal bool Stop(
             Entity vehicle,
             Entity line,
             Entity station,
@@ -1250,7 +1126,8 @@ namespace RapidTransitMod.Dispatch.Observation
             bool arrival,
             string clockTime,
             ClockSnapshot clock,
-            uint frame)
+            uint frame,
+            out MonitorStopResult result)
         {
             return RecordMonitorStop(
                 vehicle,
@@ -1260,7 +1137,8 @@ namespace RapidTransitMod.Dispatch.Observation
                 isOrigin,
                 arrival,
                 clock,
-                frame);
+                frame,
+                out result);
         }
 
         internal void Hold(

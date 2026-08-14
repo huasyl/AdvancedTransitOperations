@@ -381,6 +381,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                         : m_StationName(item.Building) ?? string.Empty,
                     IsStop = item.Kind == TraversalEventKind.Stop,
                     EventOrder = item.EventIndex,
+                    WaypointIndex = item.WaypointIndex,
                     StartAtomIndex = item.StartAtomIndex,
                     Broken = boundary || string.IsNullOrEmpty(stationId)
                 });
@@ -691,8 +692,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 LineId = source.LineId,
                 LineIdentity = source.LineIdentity,
                 DirectionPhase = phase.Index,
+                Phase = phase,
                 FromOrder = from.EventOrder,
                 ToOrder = to.EventOrder,
+                FromWaypointIndex = from.WaypointIndex,
+                ToWaypointIndex = to.WaypointIndex,
                 FromIsStop = from.IsStop,
                 ToIsStop = to.IsStop,
                 ChainSignature = source.ChainSignature,
@@ -903,8 +907,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 FromSectionIndex = startIndex,
                 ToSectionIndex = startIndex + 1
             };
-            AddCoveragePoint(coverage, startIndex, first.FromIsStop);
-            AddCoveragePoint(coverage, startIndex + 1, first.ToIsStop);
+            AddCoveragePoint(coverage, startIndex, first.FromIsStop, first.FromWaypointIndex);
+            AddCoveragePoint(coverage, startIndex + 1, first.ToIsStop, first.ToWaypointIndex);
             EdgeAttachment current = first;
             for (int edgeIndex = startIndex + 1; edgeIndex < section.Stations.Count - 1; edgeIndex++)
             {
@@ -915,8 +919,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                     break;
                 current = next;
                 coverage.ToSectionIndex = edgeIndex + 1;
-                AddCoveragePoint(coverage, edgeIndex + 1, current.ToIsStop);
+                AddCoveragePoint(coverage, edgeIndex + 1, current.ToIsStop, current.ToWaypointIndex);
             }
+            AddClipStops(coverage, first, current);
             string key = CoverageKey(coverage);
             if (!section.CoverageKeys.Add(key))
                 return;
@@ -928,11 +933,72 @@ namespace RapidTransitMod.Dispatch.Workbench
             section.Coverages.Add(coverage);
         }
 
-        private static void AddCoveragePoint(Coverage coverage, int sectionIndex, bool isStop)
+        private static void AddCoveragePoint(Coverage coverage, int sectionIndex, bool isStop, int waypointIndex)
         {
-            List<int> target = isStop ? coverage.StopSectionIndices : coverage.PassSectionIndices;
-            if (!target.Contains(sectionIndex))
-                target.Add(sectionIndex);
+            List<CoveragePoint> target = isStop ? coverage.Stops : coverage.Passes;
+            if (!target.Any(point => point.SectionIndex == sectionIndex))
+                target.Add(new CoveragePoint { SectionIndex = sectionIndex, WaypointIndex = waypointIndex });
+        }
+
+        private void AddClipStops(Coverage coverage, EdgeAttachment first, EdgeAttachment last)
+        {
+            LinePhase phase = first.Phase;
+            if (phase == null || phase.Events.Count < 2)
+                return;
+
+            if (!first.FromIsStop
+                && TryFindClipStop(phase, first.FromOrder, -1, out Fact leading, out int leadingHops))
+            {
+                coverage.LeadingStop = new CoveragePoint
+                {
+                    StationId = leading.StationId,
+                    SectionIndex = coverage.FromSectionIndex - leadingHops,
+                    WaypointIndex = leading.WaypointIndex
+                };
+            }
+            if (!last.ToIsStop
+                && TryFindClipStop(phase, last.ToOrder, 1, out Fact trailing, out int trailingHops))
+            {
+                coverage.TrailingStop = new CoveragePoint
+                {
+                    StationId = trailing.StationId,
+                    SectionIndex = coverage.ToSectionIndex + trailingHops,
+                    WaypointIndex = trailing.WaypointIndex
+                };
+            }
+        }
+
+        private static bool TryFindClipStop(
+            LinePhase phase,
+            int eventOrder,
+            int direction,
+            out Fact stop,
+            out int hops)
+        {
+            stop = null;
+            hops = 0;
+            int start = phase.Events.FindIndex(item => item.EventOrder == eventOrder);
+            if (start < 0 || direction == 0)
+                return false;
+
+            int index = start;
+            for (int step = 1; step < phase.Events.Count; step++)
+            {
+                index += direction;
+                if (index < 0 || index >= phase.Events.Count)
+                {
+                    if (!phase.CanWrap)
+                        return false;
+                    index = index < 0 ? phase.Events.Count - 1 : 0;
+                }
+                Fact candidate = phase.Events[index];
+                if (!candidate.IsStop)
+                    continue;
+                stop = candidate;
+                hops = step;
+                return true;
+            }
+            return false;
         }
 
         private static bool AttachmentsFollow(EdgeAttachment previous, EdgeAttachment next)
@@ -1436,6 +1502,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     stationId = stationId,
                     sectionIndex = index,
+                    waypointIndex = -1,
                     type = section.StationIsStop[index] ? "stop" : "pass"
                 }).ToArray(),
                 coverages = section.Coverages.Select(coverage => new DispatchWorkbenchRunChartCoverageDto
@@ -1448,20 +1515,37 @@ namespace RapidTransitMod.Dispatch.Workbench
                     traversalSignature = coverage.TraversalSignature,
                     fromSectionIndex = coverage.FromSectionIndex,
                     toSectionIndex = coverage.ToSectionIndex,
-                    stops = coverage.StopSectionIndices.Select(index => new DispatchWorkbenchRunChartStationDto
+                    stops = coverage.Stops.Select(point => new DispatchWorkbenchRunChartStationDto
                     {
-                        stationId = section.Stations[index],
-                        sectionIndex = index,
+                        stationId = section.Stations[point.SectionIndex],
+                        sectionIndex = point.SectionIndex,
+                        waypointIndex = point.WaypointIndex,
                         type = "stop"
                     }).ToArray(),
-                    passes = coverage.PassSectionIndices.Select(index => new DispatchWorkbenchRunChartStationDto
+                    passes = coverage.Passes.Select(point => new DispatchWorkbenchRunChartStationDto
                     {
-                        stationId = section.Stations[index],
-                        sectionIndex = index,
+                        stationId = section.Stations[point.SectionIndex],
+                        sectionIndex = point.SectionIndex,
+                        waypointIndex = -1,
                         type = "pass"
-                    }).ToArray()
+                    }).ToArray(),
+                    leadingStop = ClipStopDto(coverage.LeadingStop),
+                    trailingStop = ClipStopDto(coverage.TrailingStop)
                 }).ToArray()
             };
+        }
+
+        private static DispatchWorkbenchRunChartStationDto ClipStopDto(CoveragePoint point)
+        {
+            return point == null
+                ? null
+                : new DispatchWorkbenchRunChartStationDto
+                {
+                    stationId = point.StationId,
+                    sectionIndex = point.SectionIndex,
+                    waypointIndex = point.WaypointIndex,
+                    type = "clip"
+                };
         }
 
         private static string OverflowReasonCode(OverflowReason reason)
@@ -1533,6 +1617,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             internal string Name;
             internal bool IsStop;
             internal int EventOrder;
+            internal int WaypointIndex = -1;
             internal int StartAtomIndex;
             internal bool Broken;
         }
@@ -1560,8 +1645,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             internal string LineId;
             internal string LineIdentity;
             internal int DirectionPhase;
+            internal LinePhase Phase;
             internal int FromOrder;
             internal int ToOrder;
+            internal int FromWaypointIndex;
+            internal int ToWaypointIndex;
             internal bool FromIsStop;
             internal bool ToIsStop;
             internal ulong ChainSignature;
@@ -1618,8 +1706,17 @@ namespace RapidTransitMod.Dispatch.Workbench
             internal ulong TraversalSignature;
             internal int FromSectionIndex;
             internal int ToSectionIndex;
-            internal readonly List<int> StopSectionIndices = new List<int>();
-            internal readonly List<int> PassSectionIndices = new List<int>();
+            internal readonly List<CoveragePoint> Stops = new List<CoveragePoint>();
+            internal readonly List<CoveragePoint> Passes = new List<CoveragePoint>();
+            internal CoveragePoint LeadingStop;
+            internal CoveragePoint TrailingStop;
+        }
+
+        private sealed class CoveragePoint
+        {
+            internal string StationId;
+            internal int SectionIndex;
+            internal int WaypointIndex;
         }
 
         private sealed class StationItem

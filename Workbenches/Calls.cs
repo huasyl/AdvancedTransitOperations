@@ -122,6 +122,10 @@ namespace RapidTransitMod.Workbenches
             Bind(view, ApiHost.Prefix + "queryRunChartSections", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.RunChartSections));
             Bind(view, ApiHost.Prefix + "loadMonitorTripHeaders", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorHeaders));
             Bind(view, ApiHost.Prefix + "loadMonitorTripDetail", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorDetail));
+            Bind(view, ApiHost.Prefix + "loadMonitorTripDetails", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorDetails));
+            Bind(view, ApiHost.Prefix + "loadMonitorAverageState", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorAverageState));
+            Bind(view, ApiHost.Prefix + "queryMonitorAverage", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.QueryMonitorAverage));
+            Bind(view, ApiHost.Prefix + "setMonitorSubscription", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.SetMonitorSubscription));
             return true;
         }
 

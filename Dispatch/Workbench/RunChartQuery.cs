@@ -125,6 +125,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private const int MaxSegments = 64;
         private const int MaxPathSlots = 256;
         private const int TimeoutMilliseconds = 8000;
+        private const int MaxResults = 512;
+        private const int MaxResultsPerEditor = 32;
         private readonly EntityManager m_Entities;
         private readonly RoutePlanQuery m_RoutePlans;
         private readonly ObservationPort m_Observation;
@@ -135,6 +137,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Action<RunTimeInvalidationDto> m_PushInvalidation;
         private readonly Dictionary<string, FullRunTimeSession> m_Active = new Dictionary<string, FullRunTimeSession>(StringComparer.Ordinal);
         private readonly Dictionary<string, FullRunTimeResult> m_Results = new Dictionary<string, FullRunTimeResult>(StringComparer.Ordinal);
+        private long m_NextResultOrder;
 
         internal FullRunTimeQuery(EntityManager entities, RoutePlanQuery routePlans, ObservationPort observation,
             Func<string, Entity> lineById, Func<double> framesPerMinute, Func<string, ulong> lineGeneration,
@@ -156,7 +159,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             request ??= new DispatchWorkbenchRunTimeQueryRequestDto();
             string editor = request.editorSessionId ?? string.Empty;
             if (string.IsNullOrEmpty(editor)) return Failure(string.Empty, editor, "run-time-editor-session-required");
-            if (request.source != "historical" && request.source != "theory") return Failure(string.Empty, editor, "run-time-source-invalid");
+            if (request.source != "sliceHistoricalEstimate"
+                && request.source != "theory"
+                && request.source != "monitorAverage"
+                && request.source != "busHistorical") return Failure(string.Empty, editor, "run-time-source-invalid");
             ClearActive(editor, request.lineId, request.source);
             ClearResults(editor, request.lineId, request.source);
             Entity line = m_LineById(request.lineId);
@@ -165,7 +171,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             if (!m_RoutePlans.TryGet(line, lifecycle, out RoutePlan plan) || plan.Waypoints.Length > MaxWaypoints)
                 return Failure(string.Empty, editor, "run-time-route-plan-unavailable");
             int[] stops = plan.Stops.Select(stop => stop.WaypointIndex).ToArray();
-            int segmentCount = request.source == "theory" ? stops.Length : stops.Length - 1;
+            int segmentCount = request.source == "sliceHistoricalEstimate"
+                ? stops.Length - 1
+                : stops.Length;
             if (stops.Length < 2 || segmentCount > MaxSegments)
                 return Failure(string.Empty, editor, "run-time-segment-limit");
             FullRunTimeSession session = new FullRunTimeSession
@@ -174,11 +182,45 @@ namespace RapidTransitMod.Dispatch.Workbench
                 LineId = request.lineId ?? string.Empty, Lifecycle = lifecycle, Source = request.source,
                 Plan = plan, StopWaypointIndices = stops, Generation = m_LineGeneration(request.lineId)
             };
-            session.Dwells = BuildDwells(session);
-            if (request.source == "historical")
+            session.Dwells = request.source == "busHistorical"
+                || request.source == "sliceHistoricalEstimate"
+                ? new List<RunChartDwell>()
+                : BuildDwells(session);
+            if (request.source == "sliceHistoricalEstimate")
             {
+                if (lifecycle != LifecycleKind.Rail)
+                    return Failure(session, "run-time-slice-historical-unsupported");
                 if (!BuildHistorical(session, out string detail))
-                    return Failure(session, "run-time-historical-missing", detail);
+                    return Failure(session, "run-time-slice-historical-missing", detail);
+                Complete(session);
+#if RT_DEBUG_TOOLS
+                if (!session.Complete)
+                {
+                    Mod.log.Info("[RunChartMissing] line=" + (session.LineId ?? string.Empty)
+                        + ";source=" + (session.Source ?? string.Empty)
+                        + ";kind=" + (session.MissingKind ?? "none")
+                        + ";prefix=" + session.PrefixStopCount);
+                }
+#endif
+                m_Active[ActiveKey(session)] = session;
+                return Status(session);
+            }
+            if (request.source == "monitorAverage")
+            {
+                if (lifecycle != LifecycleKind.Rail)
+                    return Failure(session, "monitor-average-unsupported");
+                if (!BuildMonitorAverage(session, out string detail))
+                    return Failure(session, "monitor-average-unavailable", detail);
+                Complete(session);
+                m_Active[ActiveKey(session)] = session;
+                return Status(session);
+            }
+            if (request.source == "busHistorical")
+            {
+                if (lifecycle != LifecycleKind.Road)
+                    return Failure(session, "bus-historical-unsupported");
+                if (!BuildBusHistorical(session, out string detail))
+                    return Failure(session, "bus-historical-missing", detail);
                 Complete(session);
                 m_Active[ActiveKey(session)] = session;
                 return Status(session);
@@ -240,6 +282,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 editorSessionId = editor,
                 state = "Idle",
+                missingKind = "none",
                 segments = Array.Empty<DispatchWorkbenchRunChartSegmentDto>(),
                 dwells = Array.Empty<DispatchWorkbenchRunChartDwellDto>()
             };
@@ -477,59 +520,50 @@ namespace RapidTransitMod.Dispatch.Workbench
                 RouteWaypointRef from = session.Plan.Waypoints[segment.FromWaypointIndex];
                 RouteWaypointRef to = session.Plan.Waypoints[segment.ToWaypointIndex];
                 float frames;
-                bool found;
-                string cause;
-                if (session.Lifecycle == LifecycleKind.Rail)
-                {
-                    found = m_Observation.TryTraversalFrames(
-                        session.Line,
-                        from.WaypointIndex,
-                        to.WaypointIndex,
-                        out frames,
-                        out cause);
-                }
-                else
-                {
-                    found = m_Observation.TryBusSegFrames(
-                        session.Line,
-                        from.Waypoint,
-                        from.Stop,
-                        to.Waypoint,
-                        to.Stop,
-                        out frames);
-                    cause = found ? string.Empty : "code=bus-segment-missing";
-                }
+                bool found = m_Observation.TryTraversalFrames(
+                    session.Line,
+                    from.WaypointIndex,
+                    to.WaypointIndex,
+                    out frames,
+                    out _);
                 if (!found || frames <= 0f || float.IsNaN(frames) || float.IsInfinity(frames))
                 {
-                    if (session.Lifecycle == LifecycleKind.Rail && RtLog.VerboseEnabled)
-                    {
-                        string diagnostic = string.IsNullOrEmpty(cause) ? "code=invalid-frames" : cause;
-                        if (!diagnostic.Contains(";required="))
-                        {
-                            diagnostic += ";required=unavailable;requiredTotal=0;requiredTruncated=0"
-                                + ";hit=none;hitTotal=0;hitTruncated=0"
-                                + ";missing=unavailable;missingTotal=0;missingTruncated=0";
-                        }
-                        Mod.log.Info("[TraversalSliceHistoricalMissing] lineId=" + session.LineId
-                            + ";line=" + session.Line.Index + ":" + session.Line.Version
-                            + ";segment=" + i
-                            + ";from=" + from.WaypointIndex
-                            + ";to=" + to.WaypointIndex
-                            + ";error=run-time-historical-missing;"
-                            + diagnostic);
-                    }
-                    detail = "segment=" + i
-                        + ";from=" + from.WaypointIndex
-                        + ";to=" + to.WaypointIndex
-                        + ";" + (string.IsNullOrEmpty(cause) ? "code=invalid-frames" : cause);
-                    return false;
+                    session.MissingKind = "slice";
+                    segments.RemoveRange(i, segments.Count - i);
+                    session.Segments = segments;
+                    session.Complete = false;
+                    session.PrefixStopCount = segments.Count + 1;
+                    return true;
                 }
                 segment.Frames = (uint)Math.Max(1, Math.Round(frames));
-                segment.Minutes = ToMinutes(frames);
-                segment.ExactMinutes = ToExactMinutes(frames);
+                segment.Minutes = ToMinutes(frames) + 5;
+                segment.ExactMinutes = ToExactMinutes(frames) + 5d;
                 segments[i] = segment;
+
+                if (i + 1 < session.StopWaypointIndices.Length - 1)
+                {
+                    RunChartDwell dwell = BuildDwell(session, i + 1);
+                    session.Dwells.Add(dwell);
+                    bool validDwell = dwell != null
+                        && dwell.HasObservation
+                        && dwell.Frames > 0f
+                        && !float.IsNaN(dwell.Frames)
+                        && !float.IsInfinity(dwell.Frames);
+                    if (!validDwell)
+                    {
+                        session.MissingKind = "dwell";
+                        segments.RemoveRange(i + 1, segments.Count - i - 1);
+                        session.Segments = segments;
+                        session.Complete = false;
+                        session.PrefixStopCount = segments.Count + 1;
+                        return true;
+                    }
+                }
             }
             session.Segments = segments;
+            session.Complete = true;
+            session.MissingKind = "none";
+            session.PrefixStopCount = segments.Count + 1;
             if (segments.Count == 0)
             {
                 detail = "code=no-segments";
@@ -538,30 +572,115 @@ namespace RapidTransitMod.Dispatch.Workbench
             return true;
         }
 
+        private bool BuildMonitorAverage(FullRunTimeSession session, out string detail)
+        {
+            detail = string.Empty;
+            if (!m_Observation.TryMonitorAverageSnapshot(
+                    session.Line,
+                    session.Plan.StopSig,
+                    out MonitorAverageSnapshot snapshot)
+                || snapshot.Segments.Length != session.Plan.Stops.Length)
+            {
+                detail = "monitor-average-unavailable";
+                return false;
+            }
+
+            List<RunChartSegment> segments = BuildIntervals(
+                session.Plan,
+                session.StopWaypointIndices,
+                true);
+            if (segments.Count != snapshot.Segments.Length)
+            {
+                detail = "monitor-average-layout-mismatch";
+                return false;
+            }
+            for (int i = 0; i < segments.Count; i++)
+            {
+                int minutes = snapshot.Segments[i];
+                if (minutes <= 0)
+                {
+                    detail = "monitor-average-segment-invalid";
+                    return false;
+                }
+                RunChartSegment segment = segments[i];
+                segment.Minutes = minutes;
+                segment.ExactMinutes = minutes;
+                segments[i] = segment;
+            }
+            session.SourceRevision = snapshot.Revision;
+            session.Segments = segments;
+            session.Complete = true;
+            session.PrefixStopCount = segments.Count + 1;
+            return true;
+        }
+
+        private bool BuildBusHistorical(FullRunTimeSession session, out string detail)
+        {
+            detail = string.Empty;
+            List<RunChartSegment> segments = BuildIntervals(
+                session.Plan,
+                session.StopWaypointIndices,
+                true);
+            for (int i = 0; i < segments.Count; i++)
+            {
+                RunChartSegment segment = segments[i];
+                RouteWaypointRef from = session.Plan.Waypoints[segment.FromWaypointIndex];
+                RouteWaypointRef to = session.Plan.Waypoints[segment.ToWaypointIndex];
+                if (!m_Observation.TryBusSegFrames(
+                        session.Line,
+                        from.Waypoint,
+                        from.Stop,
+                        to.Waypoint,
+                        to.Stop,
+                        out float frames)
+                    || frames <= 0f
+                    || float.IsNaN(frames)
+                    || float.IsInfinity(frames))
+                {
+                    detail = "segment=" + i
+                        + ";from=" + from.WaypointIndex
+                        + ";to=" + to.WaypointIndex
+                        + ";code=bus-segment-missing";
+                    return false;
+                }
+                segment.Frames = (uint)Math.Max(1, Math.Round(frames));
+                segment.Minutes = ToMinutes(frames);
+                segment.ExactMinutes = ToExactMinutes(frames);
+                segments[i] = segment;
+            }
+            session.Segments = segments;
+            session.Complete = true;
+            session.PrefixStopCount = segments.Count + 1;
+            return true;
+        }
+
         private List<RunChartDwell> BuildDwells(FullRunTimeSession session)
         {
             List<RunChartDwell> dwells = new List<RunChartDwell>(session.Plan.Stops.Length);
             for (int i = 0; i < session.Plan.Stops.Length; i++)
-            {
-                RouteStopRef stop = session.Plan.Stops[i];
-                RunChartDwell dwell = new RunChartDwell
-                {
-                    StopKey = stop.StopKey,
-                    WaypointIndex = stop.WaypointIndex
-                };
-                if (m_Observation.TryObservedWaypointDwell(
-                        session.Line,
-                        stop.WaypointIndex,
-                        out StationDwellObservation observation))
-                {
-                    dwell.Frames = observation.AverageFrames;
-                    dwell.Minutes = ToMinutes(observation.AverageFrames);
-                    dwell.SampleCount = observation.SampleCount;
-                    dwell.HasObservation = true;
-                }
-                dwells.Add(dwell);
-            }
+                dwells.Add(BuildDwell(session, i));
             return dwells;
+        }
+
+        private RunChartDwell BuildDwell(FullRunTimeSession session, int stopIndex)
+        {
+            RouteStopRef stop = session.Plan.Stops[stopIndex];
+            RunChartDwell dwell = new RunChartDwell
+            {
+                StopKey = stop.StopKey,
+                WaypointIndex = stop.WaypointIndex
+            };
+            if (m_Observation.TryObservedWaypointDwell(
+                    session.Line,
+                    stop.WaypointIndex,
+                    out StationDwellObservation observation))
+            {
+                dwell.Frames = observation.AverageFrames;
+                dwell.Minutes = ToMinutes(observation.AverageFrames);
+                dwell.SampleCount = observation.SampleCount;
+                dwell.HasObservation = true;
+            }
+            return dwell;
         }
 
         private bool ApplyTheory(FullRunTimeSession session, RailEtaTheorySegmentResult[] results)
@@ -688,10 +807,59 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 ResultId = session.ResultId, EditorSessionId = session.EditorSessionId, LineId = session.LineId,
                 Line = session.Line, Source = session.Source, StopSig = session.Plan.StopSig, Generation = session.Generation,
+                SourceRevision = session.SourceRevision,
+                CompletedOrder = ++m_NextResultOrder,
                 StopKeys = session.Plan.Stops.Select(stop => stop.StopKey ?? string.Empty).ToArray(),
                 Segments = session.Segments?.ToArray() ?? Array.Empty<RunChartSegment>()
             };
+            TrimResults();
             Release(session);
+        }
+
+        private void TrimResults()
+        {
+            HashSet<string> editors = new HashSet<string>(
+                m_Results.Values.Select(result => result.EditorSessionId),
+                StringComparer.Ordinal);
+            foreach (string editor in editors)
+            {
+                while (m_Results.Values.Count(result => result.EditorSessionId == editor) > MaxResultsPerEditor)
+                {
+                    FullRunTimeResult oldest = FindOldestResult(editor);
+                    if (oldest == null)
+                        break;
+                    m_Results.Remove(oldest.ResultId);
+                }
+            }
+            while (m_Results.Count > MaxResults)
+            {
+                FullRunTimeResult oldest = FindOldestResult(null);
+                if (oldest == null)
+                    break;
+                m_Results.Remove(oldest.ResultId);
+            }
+        }
+
+        private FullRunTimeResult FindOldestResult(string editorSessionId)
+        {
+            FullRunTimeResult fallback = null;
+            FullRunTimeResult idle = null;
+            foreach (FullRunTimeResult result in m_Results.Values
+                .Where(result => editorSessionId == null || result.EditorSessionId == editorSessionId)
+                .OrderBy(result => result.CompletedOrder))
+            {
+                fallback ??= result;
+                bool active = m_Active.Values.Any(session => session.State == "Running"
+                    && session.EditorSessionId == result.EditorSessionId
+                    && session.LineId == result.LineId
+                    && session.Source == result.Source);
+                if (!active)
+                {
+                    idle = result;
+                    break;
+                }
+            }
+            return idle ?? fallback;
         }
 
         private static void Fail(FullRunTimeSession session, string error, string detail = "")
@@ -734,6 +902,15 @@ namespace RapidTransitMod.Dispatch.Workbench
                 resultId = session.ResultId ?? string.Empty, error = session.Error ?? string.Empty,
                 detail = session.Detail ?? string.Empty,
                 lineId = session.LineId ?? string.Empty, source = session.Source ?? string.Empty,
+                stopSig = session.Plan?.StopSig ?? string.Empty,
+                sourceRevision = session.SourceRevision,
+                complete = session.Complete,
+                prefixStopCount = session.PrefixStopCount > 0
+                    ? session.PrefixStopCount
+                    : session.Plan?.Stops.Length ?? 0,
+                missingKind = string.IsNullOrEmpty(session.MissingKind)
+                    ? "none"
+                    : session.MissingKind,
                 segments = session.Segments == null ? Array.Empty<DispatchWorkbenchRunChartSegmentDto>() : session.Segments.Select(segment => new DispatchWorkbenchRunChartSegmentDto
                 {
                     fromStopKey = segment.FromStopKey, toStopKey = segment.ToStopKey,
@@ -759,6 +936,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 queryId = queryId ?? string.Empty, editorSessionId = editor ?? string.Empty,
                 state = "Failed", error = error ?? string.Empty,
+                missingKind = "none",
                 segments = Array.Empty<DispatchWorkbenchRunChartSegmentDto>(),
                 dwells = Array.Empty<DispatchWorkbenchRunChartDwellDto>()
             };
@@ -812,6 +990,10 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal ulong ModelSignature;
         internal ulong ModelPairSignature;
         internal ulong Generation;
+        internal ulong SourceRevision;
+        internal bool Complete = true;
+        internal int PrefixStopCount;
+        internal string MissingKind = "none";
         internal long StartTicks;
         internal bool LineInvalidationNotified;
         internal RailEtaPublicTicket Ticket;
@@ -826,6 +1008,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal string Source;
         internal string StopSig;
         internal ulong Generation;
+        internal ulong SourceRevision;
+        internal long CompletedOrder;
         internal string[] StopKeys;
         internal RunChartSegment[] Segments;
     }

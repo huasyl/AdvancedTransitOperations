@@ -1318,9 +1318,35 @@ namespace RapidTransitMod.Dispatch.Observation
                 return false;
 
             int separatorIndex = value.IndexOf('|');
-            return separatorIndex > 0
-                && separatorIndex + 1 < value.Length
-                && RapidTransitMod.Stops.IsKey(value.Substring(separatorIndex + 1));
+            if (separatorIndex <= 0
+                || separatorIndex != value.LastIndexOf('|')
+                || string.IsNullOrWhiteSpace(value.Substring(0, separatorIndex)))
+            {
+                return false;
+            }
+
+            const int anchorLength = 36;
+            int anchorStart = separatorIndex + 1;
+            if (value.Length != anchorStart + anchorLength
+                || value[anchorStart] != 's'
+                || value[anchorStart + 1] != 'a'
+                || value[anchorStart + 2] != 'k'
+                || value[anchorStart + 3] != ':')
+            {
+                return false;
+            }
+
+            for (int i = anchorStart + 4; i < value.Length; i++)
+            {
+                char valueChar = value[i];
+                bool hexadecimal = (valueChar >= '0' && valueChar <= '9')
+                    || (valueChar >= 'a' && valueChar <= 'f')
+                    || (valueChar >= 'A' && valueChar <= 'F');
+                if (!hexadecimal)
+                    return false;
+            }
+
+            return true;
         }
 
         private void LogTraversalProfileLapSlices(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints)

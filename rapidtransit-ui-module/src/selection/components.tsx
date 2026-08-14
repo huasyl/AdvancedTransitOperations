@@ -4,7 +4,7 @@ import { GROUP } from "./selectionBindings";
 import { COLORS } from "./selectionStyles";
 import { formatServiceMinute, formatValue } from "./selectionViewModel";
 
-export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; dense?: boolean; first?: boolean; alert?: boolean }>) {
+export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; dense?: boolean; first?: boolean; alert?: boolean; seamless?: boolean }>) {
   const children = React.Children.toArray(props.children);
 
   return (
@@ -15,7 +15,7 @@ export function SectionCard(props: React.PropsWithChildren<{ compact?: boolean; 
         margin: "0 -12rem",
         padding: props.dense ? "12rem 12rem 10rem" : props.compact ? "14rem 12rem 6rem" : "17rem 12rem 15rem",
         background: "transparent",
-        borderTop: props.first ? "none" : "3rem solid rgba(215,233,245,0.28)"
+        borderTop: props.first || props.seamless ? "none" : "3rem solid rgba(215,233,245,0.28)"
       }}
     >
       {children.map((child, index) => (
@@ -78,6 +78,56 @@ export function DetailRow(props: {
   );
 }
 
+export function VehicleInfoRow(props: {
+  label: string;
+  value?: string | number;
+  valueKind?: string;
+  level?: "primary" | "secondary" | "muted";
+  t: (key: string) => string;
+}) {
+  const level = props.level || "primary";
+  const secondary = level === "secondary";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        minHeight: secondary ? "24rem" : "28rem",
+        marginLeft: secondary ? "16rem" : "0"
+      }}
+    >
+      <div
+        style={{
+          minWidth: 0,
+          fontSize: "15rem",
+          lineHeight: "20rem",
+          fontWeight: 400,
+          color: COLORS.text
+        }}
+      >
+        {props.t(props.label)}
+      </div>
+      <div
+        style={{
+          flexShrink: 0,
+          marginLeft: "12rem",
+          fontSize: "16rem",
+          lineHeight: "21rem",
+          fontWeight: 500,
+          color: COLORS.title,
+          textAlign: "right",
+          whiteSpace: "nowrap"
+        }}
+      >
+        {formatValue(props.value, props.valueKind, props.t)}
+      </div>
+    </div>
+  );
+}
+
 export function ArrivalTimesRow(props: {
   plannedArrivalMinute?: number;
   actualArrivalMinute?: number;
@@ -90,23 +140,56 @@ export function ArrivalTimesRow(props: {
         flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
-        minHeight: "28rem"
+        minHeight: "24rem",
+        marginLeft: "16rem"
       }}
     >
-      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", flexShrink: 0 }}>
-        <div style={{ fontSize: "14rem", lineHeight: "20rem", color: COLORS.text }}>
-          {props.t("scheduledArrival")}
-        </div>
-        <div style={{ marginLeft: "8rem", fontSize: "15rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
-          {formatServiceMinute(props.plannedArrivalMinute)}
-        </div>
+      <div style={{ flexShrink: 0, fontSize: "15rem", lineHeight: "20rem", fontWeight: 400, color: COLORS.text }}>
+        {props.t("arrival")}
       </div>
       <div style={{ display: "flex", flexDirection: "row", alignItems: "center", flexShrink: 0, marginLeft: "12rem" }}>
-        <div style={{ fontSize: "14rem", lineHeight: "20rem", color: COLORS.text }}>
-          {props.t("actualArrival")}
+        <div style={{ fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
+          {props.t("scheduled")}
         </div>
-        <div style={{ marginLeft: "8rem", fontSize: "15rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
+        <div style={{ marginLeft: "8rem", fontSize: "16rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
+          {formatServiceMinute(props.plannedArrivalMinute)}
+        </div>
+        <div style={{ marginLeft: "12rem", fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
+          {props.t("actual")}
+        </div>
+        <div style={{ marginLeft: "8rem", fontSize: "16rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
           {formatServiceMinute(props.actualArrivalMinute)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ScheduledTimeRow(props: {
+  label: string;
+  minute?: number;
+  t: (key: string) => string;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        minHeight: "24rem",
+        marginLeft: "16rem"
+      }}
+    >
+      <div style={{ fontSize: "15rem", lineHeight: "20rem", fontWeight: 400, color: COLORS.text }}>
+        {props.t(props.label)}
+      </div>
+      <div style={{ display: "flex", flexDirection: "row", alignItems: "center", flexShrink: 0, marginLeft: "12rem" }}>
+        <div style={{ fontSize: "15rem", lineHeight: "20rem", color: COLORS.text }}>
+          {props.t("scheduled")}
+        </div>
+        <div style={{ marginLeft: "8rem", fontSize: "16rem", lineHeight: "21rem", fontWeight: 500, color: COLORS.title, whiteSpace: "nowrap" }}>
+          {formatServiceMinute(props.minute)}
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 #if RT_DEBUG_TOOLS
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -92,6 +93,10 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     return Ping();
                 case "mod.slices":
                     return ReadSlices(request);
+                case "mod.read":
+                    return ReadObject(request);
+                case "mod.systems":
+                    return ListSystems();
                 case "entity.components":
                     return ListComponents(ReadEntity(request));
                 case "entity.component":
@@ -534,6 +539,193 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             };
         }
 
+        private JToken ReadObject(JObject request)
+        {
+            ReadPage(request, out int offset, out int limit);
+            int maxDepth = request.Value<int?>("depth") ?? 4;
+            if (maxDepth < 1)
+                throw new ProbeError("depth 必须大于 0。");
+
+            string root = request.Value<string>("root");
+            string path = request.Value<string>("path") ?? string.Empty;
+            ReadView view = new ReadView(
+                offset,
+                limit,
+                maxDepth,
+                request.Value<string>("key"),
+                request.Value<string>("prefix"));
+            object value;
+            Type type;
+            switch (root)
+            {
+                case "runtime":
+                    value = ResolvePath(m_Runtime, m_Runtime.GetType(), path, false, out type);
+                    break;
+                case "system":
+                    value = FindSystem(request.Value<string>("type"));
+                    value = ResolvePath(value, value.GetType(), path, false, out type);
+                    break;
+                case "static":
+                    Type staticType = FindModType(request.Value<string>("type"));
+                    value = ResolvePath(null, staticType, path, true, out type);
+                    break;
+                default:
+                    throw new ProbeError("root 必须是 runtime、system 或 static。");
+            }
+
+            return new JObject
+            {
+                ["root"] = root,
+                ["type"] = type?.FullName ?? string.Empty,
+                ["path"] = path,
+                ["value"] = ValueNode(value, type, 0, view)
+            };
+        }
+
+        private JObject ListSystems()
+        {
+            JArray items = new JArray();
+            Assembly modAssembly = typeof(ModRuntimeHostSystem).Assembly;
+            foreach (ComponentSystemBase system in m_Runtime.World.Systems)
+            {
+                if (system == null || system.GetType().Assembly != modAssembly)
+                    continue;
+
+                items.Add(new JObject
+                {
+                    ["type"] = system.GetType().FullName,
+                    ["enabled"] = system.Enabled
+                });
+            }
+
+            return new JObject
+            {
+                ["total"] = items.Count,
+                ["items"] = items
+            };
+        }
+
+        private object FindSystem(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ProbeError("读取 system 时缺少 type。");
+
+            ComponentSystemBase match = null;
+            foreach (ComponentSystemBase system in m_Runtime.World.Systems)
+            {
+                if (system == null || system.GetType().Assembly != typeof(ModRuntimeHostSystem).Assembly)
+                    continue;
+
+                Type type = system.GetType();
+                if (string.Equals(type.FullName, name, StringComparison.Ordinal))
+                    return system;
+                if (string.Equals(type.Name, name, StringComparison.Ordinal))
+                {
+                    if (match != null)
+                        throw new ProbeError("系统短名称不唯一，请使用完整类型名: " + name);
+                    match = system;
+                }
+            }
+
+            return match ?? throw new ProbeError("当前 World 中没有该模组系统: " + name);
+        }
+
+        private static Type FindModType(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ProbeError("读取 static 时缺少 type。");
+
+            Assembly assembly = typeof(ModRuntimeHostSystem).Assembly;
+            Type exact = assembly.GetType(name, false, false);
+            if (exact != null)
+                return exact;
+
+            Type match = null;
+            Type[] types = assembly.GetTypes();
+            for (int i = 0; i < types.Length; i++)
+            {
+                if (!string.Equals(types[i].Name, name, StringComparison.Ordinal))
+                    continue;
+                if (match != null)
+                    throw new ProbeError("类型短名称不唯一，请使用完整类型名: " + name);
+                match = types[i];
+            }
+
+            return match ?? throw new ProbeError("模组中没有该类型: " + name);
+        }
+
+        private static object ResolvePath(
+            object value,
+            Type type,
+            string path,
+            bool firstStatic,
+            out Type resultType)
+        {
+            resultType = type;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                if (firstStatic)
+                    throw new ProbeError("读取 static 时缺少 path。");
+                return value;
+            }
+
+            string[] parts = path.Split('.');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(parts[i]))
+                    throw new ProbeError("path 包含空字段。");
+
+                bool useStatic = firstStatic && i == 0;
+                FieldInfo field = FindField(resultType, parts[i], useStatic);
+                if (field != null)
+                {
+                    value = field.GetValue(useStatic ? null : value);
+                    resultType = field.FieldType;
+                }
+                else
+                {
+                    PropertyInfo property = FindProperty(resultType, parts[i], useStatic);
+                    if (property == null || property.GetIndexParameters().Length != 0)
+                        throw new ProbeError("找不到字段或属性: " + parts[i]);
+                    value = property.GetValue(useStatic ? null : value, null);
+                    resultType = property.PropertyType;
+                }
+
+                if (value == null && i + 1 < parts.Length)
+                    throw new ProbeError("字段为空，无法继续读取: " + parts[i]);
+            }
+
+            return value;
+        }
+
+        private static FieldInfo FindField(Type type, string name, bool isStatic)
+        {
+            BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic
+                | (isStatic ? BindingFlags.Static : BindingFlags.Instance)
+                | BindingFlags.DeclaredOnly;
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                FieldInfo field = current.GetField(name, flags);
+                if (field != null)
+                    return field;
+            }
+            return null;
+        }
+
+        private static PropertyInfo FindProperty(Type type, string name, bool isStatic)
+        {
+            BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic
+                | (isStatic ? BindingFlags.Static : BindingFlags.Instance)
+                | BindingFlags.DeclaredOnly;
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                PropertyInfo property = current.GetProperty(name, flags);
+                if (property != null)
+                    return property;
+            }
+            return null;
+        }
+
         private static JObject EntityNode(Entity value)
         {
             return new JObject
@@ -545,8 +737,14 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         private static JToken ValueNode(object value, Type type, int depth)
         {
+            return ValueNode(value, type, depth, new ReadView(0, DefaultLimit, 4, null, null));
+        }
+
+        private static JToken ValueNode(object value, Type type, int depth, ReadView view)
+        {
             if (value == null)
                 return JValue.CreateNull();
+            type = value.GetType();
             if (type == typeof(Entity))
                 return EntityNode((Entity)value);
             if (type.IsEnum)
@@ -568,25 +766,105 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 return new JValue(value.ToString());
             if (type.IsPrimitive || type == typeof(decimal))
                 return JToken.FromObject(value);
+            if (type == typeof(DateTime)
+                || type == typeof(TimeSpan)
+                || type == typeof(Guid)
+                || type == typeof(Type)
+                || type == typeof(IntPtr)
+                || type == typeof(UIntPtr))
+            {
+                return new JValue(value.ToString());
+            }
             if (type.Namespace == "Unity.Collections"
                 && type.Name.StartsWith("FixedString", StringComparison.Ordinal))
             {
                 return new JValue(value.ToString());
             }
-            if (depth >= 4)
+            if (value is IDictionary dictionary)
+                return DictionaryNode(dictionary, depth, view);
+            if (value is IEnumerable enumerable && !(value is string))
+                return EnumerableNode(enumerable, depth, view);
+            if (depth >= view.MaxDepth)
+                return new JValue(value.ToString());
+            if (type.Namespace == "Unity.Collections" || typeof(Delegate).IsAssignableFrom(type))
                 return new JValue(value.ToString());
 
-            FieldInfo[] fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public);
-            if (fields.Length == 0)
+            List<FieldInfo> fields = Fields(type);
+            if (fields.Count == 0)
                 return new JValue(value.ToString());
 
             JObject node = new JObject();
-            for (int i = 0; i < fields.Length; i++)
+            for (int i = 0; i < fields.Count; i++)
             {
                 FieldInfo field = fields[i];
-                node[field.Name] = ValueNode(field.GetValue(value), field.FieldType, depth + 1);
+                node[field.Name] = ValueNode(field.GetValue(value), field.FieldType, depth + 1, view);
             }
             return node;
+        }
+
+        private static JObject DictionaryNode(IDictionary values, int depth, ReadView view)
+        {
+            JArray items = new JArray();
+            int matched = 0;
+            foreach (DictionaryEntry entry in values)
+            {
+                string keyText = entry.Key?.ToString() ?? string.Empty;
+                if (!string.IsNullOrEmpty(view.Key)
+                    && !string.Equals(keyText, view.Key, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(view.Prefix)
+                    && !keyText.StartsWith(view.Prefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (matched >= view.Offset && items.Count < view.Limit)
+                {
+                    items.Add(new JObject
+                    {
+                        ["key"] = ValueNode(entry.Key, entry.Key?.GetType(), depth + 1, view),
+                        ["value"] = ValueNode(entry.Value, entry.Value?.GetType(), depth + 1, view)
+                    });
+                }
+                matched++;
+            }
+
+            return Page(matched, view.Offset, view.Limit, items);
+        }
+
+        private static JObject EnumerableNode(IEnumerable values, int depth, ReadView view)
+        {
+            JArray items = new JArray();
+            int count = 0;
+            foreach (object item in values)
+            {
+                if (count >= view.Offset && items.Count < view.Limit)
+                    items.Add(ValueNode(item, item?.GetType(), depth + 1, view));
+                count++;
+            }
+
+            return Page(count, view.Offset, view.Limit, items);
+        }
+
+        private static List<FieldInfo> Fields(Type type)
+        {
+            List<FieldInfo> fields = new List<FieldInfo>();
+            BindingFlags flags = BindingFlags.Instance
+                | BindingFlags.Public
+                | BindingFlags.NonPublic
+                | BindingFlags.DeclaredOnly;
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                FieldInfo[] declared = current.GetFields(flags);
+                for (int i = 0; i < declared.Length; i++)
+                {
+                    if (!declared[i].IsStatic)
+                        fields.Add(declared[i]);
+                }
+            }
+            return fields;
         }
 
         private static JObject Page(int total, int offset, int limit, JArray items)
@@ -644,6 +922,24 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         {
             internal ProbeError(string message) : base(message)
             {
+            }
+        }
+
+        private readonly struct ReadView
+        {
+            internal readonly int Offset;
+            internal readonly int Limit;
+            internal readonly int MaxDepth;
+            internal readonly string Key;
+            internal readonly string Prefix;
+
+            internal ReadView(int offset, int limit, int maxDepth, string key, string prefix)
+            {
+                Offset = offset;
+                Limit = limit;
+                MaxDepth = maxDepth;
+                Key = key;
+                Prefix = prefix;
             }
         }
     }

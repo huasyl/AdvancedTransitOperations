@@ -54,6 +54,10 @@ const CALLS = {
   queryRunChartSections: "suhua::rt.workbench.queryRunChartSections",
   loadMonitorTripHeaders: "suhua::rt.workbench.loadMonitorTripHeaders",
   loadMonitorTripDetail: "suhua::rt.workbench.loadMonitorTripDetail",
+  loadMonitorTripDetails: "suhua::rt.workbench.loadMonitorTripDetails",
+  loadMonitorAverageState: "suhua::rt.workbench.loadMonitorAverageState",
+  queryMonitorAverage: "suhua::rt.workbench.queryMonitorAverage",
+  setMonitorSubscription: "suhua::rt.workbench.setMonitorSubscription",
   setWorkbenchHostState: "suhua::rt.workbench.setWorkbenchHostState",
   getLocale: "suhua::rt.workbench.getLocale"
 };
@@ -64,6 +68,7 @@ const EVENTS = {
   lineInvalidated: "suhua::rt.workbench.onLineInvalidated",
   runTimeQuery: "suhua::rt.workbench.onRunTimeQuery",
   runTimeInvalidated: "suhua::rt.workbench.onRunTimeInvalidated",
+  monitorChanged: "suhua::rt.workbench.onMonitorChanged",
   broadcastSnapshotChanged: "suhua::rt.workbench.onBroadcastSnapshotChanged",
   broadcastAssetPreviewStateChanged: "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged",
   broadcastRulePreviewStateChanged: "suhua::rt.workbench.onBroadcastRulePreviewStateChanged"
@@ -460,6 +465,25 @@ function createLiveApi() {
       const payload = await engineCall(CALLS.loadMonitorTripDetail, plainRequestJson(request));
       return parsePayload(payload, { success: false, error: "", header: null, stops: [] });
     },
+    async loadMonitorTripDetails(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadMonitorTripDetails, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", details: [] });
+    },
+    async loadMonitorAverageState(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadMonitorAverageState, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", lineId: "", stopSig: "", ready: false, revision: 0 });
+    },
+    async queryMonitorAverage(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.queryMonitorAverage, plainRequestJson(request));
+      return parsePayload(payload, createEmptyRunTimeStatus());
+    },
+    async setMonitorSubscription(request = {}) {
+      const engineCall = getEngineCall();
+      await engineCall(CALLS.setMonitorSubscription, plainRequestJson(request));
+    },
     async loadOverviewSnapshot(request = {}) {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.loadOverviewSnapshot, requestJson(request));
@@ -800,6 +824,25 @@ function createLiveApi() {
       return () => {
         if (typeof window.engine.off === "function") {
           window.engine.off(EVENTS.runTimeInvalidated, handler);
+        }
+      };
+    },
+    onMonitorChanged(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const event = parsePayload(payload, null);
+        if (event) {
+          callback(event);
+        }
+      };
+
+      window.engine.on(EVENTS.monitorChanged, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.monitorChanged, handler);
         }
       };
     },

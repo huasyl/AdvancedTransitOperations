@@ -9,7 +9,6 @@ using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
-using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
@@ -27,6 +26,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly Capture m_Capture;
         private readonly SliceAdmission m_Admission;
         private readonly BusSegCapture m_BusSeg;
+        private readonly MonitorAverageStore m_Averages;
         private readonly Func<Entity, Entity> m_Anchor;
         private readonly Func<Entity, string> m_StopKey;
         private readonly Dictionary<Entity, DispatchEtaRequest> m_DispatchEtaRequests =
@@ -44,6 +44,7 @@ namespace RapidTransitMod.Dispatch.Observation
             Capture capture,
             SliceAdmission admission,
             BusSegCapture busSeg,
+            MonitorAverageStore averages,
             Func<Entity, Entity> anchor,
             Func<Entity, string> stopKey)
         {
@@ -51,6 +52,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Capture = capture;
             m_Admission = admission;
             m_BusSeg = busSeg;
+            m_Averages = averages ?? throw new ArgumentNullException(nameof(averages));
             m_Anchor = anchor ?? throw new ArgumentNullException(nameof(anchor));
             m_StopKey = stopKey ?? throw new ArgumentNullException(nameof(stopKey));
         }
@@ -81,14 +83,12 @@ namespace RapidTransitMod.Dispatch.Observation
         public void ClearVehicleSlices(Entity vehicle)
         {
             m_Runtime.m_ObsPersist.ClearVehicleSlices(vehicle);
-            m_Runtime.m_ObsRecorder?.ClearRailSegmentVehicle(vehicle);
             m_Admission.End(vehicle);
         }
 
         public void InvalidateSliceLine(Entity line)
         {
             m_Runtime.m_Slices.RemoveLine(line);
-            m_Runtime.m_ObsRecorder?.ClearRailSegmentLine(line);
             m_Admission.InvalidateLine(line);
             m_Runtime.m_ObsBuffers.RemoveSliceLine(line);
         }
@@ -236,22 +236,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 new BusSegKey(line, fromWaypoint, fromStop, toWaypoint, toStop),
                 out BusSegObservation observation)
                 && (frames = observation.EstimatedFrames) > 0f;
-        }
-
-        public bool TryRailSegmentFrames(
-            Entity line,
-            Entity fromWaypoint,
-            Entity fromStop,
-            Entity toWaypoint,
-            Entity toStop,
-            out float frames)
-        {
-            frames = 0f;
-            return m_Runtime.m_ObsRecorder != null
-                && m_Runtime.m_ObsRecorder.TryRailSegment(
-                    new RailSegmentKey(line, fromWaypoint, fromStop, toWaypoint, toStop),
-                    out RailSegmentObservation observation)
-                && (frames = observation.AverageFrames) > 0f;
         }
 
         public bool TryTraversalFrames(
@@ -579,7 +563,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
 
             m_BusSeg.RemoveLine(line);
-            m_Runtime.m_ObsRecorder?.ClearRailSegmentLine(line);
+            m_Averages.RemoveLine(line);
             m_DispatchTimingCutoffs.Remove(line);
             m_Runtime.m_DispatchCache.RemoveLine(line);
         }
@@ -743,7 +727,7 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_ObsRecorder?.TargetBound(line, vehicle, targetMinute, nowFrame, reasonCode);
         }
 
-        public void Launch(
+        public MonitorChange Launch(
             Entity line,
             Entity vehicle,
             int targetMinute,
@@ -757,32 +741,30 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 if (m_Runtime.m_ObsRecorder != null)
                 {
-                    m_Runtime.m_ObsRecorder.Launch(
+                    string tripKey = m_Runtime.m_ObsRecorder.Launch(
                         line,
                         vehicle,
                         row,
                         m_Runtime.m_SimClock.Snapshot,
                         launchFrame,
                         out _);
+                    if (!string.IsNullOrEmpty(tripKey)
+                        && m_Runtime.m_ObsRecorder.TryMonitor(tripKey, out MonitorTrip trip, out _))
+                    {
+                        return new MonitorChange(
+                            true,
+                            trip.Line,
+                            trip.ServiceDateKey,
+                            trip.Key,
+                            0,
+                            false);
+                    }
                 }
             }
-            if (IsRail(line)
-                && m_Runtime.m_ObsRecorder != null
-                && row.Stops != null
-                && row.Stops.Length > 0)
-            {
-                AppliedMonitorStop stop = row.Stops[0];
-                m_Runtime.m_ObsRecorder.StartRailSegment(
-                    vehicle,
-                    line,
-                    stop.Waypoint,
-                    stop.Station,
-                    stop.WaypointIndex,
-                    launchFrame);
-            }
+            return default;
         }
 
-        public void Stop(
+        public MonitorChange Stop(
             Entity vehicle,
             Entity line,
             Entity waypoint,
@@ -794,48 +776,49 @@ namespace RapidTransitMod.Dispatch.Observation
             string clockTime,
             uint frame)
         {
-            if (m_Runtime.m_ObsRecorder != null)
-            {
-                string stopKey = m_StopKey(m_Anchor(station));
-                m_Runtime.m_ObsRecorder.Stop(
+            if (m_Runtime.m_ObsRecorder != null
+                && m_Runtime.m_ObsRecorder.Stop(
                     vehicle,
                     line,
                     station,
-                    stopKey,
+                    m_StopKey(m_Anchor(station)),
                     kind,
                     waypointIndex,
                     isOrigin,
                     arrival,
                     clockTime,
                     m_Runtime.m_SimClock.Snapshot,
-                    frame);
-            }
-            if (IsRail(line)
-                && m_Runtime.m_ObsRecorder != null
-                && waypoint != Entity.Null
-                && station != Entity.Null)
+                    frame,
+                    out MonitorStopResult result))
             {
-                if (arrival)
-                {
-                    m_Runtime.m_ObsRecorder.RecordRailSegmentArrival(
-                        vehicle,
-                        line,
-                        waypoint,
-                        station,
-                        frame,
-                        true);
-                }
-                else
-                {
-                    m_Runtime.m_ObsRecorder.StartRailSegment(
-                        vehicle,
-                        line,
-                        waypoint,
-                        station,
-                        waypointIndex,
-                        frame);
-                }
+                MonitorChange average = result.Sample.Line == Entity.Null || !IsRail(result.Line)
+                    ? default
+                    : m_Averages.Add(result.Sample);
+                return new MonitorChange(
+                    true,
+                    result.Line,
+                    result.ServiceDateKey,
+                    result.TripKey,
+                    average.MonitorRevision,
+                    average.MonitorAverageBecameReady);
             }
+            return default;
+        }
+
+        public bool TryMonitorAverageState(
+            Entity line,
+            string expectedStopSig,
+            out MonitorAverageState state)
+        {
+            return m_Averages.TryState(line, expectedStopSig, out state);
+        }
+
+        public bool TryMonitorAverageSnapshot(
+            Entity line,
+            string expectedStopSig,
+            out MonitorAverageSnapshot snapshot)
+        {
+            return m_Averages.TrySnapshot(line, expectedStopSig, out snapshot);
         }
 
         private bool IsRail(Entity line)

@@ -251,6 +251,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineMileage = new LineMileage(lineHost.Mileage);
             runtime.m_LineVehicles = new LineVehicles(runtime);
             runtime.m_Obs = new TraceStore();
+            runtime.m_MonitorAverages = new MonitorAverageStore();
             runtime.m_ObsRecorder = new Recorder(RuntimePorts.BuildObservation(runtime));
             runtime.m_TrackModel = new TrackModelService(new TrackModelContext(new TrackModelContext.Args
             {
@@ -310,6 +311,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_ObsCapture,
                 runtime.m_SliceAdmission,
                 busSegCapture,
+                runtime.m_MonitorAverages,
                 stopService.Anchor,
                 stopService.Key);
             runtime.m_Bypass = new RuntimeFacade(RuntimePorts.BuildBypassRuntime(runtime));
@@ -520,6 +522,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_Slices = null!;
             runtime.m_SliceAdmission = null!;
             runtime.m_Obs = null!;
+            runtime.m_MonitorAverages = null!;
             runtime.m_ObsRecorder = null!;
             runtime.m_ObsCapture = null!;
             runtime.m_LineRange = null!;

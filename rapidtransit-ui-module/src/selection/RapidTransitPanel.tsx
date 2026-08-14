@@ -5,7 +5,7 @@ import { useLocalPanelOpen, panelDataJson$, devSightJson$, devSightVisible$, eta
 import { useT } from "./selectionI18n";
 import { COLORS } from "./selectionStyles";
 import { buildDetailRows, DevSightData, EtaHotStatusData, EtaSnapshotStatusData, formatAlertText, PanelData } from "./selectionViewModel";
-import { ActionButton, ArrivalTimesRow, BypassToggleRow, DetailRow, DevSightBlock, PanelHeader, SectionCard } from "./components";
+import { ActionButton, ArrivalTimesRow, BypassToggleRow, DetailRow, DevSightBlock, PanelHeader, ScheduledTimeRow, SectionCard, VehicleInfoRow } from "./components";
 
 export function RapidTransitPanel() {
   const t = useT();
@@ -72,6 +72,17 @@ export function RapidTransitPanel() {
   const mode = hasData && panelData && panelData.mode === "line" ? "line" : "vehicle";
   const canRequestEta = (hasData && mode === "vehicle") || !!etaSnapshotStatus?.comparisonVehicleId;
   const detailRows = hasData ? buildDetailRows(panelData, mode) : [];
+  const isVehicle = mode === "vehicle";
+  const showAhead = isVehicle && !!(
+    panelData?.nextPassStationName
+    || panelData?.nextStopStationName
+    || (typeof panelData?.nextPlannedArrivalMinute === "number" && panelData.nextPlannedArrivalMinute >= 0)
+  );
+  const showArrivalPair = isVehicle
+    && typeof panelData?.plannedArrivalMinute === "number"
+    && panelData.plannedArrivalMinute >= 0
+    && typeof panelData?.actualArrivalMinute === "number"
+    && panelData.actualArrivalMinute >= 0;
   const titleKey = mode === "line" ? "lineTitle" : "vehicleTitle";
   const actionButtons: Array<{ action: string; label: string }> = [];
 
@@ -151,16 +162,91 @@ export function RapidTransitPanel() {
                     strong={true}
                   />
                 </SectionCard>
-                <SectionCard dense={true}>
-                  {detailRows.map((row, index) => (
-                    row.rowKind === "arrivalTimes" ? (
-                      <ArrivalTimesRow
-                        key={(row.label || "arrivalTimes") + ":" + index}
-                        plannedArrivalMinute={row.plannedArrivalMinute}
-                        actualArrivalMinute={row.actualArrivalMinute}
-                        t={t}
-                      />
-                    ) : (
+                {isVehicle ? (
+                  <>
+                    {!panelData.isManagedVehicle ? null : (
+                      <>
+                        {panelData.showCurrentStop || showAhead || panelData.showSchedule ? (
+                          <SectionCard dense={true}>
+                            <div style={{ display: "flex", flexDirection: "column" }}>
+                            {panelData.showCurrentStop ? (
+                              <div style={{ display: "flex", flexDirection: "column" }}>
+                                <VehicleInfoRow label="currentStation" value={panelData.currentStationName} t={t} />
+                                {showArrivalPair ? (
+                                  <div style={{ marginTop: "8rem" }}>
+                                    <ArrivalTimesRow
+                                      plannedArrivalMinute={panelData.plannedArrivalMinute}
+                                      actualArrivalMinute={panelData.actualArrivalMinute}
+                                      t={t}
+                                    />
+                                  </div>
+                                ) : null}
+                                {!showArrivalPair && typeof panelData.plannedArrivalMinute === "number" && panelData.plannedArrivalMinute >= 0 ? (
+                                  <div style={{ marginTop: "8rem" }}>
+                                    <ScheduledTimeRow label="arrival" minute={panelData.plannedArrivalMinute} t={t} />
+                                  </div>
+                                ) : null}
+                                {!showArrivalPair && typeof panelData.actualArrivalMinute === "number" && panelData.actualArrivalMinute >= 0 ? (
+                                  <div style={{ marginTop: "8rem" }}>
+                                    <VehicleInfoRow label="actualArrival" value={panelData.actualArrivalMinute} valueKind="serviceMinute" level="secondary" t={t} />
+                                  </div>
+                                ) : null}
+                                {typeof panelData.plannedDepartureMinute === "number" && panelData.plannedDepartureMinute >= 0 ? (
+                                  <div style={{ marginTop: "8rem" }}>
+                                    <ScheduledTimeRow label="departure" minute={panelData.plannedDepartureMinute} t={t} />
+                                  </div>
+                                ) : null}
+                                <div style={{ marginTop: "8rem" }}>
+                                  <VehicleInfoRow label="stopped" value={panelData.stopDwellValue} level="secondary" t={t} />
+                                </div>
+                              </div>
+                            ) : null}
+                            {showAhead ? (
+                              <div style={{ display: "flex", flexDirection: "column", marginTop: panelData.showCurrentStop ? "16rem" : "0" }}>
+                                {panelData.nextPassStationName ? (
+                                  <VehicleInfoRow label="nextPass" value={panelData.nextPassStationName} level="muted" t={t} />
+                                ) : null}
+                                {panelData.nextStopStationName ? (
+                                  <div style={{ marginTop: panelData.nextPassStationName ? "8rem" : "0" }}>
+                                    <VehicleInfoRow label="nextStopStation" value={panelData.nextStopStationName} t={t} />
+                                  </div>
+                                ) : null}
+                                {typeof panelData.nextPlannedArrivalMinute === "number" && panelData.nextPlannedArrivalMinute >= 0 ? (
+                                  <div style={{ marginTop: "8rem" }}>
+                                    <ScheduledTimeRow label="arrival" minute={panelData.nextPlannedArrivalMinute} t={t} />
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {panelData.showSchedule ? (
+                              <div style={{ display: "flex", flexDirection: "column", marginTop: panelData.showCurrentStop || showAhead ? "16rem" : "0" }}>
+                                {panelData.currentSlotText ? <VehicleInfoRow label="currentSlot" value={panelData.currentSlotText} t={t} /> : null}
+                                {panelData.targetSlotText ? (
+                                  <div style={{ marginTop: panelData.currentSlotText ? "8rem" : "0" }}>
+                                    <VehicleInfoRow label="targetSlot" value={panelData.targetSlotText} t={t} />
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            </div>
+                          </SectionCard>
+                        ) : null}
+                        {panelData.showWaitingForFastTrain ? (
+                          <SectionCard compact={true}>
+                            <div style={{ fontSize: "15rem", lineHeight: "22rem", fontWeight: 500, color: COLORS.title }}>
+                              {t("waitingForFastTrain")}
+                              {typeof panelData.waitingForFastTrainVehicleId === "number" && panelData.waitingForFastTrainVehicleId >= 0
+                                ? `：#${panelData.waitingForFastTrainVehicleId}`
+                                : ""}
+                            </div>
+                          </SectionCard>
+                        ) : null}
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <SectionCard dense={true}>
+                    {detailRows.map((row, index) => (
                       <DetailRow
                         key={(row.label || "detail") + ":" + index}
                         label={row.label}
@@ -169,10 +255,10 @@ export function RapidTransitPanel() {
                         dense={true}
                         t={t}
                       />
-                    )
-                  ))}
-                </SectionCard>
-                {panelData.showAlerts ? (
+                    ))}
+                  </SectionCard>
+                )}
+                {!isVehicle && panelData.showAlerts ? (
                   <SectionCard alert={true}>
                     <div
                       style={{
@@ -202,7 +288,7 @@ export function RapidTransitPanel() {
                         flexDirection: "column",
                         justifyContent: "flex-start",
                         alignItems: "stretch",
-                        paddingTop: "5rem"
+                        paddingBottom: "8rem"
                       }}
                     >
                       {actionRows.map((row, rowIndex) => (

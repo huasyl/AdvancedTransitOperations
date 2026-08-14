@@ -44,6 +44,9 @@ namespace RapidTransitMod.Dispatch.Workbench
         private RunChartSectionIndex m_RunChartIndex;
         private readonly Dictionary<string, ulong> m_LineGenerations =
             new Dictionary<string, ulong>(StringComparer.Ordinal);
+        private readonly Dictionary<string, DispatchWorkbenchMonitorChangedDto> m_MonitorChanges =
+            new Dictionary<string, DispatchWorkbenchMonitorChangedDto>(StringComparer.Ordinal);
+        private string m_MonitorAverageWaitingLineId = string.Empty;
         private Snapshot m_Snapshot;
         private Persist m_Persist;
         private Commands m_Commands;
@@ -345,6 +348,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             return Workbenches.Json.Write(Trips().BuildMonitorDetail(request));
         }
 
+        internal string MonitorDetails(string requestJson)
+        {
+            DispatchWorkbenchMonitorDetailsRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorDetailsRequestDto>(requestJson);
+            return Workbenches.Json.Write(Trips().BuildMonitorDetails(request));
+        }
+
         internal Clock Clock()
         {
             return m_Clock ?? (m_Clock = new Clock(Minute));
@@ -499,7 +509,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             m_RunTime?.InvalidateSources(
                 null,
-                new[] { "historical", "theory" },
+                new[] { "sliceHistoricalEstimate", "theory" },
                 "run-time-clock-changed");
         }
 
@@ -776,6 +786,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             m_RunTime?.Clear();
             m_RunChartIndex?.Clear();
+            m_MonitorChanges.Clear();
             Root().Reset();
         }
 
@@ -783,6 +794,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             m_RunTime?.Clear();
             m_RunChartIndex?.Clear();
+            m_MonitorChanges.Clear();
             m_Drafts.Clear();
             Applied().Reset();
             LineCfg().Clear();
@@ -912,6 +924,14 @@ namespace RapidTransitMod.Dispatch.Workbench
                 errors.Add("schedule-batch-runtime-stop-sig-invalid:" + block.lineId);
                 return false;
             }
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Runtime.EntityManager, runtimeLine.Entity)).Lifecycle;
+            if (runtimeResult != null
+                && !AllowsRuntimeSource(lifecycle, runtimeResult.Source))
+            {
+                errors.Add("schedule-batch-runtime-source-invalid:" + block.lineId);
+                return false;
+            }
 
             List<DispatchWorkbenchStagedRowDto> rows = new List<DispatchWorkbenchStagedRowDto>();
             int blockErrorStart = errors.Count;
@@ -927,12 +947,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (row.slotMinute < 0 || row.slotMinute >= 24 * 60 || !slots.Add(row.slotMinute))
                 {
                     errors.Add("schedule-batch-slot-invalid:" + block.lineId + ":" + row.rowId);
-                    continue;
-                }
-                if (runtimeResult != null
-                    && !string.Equals(row.source, runtimeResult.Source, StringComparison.Ordinal))
-                {
-                    errors.Add("schedule-batch-runtime-source-mismatch:" + block.lineId + ":" + row.rowId);
                     continue;
                 }
                 DispatchWorkbenchTimedStopDto[] timedStops = CopyBatchStops(row.timedStops, out bool hadNull);
@@ -990,6 +1004,15 @@ namespace RapidTransitMod.Dispatch.Workbench
             return true;
         }
 
+        private static bool AllowsRuntimeSource(LifecycleKind lifecycle, string source)
+        {
+            if (lifecycle == LifecycleKind.Road)
+                return string.Equals(source, "busHistorical", StringComparison.Ordinal);
+            return lifecycle == LifecycleKind.Rail
+                && (string.Equals(source, "theory", StringComparison.Ordinal)
+                    || string.Equals(source, "monitorAverage", StringComparison.Ordinal));
+        }
+
         private static DispatchWorkbenchTimedStopDto[] CopyBatchStops(
             DispatchWorkbenchTimedStopDto[] source,
             out bool hadNull)
@@ -1041,10 +1064,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                     errors.Add("schedule-batch-stop-order-invalid:" + lineId + ":" + rowId);
                     return false;
                 }
-                if (stops[i].arrive.HasValue && stops[i].arrive.Value < 0)
-                    stops[i].arrive = null;
-                if (stops[i].depart.HasValue && stops[i].depart.Value < 0)
-                    stops[i].depart = null;
+                if ((stops[i].arrive.HasValue && stops[i].arrive.Value < 0)
+                    || (stops[i].depart.HasValue && stops[i].depart.Value < 0))
+                {
+                    errors.Add("schedule-batch-negative-time:" + lineId + ":" + rowId);
+                    return false;
+                }
             }
             if (stops[0].arrive.HasValue || !stops[0].depart.HasValue || stops[0].depart.Value != slotMinute)
             {
@@ -1128,6 +1153,90 @@ namespace RapidTransitMod.Dispatch.Workbench
             return Workbenches.Json.Write(RunTime().Cancel(
                 request?.editorSessionId ?? string.Empty,
                 request?.queryId));
+        }
+
+        internal string LoadMonitorAverageState(string requestJson)
+        {
+            DispatchWorkbenchMonitorAverageRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorAverageRequestDto>(requestJson);
+            string lineId = request?.lineId ?? string.Empty;
+            DispatchWorkbenchMonitorAverageStateDto response = new DispatchWorkbenchMonitorAverageStateDto
+            {
+                lineId = lineId,
+                stopSig = request?.stopSig ?? string.Empty
+            };
+            Entity line = ResolveRunChartLine(lineId);
+            if (line == Entity.Null || !m_Runtime.EntityManager.Exists(line))
+            {
+                response.error = "monitor-average-line-missing";
+                return Workbenches.Json.Write(response);
+            }
+            if (m_Runtime.m_LineView.TryStopLayout(line, out string currentStopSig, out _))
+                response.stopSig = currentStopSig;
+            if (m_Runtime.m_Observation.TryMonitorAverageState(line, response.stopSig, out MonitorAverageState state))
+            {
+                response.ready = state.Ready;
+                response.revision = state.Revision;
+                response.stopSig = state.StopSig;
+            }
+            response.success = true;
+            return Workbenches.Json.Write(response);
+        }
+
+        internal string QueryMonitorAverage(string requestJson)
+        {
+            DispatchWorkbenchMonitorAverageRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorAverageRequestDto>(requestJson);
+            DispatchWorkbenchRunTimeQueryRequestDto query = new DispatchWorkbenchRunTimeQueryRequestDto
+            {
+                editorSessionId = request?.editorSessionId ?? string.Empty,
+                lineId = request?.lineId ?? string.Empty,
+                source = "monitorAverage"
+            };
+            return Workbenches.Json.Write(RunTime().Start(query));
+        }
+
+        internal void OnMonitorChanged(MonitorChange change)
+        {
+            if (!change.Changed
+                || !change.MonitorAverageBecameReady
+                || change.Line == Entity.Null
+                || string.IsNullOrEmpty(m_MonitorAverageWaitingLineId))
+                return;
+            string lineId = m_Runtime.LineStableId(change.Line);
+            if (string.IsNullOrEmpty(lineId)
+                || !string.Equals(lineId, m_MonitorAverageWaitingLineId, StringComparison.Ordinal))
+                return;
+            m_MonitorChanges[lineId] = new DispatchWorkbenchMonitorChangedDto
+            {
+                lineId = lineId,
+                monitorAverageBecameReady = true
+            };
+            m_MonitorAverageWaitingLineId = string.Empty;
+        }
+
+        internal string SetMonitorSubscription(string requestJson)
+        {
+            DispatchWorkbenchMonitorSubscriptionDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorSubscriptionDto>(requestJson);
+            m_MonitorAverageWaitingLineId = request?.averageWaitingLineId ?? string.Empty;
+            foreach (string key in m_MonitorChanges.Keys.Where(key =>
+                !string.Equals(key, m_MonitorAverageWaitingLineId, StringComparison.Ordinal)).ToArray())
+            {
+                m_MonitorChanges.Remove(key);
+            }
+            return "{}";
+        }
+
+        internal void FlushMonitorChanges()
+        {
+            if (m_MonitorChanges.Count == 0)
+                return;
+
+            DispatchWorkbenchMonitorChangedDto[] pending = m_MonitorChanges.Values.ToArray();
+            m_MonitorChanges.Clear();
+            foreach (DispatchWorkbenchMonitorChangedDto change in pending)
+                Workbenches.UiEvents.Push(change);
         }
 
         internal string CloseRunTimeEditor(string requestJson)

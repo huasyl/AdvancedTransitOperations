@@ -126,3 +126,18 @@ export function minutesToTime(value) {
   const minutes = normalized % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
+
+export function serviceDayOffset(value) {
+  return Number.isFinite(value) && value >= 1440 ? Math.floor(value / 1440) : 0;
+}
+
+export function formatServiceMinute(value, formatDayOffset) {
+  if (!Number.isFinite(value)) {
+    return "--";
+  }
+  const dayOffset = serviceDayOffset(value);
+  const suffix = dayOffset > 0 && typeof formatDayOffset === "function"
+    ? formatDayOffset(dayOffset)
+    : "";
+  return `${minutesToTime(value)}${suffix}`;
+}

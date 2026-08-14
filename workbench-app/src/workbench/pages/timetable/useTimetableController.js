@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import { minutesToTime, timeToMinutes } from "./timetable-data";
+import { isValidTimeValue } from "../schedule/schedule-normalize";
 
 const EMPTY_SNAPSHOT = {
   lines: [],
@@ -8,6 +9,14 @@ const EMPTY_SNAPSHOT = {
   lineDraftRowsByLineId: [],
   appliedRows: []
 };
+const MONITOR_DETAIL_BATCH = 32;
+
+function isEditorRuntimeSource(source) {
+  return source === "sliceHistoricalEstimate"
+    || source === "theory"
+    || source === "monitorAverage"
+    || source === "busHistorical";
+}
 
 function createEditorId() {
   return `timetable-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
@@ -29,6 +38,10 @@ function buildRows(snapshot, lineId) {
   return draftBlock
     ? asArray(draftBlock.lineDraftRows)
     : asArray(snapshot.appliedRows).filter((row) => row?.lineId === lineId);
+}
+
+function buildAppliedRows(snapshot, lineId) {
+  return asArray(snapshot.appliedRows).filter((row) => row?.lineId === lineId);
 }
 
 function normalizeSnapshot(snapshot) {
@@ -106,20 +119,27 @@ function buildTrain(row, layout, runtime, stationNames) {
   const includeClosing = storedClosing || hasClosingSegment(runtime, stopKeys.length);
   const displayKeys = includeClosing ? [...stopKeys, stopKeys[0]] : stopKeys;
   let previousDeparture = slotMinute;
+  let runtimeGap = false;
   const stops = displayKeys.map((stopKey, index) => {
     const storedStop = stored[index];
     const layoutStop = index === stopKeys.length ? layoutStops[0] : layoutStops[index];
     const segmentMinutes = segments[index - 1]?.segmentMinutes;
+    const missingSlice = runtime?.source === "sliceHistoricalEstimate"
+      && index > 0
+      && (runtimeGap || !Number.isFinite(segmentMinutes));
+    if (missingSlice) {
+      runtimeGap = true;
+    }
     const arrival = index === 0
       ? null
-      : previousDeparture != null && Number.isFinite(segmentMinutes)
+      : !missingSlice && previousDeparture != null && Number.isFinite(segmentMinutes)
         ? previousDeparture + segmentMinutes
-        : storedStop?.arrive ?? null;
+        : missingSlice ? null : storedStop?.arrive ?? null;
     const departure = index === displayKeys.length - 1
       ? null
       : index === 0
         ? slotMinute
-        : storedStop?.depart ?? null;
+        : missingSlice ? null : storedStop?.depart ?? null;
     previousDeparture = departure;
     return {
       stationId: stopKey,
@@ -139,7 +159,7 @@ function buildTrain(row, layout, runtime, stationNames) {
     id: row?.id || `row-${slotMinute}`,
     name: row?.id || minutesToTime(slotMinute),
     kind: row?.kind || "local",
-    source: row?.source || runtime?.source || "historical",
+    source: row?.source || "manual",
     stopSig: row?.stopSig || "",
     scheduleType: stored.length > 0 ? "custom" : "default",
     slotMinute,
@@ -172,6 +192,66 @@ function buildBatchTimedStops(row, layout, runtime, stationNames) {
   });
 }
 
+function buildSliceTrain(row, layout, runtime, stationNames) {
+  const layoutStops = asArray(layout?.stops).filter((stop) => stop?.stopKey);
+  const segments = asArray(runtime?.segments);
+  const dwells = asArray(runtime?.dwells);
+  const slotMinute = timeToMinutes(row?.time);
+  if (layoutStops.length === 0 || runtime?.state !== "Completed") {
+    return { id: row?.id || `row-${slotMinute}`, stops: [] };
+  }
+
+  const prefixStopCount = Number.isInteger(runtime?.prefixStopCount)
+    ? Math.max(1, Math.min(layoutStops.length, runtime.prefixStopCount))
+    : layoutStops.length;
+  const stops = [];
+  let departure = slotMinute;
+  stops.push({
+    stationId: layoutStops[0].stopKey,
+    stationName: layoutStops[0].name || stationNames.get(layoutStops[0].stopKey) || layoutStops[0].stopKey,
+    stopKey: layoutStops[0].stopKey,
+    waypointIndex: layoutStops[0].waypointIndex,
+    occurrence: 0,
+    arrivalMinute: null,
+    departureMinute: departure
+  });
+  for (let index = 1; index < prefixStopCount; index++) {
+    const segment = segments[index - 1];
+    if (!Number.isFinite(segment?.segmentMinutes)) {
+      break;
+    }
+    const stop = layoutStops[index];
+    const arrival = departure + segment.segmentMinutes;
+    const next = {
+      stationId: stop.stopKey,
+      stationName: stop.name || stationNames.get(stop.stopKey) || stop.stopKey,
+      stopKey: stop.stopKey,
+      waypointIndex: stop.waypointIndex,
+      occurrence: index,
+      arrivalMinute: arrival,
+      departureMinute: null
+    };
+    stops.push(next);
+    if (index === layoutStops.length - 1) {
+      break;
+    }
+    const dwell = dwells.find((item) => item?.stopKey === stop.stopKey
+      && item?.waypointIndex === stop.waypointIndex);
+    if (!dwell?.hasObservation || !Number.isFinite(dwell.averageMinutes)) {
+      break;
+    }
+    departure = arrival + dwell.averageMinutes;
+    next.departureMinute = departure;
+  }
+
+  return {
+    id: row?.id || `row-${slotMinute}`,
+    name: row?.id || minutesToTime(slotMinute),
+    slotMinute,
+    stops
+  };
+}
+
 function continuousTimedStops(value) {
   const stops = asArray(value);
   if (stops.length < 2
@@ -202,12 +282,110 @@ function continuousTimedStops(value) {
   return prefix.length >= 2 ? prefix : [];
 }
 
+function rebuildTimedStops(row, layout, runtime) {
+  const original = continuousTimedStops(row?.timedStops);
+  const stopKeys = buildStopKeys(layout);
+  const segments = asArray(runtime?.segments);
+  if (original.length < 2 || stopKeys.length < 2) {
+    return asArray(row?.timedStops);
+  }
+
+  const stops = [{
+    stopKey: original[0].stopKey,
+    arrive: null,
+    depart: timeToMinutes(row?.time)
+  }];
+  for (let index = 1; index < original.length; index++) {
+    const expectedKey = index === stopKeys.length ? stopKeys[0] : stopKeys[index];
+    const minutes = segments[index - 1]?.segmentMinutes;
+    const previous = stops[index - 1];
+    if (!expectedKey
+      || original[index]?.stopKey !== expectedKey
+      || !Number.isFinite(previous?.depart)
+      || !Number.isFinite(minutes)) {
+      break;
+    }
+    const last = index === original.length - 1;
+    const depart = last ? null : original[index]?.depart;
+    stops.push({
+      stopKey: expectedKey,
+      arrive: previous.depart + minutes,
+      depart: Number.isFinite(depart) ? depart : null
+    });
+    if (!last && !Number.isFinite(depart)) {
+      break;
+    }
+  }
+  return stops.length >= 2 ? stops : asArray(row?.timedStops);
+}
+
+function rebuildLineRows(snapshot, lineId, layout, runtime) {
+  return {
+    ...snapshot,
+    lineDraftRowsByLineId: asArray(snapshot.lineDraftRowsByLineId).map((block) => block?.lineId !== lineId
+      ? block
+      : {
+          ...block,
+          lineDraftRows: asArray(block.lineDraftRows).map((row) => ({
+            ...row,
+            timedStops: rebuildTimedStops(row, layout, runtime)
+          }))
+        })
+  };
+}
+
 function runtimeKey(lineId, source) {
-  return `${lineId || ""}\u001f${source || "historical"}`;
+  return `${lineId || ""}\u001f${source || "theory"}`;
 }
 
 function lineRuntime(runtimes, sources, lineId) {
-  return runtimes[lineId]?.[sources[lineId] || "historical"] || null;
+  return runtimes[lineId]?.[sources[lineId] || "theory"] || null;
+}
+
+function validateDepartureValue(train, runtime, occurrence, value) {
+  if (!isValidTimeValue(value)) {
+    return { error: "format", minute: null };
+  }
+  const stopIndex = train.stops.findIndex((stop) => stop.occurrence === occurrence);
+  const lastIndex = train.stops.length - 1;
+  if (stopIndex <= 0 || stopIndex >= lastIndex) {
+    return { error: "", minute: null };
+  }
+  const stop = train.stops[stopIndex];
+  const anchor = stop.arrivalMinute ?? train.slotMinute;
+  let minute = Math.floor(anchor / 1440) * 1440 + timeToMinutes(value);
+  // A clock time more than half a day behind arrival is a midnight crossing.
+  if (Number.isFinite(stop.arrivalMinute) && stop.arrivalMinute - minute > 720) {
+    minute += 1440;
+  }
+  if (!Number.isFinite(stop.arrivalMinute) || minute - stop.arrivalMinute < 5) {
+    return { error: "dwell", minute };
+  }
+
+  let previousDeparture = minute;
+  let reachesThirdDay = minute >= 2880;
+  for (let index = stopIndex + 1; index <= lastIndex; index += 1) {
+    const segmentMinutes = runtime?.segments?.[index - 1]?.segmentMinutes;
+    if (!Number.isFinite(previousDeparture) || !Number.isFinite(segmentMinutes)) {
+      break;
+    }
+    const arrival = previousDeparture + segmentMinutes;
+    reachesThirdDay = reachesThirdDay || arrival >= 2880;
+    if (index === lastIndex) {
+      break;
+    }
+    const departure = train.stops[index].departureMinute;
+    if (!Number.isFinite(departure)) {
+      break;
+    }
+    if (departure - arrival < 5) {
+      return { error: "dwell", minute };
+    }
+    reachesThirdDay = reachesThirdDay || departure >= 2880;
+    previousDeparture = departure;
+  }
+
+  return { error: reachesThirdDay ? "thirdDay" : "", minute };
 }
 
 function buildLines(snapshot, section, directory, runtimes, runtimeSources, layouts, timing) {
@@ -246,7 +424,13 @@ function buildLines(snapshot, section, directory, runtimes, runtimeSources, layo
         stations,
         stopSig: layout?.stopSig || rows[0]?.stopSig || "",
         trains: rows.map((row) => buildTrain(row, layout, runtime, stationNames)),
-        plannedTrains: rows.map((row) => buildTrain(row, layout, null, stationNames))
+        sliceTrains: rows.map((row) => buildSliceTrain(
+          row,
+          layout,
+          runtimes[line.id]?.sliceHistoricalEstimate,
+          stationNames)),
+        plannedTrains: buildAppliedRows(snapshot, line.id)
+          .map((row) => buildTrain(row, layout, null, stationNames))
       };
     });
   if (timing) {
@@ -278,8 +462,10 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   const runtimeStartTailRef = useRef(Promise.resolve());
   const runtimesRef = useRef({});
   const runtimeSourcesRef = useRef({});
-  const autoHistoricalLineRef = useRef("");
-  const autoHistoricalAttemptRef = useRef(new Set());
+  const sourceTransactionsRef = useRef({});
+  const monitorChartRequestRef = useRef(new Map());
+  const actualTripsRef = useRef({});
+  const averageWaitingLineRef = useRef("");
   const runtimeActiveRef = useRef(isActive);
   const reportedRunTimeErrorsRef = useRef(new Set());
   const pendingQueriesRef = useRef({});
@@ -293,17 +479,34 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   const [sectionId, setSectionId] = useState("");
   const [runtimes, setRuntimes] = useState({});
   const [runtimeSources, setRuntimeSources] = useState({});
+  const [sourceTransactions, setSourceTransactions] = useState({});
+  const [monitorAverageStates, setMonitorAverageStates] = useState({});
+  const [actualTrips, setActualTrips] = useState({});
   const [layouts, setLayouts] = useState({});
   const [pendingQueries, setPendingQueries] = useState({});
   const [dirtyLineIds, setDirtyLineIds] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [saveState, setSaveState] = useState("clean");
   const [saveError, setSaveError] = useState("");
+  const [inputErrors, setInputErrors] = useState({});
+  const snapshotReady = isSnapshotForMode(snapshot, activeTransportMode);
+  const canSave = snapshotReady
+    && dirtyLineIds.length > 0
+    && saveState !== "saving"
+    && Object.keys(sourceTransactions).length === 0
+    && Object.keys(inputErrors).length === 0
+    && dirtyLineIds.every((lineId) => {
+      const source = runtimeSources[lineId]
+        || (activeTransportMode === "bus" ? "busHistorical" : "theory");
+      return Boolean(runtimes[lineId]?.[source]?.resultId);
+    });
 
   const selectedSection = sections.find((section) => section.sectionId === sectionId) || sections[0] || null;
   const lines = useMemo(
-    () => buildLines(snapshot, selectedSection, directory, runtimes, runtimeSources, layouts, layoutTimingRef.current),
-    [directory, layouts, runtimes, runtimeSources, selectedSection, snapshot]
+    () => snapshotReady
+      ? buildLines(snapshot, selectedSection, directory, runtimes, runtimeSources, layouts, layoutTimingRef.current)
+      : [],
+    [directory, layouts, runtimes, runtimeSources, selectedSection, snapshot, snapshotReady]
   );
 
   const setLineLayout = useCallback((lineId, layout) => {
@@ -311,6 +514,41 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     layoutsRef.current = next;
     setLayouts(next);
   }, []);
+
+  const setInputError = useCallback((key, error) => {
+    if (!key) {
+      return;
+    }
+    setInputErrors((current) => {
+      if (error) {
+        return current[key] === error ? current : { ...current, [key]: error };
+      }
+      if (!current[key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const clearInputErrors = useCallback(() => {
+    setInputErrors({});
+  }, []);
+
+  const validateDeparture = useCallback((lineId, trainId, occurrence, value) => {
+    if (!isValidTimeValue(value)) {
+      return { error: "format", minute: null };
+    }
+    const layout = layouts[lineId]?.value;
+    const runtime = lineRuntime(runtimes, runtimeSources, lineId);
+    const row = buildRows(snapshot, lineId).find((item) => item?.id === trainId);
+    if (!row || !layout || !runtime) {
+      return { error: "", minute: null };
+    }
+    const stationNames = new Map(directory.map((station) => [station.stationId, station.name]));
+    return validateDepartureValue(buildTrain(row, layout, runtime, stationNames), runtime, occurrence, value);
+  }, [directory, layouts, runtimeSources, runtimes, snapshot]);
 
   const resetLineLayouts = useCallback(() => {
     layoutGenerationRef.current += 1;
@@ -331,7 +569,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }, []);
 
   const setRuntimeSource = useCallback((lineId, source) => {
-    if (!lineId || (source !== "historical" && source !== "theory")) {
+    if (!lineId || !isEditorRuntimeSource(source)) {
       return;
     }
     const next = { ...runtimeSourcesRef.current, [lineId]: source };
@@ -358,7 +596,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }, []);
 
   const invalidateRuntimeSource = useCallback((lineId, source) => {
-    if (!lineId || (source !== "historical" && source !== "theory")) {
+    if (!lineId || !isEditorRuntimeSource(source)) {
       return;
     }
     const key = runtimeKey(lineId, source);
@@ -382,6 +620,9 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       error: status?.error || "run-time-query-failed",
       detail: status?.detail || ""
     };
+    if (detail.error === "run-time-theory-busy") {
+      return;
+    }
     const key = [
       detail.editorSessionId,
       detail.lineId,
@@ -408,8 +649,8 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       return;
     }
     const lineId = status.lineId || context?.lineId || "";
-    const source = status.source || context?.source || "historical";
-    if (status.state === "Completed") {
+    const source = status.source || context?.source || "theory";
+    if (status.state === "Completed" || status.state === "Failed" || status.state === "Cancelled") {
       setRuntimes((current) => {
         const next = {
           ...current,
@@ -418,10 +659,33 @@ export default function useTimetableController({ activeTransportMode, isActive, 
         runtimesRef.current = next;
         return next;
       });
+    }
+    if (status.state === "Completed") {
       clearPendingQuery(lineId, source, status.queryId);
+      if (sourceTransactionsRef.current[lineId] === source) {
+        const layout = layoutsRef.current[lineId]?.value;
+        if (layout) {
+          setSnapshot((current) => rebuildLineRows(current, lineId, layout, status));
+        }
+        setRuntimeSource(lineId, source);
+        const nextTransactions = { ...sourceTransactionsRef.current };
+        delete nextTransactions[lineId];
+        sourceTransactionsRef.current = nextTransactions;
+        setSourceTransactions(nextTransactions);
+        setDirtyLineIds((current) => current.includes(lineId) ? current : [...current, lineId]);
+        setSaveError("");
+        setSaveState("dirty");
+      }
       setLoadError("");
     } else if (status.state === "Failed" || status.state === "Cancelled") {
       clearPendingQuery(lineId, source, status.queryId);
+      if (sourceTransactionsRef.current[lineId] === source) {
+        setRuntimeSource(lineId, source);
+        const nextTransactions = { ...sourceTransactionsRef.current };
+        delete nextTransactions[lineId];
+        sourceTransactionsRef.current = nextTransactions;
+        setSourceTransactions(nextTransactions);
+      }
       setLoadError(status.error || "run-time-query-failed");
       const detail = {
         ...status,
@@ -431,24 +695,24 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       };
       reportRunTimeError(operation, detail);
     }
-  }, [clearPendingQuery, reportRunTimeError]);
+  }, [clearPendingQuery, reportRunTimeError, setRuntimeSource]);
 
-  const requestRuntime = useCallback((lineId, source = "historical", automatic = false, refresh = false) => {
+  const requestRuntime = useCallback((lineId, source = "theory", refreshReady = false) => {
     if (!lineId) {
       return Promise.resolve(null);
     }
     const key = runtimeKey(lineId, source);
     const ready = runtimesRef.current[lineId]?.[source];
-    if (!refresh && ready) {
-      return Promise.resolve(ready);
+    const activeRequest = runtimeRequestRef.current.get(key);
+    if (activeRequest) {
+      return activeRequest.promise;
     }
     const pending = pendingQueriesRef.current[key];
-    if (!refresh && pending) {
+    if (pending) {
       return Promise.resolve(pending);
     }
-    const activeRequest = runtimeRequestRef.current.get(key);
-    if (!refresh && activeRequest) {
-      return activeRequest.promise;
+    if (!refreshReady && ready?.state === "Completed") {
+        return Promise.resolve(ready);
     }
 
     const request = {
@@ -459,7 +723,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     const requestGeneration = (runtimeRequestGenerationRef.current.get(key) || 0) + 1;
     const mode = activeTransportMode;
     runtimeRequestGenerationRef.current.set(key, requestGeneration);
-    if (refresh) {
+    if (refreshReady) {
       clearRuntimeSource(lineId, source);
     }
     clearPendingQuery(lineId, source);
@@ -469,21 +733,19 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       if (!runtimeActiveRef.current || !isCurrent()) {
         return null;
       }
-      if (automatic && (autoHistoricalLineRef.current !== lineId
-        || runtimesRef.current[lineId]?.historical)) {
-        return null;
-      }
       const queuedReady = runtimesRef.current[lineId]?.[source];
-      if (!refresh && queuedReady) {
+      if (!refreshReady && queuedReady?.state === "Completed") {
         return queuedReady;
       }
       const queuedPending = pendingQueriesRef.current[key];
-      if (!refresh && queuedPending) {
+      if (queuedPending) {
         return queuedPending;
       }
 
       try {
-        const status = await api.startRunTimeQuery(request);
+        const status = source === "monitorAverage"
+          ? await api.queryMonitorAverage(request)
+          : await api.startRunTimeQuery(request);
         if (!isCurrent()) {
           return null;
         }
@@ -521,34 +783,166 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       });
     runtimeStartTailRef.current = promise.then(() => null, () => null);
     runtimeRequestRef.current.set(key, {
-      automatic,
       generation: requestGeneration,
       promise
     });
     return promise;
   }, [acceptRuntime, activeTransportMode, api, clearPendingQuery, clearRuntimeSource, reportRunTimeError]);
 
-  const ensureHistoricalRuntime = useCallback((lineId, forceRetry = false) => {
-    autoHistoricalLineRef.current = lineId || "";
+  const ensureBusHistoricalRuntime = useCallback((lineId, forceRetry = false) => {
+    if (!isActive || activeTransportMode !== "bus" || !lineId) {
+      return Promise.resolve(null);
+    }
+    setRuntimeSource(lineId, "busHistorical");
+    return requestRuntime(lineId, "busHistorical", forceRetry);
+  }, [activeTransportMode, isActive, requestRuntime, setRuntimeSource]);
+
+  const switchRuntimeSource = useCallback((lineId, source) => {
+    if (!lineId || (source !== "theory" && source !== "monitorAverage")) {
+      return Promise.resolve(null);
+    }
+    if (source === "monitorAverage" && !monitorAverageStates[lineId]?.ready) {
+      return Promise.resolve(null);
+    }
+    const nextTransactions = { ...sourceTransactionsRef.current, [lineId]: source };
+    sourceTransactionsRef.current = nextTransactions;
+    setSourceTransactions(nextTransactions);
+    const ready = runtimesRef.current[lineId]?.[source];
+    if (source === "theory" && ready?.state === "Completed") {
+        acceptRuntime(ready, "switchRuntimeSource");
+        return Promise.resolve(ready);
+    }
+    return requestRuntime(lineId, source, source === "monitorAverage");
+  }, [acceptRuntime, monitorAverageStates, requestRuntime]);
+
+  const setActualLayer = useCallback((lineId, source, layer) => {
+    const next = {
+      ...actualTripsRef.current,
+      [lineId]: { ...actualTripsRef.current[lineId], [source]: layer }
+    };
+    actualTripsRef.current = next;
+    setActualTrips(next);
+  }, []);
+
+  const syncMonitorSubscription = useCallback(() => {
+    api.setMonitorSubscription({
+      averageWaitingLineId: averageWaitingLineRef.current
+    }).catch(() => {});
+  }, [api]);
+
+  const loadMonitorAverageState = useCallback(async (lineId) => {
     if (!isActive || !lineId) {
-      return Promise.resolve(null);
+      return null;
     }
-    if (forceRetry) {
-      autoHistoricalAttemptRef.current.delete(lineId);
+    const response = await api.loadMonitorAverageState({
+      lineId,
+      stopSig: layoutsRef.current[lineId]?.value?.stopSig || ""
+    });
+    if (!response?.success) {
+      return null;
     }
-    if (runtimesRef.current[lineId]?.historical) {
-      return Promise.resolve(runtimesRef.current[lineId].historical);
+    setMonitorAverageStates((current) => ({ ...current, [lineId]: response }));
+    averageWaitingLineRef.current = response.ready ? "" : lineId;
+    syncMonitorSubscription();
+    return response;
+  }, [api, isActive, syncMonitorSubscription]);
+
+  const loadActualTrips = useCallback(async (lineId, source, startMinute, endMinute, coverageFilter) => {
+    if (!isActive || !lineId || (source !== "actualToday" && source !== "actualYesterday")) {
+      return;
     }
-    const activeRequest = runtimeRequestRef.current.get(runtimeKey(lineId, "historical"));
-    if (activeRequest) {
-      return activeRequest.promise;
+    const key = runtimeKey(lineId, source);
+    const generation = (monitorChartRequestRef.current.get(key) || 0) + 1;
+    monitorChartRequestRef.current.set(key, generation);
+    setActualLayer(lineId, source, {
+      state: "loading",
+      startMinute,
+      endMinute,
+      coverageFilter,
+      headers: {},
+      details: {}
+    });
+    try {
+      const headers = await api.loadMonitorTripHeaders({
+        dayOffset: source === "actualYesterday" ? -1 : 0,
+        lineId,
+        startMinute,
+        endMinute,
+        limit: 128,
+        coverageFilter
+      });
+      if (monitorChartRequestRef.current.get(key) !== generation) {
+        return;
+      }
+      if (!headers?.success || headers.truncated) {
+        setActualLayer(lineId, source, {
+          state: "unavailable",
+          startMinute,
+          endMinute,
+          coverageFilter,
+          hasLineTrips: headers?.hasLineTrips === true,
+          dataComplete: headers?.dataComplete,
+          persistenceHealthy: headers?.persistenceHealthy,
+          headers: {},
+          details: {}
+        });
+        setLoadError(headers?.error || "monitor-chart-range-too-large");
+        return;
+      }
+      const tripKeys = asArray(headers.trips).map((trip) => trip?.tripKey).filter(Boolean);
+      const layer = {
+        state: "ready",
+        serviceDateKey: headers.serviceDateKey,
+        startMinute,
+        endMinute,
+        coverageFilter,
+        hasLineTrips: headers.hasLineTrips === true,
+        hasRangeTrips: tripKeys.length > 0,
+        dataComplete: headers.dataComplete,
+        persistenceHealthy: headers.persistenceHealthy,
+        droppedTripCount: headers.droppedTripCount,
+        lastIssueCode: headers.lastIssueCode,
+        issueCount: headers.issueCount,
+        headers: Object.fromEntries(asArray(headers.trips).map((trip) => [trip.tripKey, trip])),
+        details: {}
+      };
+      setActualLayer(lineId, source, layer);
+      for (let offset = 0; offset < tripKeys.length; offset += 32) {
+        const response = await api.loadMonitorTripDetails({ tripKeys: tripKeys.slice(offset, offset + 32) });
+        if (monitorChartRequestRef.current.get(key) !== generation) {
+          return;
+        }
+        if (!response?.success) {
+          setActualLayer(lineId, source, { ...layer, state: "unavailable" });
+          setLoadError(response?.error || "monitor-chart-detail-failed");
+          return;
+        }
+        asArray(response.details).filter((detail) => detail?.success).forEach((detail) => {
+          if (detail.header?.tripKey) {
+            layer.details[detail.header.tripKey] = detail;
+          }
+        });
+        setActualLayer(lineId, source, {
+          ...layer,
+          details: { ...layer.details }
+        });
+      }
+    } catch (error) {
+      if (monitorChartRequestRef.current.get(key) !== generation) {
+        return;
+      }
+      setActualLayer(lineId, source, {
+        state: "unavailable",
+        startMinute,
+        endMinute,
+        coverageFilter,
+        headers: {},
+        details: {}
+      });
+      const message = error instanceof Error ? error.message : String(error);
+      setLoadError(message);
     }
-    if (autoHistoricalAttemptRef.current.has(lineId)) {
-      return Promise.resolve(null);
-    }
-    autoHistoricalAttemptRef.current.add(lineId);
-    return requestRuntime(lineId, "historical", true);
-  }, [isActive, requestRuntime]);
+  }, [api, isActive, setActualLayer]);
 
   const ensureTimetableLineLayout = useCallback((lineId, forceRetry = false) => {
     if (!isActive || !lineId) {
@@ -665,13 +1059,9 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     const nextDirectory = asArray(stationResponse.stations);
     const selectable = nextDirectory.filter((station) => !station.passOnly && station.stationId);
     const selectableIds = new Set(selectable.map((station) => station.stationId));
-    const firstStationId = selectable[0]?.stationId || "";
-    const lastStationId = selectable[selectable.length - 1]?.stationId || "";
     setDirectory(nextDirectory);
-    setStartStationId((current) => selectableIds.has(current) ? current : firstStationId);
-    setEndStationId((current) => selectableIds.has(current) && current !== firstStationId
-      ? current
-      : lastStationId === firstStationId ? "" : lastStationId);
+    setStartStationId((current) => selectableIds.has(current) ? current : "");
+    setEndStationId((current) => selectableIds.has(current) ? current : "");
     setLoadError("");
     if (stationResponse.status === "warming" || stationResponse.status === "stale") {
       setIndexVersion(0);
@@ -742,6 +1132,17 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     const snapshotRequest = isSnapshotForMode(sharedSnapshot, mode)
       ? Promise.resolve(sharedSnapshot)
       : api.loadSnapshot({ mode });
+    if (mode === "bus") {
+      const nextSnapshot = await snapshotRequest;
+      if (isCurrentDirectory(mode, generation)) {
+        setSnapshot(normalizeSnapshot(nextSnapshot));
+        setDirectory([]);
+        setSections([]);
+        setSectionId("");
+        setIndexVersion(0);
+      }
+      return;
+    }
     const directoryRequest = loadDirectory(mode, generation);
     const nextSnapshot = await snapshotRequest;
     if (!isCurrentDirectory(mode, generation)) {
@@ -753,7 +1154,6 @@ export default function useTimetableController({ activeTransportMode, isActive, 
 
   const reloadBase = useCallback(() => {
     resetLineLayouts();
-    autoHistoricalAttemptRef.current.clear();
     const generation = directoryGenerationRef.current + 1;
     directoryGenerationRef.current = generation;
     directoryRequestRef.current += 1;
@@ -801,7 +1201,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }, [activeTransportMode, isActive, reloadBase]);
 
   useEffect(() => {
-    if (!isActive || !startStationId || !endStationId || !indexVersion) {
+    if (!isActive || activeTransportMode === "bus" || !startStationId || !endStationId || !indexVersion) {
       return;
     }
     let cancelled = false;
@@ -846,24 +1246,64 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       return;
     }
     invalidateRuntimeSource(event.lineId, event.source);
-  }), [api, invalidateRuntimeSource]);
+    if (event?.source !== "monitorAverage") {
+      return;
+    }
+    setMonitorAverageStates((current) => {
+      const next = { ...current };
+      delete next[event.lineId];
+      return next;
+    });
+    if (runtimeSourcesRef.current[event.lineId] !== "monitorAverage") {
+      return;
+    }
+    setRuntimeSource(event.lineId, "theory");
+    const nextTransactions = { ...sourceTransactionsRef.current };
+    delete nextTransactions[event.lineId];
+    sourceTransactionsRef.current = nextTransactions;
+    setSourceTransactions(nextTransactions);
+  }), [api, invalidateRuntimeSource, setRuntimeSource]);
+
+  useEffect(() => api.onMonitorChanged?.((event) => {
+    if (event?.monitorAverageBecameReady && event?.lineId) {
+      averageWaitingLineRef.current = "";
+      syncMonitorSubscription();
+      loadMonitorAverageState(event.lineId).catch(() => {});
+    }
+  }), [api, loadMonitorAverageState, syncMonitorSubscription]);
 
   useEffect(() => {
     runtimeActiveRef.current = isActive;
+    if (!isActive) {
+      averageWaitingLineRef.current = "";
+      monitorChartRequestRef.current.forEach((generation, key) => {
+        monitorChartRequestRef.current.set(key, generation + 1);
+      });
+      syncMonitorSubscription();
+      return;
+    }
     if (pendingModeRef.current === activeTransportMode) {
       return;
     }
     pendingModeRef.current = activeTransportMode;
     runtimeRequestRef.current.clear();
-    autoHistoricalLineRef.current = "";
-    autoHistoricalAttemptRef.current.clear();
     pendingQueriesRef.current = {};
     setPendingQueries({});
     runtimesRef.current = {};
     setRuntimes({});
     runtimeSourcesRef.current = {};
     setRuntimeSources({});
-  }, [activeTransportMode, isActive]);
+    sourceTransactionsRef.current = {};
+    setSourceTransactions({});
+    setMonitorAverageStates({});
+    averageWaitingLineRef.current = "";
+    monitorChartRequestRef.current.forEach((generation, key) => {
+      monitorChartRequestRef.current.set(key, generation + 1);
+    });
+    actualTripsRef.current = {};
+    setActualTrips({});
+    syncMonitorSubscription();
+  }, [activeTransportMode, isActive, syncMonitorSubscription]);
 
   useEffect(() => api.onLineInvalidated((event) => {
     loadedModeRef.current = "";
@@ -878,6 +1318,16 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       runtimeSourcesRef.current = next;
       return next;
     });
+    setMonitorAverageStates((current) => Object.fromEntries(
+      Object.entries(current).filter(([lineId]) => !invalidIds.has(lineId))
+    ));
+    invalidIds.forEach((lineId) => ["actualToday", "actualYesterday"].forEach((source) => {
+      const key = runtimeKey(lineId, source);
+      monitorChartRequestRef.current.set(key, (monitorChartRequestRef.current.get(key) || 0) + 1);
+    }));
+    actualTripsRef.current = Object.fromEntries(Object.entries(actualTripsRef.current)
+      .filter(([lineId]) => !invalidIds.has(lineId)));
+    setActualTrips(actualTripsRef.current);
     const nextPending = Object.fromEntries(Object.entries(pendingQueriesRef.current)
       .filter(([, query]) => !invalidIds.has(query?.lineId)));
     pendingQueriesRef.current = nextPending;
@@ -887,6 +1337,11 @@ export default function useTimetableController({ activeTransportMode, isActive, 
 
   useEffect(() => () => {
     runtimeActiveRef.current = false;
+    averageWaitingLineRef.current = "";
+    monitorChartRequestRef.current.forEach((generation, key) => {
+      monitorChartRequestRef.current.set(key, generation + 1);
+    });
+    api.setMonitorSubscription({ averageWaitingLineId: "" }).catch(() => {});
     api.closeRunTimeEditorSession({ editorSessionId: editorIdRef.current }).catch(() => {});
   }, [api]);
 
@@ -931,7 +1386,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
           }
           return {
             ...row,
-            source: runtime?.source || row.source || "historical",
+            source: row.source || "manual",
             timedStops: train.stops.map((stop, index) => ({
               stopKey: stop.stationId,
               arrive: index === 0 ? null : stop.arrivalMinute,
@@ -973,7 +1428,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
           }
           return {
             ...row,
-            source: runtime?.source || row.source || "historical",
+            source: row.source || "manual",
             timedStops: buildBatchTimedStops(row, layout, runtime, stationNames)
           };
         })
@@ -986,7 +1441,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }, [directory, layouts, runtimeSources, runtimes]);
 
   const saveAll = useCallback(async () => {
-    if (dirtyLineIds.length === 0 || saveState === "saving") {
+    if (!canSave) {
       return;
     }
     setSaveState("saving");
@@ -1005,7 +1460,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
             rowId: row.id,
             slotMinute: timeToMinutes(row.time),
             kind: row.kind || "local",
-            source: runtime?.source || row.source || "historical",
+            source: row.source || "manual",
             timedStops,
             truncateFromStopIndex: -1
           };
@@ -1026,7 +1481,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       setSaveState("error");
       setSaveError(error instanceof Error ? error.message : String(error));
     }
-  }, [api, dirtyLineIds, layouts, runtimeSources, runtimes, saveState, snapshot]);
+  }, [api, canSave, dirtyLineIds, layouts, runtimeSources, runtimes, snapshot]);
 
   return {
     directory,
@@ -1041,15 +1496,26 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     setEndStationId,
     runtimes,
     runtimeSources,
+    monitorAverageStates,
+    actualTrips,
+    sourceTransactions,
     pendingQueries,
     requestRuntime,
     setRuntimeSource,
-    ensureHistoricalRuntime,
+    switchRuntimeSource,
+    loadMonitorAverageState,
+    loadActualTrips,
+    ensureBusHistoricalRuntime,
     ensureTimetableLineLayout,
     layoutTimingRef,
     updateDeparture,
+    validateDeparture,
+    inputErrors,
+    setInputError,
+    clearInputErrors,
     markLineCustom,
     dirty: dirtyLineIds.length > 0,
+    canSave,
     saveState,
     saveError,
     saveAll,

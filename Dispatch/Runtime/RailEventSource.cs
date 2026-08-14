@@ -73,7 +73,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, RailBaseline> m_Baselines = new Dictionary<Entity, RailBaseline>();
-        private readonly Dictionary<Entity, int> m_TraceTargetWaypoints = new Dictionary<Entity, int>();
         private readonly Dictionary<Entity, RuntimeDemandMask> m_Demands = new Dictionary<Entity, RuntimeDemandMask>();
         private readonly List<RailFrameRow> m_FrameRows = new List<RailFrameRow>();
         private readonly Dictionary<Entity, int> m_FrameRowIndex = new Dictionary<Entity, int>();
@@ -390,7 +389,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_WaypointBuffers.Clear();
             m_WaypointCounts.Clear();
             m_Baselines.Remove(vehicle);
-            m_TraceTargetWaypoints.Remove(vehicle);
             if (m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
             {
                 RailFrameRow row = m_FrameRows[rowIndex];
@@ -491,7 +489,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void RemoveVehicle(Entity vehicle)
         {
             m_Baselines.Remove(vehicle);
-            m_TraceTargetWaypoints.Remove(vehicle);
             m_Demands.Remove(vehicle);
             m_FrameRowIndex.Remove(vehicle);
             m_PreparingWaypointLiveFrames.Remove(vehicle);
@@ -737,87 +734,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 isDeparturePending(row.Vehicle) && row.MovingKnown,
                 isDeparturePending(row.Vehicle) && row.Moving,
                 suppressBoardingGhost);
-            TraceStopSource(
-                row,
-                input,
-                hasOpenStopSession(row.Vehicle),
-                isDeparturePending(row.Vehicle),
-                forcedMidStopGraceActive(row.Vehicle, nowFrame));
             return true;
-        }
-
-        private void TraceStopSource(
-            RailFrameRow row,
-            StopInput input,
-            bool openSession,
-            bool departurePending,
-            bool forcedGrace)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-
-            bool changed = (row.Changes & RailChangeMask.OfficialBoardingChanged) != 0;
-            string edge = changed
-                ? input.OfficialBoarding ? "rise" : "fall"
-                : departurePending ? "departure-pending" : "wake";
-            int targetWaypoint = ReadTargetWaypoint(row.Vehicle);
-            int boardingWaypoint = ReadBoardingWaypoint(row.Vehicle, row.CurrentRoute);
-            uint departureFrame = row.HasPublicTransport ? row.PublicTransport.m_DepartureFrame : 0;
-            string flags = row.HasPublicTransport ? row.PublicTransport.m_State.ToString() : "missing";
-            RtLog.Diagnostics(
-                "[StopTraceSource] frame=" + input.SourceFrame
-                + " vehicle=" + row.Vehicle.Index
-                + " line=" + row.RegisteredLine.Index
-                + " state=" + row.RegistryState
-                + " edge=" + edge
-                + " official=" + (input.OfficialBoarding ? 1 : 0)
-                + " flags=" + flags
-                + " departureFrame=" + departureFrame
-                + " targetWp=" + targetWaypoint
-                + " boardingWp=" + boardingWaypoint
-                + " cachedWp=" + input.PreviousWaypoint
-                + " resolvedWp=" + input.CurrentWaypoint
-                + " openSession=" + (openSession ? 1 : 0)
-                + " cooldown=" + (input.CooldownActive ? 1 : 0)
-                + " pending=" + (departurePending ? 1 : 0)
-                + " movingKnown=" + (input.MovingKnown ? 1 : 0)
-                + " moving=" + (input.MovingForDeparture ? 1 : 0)
-                + " forcedGrace=" + (forcedGrace ? 1 : 0)
-                + " suppressGhost=" + (input.SuppressBoardingGhost ? 1 : 0));
-        }
-
-        private int ReadTargetWaypoint(Entity vehicle)
-        {
-            if (!m_Runtime.EntityManager.HasComponent<Target>(vehicle))
-                return -1;
-
-            Entity target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle).m_Target;
-            return target != Entity.Null && m_Runtime.EntityManager.HasComponent<Waypoint>(target)
-                ? m_Runtime.EntityManager.GetComponentData<Waypoint>(target).m_Index
-                : -1;
-        }
-
-        private int ReadBoardingWaypoint(Entity vehicle, Entity route)
-        {
-            if (!TryGetWaypointsForRoute(route, out _, out DynamicBuffer<RouteWaypoint> waypoints))
-                return -1;
-
-            for (int i = 0; i < waypoints.Length; i++)
-            {
-                Entity waypoint = waypoints[i].m_Waypoint;
-                if (waypoint == Entity.Null || !m_Runtime.EntityManager.HasComponent<Connected>(waypoint))
-                    continue;
-
-                Entity stop = m_Runtime.EntityManager.GetComponentData<Connected>(waypoint).m_Connected;
-                if (stop != Entity.Null
-                    && m_Runtime.EntityManager.HasComponent<BoardingVehicle>(stop)
-                    && m_Runtime.EntityManager.GetComponentData<BoardingVehicle>(stop).m_Vehicle == vehicle)
-                {
-                    return i;
-                }
-            }
-
-            return -1;
         }
 
         private bool SuppressBoardingGhost(RailFrameRow row, DynamicBuffer<RouteWaypoint> waypoints)
@@ -1020,7 +937,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void ResetTracking()
         {
             m_Baselines.Clear();
-            m_TraceTargetWaypoints.Clear();
             m_Demands.Clear();
             m_FrameRows.Clear();
             m_FrameRowIndex.Clear();
@@ -1120,36 +1036,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_RuntimeHotPathProbe.CountMovingChanged();
             fresh.Writes = writes;
             row = fresh;
-            TraceTargetChange(row, frame);
             UpdateBaseline(row);
-        }
-
-        private void TraceTargetChange(RailFrameRow row, uint frame)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-
-            int targetWaypoint = ReadTargetWaypoint(row.Vehicle);
-            bool hadPrevious = m_TraceTargetWaypoints.TryGetValue(row.Vehicle, out int previousTarget);
-            if (hadPrevious && previousTarget == targetWaypoint)
-                return;
-
-            m_TraceTargetWaypoints[row.Vehicle] = targetWaypoint;
-            bool boarding = OfficialBoarding(row);
-            int boardingWaypoint = ReadBoardingWaypoint(row.Vehicle, row.CurrentRoute);
-            RtLog.Diagnostics(
-                "[StopTraceTarget] frame=" + frame
-                + " vehicle=" + row.Vehicle.Index
-                + " line=" + row.RegisteredLine.Index
-                + " state=" + row.RegistryState
-                + " change=" + (hadPrevious ? previousTarget + "->" + targetWaypoint : "initial->" + targetWaypoint)
-                + " official=" + (boarding ? 1 : 0)
-                + " boardingWp=" + boardingWaypoint
-                + " cachedWp=" + row.CachedWaypoint
-                + " movingKnown=" + (row.MovingKnown ? 1 : 0)
-                + " moving=" + (row.Moving ? 1 : 0)
-                + " flags=" + (row.HasPublicTransport ? row.PublicTransport.m_State.ToString() : "missing")
-                + " departureFrame=" + (row.HasPublicTransport ? row.PublicTransport.m_DepartureFrame : 0));
         }
 
         private void ReadNarrow(ref RailFrameRow row, bool readMoving)

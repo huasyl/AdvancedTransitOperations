@@ -191,6 +191,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 TryProgress = runtime.m_RouteProgress.Try,
                 TryBlocker = (Entity vehicle, out Entity blocker) => runtime.m_Bypass.TryGetLatchedBlocker(vehicle, out blocker),
                 TrySessionArrival = runtime.m_StopRuntime.TryGetSessionArrivalFrame,
+                TryStopSession = runtime.m_StopRuntime.TryGetSession,
                 TryVehicleTimes = runtime.m_ObsRecorder.TryVehicleTimes,
                 ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
                 Stations = (Entity vehicle, Entity line, out string current, out string nextPhysical, out string nextStop, out bool nextPhysicalIsPass) =>
@@ -203,7 +204,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                         out nextPhysical,
                         out nextPhysicalIsPass,
                         out _);
-                }
+                },
+                TryPanelStations = runtime.m_StationContextQuery.TryPanelStations
             };
         }
 

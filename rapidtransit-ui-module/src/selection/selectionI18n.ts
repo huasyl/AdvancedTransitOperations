@@ -44,6 +44,13 @@ const KEYS = {
   currentSlot: "RapidTransit.CurrentSlot",
   targetSlot: "RapidTransit.TargetSlot",
   currentStation: "RapidTransit.CurrentStation",
+  arrival: "RapidTransit.Arrival",
+  departure: "RapidTransit.Departure",
+  stopped: "RapidTransit.Stopped",
+  scheduled: "RapidTransit.Scheduled",
+  actual: "RapidTransit.Actual",
+  nextPass: "RapidTransit.NextPass",
+  waitingForFastTrain: "RapidTransit.WaitingForFastTrain",
   nextStation: "RapidTransit.NextStation",
   nextStopStation: "RapidTransit.NextStopStation",
   nextScheduledArrival: "RapidTransit.NextScheduledArrival",
@@ -106,6 +113,17 @@ const KEYS = {
   etaComparisonPredictionDelta: "RapidTransit.EtaComparisonPredictionDelta"
 } as const;
 
+const PANEL_FALLBACKS: Record<string, string> = {
+  vanillaControl: "原版系统控制",
+  arrival: "到达",
+  departure: "发出",
+  stopped: "已停",
+  scheduled: "图定",
+  actual: "实际",
+  nextPass: "下一通过",
+  waitingForFastTrain: "等待快车"
+};
+
 function formatFallbackLabel(value: string) {
   const source = value.indexOf(".") >= 0 ? value.slice(value.lastIndexOf(".") + 1) : value;
   return source
@@ -122,7 +140,7 @@ export function useT() {
 
   return useCallback((key: string) => {
     const translationKey = (KEYS as Record<string, string>)[key] || key;
-    const fallback = formatFallbackLabel(key);
+    const fallback = PANEL_FALLBACKS[key] || formatFallbackLabel(key);
     if (!translate) {
       return fallback;
     }

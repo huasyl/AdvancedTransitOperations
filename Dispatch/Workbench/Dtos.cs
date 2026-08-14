@@ -618,6 +618,16 @@ namespace RapidTransitMod
         [DataMember]
         public string source;
         [DataMember]
+        public string stopSig;
+        [DataMember]
+        public ulong sourceRevision;
+        [DataMember]
+        public bool complete;
+        [DataMember]
+        public int prefixStopCount;
+        [DataMember]
+        public string missingKind;
+        [DataMember]
         public DispatchWorkbenchRunChartSegmentDto[] segments;
         [DataMember]
         public DispatchWorkbenchRunChartDwellDto[] dwells;
@@ -833,6 +843,8 @@ namespace RapidTransitMod
         [DataMember]
         public int sectionIndex;
         [DataMember]
+        public int waypointIndex;
+        [DataMember]
         public string type;
     }
 
@@ -859,6 +871,10 @@ namespace RapidTransitMod
         public DispatchWorkbenchRunChartStationDto[] stops;
         [DataMember]
         public DispatchWorkbenchRunChartStationDto[] passes;
+        [DataMember]
+        public DispatchWorkbenchRunChartStationDto leadingStop;
+        [DataMember]
+        public DispatchWorkbenchRunChartStationDto trailingStop;
     }
 
     [DataContract]
@@ -868,6 +884,32 @@ namespace RapidTransitMod
         public int dayOffset;
         [DataMember]
         public string lineId;
+        [DataMember]
+        public int startMinute;
+        [DataMember]
+        public int endMinute;
+        [DataMember]
+        public int limit;
+        [DataMember]
+        public DispatchWorkbenchMonitorFilterDto coverageFilter;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorFilterDto
+    {
+        [DataMember]
+        public DispatchWorkbenchMonitorCoverageDto[] coverages;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorCoverageDto
+    {
+        [DataMember]
+        public int fromSectionIndex;
+        [DataMember]
+        public int toSectionIndex;
+        [DataMember]
+        public DispatchWorkbenchRunChartStationDto[] points;
     }
 
     [DataContract]
@@ -877,6 +919,8 @@ namespace RapidTransitMod
         public bool success;
         [DataMember]
         public string error;
+        [DataMember]
+        public bool hasLineTrips;
         [DataMember]
         public bool dataComplete;
         [DataMember]
@@ -895,6 +939,8 @@ namespace RapidTransitMod
         public int nowMinute;
         [DataMember]
         public long clockEpoch;
+        [DataMember]
+        public bool truncated;
         [DataMember]
         public DispatchWorkbenchMonitorSummaryDto summary;
         [DataMember]
@@ -961,6 +1007,68 @@ namespace RapidTransitMod
         public DispatchWorkbenchMonitorTripHeaderDto header;
         [DataMember]
         public DispatchWorkbenchMonitorStopDto[] stops = System.Array.Empty<DispatchWorkbenchMonitorStopDto>();
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorDetailsRequestDto
+    {
+        [DataMember]
+        public string[] tripKeys;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorDetailsResponseDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public DispatchWorkbenchMonitorDetailResponseDto[] details = System.Array.Empty<DispatchWorkbenchMonitorDetailResponseDto>();
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorAverageStateDto
+    {
+        [DataMember]
+        public bool success;
+        [DataMember]
+        public string error;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string stopSig;
+        [DataMember]
+        public bool ready;
+        [DataMember]
+        public ulong revision;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorAverageRequestDto
+    {
+        [DataMember]
+        public string editorSessionId;
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public string stopSig;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorChangedDto
+    {
+        [DataMember]
+        public string lineId;
+        [DataMember]
+        public bool monitorAverageBecameReady;
+    }
+
+    [DataContract]
+    public class DispatchWorkbenchMonitorSubscriptionDto
+    {
+        [DataMember]
+        public string averageWaitingLineId;
     }
 
     [DataContract]

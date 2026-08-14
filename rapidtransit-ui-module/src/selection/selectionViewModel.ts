@@ -79,6 +79,17 @@ export interface PanelData {
   actualArrivalMinute?: number;
   plannedDepartureMinute?: number;
   alertText?: string;
+  isManagedVehicle?: boolean;
+  showCurrentStop?: boolean;
+  currentStationName?: string;
+  stopDwellValue?: string;
+  nextPassStationName?: string;
+  nextStopStationName?: string;
+  showSchedule?: boolean;
+  currentSlotText?: string;
+  targetSlotText?: string;
+  showWaitingForFastTrain?: boolean;
+  waitingForFastTrainVehicleId?: number;
   showAlerts?: boolean;
   showBypassStationToggle?: boolean;
   bypassStationChecked?: boolean;

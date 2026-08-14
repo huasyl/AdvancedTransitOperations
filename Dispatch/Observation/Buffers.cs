@@ -18,13 +18,13 @@ namespace RapidTransitMod.Dispatch.Observation
         private const int MonitorVersion = 1;
         private const int MonitorTripLegacyVersion = 2;
         private const int MonitorTripVersion = 3;
+        private const int MonitorAverageVersion = 1;
         private const int MaxMonitorDateSlots = 2;
         private const int MaxMonitorTripsPerDate = 4096;
         private const int MaxMonitorActiveTrips = 1024;
         private const int MaxMonitorTrips = MaxMonitorTripsPerDate * 2 + MaxMonitorActiveTrips;
         private const int MaxMonitorStops = MaxMonitorTrips * 256;
-        private const int MaxRailSegments = 65536;
-        private const int MaxRailSegmentsPerLine = 4096;
+        private const int MaxMonitorAverageSegments = MonitorAverageStore.MaxLines * MonitorAverageStore.MaxSegmentsPerLine;
         private const int MaxRestoreLineLogSlices = 32;
         private readonly ModRuntimeHostSystem m_Runtime;
         private bool m_MonitorPersistenceHealthy = true;
@@ -42,7 +42,7 @@ namespace RapidTransitMod.Dispatch.Observation
             EnsureStationDwell();
             EnsureSlice();
             EnsureBusSeg();
-            EnsureRailSegments();
+            EnsureMonitorAverages();
             EnsureMonitor();
         }
 
@@ -66,13 +66,15 @@ namespace RapidTransitMod.Dispatch.Observation
             EnsureBusSegCore();
         }
 
-        public void EnsureRailSegments()
+        public void EnsureMonitorAverages()
         {
             Entity city = m_Runtime.m_CitySystem.City;
-            if (city == Entity.Null || m_Runtime.EntityManager.HasBuffer<RailSegmentObservationElement>(city))
+            if (city == Entity.Null)
                 return;
-
-            m_Runtime.EntityManager.AddBuffer<RailSegmentObservationElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorAverageLineElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorAverageLineElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorAverageSegmentElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorAverageSegmentElement>(city);
         }
 
         public void EnsureMonitor()
@@ -98,7 +100,7 @@ namespace RapidTransitMod.Dispatch.Observation
             LoadBusSeg();
             LoadMonitor();
             LoadMonitorIntegrity();
-            LoadRailSegments();
+            LoadMonitorAverages();
         }
 
         public void LoadMonitor()
@@ -402,9 +404,10 @@ namespace RapidTransitMod.Dispatch.Observation
             try
             {
                 EnsureMonitor();
-                EnsureRailSegments();
+                EnsureMonitorAverages();
                 if (!HasMonitorBuffers(city)
-                    || !m_Runtime.EntityManager.HasBuffer<RailSegmentObservationElement>(city))
+                    || !m_Runtime.EntityManager.HasBuffer<MonitorAverageLineElement>(city)
+                    || !m_Runtime.EntityManager.HasBuffer<MonitorAverageSegmentElement>(city))
                 {
                     return FailSnapshot("monitor-snapshot-buffer-missing", null);
                 }
@@ -417,21 +420,25 @@ namespace RapidTransitMod.Dispatch.Observation
                     m_Runtime.EntityManager.GetBuffer<MonitorTripElement>(city);
                 DynamicBuffer<MonitorStopElement> stops =
                     m_Runtime.EntityManager.GetBuffer<MonitorStopElement>(city);
-                DynamicBuffer<RailSegmentObservationElement> segments =
-                    m_Runtime.EntityManager.GetBuffer<RailSegmentObservationElement>(city);
+                DynamicBuffer<MonitorAverageLineElement> averageLines =
+                    m_Runtime.EntityManager.GetBuffer<MonitorAverageLineElement>(city);
+                DynamicBuffer<MonitorAverageSegmentElement> averageSegments =
+                    m_Runtime.EntityManager.GetBuffer<MonitorAverageSegmentElement>(city);
 
                 slots.EnsureCapacity(snapshot.DateSlots.Count);
                 integrity.EnsureCapacity(1);
                 trips.EnsureCapacity(snapshot.Trips.Count);
                 stops.EnsureCapacity(snapshot.Stops.Count);
-                segments.EnsureCapacity(snapshot.Segments.Count);
+                averageLines.EnsureCapacity(snapshot.AverageLines.Count);
+                averageSegments.EnsureCapacity(snapshot.AverageSegments.Count);
 
                 snapshot.Integrity.m_PersistenceHealthy = 1;
                 slots.Clear();
                 integrity.Clear();
                 trips.Clear();
                 stops.Clear();
-                segments.Clear();
+                averageLines.Clear();
+                averageSegments.Clear();
                 for (int i = 0; i < snapshot.DateSlots.Count; i++)
                     slots.Add(snapshot.DateSlots[i]);
                 integrity.Add(snapshot.Integrity);
@@ -439,8 +446,10 @@ namespace RapidTransitMod.Dispatch.Observation
                     trips.Add(snapshot.Trips[i]);
                 for (int i = 0; i < snapshot.Stops.Count; i++)
                     stops.Add(snapshot.Stops[i]);
-                for (int i = 0; i < snapshot.Segments.Count; i++)
-                    segments.Add(snapshot.Segments[i]);
+                for (int i = 0; i < snapshot.AverageLines.Count; i++)
+                    averageLines.Add(snapshot.AverageLines[i]);
+                for (int i = 0; i < snapshot.AverageSegments.Count; i++)
+                    averageSegments.Add(snapshot.AverageSegments[i]);
 
                 m_MonitorPersistenceHealthy = true;
                 return true;
@@ -476,8 +485,10 @@ namespace RapidTransitMod.Dispatch.Observation
                 new List<MonitorTripElement>();
             internal readonly List<MonitorStopElement> Stops =
                 new List<MonitorStopElement>();
-            internal readonly List<RailSegmentObservationElement> Segments =
-                new List<RailSegmentObservationElement>();
+            internal readonly List<MonitorAverageLineElement> AverageLines =
+                new List<MonitorAverageLineElement>();
+            internal readonly List<MonitorAverageSegmentElement> AverageSegments =
+                new List<MonitorAverageSegmentElement>();
             internal MonitorIntegrityElement Integrity;
         }
 
@@ -544,35 +555,49 @@ namespace RapidTransitMod.Dispatch.Observation
             if (tripOrder > MaxMonitorTrips || snapshot.Stops.Count > MaxMonitorStops)
                 throw new InvalidOperationException("monitor-trip-stop-capacity");
 
-            HashSet<RailSegmentKey> segmentKeys = new HashSet<RailSegmentKey>();
-            Dictionary<Entity, int> segmentCounts = new Dictionary<Entity, int>();
-            foreach (KeyValuePair<RailSegmentKey, RailSegmentObservation> entry in
-                m_Runtime.m_ObsRecorder.RailSegmentValues)
+            List<MonitorAverageLine> averageLines = new List<MonitorAverageLine>();
+            foreach (MonitorAverageLine line in m_Runtime.m_MonitorAverages.Lines)
+                averageLines.Add(line);
+            if (averageLines.Count > MonitorAverageStore.MaxLines)
+                throw new InvalidOperationException("monitor-average-line-capacity");
+            averageLines.Sort((left, right) => left.Line.Index.CompareTo(right.Line.Index));
+            for (int lineIndex = 0; lineIndex < averageLines.Count; lineIndex++)
             {
-                int lineCount = segmentCounts.TryGetValue(entry.Key.Line, out int existingCount)
-                    ? existingCount
-                    : 0;
-                if (snapshot.Segments.Count >= MaxRailSegments
-                    || lineCount >= MaxRailSegmentsPerLine
-                    || !segmentKeys.Add(entry.Key)
-                    || !ValidRailSegmentSnapshot(entry.Key, entry.Value))
+                MonitorAverageLine line = averageLines[lineIndex];
+                if (line == null
+                    || line.Line == Entity.Null
+                    || string.IsNullOrEmpty(line.StopSig)
+                    || line.Segments.Length == 0
+                    || line.Segments.Length > MonitorAverageStore.MaxSegmentsPerLine
+                    || snapshot.AverageSegments.Count + line.Segments.Length > MaxMonitorAverageSegments)
                 {
-                    throw new InvalidOperationException("rail-segment-invalid");
+                    throw new InvalidOperationException("monitor-average-invalid");
                 }
-                segmentCounts[entry.Key.Line] = lineCount + 1;
-
-                RailSegmentObservation observation = entry.Value;
-                snapshot.Segments.Add(new RailSegmentObservationElement
+                snapshot.AverageLines.Add(new MonitorAverageLineElement
                 {
-                    m_LineEntity = entry.Key.Line,
-                    m_FromWaypointEntity = entry.Key.FromWaypoint,
-                    m_FromStopEntity = entry.Key.FromStop,
-                    m_ToWaypointEntity = entry.Key.ToWaypoint,
-                    m_ToStopEntity = entry.Key.ToStop,
-                    m_AverageFrames = observation.AverageFrames,
-                    m_SampleCount = observation.SampleCount,
-                    m_LastObservedFrame = observation.LastObservedFrame
+                    m_Version = MonitorAverageVersion,
+                    m_Line = line.Line,
+                    m_StopSig = line.StopSig,
+                    m_Revision = line.Revision,
+                    m_SegmentCount = line.Segments.Length
                 });
+                for (int order = 0; order < line.Segments.Length; order++)
+                {
+                    MonitorAverageSegment segment = line.Segments[order];
+                    if ((segment.SampleCount == 0 && segment.TotalMinutes != 0)
+                        || (segment.SampleCount > 0 && segment.TotalMinutes <= 0))
+                    {
+                        throw new InvalidOperationException("monitor-average-segment-invalid");
+                    }
+                    snapshot.AverageSegments.Add(new MonitorAverageSegmentElement
+                    {
+                        m_Version = MonitorAverageVersion,
+                        m_Line = line.Line,
+                        m_Order = order,
+                        m_TotalMinutes = segment.TotalMinutes,
+                        m_SampleCount = segment.SampleCount
+                    });
+                }
             }
 
             string issueCode = m_Runtime.m_Obs.MonitorIssueCode ?? string.Empty;
@@ -675,22 +700,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 }
             }
             return true;
-        }
-
-        private bool ValidRailSegmentSnapshot(
-            RailSegmentKey key,
-            RailSegmentObservation observation)
-        {
-            return observation != null
-                && ValidRailSegment(
-                    key.Line,
-                    key.FromWaypoint,
-                    key.FromStop,
-                    key.ToWaypoint,
-                    key.ToStop,
-                    observation.AverageFrames,
-                    observation.SampleCount)
-                && observation.SampleCount <= 32;
         }
 
         private bool HasMonitorBuffers(Entity city)
@@ -863,51 +872,105 @@ namespace RapidTransitMod.Dispatch.Observation
             RestoreBusSegCore();
         }
 
-        public void LoadRailSegments()
+        public void LoadMonitorAverages()
         {
-            EnsureRailSegments();
+            EnsureMonitorAverages();
+            m_Runtime.m_MonitorAverages.Clear();
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null
-                || !m_Runtime.EntityManager.HasBuffer<RailSegmentObservationElement>(city)
-                || m_Runtime.m_ObsRecorder == null)
+                || !m_Runtime.EntityManager.HasBuffer<MonitorAverageLineElement>(city)
+                || !m_Runtime.EntityManager.HasBuffer<MonitorAverageSegmentElement>(city))
             {
                 return;
             }
 
-            DynamicBuffer<RailSegmentObservationElement> buffer =
-                m_Runtime.EntityManager.GetBuffer<RailSegmentObservationElement>(city, true);
-            HashSet<RailSegmentKey> loadedKeys = new HashSet<RailSegmentKey>();
-            Dictionary<Entity, int> loadedCounts = new Dictionary<Entity, int>();
-            for (int i = 0; i < buffer.Length; i++)
+            DynamicBuffer<MonitorAverageLineElement> lineBuffer =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageLineElement>(city, true);
+            DynamicBuffer<MonitorAverageSegmentElement> segmentBuffer =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageSegmentElement>(city, true);
+            if (lineBuffer.Length > MonitorAverageStore.MaxLines
+                || segmentBuffer.Length > MaxMonitorAverageSegments)
             {
-                RailSegmentObservationElement element = buffer[i];
-                RailSegmentKey key = new RailSegmentKey(
-                    element.m_LineEntity,
-                    element.m_FromWaypointEntity,
-                    element.m_FromStopEntity,
-                    element.m_ToWaypointEntity,
-                    element.m_ToStopEntity);
-                int lineCount = loadedCounts.TryGetValue(key.Line, out int existingCount)
-                    ? existingCount
-                    : 0;
-                bool invalid = loadedKeys.Count >= MaxRailSegments
-                    || lineCount >= MaxRailSegmentsPerLine
-                    || !loadedKeys.Add(key)
-                    || element.m_SampleCount > 32
-                    || !ValidRailSegment(element.m_LineEntity, element.m_FromWaypointEntity, element.m_FromStopEntity,
-                    element.m_ToWaypointEntity, element.m_ToStopEntity, element.m_AverageFrames, element.m_SampleCount);
+                RecordLoadIssue("monitor-average-capacity", false, false);
+                return;
+            }
+
+            Dictionary<Entity, List<MonitorAverageSegmentElement>> segments =
+                new Dictionary<Entity, List<MonitorAverageSegmentElement>>();
+            HashSet<Entity> invalidLines = new HashSet<Entity>();
+            for (int i = 0; i < segmentBuffer.Length; i++)
+            {
+                MonitorAverageSegmentElement element = segmentBuffer[i];
+                bool invalid = element.m_Version != MonitorAverageVersion
+                    || element.m_Line == Entity.Null
+                    || element.m_Order < 0
+                    || element.m_TotalMinutes < 0
+                    || element.m_SampleCount < 0
+                    || (element.m_SampleCount == 0 && element.m_TotalMinutes != 0)
+                    || (element.m_SampleCount > 0 && element.m_TotalMinutes <= 0);
                 if (invalid)
                 {
-                    RecordLoadIssue("rail-segment-corrupt", false, false);
+                    invalidLines.Add(element.m_Line);
                     continue;
                 }
-                loadedCounts[key.Line] = lineCount + 1;
+                if (!segments.TryGetValue(element.m_Line, out List<MonitorAverageSegmentElement> values))
+                {
+                    values = new List<MonitorAverageSegmentElement>();
+                    segments[element.m_Line] = values;
+                }
+                values.Add(element);
+            }
 
-                m_Runtime.m_ObsRecorder.RestoreRailSegment(
-                    key,
-                    element.m_AverageFrames,
-                    element.m_SampleCount,
-                    element.m_LastObservedFrame);
+            HashSet<Entity> seenLines = new HashSet<Entity>();
+            for (int i = 0; i < lineBuffer.Length; i++)
+            {
+                MonitorAverageLineElement element = lineBuffer[i];
+                Entity line = element.m_Line;
+                bool layoutValid = line != Entity.Null
+                    && m_Runtime.EntityManager.Exists(line)
+                    && m_Runtime.m_LineView.TryStopLayout(line, out string currentStopSig, out int[] currentStops)
+                    && string.Equals(currentStopSig, element.m_StopSig.ToString(), StringComparison.Ordinal)
+                    && currentStops.Length == element.m_SegmentCount;
+                if (element.m_Version != MonitorAverageVersion
+                    || !seenLines.Add(line)
+                    || string.IsNullOrEmpty(element.m_StopSig.ToString())
+                    || element.m_SegmentCount < 2
+                    || element.m_SegmentCount > MonitorAverageStore.MaxSegmentsPerLine
+                    || !layoutValid
+                    || invalidLines.Contains(line)
+                    || !segments.TryGetValue(line, out List<MonitorAverageSegmentElement> values)
+                    || values.Count != element.m_SegmentCount)
+                {
+                    RecordLoadIssue("monitor-average-corrupt", false, false);
+                    continue;
+                }
+
+                values.Sort((left, right) => left.m_Order.CompareTo(right.m_Order));
+                MonitorAverageSegment[] restored = new MonitorAverageSegment[element.m_SegmentCount];
+                bool valid = true;
+                for (int order = 0; order < values.Count; order++)
+                {
+                    MonitorAverageSegmentElement segment = values[order];
+                    if (segment.m_Order != order)
+                    {
+                        valid = false;
+                        break;
+                    }
+                    restored[order] = new MonitorAverageSegment
+                    {
+                        TotalMinutes = segment.m_TotalMinutes,
+                        SampleCount = segment.m_SampleCount
+                    };
+                }
+                if (!valid || !m_Runtime.m_MonitorAverages.Restore(new MonitorAverageLine(
+                        line,
+                        element.m_StopSig.ToString(),
+                        element.m_Revision,
+                        restored,
+                        false)))
+                {
+                    RecordLoadIssue("monitor-average-corrupt", false, false);
+                }
             }
         }
 
@@ -986,12 +1049,12 @@ namespace RapidTransitMod.Dispatch.Observation
             DynamicBuffer<StationDwellObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<StationDwellObservationElement>(city);
             for (int i = 0; i < buffer.Length; i++)
             {
-                if (!string.Equals(buffer[i].m_StationAnchorId.ToString(), key, System.StringComparison.Ordinal))
+                if (!string.Equals(buffer[i].m_ObservationKey.ToString(), key, System.StringComparison.Ordinal))
                     continue;
 
                 buffer[i] = new StationDwellObservationElement
                 {
-                    m_StationAnchorId = key,
+                    m_ObservationKey = key,
                     m_AverageFrames = observation.AverageFrames,
                     m_SampleCount = observation.SampleCount,
                     m_LastObservedFrame = observation.LastObservedFrame
@@ -1001,7 +1064,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             buffer.Add(new StationDwellObservationElement
             {
-                m_StationAnchorId = key,
+                m_ObservationKey = key,
                 m_AverageFrames = observation.AverageFrames,
                 m_SampleCount = observation.SampleCount,
                 m_LastObservedFrame = observation.LastObservedFrame
@@ -1358,20 +1421,97 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
 
             m_Runtime.m_ObsPersist.ClearStationDwell();
-            DynamicBuffer<StationDwellObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<StationDwellObservationElement>(city, true);
-            int restoredCount = 0;
+            DynamicBuffer<StationDwellObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<StationDwellObservationElement>(city);
+            int anchorBufferCount = buffer.Length;
+            int removedInvalidCount = 0;
+            int removedDuplicateCount = 0;
+            int removedLegacyConflictCount = 0;
+            int removedLegacyMissingCount = 0;
+            Dictionary<string, StationDwellObservationElement> winners =
+                new Dictionary<string, StationDwellObservationElement>(StringComparer.Ordinal);
+            HashSet<string> migratedWinners = new HashSet<string>(StringComparer.Ordinal);
+            List<string> winnerKeys = new List<string>();
             for (int i = 0; i < buffer.Length; i++)
             {
                 StationDwellObservationElement entry = buffer[i];
-                string observationKey = entry.m_StationAnchorId.ToString();
+                string observationKey = entry.m_ObservationKey.ToString();
                 if (string.IsNullOrWhiteSpace(observationKey)
                     || !Capture.IsStationDwellKey(observationKey)
+                    || !math.isfinite(entry.m_AverageFrames)
                     || !(entry.m_AverageFrames > 0f)
                     || entry.m_SampleCount <= 0)
                 {
+                    removedInvalidCount++;
                     continue;
                 }
 
+                int separatorIndex = observationKey.IndexOf('|');
+                string lineId = observationKey.Substring(0, separatorIndex);
+                if (!LineKey.TryParse(lineId, out LineKey lineKey))
+                {
+                    removedInvalidCount++;
+                    continue;
+                }
+
+                bool migrated = false;
+                if (!LineKey.IsStableGuidKey(lineKey))
+                {
+                    if (!LineKey.IsLegacyNumericKey(lineKey))
+                    {
+                        removedInvalidCount++;
+                        continue;
+                    }
+
+                    LineAnchorCatalog catalog = m_Runtime.m_LineAnchorCatalog;
+                    if (catalog == null || catalog.IsLegacyConflict(lineKey))
+                    {
+                        removedLegacyConflictCount++;
+                        continue;
+                    }
+                    if (!catalog.TryLegacy(lineKey, out LineKey stableKey))
+                    {
+                        removedLegacyMissingCount++;
+                        continue;
+                    }
+
+                    observationKey = stableKey.ToString() + observationKey.Substring(separatorIndex);
+                    entry.m_ObservationKey = observationKey;
+                    migrated = true;
+                }
+
+                if (winners.TryGetValue(observationKey, out StationDwellObservationElement existing))
+                {
+                    removedDuplicateCount++;
+                    bool existingMigrated = migratedWinners.Contains(observationKey);
+                    bool replace = (existingMigrated && !migrated)
+                        || (existingMigrated == migrated
+                            && (entry.m_LastObservedFrame > existing.m_LastObservedFrame
+                                || (entry.m_LastObservedFrame == existing.m_LastObservedFrame
+                                    && entry.m_SampleCount > existing.m_SampleCount)));
+                    if (replace)
+                    {
+                        winners[observationKey] = entry;
+                        if (migrated)
+                            migratedWinners.Add(observationKey);
+                        else
+                            migratedWinners.Remove(observationKey);
+                    }
+                    continue;
+                }
+
+                winners.Add(observationKey, entry);
+                if (migrated)
+                    migratedWinners.Add(observationKey);
+                winnerKeys.Add(observationKey);
+            }
+
+            buffer.Clear();
+            buffer.EnsureCapacity(winnerKeys.Count);
+            for (int i = 0; i < winnerKeys.Count; i++)
+            {
+                string observationKey = winnerKeys[i];
+                StationDwellObservationElement entry = winners[observationKey];
+                buffer.Add(entry);
                 m_Runtime.m_ObsPersist.PutStationDwell(
                     observationKey,
                     new StationDwellObservation
@@ -1380,16 +1520,21 @@ namespace RapidTransitMod.Dispatch.Observation
                         SampleCount = math.max(0, entry.m_SampleCount),
                         LastObservedFrame = entry.m_LastObservedFrame
                     });
-                restoredCount++;
             }
 
+            int restoredCount = winnerKeys.Count;
             m_Runtime.m_StationDwellObservationCacheLoaded = true;
-            m_Runtime.m_LastStationStopDwellAnchorBufferCount = buffer.Length;
+            m_Runtime.m_LastStationStopDwellAnchorBufferCount = anchorBufferCount;
             m_Runtime.m_LastStationStopDwellAnchorRestoredCount = restoredCount;
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[StopDwellAnchorRestore] anchorBuffer=" + buffer.Length
+                m_Runtime.log.Info("[StopDwellAnchorRestore] anchorBuffer=" + anchorBufferCount
                     + " anchorRestored=" + restoredCount
+                    + " legacyMigrated=" + migratedWinners.Count
+                    + " removedInvalid=" + removedInvalidCount
+                    + " removedDuplicate=" + removedDuplicateCount
+                    + " removedLegacyConflict=" + removedLegacyConflictCount
+                    + " removedLegacyMissing=" + removedLegacyMissingCount
                     + " legacyBuffer=" + m_Runtime.m_LastStationStopDwellLegacyBufferCount
                     + " legacyRestored=" + m_Runtime.m_LastStationStopDwellLegacyRestoredCount
                     + " legacyPreserved=1");
@@ -2106,32 +2251,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 return 0;
 
             return (int)math.round(value * 10f);
-        }
-
-        private bool ValidRailSegment(
-            Entity line,
-            Entity fromWaypoint,
-            Entity fromStop,
-            Entity toWaypoint,
-            Entity toStop,
-            float averageFrames,
-            int sampleCount)
-        {
-            return line != Entity.Null
-                && fromWaypoint != Entity.Null
-                && fromStop != Entity.Null
-                && toWaypoint != Entity.Null
-                && toStop != Entity.Null
-                && m_Runtime.EntityManager.Exists(line)
-                && m_Runtime.EntityManager.Exists(fromWaypoint)
-                && m_Runtime.EntityManager.Exists(fromStop)
-                && m_Runtime.EntityManager.Exists(toWaypoint)
-                && m_Runtime.EntityManager.Exists(toStop)
-                && TransportModeProfile.GetProfile(
-                    TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle == LifecycleKind.Rail
-                && math.isfinite(averageFrames)
-                && averageFrames > 0f
-                && sampleCount > 0;
         }
 
         private bool CanRestoreLegacy(Entity line, int waypointIndex)

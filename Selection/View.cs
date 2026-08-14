@@ -151,6 +151,52 @@ namespace RapidTransitMod
             };
         }
 
+        public SelectPanel.Snapshot BuildVehiclePanelSnapshot(VehicleSelectData data)
+        {
+            if (!data.IsManagedVehicle)
+            {
+                return new SelectPanel.Snapshot
+                {
+                    Mode = "vehicle",
+                    EntityId = data.Vehicle.Index.ToString(),
+                    PrimaryLabelKey = "state",
+                    PrimaryValue = "vanillaControl",
+                    PrimaryValueKind = "key",
+                    IsManagedVehicle = false
+                };
+            }
+
+            bool showCurrentStop = data.HasStopSession
+                && !string.IsNullOrWhiteSpace(data.CurrentStationName);
+            bool showSchedule = data.CurrentMinute >= 0 || data.TargetMinute >= 0;
+            return new SelectPanel.Snapshot
+            {
+                Mode = "vehicle",
+                EntityId = data.Vehicle.Index.ToString(),
+                PrimaryLabelKey = "state",
+                PrimaryValue = data.StateText,
+                PrimaryValueKind = "state",
+                IsManagedVehicle = true,
+                ShowCurrentStop = showCurrentStop,
+                CurrentStationName = showCurrentStop ? data.CurrentStationName : string.Empty,
+                StopDwellValue = showCurrentStop ? data.StopDwellValue : string.Empty,
+                NextPassStationName = data.NextPassStationName ?? string.Empty,
+                NextStopStationName = data.NextStopStationName ?? string.Empty,
+                NextPlannedArrivalMinute = data.NextPlannedArrivalMinute,
+                PlannedArrivalMinute = showCurrentStop ? data.PlannedArrivalMinute : -1,
+                ActualArrivalMinute = showCurrentStop ? data.ActualArrivalMinute : -1,
+                PlannedDepartureMinute = showCurrentStop ? data.PlannedDepartureMinute : -1,
+                ShowSchedule = showSchedule,
+                CurrentSlotText = data.CurrentMinute >= 0 ? data.CurrentText : string.Empty,
+                TargetSlotText = data.TargetMinute >= 0 ? data.TargetText : string.Empty,
+                ShowWaitingForFastTrain = data.WaitingForFastTrain,
+                WaitingForFastTrainVehicleId = data.WaitingForFastTrainVehicleId,
+                ShowRetireAction = true,
+                ShowForceDepartAction = true,
+                ShowReevaluateAction = BuildFlavor.DebugTools
+            };
+        }
+
         public void FillVehicleCard(
             VehicleSelectData data,
             out string summaryLabel,

@@ -108,6 +108,26 @@ namespace RapidTransitMod.Dispatch.Workbench
             return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.MonitorDetail(requestJson) ?? string.Empty;
         }
 
+        internal static string MonitorDetails(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.MonitorDetails(requestJson) ?? string.Empty;
+        }
+
+        internal static string MonitorAverageState(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.LoadMonitorAverageState(requestJson) ?? string.Empty;
+        }
+
+        internal static string QueryMonitorAverage(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.QueryMonitorAverage(requestJson) ?? string.Empty;
+        }
+
+        internal static string SetMonitorSubscription(string requestJson)
+        {
+            return ModRuntimeHostSystem.Instance?.m_WorkbenchBridge?.SetMonitorSubscription(requestJson) ?? string.Empty;
+        }
+
         internal static string Legacy(string requestJson)
         {
             string resultJson = BuildLegacy();

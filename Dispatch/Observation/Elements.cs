@@ -138,14 +138,14 @@ namespace RapidTransitMod
     [InternalBufferCapacity(1)]
     public struct StationDwellObservationElement : IBufferElementData, ISerializable
     {
-        public FixedString64Bytes m_StationAnchorId;
+        public FixedString128Bytes m_ObservationKey;
         public float m_AverageFrames;
         public int m_SampleCount;
         public uint m_LastObservedFrame;
 
         public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
         {
-            writer.Write(m_StationAnchorId.ToString());
+            writer.Write(m_ObservationKey.ToString());
             writer.Write(m_AverageFrames);
             writer.Write(m_SampleCount);
             writer.Write(m_LastObservedFrame);
@@ -153,8 +153,8 @@ namespace RapidTransitMod
 
         public void Deserialize<TReader>(TReader reader) where TReader : IReader
         {
-            reader.Read(out string stationAnchorId);
-            m_StationAnchorId = stationAnchorId ?? string.Empty;
+            reader.Read(out string observationKey);
+            m_ObservationKey = observationKey ?? string.Empty;
             reader.Read(out m_AverageFrames);
             reader.Read(out m_SampleCount);
             reader.Read(out m_LastObservedFrame);
@@ -254,6 +254,63 @@ namespace RapidTransitMod
             reader.Read(out m_AverageFrames);
             reader.Read(out m_SampleCount);
             reader.Read(out m_LastObservedFrame);
+        }
+    }
+
+    [InternalBufferCapacity(0)]
+    public struct MonitorAverageLineElement : IBufferElementData, ISerializable
+    {
+        public int m_Version;
+        public Entity m_Line;
+        public FixedString64Bytes m_StopSig;
+        public ulong m_Revision;
+        public int m_SegmentCount;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_Version);
+            writer.Write(m_Line);
+            writer.Write(m_StopSig.ToString());
+            writer.Write(m_Revision);
+            writer.Write(m_SegmentCount);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_Version);
+            reader.Read(out m_Line);
+            reader.Read(out string stopSig);
+            m_StopSig = stopSig ?? string.Empty;
+            reader.Read(out m_Revision);
+            reader.Read(out m_SegmentCount);
+        }
+    }
+
+    [InternalBufferCapacity(0)]
+    public struct MonitorAverageSegmentElement : IBufferElementData, ISerializable
+    {
+        public int m_Version;
+        public Entity m_Line;
+        public int m_Order;
+        public int m_TotalMinutes;
+        public int m_SampleCount;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_Version);
+            writer.Write(m_Line);
+            writer.Write(m_Order);
+            writer.Write(m_TotalMinutes);
+            writer.Write(m_SampleCount);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_Version);
+            reader.Read(out m_Line);
+            reader.Read(out m_Order);
+            reader.Read(out m_TotalMinutes);
+            reader.Read(out m_SampleCount);
         }
     }
 
