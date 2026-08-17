@@ -7,6 +7,8 @@ namespace RapidTransitMod.Dispatch.Scheduling
 {
     internal sealed class SchedulePolicy
     {
+        private const int RoadSpawnLeadMaxMinutes = 60;
+
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, bool> m_Managed;
         private readonly Func<Entity, int[]> m_Times;
@@ -97,23 +99,31 @@ namespace RapidTransitMod.Dispatch.Scheduling
 
         public float SpawnLead(Entity line, float lineDurationFrames)
         {
-            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
-                TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle;
+            TransitMode mode = TransportModeResolver.Resolve(m_Runtime.EntityManager, line);
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(mode).Lifecycle;
+            float maxFrames = MaxSpawnLeadFrames(lifecycle);
             if (lifecycle == LifecycleKind.Road)
             {
                 float roadCachedFrames = m_ReadDispatchCache(line);
-                return roadCachedFrames > 0f ? ClampSpawnLeadFrames(roadCachedFrames) : 0f;
+                return roadCachedFrames > 0f ? ClampSpawnLeadFrames(roadCachedFrames, maxFrames) : 0f;
             }
             if (m_Runtime.m_SpawnLeadTheory != null && m_Runtime.m_SpawnLeadTheory.TryRead(line, out float theoryFrames))
-                return ClampSpawnLeadFrames(theoryFrames);
+                return ClampSpawnLeadFrames(theoryFrames, maxFrames);
             float cachedFrames = m_ReadDispatchCache(line);
             if (cachedFrames > 0f)
-                return ClampSpawnLeadFrames(cachedFrames);
+                return ClampSpawnLeadFrames(cachedFrames, maxFrames);
 
             float estimateFrames = lineDurationFrames > 0f
                 ? lineDurationFrames * 0.2f
                 : ModRuntimeHostSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES;
-            return ClampSpawnLeadFrames(estimateFrames);
+            return ClampSpawnLeadFrames(estimateFrames, maxFrames);
+        }
+
+        public float MaxSpawnLeadFrames(LifecycleKind lifecycle)
+        {
+            return lifecycle == LifecycleKind.Road
+                ? m_Runtime.m_SimClock.Snapshot.ToFramesCeil(RoadSpawnLeadMaxMinutes)
+                : ModRuntimeHostSystem.DISPATCH_ESTIMATE_MAX_FRAMES;
         }
 
         public string SpawnLeadSource(Entity line)
@@ -134,12 +144,12 @@ namespace RapidTransitMod.Dispatch.Scheduling
                 : ModRuntimeHostSystem.SPAWN_TRIGGER_BUFFER_LONG_FRAMES;
         }
 
-        private static float ClampSpawnLeadFrames(float spawnLeadFrames)
+        private static float ClampSpawnLeadFrames(float spawnLeadFrames, float maxFrames)
         {
             return math.clamp(
                 spawnLeadFrames,
                 ModRuntimeHostSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
-                ModRuntimeHostSystem.DISPATCH_ESTIMATE_MAX_FRAMES);
+                maxFrames);
         }
     }
 }

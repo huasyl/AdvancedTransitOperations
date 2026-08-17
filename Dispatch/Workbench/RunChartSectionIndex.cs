@@ -14,6 +14,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private const int SourceItemsPerTick = 4;
         private const int FactItemsPerTick = 128;
         private const int EdgeItemsPerTick = 128;
+        private const int NetworkItemsPerTick = 128;
         private const int SectionItemsPerTick = 16;
         private const int CoverageItemsPerTick = 32;
         private const int PublishItemsPerTick = 32;
@@ -42,6 +43,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             new Dictionary<string, StationItem>(StringComparer.Ordinal);
         private readonly Dictionary<string, StationEdge> m_BuildEdges =
             new Dictionary<string, StationEdge>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> m_BuildNetworkParents =
+            new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, List<StationEdge>> m_BuildOutgoing =
             new Dictionary<string, List<StationEdge>>(StringComparer.Ordinal);
         private readonly SortedSet<string> m_BuildStartStations =
@@ -70,6 +73,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private int m_BuildAttachmentCount;
         private int m_BuildCoverageCount;
         private IEnumerator<string> m_BuildStartReader;
+        private IEnumerator<KeyValuePair<string, StationItem>> m_BuildNetworkStations;
         private SectionSeed m_BuildActiveSeed;
         private IEnumerator<Section> m_BuildCoverageReader;
         private CoverageWork m_BuildCoverageWork;
@@ -88,6 +92,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Sources,
             Facts,
             Edges,
+            Networks,
             Sections,
             Coverage,
             Publish
@@ -193,6 +198,15 @@ namespace RapidTransitMod.Dispatch.Workbench
                     return;
                 case BuildPhase.Edges:
                     if (!BuildEdgesWork())
+                    {
+                        if (m_BuildOverflow)
+                            StopOverflow();
+                        return;
+                    }
+                    BeginNetworkBuild();
+                    return;
+                case BuildPhase.Networks:
+                    if (!BuildNetworksWork())
                     {
                         if (m_BuildOverflow)
                             StopOverflow();
@@ -361,13 +375,20 @@ namespace RapidTransitMod.Dispatch.Workbench
                 TraversalEvent item = snapshot.Events[i];
                 if (item.Kind != TraversalEventKind.Stop
                     && item.Kind != TraversalEventKind.Pass
+                    && item.Kind != TraversalEventKind.OutsideEndpointBoundary
                     && item.Kind != TraversalEventKind.BreakBoundary)
                 {
                     continue;
                 }
                 bool boundary = item.Kind == TraversalEventKind.BreakBoundary;
-                string stationId = boundary ? string.Empty : item.StationId ?? string.Empty;
+                bool outsideEndpoint = item.Kind == TraversalEventKind.OutsideEndpointBoundary;
+                string stationId = boundary
+                    ? string.Empty
+                    : outsideEndpoint && item.Building != Entity.Null
+                        ? "endpoint:" + item.Building.Index + ":" + item.Building.Version
+                        : item.StationId ?? string.Empty;
                 if (!boundary
+                    && !outsideEndpoint
                     && string.IsNullOrEmpty(stationId)
                     && item.Building != Entity.Null)
                 {
@@ -376,31 +397,26 @@ namespace RapidTransitMod.Dispatch.Workbench
                 source.Events.Add(new Fact
                 {
                     StationId = stationId,
+                    Station = item.Building,
                     Name = boundary || item.Building == Entity.Null
                         ? string.Empty
                         : m_StationName(item.Building) ?? string.Empty,
-                    IsStop = item.Kind == TraversalEventKind.Stop,
+                    IsStop = item.Kind == TraversalEventKind.Stop
+                        || item.Kind == TraversalEventKind.OutsideEndpointBoundary
+                        || item.WaypointIndex >= 0,
                     EventOrder = item.EventIndex,
                     WaypointIndex = item.WaypointIndex,
                     StartAtomIndex = item.StartAtomIndex,
                     Broken = boundary || string.IsNullOrEmpty(stationId)
                 });
             }
-            source.Events.Sort((left, right) => left.EventOrder.CompareTo(right.EventOrder));
-            for (int index = 0; index + 1 < source.Events.Count; index++)
+            source.Events.Sort((left, right) =>
             {
-                Fact from = source.Events[index];
-                Fact to = source.Events[index + 1];
-                if (!from.Broken
-                    && !to.Broken
-                    && string.Equals(from.StationId, to.StationId, StringComparison.Ordinal))
-                {
-                    source.HasSameStationAdjacent = true;
-                    source.SameStationDetail = source.LineId + " fromOrder="
-                        + from.EventOrder + " toOrder=" + to.EventOrder;
-                    break;
-                }
-            }
+                int result = left.StartAtomIndex.CompareTo(right.StartAtomIndex);
+                return result != 0
+                    ? result
+                    : left.EventOrder.CompareTo(right.EventOrder);
+            });
             HashSet<int> phaseBreaks = FindPhaseBreaks(source);
             AddRegionBreaks(phaseBreaks, snapshot.RunChartTurnbackRegions, source);
             bool canWrap = source.ChainComplete
@@ -535,14 +551,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                     && source != null
                     && source.Mode == m_BuildMode)
                 {
-                    if (source.HasSameStationAdjacent)
-                    {
-                        SetBuildOverflow(
-                            OverflowReason.SameStationAdjacent,
-                            source.Events.FirstOrDefault(item => !item.Broken)?.StationId,
-                            source.SameStationDetail);
-                        return false;
-                    }
                     m_BuildSources.Add(source);
                 }
             }
@@ -634,6 +642,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     && (string.IsNullOrEmpty(existing.Name)
                         || StringComparer.Ordinal.Compare(fact.Name, existing.Name) < 0))
                 {
+                    existing.Station = fact.Station;
                     existing.Name = fact.Name;
                 }
                 return;
@@ -646,9 +655,11 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_BuildStations[fact.StationId] = new StationItem
             {
                 StationId = fact.StationId,
+                Station = fact.Station,
                 Name = fact.Name ?? string.Empty,
                 PassOnly = !fact.IsStop
             };
+            m_BuildNetworkParents[fact.StationId] = fact.StationId;
             m_BuildStartStations.Add(fact.StationId);
         }
 
@@ -663,6 +674,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return;
             if (string.Equals(from.StationId, to.StationId, StringComparison.Ordinal))
             {
+                if (IsTerminalReturn(phase, from, to, closing))
+                    return;
                 SetBuildOverflow(
                     OverflowReason.SameStationAdjacent,
                     from.StationId,
@@ -670,6 +683,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                         + from.EventOrder + " toOrder=" + to.EventOrder);
                 return;
             }
+            MergeNetworks(from.StationId, to.StationId);
             string key = StationPairKey(from.StationId, to.StationId);
             if (!m_BuildEdges.TryGetValue(key, out StationEdge edge))
             {
@@ -708,6 +722,88 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_BuildAttachmentCount++;
             if (m_BuildAttachmentCount > MaxAttachments)
                 SetBuildOverflow(OverflowReason.AttachmentLimit, to.StationId, from.StationId + ">" + to.StationId);
+        }
+
+        private static bool IsTerminalReturn(
+            LinePhase phase,
+            Fact from,
+            Fact to,
+            bool closing)
+        {
+            return !closing
+                && phase != null
+                && !phase.CanWrap
+                && phase.Events.Count > 0
+                && ReferenceEquals(phase.Events[phase.Events.Count - 1], to)
+                && from.WaypointIndex >= 0
+                && to.WaypointIndex == 0
+                && to.EventOrder > from.EventOrder
+                && to.StartAtomIndex > from.StartAtomIndex;
+        }
+
+        private void MergeNetworks(string leftStationId, string rightStationId)
+        {
+            string leftRoot = NetworkRoot(leftStationId);
+            string rightRoot = NetworkRoot(rightStationId);
+            if (string.IsNullOrEmpty(leftRoot)
+                || string.IsNullOrEmpty(rightRoot)
+                || string.Equals(leftRoot, rightRoot, StringComparison.Ordinal))
+            {
+                return;
+            }
+            if (StringComparer.Ordinal.Compare(leftRoot, rightRoot) < 0)
+                m_BuildNetworkParents[rightRoot] = leftRoot;
+            else
+                m_BuildNetworkParents[leftRoot] = rightRoot;
+        }
+
+        private string NetworkRoot(string stationId)
+        {
+            if (string.IsNullOrEmpty(stationId)
+                || !m_BuildNetworkParents.TryGetValue(stationId, out string parent))
+            {
+                return string.Empty;
+            }
+            string root = stationId;
+            while (!string.Equals(root, parent, StringComparison.Ordinal))
+            {
+                root = parent;
+                if (!m_BuildNetworkParents.TryGetValue(root, out parent))
+                    return string.Empty;
+            }
+            string current = stationId;
+            while (m_BuildNetworkParents.TryGetValue(current, out string currentParent)
+                && !string.Equals(current, root, StringComparison.Ordinal))
+            {
+                m_BuildNetworkParents[current] = root;
+                current = currentParent;
+            }
+            return root;
+        }
+
+        private void BeginNetworkBuild()
+        {
+            m_BuildNetworkStations = m_BuildStations.GetEnumerator();
+            m_BuildPhase = BuildPhase.Networks;
+        }
+
+        private bool BuildNetworksWork()
+        {
+            int work = 0;
+            while (work++ < NetworkItemsPerTick)
+            {
+                if (!m_BuildNetworkStations.MoveNext())
+                {
+                    m_BuildNetworkStations = null;
+                    return true;
+                }
+                KeyValuePair<string, StationItem> entry = m_BuildNetworkStations.Current;
+                string networkId = NetworkRoot(entry.Key);
+                entry.Value.NetworkId = string.IsNullOrEmpty(networkId)
+                    ? entry.Key
+                    : networkId;
+            }
+            return false;
         }
 
         private void BeginSectionBuild()
@@ -1163,16 +1259,28 @@ namespace RapidTransitMod.Dispatch.Workbench
                 error = string.Empty,
                 status = status,
                 publishedIndexVersion = state.PublishedVersion,
-                stations = stations.OrderBy(item => item.Name, StringComparer.Ordinal)
-                    .ThenBy(item => item.StationId, StringComparer.Ordinal)
-                    .Select(item => new DispatchWorkbenchRunChartStationDirectoryItemDto
+                stations = stations.Select(item => new DispatchWorkbenchRunChartStationDirectoryItemDto
                     {
                         stationId = item.StationId,
-                        name = item.Name,
+                        networkId = item.NetworkId,
+                        name = CurrentStationName(item),
                         passOnly = item.PassOnly
                     })
+                    .OrderBy(item => item.name, StringComparer.Ordinal)
+                    .ThenBy(item => item.stationId, StringComparer.Ordinal)
                     .ToArray()
             };
+        }
+
+        private string CurrentStationName(StationItem item)
+        {
+            if (item != null && item.Station != Entity.Null && m_Entities.Exists(item.Station))
+            {
+                string name = m_StationName(item.Station) ?? string.Empty;
+                if (!string.IsNullOrEmpty(name))
+                    return name;
+            }
+            return item?.Name ?? string.Empty;
         }
 
         internal void Clear()
@@ -1243,6 +1351,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_BuildSources.Clear();
             m_BuildStations.Clear();
             m_BuildEdges.Clear();
+            m_BuildNetworkParents.Clear();
             m_BuildOutgoing.Clear();
             m_BuildStartStations.Clear();
             m_BuildSectionsQueue.Clear();
@@ -1255,6 +1364,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_BuildAttachmentCount = 0;
             m_BuildCoverageCount = 0;
             m_BuildStartReader = null;
+            m_BuildNetworkStations = null;
             m_BuildActiveSeed = null;
             m_BuildCoverageReader = null;
             m_BuildCoverageWork = null;
@@ -1487,6 +1597,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             return new StationItem
             {
                 StationId = item.StationId,
+                NetworkId = item.NetworkId,
+                Station = item.Station,
                 Name = item.Name,
                 PassOnly = item.PassOnly
             };
@@ -1598,8 +1710,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             internal ulong TraversalSignature;
             internal bool ChainComplete;
             internal bool HasPhysicalTurnback;
-            internal bool HasSameStationAdjacent;
-            internal string SameStationDetail;
             internal readonly List<Fact> Events = new List<Fact>();
             internal readonly List<LinePhase> Phases = new List<LinePhase>();
         }
@@ -1614,6 +1724,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private sealed class Fact
         {
             internal string StationId;
+            internal Entity Station;
             internal string Name;
             internal bool IsStop;
             internal int EventOrder;
@@ -1722,6 +1833,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private sealed class StationItem
         {
             internal string StationId;
+            internal string NetworkId;
+            internal Entity Station;
             internal string Name;
             internal bool PassOnly;
         }

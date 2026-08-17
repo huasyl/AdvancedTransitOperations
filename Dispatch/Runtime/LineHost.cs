@@ -39,7 +39,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public float DispatchFallbackFramesPerMeter;
         public float DispatchEstimateMinFrames;
         public float DispatchEstimateDefaultFrames;
-        public float DispatchEstimateMaxFrames;
+        public Func<LifecycleKind, float> DispatchEstimateMaxFrames = null!;
         public Func<Entity, float> ReadLapFrames = null!;
         public Func<Entity, float> ReadDispatchFrames = null!;
         public Func<Entity, int> DwellMinutes = null!;

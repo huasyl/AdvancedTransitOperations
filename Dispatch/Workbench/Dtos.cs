@@ -798,6 +798,8 @@ namespace RapidTransitMod
         [DataMember]
         public string stationId;
         [DataMember]
+        public string networkId;
+        [DataMember]
         public string name;
         [DataMember]
         public bool passOnly;

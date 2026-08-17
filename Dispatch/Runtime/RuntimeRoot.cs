@@ -305,7 +305,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             var busSegCapture = new BusSegCapture(
                 runtime,
                 busSegStore,
-                runtime.m_ObsBuffers.SyncBusSeg);
+                line =>
+                {
+                    runtime.m_ObsBuffers.SyncBusSeg(line);
+                    runtime.m_WorkbenchBridge.OnBusSegChanged(line);
+                });
             runtime.m_Observation = new ObservationPort(
                 runtime,
                 runtime.m_ObsCapture,

@@ -25,6 +25,19 @@ function formatDayHint(value, t) {
   return dayOffset > 0 ? t("timetable.time.dayHint", { dayOffset }) : "";
 }
 
+function renderArrivalTime(value, t) {
+  if (!Number.isFinite(value)) {
+    return "--";
+  }
+  const dayOffset = serviceDayOffset(value);
+  return (
+    <span className="rtw-timetable-service-time">
+      <span>{minutesToTime(value)}</span>
+      {dayOffset > 0 ? <span className="rtw-timetable-day-mark">{t("timetable.time.dayHint", { dayOffset })}</span> : null}
+    </span>
+  );
+}
+
 function diagnosticNow() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
@@ -71,41 +84,100 @@ function monitorCoverageFilter(coverages) {
 function actualPoints(detail, coveragePoints) {
   const points = [];
   const stops = detail?.stops || [];
-  let coverageIndex = -1;
+  if (stops.length === 0) {
+    return points;
+  }
+  const origin = stops[0];
+  let terminalArrival = Number.isFinite(origin?.actualArrivalMinute)
+    ? origin.actualArrivalMinute
+    : null;
+  let terminalPointAdded = false;
+  let completePrefix = true;
   for (let index = 0; index < stops.length; index++) {
     const stop = stops[index];
-    const origin = index === 0;
-    if ((origin && !Number.isFinite(stop?.actualDepartureMinute))
-      || (!origin && !Number.isFinite(stop?.actualArrivalMinute))) {
+    const firstOrigin = index === 0;
+    const terminal = index > 0
+      && stop?.stopKey === origin?.stopKey
+      && stop?.waypointIndex === origin?.waypointIndex;
+    if ((firstOrigin && !Number.isFinite(stop?.actualDepartureMinute))
+      || (!firstOrigin && !Number.isFinite(stop?.actualArrivalMinute))) {
+      completePrefix = false;
       break;
     }
-    let nextIndex = -1;
-    if (coverageIndex < 0) {
-      const first = coveragePoints[0];
-      if (first?.stationId === stop.stopKey && first.waypointIndex === stop.waypointIndex) {
-        nextIndex = 0;
-      }
-    } else {
-      nextIndex = coveragePoints.findIndex((point, pointIndex) => pointIndex > coverageIndex
-        && point?.stationId === stop.stopKey
-        && point.waypointIndex === stop.waypointIndex);
+    if (terminal && Number.isFinite(stop?.actualArrivalMinute)) {
+      terminalArrival = stop.actualArrivalMinute;
     }
-    const coverageStop = nextIndex >= 0 ? coveragePoints[nextIndex] : null;
+    const coverageStop = coveragePoints.find((point) => point?.stationId === stop.stopKey
+      && point.waypointIndex === stop.waypointIndex);
     if (coverageStop?.stationId === stop.stopKey) {
-      coverageIndex = nextIndex;
       points.push({
         stationId: stop.stopKey,
-        pointKey: stop.order,
+        pointKey: Number.isFinite(stop.order) ? stop.order : index,
         distance: coverageStop.sectionIndex,
-        arrivalTime: origin ? null : stop.actualArrivalMinute,
-        departureTime: stop.actualDepartureMinute
+        arrivalTime: firstOrigin ? null : stop.actualArrivalMinute,
+        departureTime: terminal ? null : stop.actualDepartureMinute
       });
+      terminalPointAdded = terminalPointAdded || terminal;
     }
-    if (index + 1 < stops.length && !Number.isFinite(stop?.actualDepartureMinute)) {
+    if (index + 1 < stops.length
+      && !terminal
+      && !Number.isFinite(stop?.actualDepartureMinute)) {
+      completePrefix = false;
       break;
     }
   }
+  if (completePrefix && !terminalPointAdded && Number.isFinite(terminalArrival)) {
+    const coverageStop = coveragePoints.find((point) => point?.stationId === origin?.stopKey
+      && point.waypointIndex === origin?.waypointIndex);
+    if (coverageStop?.stationId === origin?.stopKey) {
+      points.push({
+        stationId: origin.stopKey,
+        pointKey: stops.length,
+        distance: coverageStop.sectionIndex,
+        arrivalTime: terminalArrival,
+        departureTime: null
+      });
+    }
+  }
   return points;
+}
+
+function projectTimedPoints(stops, coveragePoints) {
+  return (stops || []).map((stop) => {
+    const coverageStop = coveragePoints.find((point) => point?.stationId === stop.stationId
+      && point.waypointIndex === stop.waypointIndex);
+    if (!coverageStop) {
+      return null;
+    }
+    return {
+      stationId: stop.stationId,
+      occurrence: stop.occurrence,
+      distance: coverageStop.sectionIndex,
+      arrivalTime: stop.arrivalMinute,
+      departureTime: stop.departureMinute
+    };
+  }).filter(Boolean);
+}
+
+function splitRunChartPoints(points) {
+  const segments = [];
+  let current = [];
+  let previousDistance = null;
+  (points || []).forEach((point) => {
+    if (current.length > 0
+      && Number.isFinite(previousDistance)
+      && Number.isFinite(point?.distance)
+      && point.distance < previousDistance) {
+      segments.push(current);
+      current = [];
+    }
+    current.push(point);
+    previousDistance = point?.distance;
+  });
+  if (current.length > 0) {
+    segments.push(current);
+  }
+  return segments;
 }
 
 function trainOverlapsRange(train, startMinute, endMinute) {
@@ -135,29 +207,59 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
   const [editLineId, setEditLineId] = useState("");
   const [editingTrainId, setEditingTrainId] = useState("");
   const [batchInterval, setBatchInterval] = useState("15");
+  const [batchRequest, setBatchRequest] = useState(null);
   const [monitorLineId, setMonitorLineId] = useState("");
   const [dateMode, setDateMode] = useState("today");
   const [chartCollapsed, setChartCollapsed] = useState(false);
+  const [intervalCollapsed, setIntervalCollapsed] = useState(false);
+  const [linesCollapsed, setLinesCollapsed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chartStart, setChartStart] = useState("");
   const [chartEnd, setChartEnd] = useState("");
   const [arrivalSource, setArrivalSource] = useState("theory");
   const [timeDrafts, setTimeDrafts] = useState({});
+  const clearLineTimersRef = useRef([]);
+  const [lineClearStage, setLineClearStage] = useState("idle");
+  const [lineClearSeconds, setLineClearSeconds] = useState(0);
   const lines = controller.lines;
+  const monitorLines = controller.lineDirectory;
   const stations = controller.directory;
+  const endStations = controller.endStations;
   const startStationId = controller.startStationId;
   const endStationId = controller.endStationId;
   const editLineExists = Boolean(editLineId && lines.some((line) => line.id === editLineId));
-  const monitorLineExists = Boolean(monitorLineId && lines.some((line) => line.id === monitorLineId));
+  const monitorLineExists = Boolean(monitorLineId && monitorLines.some((line) => line.id === monitorLineId));
   const editingErrorPrefix = editingTrainId ? inputKey(editLineId, editingTrainId, "") : "";
   const hasEditingErrors = Boolean(editingErrorPrefix
     && Object.keys(controller.inputErrors).some((key) => key.startsWith(editingErrorPrefix)));
+  const footerButtonState = editingTrainId
+    ? "editing"
+    : ["saving", "applied", "error"].includes(controller.saveState)
+      ? controller.saveState
+      : controller.canSave ? "ready" : "disabled";
+  const footerIconColor = footerButtonState === "saving"
+    ? "#d3f6fb"
+    : footerButtonState === "applied"
+      ? "#8fd3a0"
+      : footerButtonState === "error"
+        ? "#dfaaaa"
+        : footerButtonState === "editing" || footerButtonState === "disabled"
+          ? "#71808a"
+          : "#0a1014";
 
   useEffect(() => {
+    clearLineTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    clearLineTimersRef.current = [];
+    setLineClearStage("idle");
+    setLineClearSeconds(0);
     setEditingTrainId("");
     setTimeDrafts({});
     controller.clearInputErrors();
   }, [activeTransportMode, controller.clearInputErrors, editLineId]);
+
+  useEffect(() => () => {
+    clearLineTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
 
   useEffect(() => {
     setLineStates((current) => {
@@ -182,15 +284,24 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
 
   useEffect(() => {
     if (!isActive || !editLineExists) {
-      return;
+      return undefined;
     }
-    controller.ensureTimetableLineLayout(editLineId);
-    if (activeTransportMode === "bus") {
-      controller.ensureBusHistoricalRuntime(editLineId);
-      return;
-    }
-    controller.loadMonitorAverageState(editLineId).catch(() => {});
-  }, [activeTransportMode, controller.ensureBusHistoricalRuntime, controller.ensureTimetableLineLayout, controller.loadMonitorAverageState, editLineExists, editLineId, isActive]);
+    let cancelled = false;
+    controller.ensureTimetableLineLayout(editLineId).then((layout) => {
+      if (cancelled || !layout) {
+        return;
+      }
+      if (activeTransportMode === "bus") {
+        controller.ensureBusHistoricalRuntime(editLineId);
+      } else {
+        controller.requestRuntime(editLineId, "theory").catch(() => {});
+        controller.loadMonitorAverageState(editLineId).catch(() => {});
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTransportMode, controller.ensureBusHistoricalRuntime, controller.ensureTimetableLineLayout, controller.layoutRevision, controller.loadMonitorAverageState, controller.requestRuntime, editLineExists, editLineId, isActive]);
 
   useEffect(() => {
     if (!isActive || view !== "monitor" || !monitorLineExists) {
@@ -282,7 +393,16 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
   }
 
   const editLine = availableLines.find((line) => line.id === editLineId) || { id: "", name: "--", stations: [], trains: [] };
-  const monitorLine = lines.find((line) => line.id === monitorLineId) || { id: "", name: "--", stations: [], trains: [] };
+  const editingTrain = editLine.trains.find((train) => train.id === editingTrainId) || null;
+  const hasCurrentTrainDetails = editingTrain?.scheduleType === "custom";
+  const hasLineDetails = editLine.trains.some((train) => train.scheduleType === "custom");
+  const hasClearableDetails = editingTrainId ? hasCurrentTrainDetails : hasLineDetails;
+  const lineClearCooling = !editingTrainId && lineClearStage === "cooldown";
+  const lineClearArmed = !editingTrainId && lineClearStage !== "idle";
+  const monitorLineData = monitorLines.find((line) => line.id === monitorLineId);
+  const monitorLine = monitorLineData
+    ? { ...monitorLineData, stations: controller.lineLayouts[monitorLineId]?.value?.stops || [] }
+    : { id: "", name: "--", stations: [], trains: [] };
   const activeStations = useMemo(() => controller.selectedSection?.stations?.map((station, index) => ({
     id: station.stationId,
     name: stations.find((item) => item.stationId === station.stationId)?.name || station.stationId,
@@ -300,49 +420,38 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
       const sources = visibleLineCount === 1 ? singleChartModes : lineSources(lineStates[line.id], false);
       return lineCoverages(controller.selectedSection, line.id).flatMap((coverage) => {
         const coveragePoints = coverageStops(coverage);
-        const stopsByOrder = new Map(coveragePoints.map((stop) => [stop.waypointIndex, stop]));
         const coverageKey = `${coverage.directionPhase}:${coverage.fromSectionIndex}:${coverage.toSectionIndex}`;
         return sources
           .filter((source) => ["sliceHistoricalEstimate", "actualToday", "actualYesterday", "plannedApplied"].includes(source))
           .flatMap((sourceName) => {
-      if (sourceName === "actualToday" || sourceName === "actualYesterday") {
-        return Object.values(controller.actualTrips[line.id]?.[sourceName]?.details || {}).map((detail) => ({
-          lineId: line.id,
-          trainId: `${detail.header?.tripKey || ""}:${coverageKey}`,
-          source: sourceName,
-          color: line.color,
-          partial: true,
-          points: actualPoints(detail, coveragePoints)
-        }));
-      }
-      const source = sourceName === "plannedApplied"
-        ? line.plannedTrains
-        : line.sliceTrains;
-      return source
-        .filter((train) => trainOverlapsRange(train, chartStartMinute, chartEndMinute))
-        .map((train) => ({
-        lineId: line.id,
-        trainId: `${train.id}:${coverageKey}`,
-        source: sourceName,
-        color: line.color,
-        partial: sourceName === "sliceHistoricalEstimate",
-        points: (train.stops || [])
-          .filter((stop) => stopsByOrder.get(stop.waypointIndex)?.stationId === stop.stationId)
-          .map((stop) => {
-            const coverageStop = stopsByOrder.get(stop.waypointIndex);
-            if (!Number.isFinite(coverageStop?.sectionIndex)) {
-              return null;
+            if (sourceName === "actualToday" || sourceName === "actualYesterday") {
+              return Object.values(controller.actualTrips[line.id]?.[sourceName]?.details || {})
+                .flatMap((detail) => splitRunChartPoints(actualPoints(detail, coveragePoints))
+                  .map((points, segmentIndex) => ({
+                    lineId: line.id,
+                    trainId: `${detail.header?.tripKey || ""}:${coverageKey}:segment-${segmentIndex}`,
+                    source: sourceName,
+                    color: line.color,
+                    partial: true,
+                    points
+                  })));
             }
-            return {
-              stationId: stop.stationId,
-              occurrence: stop.occurrence,
-              distance: coverageStop.sectionIndex,
-              arrivalTime: stop.arrivalMinute,
-              departureTime: stop.departureMinute
-            };
-          })
-          .filter(Boolean)
-        }));
+            const source = sourceName === "plannedApplied"
+              ? line.plannedTrains
+              : line.sliceTrains;
+            return source
+              .filter((train) => trainOverlapsRange(train, chartStartMinute, chartEndMinute))
+              .flatMap((train) => {
+                const points = projectTimedPoints(train.stops || [], coveragePoints);
+                return splitRunChartPoints(points).map((segmentPoints, segmentIndex) => ({
+                  lineId: line.id,
+                  trainId: `${train.id}:${coverageKey}:segment-${segmentIndex}`,
+                  source: sourceName,
+                  color: line.color,
+                  partial: sourceName === "sliceHistoricalEstimate",
+                  points: segmentPoints
+                }));
+              });
           });
       });
     });
@@ -463,39 +572,143 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     setView(nextView);
   }
 
+  function resetLineClear() {
+    clearLineTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    clearLineTimersRef.current = [];
+    setLineClearStage("idle");
+    setLineClearSeconds(0);
+  }
+
+  function armLineClear() {
+    resetLineClear();
+    setLineClearStage("cooldown");
+    setLineClearSeconds(3);
+    const timers = [
+      window.setTimeout(() => setLineClearSeconds(2), 1000),
+      window.setTimeout(() => setLineClearSeconds(1), 2000),
+      window.setTimeout(() => {
+        setLineClearStage("confirm");
+        setLineClearSeconds(0);
+        clearLineTimersRef.current.push(window.setTimeout(() => {
+          clearLineTimersRef.current = [];
+          setLineClearStage("idle");
+        }, 5000));
+      }, 3000)
+    ];
+    clearLineTimersRef.current = timers;
+  }
+
   function handleEditLine(value) {
-    if (!value || value === editLineId) {
+    if (!value) {
+      return;
+    }
+    controller.refreshLineNames();
+    if (value === editLineId) {
+      controller.ensureTimetableLineLayout(value).then((layout) => {
+        if (layout && activeTransportMode !== "bus") {
+          controller.loadMonitorAverageState(value).catch(() => {});
+        }
+      });
       return;
     }
     setEditLineId(value);
     setEditingTrainId("");
     setArrivalSource(activeTransportMode === "bus" ? "busHistorical" : "theory");
-    if (activeTransportMode === "bus") {
-      controller.ensureTimetableLineLayout(value);
-      controller.ensureBusHistoricalRuntime(value);
+    if (activeTransportMode !== "bus") {
+      controller.setRuntimeSource(value, "theory");
+    }
+  }
+
+  function handleMonitorLine(value) {
+    if (!value) {
       return;
     }
-    controller.setRuntimeSource(value, "theory");
+    controller.refreshLineNames();
     controller.ensureTimetableLineLayout(value);
-    controller.loadMonitorAverageState(value).catch(() => {});
+    setMonitorLineId(value);
   }
 
-  function handleBatchCustom() {
-    if (editLine?.id) {
-      controller.markLineCustom(editLine.id);
+  function applyBatchCustom(request) {
+    const applied = controller.markLineCustom(request.lineId, request.intervalMinutes, request.trainId);
+    if (!applied) {
+      return false;
+    }
+    const prefix = request.trainId
+      ? inputKey(request.lineId, request.trainId, "")
+      : `${request.lineId}\u001f`;
+    setTimeDrafts((current) => Object.fromEntries(
+      Object.entries(current).filter(([key]) => !key.startsWith(prefix))
+    ));
+    controller.clearInputErrors(request.lineId, request.trainId);
+    return true;
+  }
+
+  async function handleBatchCustom() {
+    if (!editLine?.id || batchRequest) {
+      return;
+    }
+    resetLineClear();
+    const request = {
+      lineId: editLine.id,
+      trainId: editingTrainId || "",
+      intervalMinutes: Number(batchInterval),
+      source: controller.runtimeSources[editLine.id]
+        || (activeTransportMode === "bus" ? "busHistorical" : "theory")
+    };
+    const layout = await controller.ensureTimetableLineLayout(request.lineId);
+    if (!layout) {
+      return;
+    }
+    setBatchRequest(request);
+    const status = activeTransportMode === "bus"
+      ? await controller.ensureBusHistoricalRuntime(request.lineId)
+      : await controller.requestRuntime(request.lineId, request.source);
+    if (!status || status.state === "Failed" || status.state === "Cancelled") {
+      setBatchRequest(null);
     }
   }
 
-  function prepareRunTime(source = arrivalSource) {
-    if (activeTransportMode === "bus") {
+  useEffect(() => {
+    if (!batchRequest) {
       return;
     }
-    const runtimeSource = source === "monitorAverage" ? "monitorAverage" : "theory";
-    const pending = controller.pendingQueries[`${editLine?.id || ""}\u001f${runtimeSource}`];
-    if (!editLine?.id || pending) {
+    const runtime = controller.runtimes[batchRequest.lineId]?.[batchRequest.source];
+    if (runtime?.state === "Completed") {
+      applyBatchCustom(batchRequest);
+      setBatchRequest(null);
+    } else if (runtime?.state === "Failed" || runtime?.state === "Cancelled") {
+      setBatchRequest(null);
+    }
+  }, [batchRequest, controller.runtimes]);
+
+  function discardTimeDrafts(lineId, trainId = "") {
+    const prefix = trainId
+      ? inputKey(lineId, trainId, "")
+      : `${lineId}\u001f`;
+    setTimeDrafts((current) => Object.fromEntries(
+      Object.entries(current).filter(([key]) => !key.startsWith(prefix))
+    ));
+    controller.clearInputErrors(lineId, trainId);
+  }
+
+  function handleClearDetails() {
+    if (!editLine.id || !hasClearableDetails || batchRequest) {
       return;
     }
-    controller.switchRuntimeSource(editLine.id, runtimeSource);
+    if (editingTrainId) {
+      if (controller.clearTrainDetails(editLine.id, editingTrainId)) {
+        discardTimeDrafts(editLine.id, editingTrainId);
+      }
+      return;
+    }
+    if (lineClearStage !== "confirm") {
+      armLineClear();
+      return;
+    }
+    if (controller.clearLineDetails(editLine.id)) {
+      discardTimeDrafts(editLine.id);
+    }
+    resetLineClear();
   }
 
   function handleTimeDraft(trainId, occurrence, value) {
@@ -519,6 +732,19 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
 
   function handleTimeChange(trainId, occurrence, value) {
     const key = inputKey(editLine.id, trainId, occurrence);
+    if (!value) {
+      controller.clearDeparture(editLine.id, trainId, occurrence);
+      controller.setInputError(key, "");
+      setTimeDrafts((current) => {
+        if (!current[key]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
     const result = handleTimeDraft(trainId, occurrence, value);
     if (result.error || !Number.isFinite(result.minute)) {
       return;
@@ -542,6 +768,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
   }
 
   function editTrain(trainId) {
+    resetLineClear();
     setEditingTrainId(trainId);
   }
 
@@ -552,11 +779,23 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     controller.switchRuntimeSource(editLine.id, source);
   }
 
-  const theoryState = controller.pendingQueries[`${editLine?.id || ""}\u001ftheory`]
-    ? "preparing"
-    : controller.runtimes[editLine?.id]?.theory?.state === "Completed"
-      ? "ready"
-      : "idle";
+  function toggleChartCollapsed() {
+    if (!chartCollapsed) {
+      setIntervalCollapsed(true);
+      setLinesCollapsed(true);
+    }
+    setChartCollapsed((current) => !current);
+  }
+
+  const theoryRuntime = controller.runtimes[editLine?.id]?.theory;
+  const theoryState = theoryRuntime?.state === "Completed"
+    ? "ready"
+    : theoryRuntime?.state === "Unavailable" || theoryRuntime?.state === "Failed"
+      ? "unavailable"
+      : theoryRuntime?.state === "Queued" || theoryRuntime?.state === "Running"
+        || controller.pendingQueries[`${editLine?.id || ""}\u001ftheory`]
+        ? "calculating"
+        : "waiting";
   const monitorAverageReady = controller.monitorAverageStates[editLine?.id]?.ready === true;
   const sourceChanging = Boolean(controller.sourceTransactions[editLine?.id]);
 
@@ -566,27 +805,31 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
         <aside className="rtw-timetable-sidebar">
           {renderedView === "workspace" ? (
             <div key="workspace" className={`rtw-timetable-sidebar-scene is-${viewStage}`}>
-            {activeTransportMode !== "bus" ? <SidebarSection icon="map" title={t("timetable.interval.title")}>
+            {activeTransportMode !== "bus" ? <SidebarSection icon="map" title={t("timetable.interval.title")} collapsed={intervalCollapsed} onToggle={() => setIntervalCollapsed((current) => !current)}>
               <WorkbenchDropdown
                 label={t("timetable.interval.start")}
                 value={stations.find((station) => station.stationId === startStationId)?.name || t("timetable.interval.choose")}
                 options={stations.map((station) => ({ value: station.stationId, label: station.name, active: station.stationId === startStationId }))}
-                onSelect={controller.setStartStationId}
+                onSelect={controller.selectStartStation}
+                onOpen={controller.refreshStationNames}
                 className="rtw-timetable-sidebar-field"
                 positioning="portal"
                 portalHostRef={portalHostRef}
               />
               <WorkbenchDropdown
                 label={t("timetable.interval.end")}
-                value={stations.find((station) => station.stationId === endStationId)?.name || t("timetable.interval.choose")}
-                options={stations.map((station) => ({ value: station.stationId, label: station.name, active: station.stationId === endStationId }))}
-                onSelect={controller.setEndStationId}
+                value={endStations.find((station) => station.stationId === endStationId)?.name || t("timetable.interval.choose")}
+                options={endStations.map((station) => ({ value: station.stationId, label: station.name, active: station.stationId === endStationId }))}
+                onSelect={controller.selectEndStation}
+                onOpen={controller.refreshStationNames}
                 className="rtw-timetable-sidebar-field"
                 positioning="portal"
                 portalHostRef={portalHostRef}
               />
-              <DemoTextField label={t("timetable.interval.start")} value={chartStart} onCommit={setChartStart} className="rtw-timetable-sidebar-field" timeMode />
-              <DemoTextField label={t("timetable.interval.end")} value={chartEnd} onCommit={setChartEnd} className="rtw-timetable-sidebar-field" timeMode />
+              <div className="rtw-timetable-sidebar-time-row">
+                <DemoTextField label={t("timetable.interval.startTime")} value={chartStart} onCommit={setChartStart} className="rtw-timetable-sidebar-field" timeMode />
+                <DemoTextField label={t("timetable.interval.endTime")} value={chartEnd} onCommit={setChartEnd} className="rtw-timetable-sidebar-field" timeMode />
+              </div>
               {controller.sections.length > 1 ? (
                 <WorkbenchDropdown
                   label={t("timetable.interval.section")}
@@ -604,7 +847,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
               ) : null}
             </SidebarSection> : null}
 
-            <SidebarSection icon="route" title={t("timetable.lines.title")}>
+            <SidebarSection icon="route" title={t("timetable.lines.title")} collapsed={linesCollapsed} onToggle={() => setLinesCollapsed((current) => !current)}>
               {availableLines.length > 0 ? availableLines.map((line) => {
                 const state = lineStates[line.id] || { visible: true, dataMode: "", dataModes: [] };
                 const selectedSources = lineSources(state, visibleLineCount === 1 && state.visible);
@@ -641,6 +884,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                   value={editLine.name}
                   options={availableLines.map((line) => ({ value: line.id, label: line.name, active: line.id === editLine.id }))}
                   onSelect={handleEditLine}
+                  onOpen={controller.refreshLineNames}
                   className="rtw-timetable-sidebar-field"
                   positioning="portal"
                   portalHostRef={portalHostRef}
@@ -654,7 +898,8 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                   positioning="portal"
                   portalHostRef={portalHostRef}
                 />
-                <button type="button" className="rtw-timetable-secondary-button" onClick={handleBatchCustom}>{t("timetable.edit.batch")}</button>
+                <button type="button" className="rtw-timetable-secondary-button" disabled={Boolean(batchRequest)} onClick={handleBatchCustom}>{t(batchRequest ? "timetable.theory.preparing" : editingTrainId ? "timetable.edit.batchCurrent" : "timetable.edit.batch")}</button>
+                <button type="button" className={`rtw-timetable-secondary-button ${lineClearArmed ? "is-danger" : ""}`} disabled={Boolean(batchRequest) || !hasClearableDetails || lineClearCooling} onClick={handleClearDetails}>{t(editingTrainId ? "timetable.edit.clearCurrent" : lineClearStage === "cooldown" ? "timetable.edit.clearLineCountdown" : lineClearStage === "confirm" ? "timetable.edit.clearLineConfirm" : "timetable.edit.clearLine", { seconds: lineClearSeconds })}</button>
               </SidebarSection>
             ) : null}
 
@@ -681,8 +926,9 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
               <WorkbenchDropdown
                 label={t("timetable.monitor.filter.line")}
                 value={monitorLine.name}
-                options={lines.map((line) => ({ value: line.id, label: line.name, active: monitorLineId === line.id }))}
-                onSelect={setMonitorLineId}
+                options={monitorLines.map((line) => ({ value: line.id, label: line.name, active: monitorLineId === line.id }))}
+                onSelect={handleMonitorLine}
+                onOpen={controller.refreshLineNames}
                 className="rtw-timetable-sidebar-field"
                 positioning="portal"
                 portalHostRef={portalHostRef}
@@ -720,7 +966,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                     <button type="button" className="rtw-timetable-chart-toggle" title={t("timetable.chart.refresh")} aria-label={t("timetable.chart.refresh")} onClick={refreshActualChart}>
                       <TimetableIcon name="refresh" />
                     </button>
-                    <button type="button" className="rtw-timetable-chart-toggle" title={t(chartCollapsed ? "timetable.chart.expand" : "timetable.chart.collapse")} onClick={() => setChartCollapsed((current) => !current)}>
+                    <button type="button" className="rtw-timetable-chart-toggle" title={t(chartCollapsed ? "timetable.chart.expand" : "timetable.chart.collapse")} onClick={toggleChartCollapsed}>
                       <TimetableIcon name={chartCollapsed ? "chevron-down" : "chevron-up"} />
                     </button>
                   </div>
@@ -733,24 +979,28 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
               <section className="rtw-timetable-schedule-section">
                 <div className="rtw-timetable-schedule-head">
                   <div className="rtw-timetable-schedule-copy">
-                    <div className="rtw-timetable-panel-title"><TimetableIcon name="calendar" /><span>{t("timetable.table.title")}</span></div>
+                    <div className="rtw-timetable-panel-title"><TimetableIcon name="calendar-clock" /><span>{t("timetable.table.title")}</span></div>
                     <div className="rtw-timetable-current-line">{t("timetable.table.current")} <strong>{editLine.name}</strong></div>
                     <span className="rtw-timetable-count">{t("timetable.table.default", { count: editLine.trains.filter((train) => train.scheduleType !== "custom").length })}</span>
                     <span className="rtw-timetable-count is-custom">{t("timetable.table.custom", { count: editLine.trains.filter((train) => train.scheduleType === "custom").length })}</span>
                   </div>
                   {editingTrainId ? (
                     <button type="button" className="rtw-timetable-primary-button" disabled={hasEditingErrors} onClick={saveEditedTrain}>{t("timetable.action.save")}</button>
-                  ) : activeTransportMode !== "bus" && theoryState === "ready" ? (
+                  ) : activeTransportMode !== "bus" ? (
                     <div className="rtw-timetable-arrival-source">
                       <span>{t("timetable.theory.arrivalSource")}</span>
-                      <button type="button" className={arrivalSource === "theory" ? "is-active" : ""} disabled={sourceChanging} onClick={() => changeArrivalSource("theory")}>{t("timetable.theory.theoretical")}</button>
+                      <button type="button" className={`is-theory is-${theoryState} ${theoryState === "ready" && arrivalSource === "theory" ? "is-active" : ""}`} disabled={sourceChanging || theoryState !== "ready"} onClick={() => changeArrivalSource("theory")}>
+                        {theoryState === "calculating" ? <span className="rtw-timetable-theory-spinner" /> : null}
+                        <span>{t(theoryState === "calculating"
+                          ? "timetable.theory.calculating"
+                          : theoryState === "unavailable"
+                            ? "timetable.theory.unavailable"
+                            : theoryState === "waiting"
+                              ? "timetable.theory.waiting"
+                              : "timetable.theory.theoretical")}</span>
+                      </button>
                       <button type="button" className={arrivalSource === "monitorAverage" ? "is-active" : ""} disabled={!monitorAverageReady || sourceChanging} onClick={() => changeArrivalSource("monitorAverage")}>{t(monitorAverageReady ? "timetable.theory.monitorAverage" : "timetable.theory.monitorUnavailable")}</button>
                     </div>
-                  ) : activeTransportMode !== "bus" ? (
-                    <button type="button" className={`rtw-timetable-theory-button ${theoryState === "preparing" ? "is-preparing" : ""}`} disabled={theoryState === "preparing"} onClick={() => prepareRunTime("theory")}>
-                      {theoryState === "preparing" ? <span className="rtw-timetable-theory-spinner" /> : null}
-                      <span>{t(theoryState === "preparing" ? "timetable.theory.preparing" : "timetable.theory.prepare")}</span>
-                    </button>
                   ) : null}
                 </div>
                 <TimetableEditor
@@ -779,40 +1029,69 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
               </div>
             </div>
           )}
-        </main>
-      </div>
-
-      <footer className="rtw-timetable-footer">
-        <div className={`rtw-timetable-footer-status is-${controller.saveError || controller.loadError ? "error" : controller.saveState}`}>
-          {controller.saveError
-            ? t("timetable.footer.error")
-            : controller.loadError
-              ? t("timetable.footer.dataError")
-              : t(`timetable.footer.${controller.saveState}`)}
+          <footer className="rtw-timetable-footer">
+        <div className={`rtw-timetable-footer-status is-${editingTrainId ? "editing" : controller.saveError || controller.loadError ? "error" : controller.saveState}`}>
+          {editingTrainId
+            ? t("timetable.footer.editingHint")
+            : controller.saveError
+              ? t("timetable.footer.error")
+              : controller.loadError
+                ? t("timetable.footer.dataError")
+                : controller.saveState === "saving"
+                  ? t("nativeSchedule.summary.action.applying")
+                  : controller.saveState === "applied"
+                    ? t("nativeSchedule.summary.action.applied")
+                    : t(`timetable.footer.${controller.saveState}`)}
         </div>
         <button
           type="button"
-          className={`rtw-timetable-primary-button is-${controller.saveState}`}
-          disabled={!controller.canSave}
+          className={`rtw-timetable-primary-button is-${footerButtonState}`}
+          disabled={Boolean(editingTrainId) || !controller.canSave}
           onClick={controller.saveAll}
         >
-          {t(controller.saveState === "saving"
-            ? "timetable.footer.saving"
-            : controller.saveState === "applied"
-              ? "timetable.footer.applied"
-              : controller.saveState === "error"
-                ? "timetable.footer.retry"
-                : "timetable.footer.save")}
+          <span className="rtw-timetable-footer-button-content">
+            <TimetableIcon
+              name={editingTrainId
+                ? "clock"
+                : controller.saveState === "saving" || controller.saveState === "error"
+                  ? "refresh"
+                  : controller.saveState === "applied"
+                    ? "check"
+                    : "calendar"}
+              className="rtw-timetable-footer-button-icon"
+              strokeColor={footerIconColor}
+            />
+            <span>{t(editingTrainId
+              ? "timetable.footer.finishEditing"
+              : controller.saveState === "saving"
+                ? "nativeSchedule.summary.action.applying"
+                : controller.saveState === "applied"
+                  ? "nativeSchedule.summary.action.applied"
+                  : controller.saveState === "error"
+                    ? "timetable.footer.retry"
+                    : "nativeSchedule.summary.action.apply")}</span>
+          </span>
         </button>
-      </footer>
+          </footer>
+        </main>
+      </div>
 
       <div ref={portalHostRef} className="dw-demo-dropdown-portal-layer" />
     </div>
   );
 }
 
-function SidebarSection({ icon, title, children }) {
-  return <section className="rtw-timetable-sidebar-section"><div className="rtw-timetable-sidebar-title"><TimetableIcon name={icon} /><h2>{title}</h2></div>{children}</section>;
+function SidebarSection({ icon, title, collapsed = false, onToggle, children }) {
+  return <section className={`rtw-timetable-sidebar-section ${collapsed ? "is-collapsed" : ""}`}>
+    {onToggle ? (
+      <button type="button" className="rtw-timetable-sidebar-title is-toggle" onClick={onToggle}>
+        <TimetableIcon name={icon} />
+        <h2>{title}</h2>
+        <TimetableIcon name={collapsed ? "chevron-down" : "chevron-up"} className="rtw-timetable-section-chevron" />
+      </button>
+    ) : <div className="rtw-timetable-sidebar-title"><TimetableIcon name={icon} /><h2>{title}</h2></div>}
+    <div className="rtw-timetable-sidebar-section-content">{children}</div>
+  </section>;
 }
 
 function ChartSourceDropdown({ value, options, onToggle, portalHostRef, emptyLabel }) {
@@ -836,8 +1115,18 @@ function ChartSourceDropdown({ value, options, onToggle, portalHostRef, emptyLab
 }
 
 function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistoricalOnly, editingTrainId, onEdit, onTimeChange, onTimeDraft, onInvalidTime, timeDrafts, inputErrors, t }) {
+  const timeInputRefs = useRef(new Map());
   const train = line.trains.find((item) => item.id === editingTrainId);
   if (train) {
+    const editableOccurrences = train.canEdit
+      ? train.stops.slice(1, -1).map((stop) => stop.occurrence)
+      : [];
+    const getTimeInputRef = (occurrence) => {
+      if (!timeInputRefs.current.has(occurrence)) {
+        timeInputRefs.current.set(occurrence, { current: null });
+      }
+      return timeInputRefs.current.get(occurrence);
+    };
     const segmentMinutes = (runtime, index) => {
       const segment = runtime?.segments?.[index];
       const value = Number.isFinite(segment?.segmentMinutesExact)
@@ -873,6 +1162,12 @@ function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistorica
             const error = inputErrors[key] || "";
             const draft = timeDrafts[key];
             const draftMinute = draft?.minute;
+            const editableIndex = editableOccurrences.indexOf(stop.occurrence);
+            const inputRef = editableIndex >= 0 ? getTimeInputRef(stop.occurrence) : null;
+            const previousOccurrence = editableIndex > 0 ? editableOccurrences[editableIndex - 1] : null;
+            const nextOccurrence = editableIndex >= 0 ? editableOccurrences[editableIndex + 1] : null;
+            const previousInputRef = previousOccurrence != null ? getTimeInputRef(previousOccurrence) : null;
+            const nextInputRef = nextOccurrence != null ? getTimeInputRef(nextOccurrence) : null;
             const hint = error
               ? t(`timetable.validation.${error}`)
               : formatDayHint(Number.isFinite(draftMinute) ? draftMinute : stop.departureMinute, t);
@@ -883,17 +1178,17 @@ function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistorica
                   {index === 0 ? <span className="rtw-timetable-stop-tag">{t("timetable.table.stop.origin")}</span> : null}
                   {isLast ? <span className="rtw-timetable-stop-tag">{t("timetable.table.stop.terminal")}</span> : null}
                 </div>
-                <div className="is-time is-arrival">{index === 0 ? "--" : formatServiceTime(stop.arrivalMinute, t)}</div>
+                <div className="is-time is-arrival">{index === 0 ? "--" : renderArrivalTime(stop.arrivalMinute, t)}</div>
                 <div className={`is-time is-departure ${error ? "has-error" : ""}`} onBlur={(event) => {
                   const value = event.target?.value ?? "";
-                  if (!isLast && index > 0 && train.canEdit && !isValidTimeValue(value)) {
+                  if (value && !isLast && index > 0 && train.canEdit && !isValidTimeValue(value)) {
                     onInvalidTime(train.id, stop.occurrence, value);
                   }
                 }}>
                   {isLast ? "--" : index === 0 || !train.canEdit ? formatServiceTime(stop.departureMinute, t) : (
                     <>
                       <TimetableIcon name="clock" />
-                      <DemoTextField label="" value={draft?.value ?? (stop.departureMinute == null ? "" : minutesToTime(stop.departureMinute))} onCommit={(value) => onTimeChange(train.id, stop.occurrence, value)} onDraftChange={(value) => onTimeDraft(train.id, stop.occurrence, value)} errorText={error ? hint : ""} preserveInvalidTime className="rtw-timetable-time-field" timeMode />
+                      <DemoTextField label="" value={draft?.value ?? (stop.departureMinute == null ? "" : minutesToTime(stop.departureMinute))} onCommit={(value) => onTimeChange(train.id, stop.occurrence, value)} onDraftChange={(value) => onTimeDraft(train.id, stop.occurrence, value)} inputRef={inputRef} previousInputRef={previousInputRef} nextInputRef={nextInputRef} errorText={error ? hint : ""} preserveInvalidTime allowEmptyCommit className="rtw-timetable-time-field" timeMode />
                       <span className={`rtw-timetable-time-hint ${error ? "is-error" : ""}`}>{hint}</span>
                     </>
                   )}
@@ -914,17 +1209,11 @@ function TimetableEditor({ line, historicalRuntime, theoryRuntime, showHistorica
   return (
     <div key="summary" className="rtw-timetable-table-scroll">
       <div className="rtw-timetable-table is-summary rtw-timetable-content-enter">
-        <div className="rtw-timetable-table-head">
-          <div className="is-trip">{t("timetable.table.head.trip")}</div>
-          <div className="is-mode">{t("timetable.table.head.mode")}</div>
-          <div className="is-action">{t("timetable.table.head.action")}</div>
-        </div>
         <div className="rtw-timetable-table-body">{line.trains.map((item, index) => (
-          <div key={item.id} className="rtw-timetable-table-row rtw-timetable-summary-row rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }} onClick={() => onEdit(item.id)}>
-            <div className="is-trip is-strong">{formatServiceTime(item.slotMinute, t)}</div>
-            <div className="is-mode"><span className={`dw-demo-badge ${item.scheduleType === "custom" ? "is-express" : "is-local"}`}>{item.scheduleType === "custom" ? t("timetable.mode.custom") : t("timetable.mode.default")}</span></div>
-            <div className="is-action"><button type="button" className="rtw-timetable-link" onClick={(event) => { event.stopPropagation(); onEdit(item.id); }}>{t("timetable.action.edit")}</button></div>
-          </div>
+          <button type="button" key={item.id} className="rtw-timetable-summary-item rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(Math.floor(index / 3), 5) * 70}ms` }} onClick={() => onEdit(item.id)}>
+            <span className="rtw-timetable-summary-time">{formatServiceTime(item.slotMinute, t)}</span>
+            <span className={`dw-demo-badge ${item.scheduleType === "custom" ? "is-express" : "is-local"}`}>{item.scheduleType === "custom" ? t("timetable.mode.custom") : t("timetable.mode.default")}</span>
+          </button>
         ))}</div>
       </div>
     </div>

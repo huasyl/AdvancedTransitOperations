@@ -269,9 +269,11 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             frames = 0f;
             detail = string.Empty;
+            bool possibleClosing = fromWaypointIndex >= 0 && toWaypointIndex == 0;
             if (line == Entity.Null
                 || fromWaypointIndex < 0
-                || toWaypointIndex <= fromWaypointIndex)
+                || toWaypointIndex < 0
+                || (!possibleClosing && toWaypointIndex <= fromWaypointIndex))
             {
                 detail = "code=invalid-interval;line=" + line.Index
                     + ";from=" + fromWaypointIndex
@@ -286,11 +288,23 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             DynamicBuffer<RouteWaypoint> waypoints = m_Port.Waypoints(line);
-            if (toWaypointIndex >= waypoints.Length)
+            if (fromWaypointIndex >= waypoints.Length
+                || toWaypointIndex >= waypoints.Length)
             {
                 detail = "code=waypoint-out-of-range;from=" + fromWaypointIndex
                     + ";to=" + toWaypointIndex
                     + ";count=" + waypoints.Length;
+                return false;
+            }
+
+            bool closing = waypoints.Length > 1
+                && fromWaypointIndex == waypoints.Length - 1
+                && toWaypointIndex == 0;
+            if (!closing && toWaypointIndex <= fromWaypointIndex)
+            {
+                detail = "code=invalid-interval;line=" + line.Index
+                    + ";from=" + fromWaypointIndex
+                    + ";to=" + toWaypointIndex;
                 return false;
             }
 
@@ -312,6 +326,22 @@ namespace RapidTransitMod.Dispatch.Observation
                 return false;
             }
 
+            if (closing
+                && (!chain.ChainComplete
+                    || chain.TrackAtoms == null
+                    || chain.TrackAtoms.Count == 0
+                    || chain.SegmentRanges == null
+                    || chain.SegmentRanges.Count != waypoints.Length
+                    || chain.TraversalProfile.RunSlices == null
+                    || chain.TraversalProfile.RunSlices.Count == 0))
+            {
+                detail = "code=closing-chain-incomplete;line=" + line.Index
+                    + ";waypoints=" + waypoints.Length
+                    + ";segments=" + (chain.SegmentRanges?.Count ?? 0)
+                    + ";atoms=" + (chain.TrackAtoms?.Count ?? 0);
+                return false;
+            }
+
             if (!TryGetStopBounds(
                     chain.TraversalProfile,
                     fromWaypointIndex,
@@ -326,10 +356,22 @@ namespace RapidTransitMod.Dispatch.Observation
                     chain.TraversalProfile,
                     toWaypointIndex,
                     out _,
-                    out int approachAtomIndex))
+                    out int rawApproachAtomIndex))
             {
                 detail = "code=to-stop-bounds-missing;waypoint=" + toWaypointIndex;
                 return false;
+            }
+
+            int approachAtomIndex = rawApproachAtomIndex;
+            if (closing)
+            {
+                if (rawApproachAtomIndex != 0)
+                {
+                    detail = "code=closing-approach-invalid;waypoint=" + toWaypointIndex
+                        + ";approach=" + rawApproachAtomIndex;
+                    return false;
+                }
+                approachAtomIndex = chain.TrackAtoms.Count;
             }
 
             if (approachAtomIndex <= departureAtomIndex)

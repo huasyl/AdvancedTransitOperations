@@ -156,6 +156,26 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Array.Empty<string>(),
                 clearedAppliedLineIds,
                 Array.Empty<string>());
+            if (request.applyDraft)
+            {
+                List<string> appliedErrors = ValidateApplied(
+                    nextLineDraftRowsByKey.Keys,
+                    nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
+                    runtimeLines,
+                    prepared.Scope.Mode);
+                if (appliedErrors.Count > 0)
+                {
+                    result.success = false;
+                    result.errors = appliedErrors.ToArray();
+                    result.snapshot = BuildSnapshot(
+                        prepared.Scope,
+                        lineKey,
+                        clientRequestSequence);
+                    result.cleanupInfo = result.snapshot?.cleanupInfo;
+                    return result;
+                }
+            }
+
             bool requestedCleanupChanged = requestedCleanupReasons.Count > 0
                 && m_Run.CleanupRequestedLines(requestedCleanupReasons);
             HashSet<string> invalidatedLineIds = new HashSet<string>(requestedCleanupReasons.Keys, StringComparer.Ordinal);
@@ -177,26 +197,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             List<DispatchWorkbenchStagedRowDto> nextStagedRows = hasActiveLineDraftRows
                 ? m_LastById(activeLineDraftRows)
                 : state.StagedRows.Select(m_CopyRow).ToList();
-
-            if (request.applyDraft)
-            {
-                List<string> appliedErrors = ValidateApplied(
-                    lineKey,
-                    nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
-                    runtimeLines,
-                    prepared.Scope.Mode);
-                if (appliedErrors.Count > 0)
-                {
-                    result.success = false;
-                    result.errors = appliedErrors.ToArray();
-                    result.snapshot = BuildSnapshot(
-                        prepared.Scope,
-                        lineKey,
-                        clientRequestSequence);
-                    result.cleanupInfo = result.snapshot?.cleanupInfo;
-                    return result;
-                }
-            }
 
             Dictionary<string, DispatchWorkbenchPlannerImportContractDto> nextPlanRefsByKey =
                 PlanRefs(
@@ -595,13 +595,13 @@ namespace RapidTransitMod.Dispatch.Workbench
         }
 
         private List<string> ValidateApplied(
-            string lineKey,
+            IEnumerable<string> targetLineIds,
             List<DispatchWorkbenchStagedRowDto> rows,
             List<WorkbenchLineRuntime> runtimeLines,
             TransitMode mode)
         {
             List<string> errors = Check.AppliedRows(
-                lineKey,
+                targetLineIds,
                 rows,
                 runtimeLines,
                 BuildAppliedState(mode),

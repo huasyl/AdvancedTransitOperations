@@ -16,8 +16,10 @@ export function DemoTextField({
   onDraftChange,
   errorText = "",
   preserveInvalidTime = false,
+  allowEmptyCommit = false,
   reserveErrorSpace = false,
-  suffix = ""
+  suffix = "",
+  previousInputRef
 }) {
   const localInputRef = useRef(null);
   const resolvedInputRef = inputRef || localInputRef;
@@ -35,6 +37,10 @@ export function DemoTextField({
 
     let nextValue = String(draftValue || "");
     if (timeMode) {
+      if (!nextValue && allowEmptyCommit) {
+        onCommit("");
+        return;
+      }
       nextValue = normalizeTimeInput(nextValue);
       if (!isValidTimeValue(nextValue)) {
         if (!preserveInvalidTime) {
@@ -109,14 +115,19 @@ export function DemoTextField({
               }
             }
 
-            if (event.key === "Tab" && nextInputRef?.current) {
-              event.preventDefault();
-              commitCurrentValue();
-              nextInputRef.current.focus();
-              if (typeof nextInputRef.current.select === "function") {
-                nextInputRef.current.select();
+            if (event.key === "Tab") {
+              const targetInputRef = event.shiftKey ? previousInputRef : nextInputRef;
+              if (targetInputRef?.current) {
+                event.preventDefault();
+                commitCurrentValue();
+                targetInputRef.current.focus();
+                if (typeof targetInputRef.current.select === "function") {
+                  targetInputRef.current.select();
+                }
               }
-              return;
+              if (targetInputRef?.current) {
+                return;
+              }
             }
 
             if (event.key === "Enter") {

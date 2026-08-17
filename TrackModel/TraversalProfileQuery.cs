@@ -152,7 +152,8 @@ namespace RapidTransitMod.TrackModel
         private static bool IsStationEvent(TraversalEvent traversalEvent)
         {
             return traversalEvent.Kind == TraversalEventKind.Stop
-                || traversalEvent.Kind == TraversalEventKind.Pass;
+                || traversalEvent.Kind == TraversalEventKind.Pass
+                || traversalEvent.Kind == TraversalEventKind.OutsideEndpointBoundary;
         }
     }
 }

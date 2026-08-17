@@ -94,7 +94,6 @@ export default function OperationMonitor({ line, dateMode, isActive, t }) {
   return (
     <div className="rtw-timetable-monitor">
       {error ? <div className="rtw-timetable-monitor-message is-error">{error === "monitor-list-truncated" ? t("timetable.monitor.rangeTooLarge") : error}</div> : null}
-      {!error && trips.length === 0 ? <div className="rtw-timetable-monitor-message">{t("timetable.monitor.empty")}</div> : null}
       <div className="rtw-timetable-monitor-table-wrap">
         <div className="rtw-timetable-table is-monitor rtw-timetable-fixed-head">
           <div className="rtw-timetable-table-head">
@@ -135,6 +134,7 @@ export default function OperationMonitor({ line, dateMode, isActive, t }) {
           </div>
           </div>
         </div>
+        {!error && line?.id && trips.length === 0 ? <div className="rtw-timetable-monitor-message">{t("timetable.monitor.empty")}</div> : null}
       </div>
     </div>
   );
@@ -166,7 +166,7 @@ function TripDetail({ detail, header, stationNames, t }) {
                 index === stops.length - 1);
               return (
                 <div key={`${stop.stopKey}-${stop.order}`} className="rtw-timetable-table-row rtw-timetable-stagger-row" style={{ animationDelay: `${Math.min(index, 5) * 70}ms` }}>
-                  <div className="is-station"><span className="rtw-timetable-station-cell">{index < stops.length - 1 ? <TimetableIcon name="arrow-down" /> : <span className="rtw-timetable-station-end" />}{stationNames.get(stop.stopKey) || stop.stopKey}</span></div>
+                  <div className="is-station"><span className="rtw-timetable-station-cell"><span className="rtw-timetable-station-spacer" />{stationNames.get(stop.stopKey) || stop.stopKey}</span></div>
                   <TimePair arrival={stop.plannedArrivalMinute} departure={stop.plannedDepartureMinute} t={t} />
                   <TimePair arrival={stop.actualArrivalMinute} departure={stop.actualDepartureMinute} t={t} />
                   <div className={`is-delta ${delta > 0 ? "is-warning" : delta < 0 ? "is-accent" : "is-good"}`}>{delta == null ? "--" : formatDelay(delta, t)}</div>

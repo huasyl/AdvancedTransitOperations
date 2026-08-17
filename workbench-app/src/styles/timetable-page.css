@@ -75,23 +75,65 @@
 }
 
 .rtw-timetable-footer .rtw-timetable-primary-button {
-  height: 42rem;
-  min-height: 42rem;
-  min-width: 144rem;
+  height: 36rem;
+  min-height: 36rem;
+  min-width: 129rem;
   border: 0;
+  padding-right: 15rem;
+  padding-left: 15rem;
   background: #5ab4c5;
   color: #0a1014;
+  font-size: 15rem;
   font-weight: 700;
+  transition: background-color 180ms ease, color 180ms ease;
 }
 
-.rtw-timetable-footer .rtw-timetable-primary-button.is-saving {
+.rtw-timetable-footer .rtw-timetable-primary-button.is-saving,
+.rtw-timetable-footer .rtw-timetable-primary-button.is-saving:hover {
   background: #3d7f8c;
   color: #d3f6fb;
+  cursor: default;
 }
 
-.rtw-timetable-footer .rtw-timetable-primary-button.is-applied:disabled {
+.rtw-timetable-footer .rtw-timetable-primary-button.is-applied,
+.rtw-timetable-footer .rtw-timetable-primary-button.is-applied:hover {
   background: #2f5e3d;
   color: #8fd3a0;
+  cursor: default;
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button.is-error {
+  background: rgba(118, 58, 58, 0.28);
+  color: #dfaaaa;
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button:hover {
+  background: #76d4e2;
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button.is-error:hover {
+  background: rgba(126, 61, 61, 0.38);
+}
+
+.rtw-timetable-footer .rtw-timetable-primary-button.is-disabled,
+.rtw-timetable-footer .rtw-timetable-primary-button.is-disabled:hover,
+.rtw-timetable-footer .rtw-timetable-primary-button.is-editing,
+.rtw-timetable-footer .rtw-timetable-primary-button.is-editing:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #71808a;
+  cursor: default;
+}
+
+.rtw-timetable-footer-button-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rtw-timetable-footer-button-icon {
+  width: 18rem;
+  height: 18rem;
+  margin-right: 8rem;
 }
 
 .rtw-timetable-view-tabs,
@@ -244,7 +286,53 @@
 .rtw-timetable-sidebar-title {
   display: flex;
   align-items: center;
+  width: 100%;
   margin-bottom: 16rem;
+  transition: margin-bottom 300ms cubic-bezier(0.2, 1, 0.3, 1);
+}
+
+.rtw-timetable-sidebar-section.is-collapsed .rtw-timetable-sidebar-title {
+  margin-bottom: 0;
+}
+
+.rtw-timetable-sidebar-title h2 {
+  flex: 1 1 auto;
+}
+
+.rtw-timetable-sidebar-title.is-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rtw-timetable-sidebar-title.is-toggle .rtw-timetable-section-chevron {
+  width: 16rem;
+  height: 16rem;
+  flex: 0 0 16rem;
+  margin-right: 0;
+  color: #8fa0aa;
+  transition: color 180ms ease;
+}
+
+.rtw-timetable-sidebar-title.is-toggle:hover .rtw-timetable-section-chevron {
+  color: #81d4d4;
+}
+
+.rtw-timetable-sidebar-section-content {
+  max-height: 1200rem;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition: max-height 300ms cubic-bezier(0.2, 1, 0.3, 1), opacity 300ms ease, transform 300ms cubic-bezier(0.2, 1, 0.3, 1);
+}
+
+.rtw-timetable-sidebar-section.is-collapsed .rtw-timetable-sidebar-section-content {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-8rem);
+  pointer-events: none;
 }
 
 .rtw-timetable-sidebar-title .rtw-timetable-icon,
@@ -273,6 +361,21 @@
 .rtw-timetable-sidebar .rtw-timetable-sidebar-field.dw-demo-field {
   width: 100%;
   margin-left: 0;
+}
+
+.rtw-timetable-sidebar-time-row {
+  display: flex;
+  margin-top: 12rem;
+}
+
+.rtw-timetable-sidebar-time-row .rtw-timetable-sidebar-field.dw-demo-field {
+  width: 116rem;
+  flex: 0 0 116rem;
+  margin-top: 0;
+}
+
+.rtw-timetable-sidebar-time-row .rtw-timetable-sidebar-field.dw-demo-field + .rtw-timetable-sidebar-field.dw-demo-field {
+  margin-left: 12rem;
 }
 
 .rtw-timetable-sidebar-field .dw-demo-label {
@@ -325,10 +428,14 @@
   margin-top: 16rem;
 }
 
-.rtw-timetable-line-item:hover,
-.rtw-timetable-line-item.is-editing {
+.rtw-timetable-line-item:hover {
   border-color: rgba(255, 255, 255, 0.10);
   background: rgba(255, 255, 255, 0.05);
+}
+
+.rtw-timetable-line-item.is-editing {
+  border-color: rgba(116, 193, 193, 0.34);
+  background: rgba(116, 193, 193, 0.08);
 }
 
 .rtw-timetable-check {
@@ -367,6 +474,15 @@
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 180ms ease;
+}
+
+.rtw-timetable-line-item:hover .rtw-timetable-line-name {
+  color: #9bd7d7;
+}
+
+.rtw-timetable-line-item.is-editing .rtw-timetable-line-name {
+  color: #81d4d4;
 }
 
 .rtw-timetable-line-mode.dw-demo-field {
@@ -412,6 +528,13 @@
 
 .rtw-timetable-secondary-button:hover {
   background: rgba(255, 255, 255, 0.10);
+}
+
+.rtw-timetable-secondary-button.is-danger,
+.rtw-timetable-secondary-button.is-danger:disabled {
+  border-color: rgba(236, 111, 111, 0.72);
+  background: rgba(236, 111, 111, 0.18);
+  color: #ffd1d1;
 }
 
 .rtw-timetable-primary-button {
@@ -781,11 +904,40 @@
   stroke: #edf5f9;
 }
 
+.rtw-timetable-chart-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 326rem;
+}
+
 .rtw-timetable-chart-svg,
 .rtw-timetable-chart-empty {
   display: block;
   width: 100%;
   height: 326rem;
+}
+
+.rtw-timetable-chart-station-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.rtw-timetable-chart-station-label {
+  position: absolute;
+  width: 96rem;
+  max-width: 96rem;
+  color: #899ba6;
+  font-size: 12rem;
+  line-height: 14rem;
+  font-weight: 500;
+  text-align: right;
+  white-space: normal;
+  transform: translate(-100%, -50%);
 }
 
 .rtw-timetable-chart-grid {
@@ -797,8 +949,7 @@
   stroke: rgba(203, 213, 225, 0.08);
 }
 
-.rtw-timetable-chart-time,
-.rtw-timetable-chart-station {
+.rtw-timetable-chart-time {
   fill: #899ba6;
   font-size: 12px;
   font-weight: 500;
@@ -813,8 +964,8 @@
 }
 
 .rtw-timetable-chart-point {
-  stroke: rgba(13, 20, 27, 0.90);
-  stroke-width: 1;
+  fill: #f8fafc;
+  stroke: none;
 }
 
 .rtw-timetable-schedule-section {
@@ -832,9 +983,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   flex: 0 0 auto;
   margin-bottom: 12rem;
+  padding-right: 8rem;
   padding-bottom: 12rem;
+  padding-left: 8rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
 }
 
@@ -890,36 +1044,6 @@
   background: transparent;
 }
 
-.rtw-timetable-theory-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 36rem;
-  flex: 0 0 auto;
-  min-width: 126rem;
-  border: 1px solid rgba(192, 132, 252, 0.56);
-  padding-right: 16rem;
-  padding-left: 16rem;
-  background: rgba(192, 132, 252, 0.16);
-  color: #c084fc;
-  font-size: 12rem;
-  line-height: 16rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
-}
-
-.rtw-timetable-theory-button:hover {
-  border-color: rgba(192, 132, 252, 0.78);
-  background: rgba(192, 132, 252, 0.24);
-  color: #d8b4fe;
-}
-
-.rtw-timetable-theory-button.is-preparing {
-  cursor: default;
-  animation: rtw-timetable-theory-pulse 900ms ease-in-out infinite alternate;
-}
-
 .rtw-timetable-theory-spinner {
   width: 13rem;
   height: 13rem;
@@ -941,6 +1065,9 @@
 }
 
 .rtw-timetable-arrival-source button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 24rem;
   margin-left: 6rem;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -953,6 +1080,28 @@
   line-height: 15rem;
   font-weight: 600;
   cursor: pointer;
+}
+
+.rtw-timetable-arrival-source button.is-theory.is-waiting,
+.rtw-timetable-arrival-source button.is-theory.is-calculating,
+.rtw-timetable-arrival-source button.is-theory.is-unavailable {
+  cursor: default;
+}
+
+.rtw-timetable-arrival-source button.is-theory.is-waiting {
+  color: #8fa0aa;
+}
+
+.rtw-timetable-arrival-source button.is-theory.is-calculating {
+  border-color: rgba(192, 132, 252, 0.40);
+  background: rgba(192, 132, 252, 0.10);
+  color: #d8b4fe;
+}
+
+.rtw-timetable-arrival-source button.is-theory.is-unavailable {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.03);
+  color: #71808a;
 }
 
 .rtw-timetable-arrival-source button.is-active {
@@ -1117,20 +1266,63 @@
   text-align: center;
 }
 
-.rtw-timetable-table.is-summary .is-trip,
-.rtw-timetable-table.is-summary .is-mode,
-.rtw-timetable-table.is-summary .is-action {
+.rtw-timetable-table.is-summary .rtw-timetable-table-body {
+  display: flex;
+  flex-wrap: wrap;
+  padding-right: 8rem;
+  padding-bottom: 8rem;
+  padding-left: 8rem;
+}
+
+.rtw-timetable-summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 33.333%;
+  min-width: 0;
+  min-height: 52rem;
   flex: 0 0 33.333%;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-right: 16rem;
+  padding-left: 16rem;
+  background: transparent;
+  color: #d8e3e9;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease;
 }
 
-.rtw-timetable-table.is-summary .is-trip {
+.rtw-timetable-summary-item:hover {
+  border-bottom-color: rgba(116, 193, 193, 0.48);
+  background: rgba(116, 193, 193, 0.08);
+}
+
+.rtw-timetable-summary-item:active {
+  border-bottom-color: rgba(116, 193, 193, 0.68);
+  background: rgba(116, 193, 193, 0.14);
+}
+
+.rtw-timetable-summary-time {
+  min-width: 0;
+  overflow: hidden;
+  color: #f0fbff;
+  font-size: 15rem;
+  line-height: 20rem;
+  font-weight: 700;
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 180ms ease;
 }
 
-.rtw-timetable-table.is-summary .is-mode {
-  justify-content: center;
-  text-align: center;
+.rtw-timetable-summary-item:hover .rtw-timetable-summary-time,
+.rtw-timetable-summary-item:active .rtw-timetable-summary-time {
+  color: #81d4d4;
+}
+
+.rtw-timetable-summary-item .dw-demo-badge {
+  flex: 0 0 auto;
+  margin-left: 16rem;
 }
 
 .rtw-timetable-table .is-strong {
@@ -1149,13 +1341,15 @@
 }
 
 .rtw-timetable-table.is-edit {
-  /* 48 row padding + 132 + 96 + 208 + 120 + 176 columns. */
-  min-width: 780rem;
+  /* 48 row padding + 132 + 96 + 202 + 142 + 176 columns. */
+  min-width: 796rem;
 }
 
 .rtw-timetable-table.is-edit .is-section {
   width: 132rem;
-  flex: 0 0 132rem;
+  min-width: 132rem;
+  max-width: 220rem;
+  flex: 1 1 132rem;
 }
 
 .rtw-timetable-table.is-edit .is-time {
@@ -1163,9 +1357,14 @@
   flex: 0 0 96rem;
 }
 
+.rtw-timetable-table.is-edit .is-arrival {
+  width: 96rem;
+  flex: 0 0 96rem;
+}
+
 .rtw-timetable-table.is-edit .is-departure {
-  width: 208rem;
-  flex: 0 0 208rem;
+  width: 202rem;
+  flex: 0 0 202rem;
 }
 
 .rtw-timetable-stop-cell,
@@ -1175,15 +1374,24 @@
 }
 
 .rtw-timetable-table.is-edit .is-next {
-  width: 120rem;
-  flex: 0 0 120rem;
+  width: 142rem;
+  min-width: 142rem;
+  max-width: 220rem;
+  flex: 0 1 142rem;
   color: #c6d4dc;
+}
+
+.rtw-timetable-shell.is-sidebar-collapsed .rtw-timetable-table.is-edit .is-next {
+  width: 220rem;
+  min-width: 220rem;
+  flex-basis: 220rem;
 }
 
 .rtw-timetable-table.is-edit .is-runtime {
   width: 176rem;
   flex: 0 0 176rem;
   min-width: 0;
+  padding-left: 12rem;
   overflow: hidden;
   color: #9dacbe;
   font-variant-numeric: tabular-nums;
@@ -1205,43 +1413,69 @@
 
 .rtw-timetable-table.is-edit .is-next > span {
   min-width: 0;
+  max-height: 36rem;
   overflow: hidden;
+  white-space: normal;
+  line-height: 18rem;
   text-overflow: ellipsis;
 }
 
 .rtw-timetable-stop-name {
   flex: 0 1 auto;
   min-width: 0;
+  max-height: 36rem;
   overflow: hidden;
   color: #edf5f9;
   font-size: 14rem;
-  line-height: 20rem;
+  line-height: 18rem;
   font-weight: 700;
   text-overflow: ellipsis;
+  white-space: normal;
 }
 
 .rtw-timetable-stop-tag {
   display: flex;
   align-items: center;
-  height: 24rem;
+  height: 20rem;
   flex: 0 0 auto;
-  margin-left: 12rem;
+  margin-left: 8rem;
   border: 1px solid rgba(116, 193, 193, 0.34);
   border-radius: 999rem;
-  padding-right: 8rem;
-  padding-left: 8rem;
+  padding-right: 6rem;
+  padding-left: 6rem;
   background: rgba(116, 193, 193, 0.08);
   color: #74c1c1;
-  font-size: 12rem;
-  line-height: 16rem;
+  font-size: 11rem;
+  line-height: 14rem;
   font-weight: 700;
 }
 
 .rtw-timetable-table.is-edit .is-arrival {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #8294aa;
   font-size: 15rem;
   line-height: 20rem;
   font-weight: 600;
+}
+
+.rtw-timetable-service-time {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.rtw-timetable-day-mark {
+  margin-left: 0;
+  color: #74c1c1;
+  font-size: 12rem;
+  line-height: 14rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .rtw-timetable-table.is-edit .is-departure {
@@ -1269,8 +1503,8 @@
 }
 
 .rtw-timetable-table.is-edit .rtw-timetable-time-field {
-  width: 82rem;
-  flex: 0 0 82rem;
+  width: 76rem;
+  flex: 0 0 76rem;
   margin: 0;
 }
 
@@ -1297,12 +1531,12 @@
 
 .rtw-timetable-table.is-edit .rtw-timetable-time-field .dw-demo-input-row,
 .rtw-timetable-table.is-edit .rtw-timetable-time-field .dw-demo-input {
-  width: 82rem;
+  width: 76rem;
 }
 
 .rtw-timetable-table.is-edit .rtw-timetable-time-field .dw-demo-input {
   height: 35rem;
-  flex: 0 0 82rem;
+  flex: 0 0 76rem;
   padding-top: 8rem;
   padding-right: 8rem;
   padding-bottom: 2px;
@@ -1321,27 +1555,6 @@
 .rtw-timetable-table.is-edit .rtw-timetable-time-field .dw-demo-input:focus {
   border-bottom-color: #74c1c1;
   background: rgba(116, 193, 193, 0.08);
-}
-
-.rtw-timetable-link {
-  min-width: 84rem;
-  height: 32rem;
-  border: 1px solid rgba(116, 193, 193, 0.36);
-  padding-right: 12rem;
-  padding-left: 12rem;
-  background: transparent;
-  color: #74c1c1;
-  font-size: 11rem;
-  line-height: 14rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
-}
-
-.rtw-timetable-link:hover {
-  border-color: rgba(116, 193, 193, 0.62);
-  background: rgba(116, 193, 193, 0.10);
-  color: #9bd7d7;
 }
 
 .rtw-timetable-monitor {
@@ -1421,10 +1634,6 @@
   cursor: pointer;
 }
 
-.rtw-timetable-summary-row {
-  cursor: pointer;
-}
-
 .rtw-timetable-monitor-row.is-expanded {
   box-shadow: inset 2px 0 0 #74c1c1;
   background: rgba(116, 193, 193, 0.06);
@@ -1471,7 +1680,8 @@
 }
 
 .rtw-timetable-station-cell .rtw-timetable-icon,
-.rtw-timetable-station-end {
+.rtw-timetable-station-end,
+.rtw-timetable-station-spacer {
   width: 12rem;
   height: 12rem;
   flex: 0 0 12rem;
@@ -1488,15 +1698,6 @@
 @keyframes rtw-timetable-theory-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes rtw-timetable-theory-pulse {
-  from {
-    background: rgba(192, 132, 252, 0.12);
-  }
-  to {
-    background: rgba(192, 132, 252, 0.24);
   }
 }
 

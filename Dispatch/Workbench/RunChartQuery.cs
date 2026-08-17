@@ -127,6 +127,9 @@ namespace RapidTransitMod.Dispatch.Workbench
         private const int TimeoutMilliseconds = 8000;
         private const int MaxResults = 512;
         private const int MaxResultsPerEditor = 32;
+        private const uint TheoryRetryDelayFrames = 60;
+        private const uint TheoryLongRetryDelayFrames = 240;
+        private const int MaxTheoryRetries = 2;
         private readonly EntityManager m_Entities;
         private readonly RoutePlanQuery m_RoutePlans;
         private readonly ObservationPort m_Observation;
@@ -137,6 +140,14 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Action<RunTimeInvalidationDto> m_PushInvalidation;
         private readonly Dictionary<string, FullRunTimeSession> m_Active = new Dictionary<string, FullRunTimeSession>(StringComparer.Ordinal);
         private readonly Dictionary<string, FullRunTimeResult> m_Results = new Dictionary<string, FullRunTimeResult>(StringComparer.Ordinal);
+        private readonly Dictionary<string, TheoryEntry> m_Theory = new Dictionary<string, TheoryEntry>(StringComparer.Ordinal);
+        private readonly Dictionary<string, TheoryWaiter> m_TheoryWaiters = new Dictionary<string, TheoryWaiter>(StringComparer.Ordinal);
+        private readonly Queue<string> m_TheoryQueue = new Queue<string>();
+        private readonly HashSet<string> m_TheoryQueued = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> m_TheoryLines = new HashSet<string>(StringComparer.Ordinal);
+        private TheoryEntry m_TheoryActive;
+        private uint m_TheoryWakeFrame;
+        private bool m_TheoryPaused;
         private long m_NextResultOrder;
 
         internal FullRunTimeQuery(EntityManager entities, RoutePlanQuery routePlans, ObservationPort observation,
@@ -163,27 +174,39 @@ namespace RapidTransitMod.Dispatch.Workbench
                 && request.source != "theory"
                 && request.source != "monitorAverage"
                 && request.source != "busHistorical") return Failure(string.Empty, editor, "run-time-source-invalid");
+            if (request.source == "theory")
+                return StartTheory(request);
             ClearActive(editor, request.lineId, request.source);
             ClearResults(editor, request.lineId, request.source);
             Entity line = m_LineById(request.lineId);
             if (line == Entity.Null || !m_Entities.Exists(line)) return Failure(string.Empty, editor, "run-time-line-missing");
             LifecycleKind lifecycle = TransportModeProfile.GetProfile(TransportModeResolver.Resolve(m_Entities, line)).Lifecycle;
-            if (!m_RoutePlans.TryGet(line, lifecycle, out RoutePlan plan) || plan.Waypoints.Length > MaxWaypoints)
-                return Failure(string.Empty, editor, "run-time-route-plan-unavailable");
-            int[] stops = plan.Stops.Select(stop => stop.WaypointIndex).ToArray();
-            int segmentCount = request.source == "sliceHistoricalEstimate"
-                ? stops.Length - 1
-                : stops.Length;
-            if (stops.Length < 2 || segmentCount > MaxSegments)
-                return Failure(string.Empty, editor, "run-time-segment-limit");
             FullRunTimeSession session = new FullRunTimeSession
             {
                 Id = Guid.NewGuid().ToString("N"), EditorSessionId = editor, Line = line,
                 LineId = request.lineId ?? string.Empty, Lifecycle = lifecycle, Source = request.source,
-                Plan = plan, StopWaypointIndices = stops, Generation = m_LineGeneration(request.lineId)
+                Generation = m_LineGeneration(request.lineId),
+                FramesPerMinute = m_FramesPerMinute()
             };
-            session.Dwells = request.source == "busHistorical"
-                || request.source == "sliceHistoricalEstimate"
+            if (request.source == "busHistorical")
+            {
+                if (lifecycle != LifecycleKind.Road)
+                    return Failure(session, "bus-historical-unsupported");
+                session.State = "Running";
+                session.Complete = false;
+                session.StartTicks = Stopwatch.GetTimestamp();
+                m_Active[ActiveKey(session)] = session;
+                return Status(session);
+            }
+            if (!m_RoutePlans.TryGet(line, lifecycle, out RoutePlan plan) || plan.Waypoints.Length > MaxWaypoints)
+                return Failure(string.Empty, editor, "run-time-route-plan-unavailable");
+            int[] stops = plan.Stops.Select(stop => stop.WaypointIndex).ToArray();
+            int segmentCount = stops.Length;
+            if (stops.Length < 2 || segmentCount > MaxSegments)
+                return Failure(string.Empty, editor, "run-time-segment-limit");
+            session.Plan = plan;
+            session.StopWaypointIndices = stops;
+            session.Dwells = request.source == "sliceHistoricalEstimate"
                 ? new List<RunChartDwell>()
                 : BuildDwells(session);
             if (request.source == "sliceHistoricalEstimate")
@@ -215,43 +238,132 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_Active[ActiveKey(session)] = session;
                 return Status(session);
             }
-            if (request.source == "busHistorical")
+            return Failure(session, "run-time-source-invalid");
+        }
+
+        private DispatchWorkbenchRunTimeQueryStatusDto StartTheory(
+            DispatchWorkbenchRunTimeQueryRequestDto request)
+        {
+            string editor = request.editorSessionId ?? string.Empty;
+            string lineId = request.lineId ?? string.Empty;
+            if (string.IsNullOrEmpty(lineId))
+                return Failure(string.Empty, editor, "run-time-line-missing");
+
+            RemoveTheoryWaiter(editor, lineId);
+            if (TryFindTheoryResult(lineId, out FullRunTimeResult result))
             {
-                if (lifecycle != LifecycleKind.Road)
-                    return Failure(session, "bus-historical-unsupported");
-                if (!BuildBusHistorical(session, out string detail))
-                    return Failure(session, "bus-historical-missing", detail);
-                Complete(session);
-                m_Active[ActiveKey(session)] = session;
-                return Status(session);
+                TheoryWaiter ready = AddTheoryWaiter(editor, lineId);
+                ready.State = "Completed";
+                ready.ResultId = result.ResultId;
+                ready.StopSig = result.StopSig;
+                return TheoryStatus(ready, result);
             }
-            if (lifecycle != LifecycleKind.Rail) return Failure(session, "run-time-theory-unsupported");
-            if (!ResolveModel(line, out session.Model, out session.SecondaryModel,
-                    out session.ModelEntryIndex))
-                return Failure(session, "run-time-model-unavailable");
+
+            Entity line = m_LineById(lineId);
+            if (line == Entity.Null || !m_Entities.Exists(line))
+                return Failure(string.Empty, editor, "run-time-line-missing");
+
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Entities, line)).Lifecycle;
+            if (lifecycle != LifecycleKind.Rail)
+                return Failure(string.Empty, editor, "run-time-theory-unsupported");
+
+            TheoryWaiter waiter = AddTheoryWaiter(editor, lineId);
+            if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry))
+            {
+                waiter.State = "Queued";
+                return TheoryStatus(waiter, null);
+            }
+
+            waiter.State = entry.State == "Completed" ? "Queued" : entry.State;
+            waiter.ResultId = waiter.State == "Completed" ? entry.ResultId : string.Empty;
+            waiter.StopSig = entry.Session?.Plan?.StopSig ?? string.Empty;
+            return TheoryStatus(waiter, FindTheoryResult(lineId));
+        }
+
+        private bool TryBuildTheory(
+            string lineId,
+            out FullRunTimeSession session,
+            out string error,
+            out string detail)
+        {
+            session = null;
+            error = string.Empty;
+            detail = string.Empty;
+            Entity line = m_LineById(lineId);
+            if (line == Entity.Null || !m_Entities.Exists(line))
+            {
+                error = "run-time-line-missing";
+                return false;
+            }
+
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Entities, line)).Lifecycle;
+            if (lifecycle != LifecycleKind.Rail)
+            {
+                error = "run-time-theory-unsupported";
+                return false;
+            }
+            if (!m_RoutePlans.TryGet(line, lifecycle, out RoutePlan plan)
+                || plan.Waypoints.Length > MaxWaypoints)
+            {
+                error = "run-time-route-plan-unavailable";
+                return false;
+            }
+
+            int[] stops = plan.Stops.Select(stop => stop.WaypointIndex).ToArray();
+            if (stops.Length < 2 || stops.Length > MaxSegments)
+            {
+                error = "run-time-segment-limit";
+                return false;
+            }
+
+            session = new FullRunTimeSession
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                EditorSessionId = string.Empty,
+                Line = line,
+                LineId = lineId ?? string.Empty,
+                Lifecycle = lifecycle,
+                Source = "theory",
+                Plan = plan,
+                StopWaypointIndices = stops,
+                Generation = m_LineGeneration(lineId),
+                FramesPerMinute = m_FramesPerMinute()
+            };
+            session.Dwells = BuildDwells(session);
             session.WaypointIndices = Enumerable.Range(0, plan.Waypoints.Length).ToArray();
             session.RouteSignature = RunChartSignatures.Route(m_Entities, line, plan);
             session.PathSignature = RunChartSignatures.Path(m_Entities, line, session.WaypointIndices);
+            if (!ResolveModel(line, out session.Model, out session.SecondaryModel,
+                    out session.ModelEntryIndex))
+            {
+                error = "run-time-model-unavailable";
+                return false;
+            }
             session.ModelSignature = RunChartSignatures.Model(m_Entities, session.Model, session.SecondaryModel);
-            session.ModelPairSignature = RunChartSignatures.ModelPair(m_Entities, line, session.ModelEntryIndex, session.Model, session.SecondaryModel);
+            session.ModelPairSignature = RunChartSignatures.ModelPair(
+                m_Entities,
+                line,
+                session.ModelEntryIndex,
+                session.Model,
+                session.SecondaryModel);
             RailEtaTheorySegmentRequest[] requests = BuildTheoryRequests(session);
-            RailEtaBridgeService service = RailEtaBridgeService.Current;
-            if (session.RouteSignature == 0 || session.PathSignature == 0 || session.ModelSignature == 0
-                || session.ModelPairSignature == 0 || requests.Length == 0 || requests.Length > MaxPathSlots)
-                return Failure(session, "run-time-theory-signature-invalid");
-            if (service == null || !service.CanSubmit) return Failure(session, "run-time-theory-busy");
-            session.Ticket = service.RequestTheorySegments(line.Index, line.Version, session.Model.Index, session.Model.Version,
-                requests, session.SecondaryModel.Index, session.SecondaryModel.Version, session.RouteSignature,
-                session.PathSignature, session.ModelSignature);
-            if (!session.Ticket.IsValid) return Failure(session, "run-time-theory-submit-failed");
-            session.State = "Running";
-            session.StartTicks = Stopwatch.GetTimestamp();
-            m_Active[ActiveKey(session)] = session;
-            return Status(session);
+            if (session.RouteSignature == 0 || session.PathSignature == 0
+                || session.ModelSignature == 0 || session.ModelPairSignature == 0
+                || requests.Length == 0 || requests.Length > MaxPathSlots)
+            {
+                error = "run-time-theory-signature-invalid";
+                return false;
+            }
+            session.TheoryRequests = requests;
+            return true;
         }
 
         internal DispatchWorkbenchRunTimeQueryStatusDto Status(string editorSessionId, string queryId = null)
         {
+            if (TryFindTheoryWaiter(editorSessionId, queryId, out TheoryWaiter theoryWaiter))
+                return TheoryStatus(theoryWaiter, FindTheoryResult(theoryWaiter.LineId));
             if (!TryFindActive(editorSessionId, queryId, out _, out FullRunTimeSession session))
                 return Failure(queryId ?? string.Empty, editorSessionId, "run-time-query-missing");
             return Status(session);
@@ -259,6 +371,15 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal DispatchWorkbenchRunTimeQueryStatusDto Cancel(string editorSessionId, string queryId)
         {
+            if (TryFindTheoryWaiter(editorSessionId, queryId, out TheoryWaiter theoryWaiter))
+            {
+                theoryWaiter.State = "Cancelled";
+                theoryWaiter.Error = "run-time-query-cancelled";
+                theoryWaiter.ResultId = string.Empty;
+                DispatchWorkbenchRunTimeQueryStatusDto theoryCancelled = TheoryStatus(theoryWaiter, null);
+                m_TheoryWaiters.Remove(TheoryWaiterKey(theoryWaiter.EditorSessionId, theoryWaiter.LineId));
+                return theoryCancelled;
+            }
             if (!TryFindActive(editorSessionId, queryId, out string activeKey, out FullRunTimeSession session))
                 return Failure(queryId ?? string.Empty, editorSessionId, "run-time-query-missing");
             if (session.Ticket.IsValid) RailEtaBridgeService.Current?.Cancel(session.Ticket);
@@ -288,7 +409,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             };
         }
 
-        internal void Tick()
+        internal void Tick(uint nowFrame = 0)
         {
             foreach (FullRunTimeSession session in m_Active.Values.ToArray())
             {
@@ -297,6 +418,478 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Poll(session);
                 if (before != session.State) m_Push(Status(session));
             }
+            TickTheory(nowFrame);
+        }
+
+        internal void SyncPrewarm(IEnumerable<WorkbenchLineRuntime> lines)
+        {
+            HashSet<string> current = new HashSet<string>(StringComparer.Ordinal);
+            foreach (WorkbenchLineRuntime line in lines ?? Enumerable.Empty<WorkbenchLineRuntime>())
+            {
+                string lineId = line?.Id ?? string.Empty;
+                if (string.IsNullOrEmpty(lineId) || line.Entity == Entity.Null
+                    || !m_Entities.Exists(line.Entity))
+                    continue;
+                LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(m_Entities, line.Entity)).Lifecycle;
+                if (lifecycle != LifecycleKind.Rail)
+                    continue;
+
+                current.Add(lineId);
+                m_TheoryLines.Add(lineId);
+                if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry))
+                {
+                    if (!TryFindTheoryResult(lineId, out _))
+                        QueueTheory(lineId, false);
+                    continue;
+                }
+
+                if (entry.State == "Completed" && !TryFindTheoryResult(lineId, out _))
+                    QueueTheory(lineId, true);
+            }
+
+            foreach (string lineId in m_TheoryLines
+                .Where(lineId => !current.Contains(lineId))
+                .ToArray())
+            {
+                m_TheoryLines.Remove(lineId);
+            }
+        }
+
+        private void TickTheory(uint nowFrame)
+        {
+            TheoryEntry active = m_TheoryActive;
+            if (active != null)
+            {
+                if (active.Session != null && active.Session.State == "Running")
+                {
+                    PollTheory(active, nowFrame);
+                    return;
+                }
+                m_TheoryActive = null;
+            }
+            if (nowFrame < m_TheoryWakeFrame)
+                return;
+
+            RailEtaBridgeService service = RailEtaBridgeService.Current;
+            if (m_TheoryPaused)
+            {
+                if (service == null || service.WorkerLost || service.HotGeneration == 0
+                    || !service.CanSubmit)
+                {
+                    m_TheoryWakeFrame = nowFrame + TheoryRetryDelayFrames;
+                    return;
+                }
+                m_TheoryPaused = false;
+            }
+            if (service == null || service.WorkerLost || service.HotGeneration == 0)
+            {
+                m_TheoryPaused = true;
+                m_TheoryWakeFrame = nowFrame + TheoryRetryDelayFrames;
+                return;
+            }
+
+            TheoryEntry next = DequeueTheory(nowFrame);
+            if (next == null)
+                return;
+            if (!service.CanSubmit)
+            {
+                RequeueTheory(next, nowFrame, TheoryRetryDelayFrames);
+                m_TheoryWakeFrame = nowFrame + TheoryRetryDelayFrames;
+                return;
+            }
+            if (!TryBuildTheory(next.LineId, out FullRunTimeSession session,
+                    out string error, out string detail))
+            {
+                FinishTheory(next, "Unavailable", error, detail, nowFrame);
+                return;
+            }
+
+            RailEtaTheorySegmentRequest[] requests = session.TheoryRequests ?? Array.Empty<RailEtaTheorySegmentRequest>();
+            RailEtaPublicTicket ticket;
+            try
+            {
+                ticket = service.RequestTheorySegments(
+                    session.Line.Index,
+                    session.Line.Version,
+                    session.Model.Index,
+                    session.Model.Version,
+                    requests,
+                    session.SecondaryModel.Index,
+                    session.SecondaryModel.Version,
+                    session.RouteSignature,
+                    session.PathSignature,
+                    session.ModelSignature);
+            }
+            catch (Exception ex)
+            {
+                RetryTheory(next, "run-time-theory-submit-failed", ex.Message, nowFrame);
+                return;
+            }
+            if (!ticket.IsValid)
+            {
+                m_TheoryPaused = true;
+                RequeueTheory(next, nowFrame, TheoryRetryDelayFrames);
+                return;
+            }
+
+            next.Session = session;
+            next.Session.Ticket = ticket;
+            next.Session.State = "Running";
+            next.Session.StartTicks = Stopwatch.GetTimestamp();
+            next.State = "Running";
+            next.Error = string.Empty;
+            next.Detail = string.Empty;
+            m_TheoryActive = next;
+            PushTheoryWaiters(next);
+        }
+
+        private TheoryEntry DequeueTheory(uint nowFrame)
+        {
+            int count = m_TheoryQueue.Count;
+            TheoryEntry fallback = null;
+            uint earliestFrame = 0;
+            for (int i = 0; i < count; i++)
+            {
+                string lineId = m_TheoryQueue.Dequeue();
+                m_TheoryQueued.Remove(lineId);
+                if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry)
+                    || entry.State != "Queued")
+                    continue;
+                if (entry.NextFrame > nowFrame)
+                {
+                    m_TheoryQueue.Enqueue(lineId);
+                    m_TheoryQueued.Add(lineId);
+                    if (fallback == null || entry.NextFrame < earliestFrame)
+                    {
+                        fallback = entry;
+                        earliestFrame = entry.NextFrame;
+                    }
+                    continue;
+                }
+                return entry;
+            }
+            if (fallback != null)
+                m_TheoryWakeFrame = fallback.NextFrame;
+            return null;
+        }
+
+        private void PollTheory(TheoryEntry entry, uint nowFrame)
+        {
+            FullRunTimeSession session = entry.Session;
+            if (session == null)
+            {
+                ClearTheoryActive(entry);
+                return;
+            }
+            if (m_LineGeneration(session.LineId) != session.Generation)
+            {
+                FinishTheory(entry, "Unavailable", "run-time-line-invalidated", string.Empty, nowFrame);
+                return;
+            }
+            if (Elapsed(session.StartTicks) >= TimeoutMilliseconds)
+            {
+                RetryTheory(entry, "run-time-theory-timeout", string.Empty, nowFrame);
+                return;
+            }
+
+            RailEtaBridgeService service = RailEtaBridgeService.Current;
+            if (service == null || !service.TryGetState(session.Ticket, out RailEtaPublicStatus status))
+            {
+                RetryTheory(entry, "run-time-theory-status-missing", string.Empty, nowFrame);
+                return;
+            }
+            if (status.State == "Completed")
+            {
+                if (ApplyTheory(session, status.TheorySegments))
+                    CompleteTheory(entry);
+                else
+                    FinishTheory(entry, "Unavailable", "run-time-theory-result-invalid", status.Detail, nowFrame);
+                return;
+            }
+
+            string failure = status.Failure ?? string.Empty;
+            string detail = status.Detail ?? string.Empty;
+            if (status.State == "Cancelled" || status.State == "Busy" || status.State == "ClockChanged")
+            {
+                RequeueTheory(entry, nowFrame, TheoryRetryDelayFrames);
+                return;
+            }
+            if (status.State == "WorkerLost" || status.State == "Unavailable")
+            {
+                m_TheoryPaused = true;
+                RequeueTheory(entry, nowFrame, TheoryRetryDelayFrames);
+                return;
+            }
+            if (status.State == "NotConverged")
+            {
+                FinishTheory(entry, "Unavailable", failure, detail, nowFrame);
+                return;
+            }
+            if (status.State == "Failed")
+            {
+                if (IsTemporaryTheoryFailure(failure, detail))
+                    RetryTheory(entry, failure, detail, nowFrame);
+                else
+                    FinishTheory(entry, "Unavailable", failure, detail, nowFrame);
+            }
+        }
+
+        private void CompleteTheory(TheoryEntry entry)
+        {
+            FullRunTimeSession session = entry.Session;
+            ClearTheoryActive(entry);
+            session.State = "Completed";
+            session.ResultId = StoreResult(session);
+            entry.State = "Completed";
+            entry.Error = string.Empty;
+            entry.Detail = string.Empty;
+            entry.ResultId = session.ResultId;
+            entry.Session = null;
+            Release(session);
+            PushTheoryWaiters(entry);
+        }
+
+        private void RetryTheory(TheoryEntry entry, string error, string detail, uint nowFrame)
+        {
+            FullRunTimeSession session = entry.Session;
+            ClearTheoryActive(entry);
+            entry.Session = null;
+            Release(session);
+            if (entry.RetryCount < MaxTheoryRetries)
+            {
+                entry.RetryCount++;
+                entry.State = "Queued";
+                entry.Error = string.Empty;
+                entry.Detail = string.Empty;
+                entry.NextFrame = nowFrame + (entry.RetryCount == 1
+                    ? TheoryRetryDelayFrames
+                    : TheoryLongRetryDelayFrames);
+                EnqueueTheory(entry);
+                PushTheoryWaiters(entry);
+                return;
+            }
+            FinishTheory(entry, "Unavailable", error, detail, nowFrame);
+        }
+
+        private void RequeueTheory(TheoryEntry entry, uint nowFrame, uint delay)
+        {
+            FullRunTimeSession session = entry.Session;
+            ClearTheoryActive(entry);
+            entry.Session = null;
+            Release(session);
+            entry.State = "Queued";
+            entry.Error = string.Empty;
+            entry.Detail = string.Empty;
+            entry.NextFrame = nowFrame + delay;
+            EnqueueTheory(entry);
+            PushTheoryWaiters(entry);
+        }
+
+        private void FinishTheory(
+            TheoryEntry entry,
+            string state,
+            string error,
+            string detail,
+            uint nowFrame)
+        {
+            FullRunTimeSession session = entry.Session;
+            ClearTheoryActive(entry);
+            entry.Session = null;
+            Release(session);
+            entry.State = state ?? "Unavailable";
+            entry.Error = error ?? string.Empty;
+            entry.Detail = detail ?? string.Empty;
+            entry.ResultId = string.Empty;
+            entry.NextFrame = nowFrame;
+            PushTheoryWaiters(entry);
+        }
+
+        private void QueueTheory(string lineId, bool force)
+        {
+            if (string.IsNullOrEmpty(lineId))
+                return;
+            if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry))
+            {
+                entry = new TheoryEntry { LineId = lineId, State = "Queued" };
+                m_Theory[lineId] = entry;
+            }
+            else if (!force && (entry.State == "Queued" || entry.State == "Running"))
+            {
+                return;
+            }
+            else if (!force && entry.State == "Unavailable"
+                && entry.Generation == m_LineGeneration(lineId))
+            {
+                return;
+            }
+            ClearTheoryActive(entry);
+            if (entry.Session != null)
+                Release(entry.Session);
+            entry.Session = null;
+            entry.State = "Queued";
+            entry.Error = string.Empty;
+            entry.Detail = string.Empty;
+            entry.ResultId = string.Empty;
+            entry.Generation = m_LineGeneration(lineId);
+            entry.RetryCount = 0;
+            entry.NextFrame = 0;
+            EnqueueTheory(entry);
+            PushTheoryWaiters(entry);
+        }
+
+        private void EnqueueTheory(TheoryEntry entry)
+        {
+            if (entry == null || entry.State != "Queued"
+                || !m_TheoryQueued.Add(entry.LineId))
+                return;
+            m_TheoryQueue.Enqueue(entry.LineId);
+        }
+
+        private void ClearTheoryActive(TheoryEntry entry)
+        {
+            if (ReferenceEquals(m_TheoryActive, entry))
+                m_TheoryActive = null;
+        }
+
+        private static bool IsTemporaryTheoryFailure(string failure, string detail)
+        {
+            string value = (failure ?? string.Empty) + " " + (detail ?? string.Empty);
+            return value.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0
+                || value.IndexOf("status-missing", StringComparison.OrdinalIgnoreCase) >= 0
+                || value.IndexOf("submit", StringComparison.OrdinalIgnoreCase) >= 0
+                || value.IndexOf("exception", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private TheoryWaiter AddTheoryWaiter(string editor, string lineId)
+        {
+            string key = TheoryWaiterKey(editor, lineId);
+            TheoryWaiter waiter = new TheoryWaiter
+            {
+                EditorSessionId = editor ?? string.Empty,
+                LineId = lineId ?? string.Empty,
+                QueryId = Guid.NewGuid().ToString("N"),
+                State = "Queued"
+            };
+            m_TheoryWaiters[key] = waiter;
+            return waiter;
+        }
+
+        private void RemoveTheoryWaiter(string editor, string lineId)
+        {
+            m_TheoryWaiters.Remove(TheoryWaiterKey(editor, lineId));
+        }
+
+        private bool TryFindTheoryWaiter(
+            string editor,
+            string queryId,
+            out TheoryWaiter waiter)
+        {
+            string editorId = editor ?? string.Empty;
+            waiter = m_TheoryWaiters.Values.FirstOrDefault(candidate =>
+                string.Equals(candidate.EditorSessionId, editorId, StringComparison.Ordinal)
+                && (string.IsNullOrEmpty(queryId)
+                    || string.Equals(candidate.QueryId, queryId, StringComparison.Ordinal)));
+            return waiter != null;
+        }
+
+        private void PushTheoryWaiters(TheoryEntry entry)
+        {
+            if (entry == null)
+                return;
+            FullRunTimeResult result = FindTheoryResult(entry.LineId);
+            foreach (TheoryWaiter waiter in m_TheoryWaiters.Values
+                .Where(waiter => string.Equals(waiter.LineId, entry.LineId, StringComparison.Ordinal))
+                .ToArray())
+            {
+                waiter.State = entry.State;
+                waiter.Error = entry.Error ?? string.Empty;
+                waiter.Detail = entry.Detail ?? string.Empty;
+                waiter.ResultId = entry.ResultId ?? string.Empty;
+                waiter.StopSig = entry.Session?.Plan?.StopSig ?? result?.StopSig ?? string.Empty;
+                m_Push(TheoryStatus(waiter, result));
+            }
+        }
+
+        private bool TryFindTheoryResult(string lineId, out FullRunTimeResult result)
+        {
+            result = FindTheoryResult(lineId);
+            return result != null;
+        }
+
+        private FullRunTimeResult FindTheoryResult(string lineId)
+        {
+            return m_Theory.TryGetValue(lineId, out TheoryEntry entry)
+                && !string.IsNullOrEmpty(entry.ResultId)
+                && m_Results.TryGetValue(entry.ResultId, out FullRunTimeResult result)
+                ? result
+                : null;
+        }
+
+        private static string TheoryWaiterKey(string editor, string lineId)
+        {
+            return (editor ?? string.Empty) + "\u001f" + (lineId ?? string.Empty);
+        }
+
+        private static DispatchWorkbenchRunChartSegmentDto[] SegmentDtos(
+            IEnumerable<RunChartSegment> segments)
+        {
+            return (segments ?? Enumerable.Empty<RunChartSegment>())
+                .Select(segment => new DispatchWorkbenchRunChartSegmentDto
+                {
+                    fromStopKey = segment.FromStopKey,
+                    toStopKey = segment.ToStopKey,
+                    fromWaypointIndex = segment.FromWaypointIndex,
+                    toWaypointIndex = segment.ToWaypointIndex,
+                    segmentFrames = segment.Frames,
+                    segmentMinutes = segment.Minutes,
+                    segmentMinutesExact = segment.ExactMinutes
+                })
+                .ToArray();
+        }
+
+        private static DispatchWorkbenchRunChartDwellDto[] DwellDtos(
+            IEnumerable<RunChartDwell> dwells)
+        {
+            return (dwells ?? Enumerable.Empty<RunChartDwell>())
+                .Select(dwell => new DispatchWorkbenchRunChartDwellDto
+                {
+                    stopKey = dwell.StopKey ?? string.Empty,
+                    waypointIndex = dwell.WaypointIndex,
+                    averageFrames = dwell.Frames,
+                    averageMinutes = dwell.Minutes,
+                    sampleCount = dwell.SampleCount,
+                    hasObservation = dwell.HasObservation
+                })
+                .ToArray();
+        }
+
+        private static DispatchWorkbenchRunTimeQueryStatusDto TheoryStatus(
+            TheoryWaiter waiter,
+            FullRunTimeResult result)
+        {
+            return new DispatchWorkbenchRunTimeQueryStatusDto
+            {
+                queryId = waiter?.QueryId ?? string.Empty,
+                editorSessionId = waiter?.EditorSessionId ?? string.Empty,
+                state = waiter?.State ?? "Unavailable",
+                resultId = !string.IsNullOrEmpty(waiter?.ResultId)
+                    ? waiter.ResultId
+                    : result?.ResultId ?? string.Empty,
+                error = waiter?.Error ?? string.Empty,
+                detail = waiter?.Detail ?? string.Empty,
+                lineId = waiter?.LineId ?? result?.LineId ?? string.Empty,
+                source = "theory",
+                stopSig = !string.IsNullOrEmpty(waiter?.StopSig)
+                    ? waiter.StopSig
+                    : result?.StopSig ?? string.Empty,
+                sourceRevision = result?.SourceRevision ?? 0UL,
+                complete = result != null,
+                prefixStopCount = result?.StopKeys?.Length ?? 0,
+                missingKind = "none",
+                segments = SegmentDtos(result?.Segments),
+                dwells = DwellDtos(result?.Dwells)
+            };
         }
 
         internal bool TryGetResult(string editorSessionId, string resultId, out FullRunTimeResult result)
@@ -304,7 +897,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             result = null;
             return !string.IsNullOrEmpty(editorSessionId) && !string.IsNullOrEmpty(resultId)
                 && m_Results.TryGetValue(resultId, out result)
-                && result.EditorSessionId == editorSessionId
+                && (result.Source == "theory" || result.EditorSessionId == editorSessionId)
                 && result.Generation == m_LineGeneration(result.LineId);
         }
 
@@ -314,7 +907,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Dictionary<string, RunTimeInvalidationDto> invalidations =
                 new Dictionary<string, RunTimeInvalidationDto>(StringComparer.Ordinal);
             foreach (FullRunTimeResult result in m_Results.Values
-                .Where(result => ids.Contains(result.LineId))
+                .Where(result => result.Source != "theory" && ids.Contains(result.LineId))
                 .ToArray())
             {
                 AddInvalidation(invalidations, result.EditorSessionId, result.LineId, result.Source,
@@ -347,6 +940,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_Active.Remove(entry.Key);
                 }
             }
+            foreach (string lineId in ids)
+                ResetTheoryLine(lineId, "run-time-line-invalidated", invalidations, false);
             foreach (RunTimeInvalidationDto invalidation in invalidations.Values)
                 m_PushInvalidation(invalidation);
         }
@@ -369,7 +964,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             Dictionary<string, RunTimeInvalidationDto> invalidations =
                 new Dictionary<string, RunTimeInvalidationDto>(StringComparer.Ordinal);
             foreach (FullRunTimeResult result in m_Results.Values
-                .Where(result => (allLines || ids.Contains(result.LineId)) && sourceSet.Contains(result.Source))
+                .Where(result => result.Source != "theory"
+                    && (allLines || ids.Contains(result.LineId)) && sourceSet.Contains(result.Source))
                 .ToArray())
             {
                 AddInvalidation(invalidations, result.EditorSessionId, result.LineId, result.Source, reason);
@@ -386,15 +982,87 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Release(session);
                 m_Active.Remove(entry.Key);
             }
+            if (sourceSet.Contains("theory"))
+            {
+                IEnumerable<string> theoryLines = m_Theory.Keys
+                    .Where(lineId => allLines || ids.Contains(lineId))
+                    .ToArray();
+                foreach (string lineId in theoryLines)
+                    ResetTheoryLine(lineId, reason, invalidations, true);
+            }
             foreach (RunTimeInvalidationDto invalidation in invalidations.Values)
                 m_PushInvalidation(invalidation);
+        }
+
+        private void ResetTheoryLine(
+            string lineId,
+            string reason,
+            Dictionary<string, RunTimeInvalidationDto> invalidations,
+            bool requeue)
+        {
+            if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry))
+                return;
+
+            foreach (TheoryWaiter waiter in m_TheoryWaiters.Values
+                .Where(waiter => string.Equals(waiter.LineId, lineId, StringComparison.Ordinal))
+                .ToArray())
+            {
+                AddInvalidation(invalidations, waiter.EditorSessionId, lineId, "theory", reason);
+            }
+            if (!string.IsNullOrEmpty(entry.ResultId))
+                m_Results.Remove(entry.ResultId);
+            entry.ResultId = string.Empty;
+            ClearTheoryActive(entry);
+            if (entry.Session?.Ticket.IsValid == true)
+                RailEtaBridgeService.Current?.Cancel(entry.Session.Ticket);
+            Release(entry.Session);
+            m_Theory.Remove(lineId);
+            if (requeue && m_TheoryLines.Contains(lineId))
+                QueueTheory(lineId, true);
+        }
+
+        internal void RefreshBusHistorical(string lineId)
+        {
+            string key = lineId ?? string.Empty;
+            if (string.IsNullOrEmpty(key))
+                return;
+
+            foreach (FullRunTimeSession session in m_Active.Values
+                .Where(session => session != null
+                    && session.State != "Running"
+                    && !session.Complete
+                    && string.Equals(session.LineId, key, StringComparison.Ordinal)
+                    && string.Equals(session.Source, "busHistorical", StringComparison.Ordinal))
+                .ToArray())
+            {
+                ClearResults(session.EditorSessionId, session.LineId, session.Source);
+                session.State = "Running";
+                session.ResultId = string.Empty;
+                session.Error = string.Empty;
+                session.Detail = string.Empty;
+                session.Complete = false;
+                session.PrefixStopCount = 0;
+                session.MissingKind = "none";
+                session.Segments = null;
+                session.Dwells = new List<RunChartDwell>();
+                session.StartTicks = Stopwatch.GetTimestamp();
+                m_Push(Status(session));
+            }
         }
 
         internal void ClearEditor(string editorSessionId)
         {
             string editor = editorSessionId ?? string.Empty;
             ClearActive(editor);
-            foreach (string id in m_Results.Values.Where(result => result.EditorSessionId == editor).Select(result => result.ResultId).ToArray())
+            foreach (string key in m_TheoryWaiters
+                .Where(entry => string.Equals(entry.Value.EditorSessionId, editor, StringComparison.Ordinal))
+                .Select(entry => entry.Key)
+                .ToArray())
+                m_TheoryWaiters.Remove(key);
+            foreach (string id in m_Results.Values
+                .Where(result => result.Source != "theory" && result.EditorSessionId == editor)
+                .Select(result => result.ResultId)
+                .ToArray())
                 m_Results.Remove(id);
         }
 
@@ -481,39 +1149,66 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (session.Ticket.IsValid) RailEtaBridgeService.Current?.Cancel(session.Ticket);
                 Release(session);
             }
+            foreach (TheoryEntry entry in m_Theory.Values)
+            {
+                if (entry?.Session?.Ticket.IsValid == true)
+                    RailEtaBridgeService.Current?.Cancel(entry.Session.Ticket);
+                Release(entry?.Session);
+            }
             m_Active.Clear();
             m_Results.Clear();
+            m_Theory.Clear();
+            m_TheoryWaiters.Clear();
+            m_TheoryQueue.Clear();
+            m_TheoryQueued.Clear();
+            m_TheoryLines.Clear();
+            m_TheoryActive = null;
+            m_TheoryPaused = false;
+            m_TheoryWakeFrame = 0;
         }
 
         private void Poll(FullRunTimeSession session)
         {
-            if (Elapsed(session.StartTicks) >= TimeoutMilliseconds) { Fail(session, "run-time-theory-timeout"); return; }
             if (m_LineGeneration(session.LineId) != session.Generation) { Fail(session, "run-time-line-invalidated"); return; }
-            if (RailEtaBridgeService.Current == null || !RailEtaBridgeService.Current.TryGetState(session.Ticket, out RailEtaPublicStatus status))
-            { Fail(session, "run-time-theory-status-missing"); return; }
-            if (status.State == "Completed") { if (ApplyTheory(session, status.TheorySegments)) Complete(session); else Fail(session, "run-time-theory-result-invalid"); return; }
-            if (status.State == "Failed" || status.State == "Cancelled" || status.State == "Busy" || status.State == "Unavailable" || status.State == "ClockChanged" || status.State == "WorkerLost")
+            if (session.Source == "busHistorical")
+                PollBusHistorical(session);
+        }
+
+        private void PollBusHistorical(FullRunTimeSession session)
+        {
+            if (!m_RoutePlans.TryGet(session.Line, session.Lifecycle, out RoutePlan plan)
+                || plan.Waypoints.Length > MaxWaypoints)
             {
-                RailEtaTheoryFailure theoryFailure = status.TheoryFailure;
-                if (theoryFailure != null && (!string.IsNullOrEmpty(theoryFailure.Failure)
-                    || !string.IsNullOrEmpty(theoryFailure.Detail)))
-                {
-                    Fail(session,
-                        string.IsNullOrEmpty(theoryFailure.Failure) ? status.Failure : theoryFailure.Failure,
-                        theoryFailure.Detail);
-                }
-                else
-                {
-                    Fail(session, string.IsNullOrEmpty(status.Failure) ? status.Detail : status.Failure,
-                        status.Detail);
-                }
+                Fail(session, "run-time-route-plan-unavailable");
+                return;
             }
+            int[] stops = plan.Stops.Select(stop => stop.WaypointIndex).ToArray();
+            if (stops.Length < 2 || stops.Length > MaxSegments)
+            {
+                Fail(session, "run-time-segment-limit");
+                return;
+            }
+            session.Plan = plan;
+            session.StopWaypointIndices = stops;
+            session.Dwells = new List<RunChartDwell>();
+            if (!BuildBusHistorical(session, out string detail))
+            {
+                Fail(session, "bus-historical-invalid", detail);
+                return;
+            }
+            if (session.Complete)
+                Complete(session);
+            else
+                CompleteIncomplete(session, detail);
         }
 
         private bool BuildHistorical(FullRunTimeSession session, out string detail)
         {
             detail = string.Empty;
-            List<RunChartSegment> segments = BuildIntervals(session.Plan, session.StopWaypointIndices);
+            List<RunChartSegment> segments = BuildIntervals(
+                session.Plan,
+                session.StopWaypointIndices,
+                true);
             for (int i = 0; i < segments.Count; i++)
             {
                 RunChartSegment segment = segments[i];
@@ -536,11 +1231,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                     return true;
                 }
                 segment.Frames = (uint)Math.Max(1, Math.Round(frames));
-                segment.Minutes = ToMinutes(frames) + 5;
-                segment.ExactMinutes = ToExactMinutes(frames) + 5d;
+                segment.Minutes = ToMinutes(frames, session.FramesPerMinute) + 5;
+                segment.ExactMinutes = ToExactMinutes(frames, session.FramesPerMinute) + 5d;
                 segments[i] = segment;
 
-                if (i + 1 < session.StopWaypointIndices.Length - 1)
+                if (i + 1 < session.StopWaypointIndices.Length)
                 {
                     RunChartDwell dwell = BuildDwell(session, i + 1);
                     session.Dwells.Add(dwell);
@@ -579,7 +1274,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     session.Line,
                     session.Plan.StopSig,
                     out MonitorAverageSnapshot snapshot)
-                || snapshot.Segments.Length != session.Plan.Stops.Length)
+                || snapshot.AverageFrames.Length != session.Plan.Stops.Length)
             {
                 detail = "monitor-average-unavailable";
                 return false;
@@ -589,22 +1284,28 @@ namespace RapidTransitMod.Dispatch.Workbench
                 session.Plan,
                 session.StopWaypointIndices,
                 true);
-            if (segments.Count != snapshot.Segments.Length)
+            if (segments.Count != snapshot.AverageFrames.Length)
             {
                 detail = "monitor-average-layout-mismatch";
                 return false;
             }
             for (int i = 0; i < segments.Count; i++)
             {
-                int minutes = snapshot.Segments[i];
-                if (minutes <= 0)
+                double averageFrames = snapshot.AverageFrames[i];
+                if (!(averageFrames > 0d)
+                    || double.IsNaN(averageFrames)
+                    || double.IsInfinity(averageFrames)
+                    || averageFrames >= uint.MaxValue)
                 {
                     detail = "monitor-average-segment-invalid";
                     return false;
                 }
                 RunChartSegment segment = segments[i];
-                segment.Minutes = minutes;
-                segment.ExactMinutes = minutes;
+                segment.Frames = (uint)Math.Max(
+                    1d,
+                    Math.Round(averageFrames, MidpointRounding.AwayFromZero));
+                segment.Minutes = ToMinutes(averageFrames, session.FramesPerMinute);
+                segment.ExactMinutes = ToExactMinutes(averageFrames, session.FramesPerMinute);
                 segments[i] = segment;
             }
             session.SourceRevision = snapshot.Revision;
@@ -641,17 +1342,26 @@ namespace RapidTransitMod.Dispatch.Workbench
                         + ";from=" + from.WaypointIndex
                         + ";to=" + to.WaypointIndex
                         + ";code=bus-segment-missing";
-                    return false;
+                    segments.RemoveRange(i, segments.Count - i);
+                    session.Segments = segments;
+                    session.Complete = false;
+                    session.MissingKind = "busSegment";
+                    session.PrefixStopCount = segments.Count + 1;
+                    return true;
                 }
                 segment.Frames = (uint)Math.Max(1, Math.Round(frames));
-                segment.Minutes = ToMinutes(frames);
-                segment.ExactMinutes = ToExactMinutes(frames);
+                segment.Minutes = ToMinutes(frames, session.FramesPerMinute);
+                segment.ExactMinutes = ToExactMinutes(frames, session.FramesPerMinute);
                 segments[i] = segment;
             }
             session.Segments = segments;
             session.Complete = true;
+            session.MissingKind = "none";
             session.PrefixStopCount = segments.Count + 1;
-            return true;
+            if (segments.Count > 0)
+                return true;
+            detail = "code=no-segments";
+            return false;
         }
 
         private List<RunChartDwell> BuildDwells(FullRunTimeSession session)
@@ -676,7 +1386,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     out StationDwellObservation observation))
             {
                 dwell.Frames = observation.AverageFrames;
-                dwell.Minutes = ToMinutes(observation.AverageFrames);
+                dwell.Minutes = ToMinutes(observation.AverageFrames, session.FramesPerMinute);
                 dwell.SampleCount = observation.SampleCount;
                 dwell.HasObservation = true;
             }
@@ -696,8 +1406,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (result.FromWaypointIndex != segment.FromWaypointIndex || result.ToWaypointIndex != segment.ToWaypointIndex) return false;
                 seen[result.SegmentIndex] = true;
                 segment.Frames = result.SegmentFrames;
-                segment.Minutes = ToMinutes(result.SegmentFrames);
-                segment.ExactMinutes = ToExactMinutes(result.SegmentFrames);
+                segment.Minutes = ToMinutes(result.SegmentFrames, session.FramesPerMinute);
+                segment.ExactMinutes = ToExactMinutes(result.SegmentFrames, session.FramesPerMinute);
                 segments[result.SegmentIndex] = segment;
             }
             if (seen.Any(value => !value)) return false;
@@ -793,37 +1503,73 @@ namespace RapidTransitMod.Dispatch.Workbench
         private void Complete(FullRunTimeSession session)
         {
             session.State = "Completed";
-            foreach (string resultId in m_Results.Values
-                .Where(result => string.Equals(result.EditorSessionId, session.EditorSessionId, StringComparison.Ordinal)
-                    && string.Equals(result.LineId, session.LineId, StringComparison.Ordinal)
-                    && string.Equals(result.Source, session.Source, StringComparison.Ordinal))
-                .Select(result => result.ResultId)
-                .ToArray())
+            session.ResultId = StoreResult(session);
+            Release(session);
+        }
+
+        private string StoreResult(FullRunTimeSession session)
+        {
+            bool shared = session.Source == "theory";
+            if (shared)
             {
-                m_Results.Remove(resultId);
+                if (m_Theory.TryGetValue(session.LineId, out TheoryEntry previous))
+                {
+                    if (!string.IsNullOrEmpty(previous.ResultId))
+                        m_Results.Remove(previous.ResultId);
+                    previous.ResultId = string.Empty;
+                }
             }
-            session.ResultId = Guid.NewGuid().ToString("N");
-            m_Results[session.ResultId] = new FullRunTimeResult
+            else
             {
-                ResultId = session.ResultId, EditorSessionId = session.EditorSessionId, LineId = session.LineId,
+                foreach (string resultId in m_Results.Values
+                    .Where(result => string.Equals(result.EditorSessionId, session.EditorSessionId, StringComparison.Ordinal)
+                        && string.Equals(result.LineId, session.LineId, StringComparison.Ordinal)
+                        && string.Equals(result.Source, session.Source, StringComparison.Ordinal))
+                    .Select(result => result.ResultId)
+                    .ToArray())
+                {
+                    m_Results.Remove(resultId);
+                }
+            }
+            string storedResultId = Guid.NewGuid().ToString("N");
+            m_Results[storedResultId] = new FullRunTimeResult
+            {
+                ResultId = storedResultId, EditorSessionId = shared ? string.Empty : session.EditorSessionId,
+                LineId = session.LineId,
                 Line = session.Line, Source = session.Source, StopSig = session.Plan.StopSig, Generation = session.Generation,
                 SourceRevision = session.SourceRevision,
                 CompletedOrder = ++m_NextResultOrder,
                 StopKeys = session.Plan.Stops.Select(stop => stop.StopKey ?? string.Empty).ToArray(),
-                Segments = session.Segments?.ToArray() ?? Array.Empty<RunChartSegment>()
+                Segments = session.Segments?.ToArray() ?? Array.Empty<RunChartSegment>(),
+                Dwells = session.Dwells?.ToArray() ?? Array.Empty<RunChartDwell>()
             };
-            TrimResults();
+            if (shared && m_Theory.TryGetValue(session.LineId, out TheoryEntry current))
+                current.ResultId = storedResultId;
+            if (!shared)
+                TrimResults();
+            return storedResultId;
+        }
+
+        private static void CompleteIncomplete(FullRunTimeSession session, string detail)
+        {
+            session.State = "Completed";
+            session.ResultId = string.Empty;
+            session.Error = string.Empty;
+            session.Detail = detail ?? string.Empty;
             Release(session);
         }
 
         private void TrimResults()
         {
             HashSet<string> editors = new HashSet<string>(
-                m_Results.Values.Select(result => result.EditorSessionId),
+                m_Results.Values
+                    .Where(result => result.Source != "theory")
+                    .Select(result => result.EditorSessionId),
                 StringComparer.Ordinal);
             foreach (string editor in editors)
             {
-                while (m_Results.Values.Count(result => result.EditorSessionId == editor) > MaxResultsPerEditor)
+                while (m_Results.Values.Count(result => result.Source != "theory"
+                    && result.EditorSessionId == editor) > MaxResultsPerEditor)
                 {
                     FullRunTimeResult oldest = FindOldestResult(editor);
                     if (oldest == null)
@@ -831,7 +1577,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     m_Results.Remove(oldest.ResultId);
                 }
             }
-            while (m_Results.Count > MaxResults)
+            while (m_Results.Values.Count(result => result.Source != "theory") > MaxResults)
             {
                 FullRunTimeResult oldest = FindOldestResult(null);
                 if (oldest == null)
@@ -845,7 +1591,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             FullRunTimeResult fallback = null;
             FullRunTimeResult idle = null;
             foreach (FullRunTimeResult result in m_Results.Values
-                .Where(result => editorSessionId == null || result.EditorSessionId == editorSessionId)
+                .Where(result => result.Source != "theory"
+                    && (editorSessionId == null || result.EditorSessionId == editorSessionId))
                 .OrderBy(result => result.CompletedOrder))
             {
                 fallback ??= result;
@@ -911,22 +1658,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 missingKind = string.IsNullOrEmpty(session.MissingKind)
                     ? "none"
                     : session.MissingKind,
-                segments = session.Segments == null ? Array.Empty<DispatchWorkbenchRunChartSegmentDto>() : session.Segments.Select(segment => new DispatchWorkbenchRunChartSegmentDto
-                {
-                    fromStopKey = segment.FromStopKey, toStopKey = segment.ToStopKey,
-                    fromWaypointIndex = segment.FromWaypointIndex, toWaypointIndex = segment.ToWaypointIndex,
-                    segmentFrames = segment.Frames, segmentMinutes = segment.Minutes,
-                    segmentMinutesExact = segment.ExactMinutes
-                }).ToArray(),
-                dwells = session.Dwells == null ? Array.Empty<DispatchWorkbenchRunChartDwellDto>() : session.Dwells.Select(dwell => new DispatchWorkbenchRunChartDwellDto
-                {
-                    stopKey = dwell.StopKey ?? string.Empty,
-                    waypointIndex = dwell.WaypointIndex,
-                    averageFrames = dwell.Frames,
-                    averageMinutes = dwell.Minutes,
-                    sampleCount = dwell.SampleCount,
-                    hasObservation = dwell.HasObservation
-                }).ToArray()
+                segments = SegmentDtos(session.Segments),
+                dwells = DwellDtos(session.Dwells)
             };
         }
 
@@ -942,19 +1675,17 @@ namespace RapidTransitMod.Dispatch.Workbench
             };
         }
 
-        private int ToMinutes(double frames)
+        private static int ToMinutes(double frames, double framesPerMinute)
         {
-            double rate = m_FramesPerMinute();
-            return rate > 0d && !double.IsNaN(rate) && !double.IsInfinity(rate)
-                ? Math.Max(1, (int)Math.Round(frames / rate, MidpointRounding.AwayFromZero))
+            return framesPerMinute > 0d && !double.IsNaN(framesPerMinute) && !double.IsInfinity(framesPerMinute)
+                ? Math.Max(1, (int)Math.Round(frames / framesPerMinute, MidpointRounding.AwayFromZero))
                 : Math.Max(1, (int)Math.Round(frames, MidpointRounding.AwayFromZero));
         }
 
-        private double ToExactMinutes(double frames)
+        private static double ToExactMinutes(double frames, double framesPerMinute)
         {
-            double rate = m_FramesPerMinute();
-            double minutes = rate > 0d && !double.IsNaN(rate) && !double.IsInfinity(rate)
-                ? frames / rate
+            double minutes = framesPerMinute > 0d && !double.IsNaN(framesPerMinute) && !double.IsInfinity(framesPerMinute)
+                ? frames / framesPerMinute
                 : frames;
             return Math.Max(0.1d, Math.Round(minutes, 1, MidpointRounding.AwayFromZero));
         }
@@ -989,8 +1720,10 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal ulong PathSignature;
         internal ulong ModelSignature;
         internal ulong ModelPairSignature;
+        internal RailEtaTheorySegmentRequest[] TheoryRequests = Array.Empty<RailEtaTheorySegmentRequest>();
         internal ulong Generation;
         internal ulong SourceRevision;
+        internal double FramesPerMinute;
         internal bool Complete = true;
         internal int PrefixStopCount;
         internal string MissingKind = "none";
@@ -1012,5 +1745,31 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal long CompletedOrder;
         internal string[] StopKeys;
         internal RunChartSegment[] Segments;
+        internal RunChartDwell[] Dwells;
+    }
+
+    internal sealed class TheoryEntry
+    {
+        internal string LineId = string.Empty;
+        internal string State = "Queued";
+        internal string ResultId = string.Empty;
+        internal string Error = string.Empty;
+        internal string Detail = string.Empty;
+        internal ulong Generation;
+        internal int RetryCount;
+        internal uint NextFrame;
+        internal FullRunTimeSession Session;
+    }
+
+    internal sealed class TheoryWaiter
+    {
+        internal string EditorSessionId = string.Empty;
+        internal string LineId = string.Empty;
+        internal string QueryId = string.Empty;
+        internal string State = "Queued";
+        internal string ResultId = string.Empty;
+        internal string Error = string.Empty;
+        internal string Detail = string.Empty;
+        internal string StopSig = string.Empty;
     }
 }

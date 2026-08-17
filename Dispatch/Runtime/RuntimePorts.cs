@@ -225,7 +225,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     DispatchFallbackFramesPerMeter = ModRuntimeHostSystem.DISPATCH_FALLBACK_FRAMES_PER_METER,
                     DispatchEstimateMinFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
                     DispatchEstimateDefaultFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES,
-                    DispatchEstimateMaxFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_MAX_FRAMES,
+                    DispatchEstimateMaxFrames = runtime.m_DispatchScheduler.Policy.MaxSpawnLeadFrames,
                     ReadLapFrames = runtime.m_LapCache.Read,
                     ReadDispatchFrames = runtime.m_DispatchCache.Read,
                     DwellMinutes = line => runtime.m_LineView.Dwell(line),

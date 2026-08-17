@@ -21,7 +21,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<ulong> m_Version;
         private readonly Func<bool> m_CanPushSnapshot;
         private readonly Func<DispatchWorkbenchSnapshot> m_BuildSnapshot;
-        private readonly Action m_TickWorkbenchQueries;
+        private readonly Action<uint> m_TickWorkbenchQueries;
+        private readonly Action<IEnumerable<WorkbenchLineRuntime>> m_OnStableLines;
         private readonly Queue<Entity> m_StationQueue = new Queue<Entity>();
         private readonly HashSet<Entity> m_QueuedStations = new HashSet<Entity>();
         private readonly Dictionary<Entity, List<DispatchWorkbenchStationDto>> m_Stations =
@@ -69,7 +70,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<ulong> version,
             Func<bool> canPushSnapshot,
             Func<DispatchWorkbenchSnapshot> buildSnapshot,
-            Action tickWorkbenchQueries = null)
+            Action<uint> tickWorkbenchQueries = null,
+            Action<IEnumerable<WorkbenchLineRuntime>> onStableLines = null)
         {
             m_Catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
             m_Push = push ?? throw new ArgumentNullException(nameof(push));
@@ -82,6 +84,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_CanPushSnapshot = canPushSnapshot ?? throw new ArgumentNullException(nameof(canPushSnapshot));
             m_BuildSnapshot = buildSnapshot ?? throw new ArgumentNullException(nameof(buildSnapshot));
             m_TickWorkbenchQueries = tickWorkbenchQueries;
+            m_OnStableLines = onStableLines;
         }
 
         internal void Reset()
@@ -153,11 +156,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_StationsStale = true;
             InitializeConfirmedLineBaseline(m_Lines);
             QueueBackendMissingLineVerification(m_Lines);
+            if (!m_LinesStale)
+                m_OnStableLines?.Invoke(m_Lines);
         }
 
         internal void Tick(uint nowFrame)
         {
-            m_TickWorkbenchQueries?.Invoke();
+            m_TickWorkbenchQueries?.Invoke(nowFrame);
             if (m_LinesStale && m_LineRebuildResult == null)
             {
                 StartLineRebuild();
@@ -211,6 +216,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_LinesStale = false;
                 InitializeConfirmedLineBaseline(m_Lines);
                 QueueBackendMissingLineVerification(m_Lines);
+                if (!m_LinesStale)
+                    m_OnStableLines?.Invoke(m_Lines);
                 return CopyLines(m_Lines);
             }
 
@@ -408,6 +415,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 m_LinesStale = true;
                 m_PendingEvent = true;
+            }
+            else
+            {
+                m_OnStableLines?.Invoke(m_Lines);
             }
             return true;
         }

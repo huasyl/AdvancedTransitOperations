@@ -98,6 +98,9 @@ namespace RapidTransitMod.Dispatch.Observation
         public int PlannedDeparture = -1;
         public int ActualArrival = -1;
         public int ActualDeparture = -1;
+        public uint ActualArrivalFrame;
+        public uint ActualDepartureFrame;
+        public uint OpenIntervalMaxFrames;
         public bool Cleared;
     }
 

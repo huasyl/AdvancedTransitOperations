@@ -1,10 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { minutesToTime } from "./timetable-data";
 
 const WIDTH = 960;
 const HEIGHT = 300;
-const LEFT = 118;
-const RIGHT = 24;
+const LEFT = 24 * 3;
+const RIGHT = 12;
 const TOP = 18;
 const BOTTOM = 34;
 const TICK_STEPS = [15, 30, 60, 120];
@@ -40,6 +40,8 @@ function buildTimeTicks(minTime, maxTime) {
 }
 
 export default function RunChart({ stations, series, startMinute, endMinute, emptyText }) {
+  const chartWrapRef = useRef(null);
+  const [chartViewport, setChartViewport] = useState(null);
   const model = useMemo(() => {
     if (stations.length === 0
       || !Number.isFinite(startMinute)
@@ -85,15 +87,26 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
           && point.departureTime !== point.arrivalTime) {
           pathPoints.push(`${x(point.departureTime)},${y(point.distance)}`);
         }
-        const markerMinute = Number.isFinite(point.arrivalTime)
-          ? point.arrivalTime
-          : point.departureTime;
-        if (markerMinute >= minTime && markerMinute <= maxTime) {
+        const markerMinutes = [];
+        if (Number.isFinite(point.arrivalTime)) {
+          markerMinutes.push(point.arrivalTime);
+        }
+        if (Number.isFinite(point.departureTime)
+          && point.departureTime !== point.arrivalTime) {
+          markerMinutes.push(point.departureTime);
+        }
+        markerMinutes.forEach((markerMinute) => {
+          if (markerMinute < minTime || markerMinute > maxTime) {
+            return;
+          }
           const markerX = x(markerMinute);
           const markerY = y(point.distance);
-          markerPaths.push(`M${markerX - 3},${markerY}a3,3 0 1,0 6,0a3,3 0 1,0 -6,0`);
-        }
+          markerPaths.push(`M${markerX - 2},${markerY}a2,2 0 1,0 4,0a2,2 0 1,0 -4,0`);
+        });
       });
+      if (pathPoints.length < 2) {
+        return [];
+      }
       return [{
         key: `${item.lineId}-${item.trainId}-${item.source || ""}`,
         color: item.color,
@@ -108,42 +121,91 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
     return { minTime, maxTime, x, y, ticks, lines };
   }, [endMinute, series, startMinute, stations]);
 
+  useEffect(() => {
+    function updateChartViewport() {
+      const element = chartWrapRef.current;
+      if (!element || typeof element.getBoundingClientRect !== "function") {
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
+      const scale = Math.min(rect.width / WIDTH, rect.height / HEIGHT);
+      const width = WIDTH * scale;
+      const height = HEIGHT * scale;
+      setChartViewport({
+        left: (rect.width - width) / 2,
+        top: (rect.height - height) / 2,
+        width,
+        height
+      });
+    }
+
+    updateChartViewport();
+    const shortTimer = window.setTimeout(updateChartViewport, 0);
+    const revealTimer = window.setTimeout(updateChartViewport, 250);
+    window.addEventListener("resize", updateChartViewport);
+    return () => {
+      window.clearTimeout(shortTimer);
+      window.clearTimeout(revealTimer);
+      window.removeEventListener("resize", updateChartViewport);
+    };
+  }, [model, stations.length]);
+
   if (!model) {
     return emptyText ? <div className="rtw-timetable-chart-empty">{emptyText}</div> : null;
   }
 
   return (
-    <svg className="rtw-timetable-chart-svg" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <defs>
-        <clipPath id="rtw-run-chart-plot-clip">
-          <rect x={LEFT} y={TOP} width={WIDTH - LEFT - RIGHT} height={HEIGHT - TOP - BOTTOM} />
-        </clipPath>
-      </defs>
-      {model.ticks.map((tick, index) => (
-        <g key={`time-${tick}`}>
-          <line className="rtw-timetable-chart-grid is-time" x1={model.x(tick)} x2={model.x(tick)} y1={TOP} y2={HEIGHT - BOTTOM} />
-          <text
-            className="rtw-timetable-chart-time"
-            x={model.x(tick)}
-            y={HEIGHT - 10}
-            textAnchor={index === 0 ? "start" : index === model.ticks.length - 1 ? "end" : "middle"}
-          >
-            {minutesToTime(tick)}
-          </text>
-        </g>
-      ))}
-      {stations.map((station, index) => (
-        <g key={`${station.id}-${station.occurrence ?? index}`}>
-          <line className="rtw-timetable-chart-grid" x1={LEFT} x2={WIDTH - RIGHT} y1={model.y(station.distance)} y2={model.y(station.distance)} />
-          <text className="rtw-timetable-chart-station" x={LEFT - 12} y={model.y(station.distance) + 4} textAnchor="end">{station.name}</text>
-        </g>
-      ))}
-      {model.lines.map((line) => (
-          <g key={line.key} clipPath="url(#rtw-run-chart-plot-clip)">
-            <polyline className="rtw-timetable-chart-line" points={line.pathPoints} style={{ stroke: line.color }} />
-            {line.markerPath ? <path className="rtw-timetable-chart-point" d={line.markerPath} style={{ fill: line.color }} /> : null}
+    <div ref={chartWrapRef} className="rtw-timetable-chart-wrap">
+      <svg className="rtw-timetable-chart-svg" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <defs>
+          <clipPath id="rtw-run-chart-plot-clip">
+            <rect x={LEFT} y={TOP - 3} width={WIDTH - LEFT - RIGHT} height={HEIGHT - TOP - BOTTOM + 6} />
+          </clipPath>
+        </defs>
+        {model.ticks.map((tick, index) => (
+          <g key={`time-${tick}`}>
+            <line className="rtw-timetable-chart-grid is-time" x1={model.x(tick)} x2={model.x(tick)} y1={TOP} y2={HEIGHT - BOTTOM} />
+            <text
+              className="rtw-timetable-chart-time"
+              x={model.x(tick)}
+              y={HEIGHT - 10}
+              textAnchor={index === 0 ? "start" : index === model.ticks.length - 1 ? "end" : "middle"}
+            >
+              {minutesToTime(tick)}
+            </text>
           </g>
-      ))}
-    </svg>
+        ))}
+        {stations.map((station, index) => (
+          <g key={`${station.id}-${station.occurrence ?? index}`}>
+            <line className="rtw-timetable-chart-grid" x1={LEFT} x2={WIDTH - RIGHT} y1={model.y(station.distance)} y2={model.y(station.distance)} />
+          </g>
+        ))}
+        <g clipPath="url(#rtw-run-chart-plot-clip)">
+          {model.lines.map((line) => (
+            <g key={line.key}>
+              <polyline className="rtw-timetable-chart-line" points={line.pathPoints} style={{ stroke: line.color }} />
+              {line.markerPath ? <path className="rtw-timetable-chart-point" d={line.markerPath} /> : null}
+            </g>
+          ))}
+        </g>
+      </svg>
+      {chartViewport ? <div className="rtw-timetable-chart-station-layer">
+        {stations.map((station, index) => (
+          <div
+            key={`label-${station.id}-${station.occurrence ?? index}`}
+            className="rtw-timetable-chart-station-label"
+            style={{
+              left: `${chartViewport.left + ((LEFT - 12) / WIDTH) * chartViewport.width}px`,
+              top: `${chartViewport.top + (model.y(station.distance) / HEIGHT) * chartViewport.height}px`
+            }}
+          >
+            {station.name}
+          </div>
+        ))}
+      </div> : null}
+    </div>
   );
 }

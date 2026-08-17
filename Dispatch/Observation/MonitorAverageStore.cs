@@ -11,7 +11,7 @@ namespace RapidTransitMod.Dispatch.Observation
         internal readonly int StopCount;
         internal readonly int FromOrder;
         internal readonly int ToOrder;
-        internal readonly int Minutes;
+        internal readonly uint Frames;
         internal readonly bool Closing;
 
         internal MonitorIntervalSample(
@@ -20,7 +20,7 @@ namespace RapidTransitMod.Dispatch.Observation
             int stopCount,
             int fromOrder,
             int toOrder,
-            int minutes,
+            uint frames,
             bool closing)
         {
             Line = line;
@@ -28,7 +28,7 @@ namespace RapidTransitMod.Dispatch.Observation
             StopCount = stopCount;
             FromOrder = fromOrder;
             ToOrder = toOrder;
-            Minutes = minutes;
+            Frames = frames;
             Closing = closing;
         }
     }
@@ -87,7 +87,6 @@ namespace RapidTransitMod.Dispatch.Observation
         internal const int MaxLines = 4096;
         internal const int MaxSegmentsPerLine = 256;
         private const int MaxSamplesPerSegment = 65536;
-        private const int MaxSampleMinutes = 24 * 60;
         private readonly Dictionary<Entity, MonitorAverageLine> m_Lines =
             new Dictionary<Entity, MonitorAverageLine>();
 
@@ -112,13 +111,13 @@ namespace RapidTransitMod.Dispatch.Observation
             int index = sample.FromOrder;
             MonitorAverageSegment segment = line.Segments[index];
             if (segment.SampleCount >= MaxSamplesPerSegment
-                || segment.TotalMinutes > int.MaxValue - sample.Minutes)
+                || ulong.MaxValue - segment.TotalFrames < sample.Frames)
             {
                 return default;
             }
 
             bool hadCoverage = segment.SampleCount > 0;
-            segment.TotalMinutes += sample.Minutes;
+            segment.TotalFrames += sample.Frames;
             segment.SampleCount++;
             line.Segments[index] = segment;
             line.Revision++;
@@ -155,17 +154,19 @@ namespace RapidTransitMod.Dispatch.Observation
                 return false;
             }
 
-            int[] minutes = new int[value.Segments.Length];
+            double[] averageFrames = new double[value.Segments.Length];
             for (int i = 0; i < value.Segments.Length; i++)
             {
                 MonitorAverageSegment segment = value.Segments[i];
-                if (segment.SampleCount <= 0 || segment.TotalMinutes <= 0)
+                if (segment.SampleCount <= 0 || segment.TotalFrames == 0)
                     return false;
-                minutes[i] = (segment.TotalMinutes + segment.SampleCount / 2) / segment.SampleCount;
-                if (minutes[i] <= 0)
+                averageFrames[i] = (double)segment.TotalFrames / segment.SampleCount;
+                if (!(averageFrames[i] > 0d)
+                    || double.IsNaN(averageFrames[i])
+                    || double.IsInfinity(averageFrames[i]))
                     return false;
             }
-            snapshot = new MonitorAverageSnapshot(value.StopSig, value.Revision, minutes);
+            snapshot = new MonitorAverageSnapshot(value.StopSig, value.Revision, averageFrames);
             return true;
         }
 
@@ -188,8 +189,8 @@ namespace RapidTransitMod.Dispatch.Observation
             for (int i = 0; i < value.Segments.Length; i++)
             {
                 MonitorAverageSegment segment = value.Segments[i];
-                if ((segment.SampleCount == 0 && segment.TotalMinutes != 0)
-                    || (segment.SampleCount > 0 && segment.TotalMinutes <= 0)
+                if ((segment.SampleCount == 0 && segment.TotalFrames != 0)
+                    || (segment.SampleCount > 0 && segment.TotalFrames == 0)
                     || segment.SampleCount < 0
                     || segment.SampleCount > MaxSamplesPerSegment)
                 {
@@ -228,8 +229,8 @@ namespace RapidTransitMod.Dispatch.Observation
                 || sample.FromOrder >= sample.StopCount
                 || sample.ToOrder < 0
                 || sample.ToOrder >= sample.StopCount
-                || sample.Minutes <= 0
-                || sample.Minutes > MaxSampleMinutes)
+                || sample.Frames == 0u
+                || sample.Frames >= 0x80000000u)
             {
                 return false;
             }
@@ -279,7 +280,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
     internal struct MonitorAverageSegment
     {
-        internal int TotalMinutes;
+        internal ulong TotalFrames;
         internal int SampleCount;
     }
 
@@ -301,13 +302,13 @@ namespace RapidTransitMod.Dispatch.Observation
     {
         internal readonly string StopSig;
         internal readonly ulong Revision;
-        internal readonly int[] Segments;
+        internal readonly double[] AverageFrames;
 
-        internal MonitorAverageSnapshot(string stopSig, ulong revision, int[] segments)
+        internal MonitorAverageSnapshot(string stopSig, ulong revision, double[] averageFrames)
         {
             StopSig = stopSig ?? string.Empty;
             Revision = revision;
-            Segments = segments ?? Array.Empty<int>();
+            AverageFrames = averageFrames ?? Array.Empty<double>();
         }
     }
 }

@@ -225,11 +225,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                     HostState().TransitMode,
                     m_Version,
                     "game-backend"),
-                () =>
+                nowFrame =>
                 {
-                    RunTime().Tick();
+                    RunTime().Tick(nowFrame);
                     RunChartIndex().Tick();
-                });
+                },
+                lines => RunTime().SyncPrewarm(lines));
             return m_Runtime.m_WorkbenchCatalogCache;
         }
 
@@ -1213,6 +1214,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                 monitorAverageBecameReady = true
             };
             m_MonitorAverageWaitingLineId = string.Empty;
+        }
+
+        internal void OnBusSegChanged(Entity line)
+        {
+            string lineId = Ids().StableId(line);
+            if (!string.IsNullOrEmpty(lineId))
+                m_RunTime?.RefreshBusHistorical(lineId);
         }
 
         internal string SetMonitorSubscription(string requestJson)

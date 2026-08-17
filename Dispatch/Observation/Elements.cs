@@ -292,7 +292,7 @@ namespace RapidTransitMod
         public int m_Version;
         public Entity m_Line;
         public int m_Order;
-        public int m_TotalMinutes;
+        public ulong m_TotalFrames;
         public int m_SampleCount;
 
         public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
@@ -300,7 +300,10 @@ namespace RapidTransitMod
             writer.Write(m_Version);
             writer.Write(m_Line);
             writer.Write(m_Order);
-            writer.Write(m_TotalMinutes);
+            if (m_Version >= 2)
+                writer.Write(m_TotalFrames);
+            else
+                writer.Write(0);
             writer.Write(m_SampleCount);
         }
 
@@ -309,7 +312,15 @@ namespace RapidTransitMod
             reader.Read(out m_Version);
             reader.Read(out m_Line);
             reader.Read(out m_Order);
-            reader.Read(out m_TotalMinutes);
+            if (m_Version >= 2)
+            {
+                reader.Read(out m_TotalFrames);
+            }
+            else
+            {
+                reader.Read(out int ignored);
+                m_TotalFrames = 0;
+            }
             reader.Read(out m_SampleCount);
         }
     }
@@ -467,6 +478,9 @@ namespace RapidTransitMod
         public int m_PlannedDeparture;
         public int m_ActualArrival;
         public int m_ActualDeparture;
+        public uint m_ActualArrivalFrame;
+        public uint m_ActualDepartureFrame;
+        public uint m_OpenIntervalMaxFrames;
         public int m_Cleared;
 
         public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
@@ -481,6 +495,12 @@ namespace RapidTransitMod
             writer.Write(m_PlannedDeparture);
             writer.Write(m_ActualArrival);
             writer.Write(m_ActualDeparture);
+            if (m_Version >= 2)
+            {
+                writer.Write(m_ActualArrivalFrame);
+                writer.Write(m_ActualDepartureFrame);
+                writer.Write(m_OpenIntervalMaxFrames);
+            }
             writer.Write(m_Cleared);
         }
 
@@ -497,6 +517,18 @@ namespace RapidTransitMod
             reader.Read(out m_PlannedDeparture);
             reader.Read(out m_ActualArrival);
             reader.Read(out m_ActualDeparture);
+            if (m_Version >= 2)
+            {
+                reader.Read(out m_ActualArrivalFrame);
+                reader.Read(out m_ActualDepartureFrame);
+                reader.Read(out m_OpenIntervalMaxFrames);
+            }
+            else
+            {
+                m_ActualArrivalFrame = 0u;
+                m_ActualDepartureFrame = 0u;
+                m_OpenIntervalMaxFrames = 0u;
+            }
             reader.Read(out m_Cleared);
         }
     }

@@ -103,6 +103,8 @@ namespace RapidTransitMod.Dispatch.Observation
             MonitorTrip trip = BuildMonitorTrip(line, vehicle, row, serviceDateKey, MonitorTripState.Active, launchFrame);
             trip.LaunchFrame = launchFrame;
             trip.Stops[0].ActualDeparture = EventMinute(clock, serviceDate);
+            trip.Stops[0].ActualDepartureFrame = launchFrame;
+            trip.Stops[0].OpenIntervalMaxFrames = clock.ToFramesCeil(1440d);
             m_Store.ActiveTrips[vehicle] = trip;
             ClearMonitorClaim(vehicle);
             return trip.Key;
@@ -614,7 +616,10 @@ namespace RapidTransitMod.Dispatch.Observation
             {
                 bool originMatches = MatchesMonitorStop(trip.Stops[0], stopKey, station, waypointIndex, false);
                 if (originMatches)
+                {
                     trip.Stops[0].ActualArrival = minute;
+                    trip.Stops[0].ActualArrivalFrame = frame;
+                }
                 TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, trip.Stops[0], 0, "accept", originMatches ? "origin-complete" : "origin-mismatch-complete", false);
                 trip.NextArrivalOrder = trip.Stops.Count;
                 trip.State = MonitorTripState.Completed;
@@ -625,7 +630,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     trip.Line,
                     trip.ServiceDateKey,
                     trip.Key,
-                    originMatches ? BuildClosingSample(trip, minute) : default);
+                    originMatches ? BuildClosingSample(trip) : default);
                 return true;
             }
 
@@ -654,6 +659,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     return false;
                 }
                 trip.Stops[matched].ActualArrival = minute;
+                trip.Stops[matched].ActualArrivalFrame = frame;
                 trip.NextArrivalOrder = matched + 1;
                 TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, trip.Stops[matched], matched, "accept", "arrival", exactLayout);
                 result = new MonitorStopResult(
@@ -661,7 +667,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     trip.Line,
                     trip.ServiceDateKey,
                     trip.Key,
-                    BuildIntervalSample(trip, matched, minute, exactLayout));
+                    BuildIntervalSample(trip, matched, exactLayout));
             }
             else
             {
@@ -690,6 +696,8 @@ namespace RapidTransitMod.Dispatch.Observation
                     return false;
                 }
                 trip.Stops[matched].ActualDeparture = minute;
+                trip.Stops[matched].ActualDepartureFrame = frame;
+                trip.Stops[matched].OpenIntervalMaxFrames = clock.ToFramesCeil(1440d);
                 TraceMonitor(trip, vehicle, frame, false, stopKey, waypointIndex, stop, matched, "accept", "departure", exactLayout);
             }
             trip.UpdatedFrame = frame;
@@ -711,7 +719,6 @@ namespace RapidTransitMod.Dispatch.Observation
         private static MonitorIntervalSample BuildIntervalSample(
             MonitorTrip trip,
             int toOrder,
-            int arrivalMinute,
             bool exactLayout)
         {
             int fromOrder = toOrder - 1;
@@ -720,43 +727,66 @@ namespace RapidTransitMod.Dispatch.Observation
                 || string.IsNullOrEmpty(trip.StopSig)
                 || fromOrder < 0
                 || toOrder >= trip.Stops.Count
-                || trip.Stops[fromOrder].ActualDeparture < 0)
+                || trip.Stops[fromOrder].ActualDeparture < 0
+                || trip.Stops[toOrder].ActualArrival < 0
+                || !TryIntervalFrames(
+                    trip.Stops[fromOrder].ActualDepartureFrame,
+                    trip.Stops[toOrder].ActualArrivalFrame,
+                    trip.Stops[fromOrder].OpenIntervalMaxFrames,
+                    out uint frames))
             {
                 return default;
             }
 
-            int minutes = arrivalMinute - trip.Stops[fromOrder].ActualDeparture;
             return new MonitorIntervalSample(
                 trip.Line,
                 trip.StopSig,
                 trip.Stops.Count,
                 fromOrder,
                 toOrder,
-                minutes,
+                frames,
                 false);
         }
 
-        private static MonitorIntervalSample BuildClosingSample(MonitorTrip trip, int arrivalMinute)
+        private static MonitorIntervalSample BuildClosingSample(MonitorTrip trip)
         {
             if (trip == null
                 || string.IsNullOrEmpty(trip.StopSig)
                 || trip.Stops.Count < 2
                 || trip.SuppressPlanFrom != int.MaxValue
-                || trip.Stops[trip.Stops.Count - 1].ActualDeparture < 0)
+                || trip.Stops[trip.Stops.Count - 1].ActualDeparture < 0
+                || trip.Stops[0].ActualArrival < 0
+                || !TryIntervalFrames(
+                    trip.Stops[trip.Stops.Count - 1].ActualDepartureFrame,
+                    trip.Stops[0].ActualArrivalFrame,
+                    trip.Stops[trip.Stops.Count - 1].OpenIntervalMaxFrames,
+                    out uint frames))
             {
                 return default;
             }
 
             int fromOrder = trip.Stops.Count - 1;
-            int minutes = arrivalMinute - trip.Stops[fromOrder].ActualDeparture;
             return new MonitorIntervalSample(
                 trip.Line,
                 trip.StopSig,
                 trip.Stops.Count,
                 fromOrder,
                 0,
-                minutes,
+                frames,
                 true);
+        }
+
+        private static bool TryIntervalFrames(
+            uint startFrame,
+            uint endFrame,
+            uint maxFrames,
+            out uint frames)
+        {
+            frames = unchecked(endFrame - startFrame);
+            return maxFrames > 0u
+                && frames > 0u
+                && frames < 0x80000000u
+                && frames <= maxFrames;
         }
 
         private void TraceMonitor(

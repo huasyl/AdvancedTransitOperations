@@ -119,12 +119,18 @@ namespace RapidTransitMod.TrackModel
                     continue;
                 }
 
+                bool terminal = IsTerminalRange(
+                    chain,
+                    pass.StartAtomIndex,
+                    pass.EndAtomIndexExclusive,
+                    pass.WaypointIndex);
+                int boundaryWaypointIndex = terminal ? -1 : pass.WaypointIndex;
                 int approachIndex = chain.TraversalProfile.Events.Count;
                 chain.TraversalProfile.Events.Add(new TraversalEvent(
                     approachIndex,
                     TraversalEventKind.ApproachSplitBoundary,
                     pass.Building,
-                    pass.WaypointIndex,
+                    boundaryWaypointIndex,
                     pass.PassIndex,
                     pass.StartAtomIndex,
                     pass.StartAtomIndex,
@@ -134,13 +140,15 @@ namespace RapidTransitMod.TrackModel
                 int stationEventIndex = chain.TraversalProfile.Events.Count;
                 chain.TraversalProfile.Events.Add(new TraversalEvent(
                     stationEventIndex,
-                    pass.WaypointIndex >= 0 ? TraversalEventKind.Stop : TraversalEventKind.Pass,
+                    pass.WaypointIndex >= 0 && !terminal
+                        ? TraversalEventKind.Stop
+                        : TraversalEventKind.Pass,
                     pass.Building,
                     pass.WaypointIndex,
                     pass.PassIndex,
                     pass.StartAtomIndex,
                     pass.EndAtomIndexExclusive,
-                    pass.StopFrames,
+                    terminal ? 0f : pass.StopFrames,
                     pass.StationId));
 
                 int departureIndex = chain.TraversalProfile.Events.Count;
@@ -148,7 +156,7 @@ namespace RapidTransitMod.TrackModel
                     departureIndex,
                     TraversalEventKind.DepartureSplitBoundary,
                     pass.Building,
-                    pass.WaypointIndex,
+                    boundaryWaypointIndex,
                     pass.PassIndex,
                     pass.EndAtomIndexExclusive,
                     pass.EndAtomIndexExclusive,
@@ -2003,8 +2011,15 @@ namespace RapidTransitMod.TrackModel
                 if (TryFindTraversalStopWaypointIndex(chain, building, startAtomIndex, endAtomIndexExclusive, out int matchedWaypointIndex))
                 {
                     waypointIndex = matchedWaypointIndex;
-                    if (hasLinePrefabData)
+                    if (hasLinePrefabData
+                        && !IsTerminalRange(
+                            chain,
+                            startAtomIndex,
+                            endAtomIndexExclusive,
+                            matchedWaypointIndex))
+                    {
                         stopFrames = m_Support.GetProfileWaypointStopFrames(line, waypoints, matchedWaypointIndex, prefabLineData);
+                    }
                     if (TransportModeResolver.Resolve(EntityManager, line) == TransitMode.Tram)
                         m_TramStops.TryGetStationId(line, matchedWaypointIndex, out stationId);
                 }
@@ -2416,7 +2431,42 @@ namespace RapidTransitMod.TrackModel
                 return true;
             }
 
+            if (!chain.ChainComplete
+                || startAtomIndex <= 0
+                || endAtomIndexExclusive != chain.TrackAtoms.Count)
+            {
+                return false;
+            }
+
+            for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count; controlPointIndex++)
+            {
+                ControlPointMarker marker = chain.ControlPoints[controlPointIndex];
+                if (marker.AtomIndex != 0
+                    || marker.WaypointIndex != 0
+                    || marker.Building != building
+                    || (marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass))
+                {
+                    continue;
+                }
+
+                waypointIndex = marker.WaypointIndex;
+                return true;
+            }
+
             return false;
+        }
+
+        private static bool IsTerminalRange(
+            LineTrackChain chain,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            int waypointIndex)
+        {
+            return chain != null
+                && chain.ChainComplete
+                && waypointIndex == 0
+                && startAtomIndex > 0
+                && endAtomIndexExclusive == chain.TrackAtoms.Count;
         }
 
         private static Entity[] CollectTraversalSlicePhysicalLaneKeys(

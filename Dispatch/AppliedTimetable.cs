@@ -719,6 +719,8 @@ namespace RapidTransitMod.Dispatch
                     .Where(key => !string.IsNullOrEmpty(key))
                     .Select(m_Host.DraftKey),
                 StringComparer.Ordinal);
+            HashSet<string> removedLineIds = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> changedLineIds = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (string key in keys)
             {
@@ -726,7 +728,10 @@ namespace RapidTransitMod.Dispatch
                     || draft == null
                     || draft.StagedRows == null)
                 {
-                    m_Lines.Remove(key);
+                    if (m_Lines.Remove(key))
+                    {
+                        removedLineIds.Add(key);
+                    }
                     continue;
                 }
 
@@ -737,7 +742,7 @@ namespace RapidTransitMod.Dispatch
                     .ToList();
                 if (draftRows.Count == 0 || !runtimeById.TryGetValue(key, out WorkbenchLineRuntime runtime) || runtime == null)
                 {
-                    RemoveAppliedByDraftOrStable(key, Entity.Null);
+                    RemoveAppliedByDraftOrStable(key, Entity.Null, removedLineIds);
                     continue;
                 }
 
@@ -749,14 +754,14 @@ namespace RapidTransitMod.Dispatch
                         ? runtime.UnsupportedReason
                         : support.Reason;
                     m_Host.Log($"Line {key} removed from applied timetable: {reason}");
-                    RemoveAppliedByDraftOrStable(key, runtime.Entity);
+                    RemoveAppliedByDraftOrStable(key, runtime.Entity, removedLineIds);
                     continue;
                 }
 
                 if (!TryResolveStableId(runtime.Entity, out string stableKey, out string orphanReason))
                 {
                     m_Host.Log($"Line {key} skipped apply: {orphanReason}");
-                    RemoveAppliedByDraftOrStable(key, runtime.Entity);
+                    RemoveAppliedByDraftOrStable(key, runtime.Entity, removedLineIds);
                     continue;
                 }
 
@@ -772,24 +777,43 @@ namespace RapidTransitMod.Dispatch
                     .ToList();
                 if (rows.Count == 0)
                 {
-                    RemoveAppliedByDraftOrStable(key, runtime.Entity);
+                    RemoveAppliedByDraftOrStable(key, runtime.Entity, removedLineIds);
                     continue;
                 }
 
                 // LineConfigStore has migrated to stable keys; read hold/dwell under stableKey.
-                AppliedLine line = new AppliedLine
+                AppliedLine target = new AppliedLine
                 {
                     LineEntity = runtime.Entity,
                     OriginHoldLimitMinutes = m_Host.Hold(stableKey),
                     MaxStationDwellMinutes = m_Host.Dwell(stableKey),
                     StagedRows = rows
                 };
-                line.DepartureMinutesCache = m_Host.BuildMinutes(line.StagedRows, stableKey);
-                m_Lines.Remove(key);
-                m_Lines[stableKey] = line;
+                m_Lines.TryGetValue(stableKey, out AppliedLine existing);
+                if (existing == null
+                    && !string.Equals(key, stableKey, StringComparison.Ordinal))
+                {
+                    m_Lines.TryGetValue(key, out existing);
+                }
+
+                ReconcileRows(existing, target);
+                target.DepartureMinutesCache = m_Host.BuildMinutes(target.StagedRows, stableKey);
+
+                bool movedToStableKey = !string.Equals(key, stableKey, StringComparison.Ordinal)
+                    && m_Lines.Remove(key);
+                if (movedToStableKey)
+                {
+                    removedLineIds.Add(key);
+                }
+
+                if (existing == null || movedToStableKey || !SameSchedule(existing, target))
+                {
+                    changedLineIds.Add(stableKey);
+                }
+                m_Lines[stableKey] = target;
             }
 
-            Sync(saveDrafts: false);
+            SyncChangedLines(removedLineIds, changedLineIds, saveDrafts: false);
         }
 
         internal bool CleanupDeletedOrReplacedAppliedLines(bool saveChanges)
@@ -1187,6 +1211,133 @@ namespace RapidTransitMod.Dispatch
             };
         }
 
+        private void ReconcileRows(AppliedLine existing, AppliedLine target)
+        {
+            if (target?.StagedRows == null)
+            {
+                return;
+            }
+
+            Dictionary<string, DispatchWorkbenchStagedRowDto> existingById =
+                new Dictionary<string, DispatchWorkbenchStagedRowDto>(StringComparer.Ordinal);
+            if (existing?.StagedRows != null)
+            {
+                for (int i = 0; i < existing.StagedRows.Count; i++)
+                {
+                    DispatchWorkbenchStagedRowDto row = existing.StagedRows[i];
+                    if (row != null && !string.IsNullOrEmpty(row.id))
+                    {
+                        existingById[row.id] = row;
+                    }
+                }
+            }
+
+            bool inheritedDetails = false;
+            for (int i = 0; i < target.StagedRows.Count; i++)
+            {
+                DispatchWorkbenchStagedRowDto targetRow = target.StagedRows[i];
+                if (targetRow == null)
+                {
+                    continue;
+                }
+
+                targetRow.stopSig = string.Empty;
+                targetRow.timedStops = Array.Empty<DispatchWorkbenchTimedStopDto>();
+                if (existing == null
+                    || string.IsNullOrEmpty(existing.StopSig)
+                    || string.IsNullOrEmpty(targetRow.id)
+                    || !existingById.TryGetValue(targetRow.id, out DispatchWorkbenchStagedRowDto existingRow)
+                    || m_Host.Minutes(existingRow.time) != m_Host.Minutes(targetRow.time)
+                    || !HasTimedStops(existingRow))
+                {
+                    continue;
+                }
+
+                DispatchWorkbenchStagedRowDto copied = m_Host.CopyRow(existingRow);
+                targetRow.stopSig = existing.StopSig;
+                targetRow.timedStops = copied?.timedStops ?? Array.Empty<DispatchWorkbenchTimedStopDto>();
+                inheritedDetails = true;
+            }
+
+            target.StopSig = inheritedDetails ? existing.StopSig : string.Empty;
+        }
+
+        private static bool HasTimedStops(DispatchWorkbenchStagedRowDto row)
+        {
+            return row?.timedStops != null && row.timedStops.Any(stop => stop != null);
+        }
+
+        private bool SameSchedule(AppliedLine left, AppliedLine right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+            if (left == null || right == null
+                || !string.Equals(left.StopSig ?? string.Empty, right.StopSig ?? string.Empty, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            List<DispatchWorkbenchStagedRowDto> leftRows = OrderedRows(left);
+            List<DispatchWorkbenchStagedRowDto> rightRows = OrderedRows(right);
+            if (leftRows.Count != rightRows.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < leftRows.Count; i++)
+            {
+                DispatchWorkbenchStagedRowDto leftRow = leftRows[i];
+                DispatchWorkbenchStagedRowDto rightRow = rightRows[i];
+                if (!string.Equals(leftRow.id ?? string.Empty, rightRow.id ?? string.Empty, StringComparison.Ordinal)
+                    || m_Host.Minutes(leftRow.time) != m_Host.Minutes(rightRow.time)
+                    || !string.Equals(leftRow.kind ?? string.Empty, rightRow.kind ?? string.Empty, StringComparison.Ordinal)
+                    || !string.Equals(leftRow.source ?? string.Empty, rightRow.source ?? string.Empty, StringComparison.Ordinal)
+                    || !SameTimedStops(leftRow.timedStops, rightRow.timedStops))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool SameTimedStops(
+            DispatchWorkbenchTimedStopDto[] left,
+            DispatchWorkbenchTimedStopDto[] right)
+        {
+            int leftCount = left?.Length ?? 0;
+            int rightCount = right?.Length ?? 0;
+            if (leftCount != rightCount)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < leftCount; i++)
+            {
+                DispatchWorkbenchTimedStopDto leftStop = left[i];
+                DispatchWorkbenchTimedStopDto rightStop = right[i];
+                if (leftStop == null || rightStop == null)
+                {
+                    if (leftStop != rightStop)
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
+                if (!string.Equals(leftStop.stopKey ?? string.Empty, rightStop.stopKey ?? string.Empty, StringComparison.Ordinal)
+                    || leftStop.arrive != rightStop.arrive
+                    || leftStop.depart != rightStop.depart)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private List<DispatchWorkbenchStagedRowDto> OrderedRows(AppliedLine line)
         {
             if (line?.StagedRows == null)
@@ -1486,11 +1637,13 @@ namespace RapidTransitMod.Dispatch
             }
 
             bool changed = false;
+            HashSet<string> removedLineIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (string lineId in lineIds)
             {
                 if (m_Lines.Remove(lineId))
                 {
                     RecordCleanup(lineId, reasons, removedApplied: true);
+                    removedLineIds.Add(lineId);
                     changed = true;
                 }
             }
@@ -1512,7 +1665,7 @@ namespace RapidTransitMod.Dispatch
                 return false;
             }
 
-            Sync(saveDrafts: false);
+            SyncChangedLines(removedLineIds, Array.Empty<string>(), saveDrafts: false);
             if (saveChanges)
             {
                 m_Host.SaveDrafts();
@@ -1946,7 +2099,37 @@ namespace RapidTransitMod.Dispatch
             }
 
             RefreshPlans();
-            m_Host.MarkTrack();
+        }
+
+        private void SyncChangedLines(
+            IEnumerable<string> removedLineIds,
+            IEnumerable<string> changedLineIds,
+            bool saveDrafts)
+        {
+            HashSet<string> removed = new HashSet<string>(
+                (removedLineIds ?? Array.Empty<string>()).Where(lineId => !string.IsNullOrEmpty(lineId)),
+                StringComparer.Ordinal);
+            HashSet<string> changed = new HashSet<string>(
+                (changedLineIds ?? Array.Empty<string>()).Where(lineId => !string.IsNullOrEmpty(lineId)),
+                StringComparer.Ordinal);
+
+            foreach (string lineId in removed.OrderBy(lineId => lineId, StringComparer.Ordinal))
+            {
+                m_Cfg.SyncApplied(lineId, null);
+            }
+
+            foreach (string lineId in changed.OrderBy(lineId => lineId, StringComparer.Ordinal))
+            {
+                m_Lines.TryGetValue(lineId, out AppliedLine applied);
+                m_Cfg.SyncApplied(lineId, applied);
+            }
+
+            RefreshPlans();
+            bool draftsChanged = m_Host.SyncDrafts();
+            if (saveDrafts && draftsChanged)
+            {
+                m_Host.SaveDrafts();
+            }
         }
 
         private static Dictionary<string, WorkbenchLineRuntime> BuildRuntimeIndex(IEnumerable<WorkbenchLineRuntime> runtimeLines)
@@ -2084,16 +2267,22 @@ namespace RapidTransitMod.Dispatch
                 : "entity-" + line.Index.ToString();
         }
 
-        private void RemoveAppliedByDraftOrStable(string draftKey, Entity line)
+        private void RemoveAppliedByDraftOrStable(
+            string draftKey,
+            Entity line,
+            ISet<string> removedLineIds)
         {
-            if (!string.IsNullOrEmpty(draftKey))
-                m_Lines.Remove(draftKey);
+            if (!string.IsNullOrEmpty(draftKey) && m_Lines.Remove(draftKey))
+            {
+                removedLineIds?.Add(draftKey);
+            }
 
             if (line != Entity.Null
                 && TryResolveStableId(line, out string stableKey, out _)
-                && !string.IsNullOrEmpty(stableKey))
+                && !string.IsNullOrEmpty(stableKey)
+                && m_Lines.Remove(stableKey))
             {
-                m_Lines.Remove(stableKey);
+                removedLineIds?.Add(stableKey);
             }
         }
 

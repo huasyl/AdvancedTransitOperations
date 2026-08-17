@@ -15,10 +15,9 @@ namespace RapidTransitMod.Dispatch.Observation
     internal sealed class Buffers
     {
         private const ulong SignatureSeed = 1469598103934665603UL;
-        private const int MonitorVersion = 1;
-        private const int MonitorTripLegacyVersion = 2;
-        private const int MonitorTripVersion = 3;
-        private const int MonitorAverageVersion = 1;
+        private const int MonitorVersion = 2;
+        private const int MonitorTripVersion = 4;
+        private const int MonitorAverageVersion = 2;
         private const int MaxMonitorDateSlots = 2;
         private const int MaxMonitorTripsPerDate = 4096;
         private const int MaxMonitorActiveTrips = 1024;
@@ -28,6 +27,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private const int MaxRestoreLineLogSlices = 32;
         private readonly ModRuntimeHostSystem m_Runtime;
         private bool m_MonitorPersistenceHealthy = true;
+        private bool m_IgnoreLegacyMonitor;
 
         public Buffers(ModRuntimeHostSystem runtime)
         {
@@ -106,6 +106,8 @@ namespace RapidTransitMod.Dispatch.Observation
         public void LoadMonitor()
         {
             EnsureMonitor();
+            EnsureMonitorAverages();
+            m_IgnoreLegacyMonitor = false;
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null
                 || m_Runtime.m_ObsRecorder == null
@@ -117,6 +119,14 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             m_MonitorPersistenceHealthy = true;
+            if (HasLegacyMonitor(city))
+            {
+                m_IgnoreLegacyMonitor = true;
+                m_Runtime.m_ObsRecorder.ClearMonitor();
+                m_Runtime.m_MonitorAverages.Clear();
+                m_Runtime.m_ObsRecorder.TickDate(m_Runtime.m_SimClock.NowDate);
+                return;
+            }
             m_Runtime.m_ObsRecorder.ClearMonitor();
             DynamicBuffer<MonitorDateSlotElement> slots =
                 m_Runtime.EntityManager.GetBuffer<MonitorDateSlotElement>(city, true);
@@ -180,9 +190,7 @@ namespace RapidTransitMod.Dispatch.Observation
                         && restoredLine == element.m_Line
                         && m_Runtime.m_VehicleView.TryGetState(element.m_Vehicle, out VehicleState restoredState)
                         && restoredState == VehicleState.Running);
-                if ((element.m_Version != MonitorVersion
-                    && element.m_Version != MonitorTripLegacyVersion
-                    && element.m_Version != MonitorTripVersion)
+                if (element.m_Version != MonitorTripVersion
                     || (element.m_Active != 0 && element.m_Active != 1)
                     || element.m_TripOrder < 0
                     || element.m_TripOrder == int.MaxValue
@@ -251,6 +259,10 @@ namespace RapidTransitMod.Dispatch.Observation
                         || stop.m_PlannedDeparture < -1
                         || stop.m_ActualArrival < -1
                         || stop.m_ActualDeparture < -1
+                        || (stop.m_ActualArrival < 0 && stop.m_ActualArrivalFrame != 0u)
+                        || (stop.m_ActualDeparture < 0 && (stop.m_ActualDepartureFrame != 0u
+                            || stop.m_OpenIntervalMaxFrames != 0u))
+                        || (stop.m_ActualDeparture >= 0 && stop.m_OpenIntervalMaxFrames == 0u)
                         || (stop.m_Cleared != 0 && stop.m_Cleared != 1))
                     {
                         valid = false;
@@ -265,6 +277,9 @@ namespace RapidTransitMod.Dispatch.Observation
                         PlannedDeparture = stop.m_PlannedDeparture,
                         ActualArrival = stop.m_ActualArrival,
                         ActualDeparture = stop.m_ActualDeparture,
+                        ActualArrivalFrame = stop.m_ActualArrivalFrame,
+                        ActualDepartureFrame = stop.m_ActualDepartureFrame,
+                        OpenIntervalMaxFrames = stop.m_OpenIntervalMaxFrames,
                         Cleared = stop.m_Cleared == 1
                     });
                 }
@@ -329,6 +344,8 @@ namespace RapidTransitMod.Dispatch.Observation
 
         public void LoadMonitorIntegrity()
         {
+            if (m_IgnoreLegacyMonitor)
+                return;
             bool loadDataComplete = !m_Runtime.m_Obs.MonitorOverflowed;
             int loadDroppedTripCount = m_Runtime.m_Obs.MonitorOverflowCount;
             string loadIssueCode = m_Runtime.m_Obs.MonitorIssueCode ?? string.Empty;
@@ -460,6 +477,48 @@ namespace RapidTransitMod.Dispatch.Observation
             }
         }
 
+        private bool HasLegacyMonitor(Entity city)
+        {
+            DynamicBuffer<MonitorDateSlotElement> slots =
+                m_Runtime.EntityManager.GetBuffer<MonitorDateSlotElement>(city, true);
+            for (int i = 0; i < slots.Length; i++)
+                if (slots[i].m_Version > 0 && slots[i].m_Version < MonitorVersion)
+                    return true;
+
+            DynamicBuffer<MonitorIntegrityElement> integrity =
+                m_Runtime.EntityManager.GetBuffer<MonitorIntegrityElement>(city, true);
+            for (int i = 0; i < integrity.Length; i++)
+                if (integrity[i].m_Version > 0 && integrity[i].m_Version < MonitorVersion)
+                    return true;
+
+            DynamicBuffer<MonitorTripElement> trips =
+                m_Runtime.EntityManager.GetBuffer<MonitorTripElement>(city, true);
+            for (int i = 0; i < trips.Length; i++)
+                if (trips[i].m_Version > 0 && trips[i].m_Version < MonitorTripVersion)
+                    return true;
+
+            DynamicBuffer<MonitorStopElement> stops =
+                m_Runtime.EntityManager.GetBuffer<MonitorStopElement>(city, true);
+            for (int i = 0; i < stops.Length; i++)
+                if (stops[i].m_Version > 0 && stops[i].m_Version < MonitorVersion)
+                    return true;
+
+            DynamicBuffer<MonitorAverageLineElement> averageLines =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageLineElement>(city, true);
+            for (int i = 0; i < averageLines.Length; i++)
+                if (averageLines[i].m_Version > 0
+                    && averageLines[i].m_Version < MonitorAverageVersion)
+                    return true;
+
+            DynamicBuffer<MonitorAverageSegmentElement> averageSegments =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageSegmentElement>(city, true);
+            for (int i = 0; i < averageSegments.Length; i++)
+                if (averageSegments[i].m_Version > 0
+                    && averageSegments[i].m_Version < MonitorAverageVersion)
+                    return true;
+            return false;
+        }
+
         private readonly struct MonitorLayout
         {
             internal readonly bool Available;
@@ -584,8 +643,8 @@ namespace RapidTransitMod.Dispatch.Observation
                 for (int order = 0; order < line.Segments.Length; order++)
                 {
                     MonitorAverageSegment segment = line.Segments[order];
-                    if ((segment.SampleCount == 0 && segment.TotalMinutes != 0)
-                        || (segment.SampleCount > 0 && segment.TotalMinutes <= 0))
+                    if ((segment.SampleCount == 0 && segment.TotalFrames != 0)
+                        || (segment.SampleCount > 0 && segment.TotalFrames == 0))
                     {
                         throw new InvalidOperationException("monitor-average-segment-invalid");
                     }
@@ -594,7 +653,7 @@ namespace RapidTransitMod.Dispatch.Observation
                         m_Version = MonitorAverageVersion,
                         m_Line = line.Line,
                         m_Order = order,
-                        m_TotalMinutes = segment.TotalMinutes,
+                        m_TotalFrames = segment.TotalFrames,
                         m_SampleCount = segment.SampleCount
                     });
                 }
@@ -694,7 +753,11 @@ namespace RapidTransitMod.Dispatch.Observation
                     || stop.PlannedArrival < -1
                     || stop.PlannedDeparture < -1
                     || stop.ActualArrival < -1
-                    || stop.ActualDeparture < -1)
+                    || stop.ActualDeparture < -1
+                    || (stop.ActualArrival < 0 && stop.ActualArrivalFrame != 0u)
+                    || (stop.ActualDeparture < 0 && (stop.ActualDepartureFrame != 0u
+                        || stop.OpenIntervalMaxFrames != 0u))
+                    || (stop.ActualDeparture >= 0 && stop.OpenIntervalMaxFrames == 0u))
                 {
                     return false;
                 }
@@ -785,7 +848,7 @@ namespace RapidTransitMod.Dispatch.Observation
                         return false;
                     stopValues[i] = new MonitorStopElement
                     {
-                        m_Version = 1,
+                        m_Version = MonitorVersion,
                         m_TripOrder = tripOrder,
                         m_StopOrder = i,
                         m_StopKey = stop.StopKey,
@@ -795,6 +858,9 @@ namespace RapidTransitMod.Dispatch.Observation
                         m_PlannedDeparture = stop.PlannedDeparture,
                         m_ActualArrival = stop.ActualArrival,
                         m_ActualDeparture = stop.ActualDeparture,
+                        m_ActualArrivalFrame = stop.ActualArrivalFrame,
+                        m_ActualDepartureFrame = stop.ActualDepartureFrame,
+                        m_OpenIntervalMaxFrames = stop.OpenIntervalMaxFrames,
                         m_Cleared = stop.Cleared ? 1 : 0
                     };
                 }
@@ -876,6 +942,8 @@ namespace RapidTransitMod.Dispatch.Observation
         {
             EnsureMonitorAverages();
             m_Runtime.m_MonitorAverages.Clear();
+            if (m_IgnoreLegacyMonitor)
+                return;
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null
                 || !m_Runtime.EntityManager.HasBuffer<MonitorAverageLineElement>(city)
@@ -904,10 +972,9 @@ namespace RapidTransitMod.Dispatch.Observation
                 bool invalid = element.m_Version != MonitorAverageVersion
                     || element.m_Line == Entity.Null
                     || element.m_Order < 0
-                    || element.m_TotalMinutes < 0
                     || element.m_SampleCount < 0
-                    || (element.m_SampleCount == 0 && element.m_TotalMinutes != 0)
-                    || (element.m_SampleCount > 0 && element.m_TotalMinutes <= 0);
+                    || (element.m_SampleCount == 0 && element.m_TotalFrames != 0)
+                    || (element.m_SampleCount > 0 && element.m_TotalFrames == 0);
                 if (invalid)
                 {
                     invalidLines.Add(element.m_Line);
@@ -958,7 +1025,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     }
                     restored[order] = new MonitorAverageSegment
                     {
-                        TotalMinutes = segment.m_TotalMinutes,
+                        TotalFrames = segment.m_TotalFrames,
                         SampleCount = segment.m_SampleCount
                     };
                 }
