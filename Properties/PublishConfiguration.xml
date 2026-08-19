@@ -14,19 +14,17 @@ If you are tired of controlling public transit only with sliders, or if you want
 
 The current version supports Train, Subway, Tram, and Bus. Supported languages: English, Simplified Chinese, and Japanese.
 
-## 🚋🚌 The wait is over!
+## Real Timetables Are Here
 
-This update adds support for trams and buses, bringing ATO’s scheduling, timetables, broadcast system, and other features to more types of public transport.
-
-Whether it’s trams running through city streets or buses handling everyday local service, they can now be managed within the same operations system.
+ATO now supports scheduled departures at intermediate stops, extending timetable control beyond the origin station. Trip records now show actual arrival and departure times stop by stop, and rail services can be viewed together in the new time–distance diagram.
 
 Please refer to the Update History for the complete changelog.
 
 ## Core Gameplay
 
-### Operate Lines with Your Own Timetables
+### Build Timetables That Fit Your Service
 
-Assign specific departure times to each Train, Subway, Tram, or Bus line, with separate timetables for peak, off-peak, and final services.
+Control only origin departures when that is all you need, or create a full timetable with scheduled departure times at intermediate stops. Different services can use different schedules for peak, off-peak, and final operations, giving you precise control without requiring a full timetable for every line.
 
 ### Run Passing Operations
 
@@ -87,19 +85,19 @@ Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交
 
 当前支持火车、地铁、有轨电车和公交。支持语言：英语、简体中文、日语。
 
-## 🚋🚌 久等了！
+## v0.4.0 真正的时刻表
 
-此次更新加入了对有轨电车和公交的支持，ATO 现在可以将调度、时刻表、广播等功能应用到更多类型的公共交通线路。
+ATO 现在不再只控制始发站发车。
 
-无论是穿行于城市街道的有轨电车，还是承担日常接驳的公交线路，现在都可以纳入同一套运营体系。
+你仍然可以只设置始发时间，保持简单的发车控制；也可以选择进一步创建完整时刻表，为中途站设置计划发车时间。运行记录现在也会逐站显示实际到达和发车时间，方便直接对比计划与实际运行情况。
 
-完整内容请参阅更新历史。
+轨道交通还新增了运行图功能，可在同一区间内同时查看不同线路的运行情况。
 
 ## 核心玩法
 
-### 按自己的时刻表运营线路
+### 按需设置运行时刻
 
-为火车、地铁、有轨电车和公交线路安排具体发车时刻，并分别设置高峰、平峰和末班服务。
+如果只需要控制始发站发车，可以仅设置始发时间；也可以进一步创建完整时刻表，为中途站设置计划发车时间。不同班次可分别使用高峰、平峰和末班时段的运行计划，在提供更精细控制的同时，也无需为每条线路都设置完整时刻表。
 
 ### 开行快车、慢车与越行服务
 
@@ -152,14 +150,14 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
 如果您觉得 ATO 好玩，或者它对您的公共交通运营有所帮助，欢迎为本 Mod 点个赞。感谢您的游玩与支持！
 </LongDescription>
   <!--Thumbnail-->
-  <Thumbnail Value="Properties/Cover.png" />
+  <Thumbnail Value="Properties/Cover2.jpg" />
   <!--Screenshot, can be set multiple times-->
   <Screenshot Value="Properties/Screenshots/Screenshot01.pub.jpg" />
+  <Screenshot Value="Properties/Screenshots/Screenshot12.png" />
+  <Screenshot Value="Properties/Screenshots/Screenshot13.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot02.pub.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot03.pub.jpg" />
-  <Screenshot Value="Properties/Screenshots/Screenshot04.pub.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot05.pub.jpg" />
-  <Screenshot Value="Properties/Screenshots/Screenshot07.pub.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot08.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot09.jpg" />
   <Screenshot Value="Properties/Screenshots/Screenshot10.jpg" />
@@ -170,7 +168,7 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.3.1" />
+  <ModVersion Value="0.4.0" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -179,14 +177,20 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <RequiredDLC Value="" />
   <!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
   <ChangeLog>
-## Performance
+## New Features
 
-- Improved performance during the initial period after loading a save.
+- Added timetable support. Vehicle departure times can now be edited for each stop, with actual arrival and departure times available in trip records.
+- Added time-distance diagrams for rail transit, allowing services from different lines sharing the same corridor to be viewed together.
+
+## Bug Fixes
+
+- Fixed an issue where temporary entities could enter the depot catalog and prevent timetables from being saved.
+- Fixed an issue where recorded dwell times were not saved correctly.
+- Fixed an issue where vehicles could occasionally be incorrectly associated with the previous stop, resulting in inaccurate data recording.
 
 ## Improvements
 
-1. Line, depot, and stop names now refresh automatically when opening the corresponding dropdowns and interfaces.
-2. Improved parts of the layout on the Broadcast page.
+- Increased the maximum depot departure lead time for buses, reducing missed services on routes with longer depot travel times.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />

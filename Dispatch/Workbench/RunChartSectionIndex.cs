@@ -394,9 +394,17 @@ namespace RapidTransitMod.Dispatch.Workbench
                 {
                     stationId = m_StationId(item.Building) ?? string.Empty;
                 }
+                string stopKey = stationId;
+                if (!boundary && !outsideEndpoint && item.Building != Entity.Null)
+                {
+                    string resolvedStopKey = m_StationId(item.Building) ?? string.Empty;
+                    if (!string.IsNullOrEmpty(resolvedStopKey))
+                        stopKey = resolvedStopKey;
+                }
                 source.Events.Add(new Fact
                 {
                     StationId = stationId,
+                    StopKey = stopKey,
                     Station = item.Building,
                     Name = boundary || item.Building == Entity.Null
                         ? string.Empty
@@ -419,12 +427,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             });
             HashSet<int> phaseBreaks = FindPhaseBreaks(source);
             AddRegionBreaks(phaseBreaks, snapshot.RunChartTurnbackRegions, source);
+            bool closeLastPhase = CanCloseLastPhase(source, snapshot.RunChartTurnbackRegions);
             bool canWrap = source.ChainComplete
                 && !source.HasPhysicalTurnback
                 && !source.Events.Any(item => item.Broken)
                 && (snapshot.RunChartTurnbackRegions?.Length ?? 0) == 0
                 && phaseBreaks.Count == 0;
-            BuildPhases(source, phaseBreaks, canWrap);
+            BuildPhases(source, phaseBreaks, canWrap, closeLastPhase ? source.Events[0] : null);
             return source;
         }
 
@@ -472,7 +481,9 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return;
             for (int regionIndex = 0; regionIndex < regions.Length; regionIndex++)
             {
-                int boundaryAtom = regions[regionIndex].BoundaryAtomIndex;
+                RunChartTurnbackRegion region = regions[regionIndex];
+                RemoveRegionBreaks(phaseBreaks, region, source);
+                int boundaryAtom = region.BoundaryAtomIndex;
                 for (int eventIndex = 1; eventIndex < source.Events.Count; eventIndex++)
                 {
                     if (source.Events[eventIndex].StartAtomIndex < boundaryAtom)
@@ -483,10 +494,49 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
         }
 
+        private static void RemoveRegionBreaks(
+            HashSet<int> phaseBreaks,
+            RunChartTurnbackRegion region,
+            LineSource source)
+        {
+            foreach (int breakIndex in phaseBreaks.ToArray())
+            {
+                int rightEventIndex = breakIndex + 1;
+                if (rightEventIndex < 0 || rightEventIndex >= source.Events.Count)
+                    continue;
+                int rightStartAtom = source.Events[rightEventIndex].StartAtomIndex;
+                if (rightStartAtom >= region.StartAtomIndex
+                    && rightStartAtom < region.EndAtomIndexExclusive
+                    && rightStartAtom != region.BoundaryAtomIndex)
+                {
+                    phaseBreaks.Remove(breakIndex);
+                }
+            }
+        }
+
+        private static bool CanCloseLastPhase(
+            LineSource source,
+            RunChartTurnbackRegion[] regions)
+        {
+            if (source == null
+                || !source.ChainComplete
+                || source.HasPhysicalTurnback
+                || source.Mode != TransitMode.Tram
+                || source.Events.Count < 2
+                || source.Events.Any(item => item.Broken)
+                || regions == null
+                || regions.Length == 0)
+            {
+                return false;
+            }
+            return true;
+        }
+
         private static void BuildPhases(
             LineSource source,
             HashSet<int> phaseBreaks,
-            bool canWrap)
+            bool canWrap,
+            Fact lastClosingFact)
         {
             source.Phases.Clear();
             LinePhase current = null;
@@ -523,6 +573,17 @@ namespace RapidTransitMod.Dispatch.Workbench
                 LinePhase phase = source.Phases[phaseIndex];
                 phase.Index = phaseIndex;
                 phase.CanWrap = canWrap && onePhase && phase.Events.Count > 1;
+                if (lastClosingFact != null
+                    && phaseIndex == source.Phases.Count - 1
+                    && source.Phases.Count > 1
+                    && phase.Events.Count > 1
+                    && !string.Equals(
+                        phase.Events[phase.Events.Count - 1].StationId,
+                        lastClosingFact.StationId,
+                        StringComparison.Ordinal))
+                {
+                    phase.ClosingFact = lastClosingFact;
+                }
                 if (phase.CanWrap
                     && string.Equals(
                         phase.Events[0].StationId,
@@ -608,7 +669,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 LinePhase phase = source.Phases[m_BuildPhaseIndex];
                 int edgeCount = phase.Events.Count < 2
                     ? 0
-                    : phase.Events.Count - 1 + (phase.CanWrap ? 1 : 0);
+                    : phase.Events.Count - 1 + (phase.CanWrap || phase.ClosingFact != null ? 1 : 0);
                 if (m_BuildEventIndex >= edgeCount)
                 {
                     m_BuildPhaseIndex++;
@@ -618,13 +679,16 @@ namespace RapidTransitMod.Dispatch.Workbench
                 int fromIndex = m_BuildEventIndex;
                 int toIndex = fromIndex + 1;
                 bool closing = false;
+                Fact to;
                 if (toIndex >= phase.Events.Count)
                 {
-                    toIndex = 0;
                     closing = true;
+                    to = phase.ClosingFact ?? phase.Events[0];
                 }
+                else
+                    to = phase.Events[toIndex];
                 m_BuildEventIndex++;
-                AddEdge(source, phase, phase.Events[fromIndex], phase.Events[toIndex], closing);
+                AddEdge(source, phase, phase.Events[fromIndex], to, closing);
                 if (m_BuildOverflow)
                     return false;
             }
@@ -709,6 +773,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Phase = phase,
                 FromOrder = from.EventOrder,
                 ToOrder = to.EventOrder,
+                FromStopKey = from.StopKey,
+                ToStopKey = to.StopKey,
                 FromWaypointIndex = from.WaypointIndex,
                 ToWaypointIndex = to.WaypointIndex,
                 FromIsStop = from.IsStop,
@@ -1003,8 +1069,18 @@ namespace RapidTransitMod.Dispatch.Workbench
                 FromSectionIndex = startIndex,
                 ToSectionIndex = startIndex + 1
             };
-            AddCoveragePoint(coverage, startIndex, first.FromIsStop, first.FromWaypointIndex);
-            AddCoveragePoint(coverage, startIndex + 1, first.ToIsStop, first.ToWaypointIndex);
+            AddCoveragePoint(
+                coverage,
+                startIndex,
+                first.FromIsStop,
+                first.FromStopKey,
+                first.FromWaypointIndex);
+            AddCoveragePoint(
+                coverage,
+                startIndex + 1,
+                first.ToIsStop,
+                first.ToStopKey,
+                first.ToWaypointIndex);
             EdgeAttachment current = first;
             for (int edgeIndex = startIndex + 1; edgeIndex < section.Stations.Count - 1; edgeIndex++)
             {
@@ -1015,7 +1091,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                     break;
                 current = next;
                 coverage.ToSectionIndex = edgeIndex + 1;
-                AddCoveragePoint(coverage, edgeIndex + 1, current.ToIsStop, current.ToWaypointIndex);
+                AddCoveragePoint(
+                    coverage,
+                    edgeIndex + 1,
+                    current.ToIsStop,
+                    current.ToStopKey,
+                    current.ToWaypointIndex);
             }
             AddClipStops(coverage, first, current);
             string key = CoverageKey(coverage);
@@ -1029,11 +1110,23 @@ namespace RapidTransitMod.Dispatch.Workbench
             section.Coverages.Add(coverage);
         }
 
-        private static void AddCoveragePoint(Coverage coverage, int sectionIndex, bool isStop, int waypointIndex)
+        private static void AddCoveragePoint(
+            Coverage coverage,
+            int sectionIndex,
+            bool isStop,
+            string stopKey,
+            int waypointIndex)
         {
             List<CoveragePoint> target = isStop ? coverage.Stops : coverage.Passes;
             if (!target.Any(point => point.SectionIndex == sectionIndex))
-                target.Add(new CoveragePoint { SectionIndex = sectionIndex, WaypointIndex = waypointIndex });
+            {
+                target.Add(new CoveragePoint
+                {
+                    StationId = isStop ? stopKey : string.Empty,
+                    SectionIndex = sectionIndex,
+                    WaypointIndex = waypointIndex
+                });
+            }
         }
 
         private void AddClipStops(Coverage coverage, EdgeAttachment first, EdgeAttachment last)
@@ -1047,7 +1140,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 coverage.LeadingStop = new CoveragePoint
                 {
-                    StationId = leading.StationId,
+                    StationId = leading.StopKey,
                     SectionIndex = coverage.FromSectionIndex - leadingHops,
                     WaypointIndex = leading.WaypointIndex
                 };
@@ -1057,7 +1150,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 coverage.TrailingStop = new CoveragePoint
                 {
-                    StationId = trailing.StationId,
+                    StationId = trailing.StopKey,
                     SectionIndex = coverage.ToSectionIndex + trailingHops,
                     WaypointIndex = trailing.WaypointIndex
                 };
@@ -1629,7 +1722,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     toSectionIndex = coverage.ToSectionIndex,
                     stops = coverage.Stops.Select(point => new DispatchWorkbenchRunChartStationDto
                     {
-                        stationId = section.Stations[point.SectionIndex],
+                        stationId = point.StationId,
                         sectionIndex = point.SectionIndex,
                         waypointIndex = point.WaypointIndex,
                         type = "stop"
@@ -1718,12 +1811,15 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             internal int Index;
             internal bool CanWrap;
+            // 仅完整链尾部的私有区域回程阶段可闭合到既有首事件一次。
+            internal Fact ClosingFact;
             internal readonly List<Fact> Events = new List<Fact>();
         }
 
         private sealed class Fact
         {
             internal string StationId;
+            internal string StopKey;
             internal Entity Station;
             internal string Name;
             internal bool IsStop;
@@ -1759,6 +1855,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             internal LinePhase Phase;
             internal int FromOrder;
             internal int ToOrder;
+            internal string FromStopKey;
+            internal string ToStopKey;
             internal int FromWaypointIndex;
             internal int ToWaypointIndex;
             internal bool FromIsStop;

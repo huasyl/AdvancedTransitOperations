@@ -127,6 +127,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private const int TimeoutMilliseconds = 8000;
         private const int MaxResults = 512;
         private const int MaxResultsPerEditor = 32;
+        private const uint TheoryStabilityDelayFrames = 64;
         private const uint TheoryRetryDelayFrames = 60;
         private const uint TheoryLongRetryDelayFrames = 240;
         private const int MaxTheoryRetries = 2;
@@ -146,6 +147,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly HashSet<string> m_TheoryQueued = new HashSet<string>(StringComparer.Ordinal);
         private readonly HashSet<string> m_TheoryLines = new HashSet<string>(StringComparer.Ordinal);
         private TheoryEntry m_TheoryActive;
+        private uint m_TheoryFrame;
         private uint m_TheoryWakeFrame;
         private bool m_TheoryPaused;
         private long m_NextResultOrder;
@@ -271,8 +273,12 @@ namespace RapidTransitMod.Dispatch.Workbench
             TheoryWaiter waiter = AddTheoryWaiter(editor, lineId);
             if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry))
             {
-                waiter.State = "Queued";
-                return TheoryStatus(waiter, null);
+                QueueTheory(lineId, false, m_TheoryFrame + TheoryStabilityDelayFrames);
+                m_Theory.TryGetValue(lineId, out entry);
+            }
+            else if (entry.State == "Completed" && !TryFindTheoryResult(lineId, out _))
+            {
+                QueueTheory(lineId, true, m_TheoryFrame + TheoryStabilityDelayFrames);
             }
 
             waiter.State = entry.State == "Completed" ? "Queued" : entry.State;
@@ -411,6 +417,7 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal void Tick(uint nowFrame = 0)
         {
+            m_TheoryFrame = nowFrame;
             foreach (FullRunTimeSession session in m_Active.Values.ToArray())
             {
                 if (session == null || session.State != "Running") continue;
@@ -440,12 +447,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry))
                 {
                     if (!TryFindTheoryResult(lineId, out _))
-                        QueueTheory(lineId, false);
+                        QueueTheory(lineId, false, m_TheoryFrame);
                     continue;
                 }
 
                 if (entry.State == "Completed" && !TryFindTheoryResult(lineId, out _))
-                    QueueTheory(lineId, true);
+                    QueueTheory(lineId, true, m_TheoryFrame);
             }
 
             foreach (string lineId in m_TheoryLines
@@ -556,6 +563,14 @@ namespace RapidTransitMod.Dispatch.Workbench
                 if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry)
                     || entry.State != "Queued")
                     continue;
+                if (entry.Generation != m_LineGeneration(lineId))
+                {
+                    QueueTheory(
+                        lineId,
+                        true,
+                        nowFrame + TheoryStabilityDelayFrames);
+                    continue;
+                }
                 if (entry.NextFrame > nowFrame)
                 {
                     m_TheoryQueue.Enqueue(lineId);
@@ -705,7 +720,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             PushTheoryWaiters(entry);
         }
 
-        private void QueueTheory(string lineId, bool force)
+        private void QueueTheory(string lineId, bool force, uint nextFrame)
         {
             if (string.IsNullOrEmpty(lineId))
                 return;
@@ -724,6 +739,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return;
             }
             ClearTheoryActive(entry);
+            if (entry.Session?.Ticket.IsValid == true)
+                RailEtaBridgeService.Current?.Cancel(entry.Session.Ticket);
             if (entry.Session != null)
                 Release(entry.Session);
             entry.Session = null;
@@ -733,8 +750,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             entry.ResultId = string.Empty;
             entry.Generation = m_LineGeneration(lineId);
             entry.RetryCount = 0;
-            entry.NextFrame = 0;
+            entry.NextFrame = nextFrame;
             EnqueueTheory(entry);
+            if (m_TheoryActive == null
+                && (m_TheoryWakeFrame == 0 || entry.NextFrame < m_TheoryWakeFrame))
+            {
+                m_TheoryWakeFrame = entry.NextFrame;
+            }
             PushTheoryWaiters(entry);
         }
 
@@ -1000,8 +1022,14 @@ namespace RapidTransitMod.Dispatch.Workbench
             Dictionary<string, RunTimeInvalidationDto> invalidations,
             bool requeue)
         {
+            bool needed = m_TheoryLines.Contains(lineId) || HasTheoryWaiter(lineId);
             if (!m_Theory.TryGetValue(lineId, out TheoryEntry entry))
-                return;
+            {
+                if (!needed)
+                    return;
+                entry = new TheoryEntry { LineId = lineId };
+                m_Theory[lineId] = entry;
+            }
 
             foreach (TheoryWaiter waiter in m_TheoryWaiters.Values
                 .Where(waiter => string.Equals(waiter.LineId, lineId, StringComparison.Ordinal))
@@ -1012,13 +1040,28 @@ namespace RapidTransitMod.Dispatch.Workbench
             if (!string.IsNullOrEmpty(entry.ResultId))
                 m_Results.Remove(entry.ResultId);
             entry.ResultId = string.Empty;
-            ClearTheoryActive(entry);
-            if (entry.Session?.Ticket.IsValid == true)
-                RailEtaBridgeService.Current?.Cancel(entry.Session.Ticket);
-            Release(entry.Session);
-            m_Theory.Remove(lineId);
-            if (requeue && m_TheoryLines.Contains(lineId))
-                QueueTheory(lineId, true);
+            if (!needed)
+            {
+                ClearTheoryActive(entry);
+                if (entry.Session?.Ticket.IsValid == true)
+                    RailEtaBridgeService.Current?.Cancel(entry.Session.Ticket);
+                Release(entry.Session);
+                entry.Session = null;
+                m_Theory.Remove(lineId);
+                m_TheoryQueued.Remove(lineId);
+                return;
+            }
+            QueueTheory(
+                lineId,
+                true,
+                m_TheoryFrame + (requeue ? 0U : TheoryStabilityDelayFrames));
+        }
+
+        private bool HasTheoryWaiter(string lineId)
+        {
+            return m_TheoryWaiters.Values.Any(waiter =>
+                string.Equals(waiter.LineId, lineId, StringComparison.Ordinal)
+                && waiter.State != "Cancelled");
         }
 
         internal void RefreshBusHistorical(string lineId)

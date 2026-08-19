@@ -54,6 +54,10 @@ export default function TimetableIcon({ name, className = "", strokeColor = "cur
     return <svg {...common}><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></svg>;
   }
 
+  if (name === "alert") {
+    return <svg {...common}><path d="m12 4 8 16H4L12 4Z" /><path d="M12 9v5M12 17h.01" /></svg>;
+  }
+
   if (name === "chevron-up") {
     return <svg {...common}><path d="m6 15 6-6 6 6" /></svg>;
   }

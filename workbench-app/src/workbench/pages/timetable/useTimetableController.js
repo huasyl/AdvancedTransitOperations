@@ -371,6 +371,10 @@ function runtimeKey(lineId, source) {
   return `${lineId || ""}\u001f${source || "theory"}`;
 }
 
+function inputErrorKey(lineId, trainId, occurrence) {
+  return `${lineId}\u001f${trainId}\u001f${occurrence}`;
+}
+
 function lineRuntime(runtimes, sources, lineId) {
   return runtimes[lineId]?.[sources[lineId] || "theory"] || null;
 }
@@ -419,6 +423,32 @@ function validateDepartureValue(train, runtime, occurrence, value) {
   }
 
   return { error: reachesThirdDay ? "thirdDay" : "", minute };
+}
+
+function collectLineDwellErrors(snapshot, lineId, layout, runtime, directory) {
+  if (!layout || !runtime) {
+    return {};
+  }
+  const stationNames = new Map(asArray(directory).map((station) => [station.stationId, station.name]));
+  const errors = {};
+  buildRows(snapshot, lineId).forEach((row) => {
+    const train = buildTrain(row, layout, runtime, stationNames);
+    train.stops.slice(1, -1).forEach((stop) => {
+      if (!Number.isFinite(stop.departureMinute)) {
+        return;
+      }
+      const result = validateDepartureValue(
+        train,
+        runtime,
+        stop.occurrence,
+        minutesToTime(stop.departureMinute)
+      );
+      if (result.error === "dwell") {
+        errors[inputErrorKey(lineId, train.id, stop.occurrence)] = "dwell";
+      }
+    });
+  });
+  return errors;
 }
 
 function buildLines(snapshot, section, directory, runtimes, runtimeSources, layouts, timing) {
@@ -510,6 +540,8 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   const pendingQueriesRef = useRef({});
   const pendingModeRef = useRef(activeTransportMode);
   const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
+  const snapshotRef = useRef(EMPTY_SNAPSHOT);
+  snapshotRef.current = snapshot;
   const [directory, setDirectory] = useState([]);
   const [indexVersion, setIndexVersion] = useState(0);
   const [startStationId, setStartStationId] = useState("");
@@ -609,16 +641,19 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     });
   }, []);
 
-  const clearInputErrors = useCallback((lineId = "", trainId = "") => {
+  const clearInputErrors = useCallback((lineId = "", trainId = "", preserveDwell = false) => {
     if (!lineId) {
-      setInputErrors({});
+      setInputErrors((current) => preserveDwell
+        ? Object.fromEntries(Object.entries(current).filter(([, value]) => value === "dwell"))
+        : {});
       return;
     }
     const prefix = trainId
       ? `${lineId}\u001f${trainId}\u001f`
       : `${lineId}\u001f`;
     setInputErrors((current) => Object.fromEntries(
-      Object.entries(current).filter(([key]) => !key.startsWith(prefix))
+      Object.entries(current).filter(([key, value]) => !key.startsWith(prefix)
+        || (preserveDwell && value === "dwell"))
     ));
   }, []);
 
@@ -799,7 +834,17 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       if (isTransaction) {
         const layout = layoutsRef.current[lineId]?.value;
         if (layout) {
-          setSnapshot((current) => rebuildLineRows(current, lineId, layout, status));
+          const rebuilt = rebuildLineRows(snapshotRef.current, lineId, layout, status);
+          snapshotRef.current = rebuilt;
+          setSnapshot(rebuilt);
+          const lineErrors = collectLineDwellErrors(rebuilt, lineId, layout, status, directory);
+          setInputErrors((current) => {
+            const prefix = `${lineId}\u001f`;
+            const retained = Object.fromEntries(
+              Object.entries(current).filter(([key, value]) => !(key.startsWith(prefix) && value === "dwell"))
+            );
+            return { ...retained, ...lineErrors };
+          });
         }
         setRuntimeSource(lineId, source);
         const nextTransactions = { ...sourceTransactionsRef.current };
@@ -838,7 +883,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
         reportRunTimeError(operation, detail);
       }
     }
-  }, [clearPendingQuery, reportRunTimeError, setRuntimeSource]);
+  }, [clearPendingQuery, directory, reportRunTimeError, setRuntimeSource]);
 
   const requestRuntime = useCallback((lineId, source = "theory", refreshReady = false) => {
     if (!lineId) {
@@ -1632,8 +1677,8 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       setLoadError("run-time-closing-segment-required");
       return;
     }
-    setSnapshot((current) => {
-      const blocks = asArray(current.lineDraftRowsByLineId).map((block) => ({
+    const currentSnapshot = snapshotRef.current;
+    const blocks = asArray(currentSnapshot.lineDraftRowsByLineId).map((block) => ({
         ...block,
         lineDraftRows: asArray(block.lineDraftRows).map((row) => {
           if (block.lineId !== lineId || row.id !== trainId) {
@@ -1666,7 +1711,16 @@ export default function useTimetableController({ activeTransportMode, isActive, 
           };
         })
       }));
-      return { ...current, lineDraftRowsByLineId: blocks };
+    const nextSnapshot = { ...currentSnapshot, lineDraftRowsByLineId: blocks };
+    snapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    const lineErrors = collectLineDwellErrors(nextSnapshot, lineId, layout, runtime, directory);
+    setInputErrors((current) => {
+      const prefix = `${lineId}\u001f`;
+      const retained = Object.fromEntries(
+        Object.entries(current).filter(([key, value]) => !(key.startsWith(prefix) && value === "dwell"))
+      );
+      return { ...retained, ...lineErrors };
     });
     setDirtyLineIds((current) => current.includes(lineId) ? current : [...current, lineId]);
     setSaveError("");
@@ -1674,16 +1728,17 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }, [directory, layouts, runtimeSources, runtimes]);
 
   const clearDeparture = useCallback((lineId, trainId, occurrence) => {
-    const row = buildRows(snapshot, lineId).find((item) => item?.id === trainId);
+    const currentSnapshot = snapshotRef.current;
+    const row = buildRows(currentSnapshot, lineId).find((item) => item?.id === trainId);
     const timedStops = asArray(row?.timedStops);
     if (occurrence <= 0
       || occurrence >= timedStops.length
       || !Number.isFinite(timedStops[occurrence]?.depart)) {
       return false;
     }
-    setSnapshot((current) => ({
-      ...current,
-      lineDraftRowsByLineId: asArray(current.lineDraftRowsByLineId).map((block) => ({
+    const nextSnapshot = {
+      ...currentSnapshot,
+      lineDraftRowsByLineId: asArray(currentSnapshot.lineDraftRowsByLineId).map((block) => ({
         ...block,
         lineDraftRows: block.lineId === lineId
           ? asArray(block.lineDraftRows).map((item) => item?.id === trainId
@@ -1696,12 +1751,24 @@ export default function useTimetableController({ activeTransportMode, isActive, 
             : item)
           : asArray(block.lineDraftRows)
       }))
-    }));
+    };
+    snapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    const layout = layouts[lineId]?.value;
+    const runtime = lineRuntime(runtimes, runtimeSources, lineId);
+    const lineErrors = collectLineDwellErrors(nextSnapshot, lineId, layout, runtime, directory);
+    setInputErrors((current) => {
+      const prefix = `${lineId}\u001f`;
+      const retained = Object.fromEntries(
+        Object.entries(current).filter(([key, value]) => !(key.startsWith(prefix) && value === "dwell"))
+      );
+      return { ...retained, ...lineErrors };
+    });
     setDirtyLineIds((current) => current.includes(lineId) ? current : [...current, lineId]);
     setSaveError("");
     setSaveState("dirty");
     return true;
-  }, [snapshot]);
+  }, [directory, layouts, runtimeSources, runtimes]);
 
   const clearTrainDetails = useCallback((lineId, trainId) => {
     const row = buildRows(snapshot, lineId).find((item) => item?.id === trainId);
@@ -1719,6 +1786,9 @@ export default function useTimetableController({ activeTransportMode, isActive, 
           : asArray(block.lineDraftRows)
       }))
     }));
+    setInputErrors((current) => Object.fromEntries(
+      Object.entries(current).filter(([key, value]) => !(key.startsWith(`${lineId}\u001f${trainId}\u001f`) && value === "dwell"))
+    ));
     setDirtyLineIds((current) => current.includes(lineId) ? current : [...current, lineId]);
     setSaveError("");
     setSaveState("dirty");
@@ -1739,6 +1809,9 @@ export default function useTimetableController({ activeTransportMode, isActive, 
           : asArray(block.lineDraftRows)
       }))
     }));
+    setInputErrors((current) => Object.fromEntries(
+      Object.entries(current).filter(([key, value]) => !(key.startsWith(`${lineId}\u001f`) && value === "dwell"))
+    ));
     setDirtyLineIds((current) => current.includes(lineId) ? current : [...current, lineId]);
     setSaveError("");
     setSaveState("dirty");

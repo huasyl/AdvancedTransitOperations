@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { minutesToTime } from "./timetable-data";
 
 const WIDTH = 960;
-const HEIGHT = 300;
-const LEFT = 24 * 3;
 const RIGHT = 12;
-const TOP = 18;
-const BOTTOM = 34;
+const CHART_LAYOUTS = {
+  expanded: { height: 432, left: 148, top: 24, bottom: 40 },
+  collapsed: { height: 300, left: 112, top: 18, bottom: 34 }
+};
 const TICK_STEPS = [15, 30, 60, 120];
 const MIN_TICK_GAP = 64;
 
@@ -16,9 +16,8 @@ function isChartPoint(point) {
     && Number.isFinite(point?.distance);
 }
 
-function buildTimeTicks(minTime, maxTime) {
+function buildTimeTicks(minTime, maxTime, plotWidth) {
   const timeRange = maxTime - minTime;
-  const plotWidth = WIDTH - LEFT - RIGHT;
   const maxIntervals = Math.max(1, Math.floor(plotWidth / MIN_TICK_GAP));
   const step = TICK_STEPS.find((value) => Math.ceil(timeRange / value) <= maxIntervals)
     || TICK_STEPS[TICK_STEPS.length - 1];
@@ -39,9 +38,10 @@ function buildTimeTicks(minTime, maxTime) {
   return ticks;
 }
 
-export default function RunChart({ stations, series, startMinute, endMinute, emptyText }) {
+export default function RunChart({ stations, series, startMinute, endMinute, emptyText, sidebarCollapsed }) {
   const chartWrapRef = useRef(null);
   const [chartViewport, setChartViewport] = useState(null);
+  const layout = sidebarCollapsed ? CHART_LAYOUTS.collapsed : CHART_LAYOUTS.expanded;
   const model = useMemo(() => {
     if (stations.length === 0
       || !Number.isFinite(startMinute)
@@ -56,9 +56,10 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
     const maxDistance = Math.max(...stations.map((station) => station.distance));
     const distanceRange = Math.max(1, maxDistance - minDistance);
     const timeRange = Math.max(1, maxTime - minTime);
-    const x = (value) => LEFT + ((value - minTime) / timeRange) * (WIDTH - LEFT - RIGHT);
-    const y = (value) => TOP + ((value - minDistance) / distanceRange) * (HEIGHT - TOP - BOTTOM);
-    const ticks = buildTimeTicks(minTime, maxTime);
+    const plotWidth = WIDTH - layout.left - RIGHT;
+    const x = (value) => layout.left + ((value - minTime) / timeRange) * plotWidth;
+    const y = (value) => layout.top + ((value - minDistance) / distanceRange) * (layout.height - layout.top - layout.bottom);
+    const ticks = buildTimeTicks(minTime, maxTime, plotWidth);
     const lines = series.flatMap((item) => {
       const points = item.points.filter(isChartPoint);
       let firstMinute = Infinity;
@@ -119,7 +120,7 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
     }
 
     return { minTime, maxTime, x, y, ticks, lines };
-  }, [endMinute, series, startMinute, stations]);
+  }, [endMinute, layout, series, startMinute, stations]);
 
   useEffect(() => {
     function updateChartViewport() {
@@ -131,9 +132,9 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
       if (rect.width <= 0 || rect.height <= 0) {
         return;
       }
-      const scale = Math.min(rect.width / WIDTH, rect.height / HEIGHT);
+      const scale = Math.min(rect.width / WIDTH, rect.height / layout.height);
       const width = WIDTH * scale;
-      const height = HEIGHT * scale;
+      const height = layout.height * scale;
       setChartViewport({
         left: (rect.width - width) / 2,
         top: (rect.height - height) / 2,
@@ -151,7 +152,7 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
       window.clearTimeout(revealTimer);
       window.removeEventListener("resize", updateChartViewport);
     };
-  }, [model, stations.length]);
+  }, [layout.height, model, stations.length]);
 
   if (!model) {
     return emptyText ? <div className="rtw-timetable-chart-empty">{emptyText}</div> : null;
@@ -159,19 +160,19 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
 
   return (
     <div ref={chartWrapRef} className="rtw-timetable-chart-wrap">
-      <svg className="rtw-timetable-chart-svg" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <svg className="rtw-timetable-chart-svg" viewBox={`0 0 ${WIDTH} ${layout.height}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <defs>
           <clipPath id="rtw-run-chart-plot-clip">
-            <rect x={LEFT} y={TOP - 3} width={WIDTH - LEFT - RIGHT} height={HEIGHT - TOP - BOTTOM + 6} />
+            <rect x={layout.left} y={layout.top - 3} width={WIDTH - layout.left - RIGHT} height={layout.height - layout.top - layout.bottom + 6} />
           </clipPath>
         </defs>
         {model.ticks.map((tick, index) => (
           <g key={`time-${tick}`}>
-            <line className="rtw-timetable-chart-grid is-time" x1={model.x(tick)} x2={model.x(tick)} y1={TOP} y2={HEIGHT - BOTTOM} />
+            <line className="rtw-timetable-chart-grid is-time" x1={model.x(tick)} x2={model.x(tick)} y1={layout.top} y2={layout.height - layout.bottom} />
             <text
               className="rtw-timetable-chart-time"
               x={model.x(tick)}
-              y={HEIGHT - 10}
+              y={layout.height - 10}
               textAnchor={index === 0 ? "start" : index === model.ticks.length - 1 ? "end" : "middle"}
             >
               {minutesToTime(tick)}
@@ -180,7 +181,7 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
         ))}
         {stations.map((station, index) => (
           <g key={`${station.id}-${station.occurrence ?? index}`}>
-            <line className="rtw-timetable-chart-grid" x1={LEFT} x2={WIDTH - RIGHT} y1={model.y(station.distance)} y2={model.y(station.distance)} />
+            <line className="rtw-timetable-chart-grid" x1={layout.left} x2={WIDTH - RIGHT} y1={model.y(station.distance)} y2={model.y(station.distance)} />
           </g>
         ))}
         <g clipPath="url(#rtw-run-chart-plot-clip)">
@@ -198,8 +199,9 @@ export default function RunChart({ stations, series, startMinute, endMinute, emp
             key={`label-${station.id}-${station.occurrence ?? index}`}
             className="rtw-timetable-chart-station-label"
             style={{
-              left: `${chartViewport.left + ((LEFT - 12) / WIDTH) * chartViewport.width}px`,
-              top: `${chartViewport.top + (model.y(station.distance) / HEIGHT) * chartViewport.height}px`
+              left: `${chartViewport.left}px`,
+              width: `${((layout.left - 12) / WIDTH) * chartViewport.width}px`,
+              top: `${chartViewport.top + (model.y(station.distance) / layout.height) * chartViewport.height}px`
             }}
           >
             {station.name}

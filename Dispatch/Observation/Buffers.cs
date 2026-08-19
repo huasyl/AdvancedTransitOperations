@@ -16,6 +16,7 @@ namespace RapidTransitMod.Dispatch.Observation
     {
         private const ulong SignatureSeed = 1469598103934665603UL;
         private const int MonitorVersion = 2;
+        private const int MonitorStopVersion = 3;
         private const int MonitorTripVersion = 4;
         private const int MonitorAverageVersion = 2;
         private const int MaxMonitorDateSlots = 2;
@@ -153,7 +154,7 @@ namespace RapidTransitMod.Dispatch.Observation
             for (int i = 0; i < stops.Length; i++)
             {
                 MonitorStopElement stop = stops[i];
-                if (stop.m_Version != MonitorVersion
+                if ((stop.m_Version != MonitorVersion && stop.m_Version != MonitorStopVersion)
                     || stop.m_TripOrder < 0
                     || stop.m_StopOrder < 0)
                 {
@@ -251,7 +252,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 for (int stopIndex = 0; stopIndex < savedStops.Count; stopIndex++)
                 {
                     MonitorStopElement stop = savedStops[stopIndex];
-                    if (stop.m_Version != MonitorVersion
+                    if ((stop.m_Version != MonitorVersion && stop.m_Version != MonitorStopVersion)
                         || stop.m_StopOrder != stopIndex
                         || string.IsNullOrEmpty(stop.m_StopKey.ToString())
                         || stop.m_WaypointIndex < -1
@@ -263,6 +264,11 @@ namespace RapidTransitMod.Dispatch.Observation
                         || (stop.m_ActualDeparture < 0 && (stop.m_ActualDepartureFrame != 0u
                             || stop.m_OpenIntervalMaxFrames != 0u))
                         || (stop.m_ActualDeparture >= 0 && stop.m_OpenIntervalMaxFrames == 0u)
+                        || (stop.m_Skipped != 0 && stop.m_Skipped != 1)
+                        || (stop.m_Skipped == 1 && (stop.m_ActualArrival < 0
+                            || stop.m_ActualDeparture >= 0
+                            || stop.m_ActualDepartureFrame != 0u
+                            || stop.m_OpenIntervalMaxFrames != 0u))
                         || (stop.m_Cleared != 0 && stop.m_Cleared != 1))
                     {
                         valid = false;
@@ -280,6 +286,7 @@ namespace RapidTransitMod.Dispatch.Observation
                         ActualArrivalFrame = stop.m_ActualArrivalFrame,
                         ActualDepartureFrame = stop.m_ActualDepartureFrame,
                         OpenIntervalMaxFrames = stop.m_OpenIntervalMaxFrames,
+                        Skipped = stop.m_Skipped == 1,
                         Cleared = stop.m_Cleared == 1
                     });
                 }
@@ -757,7 +764,11 @@ namespace RapidTransitMod.Dispatch.Observation
                     || (stop.ActualArrival < 0 && stop.ActualArrivalFrame != 0u)
                     || (stop.ActualDeparture < 0 && (stop.ActualDepartureFrame != 0u
                         || stop.OpenIntervalMaxFrames != 0u))
-                    || (stop.ActualDeparture >= 0 && stop.OpenIntervalMaxFrames == 0u))
+                    || (stop.ActualDeparture >= 0 && stop.OpenIntervalMaxFrames == 0u)
+                    || (stop.Skipped && (stop.ActualArrival < 0
+                        || stop.ActualDeparture >= 0
+                        || stop.ActualDepartureFrame != 0u
+                        || stop.OpenIntervalMaxFrames != 0u)))
                 {
                     return false;
                 }
@@ -848,7 +859,7 @@ namespace RapidTransitMod.Dispatch.Observation
                         return false;
                     stopValues[i] = new MonitorStopElement
                     {
-                        m_Version = MonitorVersion,
+                        m_Version = MonitorStopVersion,
                         m_TripOrder = tripOrder,
                         m_StopOrder = i,
                         m_StopKey = stop.StopKey,
@@ -861,6 +872,7 @@ namespace RapidTransitMod.Dispatch.Observation
                         m_ActualArrivalFrame = stop.ActualArrivalFrame,
                         m_ActualDepartureFrame = stop.ActualDepartureFrame,
                         m_OpenIntervalMaxFrames = stop.OpenIntervalMaxFrames,
+                        m_Skipped = stop.Skipped ? 1 : 0,
                         m_Cleared = stop.Cleared ? 1 : 0
                     };
                 }

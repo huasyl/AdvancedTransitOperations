@@ -169,7 +169,7 @@ function TripDetail({ detail, header, stationNames, t }) {
                   <div className="is-station"><span className="rtw-timetable-station-cell"><span className="rtw-timetable-station-spacer" />{stationNames.get(stop.stopKey) || stop.stopKey}</span></div>
                   <TimePair arrival={stop.plannedArrivalMinute} departure={stop.plannedDepartureMinute} t={t} />
                   <TimePair arrival={stop.actualArrivalMinute} departure={stop.actualDepartureMinute} t={t} />
-                  <div className={`is-delta ${delta > 0 ? "is-warning" : delta < 0 ? "is-accent" : "is-good"}`}>{delta == null ? "--" : formatDelay(delta, t)}</div>
+                  <div className={`is-delta ${stop.skipped ? "is-muted" : delta > 0 ? "is-warning" : delta < 0 ? "is-accent" : "is-good"}`}>{stop.skipped ? t("timetable.monitor.skipped") : delta == null ? "--" : formatDelay(delta, t)}</div>
                   <div className={`is-status ${stop.cleared ? "is-muted" : "is-warning"}`}>{t(status)}</div>
                 </div>
               );

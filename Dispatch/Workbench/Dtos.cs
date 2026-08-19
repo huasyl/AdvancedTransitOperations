@@ -1091,6 +1091,8 @@ namespace RapidTransitMod
         [DataMember]
         public int? actualDepartureMinute;
         [DataMember]
+        public bool skipped;
+        [DataMember]
         public bool cleared;
     }
 }

@@ -716,6 +716,56 @@ namespace RapidTransitMod.Dispatch.Observation
             return true;
         }
 
+        internal bool Skip(
+            Entity vehicle,
+            Entity line,
+            Entity station,
+            string stopKey,
+            int waypointIndex,
+            ClockSnapshot clock,
+            uint frame,
+            out MonitorStopResult result)
+        {
+            result = default;
+            if (!m_Store.ActiveTrips.TryGetValue(vehicle, out MonitorTrip trip)
+                || trip.Line != line
+                || trip.State != MonitorTripState.Active)
+            {
+                return false;
+            }
+
+            int matched = Math.Max(1, trip.NextArrivalOrder);
+            if (matched >= trip.Stops.Count
+                || !MatchesMonitorStop(
+                    trip.Stops[matched],
+                    stopKey,
+                    station,
+                    waypointIndex,
+                    true)
+                || trip.Stops[matched].ActualArrival >= 0)
+            {
+                return false;
+            }
+
+            DateTime serviceDate = ParseDateKey(trip.ServiceDateKey);
+            MonitorStop stop = trip.Stops[matched];
+            stop.Skipped = true;
+            stop.ActualArrival = EventMinute(clock, serviceDate);
+            stop.ActualArrivalFrame = frame;
+            stop.ActualDeparture = -1;
+            stop.ActualDepartureFrame = 0u;
+            stop.OpenIntervalMaxFrames = 0u;
+            trip.NextArrivalOrder = matched + 1;
+            trip.UpdatedFrame = frame;
+            result = new MonitorStopResult(
+                true,
+                trip.Line,
+                trip.ServiceDateKey,
+                trip.Key,
+                default);
+            return true;
+        }
+
         private static MonitorIntervalSample BuildIntervalSample(
             MonitorTrip trip,
             int toOrder,

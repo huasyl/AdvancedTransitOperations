@@ -252,6 +252,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     plannedDepartureMinute = plannedVisible ? NullableMinute(stop.PlannedDeparture) : null,
                     actualArrivalMinute = i == 0 ? null : NullableMinute(stop.ActualArrival),
                     actualDepartureMinute = NullableMinute(stop.ActualDeparture),
+                    skipped = stop.Skipped,
                     cleared = stop.Cleared
                 };
             }
@@ -267,6 +268,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     plannedDepartureMinute = null,
                     actualArrivalMinute = NullableMinute(origin.ActualArrival),
                     actualDepartureMinute = null,
+                    skipped = origin.Skipped,
                     cleared = found.State == MonitorTripState.Cleared
                 };
             }

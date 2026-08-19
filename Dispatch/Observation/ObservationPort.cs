@@ -805,6 +805,35 @@ namespace RapidTransitMod.Dispatch.Observation
             return default;
         }
 
+        public MonitorChange Skip(
+            Entity vehicle,
+            Entity line,
+            Entity station,
+            int waypointIndex,
+            uint frame)
+        {
+            if (m_Runtime.m_ObsRecorder != null
+                && m_Runtime.m_ObsRecorder.Skip(
+                    vehicle,
+                    line,
+                    station,
+                    m_StopKey(m_Anchor(station)),
+                    waypointIndex,
+                    m_Runtime.m_SimClock.Snapshot,
+                    frame,
+                    out MonitorStopResult result))
+            {
+                return new MonitorChange(
+                    true,
+                    result.Line,
+                    result.ServiceDateKey,
+                    result.TripKey,
+                    0,
+                    false);
+            }
+            return default;
+        }
+
         public bool TryMonitorAverageState(
             Entity line,
             string expectedStopSig,

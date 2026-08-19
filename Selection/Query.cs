@@ -545,7 +545,16 @@ namespace RapidTransitMod
 
         private string FormatMinutes(float frames)
         {
-            return frames > 0f ? m_ClockSnapshot().ToMinutes(frames).ToString("F1") + " min" : "-";
+            return frames > 0f ? m_ClockSnapshot().ToMinutes(frames).ToString("F1") + " " + MinuteUnit() : "-";
+        }
+
+        private string MinuteUnit()
+        {
+            if (SelectPanel.IsChineseLocale())
+                return "分";
+            if (SelectPanel.IsJapaneseLocale())
+                return "分";
+            return "min";
         }
 
         private string BuildStopDwellValue(Entity vehicle)
@@ -560,7 +569,7 @@ namespace RapidTransitMod
         {
             uint nowFrame = m_SimulationSystem.frameIndex;
             uint elapsedFrames = unchecked(nowFrame - dwellSinceFrame);
-            return m_ClockSnapshot().ToMinutes(elapsedFrames).ToString("F1") + " min";
+            return m_ClockSnapshot().ToMinutes(elapsedFrames).ToString("F1") + " " + MinuteUnit();
         }
 
         private string BuildInboundTimeValue(Entity vehicle)

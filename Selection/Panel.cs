@@ -765,6 +765,12 @@ namespace RapidTransitMod
             return locale.StartsWith("zh", System.StringComparison.OrdinalIgnoreCase);
         }
 
+        internal static bool IsJapaneseLocale()
+        {
+            string locale = Game.SceneFlow.GameManager.instance?.localizationManager?.activeLocaleId ?? string.Empty;
+            return locale.StartsWith("ja", System.StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string LocalizedDispatchLabel()
         {
             return IsChineseLocale() ? "发车模式" : "Dispatch";

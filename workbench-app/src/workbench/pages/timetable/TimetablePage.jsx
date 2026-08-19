@@ -218,6 +218,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
   const [chartEnd, setChartEnd] = useState("");
   const [arrivalSource, setArrivalSource] = useState("theory");
   const [timeDrafts, setTimeDrafts] = useState({});
+  const pendingLocateRef = useRef(null);
   const clearLineTimersRef = useRef([]);
   const [lineClearStage, setLineClearStage] = useState("idle");
   const [lineClearSeconds, setLineClearSeconds] = useState(0);
@@ -232,8 +233,29 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
   const editingErrorPrefix = editingTrainId ? inputKey(editLineId, editingTrainId, "") : "";
   const hasEditingErrors = Boolean(editingErrorPrefix
     && Object.keys(controller.inputErrors).some((key) => key.startsWith(editingErrorPrefix)));
+  const shortDwellError = useMemo(() => {
+    for (const [key, value] of Object.entries(controller.inputErrors)) {
+      if (value !== "dwell") {
+        continue;
+      }
+      const [lineId, trainId, occurrence] = key.split("\u001f");
+      const line = lines.find((item) => item.id === lineId);
+      const train = line?.trains.find((item) => item.id === trainId);
+      if (line && train) {
+        return {
+          lineId,
+          trainId,
+          occurrence,
+          time: formatServiceTime(train.slotMinute, t)
+        };
+      }
+    }
+    return null;
+  }, [controller.inputErrors, lines, t]);
   const footerButtonState = editingTrainId
     ? "editing"
+    : shortDwellError
+      ? "conflict"
     : ["saving", "applied", "error"].includes(controller.saveState)
       ? controller.saveState
       : controller.canSave ? "ready" : "disabled";
@@ -243,19 +265,39 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
       ? "#8fd3a0"
       : footerButtonState === "error"
         ? "#dfaaaa"
+        : footerButtonState === "conflict"
+          ? "#dfaaaa"
         : footerButtonState === "editing" || footerButtonState === "disabled"
           ? "#71808a"
           : "#0a1014";
+  const showFooterControlNote = !editingTrainId
+    && !controller.saveError
+    && !controller.loadError
+    && ["clean", "applied"].includes(controller.saveState);
 
   useEffect(() => {
     clearLineTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     clearLineTimersRef.current = [];
     setLineClearStage("idle");
     setLineClearSeconds(0);
+    pendingLocateRef.current = null;
     setEditingTrainId("");
     setTimeDrafts({});
     controller.clearInputErrors();
-  }, [activeTransportMode, controller.clearInputErrors, editLineId]);
+  }, [activeTransportMode, controller.clearInputErrors]);
+
+  useEffect(() => {
+    clearLineTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    clearLineTimersRef.current = [];
+    setLineClearStage("idle");
+    setLineClearSeconds(0);
+    const pendingLocate = pendingLocateRef.current;
+    pendingLocateRef.current = null;
+    const isPendingLocate = pendingLocate?.lineId === editLineId;
+    setEditingTrainId(isPendingLocate ? pendingLocate.trainId : "");
+    setTimeDrafts({});
+    controller.clearInputErrors("", "", true);
+  }, [controller.clearInputErrors, editLineId]);
 
   useEffect(() => () => {
     clearLineTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -334,7 +376,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
   );
   const visibleLineCount = visibleLines.length;
   const singleVisibleLine = visibleLineCount === 1 ? visibleLines[0] : null;
-  const singleChartModes = singleVisibleLine ? lineSources(lineStates[singleVisibleLine.id], true) : [];
+  const singleChartModes = singleVisibleLine ? lineSources(lineStates[singleVisibleLine.id], false) : [];
   const chartSelectionKey = visibleLines.map((line) => {
     const sources = visibleLineCount === 1
       ? singleChartModes
@@ -779,6 +821,25 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
     controller.switchRuntimeSource(editLine.id, source);
   }
 
+  function locateShortDwellError() {
+    if (!shortDwellError) {
+      return;
+    }
+    resetLineClear();
+    if (shortDwellError.lineId !== editLineId) {
+      pendingLocateRef.current = {
+        lineId: shortDwellError.lineId,
+        trainId: shortDwellError.trainId
+      };
+      setEditLineId(shortDwellError.lineId);
+      setArrivalSource(controller.runtimeSources[shortDwellError.lineId]
+        || (activeTransportMode === "bus" ? "busHistorical" : "theory"));
+      return;
+    }
+    setEditingTrainId(shortDwellError.trainId);
+    controller.ensureTimetableLineLayout(shortDwellError.lineId).catch(() => {});
+  }
+
   function toggleChartCollapsed() {
     if (!chartCollapsed) {
       setIntervalCollapsed(true);
@@ -850,7 +911,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
             <SidebarSection icon="route" title={t("timetable.lines.title")} collapsed={linesCollapsed} onToggle={() => setLinesCollapsed((current) => !current)}>
               {availableLines.length > 0 ? availableLines.map((line) => {
                 const state = lineStates[line.id] || { visible: true, dataMode: "", dataModes: [] };
-                const selectedSources = lineSources(state, visibleLineCount === 1 && state.visible);
+                const selectedSources = lineSources(state, false);
                 return (
                     <div key={line.id} className={`rtw-timetable-line-item ${editLine.id === line.id ? "is-editing" : ""}`} onClick={() => handleEditLine(line.id)}>
                     <div className="rtw-timetable-line-row">
@@ -858,20 +919,13 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                       <span className="rtw-timetable-line-dot" style={{ backgroundColor: line.color }} />
                       <span className="rtw-timetable-line-name">{line.name}</span>
                     </div>
-                    {activeTransportMode !== "bus" && (visibleLineCount === 1 && state.visible ? <ChartSourceDropdown
-                      value={selectedSources}
+                    {activeTransportMode !== "bus" && <ChartSourceDropdown
+                      value={selectedSources[0] || ""}
                       options={["sliceHistoricalEstimate", "actualToday", "actualYesterday", "plannedApplied"].map((mode) => ({ value: mode, label: t(`timetable.data.${mode}`) }))}
-                      onToggle={(mode) => toggleLineSource(line.id, mode)}
+                      onSelect={(mode) => selectLineSource(line.id, mode)}
                       portalHostRef={portalHostRef}
                       emptyLabel={t("timetable.interval.choose")}
-                    /> : <WorkbenchDropdown
-                      value={selectedSources[0] ? t(`timetable.data.${selectedSources[0]}`) : t("timetable.interval.choose")}
-                      options={["sliceHistoricalEstimate", "actualToday", "actualYesterday", "plannedApplied"].map((mode) => ({ value: mode, label: t(`timetable.data.${mode}`), active: selectedSources[0] === mode }))}
-                      onSelect={(mode) => selectLineSource(line.id, mode)}
-                      className="rtw-timetable-line-mode"
-                      positioning="portal"
-                      portalHostRef={portalHostRef}
-                    />)}
+                    />}
                   </div>
                 );
               }) : <div className="rtw-timetable-sidebar-empty">{t("timetable.lines.empty")}</div>}
@@ -973,7 +1027,7 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
                 </div>
                 {!chartCollapsed ? <>
                   {chartStatuses.length > 0 ? <div className="rtw-timetable-chart-status">{chartStatuses.map((status) => <div key={status}>{status}</div>)}</div> : null}
-                  <RunChart stations={activeStations} series={chartSeries} startMinute={chartStartMinute} endMinute={chartEndMinute} emptyText={chartStatuses.length > 0 ? "" : t("timetable.chart.empty")} />
+                  <RunChart stations={activeStations} series={chartSeries} startMinute={chartStartMinute} endMinute={chartEndMinute} emptyText={chartStatuses.length > 0 ? "" : t("timetable.chart.empty")} sidebarCollapsed={sidebarCollapsed} />
                 </> : null}
               </section> : null}
               <section className="rtw-timetable-schedule-section">
@@ -1030,9 +1084,13 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
             </div>
           )}
           <footer className="rtw-timetable-footer">
-        <div className={`rtw-timetable-footer-status is-${editingTrainId ? "editing" : controller.saveError || controller.loadError ? "error" : controller.saveState}`}>
+        <div className={`rtw-timetable-footer-status is-${editingTrainId ? "editing" : shortDwellError || controller.saveError || controller.loadError ? "error" : controller.saveState}`}>
           {editingTrainId
             ? t("timetable.footer.editingHint")
+            : shortDwellError
+              ? t("timetable.footer.shortDwell", { time: shortDwellError.time })
+              : showFooterControlNote
+                ? t("timetable.footer.controlNote")
             : controller.saveError
               ? t("timetable.footer.error")
               : controller.loadError
@@ -1046,13 +1104,15 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
         <button
           type="button"
           className={`rtw-timetable-primary-button is-${footerButtonState}`}
-          disabled={Boolean(editingTrainId) || !controller.canSave}
-          onClick={controller.saveAll}
+          disabled={Boolean(editingTrainId) || (!shortDwellError && !controller.canSave)}
+          onClick={shortDwellError ? locateShortDwellError : controller.saveAll}
         >
           <span className="rtw-timetable-footer-button-content">
             <TimetableIcon
               name={editingTrainId
                 ? "clock"
+                : shortDwellError
+                  ? "alert"
                 : controller.saveState === "saving" || controller.saveState === "error"
                   ? "refresh"
                   : controller.saveState === "applied"
@@ -1063,6 +1123,8 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
             />
             <span>{t(editingTrainId
               ? "timetable.footer.finishEditing"
+              : shortDwellError
+                ? "timetable.footer.locateError"
               : controller.saveState === "saving"
                 ? "nativeSchedule.summary.action.applying"
                 : controller.saveState === "applied"
@@ -1094,23 +1156,19 @@ function SidebarSection({ icon, title, collapsed = false, onToggle, children }) 
   </section>;
 }
 
-function ChartSourceDropdown({ value, options, onToggle, portalHostRef, emptyLabel }) {
-  const selectedValues = Array.isArray(value) ? value : [];
-  const selectedLabels = selectedValues
-    .map((selectedValue) => options.find((option) => option.value === selectedValue)?.label || selectedValue)
-    .filter(Boolean);
+function ChartSourceDropdown({ value, options, onSelect, portalHostRef, emptyLabel }) {
+  const selectedValue = Array.isArray(value) ? value[0] || "" : value || "";
+  const selectedLabel = options.find((option) => option.value === selectedValue)?.label || selectedValue;
   return <WorkbenchDropdown
-    value={selectedLabels.length > 0 ? selectedLabels.join(" / ") : emptyLabel}
+    value={selectedLabel || emptyLabel}
     options={options.map((option) => ({
       ...option,
-      active: selectedValues.includes(option.value),
-      content: <span className="dw-planner-multi-option"><span className={`dw-planner-multi-check ${selectedValues.includes(option.value) ? "is-checked" : ""}`} aria-hidden="true" /><span className="dw-planner-multi-label">{option.label}</span></span>
+      active: option.value === selectedValue
     }))}
-    onSelect={onToggle}
+    onSelect={onSelect}
     className="rtw-timetable-line-mode"
     positioning="portal"
     portalHostRef={portalHostRef}
-    closeOnSelect={false}
   />;
 }
 

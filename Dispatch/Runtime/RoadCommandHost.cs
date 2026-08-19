@@ -153,6 +153,47 @@ namespace RapidTransitMod.Dispatch.Runtime
             return RoadOriginGuardResult.Pin;
         }
 
+        internal RoadOriginGuardResult EnsureRunningTimedStop(
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            EntityCommandBuffer ecb)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || waypointIndex < 0
+                || !EntityManager.Exists(vehicle)
+                || !EntityManager.Exists(line)
+                || !EntityManager.HasComponent<CurrentRoute>(vehicle)
+                || !EntityManager.HasComponent<Target>(vehicle)
+                || !EntityManager.HasComponent<PublicTransport>(vehicle)
+                || !EntityManager.HasBuffer<RouteWaypoint>(line)
+                || EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route != line)
+            {
+                return RoadOriginGuardResult.InvalidOrigin;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            if (waypointIndex >= waypoints.Length
+                || waypoints[waypointIndex].m_Waypoint == Entity.Null
+                || EntityManager.GetComponentData<Target>(vehicle).m_Target != waypoints[waypointIndex].m_Waypoint)
+            {
+                return RoadOriginGuardResult.InvalidOrigin;
+            }
+
+            PublicTransport publicTransport = ReadPublicTransport(vehicle);
+            if ((publicTransport.m_State & PublicTransportFlags.Boarding) != 0)
+                return RoadOriginGuardResult.Boarding;
+
+            if ((publicTransport.m_State & PublicTransportFlags.RequireStop) != 0)
+                return RoadOriginGuardResult.Protected;
+
+            publicTransport.m_State |= PublicTransportFlags.RequireStop;
+            AppendPublicTransportWrite(vehicle, publicTransport);
+            ecb.SetComponent(vehicle, publicTransport);
+            return RoadOriginGuardResult.Pin;
+        }
+
         private bool PinOrigin(
             Entity vehicle,
             ref PublicTransport publicTransport,

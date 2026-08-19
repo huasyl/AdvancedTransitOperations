@@ -1492,6 +1492,53 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal bool IsTimedStopActive(Entity vehicle) => HasActiveTimedStop(vehicle);
 
+        internal bool IsNextTimedStop(Entity vehicle, Entity line, int waypoint)
+        {
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || waypoint < 0
+                || !m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan plan)
+                || plan.Line != line)
+            {
+                return false;
+            }
+
+            for (int i = plan.NextStopOrder; i < plan.Stops.Length; i++)
+            {
+                TimedStop stop = plan.Stops[i];
+                if (stop == null || (stop.Arrive < 0 && stop.Depart < 0))
+                    continue;
+
+                return i < plan.WaypointIndices.Length
+                    && plan.WaypointIndices[i] == waypoint;
+            }
+
+            return false;
+        }
+
+        internal bool SkipTimedStop(Entity vehicle, Entity line, int waypoint)
+        {
+            if (!IsNextTimedStop(vehicle, line, waypoint)
+                || !m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan plan))
+            {
+                return false;
+            }
+
+            for (int i = plan.NextStopOrder; i < plan.Stops.Length; i++)
+            {
+                TimedStop stop = plan.Stops[i];
+                if (stop == null || (stop.Arrive < 0 && stop.Depart < 0))
+                    continue;
+
+                plan.NextStopOrder = i + 1;
+                if (plan.NextStopOrder >= plan.Stops.Length)
+                    ClearTimedPlan(vehicle);
+                return true;
+            }
+
+            return false;
+        }
+
         private void SetTimedDeadline(
             Entity vehicle,
             TimedStopPlan plan,

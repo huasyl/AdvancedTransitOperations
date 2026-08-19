@@ -101,6 +101,7 @@ namespace RapidTransitMod.Dispatch.Observation
         public uint ActualArrivalFrame;
         public uint ActualDepartureFrame;
         public uint OpenIntervalMaxFrames;
+        public bool Skipped;
         public bool Cleared;
     }
 

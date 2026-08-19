@@ -669,6 +669,8 @@ namespace RapidTransitMod
                     m_RailEventSource.CollectIfDue(simulationFrame);
                     m_RoadEventSource.Collect(simulationFrame);
                 }
+                RecordRoadSkips();
+                QueueRoadTimedStops();
                 m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.SourceCollect);
 
                 bool runFullRegisterSweep = nowMinute != m_LastRegisterSweepMinute;
@@ -1247,17 +1249,80 @@ namespace RapidTransitMod
                 if (!RuntimePorts.TryResolveVehicleLifecycle(this, input.Vehicle, out LifecycleKind lifecycle)
                     || lifecycle != LifecycleKind.Road
                     || !input.InputValid
-                    || !input.TargetAtOrigin
                     || !m_VehicleView.TryGetState(input.Vehicle, out VehicleState state)
                     || state != VehicleState.Running)
                 {
                     continue;
                 }
 
-                m_CommandApplier.EnsureRunningOriginStop(
-                    input.Vehicle,
-                    input.Line,
-                    commandBuffer);
+                if (input.TargetAtOrigin)
+                {
+                    m_CommandApplier.EnsureRunningOriginStop(
+                        input.Vehicle,
+                        input.Line,
+                        commandBuffer);
+                    continue;
+                }
+
+                if (input.CurrentWaypoint >= 0
+                    && m_StopRuntime.IsNextTimedStop(
+                        input.Vehicle,
+                        input.Line,
+                        input.CurrentWaypoint))
+                {
+                    m_CommandApplier.EnsureRunningTimedStop(
+                        input.Vehicle,
+                        input.Line,
+                        input.CurrentWaypoint,
+                        commandBuffer);
+                }
+            }
+        }
+
+        private void RecordRoadSkips()
+        {
+            IReadOnlyList<RoadEventSource.RoadSkipEvent> skips = m_RoadEventSource.SkipEvents;
+            for (int i = 0; i < skips.Count; i++)
+            {
+                RoadEventSource.RoadSkipEvent skip = skips[i];
+                if (m_StopRuntime.HasOpenStopSession(skip.Vehicle)
+                    || m_StopRuntime.IsDeparturePending(skip.Vehicle))
+                {
+                    continue;
+                }
+                if (m_StopRuntime.SkipTimedStop(
+                    skip.Vehicle,
+                    skip.Line,
+                    skip.WaypointIndex))
+                {
+                    m_RuntimeFramePlan.AddStage(
+                        skip.Vehicle,
+                        RuntimeStageMask.Dispatch);
+                }
+                m_WorkbenchBridge.OnMonitorChanged(m_Observation.Skip(
+                    skip.Vehicle,
+                    skip.Line,
+                    skip.Station,
+                    skip.WaypointIndex,
+                    skip.Frame));
+            }
+        }
+
+        private void QueueRoadTimedStops()
+        {
+            IReadOnlyList<RoadEventSource.RoadTargetProbe> probes = m_RoadEventSource.TargetProbes;
+            for (int i = 0; i < probes.Count; i++)
+            {
+                RoadEventSource.RoadTargetProbe probe = probes[i];
+                if (m_StopRuntime.IsNextTimedStop(
+                    probe.Vehicle,
+                    probe.Line,
+                    probe.WaypointIndex))
+                {
+                    m_RuntimeFramePlan.AddStage(
+                        probe.Vehicle,
+                        RuntimeStageMask.Dispatch);
+                }
             }
         }
 

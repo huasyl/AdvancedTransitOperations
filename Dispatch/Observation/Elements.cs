@@ -481,6 +481,7 @@ namespace RapidTransitMod
         public uint m_ActualArrivalFrame;
         public uint m_ActualDepartureFrame;
         public uint m_OpenIntervalMaxFrames;
+        public int m_Skipped;
         public int m_Cleared;
 
         public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
@@ -501,6 +502,8 @@ namespace RapidTransitMod
                 writer.Write(m_ActualDepartureFrame);
                 writer.Write(m_OpenIntervalMaxFrames);
             }
+            if (m_Version >= 3)
+                writer.Write(m_Skipped);
             writer.Write(m_Cleared);
         }
 
@@ -529,6 +532,9 @@ namespace RapidTransitMod
                 m_ActualDepartureFrame = 0u;
                 m_OpenIntervalMaxFrames = 0u;
             }
+            m_Skipped = 0;
+            if (m_Version >= 3)
+                reader.Read(out m_Skipped);
             reader.Read(out m_Cleared);
         }
     }

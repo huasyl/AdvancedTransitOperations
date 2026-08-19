@@ -264,7 +264,10 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             if (m_DepotsStale)
             {
-                StartDepotRebuild();
+                CancelDepotRebuild();
+                m_Depots = m_Catalog.Depots();
+                m_DepotsReady = true;
+                m_DepotsStale = false;
             }
 
             return CopyDepots(m_Depots);

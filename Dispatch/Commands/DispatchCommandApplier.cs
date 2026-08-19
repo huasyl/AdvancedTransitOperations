@@ -223,6 +223,28 @@ namespace RapidTransitMod
             LogRoadOriginGuard(vehicle, line, result);
         }
 
+        internal void EnsureRunningTimedStop(
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            EntityCommandBuffer ecb)
+        {
+            if (!TryGetDispatchActions(vehicle, out _, out bool isRoad) || !isRoad)
+                return;
+
+            if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
+                || state != VehicleState.Running)
+            {
+                return;
+            }
+
+            m_RoadCommandHost.EnsureRunningTimedStop(
+                vehicle,
+                line,
+                waypointIndex,
+                ecb);
+        }
+
         private bool TryGetDispatchActions(
             Entity vehicle,
             out DispatchActions actions,
