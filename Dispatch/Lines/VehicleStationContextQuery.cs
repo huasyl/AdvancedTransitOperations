@@ -327,6 +327,8 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             int preferredCurrentStopWaypointIndex,
+            bool includePhysical,
+            bool includePanelExtras,
             out VehicleStationContext context)
         {
             context = default;
@@ -387,20 +389,24 @@ namespace RapidTransitMod.Dispatch.Lines
             if (currentStation == null)
                 return false;
 
-            TryNextPhysicalStation(
-                vehicle,
-                line,
-                waypoints,
-                cache,
-                currentStation,
-                out nextPhysicalStation,
-                out nextPhysicalIsPass);
+            if (includePhysical)
+            {
+                TryNextPhysicalStation(
+                    vehicle,
+                    line,
+                    waypoints,
+                    cache,
+                    currentStation,
+                    out nextPhysicalStation,
+                    out nextPhysicalIsPass);
+            }
 
-            ResolvedStation terminalStation = cache.Stations[0];
-            ResolvedStation turnbackStation = TryTurnback(vehicle, line, waypoints, cache, out ResolvedStation resolvedTurnbackStation)
+            ResolvedStation terminalStation = includePanelExtras ? cache.Stations[0] : null;
+            ResolvedStation turnbackStation = includePanelExtras
+                && TryTurnback(vehicle, line, waypoints, cache, out ResolvedStation resolvedTurnbackStation)
                 ? resolvedTurnbackStation
                 : null;
-            string lineId = m_DraftKey(m_LineId(line));
+            string lineId = includePanelExtras ? m_DraftKey(m_LineId(line)) : string.Empty;
 
             context = new VehicleStationContext(
                 lineId,
@@ -430,12 +436,12 @@ namespace RapidTransitMod.Dispatch.Lines
 
                 m_CurrentStationNameByVehicle[vehicle] = context.CurrentStationName;
                 m_NextStopStationNameByVehicle[vehicle] = context.NextStopStationName;
-                if (nextPhysicalStation != null)
+                if (includePhysical && nextPhysicalStation != null)
                 {
                     m_NextPhysicalStationByVehicle[vehicle] = nextPhysicalStation;
                     m_NextPhysicalIsPassByVehicle[vehicle] = nextPhysicalIsPass;
                 }
-                else
+                else if (includePhysical)
                 {
                     m_NextPhysicalStationByVehicle.Remove(vehicle);
                     m_NextPhysicalIsPassByVehicle.Remove(vehicle);
@@ -475,7 +481,7 @@ namespace RapidTransitMod.Dispatch.Lines
             }
 
             DynamicBuffer<RouteWaypoint> waypoints = m_EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            if (TryResolve(vehicle, line, waypoints, -1, out VehicleStationContext context))
+            if (TryResolve(vehicle, line, waypoints, -1, true, true, out VehicleStationContext context))
             {
                 currentStationName = context.CurrentStationName;
                 nextStopStationName = context.NextStopStationName;
@@ -488,6 +494,28 @@ namespace RapidTransitMod.Dispatch.Lines
                 || !string.IsNullOrEmpty(nextStopStationName)
                 || !string.IsNullOrEmpty(nextPhysicalStationName)
                 || !string.IsNullOrEmpty(terminalStationName);
+        }
+
+        internal bool TryPanelStations(
+            Entity vehicle,
+            Entity line,
+            int preferredCurrentStopWaypointIndex,
+            bool includePhysical,
+            out VehicleStationContext context)
+        {
+            context = default;
+            if (line == Entity.Null || !m_EntityManager.HasBuffer<RouteWaypoint>(line))
+                return false;
+
+            DynamicBuffer<RouteWaypoint> waypoints = m_EntityManager.GetBuffer<RouteWaypoint>(line, true);
+            return TryResolve(
+                vehicle,
+                line,
+                waypoints,
+                preferredCurrentStopWaypointIndex,
+                includePhysical,
+                false,
+                out context);
         }
 
         internal static ResolvedStation TurnbackAfterWaypoint(StationLineCache cache, ResolvedStation currentStation)

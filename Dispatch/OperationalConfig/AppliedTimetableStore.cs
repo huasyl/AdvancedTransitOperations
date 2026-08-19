@@ -18,6 +18,8 @@ namespace RapidTransitMod
     {
         private readonly Dictionary<LineKey, AppliedTimetableState> m_Lines =
             new Dictionary<LineKey, AppliedTimetableState>();
+        private readonly Dictionary<LineKey, Dictionary<int, AppliedTimetableRow>> m_Rows =
+            new Dictionary<LineKey, Dictionary<int, AppliedTimetableRow>>();
         private ulong m_Version = 1;
         private Action<LineKey> m_LineChanged;
         private Action m_AllChanged;
@@ -111,6 +113,30 @@ namespace RapidTransitMod
             return TryGet(LineIdentityService.GetKey(lineId, mode), out state);
         }
 
+        internal bool TryGetRow(
+            LineKey lineKey,
+            int departureMinute,
+            out AppliedTimetableRow row,
+            out string stopSig)
+        {
+            row = null;
+            stopSig = string.Empty;
+            LineKey key = RuntimeConfigStoreDefaults.NormalizeLineKey(lineKey);
+            if (key.IsEmpty
+                || !m_Lines.TryGetValue(key, out AppliedTimetableState state)
+                || state == null
+                || !m_Rows.TryGetValue(key, out Dictionary<int, AppliedTimetableRow> rows)
+                || !rows.TryGetValue(departureMinute, out AppliedTimetableRow stored)
+                || stored == null)
+            {
+                return false;
+            }
+
+            row = stored.Clone();
+            stopSig = state.StopSig ?? string.Empty;
+            return true;
+        }
+
         public void Apply(LineKey lineKey, AppliedTimetableState state)
         {
             LineKey key = RuntimeConfigStoreDefaults.NormalizeLineKey(lineKey);
@@ -121,13 +147,16 @@ namespace RapidTransitMod
             {
                 if (m_Lines.Remove(key))
                 {
+                    m_Rows.Remove(key);
                     m_Version++;
                     m_LineChanged?.Invoke(key);
                 }
                 return;
             }
 
-            m_Lines[key] = Normalize(state);
+            AppliedTimetableState replacement = Normalize(state);
+            m_Lines[key] = replacement;
+            IndexRows(key, replacement);
             m_Version++;
             m_LineChanged?.Invoke(key);
         }
@@ -140,6 +169,7 @@ namespace RapidTransitMod
 
             if (m_Lines.Remove(key))
             {
+                m_Rows.Remove(key);
                 m_Version++;
                 m_LineChanged?.Invoke(key);
             }
@@ -153,6 +183,7 @@ namespace RapidTransitMod
                 m_AllChanged?.Invoke();
             }
             m_Lines.Clear();
+            m_Rows.Clear();
         }
 
         public IEnumerable<KeyValuePair<LineKey, AppliedTimetableState>> GetAll()
@@ -197,6 +228,11 @@ namespace RapidTransitMod
 
             m_Lines[targetKey] = state.Clone();
             m_Lines.Remove(legacyKey);
+            if (m_Rows.TryGetValue(legacyKey, out Dictionary<int, AppliedTimetableRow> rows))
+            {
+                m_Rows[targetKey] = rows;
+                m_Rows.Remove(legacyKey);
+            }
             m_Version++;
             m_AllChanged?.Invoke();
             return true;
@@ -228,6 +264,11 @@ namespace RapidTransitMod
 
             m_Lines[stable] = state.Clone();
             m_Lines.Remove(legacy);
+            if (m_Rows.TryGetValue(legacy, out Dictionary<int, AppliedTimetableRow> rows))
+            {
+                m_Rows[stable] = rows;
+                m_Rows.Remove(legacy);
+            }
             m_Version++;
             m_AllChanged?.Invoke();
             return LineKeyMigrateResult.Migrated;
@@ -249,8 +290,34 @@ namespace RapidTransitMod
                 Managed = state.Managed,
                 DepartureMinutes = departures,
                 ServiceKind = NormalizeKind(state.ServiceKind, rows, departures),
+                StopSig = state.StopSig ?? string.Empty,
                 AppliedRows = rows
             };
+        }
+
+        private void IndexRows(LineKey key, AppliedTimetableState state)
+        {
+            Dictionary<int, AppliedTimetableRow> rows = new Dictionary<int, AppliedTimetableRow>();
+            HashSet<int> duplicates = new HashSet<int>();
+            AppliedTimetableRow[] appliedRows = state?.AppliedRows ?? Array.Empty<AppliedTimetableRow>();
+            for (int i = 0; i < appliedRows.Length; i++)
+            {
+                AppliedTimetableRow row = appliedRows[i];
+                if (row == null || row.DepartureMinute < 0 || duplicates.Contains(row.DepartureMinute))
+                    continue;
+
+                if (rows.ContainsKey(row.DepartureMinute))
+                {
+                    rows.Remove(row.DepartureMinute);
+                    duplicates.Add(row.DepartureMinute);
+                }
+                else
+                {
+                    rows.Add(row.DepartureMinute, row);
+                }
+            }
+
+            m_Rows[key] = rows;
         }
 
         private static AppliedTimetableRow[] CloneRows(IEnumerable<AppliedTimetableRow> rows)
@@ -318,6 +385,7 @@ namespace RapidTransitMod
         public bool Managed { get; set; }
         public int[] DepartureMinutes { get; set; } = Array.Empty<int>();
         public string ServiceKind { get; set; } = string.Empty;
+        public string StopSig { get; set; } = string.Empty;
         public AppliedTimetableRow[] AppliedRows { get; set; } = Array.Empty<AppliedTimetableRow>();
 
         public AppliedTimetableState Clone()
@@ -327,6 +395,7 @@ namespace RapidTransitMod
                 Managed = Managed,
                 DepartureMinutes = (DepartureMinutes ?? Array.Empty<int>()).ToArray(),
                 ServiceKind = ServiceKind ?? string.Empty,
+                StopSig = StopSig ?? string.Empty,
                 AppliedRows = (AppliedRows ?? Array.Empty<AppliedTimetableRow>())
                     .Where(row => row != null)
                     .Select(row => row.Clone())
@@ -347,6 +416,7 @@ namespace RapidTransitMod
         public string ServiceKind { get; set; } = string.Empty;
         public string OriginKey { get; set; } = string.Empty;
         public string Source { get; set; } = string.Empty;
+        public TimedStop[] TimedStops { get; set; } = Array.Empty<TimedStop>();
 
         public AppliedTimetableRow Clone()
         {
@@ -356,7 +426,28 @@ namespace RapidTransitMod
                 DepartureMinute = DepartureMinute,
                 ServiceKind = RuntimeConfigStoreDefaults.NormalizeAppliedServiceKind(ServiceKind),
                 OriginKey = OriginKey ?? string.Empty,
-                Source = Source ?? string.Empty
+                Source = Source ?? string.Empty,
+                TimedStops = (TimedStops ?? Array.Empty<TimedStop>())
+                    .Where(stop => stop != null)
+                    .Select(stop => stop.Clone())
+                    .ToArray()
+            };
+        }
+    }
+
+    public sealed class TimedStop
+    {
+        public string StopKey { get; set; } = string.Empty;
+        public int Arrive { get; set; } = -1;
+        public int Depart { get; set; } = -1;
+
+        public TimedStop Clone()
+        {
+            return new TimedStop
+            {
+                StopKey = StopKey ?? string.Empty,
+                Arrive = Arrive,
+                Depart = Depart
             };
         }
     }

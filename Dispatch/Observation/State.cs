@@ -41,6 +41,77 @@ namespace RapidTransitMod.Dispatch.Observation
         public uint UpdatedFrame;
     }
 
+    internal enum MonitorTripState : byte
+    {
+        Active,
+        Completed,
+        Missed,
+        Cleared
+    }
+
+    internal enum MonitorEndReason : byte
+    {
+        None,
+        Rebound,
+        Removed,
+        Retired,
+        Relaunched
+    }
+
+    internal sealed class MonitorTrip
+    {
+        public string Key = string.Empty;
+        public string LineKey = string.Empty;
+        public string LineId = string.Empty;
+        public string RowId = string.Empty;
+        public string ServiceKind = string.Empty;
+        public string StopSig = string.Empty;
+        public Entity Line = Entity.Null;
+        public Entity Vehicle = Entity.Null;
+        public int ServiceDateKey;
+        public int SlotMinute = -1;
+        // 持久元素仍保留旧字段；内存权威改由始发站实际离站表达。
+        public int ActualStartMinute
+        {
+            get => Stops.Count > 0 ? Stops[0].ActualDeparture : -1;
+            set { }
+        }
+        public int NextArrivalOrder = 1;
+        public int VisibleStopCount;
+        public int SuppressPlanFrom = int.MaxValue;
+        public string LastFactStopKey = string.Empty;
+        public uint LastFactFrame;
+        public bool LastFactArrival;
+        public MonitorTripState State;
+        public MonitorEndReason EndReason;
+        public uint LaunchFrame;
+        public uint UpdatedFrame;
+        public readonly List<MonitorStop> Stops = new List<MonitorStop>();
+    }
+
+    internal sealed class MonitorStop
+    {
+        public string StopKey = string.Empty;
+        public Entity Station = Entity.Null;
+        public int WaypointIndex = -1;
+        public int PlannedArrival = -1;
+        public int PlannedDeparture = -1;
+        public int ActualArrival = -1;
+        public int ActualDeparture = -1;
+        public uint ActualArrivalFrame;
+        public uint ActualDepartureFrame;
+        public uint OpenIntervalMaxFrames;
+        public bool Skipped;
+        public bool Cleared;
+    }
+
+    internal sealed class MonitorDateSlot
+    {
+        public int DateKey;
+        public readonly Dictionary<string, MonitorTrip> Trips =
+            new Dictionary<string, MonitorTrip>(StringComparer.Ordinal);
+    }
+
     internal sealed class StopEvent
     {
         public string EventId = string.Empty;

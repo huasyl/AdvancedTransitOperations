@@ -19,15 +19,20 @@ namespace RapidTransitMod.RailTravel
 
         public bool TryBuild(Entity pathOwner, out Path path)
         {
-            return TryBuild(pathOwner, false, out path);
+            return TryBuild(pathOwner, false, true, out path);
         }
 
         internal bool TryBuildTheoryDepot(Entity pathOwner, out Path path)
         {
-            return TryBuild(pathOwner, true, out path);
+            return TryBuild(pathOwner, true, false, out path);
         }
 
-        private bool TryBuild(Entity pathOwner, bool theoryDepot, out Path path)
+        internal bool TryBuildTemporary(Entity pathOwner, out Path path)
+        {
+            return TryBuild(pathOwner, false, false, out path);
+        }
+
+        private bool TryBuild(Entity pathOwner, bool theoryDepot, bool formalPath, out Path path)
         {
             path = null;
             if (pathOwner == Entity.Null
@@ -43,20 +48,25 @@ namespace RapidTransitMod.RailTravel
 
             int firstCurve = elements.Length;
             int lastCurve = -1;
-            for (int i = 0; i < elements.Length; i++)
+            if (theoryDepot)
             {
-                if (!m_EntityManager.HasComponent<Curve>(elements[i].m_Target))
-                    continue;
-                firstCurve = System.Math.Min(firstCurve, i);
-                lastCurve = i;
+                for (int i = 0; i < elements.Length; i++)
+                {
+                    if (!m_EntityManager.HasComponent<Curve>(elements[i].m_Target))
+                        continue;
+                    firstCurve = System.Math.Min(firstCurve, i);
+                    lastCurve = i;
+                }
             }
 
             var segments = new List<Segment>(elements.Length);
             int skipped = 0;
             int nonNoiseSkipped = 0;
+            ulong sourceSignature = 1469598103934665603UL;
             for (int i = 0; i < elements.Length; i++)
             {
                 PathElement element = elements[i];
+                sourceSignature = MixPathElement(sourceSignature, i, element);
                 bool hasConnection = m_EntityManager.HasComponent<ConnectionLane>(element.m_Target);
                 TrackTypes connectionTrackTypes = hasConnection ? m_EntityManager.GetComponentData<ConnectionLane>(element.m_Target).m_TrackTypes : TrackTypes.None;
                 TrackAtomClass atomClass = TrackBuild.ClassifyPathElementTarget(
@@ -88,13 +98,21 @@ namespace RapidTransitMod.RailTravel
                     segments.Add(new Segment(
                         element.m_Target,
                         SegmentKind.TrackLane,
+                        formalPath ? i : -1,
                         element.m_TargetDelta,
-                        curve.m_Length,
+                        curve,
                         element.m_Flags,
                         trackLane.m_Flags,
                         0,
                         trackLane.m_SpeedLimit,
-                        trackLane.m_Curviness));
+                        trackLane.m_Curviness,
+                        trackLane.m_AccessRestriction,
+                        TrackTypes.None,
+                        RoadTypes.None,
+                        0f,
+                        0f,
+                        0,
+                        0));
                     continue;
                 }
 
@@ -102,17 +120,30 @@ namespace RapidTransitMod.RailTravel
                 {
                     // EdgeLane and flag-marked path connectors share ConnectionHelper physics with ConnectionLane:
                     // IsConnectionLane=true via SegmentKind.ConnectionLane, speed=Calculator.ConnectionSpeed, no TrackLane flags.
-                    ConnectionLaneFlags connectionFlags = hasConnection ? m_EntityManager.GetComponentData<ConnectionLane>(element.m_Target).m_Flags : 0;
+                    ConnectionLane connection = hasConnection
+                        ? m_EntityManager.GetComponentData<ConnectionLane>(element.m_Target)
+                        : default;
+                    EdgeLane edge = m_EntityManager.HasComponent<EdgeLane>(element.m_Target)
+                        ? m_EntityManager.GetComponentData<EdgeLane>(element.m_Target)
+                        : default;
                     segments.Add(new Segment(
                         element.m_Target,
                         SegmentKind.ConnectionLane,
+                        formalPath ? i : -1,
                         element.m_TargetDelta,
-                        curve.m_Length,
+                        curve,
                         element.m_Flags,
                         0,
-                        connectionFlags,
+                        connection.m_Flags,
                         Calculator.ConnectionSpeed,
-                        0f));
+                        0f,
+                        hasConnection ? connection.m_AccessRestriction : Entity.Null,
+                        hasConnection ? connection.m_TrackTypes : TrackTypes.None,
+                        hasConnection ? connection.m_RoadTypes : RoadTypes.None,
+                        edge.m_EdgeDelta.x,
+                        edge.m_EdgeDelta.y,
+                        edge.m_ConnectedStartCount,
+                        edge.m_ConnectedEndCount));
                     continue;
                 }
 
@@ -125,8 +156,28 @@ namespace RapidTransitMod.RailTravel
             if (segments.Count == 0 || nonNoiseSkipped > 0)
                 return false;
 
-            path = new Path(pathOwner, segments.ToArray(), elements.Length, skipped);
+            path = new Path(pathOwner, segments.ToArray(), elements.Length, skipped, sourceSignature);
             return true;
+        }
+
+        private static ulong MixPathElement(ulong hash, int index, PathElement element)
+        {
+            hash = Mix(hash, index);
+            hash = Mix(hash, element.m_Target.Index);
+            hash = Mix(hash, element.m_Target.Version);
+            hash = Mix(hash, element.m_TargetDelta.x);
+            hash = Mix(hash, element.m_TargetDelta.y);
+            return Mix(hash, (int)element.m_Flags);
+        }
+
+        private static ulong Mix(ulong hash, int value)
+        {
+            unchecked { return (hash ^ (uint)value) * 1099511628211UL; }
+        }
+
+        private static ulong Mix(ulong hash, float value)
+        {
+            return Mix(hash, value.GetHashCode());
         }
 
         private bool IsTheoryDepotEndpoint(Entity target, int index, int firstCurve, int lastCurve, Entity pathOwner)

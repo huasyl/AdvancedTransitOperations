@@ -5,6 +5,7 @@ using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.TrackModel;
+using System;
 using System.Collections.Generic;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -14,12 +15,27 @@ namespace RapidTransitMod.Dispatch.Observation
     internal sealed class Buffers
     {
         private const ulong SignatureSeed = 1469598103934665603UL;
+        private const int MonitorVersion = 2;
+        private const int MonitorStopVersion = 3;
+        private const int MonitorTripVersion = 4;
+        private const int MonitorAverageVersion = 2;
+        private const int MaxMonitorDateSlots = 2;
+        private const int MaxMonitorTripsPerDate = 4096;
+        private const int MaxMonitorActiveTrips = 1024;
+        private const int MaxMonitorTrips = MaxMonitorTripsPerDate * 2 + MaxMonitorActiveTrips;
+        private const int MaxMonitorStops = MaxMonitorTrips * 256;
+        private const int MaxMonitorAverageSegments = MonitorAverageStore.MaxLines * MonitorAverageStore.MaxSegmentsPerLine;
+        private const int MaxRestoreLineLogSlices = 32;
         private readonly ModRuntimeHostSystem m_Runtime;
+        private bool m_MonitorPersistenceHealthy = true;
+        private bool m_IgnoreLegacyMonitor;
 
         public Buffers(ModRuntimeHostSystem runtime)
         {
             m_Runtime = runtime;
         }
+
+        internal bool MonitorPersistenceHealthy => m_MonitorPersistenceHealthy;
 
         public void Ensure()
         {
@@ -27,6 +43,8 @@ namespace RapidTransitMod.Dispatch.Observation
             EnsureStationDwell();
             EnsureSlice();
             EnsureBusSeg();
+            EnsureMonitorAverages();
+            EnsureMonitor();
         }
 
         public void EnsureDwell()
@@ -49,12 +67,867 @@ namespace RapidTransitMod.Dispatch.Observation
             EnsureBusSegCore();
         }
 
+        public void EnsureMonitorAverages()
+        {
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null)
+                return;
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorAverageLineElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorAverageLineElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorAverageSegmentElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorAverageSegmentElement>(city);
+        }
+
+        public void EnsureMonitor()
+        {
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null)
+                return;
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorDateSlotElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorDateSlotElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorIntegrityElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorIntegrityElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorTripElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorTripElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<MonitorStopElement>(city))
+                m_Runtime.EntityManager.AddBuffer<MonitorStopElement>(city);
+        }
+
         public void Load()
         {
             LoadDwell();
             LoadStationDwell();
             LoadSlice();
             LoadBusSeg();
+            LoadMonitor();
+            LoadMonitorIntegrity();
+            LoadMonitorAverages();
+        }
+
+        public void LoadMonitor()
+        {
+            EnsureMonitor();
+            EnsureMonitorAverages();
+            m_IgnoreLegacyMonitor = false;
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null
+                || m_Runtime.m_ObsRecorder == null
+                || !m_Runtime.EntityManager.HasBuffer<MonitorDateSlotElement>(city)
+                || !m_Runtime.EntityManager.HasBuffer<MonitorTripElement>(city)
+                || !m_Runtime.EntityManager.HasBuffer<MonitorStopElement>(city))
+            {
+                return;
+            }
+
+            m_MonitorPersistenceHealthy = true;
+            if (HasLegacyMonitor(city))
+            {
+                m_IgnoreLegacyMonitor = true;
+                m_Runtime.m_ObsRecorder.ClearMonitor();
+                m_Runtime.m_MonitorAverages.Clear();
+                m_Runtime.m_ObsRecorder.TickDate(m_Runtime.m_SimClock.NowDate);
+                return;
+            }
+            m_Runtime.m_ObsRecorder.ClearMonitor();
+            DynamicBuffer<MonitorDateSlotElement> slots =
+                m_Runtime.EntityManager.GetBuffer<MonitorDateSlotElement>(city, true);
+            HashSet<int> slotKeys = new HashSet<int>();
+            for (int i = 0; i < slots.Length && slotKeys.Count < 2; i++)
+            {
+                MonitorDateSlotElement element = slots[i];
+                if (element.m_Version != MonitorVersion
+                    || element.m_DateKey <= 0
+                    || !slotKeys.Add(element.m_DateKey))
+                {
+                    RecordLoadIssue("monitor-date-slot-corrupt", false);
+                    continue;
+                }
+                m_Runtime.m_ObsRecorder.RestoreDateSlot(element.m_DateKey);
+            }
+
+            DynamicBuffer<MonitorTripElement> trips =
+                m_Runtime.EntityManager.GetBuffer<MonitorTripElement>(city, true);
+            DynamicBuffer<MonitorStopElement> stops =
+                m_Runtime.EntityManager.GetBuffer<MonitorStopElement>(city, true);
+            Dictionary<int, List<MonitorStopElement>> stopsByTrip =
+                new Dictionary<int, List<MonitorStopElement>>();
+            for (int i = 0; i < stops.Length; i++)
+            {
+                MonitorStopElement stop = stops[i];
+                if ((stop.m_Version != MonitorVersion && stop.m_Version != MonitorStopVersion)
+                    || stop.m_TripOrder < 0
+                    || stop.m_StopOrder < 0)
+                {
+                    RecordLoadIssue("monitor-stop-corrupt", false);
+                    continue;
+                }
+                if (!stopsByTrip.TryGetValue(stop.m_TripOrder, out List<MonitorStopElement> list))
+                {
+                    list = new List<MonitorStopElement>();
+                    stopsByTrip[stop.m_TripOrder] = list;
+                }
+                list.Add(stop);
+            }
+
+            HashSet<int> tripOrders = new HashSet<int>();
+            HashSet<string> monitorKeys = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<Entity> activeVehicles = new HashSet<Entity>();
+            Dictionary<Entity, MonitorLayout> layouts =
+                new Dictionary<Entity, MonitorLayout>();
+            for (int i = 0; i < trips.Length; i++)
+            {
+                MonitorTripElement element = trips[i];
+                string elementKey = element.m_Key.ToString();
+                bool active = element.m_Active == 1;
+                string lineKey = element.m_LineKey.ToString();
+                string rowId = element.m_RowId.ToString();
+                string expectedKey = lineKey + "|" + rowId + "|" + element.m_ServiceDateKey;
+                bool activeValid = !active
+                    || (element.m_Vehicle != Entity.Null
+                        && element.m_Line != Entity.Null
+                        && m_Runtime.EntityManager.Exists(element.m_Vehicle)
+                        && m_Runtime.EntityManager.Exists(element.m_Line)
+                        && m_Runtime.m_VehicleView.TryGetLine(element.m_Vehicle, out Entity restoredLine)
+                        && restoredLine == element.m_Line
+                        && m_Runtime.m_VehicleView.TryGetState(element.m_Vehicle, out VehicleState restoredState)
+                        && restoredState == VehicleState.Running);
+                if (element.m_Version != MonitorTripVersion
+                    || (element.m_Active != 0 && element.m_Active != 1)
+                    || element.m_TripOrder < 0
+                    || element.m_TripOrder == int.MaxValue
+                    || !tripOrders.Add(element.m_TripOrder)
+                    || !monitorKeys.Add(element.m_Key.ToString())
+                    || string.IsNullOrEmpty(element.m_Key.ToString())
+                    || string.IsNullOrEmpty(lineKey)
+                    || string.IsNullOrEmpty(rowId)
+                    || string.IsNullOrEmpty(element.m_StopSig.ToString())
+                    || !string.Equals(element.m_Key.ToString(), expectedKey, StringComparison.Ordinal)
+                    || !ValidMonitorDate(element.m_ServiceDateKey)
+                    || element.m_SlotMinute < 0
+                    || element.m_SlotMinute >= 1440
+                    || element.m_StopCount <= 0
+                    || element.m_StopCount > 256
+                    || element.m_NextArrivalOrder < 1
+                    || element.m_NextArrivalOrder > element.m_StopCount
+                    || element.m_VisibleStopCount < 1
+                    || element.m_VisibleStopCount > element.m_StopCount
+                    || element.m_SuppressPlanFrom < 0
+                    || element.m_State < 0
+                    || element.m_State > (int)MonitorTripState.Cleared
+                    || element.m_EndReason < (int)MonitorEndReason.None
+                    || element.m_EndReason > (int)MonitorEndReason.Relaunched
+                    || (active && element.m_State != (int)MonitorTripState.Active)
+                    || (!active && element.m_State == (int)MonitorTripState.Active)
+                    || !stopsByTrip.TryGetValue(element.m_TripOrder, out List<MonitorStopElement> savedStops)
+                    || savedStops.Count != element.m_StopCount
+                    || !activeValid
+                    || (active && !activeVehicles.Add(element.m_Vehicle)))
+                {
+                    RecordLoadIssue("monitor-trip-corrupt", true);
+                    continue;
+                }
+
+                savedStops.Sort((left, right) => left.m_StopOrder.CompareTo(right.m_StopOrder));
+                MonitorTrip trip = new MonitorTrip
+                {
+                    Key = element.m_Key.ToString(),
+                    LineKey = element.m_LineKey.ToString(),
+                    LineId = element.m_LineId.ToString(),
+                    RowId = element.m_RowId.ToString(),
+                    ServiceKind = element.m_ServiceKind.ToString(),
+                    StopSig = element.m_StopSig.ToString(),
+                    Line = element.m_Line,
+                    Vehicle = element.m_Vehicle,
+                    ServiceDateKey = element.m_ServiceDateKey,
+                    SlotMinute = element.m_SlotMinute,
+                    NextArrivalOrder = element.m_NextArrivalOrder,
+                    VisibleStopCount = element.m_VisibleStopCount,
+                    SuppressPlanFrom = element.m_SuppressPlanFrom,
+                    State = (MonitorTripState)element.m_State,
+                    EndReason = (MonitorEndReason)element.m_EndReason,
+                    LaunchFrame = element.m_LaunchFrame,
+                    UpdatedFrame = element.m_UpdatedFrame
+                };
+                bool valid = true;
+                for (int stopIndex = 0; stopIndex < savedStops.Count; stopIndex++)
+                {
+                    MonitorStopElement stop = savedStops[stopIndex];
+                    if ((stop.m_Version != MonitorVersion && stop.m_Version != MonitorStopVersion)
+                        || stop.m_StopOrder != stopIndex
+                        || string.IsNullOrEmpty(stop.m_StopKey.ToString())
+                        || stop.m_WaypointIndex < -1
+                        || stop.m_PlannedArrival < -1
+                        || stop.m_PlannedDeparture < -1
+                        || stop.m_ActualArrival < -1
+                        || stop.m_ActualDeparture < -1
+                        || (stop.m_ActualArrival < 0 && stop.m_ActualArrivalFrame != 0u)
+                        || (stop.m_ActualDeparture < 0 && (stop.m_ActualDepartureFrame != 0u
+                            || stop.m_OpenIntervalMaxFrames != 0u))
+                        || (stop.m_ActualDeparture >= 0 && stop.m_OpenIntervalMaxFrames == 0u)
+                        || (stop.m_Skipped != 0 && stop.m_Skipped != 1)
+                        || (stop.m_Skipped == 1 && (stop.m_ActualArrival < 0
+                            || stop.m_ActualDeparture >= 0
+                            || stop.m_ActualDepartureFrame != 0u
+                            || stop.m_OpenIntervalMaxFrames != 0u))
+                        || (stop.m_Cleared != 0 && stop.m_Cleared != 1))
+                    {
+                        valid = false;
+                        break;
+                    }
+                    trip.Stops.Add(new MonitorStop
+                    {
+                        StopKey = stop.m_StopKey.ToString(),
+                        Station = stop.m_Station,
+                        WaypointIndex = stop.m_WaypointIndex,
+                        PlannedArrival = stop.m_PlannedArrival,
+                        PlannedDeparture = stop.m_PlannedDeparture,
+                        ActualArrival = stop.m_ActualArrival,
+                        ActualDeparture = stop.m_ActualDeparture,
+                        ActualArrivalFrame = stop.m_ActualArrivalFrame,
+                        ActualDepartureFrame = stop.m_ActualDepartureFrame,
+                        OpenIntervalMaxFrames = stop.m_OpenIntervalMaxFrames,
+                        Skipped = stop.m_Skipped == 1,
+                        Cleared = stop.m_Cleared == 1
+                    });
+                }
+                if (!valid)
+                {
+                    RecordLoadIssue("monitor-stop-corrupt", true);
+                    continue;
+                }
+                if (valid && active)
+                {
+                    if (!layouts.TryGetValue(trip.Line, out MonitorLayout layout))
+                    {
+                        if (m_Runtime.m_LineView.TryStopLayout(
+                                trip.Line,
+                                out string currentStopSig,
+                                out int[] currentWaypoints))
+                        {
+                            layout = new MonitorLayout(
+                                true,
+                                currentStopSig,
+                                currentWaypoints);
+                        }
+                        else
+                        {
+                            layout = new MonitorLayout(
+                                false,
+                                string.Empty,
+                                Array.Empty<int>());
+                        }
+                        layouts[trip.Line] = layout;
+                    }
+
+                    if (layout.Available
+                        && !string.Equals(trip.StopSig, layout.StopSig, StringComparison.Ordinal))
+                    {
+                        trip.SuppressPlanFrom = Math.Min(
+                            trip.SuppressPlanFrom,
+                            trip.NextArrivalOrder);
+                    }
+                    else if (layout.Available
+                        && layout.WaypointIndices.Length != trip.Stops.Count)
+                    {
+                        RecordLoadIssue("monitor-layout-projection-mismatch", true);
+                        continue;
+                    }
+                    else if (layout.Available)
+                    {
+                        for (int stopIndex = 0; stopIndex < trip.Stops.Count; stopIndex++)
+                            trip.Stops[stopIndex].WaypointIndex = layout.WaypointIndices[stopIndex];
+                    }
+                }
+                if (valid && trip.Stops.Count > 0)
+                {
+                    if (m_Runtime.m_ObsRecorder.RestoreMonitor(trip, active))
+                    {
+                        // ActualStartMinute 由 Stops[0].ActualDeparture 投影。
+                    }
+                }
+            }
+            m_Runtime.m_ObsRecorder.TickDate(m_Runtime.m_SimClock.NowDate);
+        }
+
+        public void LoadMonitorIntegrity()
+        {
+            if (m_IgnoreLegacyMonitor)
+                return;
+            bool loadDataComplete = !m_Runtime.m_Obs.MonitorOverflowed;
+            int loadDroppedTripCount = m_Runtime.m_Obs.MonitorOverflowCount;
+            string loadIssueCode = m_Runtime.m_Obs.MonitorIssueCode ?? string.Empty;
+            int loadIssueCount = m_Runtime.m_Obs.MonitorIssueCount;
+            bool loadPersistenceHealthy = m_MonitorPersistenceHealthy;
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null
+                || !m_Runtime.EntityManager.HasBuffer<MonitorIntegrityElement>(city))
+            {
+                return;
+            }
+
+            DynamicBuffer<MonitorIntegrityElement> buffer =
+                m_Runtime.EntityManager.GetBuffer<MonitorIntegrityElement>(city, true);
+            if (buffer.Length == 0)
+                return;
+            if (buffer.Length != 1)
+            {
+                RecordLoadIssue("monitor-integrity-duplicate", false);
+                return;
+            }
+
+            MonitorIntegrityElement element = buffer[0];
+            string issueCode = element.m_LastIssueCode.ToString();
+            if (element.m_Version != MonitorVersion
+                || (element.m_DataComplete != 0 && element.m_DataComplete != 1)
+                || element.m_DroppedTripCount < 0
+                || element.m_DroppedTripCount > MaxMonitorTrips
+                || element.m_PersistenceHealthy < 0
+                || element.m_PersistenceHealthy > 1
+                || element.m_IssueCount < 0
+                || element.m_IssueCount > MaxMonitorTrips
+                || issueCode.Length > 64)
+            {
+                RecordLoadIssue("monitor-integrity-invalid", false);
+                return;
+            }
+
+            string mergedIssueCode = !string.IsNullOrEmpty(loadIssueCode)
+                ? loadIssueCode
+                : issueCode;
+            m_Runtime.m_Obs.MonitorOverflowed = !loadDataComplete
+                || element.m_DataComplete == 0;
+            m_Runtime.m_Obs.MonitorOverflowReason = mergedIssueCode;
+            m_Runtime.m_Obs.MonitorOverflowCount = MergeMonitorCount(
+                loadDroppedTripCount,
+                element.m_DroppedTripCount);
+            m_Runtime.m_Obs.MonitorIssueCode = mergedIssueCode;
+            m_Runtime.m_Obs.MonitorIssueCount = MergeMonitorCount(
+                loadIssueCount,
+                element.m_IssueCount);
+            m_MonitorPersistenceHealthy = loadPersistenceHealthy
+                && element.m_PersistenceHealthy != 0;
+        }
+
+        public bool SaveSnapshot()
+        {
+            MonitorSnapshot snapshot;
+            try
+            {
+                snapshot = BuildMonitorSnapshot();
+            }
+            catch (Exception ex)
+            {
+                return FailSnapshot("monitor-snapshot-build-failed", ex);
+            }
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null)
+                return FailSnapshot("monitor-snapshot-city-missing", null);
+
+            try
+            {
+                EnsureMonitor();
+                EnsureMonitorAverages();
+                if (!HasMonitorBuffers(city)
+                    || !m_Runtime.EntityManager.HasBuffer<MonitorAverageLineElement>(city)
+                    || !m_Runtime.EntityManager.HasBuffer<MonitorAverageSegmentElement>(city))
+                {
+                    return FailSnapshot("monitor-snapshot-buffer-missing", null);
+                }
+
+                DynamicBuffer<MonitorDateSlotElement> slots =
+                    m_Runtime.EntityManager.GetBuffer<MonitorDateSlotElement>(city);
+                DynamicBuffer<MonitorIntegrityElement> integrity =
+                    m_Runtime.EntityManager.GetBuffer<MonitorIntegrityElement>(city);
+                DynamicBuffer<MonitorTripElement> trips =
+                    m_Runtime.EntityManager.GetBuffer<MonitorTripElement>(city);
+                DynamicBuffer<MonitorStopElement> stops =
+                    m_Runtime.EntityManager.GetBuffer<MonitorStopElement>(city);
+                DynamicBuffer<MonitorAverageLineElement> averageLines =
+                    m_Runtime.EntityManager.GetBuffer<MonitorAverageLineElement>(city);
+                DynamicBuffer<MonitorAverageSegmentElement> averageSegments =
+                    m_Runtime.EntityManager.GetBuffer<MonitorAverageSegmentElement>(city);
+
+                slots.EnsureCapacity(snapshot.DateSlots.Count);
+                integrity.EnsureCapacity(1);
+                trips.EnsureCapacity(snapshot.Trips.Count);
+                stops.EnsureCapacity(snapshot.Stops.Count);
+                averageLines.EnsureCapacity(snapshot.AverageLines.Count);
+                averageSegments.EnsureCapacity(snapshot.AverageSegments.Count);
+
+                snapshot.Integrity.m_PersistenceHealthy = 1;
+                slots.Clear();
+                integrity.Clear();
+                trips.Clear();
+                stops.Clear();
+                averageLines.Clear();
+                averageSegments.Clear();
+                for (int i = 0; i < snapshot.DateSlots.Count; i++)
+                    slots.Add(snapshot.DateSlots[i]);
+                integrity.Add(snapshot.Integrity);
+                for (int i = 0; i < snapshot.Trips.Count; i++)
+                    trips.Add(snapshot.Trips[i]);
+                for (int i = 0; i < snapshot.Stops.Count; i++)
+                    stops.Add(snapshot.Stops[i]);
+                for (int i = 0; i < snapshot.AverageLines.Count; i++)
+                    averageLines.Add(snapshot.AverageLines[i]);
+                for (int i = 0; i < snapshot.AverageSegments.Count; i++)
+                    averageSegments.Add(snapshot.AverageSegments[i]);
+
+                m_MonitorPersistenceHealthy = true;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                return FailSnapshot("monitor-snapshot-capacity-failed", ex);
+            }
+        }
+
+        private bool HasLegacyMonitor(Entity city)
+        {
+            DynamicBuffer<MonitorDateSlotElement> slots =
+                m_Runtime.EntityManager.GetBuffer<MonitorDateSlotElement>(city, true);
+            for (int i = 0; i < slots.Length; i++)
+                if (slots[i].m_Version > 0 && slots[i].m_Version < MonitorVersion)
+                    return true;
+
+            DynamicBuffer<MonitorIntegrityElement> integrity =
+                m_Runtime.EntityManager.GetBuffer<MonitorIntegrityElement>(city, true);
+            for (int i = 0; i < integrity.Length; i++)
+                if (integrity[i].m_Version > 0 && integrity[i].m_Version < MonitorVersion)
+                    return true;
+
+            DynamicBuffer<MonitorTripElement> trips =
+                m_Runtime.EntityManager.GetBuffer<MonitorTripElement>(city, true);
+            for (int i = 0; i < trips.Length; i++)
+                if (trips[i].m_Version > 0 && trips[i].m_Version < MonitorTripVersion)
+                    return true;
+
+            DynamicBuffer<MonitorStopElement> stops =
+                m_Runtime.EntityManager.GetBuffer<MonitorStopElement>(city, true);
+            for (int i = 0; i < stops.Length; i++)
+                if (stops[i].m_Version > 0 && stops[i].m_Version < MonitorVersion)
+                    return true;
+
+            DynamicBuffer<MonitorAverageLineElement> averageLines =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageLineElement>(city, true);
+            for (int i = 0; i < averageLines.Length; i++)
+                if (averageLines[i].m_Version > 0
+                    && averageLines[i].m_Version < MonitorAverageVersion)
+                    return true;
+
+            DynamicBuffer<MonitorAverageSegmentElement> averageSegments =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageSegmentElement>(city, true);
+            for (int i = 0; i < averageSegments.Length; i++)
+                if (averageSegments[i].m_Version > 0
+                    && averageSegments[i].m_Version < MonitorAverageVersion)
+                    return true;
+            return false;
+        }
+
+        private readonly struct MonitorLayout
+        {
+            internal readonly bool Available;
+            internal readonly string StopSig;
+            internal readonly int[] WaypointIndices;
+
+            internal MonitorLayout(
+                bool available,
+                string stopSig,
+                int[] waypointIndices)
+            {
+                Available = available;
+                StopSig = stopSig ?? string.Empty;
+                WaypointIndices = waypointIndices ?? Array.Empty<int>();
+            }
+        }
+
+        private sealed class MonitorSnapshot
+        {
+            internal readonly List<MonitorDateSlotElement> DateSlots =
+                new List<MonitorDateSlotElement>();
+            internal readonly List<MonitorTripElement> Trips =
+                new List<MonitorTripElement>();
+            internal readonly List<MonitorStopElement> Stops =
+                new List<MonitorStopElement>();
+            internal readonly List<MonitorAverageLineElement> AverageLines =
+                new List<MonitorAverageLineElement>();
+            internal readonly List<MonitorAverageSegmentElement> AverageSegments =
+                new List<MonitorAverageSegmentElement>();
+            internal MonitorIntegrityElement Integrity;
+        }
+
+        private MonitorSnapshot BuildMonitorSnapshot()
+        {
+            if (m_Runtime.m_ObsRecorder == null)
+                throw new InvalidOperationException("monitor-recorder-missing");
+
+            MonitorSnapshot snapshot = new MonitorSnapshot();
+            List<MonitorDateSlot> dateSlots = new List<MonitorDateSlot>();
+            foreach (MonitorDateSlot slot in m_Runtime.m_ObsRecorder.MonitorDateSlots)
+            {
+                if (slot == null)
+                    throw new InvalidOperationException("monitor-date-slot-null");
+                dateSlots.Add(slot);
+            }
+            if (dateSlots.Count > MaxMonitorDateSlots)
+                throw new InvalidOperationException("monitor-date-slot-capacity");
+            dateSlots.Sort((left, right) => left.DateKey.CompareTo(right.DateKey));
+
+            HashSet<int> dateKeys = new HashSet<int>();
+            for (int i = 0; i < dateSlots.Count; i++)
+            {
+                MonitorDateSlot slot = dateSlots[i];
+                if (!ValidMonitorDate(slot.DateKey) || !dateKeys.Add(slot.DateKey))
+                    throw new InvalidOperationException("monitor-date-slot-invalid");
+                snapshot.DateSlots.Add(new MonitorDateSlotElement
+                {
+                    m_Version = MonitorVersion,
+                    m_DateKey = slot.DateKey
+                });
+            }
+
+            HashSet<string> monitorKeys = new HashSet<string>(StringComparer.Ordinal);
+            int tripOrder = 0;
+            List<MonitorTrip> activeTrips = new List<MonitorTrip>();
+            foreach (MonitorTrip trip in m_Runtime.m_ObsRecorder.ActiveMonitorTrips)
+                activeTrips.Add(trip);
+            if (activeTrips.Count > MaxMonitorActiveTrips)
+                throw new InvalidOperationException("monitor-active-trip-capacity");
+            activeTrips.Sort((left, right) => string.CompareOrdinal(left?.Key, right?.Key));
+            for (int i = 0; i < activeTrips.Count; i++)
+                AppendMonitorSnapshotTrip(snapshot, activeTrips[i], true, ref tripOrder, monitorKeys);
+
+            for (int slotIndex = 0; slotIndex < dateSlots.Count; slotIndex++)
+            {
+                if (dateSlots[slotIndex].Trips.Count > MaxMonitorTripsPerDate)
+                    throw new InvalidOperationException("monitor-date-trip-capacity");
+                List<MonitorTrip> archivedTrips = new List<MonitorTrip>();
+                foreach (MonitorTrip trip in dateSlots[slotIndex].Trips.Values)
+                    archivedTrips.Add(trip);
+                archivedTrips.Sort((left, right) => string.CompareOrdinal(left?.Key, right?.Key));
+                for (int i = 0; i < archivedTrips.Count; i++)
+                {
+                    if (archivedTrips[i] == null
+                        || archivedTrips[i].ServiceDateKey != dateSlots[slotIndex].DateKey)
+                    {
+                        throw new InvalidOperationException("monitor-trip-date-mismatch");
+                    }
+                    AppendMonitorSnapshotTrip(snapshot, archivedTrips[i], false, ref tripOrder, monitorKeys);
+                }
+            }
+
+            if (tripOrder > MaxMonitorTrips || snapshot.Stops.Count > MaxMonitorStops)
+                throw new InvalidOperationException("monitor-trip-stop-capacity");
+
+            List<MonitorAverageLine> averageLines = new List<MonitorAverageLine>();
+            foreach (MonitorAverageLine line in m_Runtime.m_MonitorAverages.Lines)
+                averageLines.Add(line);
+            if (averageLines.Count > MonitorAverageStore.MaxLines)
+                throw new InvalidOperationException("monitor-average-line-capacity");
+            averageLines.Sort((left, right) => left.Line.Index.CompareTo(right.Line.Index));
+            for (int lineIndex = 0; lineIndex < averageLines.Count; lineIndex++)
+            {
+                MonitorAverageLine line = averageLines[lineIndex];
+                if (line == null
+                    || line.Line == Entity.Null
+                    || string.IsNullOrEmpty(line.StopSig)
+                    || line.Segments.Length == 0
+                    || line.Segments.Length > MonitorAverageStore.MaxSegmentsPerLine
+                    || snapshot.AverageSegments.Count + line.Segments.Length > MaxMonitorAverageSegments)
+                {
+                    throw new InvalidOperationException("monitor-average-invalid");
+                }
+                snapshot.AverageLines.Add(new MonitorAverageLineElement
+                {
+                    m_Version = MonitorAverageVersion,
+                    m_Line = line.Line,
+                    m_StopSig = line.StopSig,
+                    m_Revision = line.Revision,
+                    m_SegmentCount = line.Segments.Length
+                });
+                for (int order = 0; order < line.Segments.Length; order++)
+                {
+                    MonitorAverageSegment segment = line.Segments[order];
+                    if ((segment.SampleCount == 0 && segment.TotalFrames != 0)
+                        || (segment.SampleCount > 0 && segment.TotalFrames == 0))
+                    {
+                        throw new InvalidOperationException("monitor-average-segment-invalid");
+                    }
+                    snapshot.AverageSegments.Add(new MonitorAverageSegmentElement
+                    {
+                        m_Version = MonitorAverageVersion,
+                        m_Line = line.Line,
+                        m_Order = order,
+                        m_TotalFrames = segment.TotalFrames,
+                        m_SampleCount = segment.SampleCount
+                    });
+                }
+            }
+
+            string issueCode = m_Runtime.m_Obs.MonitorIssueCode ?? string.Empty;
+            if (issueCode.Length > 64
+                || m_Runtime.m_Obs.MonitorIssueCount < 0
+                || m_Runtime.m_Obs.MonitorIssueCount > MaxMonitorTrips
+                || m_Runtime.m_Obs.MonitorOverflowCount < 0
+                || m_Runtime.m_Obs.MonitorOverflowCount > MaxMonitorTrips)
+            {
+                throw new InvalidOperationException("monitor-integrity-invalid");
+            }
+
+            snapshot.Integrity = new MonitorIntegrityElement
+            {
+                m_Version = MonitorVersion,
+                m_DataComplete = m_Runtime.m_Obs.MonitorOverflowed ? 0 : 1,
+                m_DroppedTripCount = m_Runtime.m_Obs.MonitorOverflowed
+                    ? m_Runtime.m_Obs.MonitorOverflowCount
+                    : 0,
+                m_PersistenceHealthy = m_MonitorPersistenceHealthy ? 1 : 0,
+                m_LastIssueCode = issueCode,
+                m_IssueCount = m_Runtime.m_Obs.MonitorIssueCount
+            };
+            return snapshot;
+        }
+
+        private void AppendMonitorSnapshotTrip(
+            MonitorSnapshot snapshot,
+            MonitorTrip trip,
+            bool active,
+            ref int tripOrder,
+            HashSet<string> monitorKeys)
+        {
+            if (!ValidMonitorTripSnapshot(trip, active)
+                || !monitorKeys.Add(trip.Key)
+                || tripOrder >= MaxMonitorTrips
+                || !TryBuildMonitorValues(
+                    trip,
+                    active,
+                    tripOrder,
+                    out MonitorTripElement tripValue,
+                    out MonitorStopElement[] stopValues))
+            {
+                throw new InvalidOperationException("monitor-trip-invalid");
+            }
+
+            snapshot.Trips.Add(tripValue);
+            for (int i = 0; i < stopValues.Length; i++)
+                snapshot.Stops.Add(stopValues[i]);
+            tripOrder++;
+        }
+
+        private bool ValidMonitorTripSnapshot(MonitorTrip trip, bool active)
+        {
+            if (trip == null
+                || string.IsNullOrEmpty(trip.Key)
+                || string.IsNullOrEmpty(trip.LineKey)
+                || string.IsNullOrEmpty(trip.StopSig)
+                || string.IsNullOrEmpty(trip.RowId)
+                || trip.Line == Entity.Null
+                || !ValidMonitorDate(trip.ServiceDateKey)
+                || trip.SlotMinute < 0
+                || trip.SlotMinute >= 1440
+                || trip.Stops == null
+                || trip.Stops.Count == 0
+                || trip.Stops.Count > 256
+                || trip.NextArrivalOrder < 1
+                || trip.NextArrivalOrder > trip.Stops.Count
+                || trip.VisibleStopCount < 1
+                || trip.VisibleStopCount > trip.Stops.Count
+                || trip.SuppressPlanFrom < 0
+                || (int)trip.EndReason < (int)MonitorEndReason.None
+                || (int)trip.EndReason > (int)MonitorEndReason.Relaunched
+                || (active && (trip.State != MonitorTripState.Active || trip.Vehicle == Entity.Null))
+                || (!active && trip.State == MonitorTripState.Active))
+            {
+                return false;
+            }
+
+            string expectedKey = trip.LineKey + "|" + trip.RowId + "|" + trip.ServiceDateKey;
+            if (!string.Equals(trip.Key, expectedKey, StringComparison.Ordinal)
+                || (int)trip.State < (int)MonitorTripState.Active
+                || (int)trip.State > (int)MonitorTripState.Cleared)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < trip.Stops.Count; i++)
+            {
+                MonitorStop stop = trip.Stops[i];
+                if (stop == null
+                    || string.IsNullOrEmpty(stop.StopKey)
+                    || stop.WaypointIndex < -1
+                    || stop.PlannedArrival < -1
+                    || stop.PlannedDeparture < -1
+                    || stop.ActualArrival < -1
+                    || stop.ActualDeparture < -1
+                    || (stop.ActualArrival < 0 && stop.ActualArrivalFrame != 0u)
+                    || (stop.ActualDeparture < 0 && (stop.ActualDepartureFrame != 0u
+                        || stop.OpenIntervalMaxFrames != 0u))
+                    || (stop.ActualDeparture >= 0 && stop.OpenIntervalMaxFrames == 0u)
+                    || (stop.Skipped && (stop.ActualArrival < 0
+                        || stop.ActualDeparture >= 0
+                        || stop.ActualDepartureFrame != 0u
+                        || stop.OpenIntervalMaxFrames != 0u)))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private bool HasMonitorBuffers(Entity city)
+        {
+            return m_Runtime.EntityManager.HasBuffer<MonitorDateSlotElement>(city)
+                && m_Runtime.EntityManager.HasBuffer<MonitorIntegrityElement>(city)
+                && m_Runtime.EntityManager.HasBuffer<MonitorTripElement>(city)
+                && m_Runtime.EntityManager.HasBuffer<MonitorStopElement>(city);
+        }
+
+        private bool FailSnapshot(string issueCode, Exception exception)
+        {
+            m_MonitorPersistenceHealthy = false;
+            m_Runtime.m_Obs.MonitorIssueCode = issueCode ?? "monitor-snapshot-failed";
+            if (m_Runtime.m_Obs.MonitorIssueCount < int.MaxValue)
+                m_Runtime.m_Obs.MonitorIssueCount++;
+            m_Runtime.log.Info("[ObservationPersistence] " + m_Runtime.m_Obs.MonitorIssueCode
+                + (exception == null
+                    ? string.Empty
+                    : " -> " + exception.GetType().Name + ": " + exception.Message));
+            return false;
+        }
+
+        private void RecordLoadIssue(
+            string issueCode,
+            bool droppedTrip,
+            bool dataIncomplete = true)
+        {
+            m_MonitorPersistenceHealthy = false;
+            string code = issueCode ?? "monitor-integrity-invalid";
+            if (dataIncomplete)
+                m_Runtime.m_Obs.MonitorOverflowed = true;
+            if (droppedTrip)
+            {
+                m_Runtime.m_Obs.MonitorOverflowed = true;
+                m_Runtime.m_Obs.MonitorOverflowCount = MergeMonitorCount(
+                    m_Runtime.m_Obs.MonitorOverflowCount,
+                    1);
+            }
+            m_Runtime.m_Obs.MonitorOverflowReason = code;
+            m_Runtime.m_Obs.MonitorIssueCode = code;
+            m_Runtime.m_Obs.MonitorIssueCount = MergeMonitorCount(
+                m_Runtime.m_Obs.MonitorIssueCount,
+                1);
+            m_Runtime.log.Info("[ObservationPersistence] " + m_Runtime.m_Obs.MonitorIssueCode);
+        }
+
+        private static int MergeMonitorCount(int left, int right)
+        {
+            if (left < 0 || right < 0)
+                return MaxMonitorTrips;
+            return left > MaxMonitorTrips - right
+                ? MaxMonitorTrips
+                : left + right;
+        }
+
+        private static bool TryBuildMonitorValues(
+            MonitorTrip trip,
+            bool active,
+            int tripOrder,
+            out MonitorTripElement tripValue,
+            out MonitorStopElement[] stopValues)
+        {
+            tripValue = default;
+            stopValues = null;
+            if (trip == null
+                || string.IsNullOrEmpty(trip.Key)
+                || tripOrder < 0
+                || tripOrder == int.MaxValue
+                || trip.Stops.Count == 0
+                || trip.Stops.Count > 256)
+            {
+                return false;
+            }
+            try
+            {
+                tripValue = MonitorTripValue(trip, active, tripOrder);
+                stopValues = new MonitorStopElement[trip.Stops.Count];
+                for (int i = 0; i < trip.Stops.Count; i++)
+                {
+                    MonitorStop stop = trip.Stops[i];
+                    if (stop == null || string.IsNullOrEmpty(stop.StopKey))
+                        return false;
+                    stopValues[i] = new MonitorStopElement
+                    {
+                        m_Version = MonitorStopVersion,
+                        m_TripOrder = tripOrder,
+                        m_StopOrder = i,
+                        m_StopKey = stop.StopKey,
+                        m_Station = stop.Station,
+                        m_WaypointIndex = stop.WaypointIndex,
+                        m_PlannedArrival = stop.PlannedArrival,
+                        m_PlannedDeparture = stop.PlannedDeparture,
+                        m_ActualArrival = stop.ActualArrival,
+                        m_ActualDeparture = stop.ActualDeparture,
+                        m_ActualArrivalFrame = stop.ActualArrivalFrame,
+                        m_ActualDepartureFrame = stop.ActualDepartureFrame,
+                        m_OpenIntervalMaxFrames = stop.OpenIntervalMaxFrames,
+                        m_Skipped = stop.Skipped ? 1 : 0,
+                        m_Cleared = stop.Cleared ? 1 : 0
+                    };
+                }
+                return true;
+            }
+            catch
+            {
+                tripValue = default;
+                stopValues = null;
+                return false;
+            }
+        }
+
+        private static MonitorTripElement MonitorTripValue(
+            MonitorTrip trip,
+            bool active,
+            int tripOrder)
+        {
+            return new MonitorTripElement
+            {
+                m_Version = MonitorTripVersion,
+                m_TripOrder = tripOrder,
+                m_Active = active ? 1 : 0,
+                m_Key = trip.Key,
+                m_LineKey = trip.LineKey,
+                m_LineId = trip.LineId,
+                m_RowId = trip.RowId,
+                m_ServiceKind = trip.ServiceKind,
+                m_StopSig = trip.StopSig,
+                m_Line = trip.Line,
+                m_Vehicle = trip.Vehicle,
+                m_ServiceDateKey = trip.ServiceDateKey,
+                m_SlotMinute = trip.SlotMinute,
+                m_NextArrivalOrder = trip.NextArrivalOrder,
+                m_VisibleStopCount = trip.VisibleStopCount,
+                m_SuppressPlanFrom = trip.SuppressPlanFrom,
+                m_State = (int)trip.State,
+                m_EndReason = (int)trip.EndReason,
+                m_LaunchFrame = trip.LaunchFrame,
+                m_UpdatedFrame = trip.UpdatedFrame,
+                m_StopCount = trip.Stops.Count
+            };
+        }
+
+        private static bool ValidMonitorDate(int dateKey)
+        {
+            try
+            {
+                _ = new DateTime(dateKey / 10000, dateKey / 100 % 100, dateKey % 100);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public void LoadDwell()
@@ -75,6 +948,109 @@ namespace RapidTransitMod.Dispatch.Observation
         public void LoadBusSeg()
         {
             RestoreBusSegCore();
+        }
+
+        public void LoadMonitorAverages()
+        {
+            EnsureMonitorAverages();
+            m_Runtime.m_MonitorAverages.Clear();
+            if (m_IgnoreLegacyMonitor)
+                return;
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null
+                || !m_Runtime.EntityManager.HasBuffer<MonitorAverageLineElement>(city)
+                || !m_Runtime.EntityManager.HasBuffer<MonitorAverageSegmentElement>(city))
+            {
+                return;
+            }
+
+            DynamicBuffer<MonitorAverageLineElement> lineBuffer =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageLineElement>(city, true);
+            DynamicBuffer<MonitorAverageSegmentElement> segmentBuffer =
+                m_Runtime.EntityManager.GetBuffer<MonitorAverageSegmentElement>(city, true);
+            if (lineBuffer.Length > MonitorAverageStore.MaxLines
+                || segmentBuffer.Length > MaxMonitorAverageSegments)
+            {
+                RecordLoadIssue("monitor-average-capacity", false, false);
+                return;
+            }
+
+            Dictionary<Entity, List<MonitorAverageSegmentElement>> segments =
+                new Dictionary<Entity, List<MonitorAverageSegmentElement>>();
+            HashSet<Entity> invalidLines = new HashSet<Entity>();
+            for (int i = 0; i < segmentBuffer.Length; i++)
+            {
+                MonitorAverageSegmentElement element = segmentBuffer[i];
+                bool invalid = element.m_Version != MonitorAverageVersion
+                    || element.m_Line == Entity.Null
+                    || element.m_Order < 0
+                    || element.m_SampleCount < 0
+                    || (element.m_SampleCount == 0 && element.m_TotalFrames != 0)
+                    || (element.m_SampleCount > 0 && element.m_TotalFrames == 0);
+                if (invalid)
+                {
+                    invalidLines.Add(element.m_Line);
+                    continue;
+                }
+                if (!segments.TryGetValue(element.m_Line, out List<MonitorAverageSegmentElement> values))
+                {
+                    values = new List<MonitorAverageSegmentElement>();
+                    segments[element.m_Line] = values;
+                }
+                values.Add(element);
+            }
+
+            HashSet<Entity> seenLines = new HashSet<Entity>();
+            for (int i = 0; i < lineBuffer.Length; i++)
+            {
+                MonitorAverageLineElement element = lineBuffer[i];
+                Entity line = element.m_Line;
+                bool layoutValid = line != Entity.Null
+                    && m_Runtime.EntityManager.Exists(line)
+                    && m_Runtime.m_LineView.TryStopLayout(line, out string currentStopSig, out int[] currentStops)
+                    && string.Equals(currentStopSig, element.m_StopSig.ToString(), StringComparison.Ordinal)
+                    && currentStops.Length == element.m_SegmentCount;
+                if (element.m_Version != MonitorAverageVersion
+                    || !seenLines.Add(line)
+                    || string.IsNullOrEmpty(element.m_StopSig.ToString())
+                    || element.m_SegmentCount < 2
+                    || element.m_SegmentCount > MonitorAverageStore.MaxSegmentsPerLine
+                    || !layoutValid
+                    || invalidLines.Contains(line)
+                    || !segments.TryGetValue(line, out List<MonitorAverageSegmentElement> values)
+                    || values.Count != element.m_SegmentCount)
+                {
+                    RecordLoadIssue("monitor-average-corrupt", false, false);
+                    continue;
+                }
+
+                values.Sort((left, right) => left.m_Order.CompareTo(right.m_Order));
+                MonitorAverageSegment[] restored = new MonitorAverageSegment[element.m_SegmentCount];
+                bool valid = true;
+                for (int order = 0; order < values.Count; order++)
+                {
+                    MonitorAverageSegmentElement segment = values[order];
+                    if (segment.m_Order != order)
+                    {
+                        valid = false;
+                        break;
+                    }
+                    restored[order] = new MonitorAverageSegment
+                    {
+                        TotalFrames = segment.m_TotalFrames,
+                        SampleCount = segment.m_SampleCount
+                    };
+                }
+                if (!valid || !m_Runtime.m_MonitorAverages.Restore(new MonitorAverageLine(
+                        line,
+                        element.m_StopSig.ToString(),
+                        element.m_Revision,
+                        restored,
+                        false)))
+                {
+                    RecordLoadIssue("monitor-average-corrupt", false, false);
+                }
+            }
         }
 
         internal bool TrySliceSignature(Entity line, out ulong signature)
@@ -152,12 +1128,12 @@ namespace RapidTransitMod.Dispatch.Observation
             DynamicBuffer<StationDwellObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<StationDwellObservationElement>(city);
             for (int i = 0; i < buffer.Length; i++)
             {
-                if (!string.Equals(buffer[i].m_StationAnchorId.ToString(), key, System.StringComparison.Ordinal))
+                if (!string.Equals(buffer[i].m_ObservationKey.ToString(), key, System.StringComparison.Ordinal))
                     continue;
 
                 buffer[i] = new StationDwellObservationElement
                 {
-                    m_StationAnchorId = key,
+                    m_ObservationKey = key,
                     m_AverageFrames = observation.AverageFrames,
                     m_SampleCount = observation.SampleCount,
                     m_LastObservedFrame = observation.LastObservedFrame
@@ -167,7 +1143,7 @@ namespace RapidTransitMod.Dispatch.Observation
 
             buffer.Add(new StationDwellObservationElement
             {
-                m_StationAnchorId = key,
+                m_ObservationKey = key,
                 m_AverageFrames = observation.AverageFrames,
                 m_SampleCount = observation.SampleCount,
                 m_LastObservedFrame = observation.LastObservedFrame
@@ -524,20 +1500,97 @@ namespace RapidTransitMod.Dispatch.Observation
                 return;
 
             m_Runtime.m_ObsPersist.ClearStationDwell();
-            DynamicBuffer<StationDwellObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<StationDwellObservationElement>(city, true);
-            int restoredCount = 0;
+            DynamicBuffer<StationDwellObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<StationDwellObservationElement>(city);
+            int anchorBufferCount = buffer.Length;
+            int removedInvalidCount = 0;
+            int removedDuplicateCount = 0;
+            int removedLegacyConflictCount = 0;
+            int removedLegacyMissingCount = 0;
+            Dictionary<string, StationDwellObservationElement> winners =
+                new Dictionary<string, StationDwellObservationElement>(StringComparer.Ordinal);
+            HashSet<string> migratedWinners = new HashSet<string>(StringComparer.Ordinal);
+            List<string> winnerKeys = new List<string>();
             for (int i = 0; i < buffer.Length; i++)
             {
                 StationDwellObservationElement entry = buffer[i];
-                string observationKey = entry.m_StationAnchorId.ToString();
+                string observationKey = entry.m_ObservationKey.ToString();
                 if (string.IsNullOrWhiteSpace(observationKey)
                     || !Capture.IsStationDwellKey(observationKey)
+                    || !math.isfinite(entry.m_AverageFrames)
                     || !(entry.m_AverageFrames > 0f)
                     || entry.m_SampleCount <= 0)
                 {
+                    removedInvalidCount++;
                     continue;
                 }
 
+                int separatorIndex = observationKey.IndexOf('|');
+                string lineId = observationKey.Substring(0, separatorIndex);
+                if (!LineKey.TryParse(lineId, out LineKey lineKey))
+                {
+                    removedInvalidCount++;
+                    continue;
+                }
+
+                bool migrated = false;
+                if (!LineKey.IsStableGuidKey(lineKey))
+                {
+                    if (!LineKey.IsLegacyNumericKey(lineKey))
+                    {
+                        removedInvalidCount++;
+                        continue;
+                    }
+
+                    LineAnchorCatalog catalog = m_Runtime.m_LineAnchorCatalog;
+                    if (catalog == null || catalog.IsLegacyConflict(lineKey))
+                    {
+                        removedLegacyConflictCount++;
+                        continue;
+                    }
+                    if (!catalog.TryLegacy(lineKey, out LineKey stableKey))
+                    {
+                        removedLegacyMissingCount++;
+                        continue;
+                    }
+
+                    observationKey = stableKey.ToString() + observationKey.Substring(separatorIndex);
+                    entry.m_ObservationKey = observationKey;
+                    migrated = true;
+                }
+
+                if (winners.TryGetValue(observationKey, out StationDwellObservationElement existing))
+                {
+                    removedDuplicateCount++;
+                    bool existingMigrated = migratedWinners.Contains(observationKey);
+                    bool replace = (existingMigrated && !migrated)
+                        || (existingMigrated == migrated
+                            && (entry.m_LastObservedFrame > existing.m_LastObservedFrame
+                                || (entry.m_LastObservedFrame == existing.m_LastObservedFrame
+                                    && entry.m_SampleCount > existing.m_SampleCount)));
+                    if (replace)
+                    {
+                        winners[observationKey] = entry;
+                        if (migrated)
+                            migratedWinners.Add(observationKey);
+                        else
+                            migratedWinners.Remove(observationKey);
+                    }
+                    continue;
+                }
+
+                winners.Add(observationKey, entry);
+                if (migrated)
+                    migratedWinners.Add(observationKey);
+                winnerKeys.Add(observationKey);
+            }
+
+            buffer.Clear();
+            buffer.EnsureCapacity(winnerKeys.Count);
+            for (int i = 0; i < winnerKeys.Count; i++)
+            {
+                string observationKey = winnerKeys[i];
+                StationDwellObservationElement entry = winners[observationKey];
+                buffer.Add(entry);
                 m_Runtime.m_ObsPersist.PutStationDwell(
                     observationKey,
                     new StationDwellObservation
@@ -546,16 +1599,21 @@ namespace RapidTransitMod.Dispatch.Observation
                         SampleCount = math.max(0, entry.m_SampleCount),
                         LastObservedFrame = entry.m_LastObservedFrame
                     });
-                restoredCount++;
             }
 
+            int restoredCount = winnerKeys.Count;
             m_Runtime.m_StationDwellObservationCacheLoaded = true;
-            m_Runtime.m_LastStationStopDwellAnchorBufferCount = buffer.Length;
+            m_Runtime.m_LastStationStopDwellAnchorBufferCount = anchorBufferCount;
             m_Runtime.m_LastStationStopDwellAnchorRestoredCount = restoredCount;
             if (RtLog.VerboseEnabled)
             {
-                m_Runtime.log.Info("[StopDwellAnchorRestore] anchorBuffer=" + buffer.Length
+                m_Runtime.log.Info("[StopDwellAnchorRestore] anchorBuffer=" + anchorBufferCount
                     + " anchorRestored=" + restoredCount
+                    + " legacyMigrated=" + migratedWinners.Count
+                    + " removedInvalid=" + removedInvalidCount
+                    + " removedDuplicate=" + removedDuplicateCount
+                    + " removedLegacyConflict=" + removedLegacyConflictCount
+                    + " removedLegacyMissing=" + removedLegacyMissingCount
                     + " legacyBuffer=" + m_Runtime.m_LastStationStopDwellLegacyBufferCount
                     + " legacyRestored=" + m_Runtime.m_LastStationStopDwellLegacyRestoredCount
                     + " legacyPreserved=1");
@@ -622,6 +1680,11 @@ namespace RapidTransitMod.Dispatch.Observation
             int unavailableCount = 0;
             int removedDuplicateCount = 0;
             int removedInvalidCount = 0;
+            Dictionary<Entity, int> restoredLineCounts = new Dictionary<Entity, int>();
+            Dictionary<Entity, int> restoredLineMinSlices = new Dictionary<Entity, int>();
+            Dictionary<Entity, int> restoredLineMaxSlices = new Dictionary<Entity, int>();
+            Dictionary<Entity, List<TraversalSliceObservationElement>> restoredLineSlices =
+                new Dictionary<Entity, List<TraversalSliceObservationElement>>();
             Dictionary<Entity, ulong> geometrySignatures = new Dictionary<Entity, ulong>();
             Dictionary<Entity, ulong> legacySignatures = new Dictionary<Entity, ulong>();
             HashSet<Entity> unavailableLines = new HashSet<Entity>();
@@ -704,6 +1767,21 @@ namespace RapidTransitMod.Dispatch.Observation
                         entry.m_FastBaselineFrames > 0f ? entry.m_FastBaselineFrames : entry.m_AverageFrames,
                         math.max(0, entry.m_SampleCount),
                         entry.m_LastObservedFrame));
+                restoredLineCounts[entry.m_LineEntity] = restoredLineCounts.TryGetValue(entry.m_LineEntity, out int lineCount)
+                    ? lineCount + 1
+                    : 1;
+                restoredLineMinSlices[entry.m_LineEntity] = restoredLineMinSlices.TryGetValue(entry.m_LineEntity, out int minSlice)
+                    ? math.min(minSlice, entry.m_SliceIndex)
+                    : entry.m_SliceIndex;
+                restoredLineMaxSlices[entry.m_LineEntity] = restoredLineMaxSlices.TryGetValue(entry.m_LineEntity, out int maxSlice)
+                    ? math.max(maxSlice, entry.m_SliceIndex)
+                    : entry.m_SliceIndex;
+                if (!restoredLineSlices.TryGetValue(entry.m_LineEntity, out List<TraversalSliceObservationElement> slices))
+                {
+                    slices = new List<TraversalSliceObservationElement>();
+                    restoredLineSlices[entry.m_LineEntity] = slices;
+                }
+                slices.Add(entry);
                 restoredCount++;
             }
 
@@ -756,7 +1834,69 @@ namespace RapidTransitMod.Dispatch.Observation
                     + " unavailable=" + unavailableCount
                     + " removedDuplicate=" + removedDuplicateCount
                     + " removedInvalid=" + removedInvalidCount);
+                List<Entity> restoredLines = new List<Entity>(restoredLineCounts.Keys);
+                restoredLines.Sort((left, right) =>
+                {
+                    int result = left.Index.CompareTo(right.Index);
+                    return result != 0 ? result : left.Version.CompareTo(right.Version);
+                });
+                List<string> restoredSummaries = new List<string>(restoredLines.Count);
+                for (int i = 0; i < restoredLines.Count; i++)
+                {
+                    Entity restoredLine = restoredLines[i];
+                    restoredSummaries.Add(restoredLine.Index + ":" + restoredLine.Version
+                        + "=" + restoredLineCounts[restoredLine]
+                        + "[" + restoredLineMinSlices[restoredLine]
+                        + ".." + restoredLineMaxSlices[restoredLine] + "]");
+                }
+                m_Runtime.log.Info("[TraversalSliceRestoreLines] " + string.Join(" | ", restoredSummaries));
+                for (int i = 0; i < restoredLines.Count; i++)
+                {
+                    Entity restoredLine = restoredLines[i];
+                    LineKey lineKey = m_Runtime.m_LineAnchorCatalog != null
+                        ? m_Runtime.m_LineAnchorCatalog.StableKey(restoredLine)
+                        : LineKey.Empty;
+                    string stableKey = LineKey.IsStableGuidKey(lineKey) ? lineKey.ToString() : "unavailable";
+                    m_Runtime.log.Info("[TraversalSliceRestoreLine] lineKey=" + stableKey
+                        + ";line=" + restoredLine.Index + ":" + restoredLine.Version
+                        + ";" + RestoreLineSlices(restoredLineSlices[restoredLine]));
+                }
             }
+        }
+
+        private static string RestoreLineSlices(List<TraversalSliceObservationElement> slices)
+        {
+            slices.Sort((left, right) => left.m_SliceIndex.CompareTo(right.m_SliceIndex));
+            List<string> observed = new List<string>(math.min(slices.Count, MaxRestoreLineLogSlices));
+            List<string> holes = new List<string>(MaxRestoreLineLogSlices);
+            int holeCount = 0;
+            int holeRangeCount = 0;
+            int expected = slices[0].m_SliceIndex;
+            for (int i = 0; i < slices.Count; i++)
+            {
+                TraversalSliceObservationElement entry = slices[i];
+                if (entry.m_SliceIndex > expected)
+                {
+                    holeCount += entry.m_SliceIndex - expected;
+                    holeRangeCount++;
+                    if (holes.Count < MaxRestoreLineLogSlices)
+                    {
+                        holes.Add(expected == entry.m_SliceIndex - 1
+                            ? expected.ToString()
+                            : expected + ".." + (entry.m_SliceIndex - 1));
+                    }
+                }
+                if (observed.Count < MaxRestoreLineLogSlices)
+                    observed.Add(entry.m_SliceIndex + ":" + math.max(0, entry.m_SampleCount));
+                expected = entry.m_SliceIndex + 1;
+            }
+
+            return "slices=" + (observed.Count > 0 ? string.Join(",", observed) : "none")
+                + ";sliceTotal=" + slices.Count
+                + ";sliceTruncated=" + (slices.Count > observed.Count ? 1 : 0)
+                + ";holes=" + (holes.Count > 0 ? string.Join(",", holes) : "none")
+                + ";holeTotal=" + holeCount
+                + ";holeTruncated=" + (holeRangeCount > holes.Count ? 1 : 0);
         }
 
         private void RestoreBusSegCore()

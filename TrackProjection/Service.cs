@@ -205,15 +205,59 @@ namespace RapidTransitMod.TrackProjection
             int referenceAtomIndex,
             out int atomIndex)
         {
+            return TryFindIndexedAtom(
+                chain,
+                lane,
+                startAtomIndex,
+                endAtomIndexExclusive,
+                referenceAtomIndex,
+                out atomIndex);
+        }
+
+        private Entity ResolveLaneContainer(Entity lane)
+        {
+            Entity current = lane;
+            for (int depth = 0; depth < 4 && current != Entity.Null; depth++)
+            {
+                if (!m_Runtime.EntityManager.Exists(current))
+                    break;
+
+                if (current != lane
+                    && (m_Runtime.EntityManager.HasComponent<Game.Net.Edge>(current)
+                        || m_Runtime.EntityManager.HasComponent<Node>(current)))
+                {
+                    return current;
+                }
+
+                if (!m_Runtime.EntityManager.HasComponent<Owner>(current))
+                    break;
+
+                Entity owner = m_Runtime.EntityManager.GetComponentData<Owner>(current).m_Owner;
+                if (owner == Entity.Null || owner == current)
+                    break;
+                current = owner;
+            }
+
+            return Entity.Null;
+        }
+
+        private static bool TryFindIndexedAtom(
+            LineTrackChain chain,
+            Entity key,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            int referenceAtomIndex,
+            out int atomIndex)
+        {
             atomIndex = -1;
             if (chain == null
-                || lane == Entity.Null
+                || key == Entity.Null
                 || chain.TrackAtoms.Count == 0)
             {
                 return false;
             }
 
-            if (!chain.AtomIndicesByLane.TryGetValue(lane, out List<int> candidateAtomIndices)
+            if (!chain.AtomIndicesByLane.TryGetValue(key, out List<int> candidateAtomIndices)
                 || candidateAtomIndices == null
                 || candidateAtomIndices.Count == 0)
             {
@@ -480,6 +524,59 @@ namespace RapidTransitMod.TrackProjection
             if (!found)
             {
                 found = TryFindClosestAtomIndexForLane(chain, rearLane, 0, chain.TrackAtoms.Count, referenceAtomIndex, out atomIndex);
+                atomPosition01 = rearCurvePosition;
+            }
+            Entity frontContainer = Entity.Null;
+            Entity rearContainer = Entity.Null;
+            if (!found)
+            {
+                frontContainer = ResolveLaneContainer(frontLane);
+                rearContainer = rearLane == frontLane
+                    ? frontContainer
+                    : ResolveLaneContainer(rearLane);
+            }
+            if (!found && frontContainer != Entity.Null)
+            {
+                found = TryResolveSemanticLaneAtomCandidate(
+                    vehicle,
+                    line,
+                    waypoints,
+                    chain,
+                    frontContainer,
+                    referenceAtomIndex,
+                    out atomIndex);
+                atomPosition01 = frontCurvePosition;
+            }
+            if (!found && rearContainer != Entity.Null)
+            {
+                found = TryResolveSemanticLaneAtomCandidate(
+                    vehicle,
+                    line,
+                    waypoints,
+                    chain,
+                    rearContainer,
+                    referenceAtomIndex,
+                    out atomIndex);
+                atomPosition01 = rearCurvePosition;
+            }
+            if (!found && frontContainer != Entity.Null)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, frontContainer, searchStartAtomIndex, searchEndAtomIndexExclusive, referenceAtomIndex, out atomIndex);
+                atomPosition01 = frontCurvePosition;
+            }
+            if (!found && rearContainer != Entity.Null)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, rearContainer, searchStartAtomIndex, searchEndAtomIndexExclusive, referenceAtomIndex, out atomIndex);
+                atomPosition01 = rearCurvePosition;
+            }
+            if (!found && frontContainer != Entity.Null)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, frontContainer, 0, chain.TrackAtoms.Count, referenceAtomIndex, out atomIndex);
+                atomPosition01 = frontCurvePosition;
+            }
+            if (!found && rearContainer != Entity.Null)
+            {
+                found = TryFindClosestAtomIndexForLane(chain, rearContainer, 0, chain.TrackAtoms.Count, referenceAtomIndex, out atomIndex);
                 atomPosition01 = rearCurvePosition;
             }
             if (!found)

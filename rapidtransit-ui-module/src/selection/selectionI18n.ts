@@ -6,15 +6,9 @@ const KEYS = {
   vehicleTitle: "RapidTransit.VehicleTitle",
   lineTitle: "RapidTransit.LineTitle",
   emptyHint: "RapidTransit.EmptyHint",
-  overview: "RapidTransit.Overview",
-  runtime: "RapidTransit.Runtime",
-  alerts: "RapidTransit.Alerts",
-  actions: "RapidTransit.Actions",
-  close: "RapidTransit.Close",
   dispatch: "RapidTransit.Dispatch",
   retire: "RapidTransit.Retire",
   departNow: "RapidTransit.DepartNow",
-  reevaluate: "RapidTransit.Reevaluate",
   spawnOne: "RapidTransit.SpawnOne",
   dumpTrackModel: "RapidTransit.DumpTrackModel",
   dumpPlannerInput: "RapidTransit.DumpPlannerInput",
@@ -23,37 +17,25 @@ const KEYS = {
   topButtonTitle: "RapidTransit.TopButtonTitle",
   topButtonDescription: "RapidTransit.TopButtonDescription",
   none: "RapidTransit.None",
+  vanillaControl: "RapidTransit.VanillaControl",
   officialDispatch: "RapidTransit.OfficialDispatch",
-  vehiclePrefix: "RapidTransit.VehiclePrefix",
-  linePrefix: "RapidTransit.LinePrefix",
   state: "RapidTransit.State",
-  line: "RapidTransit.Line",
   lineName: "RapidTransit.LineName",
   nextSlot: "RapidTransit.NextSlot",
-  time: "RapidTransit.Time",
-  fleet: "RapidTransit.Fleet",
-  states: "RapidTransit.States",
-  lapCache: "RapidTransit.LapCache",
-  dispatchCache: "RapidTransit.DispatchCache",
   routeDuration: "RapidTransit.RouteDuration",
-  spawnTarget: "RapidTransit.SpawnTarget",
-  stationBindings: "RapidTransit.StationBindings",
   bypassStation: "RapidTransit.BypassStation",
-  managed: "RapidTransit.Managed",
-  progress: "RapidTransit.Progress",
   currentSlot: "RapidTransit.CurrentSlot",
   targetSlot: "RapidTransit.TargetSlot",
   currentStation: "RapidTransit.CurrentStation",
-  nextStation: "RapidTransit.NextStation",
+  arrival: "RapidTransit.Arrival",
+  departure: "RapidTransit.Departure",
+  stopped: "RapidTransit.Stopped",
+  scheduled: "RapidTransit.Scheduled",
+  actual: "RapidTransit.Actual",
+  nextPass: "RapidTransit.NextPass",
+  waitingForFastTrain: "RapidTransit.WaitingForFastTrain",
   nextStopStation: "RapidTransit.NextStopStation",
-  event: "RapidTransit.Event",
-  nextSliceCut: "RapidTransit.NextSliceCut",
-  stopDwell: "RapidTransit.StopDwell",
-  inboundTime: "RapidTransit.InboundTime",
-  waypoint: "RapidTransit.Waypoint",
-  lapCooldown: "RapidTransit.LapCooldown",
-  yes: "RapidTransit.Yes",
-  no: "RapidTransit.No",
+  actualArrival: "RapidTransit.ActualArrival",
   assigned: "RapidTransit.Assigned",
   yielding: "RapidTransit.Yielding",
   waitingDispatch: "RapidTransit.WaitingDispatch",
@@ -102,6 +84,17 @@ const KEYS = {
   etaComparisonPredictionDelta: "RapidTransit.EtaComparisonPredictionDelta"
 } as const;
 
+const PANEL_FALLBACKS: Record<string, string> = {
+  vanillaControl: "原版系统控制",
+  arrival: "到达",
+  departure: "发出",
+  stopped: "已停",
+  scheduled: "图定",
+  actual: "实际",
+  nextPass: "下一通过",
+  waitingForFastTrain: "等待快车"
+};
+
 function formatFallbackLabel(value: string) {
   const source = value.indexOf(".") >= 0 ? value.slice(value.lastIndexOf(".") + 1) : value;
   return source
@@ -118,7 +111,7 @@ export function useT() {
 
   return useCallback((key: string) => {
     const translationKey = (KEYS as Record<string, string>)[key] || key;
-    const fallback = formatFallbackLabel(key);
+    const fallback = PANEL_FALLBACKS[key] || formatFallbackLabel(key);
     if (!translate) {
       return fallback;
     }

@@ -1,6 +1,7 @@
 using System;
 using Game;
 using Game.SceneFlow;
+using RapidTransitMod.Dispatch.Workbench;
 
 namespace RapidTransitMod.Workbenches
 {
@@ -9,6 +10,9 @@ namespace RapidTransitMod.Workbenches
         private const string Snap = "suhua::rt.workbench.onSnapshotChanged";
         private const string Catalog = "suhua::rt.workbench.onCatalog";
         private const string LineInvalidated = "suhua::rt.workbench.onLineInvalidated";
+        private const string RunTimeQuery = "suhua::rt.workbench.onRunTimeQuery";
+        private const string RunTimeInvalidated = "suhua::rt.workbench.onRunTimeInvalidated";
+        private const string MonitorChanged = "suhua::rt.workbench.onMonitorChanged";
         private const string Broadcast = "suhua::rt.workbench.onBroadcastSnapshotChanged";
         private const string Asset = "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged";
         private const string Rule = "suhua::rt.workbench.onBroadcastRulePreviewStateChanged";
@@ -34,6 +38,24 @@ namespace RapidTransitMod.Workbenches
         {
             string json = payload != null ? Json.Write(payload) : string.Empty;
             Push(LineInvalidated, json, "Workbench line invalidation event push failed: ");
+        }
+
+        internal static void Push(DispatchWorkbenchRunTimeQueryStatusDto payload)
+        {
+            string json = payload != null ? Json.Write(payload) : string.Empty;
+            Push(RunTimeQuery, json, "Workbench run-time query event push failed: ");
+        }
+
+        internal static void Push(RunTimeInvalidationDto payload)
+        {
+            string json = payload != null ? Json.Write(payload) : string.Empty;
+            Push(RunTimeInvalidated, json, "Workbench run-time invalidation event push failed: ");
+        }
+
+        internal static void Push(DispatchWorkbenchMonitorChangedDto payload)
+        {
+            string json = payload != null ? Json.Write(payload) : string.Empty;
+            Push(MonitorChanged, json, "Workbench monitor event push failed: ");
         }
 
         internal static void Push(BroadcastWorkbenchSnapshot snapshot)

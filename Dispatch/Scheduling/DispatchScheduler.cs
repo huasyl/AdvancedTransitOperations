@@ -43,6 +43,26 @@ namespace RapidTransitMod
             }
         }
 
+        internal readonly struct MissedCandidate
+        {
+            public readonly Entity Line;
+            public readonly AppliedMonitorRow Row;
+            public readonly DateTime ServiceDate;
+            public readonly bool Final;
+
+            public MissedCandidate(
+                Entity line,
+                AppliedMonitorRow row,
+                DateTime serviceDate,
+                bool final)
+            {
+                Line = line;
+                Row = row;
+                ServiceDate = serviceDate.Date;
+                Final = final;
+            }
+        }
+
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, bool> m_Managed;
         private readonly Func<Entity, int[]> m_Times;
@@ -60,9 +80,11 @@ namespace RapidTransitMod
         private readonly SlotPlan m_SlotPlan;
         private readonly List<SlotClaim> m_SlotClaims = new List<SlotClaim>();
         private readonly List<RetireDecision> m_RetireDecisions = new List<RetireDecision>();
+        private readonly List<MissedCandidate> m_MissedCandidates = new List<MissedCandidate>();
 
         internal IReadOnlyList<SlotClaim> SlotClaims => m_SlotClaims;
         internal IReadOnlyList<RetireDecision> RetireDecisions => m_RetireDecisions;
+        internal IReadOnlyList<MissedCandidate> MissedCandidates => m_MissedCandidates;
         internal SchedulePolicy Policy => m_Policy;
         internal SlotPlan Plan => m_SlotPlan;
 
@@ -97,12 +119,16 @@ namespace RapidTransitMod
             m_SlotPlan = new SlotPlan(runtime, m_Policy, managed, times, hold, resolveRuntimeControllerVehicle);
         }
 
-        public void Tick(ClockSnapshot clockSnapshot, IReadOnlyList<Entity> lines)
+        public void Tick(
+            ClockSnapshot clockSnapshot,
+            IReadOnlyList<Entity> lines,
+            bool fullMinuteSweep)
         {
             int nowMinute = clockSnapshot.NowMinute;
             m_Runtime.m_SpawnLeadTheory?.Tick();
             m_SlotClaims.Clear();
             m_RetireDecisions.Clear();
+            m_MissedCandidates.Clear();
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
 
@@ -116,6 +142,8 @@ namespace RapidTransitMod
                         continue;
                     if (!DispatchLineEligibility.IsDispatchTransportLine(m_Runtime.EntityManager, line))
                         continue;
+                    if (fullMinuteSweep)
+                        CollectMissed(line, clockSnapshot);
                     if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs))
                         continue;
                     if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2)
@@ -515,6 +543,45 @@ namespace RapidTransitMod
             }
 
             m_Runtime.m_SpawnLeadTheory?.Tick();
+        }
+
+        internal void ResetMonitorClock(ClockSnapshot clock)
+        {
+            m_MissedCandidates.Clear();
+        }
+
+        private void CollectMissed(Entity line, ClockSnapshot clock)
+        {
+            AddMissedBucket(
+                line,
+                ScheduleClock.MonitorBucket(
+                    clock.NowMinute,
+                    ScheduleClock.MonitorClaimMinutes + 1),
+                clock,
+                false);
+            AddMissedBucket(
+                line,
+                ScheduleClock.MonitorBucket(
+                    clock.NowMinute,
+                    ScheduleClock.MonitorFinalMinutes),
+                clock,
+                true);
+        }
+
+        private void AddMissedBucket(
+            Entity line,
+            int slotMinute,
+            ClockSnapshot clock,
+            bool final)
+        {
+            if (!m_Runtime.m_LineView.TryMonitorRow(line, slotMinute, out AppliedMonitorRow row))
+                return;
+
+            m_MissedCandidates.Add(new MissedCandidate(
+                line,
+                row,
+                ScheduleClock.MonitorServiceDate(clock, slotMinute),
+                final));
         }
 
         public int NextSlotMin(int nowMinute)

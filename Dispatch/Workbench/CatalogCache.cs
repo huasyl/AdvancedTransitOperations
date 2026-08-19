@@ -16,10 +16,13 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Action<DispatchWorkbenchLineInvalidationEvent> m_PushInvalidation;
         private readonly Action<DispatchWorkbenchSnapshot> m_PushSnapshot;
         private readonly Func<IReadOnlyDictionary<string, string>, bool> m_CleanupConfirmedInvalidatedLines;
+        private readonly Action<IEnumerable<string>> m_InvalidateRunTimeModels;
         private readonly Func<IEnumerable<WorkbenchLineRuntime>, IReadOnlyDictionary<string, string>> m_CollectBackendMissingLineReasons;
         private readonly Func<ulong> m_Version;
         private readonly Func<bool> m_CanPushSnapshot;
         private readonly Func<DispatchWorkbenchSnapshot> m_BuildSnapshot;
+        private readonly Action<uint> m_TickWorkbenchQueries;
+        private readonly Action<IEnumerable<WorkbenchLineRuntime>> m_OnStableLines;
         private readonly Queue<Entity> m_StationQueue = new Queue<Entity>();
         private readonly HashSet<Entity> m_QueuedStations = new HashSet<Entity>();
         private readonly Dictionary<Entity, List<DispatchWorkbenchStationDto>> m_Stations =
@@ -34,6 +37,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private List<DispatchWorkbenchDepotDto> m_DepotRebuildResult;
         private HashSet<Entity> m_DepotRebuildSeen;
         private ulong m_LineGeneration;
+        private ulong m_RuntimeLinesVersion;
         private ulong m_DepotGeneration;
         private ulong m_LineRebuildGeneration;
         private ulong m_DepotRebuildGeneration;
@@ -45,6 +49,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private bool m_PendingEvent;
         private bool m_HasConfirmedLineBaseline;
         private readonly Dictionary<string, string> m_ConfirmedLineSignatures =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> m_ConfirmedModelSignatures =
             new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> m_LineInvalidationCandidates =
             new Dictionary<string, string>(StringComparer.Ordinal);
@@ -59,20 +65,26 @@ namespace RapidTransitMod.Dispatch.Workbench
             Action<DispatchWorkbenchLineInvalidationEvent> pushInvalidation,
             Action<DispatchWorkbenchSnapshot> pushSnapshot,
             Func<IReadOnlyDictionary<string, string>, bool> cleanupConfirmedInvalidatedLines,
+            Action<IEnumerable<string>> invalidateRunTimeModels,
             Func<IEnumerable<WorkbenchLineRuntime>, IReadOnlyDictionary<string, string>> collectBackendMissingLineReasons,
             Func<ulong> version,
             Func<bool> canPushSnapshot,
-            Func<DispatchWorkbenchSnapshot> buildSnapshot)
+            Func<DispatchWorkbenchSnapshot> buildSnapshot,
+            Action<uint> tickWorkbenchQueries = null,
+            Action<IEnumerable<WorkbenchLineRuntime>> onStableLines = null)
         {
             m_Catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
             m_Push = push ?? throw new ArgumentNullException(nameof(push));
             m_PushInvalidation = pushInvalidation ?? throw new ArgumentNullException(nameof(pushInvalidation));
             m_PushSnapshot = pushSnapshot ?? throw new ArgumentNullException(nameof(pushSnapshot));
             m_CleanupConfirmedInvalidatedLines = cleanupConfirmedInvalidatedLines ?? throw new ArgumentNullException(nameof(cleanupConfirmedInvalidatedLines));
+            m_InvalidateRunTimeModels = invalidateRunTimeModels ?? throw new ArgumentNullException(nameof(invalidateRunTimeModels));
             m_CollectBackendMissingLineReasons = collectBackendMissingLineReasons ?? throw new ArgumentNullException(nameof(collectBackendMissingLineReasons));
             m_Version = version ?? throw new ArgumentNullException(nameof(version));
             m_CanPushSnapshot = canPushSnapshot ?? throw new ArgumentNullException(nameof(canPushSnapshot));
             m_BuildSnapshot = buildSnapshot ?? throw new ArgumentNullException(nameof(buildSnapshot));
+            m_TickWorkbenchQueries = tickWorkbenchQueries;
+            m_OnStableLines = onStableLines;
         }
 
         internal void Reset()
@@ -90,6 +102,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_DepotRebuildResult = null;
             m_DepotRebuildSeen = null;
             m_LineGeneration++;
+            m_RuntimeLinesVersion++;
             m_DepotGeneration++;
             m_LineRebuildGeneration = m_LineGeneration;
             m_DepotRebuildGeneration = m_DepotGeneration;
@@ -101,6 +114,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_PendingEvent = false;
             m_HasConfirmedLineBaseline = false;
             m_ConfirmedLineSignatures.Clear();
+            m_ConfirmedModelSignatures.Clear();
             m_LineInvalidationCandidates.Clear();
             m_BackendMissingLineCandidates.Clear();
             m_PendingInvalidationReasons.Clear();
@@ -126,6 +140,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_LineGeneration++;
             m_DepotGeneration++;
             m_Lines = m_Catalog.RuntimeLines();
+            m_Lines.Sort(CompareRuntimeLine);
+            m_RuntimeLinesVersion++;
             m_Depots = m_Catalog.Depots()
                 .OrderBy(entry => entry.name, StringComparer.CurrentCultureIgnoreCase)
                 .ThenBy(entry => entry.id, StringComparer.Ordinal)
@@ -140,10 +156,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_StationsStale = true;
             InitializeConfirmedLineBaseline(m_Lines);
             QueueBackendMissingLineVerification(m_Lines);
+            if (!m_LinesStale)
+                m_OnStableLines?.Invoke(m_Lines);
         }
 
         internal void Tick(uint nowFrame)
         {
+            m_TickWorkbenchQueries?.Invoke(nowFrame);
             if (m_LinesStale && m_LineRebuildResult == null)
             {
                 StartLineRebuild();
@@ -191,10 +210,14 @@ namespace RapidTransitMod.Dispatch.Workbench
                 CancelLineRebuild();
                 m_LineGeneration++;
                 m_Lines = m_Catalog.RuntimeLines();
+                m_Lines.Sort(CompareRuntimeLine);
+                m_RuntimeLinesVersion++;
                 m_LinesReady = true;
                 m_LinesStale = false;
                 InitializeConfirmedLineBaseline(m_Lines);
                 QueueBackendMissingLineVerification(m_Lines);
+                if (!m_LinesStale)
+                    m_OnStableLines?.Invoke(m_Lines);
                 return CopyLines(m_Lines);
             }
 
@@ -204,6 +227,27 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             return CopyLines(m_Lines);
+        }
+
+        internal int CopyRuntimeLines(
+            int cursor,
+            int budget,
+            List<WorkbenchLineRuntime> output,
+            out ulong version,
+            out bool complete)
+        {
+            version = m_RuntimeLinesVersion;
+            complete = false;
+            if (output == null || budget <= 0 || !m_LinesReady || m_LinesStale)
+                return 0;
+
+            output.Clear();
+            int start = Math.Max(0, Math.Min(cursor, m_Lines.Count));
+            int end = Math.Min(start + budget, m_Lines.Count);
+            for (int i = start; i < end; i++)
+                output.Add(m_Lines[i]);
+            complete = end >= m_Lines.Count;
+            return output.Count;
         }
 
         internal List<DispatchWorkbenchDepotDto> Depots()
@@ -220,7 +264,10 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             if (m_DepotsStale)
             {
-                StartDepotRebuild();
+                CancelDepotRebuild();
+                m_Depots = m_Catalog.Depots();
+                m_DepotsReady = true;
+                m_DepotsStale = false;
             }
 
             return CopyDepots(m_Depots);
@@ -312,7 +359,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 if (m_Catalog.TryRuntimeLine(m_LineRebuildEntities[m_LineRebuildIndex], out WorkbenchLineRuntime line))
                 {
-                    m_LineRebuildResult.Add(line);
+                    InsertRuntimeLine(m_LineRebuildResult, line);
                 }
             }
 
@@ -328,6 +375,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
 
             Dictionary<string, string> confirmedInvalidations = ConfirmStableLineInvalidations(m_LineRebuildResult);
+            string[] modelChanges = ConfirmModelChanges(m_LineRebuildResult);
             Dictionary<string, string> confirmedBackendMissing = ConfirmStableBackendMissingLines(m_LineRebuildResult);
             foreach (KeyValuePair<string, string> entry in confirmedBackendMissing)
             {
@@ -358,8 +406,11 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_CleanupConfirmedInvalidatedLines(confirmedInvalidations);
                 m_PendingEvent = true;
             }
+            if (modelChanges.Length > 0)
+                m_InvalidateRunTimeModels(modelChanges);
 
             m_Lines = m_LineRebuildResult;
+            m_RuntimeLinesVersion++;
             m_LinesReady = true;
             m_LinesStale = false;
             CancelLineRebuild();
@@ -367,6 +418,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 m_LinesStale = true;
                 m_PendingEvent = true;
+            }
+            else
+            {
+                m_OnStableLines?.Invoke(m_Lines);
             }
             return true;
         }
@@ -477,6 +532,40 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_LineRebuildIndex = 0;
         }
 
+        private static void InsertRuntimeLine(
+            List<WorkbenchLineRuntime> lines,
+            WorkbenchLineRuntime line)
+        {
+            if (lines == null || line == null)
+                return;
+
+            int index = lines.Count;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (CompareRuntimeLine(line, lines[i]) < 0)
+                {
+                    index = i;
+                    break;
+                }
+            }
+            lines.Insert(index, line);
+        }
+
+        private static int CompareRuntimeLine(
+            WorkbenchLineRuntime left,
+            WorkbenchLineRuntime right)
+        {
+            int result = StringComparer.Ordinal.Compare(left?.Id, right?.Id);
+            if (result != 0)
+                return result;
+            int leftIndex = left?.Entity.Index ?? int.MinValue;
+            int rightIndex = right?.Entity.Index ?? int.MinValue;
+            result = leftIndex.CompareTo(rightIndex);
+            return result != 0
+                ? result
+                : (left?.Entity.Version ?? int.MinValue).CompareTo(right?.Entity.Version ?? int.MinValue);
+        }
+
         private void CancelDepotRebuild()
         {
             m_DepotRebuildResult = null;
@@ -556,9 +645,14 @@ namespace RapidTransitMod.Dispatch.Workbench
         private void InitializeConfirmedLineBaseline(IEnumerable<WorkbenchLineRuntime> lines)
         {
             m_ConfirmedLineSignatures.Clear();
+            m_ConfirmedModelSignatures.Clear();
             foreach (KeyValuePair<string, string> entry in BuildStableLineSignatures(lines))
             {
                 m_ConfirmedLineSignatures[entry.Key] = entry.Value;
+            }
+            foreach (KeyValuePair<string, string> entry in BuildModelSignatures(lines))
+            {
+                m_ConfirmedModelSignatures[entry.Key] = entry.Value;
             }
 
             m_LineInvalidationCandidates.Clear();
@@ -686,6 +780,21 @@ namespace RapidTransitMod.Dispatch.Workbench
             return confirmed;
         }
 
+        private string[] ConfirmModelChanges(IEnumerable<WorkbenchLineRuntime> lines)
+        {
+            Dictionary<string, string> current = BuildModelSignatures(lines);
+            string[] changed = current
+                .Where(entry => m_ConfirmedModelSignatures.TryGetValue(entry.Key, out string previous)
+                    && !string.Equals(previous, entry.Value, StringComparison.Ordinal))
+                .Select(entry => entry.Key)
+                .OrderBy(lineId => lineId, StringComparer.Ordinal)
+                .ToArray();
+            m_ConfirmedModelSignatures.Clear();
+            foreach (KeyValuePair<string, string> entry in current)
+                m_ConfirmedModelSignatures[entry.Key] = entry.Value;
+            return changed;
+        }
+
         private static Dictionary<string, string> BuildStableLineSignatures(IEnumerable<WorkbenchLineRuntime> lines)
         {
             Dictionary<string, string> signatures = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -700,6 +809,18 @@ namespace RapidTransitMod.Dispatch.Workbench
                 signatures[lineId] = line?.StableSignature ?? string.Empty;
             }
 
+            return signatures;
+        }
+
+        private static Dictionary<string, string> BuildModelSignatures(IEnumerable<WorkbenchLineRuntime> lines)
+        {
+            Dictionary<string, string> signatures = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (WorkbenchLineRuntime line in lines ?? Enumerable.Empty<WorkbenchLineRuntime>())
+            {
+                string lineId = DraftStore.GetKey(line?.Id);
+                if (!string.IsNullOrEmpty(lineId))
+                    signatures[lineId] = line?.ModelSignature ?? string.Empty;
+            }
             return signatures;
         }
 

@@ -1,9 +1,31 @@
 using System;
+using System.Collections.Generic;
+using RapidTransitMod.Dispatch;
 using Unity.Collections;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Runtime
 {
+    internal sealed class TimedStopPlan
+    {
+        internal Entity Line;
+        internal string RowId = string.Empty;
+        internal string StopSig = string.Empty;
+        internal DateTime ServiceDate;
+        internal int SlotMinute;
+        internal TimedStop[] Stops = Array.Empty<TimedStop>();
+        internal int[] WaypointIndices = Array.Empty<int>();
+        internal int NextStopOrder;
+        internal int ActiveStopOrder = -1;
+        internal uint EarliestReleaseFrame;
+        internal long ClockEpoch;
+        internal bool HoldApplied;
+        internal bool CanBypass;
+        internal bool RestorePending;
+        internal double RestoredWaitMinutes = -1d;
+        internal int SavedTicksPerDay;
+    }
+
     internal sealed class StopRuntimeState : IDisposable
     {
         internal NativeHashMap<Entity, byte> LastOfficialBoarding;
@@ -18,6 +40,9 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal NativeHashSet<Entity> DwellTimeoutPending;
         internal NativeHashSet<Entity> DwellTimedOutLatched;
         internal NativeHashMap<Entity, uint> ForcedMidStopBoardingGraceUntil;
+        internal readonly Dictionary<Entity, TimedStopPlan> TimedPlans =
+            new Dictionary<Entity, TimedStopPlan>();
+        internal readonly HashSet<Entity> TimedStopPending = new HashSet<Entity>();
 
         internal StopRuntimeState()
         {
@@ -46,6 +71,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             ClearInvalidatedRecovery();
             ClearDwellTimeoutLatches();
             ClearForcedMidStopGrace();
+            ClearTimedPlans();
         }
 
         internal void ClearBoardingStates()
@@ -78,6 +104,12 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal void ClearForcedMidStopGrace()
         {
             ForcedMidStopBoardingGraceUntil.Clear();
+        }
+
+        internal void ClearTimedPlans()
+        {
+            TimedPlans.Clear();
+            TimedStopPending.Clear();
         }
 
         public void Dispose()

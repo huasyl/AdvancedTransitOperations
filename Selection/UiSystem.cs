@@ -83,6 +83,13 @@ namespace RapidTransitMod
         {
             base.OnUpdate();
 
+            if (!m_PanelOpen)
+            {
+                ResetState(clearSnapshot: true);
+                SetHidden();
+                return;
+            }
+
 #if RT_DEBUG_TOOLS
             try
             {
@@ -96,13 +103,6 @@ namespace RapidTransitMod
                 Mod.log.Info("[DevSightPanel] update failed: " + ex.GetType().Name + ": " + ex.Message);
             }
 #endif
-
-            if (!m_PanelOpen)
-            {
-                ResetState(clearSnapshot: true);
-                SetHidden();
-                return;
-            }
 
             ModRuntimeHostSystem control = ModRuntimeHostSystem.Instance;
             if (control == null)
@@ -140,7 +140,9 @@ namespace RapidTransitMod
                 return;
 
             bool needsSelectionPush = !m_LastVisible || selectedEntity != m_LastVehicle || selectedRoute != m_LastRoute;
-            if (!needsSelectionPush && panel.PanelDataVersion != m_LastSnapshotVersion)
+            if (!needsSelectionPush
+                && (!isInspectableVehicle || m_LastSnapshot.IsManagedVehicle)
+                && panel.PanelDataVersion != m_LastSnapshotVersion)
             {
                 needsSelectionPush = true;
             }
@@ -156,7 +158,7 @@ namespace RapidTransitMod
         private bool TryPushSnapshot(SelectPanel panel, Entity entity, Entity selectedRoute, bool isVehicle, string dirtyReason, int currentFrame)
         {
             bool built = isVehicle
-                ? panel.TryVehicle(entity, out m_LastSnapshot)
+                ? panel.TryVehiclePanel(entity, out m_LastSnapshot)
                 : panel.TryLine(entity, selectedRoute, out m_LastSnapshot);
 
             if (!built)
@@ -166,7 +168,9 @@ namespace RapidTransitMod
                 return false;
             }
 
-            m_PanelDataJsonBinding.Update(SerializeSnapshot(m_LastSnapshot));
+            string payload = SerializeSnapshot(m_LastSnapshot);
+            if (m_PanelDataJsonBinding.value != payload)
+                m_PanelDataJsonBinding.Update(payload);
             m_LastVehicle = entity;
             m_LastRoute = selectedRoute;
             m_LastSnapshotVersion = panel.PanelDataVersion;
@@ -199,24 +203,43 @@ namespace RapidTransitMod
             AppendJsonString(sb, "primaryLabelKey", snapshot.PrimaryLabelKey);
             AppendJsonString(sb, "primaryValue", snapshot.PrimaryValue);
             AppendJsonString(sb, "primaryValueKind", snapshot.PrimaryValueKind);
-            AppendJsonString(sb, "detail1LabelKey", snapshot.Detail1LabelKey);
-            AppendJsonString(sb, "detail1Value", snapshot.Detail1Value);
-            AppendJsonString(sb, "detail2LabelKey", snapshot.Detail2LabelKey);
-            AppendJsonString(sb, "detail2Value", snapshot.Detail2Value);
-            AppendJsonString(sb, "detail3LabelKey", snapshot.Detail3LabelKey);
-            AppendJsonString(sb, "detail3Value", snapshot.Detail3Value);
-            AppendJsonString(sb, "detail4LabelKey", snapshot.Detail4LabelKey);
-            AppendJsonString(sb, "detail4Value", snapshot.Detail4Value);
-            AppendJsonString(sb, "detail5LabelKey", snapshot.Detail5LabelKey);
-            AppendJsonString(sb, "detail5Value", snapshot.Detail5Value);
-            AppendJsonString(sb, "detail6LabelKey", snapshot.Detail6LabelKey);
-            AppendJsonString(sb, "detail6Value", snapshot.Detail6Value);
-            AppendJsonString(sb, "detail7LabelKey", snapshot.Detail7LabelKey);
-            AppendJsonString(sb, "detail7Value", snapshot.Detail7Value);
-            AppendJsonString(sb, "detail8LabelKey", snapshot.Detail8LabelKey);
-            AppendJsonString(sb, "detail8Value", snapshot.Detail8Value);
-            AppendJsonString(sb, "alertText", snapshot.AlertText);
-            AppendJsonBool(sb, "showAlerts", snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
+            if (snapshot.Mode != "vehicle")
+            {
+                AppendJsonString(sb, "detail1LabelKey", snapshot.Detail1LabelKey);
+                AppendJsonString(sb, "detail1Value", snapshot.Detail1Value);
+                AppendJsonString(sb, "detail2LabelKey", snapshot.Detail2LabelKey);
+                AppendJsonString(sb, "detail2Value", snapshot.Detail2Value);
+                AppendJsonString(sb, "detail3LabelKey", snapshot.Detail3LabelKey);
+                AppendJsonString(sb, "detail3Value", snapshot.Detail3Value);
+                AppendJsonString(sb, "detail4LabelKey", snapshot.Detail4LabelKey);
+                AppendJsonString(sb, "detail4Value", snapshot.Detail4Value);
+                AppendJsonString(sb, "detail5LabelKey", snapshot.Detail5LabelKey);
+                AppendJsonString(sb, "detail5Value", snapshot.Detail5Value);
+                AppendJsonString(sb, "detail6LabelKey", snapshot.Detail6LabelKey);
+                AppendJsonString(sb, "detail6Value", snapshot.Detail6Value);
+                AppendJsonString(sb, "detail7LabelKey", snapshot.Detail7LabelKey);
+                AppendJsonString(sb, "detail7Value", snapshot.Detail7Value);
+                AppendJsonString(sb, "detail8LabelKey", snapshot.Detail8LabelKey);
+                AppendJsonString(sb, "detail8Value", snapshot.Detail8Value);
+            }
+            AppendJsonInt(sb, "nextPlannedArrivalMinute", snapshot.NextPlannedArrivalMinute);
+            AppendJsonInt(sb, "plannedArrivalMinute", snapshot.PlannedArrivalMinute);
+            AppendJsonInt(sb, "actualArrivalMinute", snapshot.ActualArrivalMinute);
+            AppendJsonInt(sb, "plannedDepartureMinute", snapshot.PlannedDepartureMinute);
+            if (snapshot.Mode != "vehicle")
+                AppendJsonString(sb, "alertText", snapshot.AlertText);
+            AppendJsonBool(sb, "isManagedVehicle", snapshot.IsManagedVehicle);
+            AppendJsonBool(sb, "showCurrentStop", snapshot.ShowCurrentStop);
+            AppendJsonString(sb, "currentStationName", snapshot.CurrentStationName);
+            AppendJsonString(sb, "stopDwellValue", snapshot.StopDwellValue);
+            AppendJsonString(sb, "nextPassStationName", snapshot.NextPassStationName);
+            AppendJsonString(sb, "nextStopStationName", snapshot.NextStopStationName);
+            AppendJsonBool(sb, "showSchedule", snapshot.ShowSchedule);
+            AppendJsonString(sb, "currentSlotText", snapshot.CurrentSlotText);
+            AppendJsonString(sb, "targetSlotText", snapshot.TargetSlotText);
+            AppendJsonBool(sb, "showWaitingForFastTrain", snapshot.ShowWaitingForFastTrain);
+            AppendJsonInt(sb, "waitingForFastTrainVehicleId", snapshot.WaitingForFastTrainVehicleId);
+            AppendJsonBool(sb, "showAlerts", snapshot.Mode != "vehicle" && snapshot.AlertText.Length > 0 && snapshot.AlertText != "None");
             AppendJsonBool(sb, "showRetireAction", snapshot.ShowRetireAction);
             AppendJsonBool(sb, "showForceDepartAction", snapshot.ShowForceDepartAction);
             AppendJsonBool(sb, "showReevaluateAction", snapshot.ShowReevaluateAction);
@@ -256,6 +279,11 @@ namespace RapidTransitMod
         private static void AppendJsonBool(StringBuilder sb, string name, bool value)
         {
             sb.Append('"').Append(name).Append("\":").Append(value ? "true" : "false").Append(',');
+        }
+
+        private static void AppendJsonInt(StringBuilder sb, string name, int value)
+        {
+            sb.Append('"').Append(name).Append("\":").Append(value).Append(',');
         }
 
         private static void AppendEscapedJson(StringBuilder sb, string value)

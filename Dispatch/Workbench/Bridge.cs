@@ -6,6 +6,8 @@ using Colossal.Core;
 using Game.Buildings;
 using Game.Common;
 using Game.UI;
+using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.TrackModel;
 using Unity.Entities;
@@ -23,10 +25,11 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly LineConfigStore m_LineStore = new LineConfigStore();
         private LineConfig m_LineCfg;
         private LineIds m_LineIds;
-        private Names m_Names;
-        private global::RapidTransitMod.Stops m_Stops;
+        private readonly Names m_Names;
+        private readonly global::RapidTransitMod.Stops m_Stops;
         private DepotResolver m_Depots;
         private Config m_Config;
+        private RoutePlanQuery m_RoutePlans;
         private Catalog m_Catalog;
         private UiPort m_Ui;
         private RunPort m_Run;
@@ -37,6 +40,13 @@ namespace RapidTransitMod.Dispatch.Workbench
         private Lines m_Lines;
         private RunHooks m_RunHooks;
         private Query m_Query;
+        private FullRunTimeQuery m_RunTime;
+        private RunChartSectionIndex m_RunChartIndex;
+        private readonly Dictionary<string, ulong> m_LineGenerations =
+            new Dictionary<string, ulong>(StringComparer.Ordinal);
+        private readonly Dictionary<string, DispatchWorkbenchMonitorChangedDto> m_MonitorChanges =
+            new Dictionary<string, DispatchWorkbenchMonitorChangedDto>(StringComparer.Ordinal);
+        private string m_MonitorAverageWaitingLineId = string.Empty;
         private Snapshot m_Snapshot;
         private Persist m_Persist;
         private Commands m_Commands;
@@ -50,9 +60,14 @@ namespace RapidTransitMod.Dispatch.Workbench
         private string m_LastSnapshotLogKey = string.Empty;
         private static readonly bool EnableIntegrity = true;
 
-        internal Bridge(ModRuntimeHostSystem runtime)
+        internal Bridge(
+            ModRuntimeHostSystem runtime,
+            Names names,
+            global::RapidTransitMod.Stops stops)
         {
             m_Runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+            m_Names = names ?? throw new ArgumentNullException(nameof(names));
+            m_Stops = stops ?? throw new ArgumentNullException(nameof(stops));
         }
 
         internal AppliedTimetableStore AppliedStore => m_AppliedStore;
@@ -79,15 +94,12 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal Names NameSvc()
         {
-            return m_Names ?? (m_Names = new Names(m_Runtime.m_NameSystem));
+            return m_Names;
         }
 
         internal global::RapidTransitMod.Stops StopSvc()
         {
-            return m_Stops ?? (m_Stops = new global::RapidTransitMod.Stops(
-                m_Runtime.EntityManager,
-                NameSvc(),
-                Live));
+            return m_Stops;
         }
 
         internal Config Config()
@@ -110,6 +122,21 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Time.Parse,
                 message => Mod.log.Info(message));
             return m_Config;
+        }
+
+        internal RoutePlanQuery RoutePlans()
+        {
+            return m_RoutePlans
+                ?? throw new InvalidOperationException("RoutePlanQuery is not ready.");
+        }
+
+        internal void BindRoutePlans(RoutePlanQuery routePlans)
+        {
+            if (routePlans == null)
+                throw new ArgumentNullException(nameof(routePlans));
+            if (m_RoutePlans != null && !ReferenceEquals(m_RoutePlans, routePlans))
+                throw new InvalidOperationException("RoutePlanQuery is already bound.");
+            m_RoutePlans = routePlans;
         }
 
         internal LineConfig LineCfg()
@@ -178,7 +205,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Workbenches.UiEvents.Push,
                 Workbenches.UiEvents.Push,
                 Workbenches.UiEvents.Push,
-                reasons => Run().CleanupConfirmedInvalidatedLines(reasons),
+                reasons =>
+                {
+                    InvalidateRunTimeLines(reasons?.Keys);
+                    return Run().CleanupConfirmedInvalidatedLines(reasons);
+                },
+                InvalidateRunTimeModels,
                 runtimeLines =>
                 {
                     Persist().Load();
@@ -192,7 +224,13 @@ namespace RapidTransitMod.Dispatch.Workbench
                         : HostState().SelectedLineId,
                     HostState().TransitMode,
                     m_Version,
-                    "game-backend"));
+                    "game-backend"),
+                nowFrame =>
+                {
+                    RunTime().Tick(nowFrame);
+                    RunChartIndex().Tick();
+                },
+                lines => RunTime().SyncPrewarm(lines));
             return m_Runtime.m_WorkbenchCatalogCache;
         }
 
@@ -218,10 +256,43 @@ namespace RapidTransitMod.Dispatch.Workbench
                     StopSvc().Name,
                     Ids().StableId,
                     line => m_Runtime.m_LineView.Kind(line, null),
-                    m_Runtime.m_Observation.Stop,
+                    RecordObservationStop,
                     ModRuntimeHostSystem.IsTripTraceLoggingEnabled,
                     evt => TraceLog.Write(message => Mod.log.Info(message), evt)));
             return m_ObsStops;
+        }
+
+        private void RecordObservationStop(
+            Entity vehicle,
+            Entity line,
+            Entity station,
+            ResolvedStopKind kind,
+            int waypointIndex,
+            bool isOrigin,
+            bool arrival,
+            string clockTime,
+            uint frame)
+        {
+            Entity waypoint = Entity.Null;
+            if (line != Entity.Null
+                && m_Runtime.EntityManager.HasBuffer<Game.Routes.RouteWaypoint>(line))
+            {
+                DynamicBuffer<Game.Routes.RouteWaypoint> waypoints =
+                    m_Runtime.EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
+                if (waypointIndex >= 0 && waypointIndex < waypoints.Length)
+                    waypoint = waypoints[waypointIndex].m_Waypoint;
+            }
+            m_Runtime.m_Observation.Stop(
+                vehicle,
+                line,
+                waypoint,
+                station,
+                kind,
+                waypointIndex,
+                isOrigin,
+                arrival,
+                clockTime,
+                frame);
         }
 
         internal Trips Trips()
@@ -231,17 +302,58 @@ namespace RapidTransitMod.Dispatch.Workbench
 
             m_Trips = new Trips(
                 new TripPort(
-                    m_Runtime.EntityManager,
-                    m_Runtime.m_Obs.Vehicles,
-                    StopSvc().Stop,
-                    StopSvc().Station,
-                    Ids().StableId,
-                    line => m_Runtime.m_LineView.Kind(line, null),
-                    Time.Parse,
-                    Clock().Now,
-                    m_Runtime.m_RouteProgress.Try,
-                    (Entity vehicle, out VehicleState state) => m_Runtime.m_VehicleView.TryGetState(vehicle, out state)));
+                    () => m_Runtime.m_Observation.ActiveMonitorTrips,
+                    () => m_Runtime.m_Observation.MonitorDateSlots,
+                    Time.Slot,
+                    MonitorDataComplete,
+                    () => m_Runtime.m_ObsRecorder?.MonitorDroppedTripCount ?? 0,
+                    MonitorPersistenceHealthy,
+                    MonitorIssueCode,
+                    () => m_Runtime.m_ObsRecorder?.MonitorIssueCount ?? 0));
             return m_Trips;
+        }
+
+        private bool MonitorPersistenceHealthy()
+        {
+            return m_Runtime.m_Observation != null
+                && m_Runtime.m_Observation.MonitorPersistenceHealthy;
+        }
+
+        private bool MonitorDataComplete()
+        {
+            return m_Runtime.m_ObsRecorder != null
+                && m_Runtime.m_ObsRecorder.MonitorDataComplete;
+        }
+
+        private string MonitorIssueCode()
+        {
+            if (m_Runtime.m_ObsRecorder == null)
+                return "monitor-recorder-missing";
+            return !string.IsNullOrEmpty(m_Runtime.m_Obs.MonitorIssueCode)
+                ? m_Runtime.m_Obs.MonitorIssueCode
+                : m_Runtime.m_ObsRecorder.MonitorOverflowReason ?? string.Empty;
+        }
+
+        internal string MonitorHeaders(string requestJson)
+        {
+            DispatchWorkbenchMonitorListRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorListRequestDto>(requestJson);
+            ClockSnapshot clock = m_Runtime.m_SimClock.Snapshot;
+            return Workbenches.Json.Write(Trips().BuildMonitorHeaders(request, clock));
+        }
+
+        internal string MonitorDetail(string requestJson)
+        {
+            DispatchWorkbenchMonitorDetailRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorDetailRequestDto>(requestJson);
+            return Workbenches.Json.Write(Trips().BuildMonitorDetail(request));
+        }
+
+        internal string MonitorDetails(string requestJson)
+        {
+            DispatchWorkbenchMonitorDetailsRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorDetailsRequestDto>(requestJson);
+            return Workbenches.Json.Write(Trips().BuildMonitorDetails(request));
         }
 
         internal Clock Clock()
@@ -330,6 +442,136 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Time.Slot,
                 Rows.Has);
             return m_Query;
+        }
+
+        internal FullRunTimeQuery RunTime()
+        {
+            if (m_RunTime != null)
+                return m_RunTime;
+
+            m_RunTime = new FullRunTimeQuery(
+                m_Runtime.EntityManager,
+                RoutePlans(),
+                m_Runtime.m_Observation,
+                ResolveRunChartLine,
+                () => m_Runtime.m_SimClock.Snapshot.FramesPerMinute,
+                LineGeneration,
+                Workbenches.UiEvents.Push,
+                Workbenches.UiEvents.Push);
+            return m_RunTime;
+        }
+
+        internal RunChartSectionIndex RunChartIndex()
+        {
+            if (m_RunChartIndex != null)
+                return m_RunChartIndex;
+            m_RunChartIndex = new RunChartSectionIndex(
+                m_Runtime.m_TrackModel,
+                m_Runtime.EntityManager,
+                entity => StopSvc().Key(StopSvc().Anchor(entity)),
+                entity =>
+                {
+                    string rendered = StopSvc().StationRenderedName(entity);
+                    return !string.IsNullOrEmpty(rendered)
+                        ? rendered
+                        : StopSvc().StationName(entity);
+                },
+                line => Ids().StableId(line));
+            return m_RunChartIndex;
+        }
+
+        private ulong LineGeneration(string lineId)
+        {
+            string key = lineId ?? string.Empty;
+            return m_LineGenerations.TryGetValue(key, out ulong generation) ? generation : 0UL;
+        }
+
+        private void InvalidateRunTimeLines(IEnumerable<string> lineIds)
+        {
+            string[] ids = (lineIds ?? Array.Empty<string>())
+                .Where(lineId => !string.IsNullOrEmpty(lineId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (ids.Length > 0)
+                RunTime().InvalidateLines(ids);
+        }
+
+        private void InvalidateRunTimeModels(IEnumerable<string> lineIds)
+        {
+            string[] ids = (lineIds ?? Array.Empty<string>())
+                .Where(lineId => !string.IsNullOrEmpty(lineId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (ids.Length > 0)
+                m_RunTime?.InvalidateSources(ids, new[] { "theory" }, "run-time-model-invalidated");
+        }
+
+        internal void InvalidateRunTimeClock()
+        {
+            m_RunTime?.InvalidateSources(
+                null,
+                new[] { "sliceHistoricalEstimate", "theory" },
+                "run-time-clock-changed");
+        }
+
+        private void InvalidateAuthoritativeLine(string stableLineId)
+        {
+            string key = stableLineId ?? string.Empty;
+            if (string.IsNullOrEmpty(key))
+                return;
+
+            m_LineGenerations[key] = LineGeneration(key) + 1UL;
+            RunTime().InvalidateLines(new[] { key });
+        }
+
+        internal bool OnAuthoritativeLineInvalidated(
+            Entity line,
+            string stableLineId,
+            string mode,
+            string stopSig,
+            string trigger,
+            bool clearDetails,
+            bool publishEvent)
+        {
+            if (string.IsNullOrEmpty(stableLineId))
+                return false;
+
+            InvalidateAuthoritativeLine(stableLineId);
+            bool cleared;
+            try
+            {
+                cleared = clearDetails
+                    ? Applied().ClearDetails(line)
+                    : Applied().InvalidateDetails(line, stopSig);
+            }
+            catch (Exception ex)
+            {
+                Fault("Bridge.OnAuthoritativeLineInvalidated", ex);
+                return false;
+            }
+
+            if (cleared && publishEvent)
+            {
+                string eventTrigger = string.IsNullOrEmpty(trigger)
+                    ? "stop-sig-changed"
+                    : trigger;
+                Workbenches.UiEvents.Push(new DispatchWorkbenchLineInvalidationEvent
+                {
+                    mode = mode ?? string.Empty,
+                    version = m_Version.ToString(),
+                    lineIds = new[] { stableLineId },
+                    reasons = new[]
+                    {
+                        new DispatchWorkbenchCleanupReasonDto
+                        {
+                            lineId = stableLineId,
+                            reason = "backend-applied-cleared;default-restored;trigger=" + eventTrigger
+                        }
+                    }
+                });
+            }
+
+            return cleared;
         }
 
         internal UiPort Ui()
@@ -501,6 +743,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Query(),
                 Snapshot(),
                 Persist(),
+                Config().BuildAppliedState,
+                m_Validator,
                 () => Applied().ConsumeCleanupInfo());
             return m_Commands;
         }
@@ -541,11 +785,17 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal void Reset()
         {
+            m_RunTime?.Clear();
+            m_RunChartIndex?.Clear();
+            m_MonitorChanges.Clear();
             Root().Reset();
         }
 
         internal void Clear()
         {
+            m_RunTime?.Clear();
+            m_RunChartIndex?.Clear();
+            m_MonitorChanges.Clear();
             m_Drafts.Clear();
             Applied().Reset();
             LineCfg().Clear();
@@ -588,6 +838,284 @@ namespace RapidTransitMod.Dispatch.Workbench
             return Root().Save(requestJson);
         }
 
+        internal string SaveScheduleBatch(string requestJson)
+        {
+            DispatchWorkbenchScheduleBatchRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchScheduleBatchRequestDto>(requestJson);
+            DispatchWorkbenchScheduleBatchResultDto result = new DispatchWorkbenchScheduleBatchResultDto
+            {
+                success = false,
+                editorSessionId = request?.editorSessionId ?? string.Empty,
+                errors = Array.Empty<string>()
+            };
+            List<string> errors = new List<string>();
+            if (request == null || string.IsNullOrEmpty(request.editorSessionId))
+            {
+                errors.Add("schedule-batch-editor-session-required");
+                result.errors = errors.ToArray();
+                return Workbenches.Json.Write(result);
+            }
+
+            Dictionary<string, WorkbenchLineRuntime> runtimeLines = Query().GetLines()
+                .Where(line => line != null && !string.IsNullOrEmpty(line.Id))
+                .GroupBy(line => line.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            Dictionary<string, AppliedLine> replacements = new Dictionary<string, AppliedLine>(StringComparer.Ordinal);
+            HashSet<string> lineIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (DispatchWorkbenchScheduleLineDto block in request.lines ?? Array.Empty<DispatchWorkbenchScheduleLineDto>())
+            {
+                if (block == null || string.IsNullOrEmpty(block.lineId) || !lineIds.Add(block.lineId))
+                {
+                    errors.Add("schedule-batch-line-duplicate-or-missing");
+                    continue;
+                }
+                if (!runtimeLines.TryGetValue(block.lineId, out WorkbenchLineRuntime runtimeLine))
+                {
+                    errors.Add("schedule-batch-line-missing:" + (block.lineId ?? string.Empty));
+                    continue;
+                }
+                if (!TryBuildScheduleLine(request.editorSessionId, block, runtimeLine, out AppliedLine applied, errors))
+                    continue;
+                replacements[block.lineId] = applied;
+            }
+
+            if (request.lines == null || request.lines.Length == 0)
+                errors.Add("schedule-batch-lines-required");
+            if (errors.Count == 0
+                && !Applied().TryApplyScheduleLines(replacements, out string applyError))
+                errors.Add("schedule-batch-apply-failed:" + applyError);
+
+            if (errors.Count == 0)
+            {
+                result.success = true;
+                Host().Dirty();
+                string selected = request.lines.FirstOrDefault(line => line != null)?.lineId ?? string.Empty;
+                result.snapshot = Snapshot().Build(selected, LineIdentityService.GetKey(selected).Mode, m_Version, "game-backend");
+            }
+            result.errors = errors.ToArray();
+            return Workbenches.Json.Write(result);
+        }
+
+        private bool TryBuildScheduleLine(
+            string editorSessionId,
+            DispatchWorkbenchScheduleLineDto block,
+            WorkbenchLineRuntime runtimeLine,
+            out AppliedLine applied,
+            List<string> errors)
+        {
+            applied = null;
+            TransitMode mode = LineIdentityService.GetKey(block.lineId).Mode;
+            if (mode == TransitMode.Unknown)
+                mode = TransportModeResolver.Resolve(m_Runtime.EntityManager, runtimeLine.Entity);
+            string stopSig = block.stopSig ?? string.Empty;
+            FullRunTimeResult runtimeResult = null;
+            if (!string.IsNullOrEmpty(block.runtimeResultId)
+                && !RunTime().TryGetResult(editorSessionId, block.runtimeResultId, out runtimeResult))
+            {
+                errors.Add("schedule-batch-runtime-result-invalid:" + block.lineId);
+                return false;
+            }
+            if (runtimeResult != null && string.IsNullOrEmpty(stopSig))
+                stopSig = runtimeResult.StopSig;
+            if (runtimeResult != null
+                && (!string.Equals(runtimeResult.LineId, block.lineId, StringComparison.Ordinal)
+                    || runtimeResult.Line != runtimeLine.Entity
+                    || !string.Equals(runtimeResult.StopSig, stopSig, StringComparison.Ordinal)))
+            {
+                errors.Add("schedule-batch-runtime-stop-sig-invalid:" + block.lineId);
+                return false;
+            }
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Runtime.EntityManager, runtimeLine.Entity)).Lifecycle;
+            if (runtimeResult != null
+                && !AllowsRuntimeSource(lifecycle, runtimeResult.Source))
+            {
+                errors.Add("schedule-batch-runtime-source-invalid:" + block.lineId);
+                return false;
+            }
+
+            List<DispatchWorkbenchStagedRowDto> rows = new List<DispatchWorkbenchStagedRowDto>();
+            int blockErrorStart = errors.Count;
+            HashSet<string> rowIds = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<int> slots = new HashSet<int>();
+            foreach (DispatchWorkbenchScheduleRowDto row in block.rows ?? Array.Empty<DispatchWorkbenchScheduleRowDto>())
+            {
+                if (row == null || string.IsNullOrEmpty(row.rowId) || !rowIds.Add(row.rowId))
+                {
+                    errors.Add("schedule-batch-row-duplicate-or-missing:" + block.lineId);
+                    continue;
+                }
+                if (row.slotMinute < 0 || row.slotMinute >= 24 * 60 || !slots.Add(row.slotMinute))
+                {
+                    errors.Add("schedule-batch-slot-invalid:" + block.lineId + ":" + row.rowId);
+                    continue;
+                }
+                DispatchWorkbenchTimedStopDto[] timedStops = CopyBatchStops(row.timedStops, out bool hadNull);
+                if (hadNull)
+                {
+                    errors.Add("schedule-batch-timed-stop-null:" + block.lineId + ":" + row.rowId);
+                    continue;
+                }
+                if (row.truncateFromStopIndex >= 0)
+                {
+                    if (row.truncateFromStopIndex > timedStops.Length)
+                    {
+                        errors.Add("schedule-batch-truncate-invalid:" + block.lineId + ":" + row.rowId);
+                        continue;
+                    }
+                    timedStops = timedStops.Take(row.truncateFromStopIndex).ToArray();
+                }
+                if (timedStops.Length > 0
+                    && !ValidateBatchTimedStops(runtimeResult, row.slotMinute, timedStops, block.lineId, row.rowId, errors))
+                    continue;
+                rows.Add(new DispatchWorkbenchStagedRowDto
+                {
+                    id = row.rowId,
+                    lineId = block.lineId,
+                    time = Time.Slot(row.slotMinute),
+                    kind = row.kind ?? string.Empty,
+                    source = row.source ?? string.Empty,
+                    stopSig = stopSig,
+                    timedStops = timedStops
+                });
+            }
+            if (errors.Count > blockErrorStart)
+                return false;
+            string appliedKey = LineIdentityService.GetId(LineIdentityService.GetKey(block.lineId, mode));
+            Applied().Lines.TryGetValue(appliedKey, out AppliedLine previous);
+            applied = new AppliedLine
+            {
+                LineEntity = runtimeLine.Entity,
+                StopSig = stopSig,
+                OriginHoldLimitMinutes = previous?.OriginHoldLimitMinutes
+                    ?? RuntimeConfigStoreDefaults.DefaultOriginHoldLimitMinutes,
+                MaxStationDwellMinutes = previous?.MaxStationDwellMinutes
+                    ?? RuntimeConfigStoreDefaults.DefaultMaxStationDwellMinutes,
+                StagedRows = rows
+            };
+            AppliedTimetableValidationResult validation = m_Validator.Validate(
+                LineIdentityService.GetKey(block.lineId, mode),
+                Config().BuildAppliedState(block.lineId, applied));
+            if (!validation.IsValid)
+            {
+                errors.AddRange(validation.Errors.Select(error => "schedule-batch:" + error));
+                applied = null;
+                return false;
+            }
+            return true;
+        }
+
+        private static bool AllowsRuntimeSource(LifecycleKind lifecycle, string source)
+        {
+            if (lifecycle == LifecycleKind.Road)
+                return string.Equals(source, "busHistorical", StringComparison.Ordinal);
+            return lifecycle == LifecycleKind.Rail
+                && (string.Equals(source, "theory", StringComparison.Ordinal)
+                    || string.Equals(source, "monitorAverage", StringComparison.Ordinal));
+        }
+
+        private static DispatchWorkbenchTimedStopDto[] CopyBatchStops(
+            DispatchWorkbenchTimedStopDto[] source,
+            out bool hadNull)
+        {
+            hadNull = false;
+            if (source == null)
+                return Array.Empty<DispatchWorkbenchTimedStopDto>();
+            DispatchWorkbenchTimedStopDto[] result = new DispatchWorkbenchTimedStopDto[source.Length];
+            for (int i = 0; i < source.Length; i++)
+            {
+                DispatchWorkbenchTimedStopDto stop = source[i];
+                if (stop == null)
+                {
+                    hadNull = true;
+                    continue;
+                }
+                result[i] = new DispatchWorkbenchTimedStopDto
+                {
+                    stopKey = stop.stopKey ?? string.Empty,
+                    arrive = stop.arrive,
+                    depart = stop.depart
+                };
+            }
+            return result;
+        }
+
+        private static bool ValidateBatchTimedStops(
+            FullRunTimeResult runtimeResult,
+            int slotMinute,
+            DispatchWorkbenchTimedStopDto[] stops,
+            string lineId,
+            string rowId,
+            List<string> errors)
+        {
+            if (runtimeResult == null || stops.Length < 2 || stops.Length > runtimeResult.StopKeys.Length + 1
+                || runtimeResult.Segments.Length < stops.Length - 1)
+            {
+                errors.Add("schedule-batch-runtime-result-required:" + lineId + ":" + rowId);
+                return false;
+            }
+            for (int i = 0; i < stops.Length; i++)
+            {
+                string expectedStopKey = i == runtimeResult.StopKeys.Length
+                    ? runtimeResult.StopKeys[0]
+                    : runtimeResult.StopKeys[i];
+                if (stops[i] == null || string.IsNullOrEmpty(stops[i].stopKey)
+                    || !string.Equals(stops[i].stopKey, expectedStopKey, StringComparison.Ordinal))
+                {
+                    errors.Add("schedule-batch-stop-order-invalid:" + lineId + ":" + rowId);
+                    return false;
+                }
+                if ((stops[i].arrive.HasValue && stops[i].arrive.Value < 0)
+                    || (stops[i].depart.HasValue && stops[i].depart.Value < 0))
+                {
+                    errors.Add("schedule-batch-negative-time:" + lineId + ":" + rowId);
+                    return false;
+                }
+            }
+            if (stops[0].arrive.HasValue || !stops[0].depart.HasValue || stops[0].depart.Value != slotMinute)
+            {
+                errors.Add("schedule-batch-origin-time-invalid:" + lineId + ":" + rowId);
+                return false;
+            }
+            for (int i = 1; i < stops.Length; i++)
+            {
+                if (!stops[i].arrive.HasValue)
+                {
+                    errors.Add("schedule-batch-arrive-required:" + lineId + ":" + rowId);
+                    return false;
+                }
+                RunChartSegment segment = runtimeResult.Segments[i - 1];
+                if (!string.Equals(segment.FromStopKey, stops[i - 1].stopKey, StringComparison.Ordinal)
+                    || !string.Equals(segment.ToStopKey, stops[i].stopKey, StringComparison.Ordinal))
+                {
+                    errors.Add("schedule-batch-runtime-segment-invalid:" + lineId + ":" + rowId);
+                    return false;
+                }
+                int expected = stops[i - 1].depart.HasValue
+                    ? stops[i - 1].depart.Value + segment.Minutes
+                    : -1;
+                if (expected < 0 || stops[i].arrive.Value != expected)
+                {
+                    errors.Add("schedule-batch-arrive-not-from-result:" + lineId + ":" + rowId);
+                    return false;
+                }
+                if (stops[i].depart.HasValue)
+                {
+                    if (i == stops.Length - 1 || stops[i].depart.Value - stops[i].arrive.Value < 5)
+                    {
+                        errors.Add("schedule-batch-depart-chain-invalid:" + lineId + ":" + rowId);
+                        return false;
+                    }
+                }
+            }
+            if (stops[stops.Length - 1].depart.HasValue)
+            {
+                errors.Add("schedule-batch-last-depart-forbidden:" + lineId + ":" + rowId);
+                return false;
+            }
+            return true;
+        }
+
         internal string SetHostState(string requestJson)
         {
             return HostState().Update(requestJson);
@@ -601,6 +1129,253 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal string Status(string operationId)
         {
             return Root().Status(operationId);
+        }
+
+        internal string StartRunTime(string requestJson)
+        {
+            DispatchWorkbenchRunTimeQueryRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchRunTimeQueryRequestDto>(requestJson);
+            return Workbenches.Json.Write(RunTime().Start(request));
+        }
+
+        internal string RunTimeStatus(string requestJson)
+        {
+            DispatchWorkbenchRunTimeControlDto request =
+                Workbenches.Json.Read<DispatchWorkbenchRunTimeControlDto>(requestJson);
+            return Workbenches.Json.Write(RunTime().Status(
+                request?.editorSessionId ?? string.Empty,
+                request?.queryId));
+        }
+
+        internal string CancelRunTime(string requestJson)
+        {
+            DispatchWorkbenchRunTimeControlDto request =
+                Workbenches.Json.Read<DispatchWorkbenchRunTimeControlDto>(requestJson);
+            return Workbenches.Json.Write(RunTime().Cancel(
+                request?.editorSessionId ?? string.Empty,
+                request?.queryId));
+        }
+
+        internal string LoadMonitorAverageState(string requestJson)
+        {
+            DispatchWorkbenchMonitorAverageRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorAverageRequestDto>(requestJson);
+            string lineId = request?.lineId ?? string.Empty;
+            DispatchWorkbenchMonitorAverageStateDto response = new DispatchWorkbenchMonitorAverageStateDto
+            {
+                lineId = lineId,
+                stopSig = request?.stopSig ?? string.Empty
+            };
+            Entity line = ResolveRunChartLine(lineId);
+            if (line == Entity.Null || !m_Runtime.EntityManager.Exists(line))
+            {
+                response.error = "monitor-average-line-missing";
+                return Workbenches.Json.Write(response);
+            }
+            if (m_Runtime.m_LineView.TryStopLayout(line, out string currentStopSig, out _))
+                response.stopSig = currentStopSig;
+            if (m_Runtime.m_Observation.TryMonitorAverageState(line, response.stopSig, out MonitorAverageState state))
+            {
+                response.ready = state.Ready;
+                response.revision = state.Revision;
+                response.stopSig = state.StopSig;
+            }
+            response.success = true;
+            return Workbenches.Json.Write(response);
+        }
+
+        internal string QueryMonitorAverage(string requestJson)
+        {
+            DispatchWorkbenchMonitorAverageRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorAverageRequestDto>(requestJson);
+            DispatchWorkbenchRunTimeQueryRequestDto query = new DispatchWorkbenchRunTimeQueryRequestDto
+            {
+                editorSessionId = request?.editorSessionId ?? string.Empty,
+                lineId = request?.lineId ?? string.Empty,
+                source = "monitorAverage"
+            };
+            return Workbenches.Json.Write(RunTime().Start(query));
+        }
+
+        internal void OnMonitorChanged(MonitorChange change)
+        {
+            if (!change.Changed
+                || !change.MonitorAverageBecameReady
+                || change.Line == Entity.Null
+                || string.IsNullOrEmpty(m_MonitorAverageWaitingLineId))
+                return;
+            string lineId = m_Runtime.LineStableId(change.Line);
+            if (string.IsNullOrEmpty(lineId)
+                || !string.Equals(lineId, m_MonitorAverageWaitingLineId, StringComparison.Ordinal))
+                return;
+            m_MonitorChanges[lineId] = new DispatchWorkbenchMonitorChangedDto
+            {
+                lineId = lineId,
+                monitorAverageBecameReady = true
+            };
+            m_MonitorAverageWaitingLineId = string.Empty;
+        }
+
+        internal void OnBusSegChanged(Entity line)
+        {
+            string lineId = Ids().StableId(line);
+            if (!string.IsNullOrEmpty(lineId))
+                m_RunTime?.RefreshBusHistorical(lineId);
+        }
+
+        internal string SetMonitorSubscription(string requestJson)
+        {
+            DispatchWorkbenchMonitorSubscriptionDto request =
+                Workbenches.Json.Read<DispatchWorkbenchMonitorSubscriptionDto>(requestJson);
+            m_MonitorAverageWaitingLineId = request?.averageWaitingLineId ?? string.Empty;
+            foreach (string key in m_MonitorChanges.Keys.Where(key =>
+                !string.Equals(key, m_MonitorAverageWaitingLineId, StringComparison.Ordinal)).ToArray())
+            {
+                m_MonitorChanges.Remove(key);
+            }
+            return "{}";
+        }
+
+        internal void FlushMonitorChanges()
+        {
+            if (m_MonitorChanges.Count == 0)
+                return;
+
+            DispatchWorkbenchMonitorChangedDto[] pending = m_MonitorChanges.Values.ToArray();
+            m_MonitorChanges.Clear();
+            foreach (DispatchWorkbenchMonitorChangedDto change in pending)
+                Workbenches.UiEvents.Push(change);
+        }
+
+        internal string CloseRunTimeEditor(string requestJson)
+        {
+            DispatchWorkbenchRunTimeEditorDto request =
+                Workbenches.Json.Read<DispatchWorkbenchRunTimeEditorDto>(requestJson);
+            return Workbenches.Json.Write(RunTime().CloseEditor(
+                request?.editorSessionId ?? string.Empty));
+        }
+
+        internal string LoadTimetableLineLayout(string requestJson)
+        {
+            DispatchWorkbenchTimetableLineLayoutRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchTimetableLineLayoutRequestDto>(requestJson);
+            string lineId = request?.lineId ?? string.Empty;
+            DispatchWorkbenchTimetableLineLayoutDto result = new DispatchWorkbenchTimetableLineLayoutDto
+            {
+                lineId = lineId,
+                mode = string.Empty,
+                stopSig = string.Empty,
+                stops = Array.Empty<DispatchWorkbenchTimetableLineStopDto>()
+            };
+            if (string.IsNullOrWhiteSpace(lineId))
+            {
+                result.error = "timetable-line-layout-line-id-required";
+                return Workbenches.Json.Write(result);
+            }
+
+            LineKey key = Ids().Key(lineId);
+            if (key.IsEmpty
+                || m_Runtime.m_LineAnchorCatalog == null
+                || !m_Runtime.m_LineAnchorCatalog.TryEntity(key, out Entity line)
+                || line == Entity.Null
+                || !m_Runtime.EntityManager.Exists(line))
+            {
+                result.error = "timetable-line-layout-line-missing";
+                return Workbenches.Json.Write(result);
+            }
+
+            TransportModeProfile profile = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Runtime.EntityManager, line));
+            result.mode = profile.Token;
+            if (!profile.IsSupported || profile.Lifecycle == LifecycleKind.Unknown)
+            {
+                result.error = "timetable-line-layout-mode-unsupported";
+                return Workbenches.Json.Write(result);
+            }
+
+            if (!RoutePlans().TryGet(line, profile.Lifecycle, out RoutePlan plan))
+            {
+                result.error = "timetable-line-layout-route-plan-unavailable";
+                return Workbenches.Json.Write(result);
+            }
+
+            if (!TryBuildTimetableStops(plan, out DispatchWorkbenchTimetableLineStopDto[] stops))
+            {
+                result.error = "timetable-line-layout-invalid";
+                return Workbenches.Json.Write(result);
+            }
+
+            result.success = true;
+            result.stopSig = plan.StopSig;
+            result.stops = stops;
+            return Workbenches.Json.Write(result);
+        }
+
+        private bool TryBuildTimetableStops(
+            RoutePlan plan,
+            out DispatchWorkbenchTimetableLineStopDto[] stops)
+        {
+            stops = Array.Empty<DispatchWorkbenchTimetableLineStopDto>();
+            if (plan == null
+                || string.IsNullOrWhiteSpace(plan.StopSig)
+                || plan.Waypoints == null
+                || plan.Stops == null
+                || plan.Stops.Length == 0)
+            {
+                return false;
+            }
+
+            DispatchWorkbenchTimetableLineStopDto[] result =
+                new DispatchWorkbenchTimetableLineStopDto[plan.Stops.Length];
+            int previousWaypointIndex = -1;
+            for (int order = 0; order < plan.Stops.Length; order++)
+            {
+                RouteStopRef stop = plan.Stops[order];
+                if (stop.WaypointIndex <= previousWaypointIndex
+                    || stop.WaypointIndex < 0
+                    || stop.WaypointIndex >= plan.Waypoints.Length
+                    || stop.Waypoint == Entity.Null
+                    || stop.Stop == Entity.Null
+                    || string.IsNullOrWhiteSpace(stop.StopKey))
+                {
+                    return false;
+                }
+
+                RouteWaypointRef waypoint = plan.Waypoints[stop.WaypointIndex];
+                if (waypoint.WaypointIndex != stop.WaypointIndex
+                    || waypoint.Waypoint != stop.Waypoint
+                    || waypoint.Stop != stop.Stop
+                    || !string.Equals(waypoint.StopKey, stop.StopKey, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                result[order] = new DispatchWorkbenchTimetableLineStopDto
+                {
+                    order = order,
+                    stopKey = stop.StopKey,
+                    name = StopSvc().StationName(stop.Stop),
+                    waypointIndex = stop.WaypointIndex
+                };
+                previousWaypointIndex = stop.WaypointIndex;
+            }
+
+            stops = result;
+            return true;
+        }
+
+        internal string RunChartSections(string requestJson)
+        {
+            DispatchWorkbenchRunChartSectionRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchRunChartSectionRequestDto>(requestJson);
+            return Workbenches.Json.Write(RunChartIndex().Query(request));
+        }
+
+        internal string RunChartStations(string requestJson)
+        {
+            DispatchWorkbenchRunChartStationDirectoryRequestDto request =
+                Workbenches.Json.Read<DispatchWorkbenchRunChartStationDirectoryRequestDto>(requestJson);
+            return Workbenches.Json.Write(RunChartIndex().QueryStations(request));
         }
 
         internal ulong NextVersion()
@@ -715,6 +1490,17 @@ namespace RapidTransitMod.Dispatch.Workbench
         {
             int nowMin = (int)(m_Runtime.m_TimeSystem.normalizedTime * 1440f) % 1440;
             return nowMin < 0 ? nowMin + 1440 : nowMin;
+        }
+
+        private Entity ResolveRunChartLine(string lineId)
+        {
+            if (string.IsNullOrEmpty(lineId))
+                return Entity.Null;
+            List<WorkbenchLineRuntime> lines = Catalog().RuntimeLines();
+            for (int i = 0; i < lines.Count; i++)
+                if (lines[i] != null && string.Equals(lines[i].Id, lineId, StringComparison.Ordinal))
+                    return lines[i].Entity;
+            return Entity.Null;
         }
 
         private List<DispatchWorkbenchTripDto> BuildTrips(

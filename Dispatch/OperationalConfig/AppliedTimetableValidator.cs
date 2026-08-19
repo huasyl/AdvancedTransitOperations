@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using RapidTransitMod.Dispatch.Lines;
 
 namespace RapidTransitMod
 {
@@ -58,6 +59,7 @@ namespace RapidTransitMod
 
             Dictionary<string, List<int>> rowsByOrigin = new Dictionary<string, List<int>>(StringComparer.Ordinal);
             HashSet<int> rowDepartureMinutes = new HashSet<int>();
+            HashSet<string> rowIds = new HashSet<string>(StringComparer.Ordinal);
             AppliedTimetableRow[] rows = state.AppliedRows ?? Array.Empty<AppliedTimetableRow>();
             for (int i = 0; i < rows.Length; i++)
             {
@@ -67,6 +69,13 @@ namespace RapidTransitMod
                     warnings.Add("null-row:" + i);
                     continue;
                 }
+
+                if (string.IsNullOrWhiteSpace(row.RowId))
+                    errors.Add("row-id-required:" + i);
+                else if (!rowIds.Add(row.RowId))
+                    errors.Add("duplicate-row-id:" + row.RowId);
+
+                ValidateTimedStops(row, i, errors);
 
                 if (row.DepartureMinute < 0)
                     continue;
@@ -127,6 +136,57 @@ namespace RapidTransitMod
             return new AppliedTimetableValidationResult(errors, warnings);
         }
 
+        private static void ValidateTimedStops(
+            AppliedTimetableRow row,
+            int rowIndex,
+            List<string> errors)
+        {
+            TimedStop[] stops = row.TimedStops ?? Array.Empty<TimedStop>();
+            if (stops.Length == 0)
+                return;
+
+            bool departed = true;
+            for (int i = 0; i < stops.Length; i++)
+            {
+                TimedStop stop = stops[i];
+                if (stop == null || string.IsNullOrWhiteSpace(stop.StopKey))
+                {
+                    errors.Add("timed-stop-key-required:" + rowIndex + ":" + i);
+                    continue;
+                }
+
+                if (stop.Arrive < -1 || stop.Arrive >= 48 * 60)
+                    errors.Add("invalid-timed-stop-arrive:" + rowIndex + ":" + i);
+                if (stop.Depart < -1 || stop.Depart >= 48 * 60)
+                    errors.Add("invalid-timed-stop-depart:" + rowIndex + ":" + i);
+
+                if (!departed)
+                    errors.Add("timed-stop-chain-break:" + rowIndex + ":" + i);
+
+                if (i > 0 && stop.Arrive < 0)
+                    errors.Add("timed-stop-arrive-required:" + rowIndex + ":" + i);
+                TimedStop previous = i > 0 ? stops[i - 1] : null;
+                if (previous != null && previous.Depart >= 0
+                    && stop.Arrive >= 0 && stop.Arrive < previous.Depart)
+                {
+                    errors.Add("timed-stop-arrival-before-departure:" + rowIndex + ":" + i);
+                }
+                if (stop.Depart >= 0 && stop.Arrive >= 0
+                    && stop.Depart - stop.Arrive < 5)
+                {
+                    errors.Add("timed-stop-minimum-dwell:" + rowIndex + ":" + i);
+                }
+
+                if (i == 0 && stop.Depart >= 0 && row.DepartureMinute >= 0
+                    && stop.Depart != row.DepartureMinute)
+                {
+                    errors.Add("origin-departure-mismatch:" + rowIndex);
+                }
+
+                departed = stop.Depart >= 0;
+            }
+        }
+
         public AppliedTimetableValidationResult Validate(
             string lineId,
             TransitMode mode,
@@ -134,6 +194,62 @@ namespace RapidTransitMod
             int minSameOriginGapMinutes)
         {
             return Validate(LineIdentityService.GetKey(lineId, mode), state, minSameOriginGapMinutes);
+        }
+
+        internal AppliedTimetableValidationResult Validate(
+            LineKey lineKey,
+            AppliedTimetableState state,
+            RoutePlan route)
+        {
+            AppliedTimetableValidationResult baseResult = Validate(lineKey, state, 0);
+            List<string> errors = baseResult.Errors.ToList();
+            List<string> warnings = baseResult.Warnings.ToList();
+            if (state == null)
+                return new AppliedTimetableValidationResult(errors, warnings);
+
+            bool hasTimedStops = (state.AppliedRows ?? Array.Empty<AppliedTimetableRow>())
+                .Any(row => row != null && (row.TimedStops?.Length ?? 0) > 0);
+            if (!hasTimedStops)
+                return new AppliedTimetableValidationResult(errors, warnings);
+
+            if (route == null || route.Stops == null || route.Stops.Length == 0)
+            {
+                errors.Add("route-plan-required");
+                return new AppliedTimetableValidationResult(errors, warnings);
+            }
+
+            if (!string.Equals(state.StopSig ?? string.Empty, route.StopSig ?? string.Empty, StringComparison.Ordinal))
+                errors.Add("stop-sig-mismatch");
+
+            AppliedTimetableRow[] rows = state.AppliedRows ?? Array.Empty<AppliedTimetableRow>();
+            for (int rowIndex = 0; rowIndex < rows.Length; rowIndex++)
+            {
+                TimedStop[] stops = rows[rowIndex]?.TimedStops ?? Array.Empty<TimedStop>();
+                if (stops.Length == 0)
+                    continue;
+
+                if (stops.Length > route.Stops.Length + 1)
+                {
+                    errors.Add("timed-stop-count-exceeded:" + rowIndex);
+                    continue;
+                }
+
+                for (int stopIndex = 0; stopIndex < stops.Length; stopIndex++)
+                {
+                    string expectedStopKey = stopIndex == route.Stops.Length
+                        ? route.Stops[0].StopKey
+                        : route.Stops[stopIndex].StopKey;
+                    if (!string.Equals(
+                        stops[stopIndex]?.StopKey ?? string.Empty,
+                        expectedStopKey ?? string.Empty,
+                        StringComparison.Ordinal))
+                    {
+                        errors.Add("timed-stop-order-mismatch:" + rowIndex + ":" + stopIndex);
+                    }
+                }
+            }
+
+            return new AppliedTimetableValidationResult(errors, warnings);
         }
     }
 

@@ -2,10 +2,91 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using RapidTransitMod.Dispatch;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 
 namespace RapidTransitMod
 {
+    internal delegate bool TryRoutePlan(Entity line, LifecycleKind lifecycle, out RoutePlan plan);
+
+    internal readonly struct AppliedRunRow
+    {
+        internal readonly string RowId;
+        internal readonly string StopSig;
+        internal readonly int SlotMinute;
+        internal readonly TimedStop[] TimedStops;
+        internal readonly int[] WaypointIndices;
+
+        internal AppliedRunRow(
+            string rowId,
+            string stopSig,
+            int slotMinute,
+            TimedStop[] timedStops,
+            int[] waypointIndices)
+        {
+            RowId = rowId ?? string.Empty;
+            StopSig = stopSig ?? string.Empty;
+            SlotMinute = slotMinute;
+            TimedStops = timedStops ?? Array.Empty<TimedStop>();
+            WaypointIndices = waypointIndices ?? Array.Empty<int>();
+        }
+    }
+
+    internal readonly struct AppliedMonitorStop
+    {
+        internal readonly string StopKey;
+        internal readonly Entity Waypoint;
+        internal readonly Entity Station;
+        internal readonly int WaypointIndex;
+        internal readonly int Arrive;
+        internal readonly int Depart;
+
+        internal AppliedMonitorStop(
+            string stopKey,
+            Entity waypoint,
+            Entity station,
+            int waypointIndex,
+            int arrive,
+            int depart)
+        {
+            StopKey = stopKey ?? string.Empty;
+            Waypoint = waypoint;
+            Station = station;
+            WaypointIndex = waypointIndex;
+            Arrive = arrive;
+            Depart = depart;
+        }
+    }
+
+    internal readonly struct AppliedMonitorRow
+    {
+        internal readonly LineKey LineKey;
+        internal readonly string LineId;
+        internal readonly string RowId;
+        internal readonly string StopSig;
+        internal readonly string ServiceKind;
+        internal readonly int SlotMinute;
+        internal readonly AppliedMonitorStop[] Stops;
+
+        internal AppliedMonitorRow(
+            LineKey lineKey,
+            string lineId,
+            string rowId,
+            string stopSig,
+            string serviceKind,
+            int slotMinute,
+            AppliedMonitorStop[] stops)
+        {
+            LineKey = lineKey;
+            LineId = lineId ?? string.Empty;
+            RowId = rowId ?? string.Empty;
+            StopSig = stopSig ?? string.Empty;
+            ServiceKind = serviceKind ?? string.Empty;
+            SlotMinute = slotMinute;
+            Stops = stops ?? Array.Empty<AppliedMonitorStop>();
+        }
+    }
+
     internal sealed class LineView
     {
         private readonly EntityManager m_EntityManager;
@@ -23,6 +104,7 @@ namespace RapidTransitMod
         private readonly Func<int, string> m_SlotText;
         private readonly Action<string> m_Log;
         private readonly Func<Entity, LineKey> m_StableStoreKey;
+        private readonly TryRoutePlan m_TryRoutePlan;
         private readonly Dictionary<Entity, LineFrame> m_Frames = new Dictionary<Entity, LineFrame>();
         private readonly Dictionary<Entity, ManagedLineFrame> m_ManagedFrames = new Dictionary<Entity, ManagedLineFrame>();
         private readonly Dictionary<Entity, bool> m_SupportCache = new Dictionary<Entity, bool>();
@@ -59,7 +141,8 @@ namespace RapidTransitMod
             Action dirtyTrack,
             Func<int, string> slotText,
             Action<string> log,
-            Func<Entity, LineKey> stableStoreKey)
+            Func<Entity, LineKey> stableStoreKey,
+            TryRoutePlan tryRoutePlan)
         {
             m_EntityManager = entityManager;
             m_Stop = stop ?? throw new ArgumentNullException(nameof(stop));
@@ -76,6 +159,157 @@ namespace RapidTransitMod
             m_SlotText = slotText ?? throw new ArgumentNullException(nameof(slotText));
             m_Log = log ?? throw new ArgumentNullException(nameof(log));
             m_StableStoreKey = stableStoreKey ?? throw new ArgumentNullException(nameof(stableStoreKey));
+            m_TryRoutePlan = tryRoutePlan ?? throw new ArgumentNullException(nameof(tryRoutePlan));
+        }
+
+        internal bool TryMonitorRow(Entity line, int slotMinute, out AppliedMonitorRow row)
+        {
+            row = default;
+            return TryBuildRows(line, slotMinute, false, out _, out row);
+        }
+
+        internal bool TryLaunchRows(
+            Entity line,
+            int slotMinute,
+            out AppliedRunRow runRow,
+            out AppliedMonitorRow monitorRow)
+        {
+            return TryBuildRows(line, slotMinute, true, out runRow, out monitorRow);
+        }
+
+        private bool TryBuildRows(
+            Entity line,
+            int slotMinute,
+            bool includeRunRow,
+            out AppliedRunRow runRow,
+            out AppliedMonitorRow monitorRow)
+        {
+            runRow = default;
+            monitorRow = default;
+            LineKey key = ResolveStoreKey(line);
+            if (key.IsEmpty
+                || !m_AppliedStore.TryGetRow(
+                    key,
+                    slotMinute,
+                    out AppliedTimetableRow appliedRow,
+                    out string savedStopSig)
+                || appliedRow == null
+                || string.IsNullOrEmpty(appliedRow.RowId))
+            {
+                return false;
+            }
+
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_EntityManager, line)).Lifecycle;
+            TimedStop[] timedStops = appliedRow.TimedStops ?? Array.Empty<TimedStop>();
+            if ((lifecycle != LifecycleKind.Rail && lifecycle != LifecycleKind.Road)
+                || !m_TryRoutePlan(line, lifecycle, out RoutePlan route)
+                || route == null
+                || route.Stops.Length == 0
+                || timedStops.Length > route.Stops.Length + 1)
+            {
+                return false;
+            }
+
+            bool detailed = timedStops.Length > 0;
+            if (detailed
+                && (string.IsNullOrEmpty(savedStopSig)
+                    || !string.Equals(route.StopSig, savedStopSig, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+
+            TimedStop[] runStops = includeRunRow && detailed
+                ? new TimedStop[timedStops.Length]
+                : Array.Empty<TimedStop>();
+            int[] runWaypoints = includeRunRow && detailed
+                ? new int[timedStops.Length]
+                : Array.Empty<int>();
+            for (int i = 0; i < timedStops.Length; i++)
+            {
+                TimedStop timedStop = timedStops[i];
+                RouteStopRef routeStop = i == route.Stops.Length
+                    ? route.Stops[0]
+                    : route.Stops[i];
+                if (timedStop == null
+                    || !string.Equals(timedStop.StopKey, routeStop.StopKey, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (includeRunRow)
+                {
+                    runStops[i] = timedStop.Clone();
+                    runWaypoints[i] = routeStop.WaypointIndex;
+                }
+            }
+
+            AppliedMonitorStop[] stops = new AppliedMonitorStop[route.Stops.Length];
+            for (int i = 0; i < route.Stops.Length; i++)
+            {
+                TimedStop timed = i < timedStops.Length
+                    ? timedStops[i]
+                    : null;
+                if (timed != null
+                    && !string.Equals(timed.StopKey, route.Stops[i].StopKey, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                int depart = timed?.Depart ?? -1;
+                int arrive = timed?.Arrive ?? -1;
+                if (i == 0)
+                {
+                    depart = appliedRow.DepartureMinute;
+                    if (timedStops.Length == route.Stops.Length + 1)
+                        arrive = timedStops[timedStops.Length - 1]?.Arrive ?? -1;
+                }
+                stops[i] = new AppliedMonitorStop(
+                    route.Stops[i].StopKey,
+                    route.Stops[i].Waypoint,
+                    route.Stops[i].Stop,
+                    route.Stops[i].WaypointIndex,
+                    arrive,
+                    depart);
+            }
+
+            if (includeRunRow)
+            {
+                runRow = new AppliedRunRow(
+                    appliedRow.RowId,
+                    route.StopSig,
+                    slotMinute,
+                    runStops,
+                    runWaypoints);
+            }
+            monitorRow = new AppliedMonitorRow(
+                key,
+                m_LineId(line),
+                appliedRow.RowId,
+                route.StopSig,
+                appliedRow.ServiceKind,
+                appliedRow.DepartureMinute,
+                stops);
+            return true;
+        }
+
+        internal bool TryStopLayout(Entity line, out string stopSig, out int[] waypointIndices)
+        {
+            stopSig = string.Empty;
+            waypointIndices = Array.Empty<int>();
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_EntityManager, line)).Lifecycle;
+            if ((lifecycle != LifecycleKind.Rail && lifecycle != LifecycleKind.Road)
+                || !m_TryRoutePlan(line, lifecycle, out RoutePlan route)
+                || route == null
+                || string.IsNullOrEmpty(route.StopSig))
+            {
+                return false;
+            }
+
+            stopSig = route.StopSig;
+            waypointIndices = route.Stops.Select(stop => stop.WaypointIndex).ToArray();
+            return true;
         }
 
         public bool TryFrame(Entity line, out LineFrame frame)

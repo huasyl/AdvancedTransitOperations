@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Colossal.Mathematics;
 using Game.Common;
 using Game.Net;
 using Game.Pathfind;
@@ -20,15 +21,26 @@ namespace RapidTransitMod.TrackModel
         private const int TURNBACK_REPEAT_MIN_UNIQUE_LANES = 2;
         private const int TURNBACK_ADJACENT_SEGMENT_MAX_EDGE_SKIP = 2;
         private readonly TrackSupport m_Support;
+        private readonly TramStopIndex m_TramStops;
         private readonly Dictionary<Entity, string> m_TrackModelTurnbackBuildLogCache = new Dictionary<Entity, string>();
 
-        internal TrackProfile(TrackSupport support)
+        internal TrackProfile(TrackSupport support, TramStopIndex tramStops)
         {
             m_Support = support;
+            m_TramStops = tramStops ?? throw new ArgumentNullException(nameof(tramStops));
         }
 
         private EntityManager EntityManager => m_Support.EntityManager;
         private TimedLogger log => m_Support.Log;
+
+        internal void RegisterTramLine(
+            Entity line,
+            LineTrackChain chain,
+            DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (TransportModeResolver.Resolve(EntityManager, line) == TransitMode.Tram)
+                m_TramStops.RegisterLine(line, chain, waypoints);
+        }
 
         private readonly struct StationPassRange
         {
@@ -38,6 +50,8 @@ namespace RapidTransitMod.TrackModel
             public readonly int WaypointIndex;
             public readonly float StopFrames;
             public readonly int PassIndex;
+            public readonly string StationId;
+            public readonly bool IsBreak;
 
             public StationPassRange(
                 Entity building,
@@ -45,7 +59,9 @@ namespace RapidTransitMod.TrackModel
                 int endAtomIndexExclusive,
                 int waypointIndex,
                 float stopFrames,
-                int passIndex)
+                int passIndex,
+                string stationId = "",
+                bool isBreak = false)
             {
                 Building = building;
                 StartAtomIndex = startAtomIndex;
@@ -53,6 +69,8 @@ namespace RapidTransitMod.TrackModel
                 WaypointIndex = waypointIndex;
                 StopFrames = stopFrames;
                 PassIndex = passIndex;
+                StationId = stationId ?? string.Empty;
+                IsBreak = isBreak;
             }
         }
 
@@ -85,12 +103,34 @@ namespace RapidTransitMod.TrackModel
                 if (!boundaries.Contains(pass.EndAtomIndexExclusive))
                     boundaries.Add(pass.EndAtomIndexExclusive);
 
+                if (pass.IsBreak)
+                {
+                    int breakIndex = chain.TraversalProfile.Events.Count;
+                    chain.TraversalProfile.Events.Add(new TraversalEvent(
+                        breakIndex,
+                        TraversalEventKind.BreakBoundary,
+                        Entity.Null,
+                        -1,
+                        -1,
+                        pass.StartAtomIndex,
+                        pass.StartAtomIndex,
+                        0f));
+                    boundaryEventIndexByAtom[pass.StartAtomIndex] = breakIndex;
+                    continue;
+                }
+
+                bool terminal = IsTerminalRange(
+                    chain,
+                    pass.StartAtomIndex,
+                    pass.EndAtomIndexExclusive,
+                    pass.WaypointIndex);
+                int boundaryWaypointIndex = terminal ? -1 : pass.WaypointIndex;
                 int approachIndex = chain.TraversalProfile.Events.Count;
                 chain.TraversalProfile.Events.Add(new TraversalEvent(
                     approachIndex,
                     TraversalEventKind.ApproachSplitBoundary,
                     pass.Building,
-                    pass.WaypointIndex,
+                    boundaryWaypointIndex,
                     pass.PassIndex,
                     pass.StartAtomIndex,
                     pass.StartAtomIndex,
@@ -100,20 +140,23 @@ namespace RapidTransitMod.TrackModel
                 int stationEventIndex = chain.TraversalProfile.Events.Count;
                 chain.TraversalProfile.Events.Add(new TraversalEvent(
                     stationEventIndex,
-                    pass.WaypointIndex >= 0 ? TraversalEventKind.Stop : TraversalEventKind.Pass,
+                    pass.WaypointIndex >= 0 && !terminal
+                        ? TraversalEventKind.Stop
+                        : TraversalEventKind.Pass,
                     pass.Building,
                     pass.WaypointIndex,
                     pass.PassIndex,
                     pass.StartAtomIndex,
                     pass.EndAtomIndexExclusive,
-                    pass.StopFrames));
+                    terminal ? 0f : pass.StopFrames,
+                    pass.StationId));
 
                 int departureIndex = chain.TraversalProfile.Events.Count;
                 chain.TraversalProfile.Events.Add(new TraversalEvent(
                     departureIndex,
                     TraversalEventKind.DepartureSplitBoundary,
                     pass.Building,
-                    pass.WaypointIndex,
+                    boundaryWaypointIndex,
                     pass.PassIndex,
                     pass.EndAtomIndexExclusive,
                     pass.EndAtomIndexExclusive,
@@ -1125,6 +1168,644 @@ namespace RapidTransitMod.TrackModel
             return EntityManager.GetComponentData<Waypoint>(target).m_Index;
         }
 
+        internal void BuildRunChartTurnbacks(LineTrackChain chain, Entity line)
+        {
+            if (chain == null)
+                return;
+
+            chain.RunChartTurnbackRegions.Clear();
+            if (TransportModeResolver.Resolve(EntityManager, line) != TransitMode.Tram)
+                return;
+
+            var spans = new List<TramEdgeSpan>();
+            for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                if (TryReadTramEdgeSpan(chain.TrackAtoms[atomIndex], atomIndex, out TramEdgeSpan span))
+                    spans.Add(span);
+            }
+            if (spans.Count < 2)
+                return;
+
+            TramTurnbackBuild published = null;
+            for (int laterIndex = 1; laterIndex < spans.Count; laterIndex++)
+            {
+                TramEdgeSpan later = spans[laterIndex];
+                int earlierIndex = FindReverseSpan(spans, laterIndex, later);
+                if (earlierIndex < 0)
+                    continue;
+
+                var region = new TramTurnbackBuild(laterIndex, earlierIndex);
+                AddOverlap(region, spans[earlierIndex], later);
+                int forward = laterIndex + 1;
+                int reverse = earlierIndex - 1;
+                while (forward < spans.Count && reverse >= 0
+                    && TryContinuousTramOverlap(
+                        region.Overlaps[region.Overlaps.Count - 1],
+                        spans[reverse + 1],
+                        spans[forward - 1],
+                        spans[reverse],
+                        spans[forward],
+                        out float low,
+                        out float high,
+                        out Entity sharedNode))
+                {
+                    region.SetLastEndNode(sharedNode);
+                    AddOverlap(region, spans[forward], low, high, sharedNode, Entity.Null);
+                    region.LastSpanIndex = forward;
+                    region.SetEarliestEarlierSpanIndex(reverse);
+                    forward++;
+                    reverse--;
+                }
+
+                if (!QualifiesRunChartTurnback(region))
+                    continue;
+
+                if (published == null)
+                {
+                    published = region;
+                    continue;
+                }
+
+                if (IsRunChartTurnbackContinuation(published, region))
+                {
+                    published.Extend(region);
+                    continue;
+                }
+
+                PublishRunChartTurnback(chain, spans, published);
+                published = region;
+            }
+            if (published != null)
+                PublishRunChartTurnback(chain, spans, published);
+            chain.RunChartTurnbackRegions.Sort((left, right) =>
+                left.BoundaryAtomIndex.CompareTo(right.BoundaryAtomIndex));
+        }
+
+        private static bool IsRunChartTurnbackContinuation(
+            TramTurnbackBuild current,
+            TramTurnbackBuild next)
+        {
+            if (next.FirstSpanIndex <= current.LastSpanIndex)
+                return true;
+
+            return next.FirstSpanIndex == current.LastSpanIndex + 1
+                && next.FirstEarlierSpanIndex < current.FirstEarlierSpanIndex;
+        }
+
+        private static void PublishRunChartTurnback(
+            LineTrackChain chain,
+            List<TramEdgeSpan> spans,
+            TramTurnbackBuild region)
+        {
+            chain.RunChartTurnbackRegions.Add(new RunChartTurnbackRegion(
+                spans[region.FirstSpanIndex].AtomIndex,
+                spans[region.FirstSpanIndex].AtomIndex,
+                spans[region.LastSpanIndex].AtomIndex + 1));
+        }
+
+        internal void AppendRunChartTramDump(StringBuilder sb, LineTrackChain chain, Entity line)
+        {
+            if (sb == null
+                || chain == null
+                || TransportModeResolver.Resolve(EntityManager, line) != TransitMode.Tram)
+            {
+                return;
+            }
+
+            sb.Append("tramTraversalEvents:");
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent item = chain.TraversalProfile.Events[eventIndex];
+                if (item.Kind != TraversalEventKind.Stop
+                    && item.Kind != TraversalEventKind.Pass
+                    && item.Kind != TraversalEventKind.BreakBoundary)
+                {
+                    continue;
+                }
+
+                string name = string.Empty;
+                if (item.Building != Entity.Null)
+                {
+                    m_Support.TryGetRenderedLabelName(item.Building, out name);
+                    if (string.IsNullOrWhiteSpace(name))
+                        name = m_Support.StopName(item.Building);
+                }
+                sb.Append(" | e").Append(item.EventIndex)
+                  .Append(" kind=").Append(item.Kind)
+                  .Append(" station=").Append(item.StationId ?? string.Empty)
+                  .Append(" name=").Append(string.IsNullOrWhiteSpace(name) ? "-" : name)
+                  .Append(" building=").Append(item.Building.Index)
+                  .Append(" wp=").Append(item.WaypointIndex)
+                  .Append(" pass=").Append(item.PassIndex)
+                  .Append(" atoms=").Append(item.StartAtomIndex)
+                  .Append("..").Append(item.EndAtomIndexExclusive);
+            }
+            sb.AppendLine();
+
+            sb.Append("tramSameStationAdjacent:");
+            TraversalEvent? previousStation = null;
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent item = chain.TraversalProfile.Events[eventIndex];
+                if (item.Kind != TraversalEventKind.Stop && item.Kind != TraversalEventKind.Pass)
+                    continue;
+                if (previousStation.HasValue
+                    && !string.IsNullOrEmpty(item.StationId)
+                    && string.Equals(previousStation.Value.StationId, item.StationId, StringComparison.Ordinal))
+                {
+                    TraversalEvent previous = previousStation.Value;
+                    sb.Append(" | station=").Append(item.StationId)
+                      .Append(" from=e").Append(previous.EventIndex)
+                      .Append('/').Append(previous.Kind)
+                      .Append("/wp").Append(previous.WaypointIndex)
+                      .Append("/a").Append(previous.StartAtomIndex)
+                      .Append(" to=e").Append(item.EventIndex)
+                      .Append('/').Append(item.Kind)
+                      .Append("/wp").Append(item.WaypointIndex)
+                      .Append("/a").Append(item.StartAtomIndex);
+                }
+                previousStation = item;
+            }
+            sb.AppendLine();
+
+            var spans = new List<TramEdgeSpan>();
+            int unreadableAtoms = 0;
+            for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
+            {
+                if (TryReadTramEdgeSpan(chain.TrackAtoms[atomIndex], atomIndex, out TramEdgeSpan span))
+                    spans.Add(span);
+                else
+                    unreadableAtoms++;
+            }
+
+            sb.Append("tramEdgeSpans: count=").Append(spans.Count)
+              .Append(" unreadableAtoms=").Append(unreadableAtoms);
+            for (int spanIndex = 0; spanIndex < spans.Count; spanIndex++)
+            {
+                TramEdgeSpan span = spans[spanIndex];
+                TrackAtom atom = chain.TrackAtoms[span.AtomIndex];
+                EdgeLane edgeLane = EntityManager.GetComponentData<EdgeLane>(atom.Key.PhysicalLaneKey);
+                sb.Append(" | s").Append(spanIndex)
+                  .Append(" atom=").Append(span.AtomIndex)
+                  .Append(" lane=").Append(atom.Key.PhysicalLaneKey.Index)
+                  .Append(" edge=").Append(span.Edge.Index)
+                  .Append(" dir=").Append(span.Forward ? "+" : "-")
+                  .Append(" target=").Append(atom.TargetDelta.x.ToString("0.0000"))
+                  .Append("..").Append(atom.TargetDelta.y.ToString("0.0000"))
+                  .Append(" edgeLane=").Append(edgeLane.m_EdgeDelta.x.ToString("0.0000"))
+                  .Append("..").Append(edgeLane.m_EdgeDelta.y.ToString("0.0000"))
+                  .Append(" mapped=").Append(span.Low.ToString("0.0000"))
+                  .Append("..").Append(span.High.ToString("0.0000"))
+                  .Append(" meters=").Append(MeasureEdgeSpan(span).ToString("0.0"));
+            }
+            sb.AppendLine();
+
+            sb.Append("tramReverseCandidates:");
+            int candidateCount = 0;
+            for (int laterIndex = 1; laterIndex < spans.Count; laterIndex++)
+            {
+                TramEdgeSpan later = spans[laterIndex];
+                int earlierIndex = FindReverseSpan(spans, laterIndex, later);
+                if (earlierIndex < 0)
+                    continue;
+
+                candidateCount++;
+                var region = new TramTurnbackBuild(laterIndex, earlierIndex);
+                AddOverlap(region, spans[earlierIndex], later);
+                int forward = laterIndex + 1;
+                int reverse = earlierIndex - 1;
+                while (forward < spans.Count && reverse >= 0
+                    && TryContinuousTramOverlap(
+                        region.Overlaps[region.Overlaps.Count - 1],
+                        spans[reverse + 1],
+                        spans[forward - 1],
+                        spans[reverse],
+                        spans[forward],
+                        out float low,
+                        out float high,
+                        out Entity sharedNode))
+                {
+                    region.SetLastEndNode(sharedNode);
+                    AddOverlap(region, spans[forward], low, high, sharedNode, Entity.Null);
+                    region.LastSpanIndex = forward;
+                    forward++;
+                    reverse--;
+                }
+
+                MeasureRunChartTurnback(region, out float meters, out int edgeCount, out bool singleEdgeLongEnough);
+                bool qualified = meters >= 400f && (edgeCount >= 2 || singleEdgeLongEnough);
+                string stopReason = forward >= spans.Count
+                    ? "later-end"
+                    : reverse < 0
+                        ? "earlier-start"
+                        : DescribeTramContinuityFailure(
+                            region.Overlaps[region.Overlaps.Count - 1],
+                            spans[reverse + 1],
+                            spans[forward - 1],
+                            spans[reverse],
+                            spans[forward]);
+                sb.Append(" | c").Append(candidateCount - 1)
+                  .Append(" earlier=s").Append(earlierIndex)
+                  .Append("/a").Append(spans[earlierIndex].AtomIndex)
+                  .Append(" later=s").Append(laterIndex)
+                  .Append("/a").Append(later.AtomIndex)
+                  .Append(" last=s").Append(region.LastSpanIndex)
+                  .Append(" overlaps=").Append(region.Overlaps.Count)
+                  .Append(" edges=").Append(edgeCount)
+                  .Append(" meters=").Append(meters.ToString("0.0"))
+                  .Append(" result=").Append(qualified ? "accepted" : "below-400m")
+                  .Append(" stop=").Append(stopReason);
+            }
+            if (candidateCount == 0)
+                sb.Append(" none");
+            sb.AppendLine();
+
+            sb.Append("tramRunChartTurnbackRegions:");
+            for (int regionIndex = 0; regionIndex < chain.RunChartTurnbackRegions.Count; regionIndex++)
+            {
+                RunChartTurnbackRegion region = chain.RunChartTurnbackRegions[regionIndex];
+                sb.Append(" | r").Append(regionIndex)
+                  .Append(" boundary=").Append(region.BoundaryAtomIndex)
+                  .Append(" atoms=").Append(region.StartAtomIndex)
+                  .Append("..").Append(region.EndAtomIndexExclusive);
+            }
+            if (chain.RunChartTurnbackRegions.Count == 0)
+                sb.Append(" none");
+            sb.AppendLine();
+        }
+
+        private bool TryReadTramEdgeSpan(TrackAtom atom, int atomIndex, out TramEdgeSpan span)
+        {
+            span = default;
+            Entity lane = atom.Key.PhysicalLaneKey;
+            if (lane == Entity.Null
+                || !EntityManager.Exists(lane)
+                || !EntityManager.HasComponent<EdgeLane>(lane)
+                || !EntityManager.HasComponent<Owner>(lane))
+            {
+                return false;
+            }
+
+            Entity edge = EntityManager.GetComponentData<Owner>(lane).m_Owner;
+            if (edge == Entity.Null
+                || !EntityManager.Exists(edge)
+                || !EntityManager.HasComponent<Game.Net.Edge>(edge)
+                || !EntityManager.HasComponent<Curve>(edge))
+            {
+                return false;
+            }
+
+            EdgeLane edgeLane = EntityManager.GetComponentData<EdgeLane>(lane);
+            float start = math.lerp(edgeLane.m_EdgeDelta.x, edgeLane.m_EdgeDelta.y, atom.TargetDelta.x);
+            float end = math.lerp(edgeLane.m_EdgeDelta.x, edgeLane.m_EdgeDelta.y, atom.TargetDelta.y);
+            if (math.abs(end - start) <= 0.0001f)
+                return false;
+
+            span = new TramEdgeSpan
+            {
+                AtomIndex = atomIndex,
+                Edge = edge,
+                Forward = end > start,
+                Low = math.min(start, end),
+                High = math.max(start, end)
+            };
+            return true;
+        }
+
+        private static int FindReverseSpan(List<TramEdgeSpan> spans, int laterIndex, TramEdgeSpan later)
+        {
+            for (int earlierIndex = laterIndex - 1; earlierIndex >= 0; earlierIndex--)
+            {
+                if (TryReverseOverlap(spans[earlierIndex], later, out _, out _))
+                    return earlierIndex;
+            }
+            return -1;
+        }
+
+        private static bool TryReverseOverlap(TramEdgeSpan earlier, TramEdgeSpan later, out float low, out float high)
+        {
+            low = math.max(earlier.Low, later.Low);
+            high = math.min(earlier.High, later.High);
+            return earlier.Edge == later.Edge
+                && earlier.Forward != later.Forward
+                && high - low > 0.0001f;
+        }
+
+        private bool TryContinuousTramOverlap(
+            TramOverlap previous,
+            TramEdgeSpan previousEarlier,
+            TramEdgeSpan previousLater,
+            TramEdgeSpan nextEarlier,
+            TramEdgeSpan nextLater,
+            out float low,
+            out float high,
+            out Entity sharedNode)
+        {
+            low = 0f;
+            high = 0f;
+            sharedNode = Entity.Null;
+            if (!TryReverseOverlap(nextEarlier, nextLater, out low, out high))
+            {
+                return false;
+            }
+            if (previous.Edge == nextLater.Edge)
+            {
+                return math.abs(EndParam(previousLater, previous.Low, previous.High)
+                        - StartParam(nextLater, low, high)) <= 0.0001f
+                    && math.abs(StartParam(previousEarlier, previous.Low, previous.High)
+                        - EndParam(nextEarlier, low, high)) <= 0.0001f;
+            }
+            if (!TrySharedNode(previous.Edge, nextLater.Edge, out Entity[] nodes))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                Entity node = nodes[i];
+                if (EndsAt(previousLater, previous.Low, previous.High, node)
+                    && StartsAt(nextLater, low, high, node)
+                    && StartsAt(previousEarlier, previous.Low, previous.High, node)
+                    && EndsAt(nextEarlier, low, high, node))
+                {
+                    sharedNode = node;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool TrySharedNode(Entity left, Entity right, out Entity[] nodes)
+        {
+            nodes = Array.Empty<Entity>();
+            if (left == Entity.Null || right == Entity.Null
+                || !EntityManager.HasComponent<Game.Net.Edge>(left)
+                || !EntityManager.HasComponent<Game.Net.Edge>(right))
+            {
+                return false;
+            }
+
+            Game.Net.Edge leftEdge = EntityManager.GetComponentData<Game.Net.Edge>(left);
+            Game.Net.Edge rightEdge = EntityManager.GetComponentData<Game.Net.Edge>(right);
+            var shared = new List<Entity>(2);
+            AddSharedNode(shared, leftEdge.m_Start, rightEdge.m_Start);
+            AddSharedNode(shared, leftEdge.m_Start, rightEdge.m_End);
+            AddSharedNode(shared, leftEdge.m_End, rightEdge.m_Start);
+            AddSharedNode(shared, leftEdge.m_End, rightEdge.m_End);
+            nodes = shared.ToArray();
+            return nodes.Length > 0;
+        }
+
+        private static void AddSharedNode(List<Entity> nodes, Entity left, Entity right)
+        {
+            if (left != Entity.Null && left == right && !nodes.Contains(left))
+                nodes.Add(left);
+        }
+
+        private bool StartsAt(TramEdgeSpan span, float low, float high, Entity node)
+        {
+            return EdgeParam(span.Edge, node, out float value)
+                && math.abs(StartParam(span, low, high) - value) <= 0.0001f;
+        }
+
+        private bool EndsAt(TramEdgeSpan span, float low, float high, Entity node)
+        {
+            return EdgeParam(span.Edge, node, out float value)
+                && math.abs(EndParam(span, low, high) - value) <= 0.0001f;
+        }
+
+        private static float StartParam(TramEdgeSpan span, float low, float high) =>
+            span.Forward ? low : high;
+
+        private static float EndParam(TramEdgeSpan span, float low, float high) =>
+            span.Forward ? high : low;
+
+        private bool EdgeParam(Entity edge, Entity node, out float value)
+        {
+            value = 0f;
+            if (edge == Entity.Null || node == Entity.Null
+                || !EntityManager.HasComponent<Game.Net.Edge>(edge))
+            {
+                return false;
+            }
+
+            Game.Net.Edge edgeData = EntityManager.GetComponentData<Game.Net.Edge>(edge);
+            if (edgeData.m_Start == node)
+                return true;
+            if (edgeData.m_End == node)
+            {
+                value = 1f;
+                return true;
+            }
+            return false;
+        }
+
+        private static void AddOverlap(TramTurnbackBuild region, TramEdgeSpan span, TramEdgeSpan other)
+        {
+            AddOverlap(region, span, math.max(span.Low, other.Low), math.min(span.High, other.High));
+        }
+
+        private static void AddOverlap(
+            TramTurnbackBuild region,
+            TramEdgeSpan span,
+            float low,
+            float high,
+            Entity startNode = default,
+            Entity endNode = default)
+        {
+            if (high - low <= 0.0001f)
+                return;
+            if (!region.Intervals.TryGetValue(span.Edge, out List<EdgeInterval> intervals))
+            {
+                intervals = new List<EdgeInterval>();
+                region.Intervals[span.Edge] = intervals;
+            }
+            intervals.Add(new EdgeInterval(low, high));
+            region.Overlaps.Add(new TramOverlap(span.Edge, low, high, startNode, endNode));
+        }
+
+        private bool QualifiesRunChartTurnback(TramTurnbackBuild region)
+        {
+            MeasureRunChartTurnback(region, out float totalLength, out int edgeCount, out bool singleEdgeLongEnough);
+            return totalLength >= 400f && (edgeCount >= 2 || singleEdgeLongEnough);
+        }
+
+        private void MeasureRunChartTurnback(
+            TramTurnbackBuild region,
+            out float totalLength,
+            out int edgeCount,
+            out bool singleEdgeLongEnough)
+        {
+            totalLength = 0f;
+            edgeCount = 0;
+            singleEdgeLongEnough = false;
+            if (region == null)
+                return;
+            foreach (KeyValuePair<Entity, List<EdgeInterval>> entry in region.Intervals)
+            {
+                float length = UnionEdgeLength(entry.Key, entry.Value);
+                if (length <= 0f)
+                    continue;
+                edgeCount++;
+                totalLength += length;
+                singleEdgeLongEnough |= length >= 400f;
+            }
+        }
+
+        private float MeasureEdgeSpan(TramEdgeSpan span)
+        {
+            if (span.Edge == Entity.Null || !EntityManager.HasComponent<Curve>(span.Edge))
+                return 0f;
+            Curve curve = EntityManager.GetComponentData<Curve>(span.Edge);
+            return MathUtils.Length(MathUtils.Cut(curve.m_Bezier, new float2(span.Low, span.High)));
+        }
+
+        private string DescribeTramContinuityFailure(
+            TramOverlap previous,
+            TramEdgeSpan previousEarlier,
+            TramEdgeSpan previousLater,
+            TramEdgeSpan nextEarlier,
+            TramEdgeSpan nextLater)
+        {
+            if (!TryReverseOverlap(nextEarlier, nextLater, out float low, out float high))
+                return "next-no-reverse-overlap";
+            if (previous.Edge == nextLater.Edge)
+            {
+                float laterGap = math.abs(EndParam(previousLater, previous.Low, previous.High)
+                    - StartParam(nextLater, low, high));
+                float earlierGap = math.abs(StartParam(previousEarlier, previous.Low, previous.High)
+                    - EndParam(nextEarlier, low, high));
+                return "same-edge-gap-later=" + laterGap.ToString("0.0000")
+                    + "-earlier=" + earlierGap.ToString("0.0000");
+            }
+            if (!TrySharedNode(previous.Edge, nextLater.Edge, out Entity[] nodes))
+                return "edges-not-connected";
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                Entity node = nodes[i];
+                if (EndsAt(previousLater, previous.Low, previous.High, node)
+                    && StartsAt(nextLater, low, high, node)
+                    && StartsAt(previousEarlier, previous.Low, previous.High, node)
+                    && EndsAt(nextEarlier, low, high, node))
+                {
+                    return "continuous";
+                }
+            }
+            return "shared-node-not-at-overlap-end";
+        }
+
+        private float UnionEdgeLength(Entity edge, List<EdgeInterval> intervals)
+        {
+            if (edge == Entity.Null || intervals == null || intervals.Count == 0
+                || !EntityManager.HasComponent<Curve>(edge))
+            {
+                return 0f;
+            }
+
+            intervals.Sort((left, right) => left.Low.CompareTo(right.Low));
+            Curve curve = EntityManager.GetComponentData<Curve>(edge);
+            float length = 0f;
+            float low = intervals[0].Low;
+            float high = intervals[0].High;
+            for (int i = 1; i <= intervals.Count; i++)
+            {
+                if (i < intervals.Count && intervals[i].Low <= high + 0.0001f)
+                {
+                    high = math.max(high, intervals[i].High);
+                    continue;
+                }
+
+                length += MathUtils.Length(MathUtils.Cut(curve.m_Bezier, new float2(low, high)));
+                if (i < intervals.Count)
+                {
+                    low = intervals[i].Low;
+                    high = intervals[i].High;
+                }
+            }
+            return length;
+        }
+
+        private struct TramEdgeSpan
+        {
+            internal int AtomIndex;
+            internal Entity Edge;
+            internal bool Forward;
+            internal float Low;
+            internal float High;
+        }
+
+        private readonly struct EdgeInterval
+        {
+            internal readonly float Low;
+            internal readonly float High;
+
+            internal EdgeInterval(float low, float high)
+            {
+                Low = low;
+                High = high;
+            }
+        }
+
+        private readonly struct TramOverlap
+        {
+            internal readonly Entity Edge;
+            internal readonly float Low;
+            internal readonly float High;
+            internal readonly Entity StartNode;
+            internal readonly Entity EndNode;
+
+            internal TramOverlap(Entity edge, float low, float high, Entity startNode, Entity endNode)
+            {
+                Edge = edge;
+                Low = low;
+                High = high;
+                StartNode = startNode;
+                EndNode = endNode;
+            }
+
+            internal TramOverlap WithEndNode(Entity node) =>
+                new TramOverlap(Edge, Low, High, StartNode, node);
+        }
+
+        private sealed class TramTurnbackBuild
+        {
+            internal readonly Dictionary<Entity, List<EdgeInterval>> Intervals =
+                new Dictionary<Entity, List<EdgeInterval>>();
+            internal readonly List<TramOverlap> Overlaps = new List<TramOverlap>();
+            internal readonly int FirstSpanIndex;
+            internal int FirstEarlierSpanIndex;
+            internal int LastSpanIndex;
+
+            internal TramTurnbackBuild(int firstSpanIndex, int firstEarlierSpanIndex = -1)
+            {
+                FirstSpanIndex = firstSpanIndex;
+                FirstEarlierSpanIndex = firstEarlierSpanIndex;
+                LastSpanIndex = firstSpanIndex;
+            }
+
+            internal void SetEarliestEarlierSpanIndex(int spanIndex)
+            {
+                if (spanIndex >= 0
+                    && (FirstEarlierSpanIndex < 0 || spanIndex < FirstEarlierSpanIndex))
+                {
+                    FirstEarlierSpanIndex = spanIndex;
+                }
+            }
+
+            internal void Extend(TramTurnbackBuild other)
+            {
+                LastSpanIndex = math.max(LastSpanIndex, other.LastSpanIndex);
+                SetEarliestEarlierSpanIndex(other.FirstEarlierSpanIndex);
+            }
+
+            internal void SetLastEndNode(Entity node)
+            {
+                int index = Overlaps.Count - 1;
+                if (index >= 0)
+                    Overlaps[index] = Overlaps[index].WithEndNode(node);
+            }
+        }
+
         internal void BuildTurnbackBoundaries(LineTrackChain chain, Entity line, DynamicBuffer<RouteWaypoint> waypoints)
         {
             if (chain == null)
@@ -1326,11 +2007,21 @@ namespace RapidTransitMod.TrackModel
                 int endAtomIndexExclusive = atomIndex;
                 int waypointIndex = -1;
                 float stopFrames = 0f;
+                string stationId = string.Empty;
                 if (TryFindTraversalStopWaypointIndex(chain, building, startAtomIndex, endAtomIndexExclusive, out int matchedWaypointIndex))
                 {
                     waypointIndex = matchedWaypointIndex;
-                    if (hasLinePrefabData)
+                    if (hasLinePrefabData
+                        && !IsTerminalRange(
+                            chain,
+                            startAtomIndex,
+                            endAtomIndexExclusive,
+                            matchedWaypointIndex))
+                    {
                         stopFrames = m_Support.GetProfileWaypointStopFrames(line, waypoints, matchedWaypointIndex, prefabLineData);
+                    }
+                    if (TransportModeResolver.Resolve(EntityManager, line) == TransitMode.Tram)
+                        m_TramStops.TryGetStationId(line, matchedWaypointIndex, out stationId);
                 }
 
                 int passIndex = passCountByBuilding.TryGetValue(building, out int existingPassCount)
@@ -1344,11 +2035,13 @@ namespace RapidTransitMod.TrackModel
                     endAtomIndexExclusive,
                     waypointIndex,
                     stopFrames,
-                    passIndex));
+                    passIndex,
+                    stationId));
             }
 
             if (TransportModeResolver.Resolve(EntityManager, line) == TransitMode.Tram)
             {
+                MergeTramStationRanges(chain, stationPasses);
                 int originalRangeCount = stationPasses.Count;
                 AppendTramCurrentStops(
                     chain,
@@ -1368,6 +2061,85 @@ namespace RapidTransitMod.TrackModel
             }
 
             return stationPasses;
+        }
+
+        private void MergeTramStationRanges(
+            LineTrackChain chain,
+            List<StationPassRange> stationPasses)
+        {
+            for (int index = 0; index + 1 < stationPasses.Count;)
+            {
+                StationPassRange left = stationPasses[index];
+                StationPassRange right = stationPasses[index + 1];
+                if (!CanMergeTramStationRanges(chain, left, right))
+                {
+                    index++;
+                    continue;
+                }
+
+                StationPassRange stop = left.WaypointIndex >= 0 ? left : right;
+                stationPasses[index] = new StationPassRange(
+                    left.Building,
+                    left.StartAtomIndex,
+                    right.EndAtomIndexExclusive,
+                    stop.WaypointIndex,
+                    stop.StopFrames,
+                    left.PassIndex,
+                    stop.StationId);
+                stationPasses.RemoveAt(index + 1);
+            }
+        }
+
+        private bool CanMergeTramStationRanges(
+            LineTrackChain chain,
+            StationPassRange left,
+            StationPassRange right)
+        {
+            if (left.Building == Entity.Null
+                || left.Building != right.Building
+                || (left.WaypointIndex < 0 && right.WaypointIndex < 0)
+                || (left.WaypointIndex >= 0
+                    && right.WaypointIndex >= 0
+                    && left.WaypointIndex != right.WaypointIndex)
+                || right.StartAtomIndex < left.EndAtomIndexExclusive
+                || right.StartAtomIndex - left.EndAtomIndexExclusive > 1)
+            {
+                return false;
+            }
+
+            for (int atomIndex = left.EndAtomIndexExclusive;
+                atomIndex < right.StartAtomIndex;
+                atomIndex++)
+            {
+                if (m_Support.ResolvePassingStationBuilding(chain.TrackAtoms[atomIndex].SourceTarget) != Entity.Null)
+                    return false;
+            }
+
+            return TryGetStationRangeDirection(chain, left, out TrackTraversalDir leftDirection)
+                && TryGetStationRangeDirection(chain, right, out TrackTraversalDir rightDirection)
+                && leftDirection == rightDirection;
+        }
+
+        private static bool TryGetStationRangeDirection(
+            LineTrackChain chain,
+            StationPassRange range,
+            out TrackTraversalDir direction)
+        {
+            direction = TrackTraversalDir.Unknown;
+            for (int atomIndex = range.StartAtomIndex;
+                atomIndex < range.EndAtomIndexExclusive;
+                atomIndex++)
+            {
+                TrackTraversalDir current = chain.TrackAtoms[atomIndex].TraversalDir;
+                if (current == TrackTraversalDir.Unknown)
+                    return false;
+                if (direction == TrackTraversalDir.Unknown)
+                    direction = current;
+                else if (direction != current)
+                    return false;
+            }
+
+            return direction != TrackTraversalDir.Unknown;
         }
 
         private void AppendTramCurrentStops(
@@ -1399,13 +2171,15 @@ namespace RapidTransitMod.TrackModel
                 float stopFrames = hasLinePrefabData
                     ? m_Support.GetProfileWaypointStopFrames(currentLine, waypoints, waypointIndex, prefabLineData)
                     : 0f;
+                m_TramStops.TryGetStationId(currentLine, waypointIndex, out string stationId);
                 stationPasses.Add(new StationPassRange(
                     stop,
                     atomIndex,
                     atomIndex + 1,
                     waypointIndex,
                     stopFrames,
-                    0));
+                    0,
+                    stationId));
             }
         }
 
@@ -1415,74 +2189,51 @@ namespace RapidTransitMod.TrackModel
             List<StationPassRange> stationPasses,
             int originalRangeCount)
         {
-            Dictionary<int, Entity> externalStopByAtom = new Dictionary<int, Entity>();
-            HashSet<int> ambiguousExternalAtoms = new HashSet<int>();
-            NativeArray<Entity> lines = m_Support.GetLineEntities(Allocator.Temp);
-            try
+            var candidates = new List<TramPassRange>();
+            m_TramStops.CollectPasses(currentLine, chain, candidates);
+            var stationByAtom = new Dictionary<int, string>();
+            var ambiguousAtoms = new HashSet<int>();
+            for (int i = 0; i < candidates.Count; i++)
             {
-                for (int i = 0; i < lines.Length; i++)
+                TramPassRange candidate = candidates[i];
+                if (candidate.AtomIndex < 0
+                    || candidate.AtomIndex >= chain.TrackAtoms.Count
+                    || string.IsNullOrEmpty(candidate.StationId)
+                    || IsCoveredByRanges(stationPasses, originalRangeCount, candidate.AtomIndex)
+                    || HasCurrentStop(stationPasses, candidate.AtomIndex)
+                    || ambiguousAtoms.Contains(candidate.AtomIndex))
                 {
-                    Entity line = lines[i];
-                    if (line == Entity.Null
-                        || line == currentLine
-                        || !EntityManager.Exists(line)
-                        || !EntityManager.HasBuffer<RouteWaypoint>(line)
-                        || TransportModeResolver.Resolve(EntityManager, line) != TransitMode.Tram)
-                    {
-                        continue;
-                    }
-
-                    DynamicBuffer<RouteWaypoint> sourceWaypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-                    for (int waypointIndex = 0; waypointIndex < sourceWaypoints.Length; waypointIndex++)
-                    {
-                        Entity stop = m_Support.Stop(sourceWaypoints[waypointIndex].m_Waypoint);
-                        if (!IsStopOnly(stop, sourceWaypoints, waypointIndex))
-                            continue;
-
-                        if (!TryProjectStopRange(
-                                chain,
-                                sourceWaypoints[waypointIndex].m_Waypoint,
-                                out List<int> atomIndices))
-                        {
-                            LogProjectionSkip(currentLine, line, waypointIndex, "unmatched-physical-lane-or-curve");
-                            continue;
-                        }
-
-                        for (int atomIndex = 0; atomIndex < atomIndices.Count; atomIndex++)
-                        {
-                            int projectedAtomIndex = atomIndices[atomIndex];
-                            if (IsCoveredByRanges(stationPasses, originalRangeCount, projectedAtomIndex)
-                                || HasCurrentStop(stationPasses, projectedAtomIndex)
-                                || ambiguousExternalAtoms.Contains(projectedAtomIndex)
-                                || HasStopRange(stationPasses, stop, projectedAtomIndex))
-                            {
-                                continue;
-                            }
-
-                            if (externalStopByAtom.TryGetValue(projectedAtomIndex, out Entity existingStop)
-                                && existingStop != stop)
-                            {
-                                RemoveProjectedPasses(stationPasses, originalRangeCount, projectedAtomIndex);
-                                ambiguousExternalAtoms.Add(projectedAtomIndex);
-                                LogProjectionSkip(currentLine, line, waypointIndex, "ambiguous-different-stop-same-atom");
-                                continue;
-                            }
-
-                            externalStopByAtom[projectedAtomIndex] = stop;
-                            stationPasses.Add(new StationPassRange(
-                                stop,
-                                projectedAtomIndex,
-                                projectedAtomIndex + 1,
-                                -1,
-                                0f,
-                                0));
-                        }
-                    }
+                    continue;
                 }
-            }
-            finally
-            {
-                lines.Dispose();
+
+                if (stationByAtom.TryGetValue(candidate.AtomIndex, out string stationId))
+                {
+                    if (!string.Equals(stationId, candidate.StationId, StringComparison.Ordinal))
+                    {
+                        RemoveProjectedPasses(stationPasses, originalRangeCount, candidate.AtomIndex);
+                        ambiguousAtoms.Add(candidate.AtomIndex);
+                        stationPasses.Add(new StationPassRange(
+                            Entity.Null,
+                            candidate.AtomIndex,
+                            candidate.AtomIndex,
+                            -1,
+                            0f,
+                            0,
+                            string.Empty,
+                            true));
+                    }
+                    continue;
+                }
+
+                stationByAtom[candidate.AtomIndex] = candidate.StationId;
+                stationPasses.Add(new StationPassRange(
+                    candidate.Stop,
+                    candidate.AtomIndex,
+                    candidate.AtomIndex + 1,
+                    -1,
+                    0f,
+                    0,
+                    candidate.StationId));
             }
         }
 
@@ -1519,75 +2270,6 @@ namespace RapidTransitMod.TrackModel
             return false;
         }
 
-        private bool TryProjectStopRange(
-            LineTrackChain chain,
-            Entity waypoint,
-            out List<int> atomIndices)
-        {
-            atomIndices = null;
-            if (waypoint == Entity.Null || !EntityManager.HasComponent<RouteLane>(waypoint))
-                return false;
-
-            RouteLane routeLane = EntityManager.GetComponentData<RouteLane>(waypoint);
-            Entity lane = routeLane.m_StartLane;
-            float curvePos = routeLane.m_StartCurvePos;
-            if (lane == Entity.Null)
-            {
-                lane = routeLane.m_EndLane;
-                curvePos = routeLane.m_EndCurvePos;
-            }
-
-            return TryProjectEndpoint(chain, lane, curvePos, out atomIndices);
-        }
-
-        private bool TryProjectEndpoint(
-            LineTrackChain chain,
-            Entity lane,
-            float curvePos,
-            out List<int> atomIndices)
-        {
-            atomIndices = null;
-            if (lane == Entity.Null
-                || chain?.AtomIndicesByLane == null
-                || !chain.AtomIndicesByLane.TryGetValue(lane, out List<int> indexedAtomIndices))
-            {
-                return false;
-            }
-
-            HashSet<int> seen = new HashSet<int>();
-            List<int> matches = new List<int>();
-            for (int i = 0; i < indexedAtomIndices.Count; i++)
-            {
-                int candidateIndex = indexedAtomIndices[i];
-                if (!seen.Add(candidateIndex)
-                    || candidateIndex < 0
-                    || candidateIndex >= chain.TrackAtoms.Count)
-                {
-                    continue;
-                }
-
-                TrackAtom atom = chain.TrackAtoms[candidateIndex];
-                if (atom.Key.PhysicalLaneKey != lane
-                    || atom.AtomClass != TrackAtomClass.PrimaryLane)
-                {
-                    continue;
-                }
-
-                float low = math.min(atom.TargetDelta.x, atom.TargetDelta.y);
-                float high = math.max(atom.TargetDelta.x, atom.TargetDelta.y);
-                if (curvePos < low - 0.001f || curvePos > high + 0.001f)
-                    continue;
-
-                matches.Add(candidateIndex);
-            }
-
-            if (matches.Count == 0)
-                return false;
-
-            atomIndices = matches;
-            return true;
-        }
-
         private void ReassignTramPassIndices(List<StationPassRange> stationPasses)
         {
             Dictionary<Entity, int> passCounts = new Dictionary<Entity, int>();
@@ -1605,7 +2287,9 @@ namespace RapidTransitMod.TrackModel
                     range.EndAtomIndexExclusive,
                     range.WaypointIndex,
                     range.StopFrames,
-                    passIndex);
+                    passIndex,
+                    range.StationId,
+                    range.IsBreak);
             }
         }
 
@@ -1700,18 +2384,8 @@ namespace RapidTransitMod.TrackModel
             if (compare != 0)
                 return compare;
 
-            return left.PassIndex.CompareTo(right.PassIndex);
-        }
-
-        private void LogProjectionSkip(Entity currentLine, Entity sourceLine, int waypointIndex, string reason)
-        {
-            if (!RtLog.CacheInvalidationDiagnosticsEnabled)
-                return;
-
-            log.Info("[TrackStopProjectionSkipped] currentLine=" + currentLine.Index
-                + " sourceLine=" + sourceLine.Index
-                + " wp=" + waypointIndex
-                + " reason=" + reason);
+            compare = StringComparer.Ordinal.Compare(left.StationId, right.StationId);
+            return compare != 0 ? compare : left.PassIndex.CompareTo(right.PassIndex);
         }
 
         private bool TryGetTraversalProfileLineData(Entity line, out Game.Prefabs.TransportLineData prefabLineData)
@@ -1757,7 +2431,42 @@ namespace RapidTransitMod.TrackModel
                 return true;
             }
 
+            if (!chain.ChainComplete
+                || startAtomIndex <= 0
+                || endAtomIndexExclusive != chain.TrackAtoms.Count)
+            {
+                return false;
+            }
+
+            for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count; controlPointIndex++)
+            {
+                ControlPointMarker marker = chain.ControlPoints[controlPointIndex];
+                if (marker.AtomIndex != 0
+                    || marker.WaypointIndex != 0
+                    || marker.Building != building
+                    || (marker.Kind != ControlPointKind.Stop && marker.Kind != ControlPointKind.Bypass))
+                {
+                    continue;
+                }
+
+                waypointIndex = marker.WaypointIndex;
+                return true;
+            }
+
             return false;
+        }
+
+        private static bool IsTerminalRange(
+            LineTrackChain chain,
+            int startAtomIndex,
+            int endAtomIndexExclusive,
+            int waypointIndex)
+        {
+            return chain != null
+                && chain.ChainComplete
+                && waypointIndex == 0
+                && startAtomIndex > 0
+                && endAtomIndexExclusive == chain.TrackAtoms.Count;
         }
 
         private static Entity[] CollectTraversalSlicePhysicalLaneKeys(

@@ -27,6 +27,13 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public int ProjectedCount;
     }
 
+    internal sealed class RailEtaTheorySegmentPathResult
+    {
+        public RailEtaTheorySegmentRequest Request;
+        public RailTravel.Path Path;
+        public bool FormalPath;
+    }
+
     internal sealed class RailEtaTheoryPaths
     {
         private readonly EntityManager m_Entities;
@@ -34,8 +41,15 @@ namespace RapidTransitMod.RailEta.BuiltIn
         private readonly DepotSourceLockSystem m_Depots;
         private readonly Action<string> m_Log;
         private readonly Dictionary<string, Entity> m_Pending = new Dictionary<string, Entity>(StringComparer.Ordinal);
+        private readonly Dictionary<string, RailEtaTheorySegmentRequest> m_SegmentPending =
+            new Dictionary<string, RailEtaTheorySegmentRequest>(StringComparer.Ordinal);
+        private readonly Dictionary<int, RailEtaTheorySegmentPathResult> m_SegmentResults =
+            new Dictionary<int, RailEtaTheorySegmentPathResult>();
         private Entity m_Line;
         private Entity m_Target;
+        private Entity m_Model;
+        private string m_SegmentFailure = string.Empty;
+        private RailEtaTheoryFailure m_SegmentFailureInfo;
         private bool m_Configured;
         private int m_CandidateCount;
         private int m_ReachableCount;
@@ -112,6 +126,98 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return false;
         }
 
+        internal bool StartSegments(Entity line, Entity model, RailEtaTheorySegmentRequest[] segments, out string failure)
+        {
+            Cancel();
+            failure = string.Empty;
+            if (line == Entity.Null || model == Entity.Null || segments == null || segments.Length == 0 || segments.Length > 256)
+            {
+                failure = "TheorySegmentRequestInvalid";
+                return false;
+            }
+            if (!TrySetup(line, model, out PathfindParameters parameters, out RouteConnectionData routeData)
+                || !m_Entities.HasBuffer<RouteSegment>(line)
+                || !m_Entities.HasBuffer<RouteWaypoint>(line))
+            {
+                failure = "TheorySegmentPathSetupMissing";
+                return false;
+            }
+
+            DynamicBuffer<RouteSegment> routeSegments = m_Entities.GetBuffer<RouteSegment>(line, true);
+            DynamicBuffer<RouteWaypoint> waypoints = m_Entities.GetBuffer<RouteWaypoint>(line, true);
+            var seen = new HashSet<int>();
+            m_Line = line;
+            m_Model = model;
+            for (int i = 0; i < segments.Length; i++)
+            {
+                RailEtaTheorySegmentRequest request = segments[i];
+                if (!seen.Add(request.PathSlotIndex)
+                    || request.PathSlotIndex < 0
+                    || request.PathSlotIndex >= routeSegments.Length
+                    || request.FromWaypointIndex < 0
+                    || request.FromWaypointIndex >= waypoints.Length
+                    || request.ToWaypointIndex < 0
+                    || request.ToWaypointIndex >= waypoints.Length)
+                {
+                    failure = "TheorySegmentSequenceInvalid";
+                    Cancel();
+                    return false;
+                }
+
+                Entity from = waypoints[request.FromWaypointIndex].m_Waypoint;
+                Entity to = waypoints[request.ToWaypointIndex].m_Waypoint;
+                if (from == Entity.Null || to == Entity.Null
+                    || from.Version != request.FromWaypointVersion
+                    || to.Version != request.ToWaypointVersion)
+                {
+                    failure = "TheorySegmentSignatureMismatch";
+                    Cancel();
+                    return false;
+                }
+
+                Entity routeSegment = routeSegments[request.PathSlotIndex].m_Segment;
+                if (routeSegment != Entity.Null
+                    && new RailTravel.PathQuery(m_Entities).TryBuild(routeSegment, out RailTravel.Path existing)
+                    && existing != null && existing.Segments.Length != 0)
+                {
+                    m_SegmentResults[request.PathSlotIndex] = new RailEtaTheorySegmentPathResult
+                    {
+                        Request = request,
+                        Path = existing,
+                        FormalPath = true
+                    };
+                    continue;
+                }
+
+                SetupQueueTarget origin = new SetupQueueTarget
+                {
+                    m_Type = SetupTargetType.CurrentLocation,
+                    m_Methods = parameters.m_Methods,
+                    m_TrackTypes = routeData.m_RouteTrackType,
+                    m_RoadTypes = routeData.m_RouteRoadType,
+                    m_Entity = from
+                };
+                SetupQueueTarget destination = new SetupQueueTarget
+                {
+                    m_Type = SetupTargetType.CurrentLocation,
+                    m_Methods = parameters.m_Methods,
+                    m_TrackTypes = routeData.m_RouteTrackType,
+                    m_RoadTypes = routeData.m_RouteRoadType,
+                    m_Entity = to
+                };
+                string id = m_Query.Start(parameters, origin, destination, 512u, 64, 0);
+                if (String.IsNullOrEmpty(id))
+                {
+                    failure = "TheorySegmentPathSubmitFailed";
+                    Cancel();
+                    return false;
+                }
+                m_SegmentPending.Add(id, request);
+            }
+
+            return true;
+        }
+
         internal bool Poll(out RailEtaTheoryPathResult result, out string failure)
         {
             result = null;
@@ -174,12 +280,95 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return true;
         }
 
+        internal bool PollSegments(
+            out List<RailEtaTheorySegmentPathResult> results,
+            out string failure,
+            out RailEtaTheoryFailure failureInfo)
+        {
+            results = null;
+            failure = m_SegmentFailure;
+            failureInfo = m_SegmentFailureInfo;
+            if (m_SegmentPending.Count != 0)
+            {
+                List<string> completed = null;
+                foreach (KeyValuePair<string, RailEtaTheorySegmentRequest> pending in m_SegmentPending)
+                {
+                    if (!m_Query.TryGetResult(pending.Key, out RailTravel.QueryResult query)
+                        || String.Equals(query.State, "pending", StringComparison.Ordinal))
+                        continue;
+                    (completed ?? (completed = new List<string>())).Add(pending.Key);
+                    if (!query.Success || !query.ProjectionSuccess || query.Path == null
+                        || query.Path.Segments.Length == 0)
+                    {
+                        string code = !query.Success
+                            ? "segment-path-failed"
+                            : !query.ProjectionSuccess
+                                ? "segment-path-projection-failed"
+                                : "segment-path-empty";
+                        if (m_SegmentFailureInfo == null)
+                        {
+                            RailEtaTheorySegmentRequest failedRequest = pending.Value;
+                            m_SegmentFailure = code;
+                            m_SegmentFailureInfo = new RailEtaTheoryFailure
+                            {
+                                SegmentIndex = failedRequest.SegmentIndex,
+                                FromWaypointIndex = failedRequest.FromWaypointIndex,
+                                ToWaypointIndex = failedRequest.ToWaypointIndex,
+                                Failure = code,
+                                Detail = SegmentFailureDetail(failedRequest, code, query.Error)
+                            };
+                        }
+                        continue;
+                    }
+                    RailEtaTheorySegmentRequest completedRequest = pending.Value;
+                    m_SegmentResults[completedRequest.PathSlotIndex] = new RailEtaTheorySegmentPathResult
+                    {
+                        Request = completedRequest,
+                        Path = query.Path
+                    };
+                }
+                if (completed != null)
+                    for (int i = 0; i < completed.Count; i++) m_SegmentPending.Remove(completed[i]);
+                if (m_SegmentPending.Count != 0) return false;
+            }
+
+            if (!String.IsNullOrEmpty(m_SegmentFailure))
+            {
+                failure = m_SegmentFailure;
+                failureInfo = m_SegmentFailureInfo;
+                return true;
+            }
+            results = new List<RailEtaTheorySegmentPathResult>(m_SegmentResults.Values);
+            results.Sort((left, right) => left.Request.PathSlotIndex.CompareTo(right.Request.PathSlotIndex));
+            return true;
+        }
+
+        private static string SegmentFailureDetail(
+            RailEtaTheorySegmentRequest request, string code, string reason)
+        {
+            string detail = "code=" + code
+                + ";seg=" + request.SegmentIndex
+                + ";from=" + request.FromWaypointIndex
+                + ";to=" + request.ToWaypointIndex
+                + ";slot=" + request.PathSlotIndex;
+            if (String.IsNullOrEmpty(reason)) return detail;
+            string token = reason.Replace(';', ',').Replace('\r', ' ').Replace('\n', ' ');
+            if (token.Length > 128) token = token.Substring(0, 128);
+            return detail + ";reason=" + token;
+        }
+
         internal void Cancel()
         {
             foreach (string id in m_Pending.Keys) m_Query.Cancel(id);
+            foreach (string id in m_SegmentPending.Keys) m_Query.Cancel(id);
             m_Pending.Clear();
+            m_SegmentPending.Clear();
+            m_SegmentResults.Clear();
             m_Line = Entity.Null;
             m_Target = Entity.Null;
+            m_Model = Entity.Null;
+            m_SegmentFailure = string.Empty;
+            m_SegmentFailureInfo = null;
             m_Configured = false;
             m_CandidateCount = 0;
             m_ReachableCount = 0;

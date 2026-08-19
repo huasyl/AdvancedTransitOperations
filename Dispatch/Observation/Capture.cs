@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Game.Routes;
 using RapidTransitMod.TrackModel;
@@ -48,6 +49,7 @@ namespace RapidTransitMod.Dispatch.Observation
         private const uint TraversalSliceSampleIntervalLowFrames = 64;
         private const uint TraversalSliceLineEligibilityNegativeCacheFrames = 60;
         private const uint TraversalSliceEntryProbeIntervalFrames = 32;
+        private const int MaxTraversalSliceDiagnosticEntries = 64;
         private const float TraversalSliceSampleHighThreshold = 0.03f;
         private const float TraversalSliceSampleMediumThreshold = 0.05f;
         private const float MaxObservedDwellMinutes = 30f;
@@ -242,6 +244,355 @@ namespace RapidTransitMod.Dispatch.Observation
             }
 
             return runFrames > 0f || stopFrames > 0f || stopCount > 0 || passCount > 0;
+        }
+
+        internal bool TryGetObservedTraversalFrames(
+            Entity line,
+            int fromWaypointIndex,
+            int toWaypointIndex,
+            out float frames)
+        {
+            return TryGetObservedTraversalFrames(
+                line,
+                fromWaypointIndex,
+                toWaypointIndex,
+                out frames,
+                out _);
+        }
+
+        internal bool TryGetObservedTraversalFrames(
+            Entity line,
+            int fromWaypointIndex,
+            int toWaypointIndex,
+            out float frames,
+            out string detail)
+        {
+            frames = 0f;
+            detail = string.Empty;
+            bool possibleClosing = fromWaypointIndex >= 0 && toWaypointIndex == 0;
+            if (line == Entity.Null
+                || fromWaypointIndex < 0
+                || toWaypointIndex < 0
+                || (!possibleClosing && toWaypointIndex <= fromWaypointIndex))
+            {
+                detail = "code=invalid-interval;line=" + line.Index
+                    + ";from=" + fromWaypointIndex
+                    + ";to=" + toWaypointIndex;
+                return false;
+            }
+
+            if (!m_Port.Exists(line) || !m_Port.HasWaypoints(line))
+            {
+                detail = "code=line-unavailable;line=" + line.Index;
+                return false;
+            }
+
+            DynamicBuffer<RouteWaypoint> waypoints = m_Port.Waypoints(line);
+            if (fromWaypointIndex >= waypoints.Length
+                || toWaypointIndex >= waypoints.Length)
+            {
+                detail = "code=waypoint-out-of-range;from=" + fromWaypointIndex
+                    + ";to=" + toWaypointIndex
+                    + ";count=" + waypoints.Length;
+                return false;
+            }
+
+            bool closing = waypoints.Length > 1
+                && fromWaypointIndex == waypoints.Length - 1
+                && toWaypointIndex == 0;
+            if (!closing && toWaypointIndex <= fromWaypointIndex)
+            {
+                detail = "code=invalid-interval;line=" + line.Index
+                    + ";from=" + fromWaypointIndex
+                    + ";to=" + toWaypointIndex;
+                return false;
+            }
+
+            if (waypoints[fromWaypointIndex].m_Waypoint == Entity.Null
+                || waypoints[toWaypointIndex].m_Waypoint == Entity.Null)
+            {
+                detail = "code=waypoint-null;from=" + fromWaypointIndex
+                    + ";to=" + toWaypointIndex;
+                return false;
+            }
+
+            if (!m_TrackModel.TryChain(line, out LineTrackChain chain)
+                || chain == null
+                || chain.LineEntity != line
+                || chain.Signature == 0UL
+                || chain.TraversalProfile == null)
+            {
+                detail = "code=track-profile-unavailable;line=" + line.Index;
+                return false;
+            }
+
+            if (closing
+                && (!chain.ChainComplete
+                    || chain.TrackAtoms == null
+                    || chain.TrackAtoms.Count == 0
+                    || chain.SegmentRanges == null
+                    || chain.SegmentRanges.Count != waypoints.Length
+                    || chain.TraversalProfile.RunSlices == null
+                    || chain.TraversalProfile.RunSlices.Count == 0))
+            {
+                detail = "code=closing-chain-incomplete;line=" + line.Index
+                    + ";waypoints=" + waypoints.Length
+                    + ";segments=" + (chain.SegmentRanges?.Count ?? 0)
+                    + ";atoms=" + (chain.TrackAtoms?.Count ?? 0);
+                return false;
+            }
+
+            if (!TryGetStopBounds(
+                    chain.TraversalProfile,
+                    fromWaypointIndex,
+                    out int departureAtomIndex,
+                    out _))
+            {
+                detail = "code=from-stop-bounds-missing;waypoint=" + fromWaypointIndex;
+                return false;
+            }
+
+            if (!TryGetStopBounds(
+                    chain.TraversalProfile,
+                    toWaypointIndex,
+                    out _,
+                    out int rawApproachAtomIndex))
+            {
+                detail = "code=to-stop-bounds-missing;waypoint=" + toWaypointIndex;
+                return false;
+            }
+
+            int approachAtomIndex = rawApproachAtomIndex;
+            if (closing)
+            {
+                if (rawApproachAtomIndex != 0)
+                {
+                    detail = "code=closing-approach-invalid;waypoint=" + toWaypointIndex
+                        + ";approach=" + rawApproachAtomIndex;
+                    return false;
+                }
+                approachAtomIndex = chain.TrackAtoms.Count;
+            }
+
+            if (approachAtomIndex <= departureAtomIndex)
+            {
+                detail = "code=stop-order-invalid;departure=" + departureAtomIndex
+                    + ";approach=" + approachAtomIndex;
+                return false;
+            }
+
+            if (TryBreakBoundary(
+                    chain,
+                    departureAtomIndex,
+                    approachAtomIndex,
+                    out string boundary))
+            {
+                detail = boundary;
+                return false;
+            }
+
+            int expectedStartAtomIndex = departureAtomIndex;
+            int observedSliceCount = 0;
+            int requiredSliceCount = 0;
+            int missingSliceCount = 0;
+            string failure = string.Empty;
+            List<string> requiredSlices = new List<string>();
+            List<string> hitSlices = new List<string>();
+            List<string> missingSlices = new List<string>();
+            for (int sliceListIndex = 0; sliceListIndex < chain.TraversalProfile.RunSlices.Count; sliceListIndex++)
+            {
+                TraversalRunSlice slice = chain.TraversalProfile.RunSlices[sliceListIndex];
+                if (slice.EndAtomIndexExclusive <= departureAtomIndex
+                    || slice.StartAtomIndex >= approachAtomIndex)
+                {
+                    continue;
+                }
+
+                requiredSliceCount++;
+                AddTraversalDiagnostic(requiredSlices, "run" + sliceListIndex + ":slice" + slice.SliceIndex);
+                if (slice.SliceIndex != sliceListIndex
+                    || slice.StartAtomIndex < 0
+                    || slice.EndAtomIndexExclusive <= slice.StartAtomIndex
+                    || slice.EndAtomIndexExclusive > chain.TrackAtoms.Count)
+                {
+                    if (string.IsNullOrEmpty(failure))
+                        failure = "code=slice-layout-invalid;slice=" + sliceListIndex;
+                    missingSliceCount++;
+                    AddTraversalDiagnostic(missingSlices, slice.SliceIndex.ToString());
+                    continue;
+                }
+
+                if (slice.StartAtomIndex != expectedStartAtomIndex)
+                {
+                    if (string.IsNullOrEmpty(failure))
+                    {
+                        failure = "code=slice-gap;slice=" + slice.SliceIndex
+                            + ";expected=" + expectedStartAtomIndex
+                            + ";actual=" + slice.StartAtomIndex;
+                    }
+                    missingSliceCount++;
+                    AddTraversalDiagnostic(missingSlices, slice.SliceIndex.ToString());
+                    continue;
+                }
+
+                if (slice.EndAtomIndexExclusive > approachAtomIndex)
+                {
+                    if (string.IsNullOrEmpty(failure))
+                    {
+                        failure = "code=slice-crosses-stop;slice=" + slice.SliceIndex
+                            + ";end=" + slice.EndAtomIndexExclusive
+                            + ";approach=" + approachAtomIndex;
+                    }
+                    missingSliceCount++;
+                    AddTraversalDiagnostic(missingSlices, slice.SliceIndex.ToString());
+                    continue;
+                }
+
+                if (!m_Slices.TryObservation(
+                        Keys.Slice(line, slice.SliceIndex),
+                        out TraversalSliceObservation observation))
+                {
+                    if (string.IsNullOrEmpty(failure))
+                    {
+                        failure = "code=slice-observation-missing;slice=" + slice.SliceIndex
+                            + ";lineHasAny=" + (m_Slices.HasLineObservation(line) ? 1 : 0);
+                    }
+                    missingSliceCount++;
+                    AddTraversalDiagnostic(missingSlices, slice.SliceIndex.ToString());
+                    expectedStartAtomIndex = slice.EndAtomIndexExclusive;
+                    continue;
+                }
+
+                if (observation.SampleCount <= 0
+                    || !(observation.AverageFrames > 0f)
+                    || float.IsNaN(observation.AverageFrames)
+                    || float.IsInfinity(observation.AverageFrames))
+                {
+                    if (string.IsNullOrEmpty(failure))
+                    {
+                        failure = "code=slice-observation-invalid;slice=" + slice.SliceIndex
+                            + ";samples=" + observation.SampleCount
+                            + ";frames=" + observation.AverageFrames;
+                    }
+                    missingSliceCount++;
+                    AddTraversalDiagnostic(missingSlices, slice.SliceIndex.ToString());
+                    expectedStartAtomIndex = slice.EndAtomIndexExclusive;
+                    continue;
+                }
+
+                frames += observation.AverageFrames;
+                expectedStartAtomIndex = slice.EndAtomIndexExclusive;
+                observedSliceCount++;
+                AddTraversalDiagnostic(hitSlices, slice.SliceIndex + ":" + observation.SampleCount);
+            }
+
+            bool complete = string.IsNullOrEmpty(failure)
+                && missingSliceCount == 0
+                && observedSliceCount > 0
+                && expectedStartAtomIndex == approachAtomIndex
+                && frames > 0f
+                && !float.IsNaN(frames)
+                && !float.IsInfinity(frames);
+            if (!complete)
+            {
+                if (string.IsNullOrEmpty(failure))
+                {
+                    failure = "code=slice-coverage-incomplete;count=" + observedSliceCount
+                        + ";end=" + expectedStartAtomIndex
+                        + ";approach=" + approachAtomIndex
+                        + ";frames=" + frames;
+                }
+                detail = failure
+                    + ";required=" + FormatTraversalDiagnostic(requiredSlices)
+                    + ";requiredTotal=" + requiredSliceCount
+                    + ";requiredTruncated=" + (requiredSliceCount > requiredSlices.Count ? 1 : 0)
+                    + ";hit=" + FormatTraversalDiagnostic(hitSlices)
+                    + ";hitTotal=" + observedSliceCount
+                    + ";hitTruncated=" + (observedSliceCount > hitSlices.Count ? 1 : 0)
+                    + ";missing=" + FormatTraversalDiagnostic(missingSlices)
+                    + ";missingTotal=" + missingSliceCount
+                    + ";missingTruncated=" + (missingSliceCount > missingSlices.Count ? 1 : 0);
+            }
+            return complete;
+        }
+
+        private static void AddTraversalDiagnostic(List<string> values, string value)
+        {
+            if (values.Count < MaxTraversalSliceDiagnosticEntries)
+                values.Add(value);
+        }
+
+        private static string FormatTraversalDiagnostic(List<string> values)
+        {
+            return values.Count > 0 ? string.Join(",", values) : "none";
+        }
+
+        private static bool TryGetStopBounds(
+            LineTraversalProfile profile,
+            int waypointIndex,
+            out int departureAtomIndex,
+            out int approachAtomIndex)
+        {
+            departureAtomIndex = -1;
+            approachAtomIndex = -1;
+            if (profile?.Events == null || waypointIndex < 0)
+                return false;
+
+            int stopStartAtomIndex = -1;
+            int stopEndAtomIndex = -1;
+            for (int eventIndex = 0; eventIndex < profile.Events.Count; eventIndex++)
+            {
+                TraversalEvent item = profile.Events[eventIndex];
+                if (item.WaypointIndex != waypointIndex)
+                    continue;
+
+                if (item.Kind == TraversalEventKind.Stop)
+                {
+                    if (stopStartAtomIndex >= 0)
+                        return false;
+                    stopStartAtomIndex = item.StartAtomIndex;
+                    stopEndAtomIndex = item.EndAtomIndexExclusive;
+                }
+                else if (item.Kind == TraversalEventKind.ApproachSplitBoundary)
+                {
+                    if (approachAtomIndex >= 0)
+                        return false;
+                    approachAtomIndex = item.StartAtomIndex;
+                }
+                else if (item.Kind == TraversalEventKind.DepartureSplitBoundary)
+                {
+                    if (departureAtomIndex >= 0)
+                        return false;
+                    departureAtomIndex = item.StartAtomIndex;
+                }
+            }
+
+            return stopStartAtomIndex >= 0
+                && stopEndAtomIndex > stopStartAtomIndex
+                && approachAtomIndex == stopStartAtomIndex
+                && departureAtomIndex == stopEndAtomIndex;
+        }
+
+        private static bool TryBreakBoundary(
+            LineTrackChain chain,
+            int fromDepartureAtomIndex,
+            int toApproachAtomIndex,
+            out string detail)
+        {
+            detail = string.Empty;
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent item = chain.TraversalProfile.Events[eventIndex];
+                if (item.Kind == TraversalEventKind.BreakBoundary
+                    && item.StartAtomIndex > fromDepartureAtomIndex
+                    && item.StartAtomIndex < toApproachAtomIndex)
+                {
+                    detail = "code=break-boundary;atom=" + item.StartAtomIndex;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         internal void UpdateVehicleTraversalSliceObservation(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, uint nowFrame)
@@ -1009,9 +1360,35 @@ namespace RapidTransitMod.Dispatch.Observation
                 return false;
 
             int separatorIndex = value.IndexOf('|');
-            return separatorIndex > 0
-                && separatorIndex + 1 < value.Length
-                && RapidTransitMod.Stops.IsKey(value.Substring(separatorIndex + 1));
+            if (separatorIndex <= 0
+                || separatorIndex != value.LastIndexOf('|')
+                || string.IsNullOrWhiteSpace(value.Substring(0, separatorIndex)))
+            {
+                return false;
+            }
+
+            const int anchorLength = 36;
+            int anchorStart = separatorIndex + 1;
+            if (value.Length != anchorStart + anchorLength
+                || value[anchorStart] != 's'
+                || value[anchorStart + 1] != 'a'
+                || value[anchorStart + 2] != 'k'
+                || value[anchorStart + 3] != ':')
+            {
+                return false;
+            }
+
+            for (int i = anchorStart + 4; i < value.Length; i++)
+            {
+                char valueChar = value[i];
+                bool hexadecimal = (valueChar >= '0' && valueChar <= '9')
+                    || (valueChar >= 'a' && valueChar <= 'f')
+                    || (valueChar >= 'A' && valueChar <= 'F');
+                if (!hexadecimal)
+                    return false;
+            }
+
+            return true;
         }
 
         private void LogTraversalProfileLapSlices(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints)

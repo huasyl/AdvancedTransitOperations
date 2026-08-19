@@ -102,7 +102,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
             m_ActiveCommand = command;
             m_ActiveTicket = m_Service.SubmitHot(command.Ticket, m_Service.Generation, command.VehicleIndex, command.VehicleVersion,
                 command.TargetWaypoint, command.Mode, command.DepotIndex, command.DepotVersion, command.ModelIndex, command.ModelVersion,
-                command.SecondaryModelIndex, command.SecondaryModelVersion);
+                command.SecondaryModelIndex, command.SecondaryModelVersion, command.TheorySegments,
+                command.RouteSignature, command.PathSignature, command.ModelSignature);
         }
 
         public JobHandle Tick(uint simulationFrame, JobHandle inputDependency)
@@ -135,9 +136,16 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 || status.State == RailEtaRequestState.Cancelled || status.State == RailEtaRequestState.Busy || status.State == RailEtaRequestState.WorkerLost;
             if (!terminal) return;
             m_Service.TryGetPrediction(m_ActiveTicket, out RailEtaPrediction prediction);
+            m_Service.TryGetTheorySegments(m_ActiveTicket, out RailEtaTheorySegmentResult[] theorySegments);
+            m_Service.TryGetTheoryFailure(m_ActiveTicket, out RailEtaTheoryFailure theoryFailure);
+            uint originFrame = status.RequestFrame;
+            if (m_Service.TryGetSnapshot(m_ActiveTicket, out RailEtaWorldSnapshot snapshot)
+                && snapshot != null)
+                originFrame = snapshot.OriginFrame;
             string publicState = status.Failure == RailEtaFailure.NotConverged ? "NotConverged" : status.State.ToString();
             Publish(m_ActiveCommand, publicState, status.Failure.ToString(), status.Detail,
-                prediction?.PredictedArrivalFrame ?? 0, status.RequestFrame, m_Service.IsIncomplete(m_ActiveTicket), string.Empty, prediction?.PredictorBuildId);
+                prediction?.PredictedArrivalFrame ?? 0, originFrame, m_Service.IsIncomplete(m_ActiveTicket),
+                string.Empty, prediction?.PredictorBuildId, theorySegments, theoryFailure);
 #if RT_DEBUG_TOOLS
             if (RailEtaDebugSettings.DetailedLogsEnabled)
                 RecordPredictionCost(status, prediction);
@@ -248,8 +256,12 @@ namespace RapidTransitMod.RailEta.BuiltIn
         }
 #endif
 
-        private void Publish(RailEtaHotCommand command, string state, string failure, string detail, uint etaFrame, uint originFrame, bool incomplete, string comparison, string build)
+        private void Publish(RailEtaHotCommand command, string state, string failure, string detail, uint etaFrame, uint originFrame, bool incomplete, string comparison, string build, RailEtaTheorySegmentResult[] theorySegments = null, RailEtaTheoryFailure theoryFailure = null)
         {
+            ulong pathSignature = command.PathSignature;
+            if (command.Mode == RailEtaMode.Theory && theorySegments != null && theorySegments.Length > 0
+                && theorySegments[0] != null && theorySegments[0].PathSignature != 0)
+                pathSignature = theorySegments[0].PathSignature;
             m_Context.PublishResult(new RailEtaPublicResult
             {
                 Ticket = command.Ticket,
@@ -265,6 +277,11 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 Generation = command.Generation,
                 Incomplete = incomplete,
                 Mode = command.Mode,
+                TheorySegments = theorySegments ?? Array.Empty<RailEtaTheorySegmentResult>(),
+                TheoryFailure = theoryFailure,
+                RouteSignature = command.RouteSignature,
+                PathSignature = pathSignature,
+                ModelSignature = command.ModelSignature,
                 ComparisonSummary = comparison ?? string.Empty
             });
         }

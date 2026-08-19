@@ -435,6 +435,20 @@ namespace RapidTransitMod.Dispatch.Lines
             return nowFrame - stableSince >= ModRuntimeHostSystem.NEW_LINE_STABLE_FRAMES;
         }
 
+        internal bool TryReadRoadRoute(Entity line, out RoadRouteSnapshot snapshot)
+        {
+            snapshot = null;
+            if (line == Entity.Null || !m_RoadSnapshots.TryGetValue(line, out RoadRouteSnapshot stored))
+                return false;
+
+            snapshot = new RoadRouteSnapshot
+            {
+                Waypoints = (Entity[])stored.Waypoints.Clone(),
+                Stops = (Entity[])stored.Stops.Clone()
+            };
+            return true;
+        }
+
         private RoadRouteSnapshot CaptureRoadRoute(DynamicBuffer<RouteWaypoint> waypoints)
         {
             var snapshot = new RoadRouteSnapshot

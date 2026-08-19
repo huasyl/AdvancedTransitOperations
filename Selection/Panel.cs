@@ -141,7 +141,22 @@ namespace RapidTransitMod
             public string Detail7Value;
             public string Detail8LabelKey;
             public string Detail8Value;
+            public int NextPlannedArrivalMinute;
+            public int PlannedArrivalMinute;
+            public int ActualArrivalMinute;
+            public int PlannedDepartureMinute;
             public string AlertText;
+            public bool IsManagedVehicle;
+            public bool ShowCurrentStop;
+            public string CurrentStationName;
+            public string StopDwellValue;
+            public string NextPassStationName;
+            public string NextStopStationName;
+            public bool ShowSchedule;
+            public string CurrentSlotText;
+            public string TargetSlotText;
+            public bool ShowWaitingForFastTrain;
+            public int WaitingForFastTrainVehicleId;
             public bool ShowRetireAction;
             public bool ShowForceDepartAction;
             public bool ShowReevaluateAction;
@@ -305,7 +320,11 @@ namespace RapidTransitMod
                     m_Port.Sim,
                     m_Port.ClockSnapshot,
                     m_Port.Vehicles,
+                    m_Port.TryBlocker,
                     m_Port.TrySessionArrival,
+                    m_Port.TryStopSession,
+                    m_Port.TryVehicleTimes,
+                    m_Port.TryPanelStations,
                     m_Port.Spawns,
                     m_LineLastSpawnTriggerSummary,
                     m_LineLastVehicleRegisterSummary,
@@ -486,6 +505,18 @@ namespace RapidTransitMod
             }
 
             snapshot = View().BuildVehicleSnapshot(data);
+            return true;
+        }
+
+        public bool TryVehiclePanel(Entity vehicle, out Snapshot snapshot)
+        {
+            if (!Query().TryVehiclePanel(vehicle, out VehicleSelectData data))
+            {
+                snapshot = default;
+                return false;
+            }
+
+            snapshot = View().BuildVehiclePanelSnapshot(data);
             return true;
         }
 
@@ -732,6 +763,12 @@ namespace RapidTransitMod
         {
             string locale = Game.SceneFlow.GameManager.instance?.localizationManager?.activeLocaleId ?? string.Empty;
             return locale.StartsWith("zh", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool IsJapaneseLocale()
+        {
+            string locale = Game.SceneFlow.GameManager.instance?.localizationManager?.activeLocaleId ?? string.Empty;
+            return locale.StartsWith("ja", System.StringComparison.OrdinalIgnoreCase);
         }
 
         private static string LocalizedDispatchLabel()

@@ -1,3 +1,4 @@
+using System;
 using Unity.Mathematics;
 using RapidTransitMod.Core;
 
@@ -5,6 +6,9 @@ namespace RapidTransitMod.Dispatch.Scheduling
 {
     internal static class ScheduleClock
     {
+        internal const int MonitorClaimMinutes = 8;
+        internal const int MonitorFinalMinutes = 14;
+
         public static int NextSlot(int nowMinute)
         {
             return ((nowMinute / ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) + 1) * ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES % 1440;
@@ -81,6 +85,44 @@ namespace RapidTransitMod.Dispatch.Scheduling
         public static uint ReachFrames(ClockSnapshot clockSnapshot, int targetMinute)
         {
             return clockSnapshot.ToFramesCeil(Lead(clockSnapshot.NowMinute, targetMinute));
+        }
+
+        public static DateTime ServiceDate(ClockSnapshot clock, int targetMinute)
+        {
+            DateTime serviceDate = clock.NowDate.Date;
+            if (clock.NowMinute < targetMinute
+                && Overdue(clock.NowMinute, targetMinute) <= MonitorFinalMinutes)
+                serviceDate = serviceDate.AddDays(-1);
+            return serviceDate;
+        }
+
+        public static int MonitorBucket(int currentMinute, int delayMinutes)
+        {
+            int minute = (currentMinute - delayMinutes) % 1440;
+            return minute < 0 ? minute + 1440 : minute;
+        }
+
+        public static DateTime MonitorServiceDate(ClockSnapshot clock, int targetMinute)
+        {
+            return MonitorOccurrenceDate(clock, targetMinute);
+        }
+
+        public static DateTime MonitorOccurrenceDate(ClockSnapshot clock, int targetMinute)
+        {
+            DateTime currentDate = clock.NowDate.Date;
+            if (targetMinute < 0 || targetMinute >= 1440)
+                return currentDate;
+
+            int overdue = Overdue(clock.NowMinute, targetMinute);
+            if (overdue <= MonitorFinalMinutes)
+                return clock.NowMinute < targetMinute ? currentDate.AddDays(-1) : currentDate;
+
+            return targetMinute <= clock.NowMinute ? currentDate.AddDays(1) : currentDate;
+        }
+
+        public static int DateKey(DateTime date)
+        {
+            return date.Year * 10000 + date.Month * 100 + date.Day;
         }
 
         private static int LateWindow()

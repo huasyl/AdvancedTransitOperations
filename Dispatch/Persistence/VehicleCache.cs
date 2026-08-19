@@ -42,6 +42,10 @@ namespace RapidTransitMod.Dispatch.Persistence
                 m_Runtime.EntityManager.AddBuffer<VehicleStateCacheElement>(city);
                 m_Runtime.log.Info("[缓存] 已在城市实体上创建 VehicleStateCacheElement Buffer");
             }
+            if (!m_Runtime.EntityManager.HasBuffer<TimedPlanCacheElement>(city))
+                m_Runtime.EntityManager.AddBuffer<TimedPlanCacheElement>(city);
+            if (!m_Runtime.EntityManager.HasBuffer<TimedStopCacheElement>(city))
+                m_Runtime.EntityManager.AddBuffer<TimedStopCacheElement>(city);
             m_Runtime.m_VehicleCacheBufferReady = true;
         }
 
@@ -71,6 +75,62 @@ namespace RapidTransitMod.Dispatch.Persistence
                 });
             }
             keys.Dispose();
+
+            DynamicBuffer<TimedPlanCacheElement> planBuffer =
+                m_Runtime.EntityManager.GetBuffer<TimedPlanCacheElement>(city);
+            DynamicBuffer<TimedStopCacheElement> stopBuffer =
+                m_Runtime.EntityManager.GetBuffer<TimedStopCacheElement>(city);
+            planBuffer.Clear();
+            stopBuffer.Clear();
+            foreach (TimedPlanSnapshot snapshot in m_Runtime.m_StopRuntime.TimedPlans())
+            {
+                if (!m_Runtime.m_VehicleView.TryGetState(snapshot.Vehicle, out VehicleState state)
+                    || state != VehicleState.Running
+                    || !m_Runtime.m_VehicleView.TryGetLine(snapshot.Vehicle, out Entity line)
+                    || line != snapshot.Line)
+                {
+                    continue;
+                }
+                if (snapshot.ActiveStopOrder >= 0
+                    && (double.IsNaN(snapshot.ArrivalWaitMinutes)
+                        || double.IsInfinity(snapshot.ArrivalWaitMinutes)
+                        || snapshot.ArrivalWaitMinutes < 0d
+                        || snapshot.ArrivalWaitMinutes > 5d))
+                {
+                    continue;
+                }
+
+                planBuffer.Add(new TimedPlanCacheElement
+                {
+                    m_Version = 2,
+                    m_VehicleEntity = snapshot.Vehicle,
+                    m_LineEntity = snapshot.Line,
+                    m_RowId = snapshot.RowId,
+                    m_StopSig = snapshot.StopSig,
+                    m_ServiceDateTicks = snapshot.ServiceDate.Date.Ticks,
+                    m_SlotMinute = snapshot.SlotMinute,
+                    m_NextStopOrder = snapshot.NextStopOrder,
+                    m_ActiveStopOrder = snapshot.ActiveStopOrder,
+                    m_StopCount = snapshot.Stops.Length,
+                    m_CanBypass = snapshot.CanBypass ? (byte)1 : (byte)0,
+                    m_ArrivalWaitMinutes = snapshot.ArrivalWaitMinutes,
+                    m_ClockTicksPerDay = snapshot.ClockTicksPerDay
+                });
+                for (int stopIndex = 0; stopIndex < snapshot.Stops.Length; stopIndex++)
+                {
+                    TimedStop stop = snapshot.Stops[stopIndex];
+                    stopBuffer.Add(new TimedStopCacheElement
+                    {
+                        m_Version = 2,
+                        m_VehicleEntity = snapshot.Vehicle,
+                        m_Order = stopIndex,
+                        m_StopKey = stop.StopKey,
+                        m_Arrive = stop.Arrive,
+                        m_Depart = stop.Depart,
+                        m_WaypointIndex = snapshot.WaypointIndices[stopIndex]
+                    });
+                }
+            }
         }
 
         public bool Restore(
@@ -96,6 +156,7 @@ namespace RapidTransitMod.Dispatch.Persistence
 
                 if (cachedState == VehicleState.Holding)
                 {
+                    m_Runtime.m_StopRuntime.ClearTimedPlan(v);
                     m_Runtime.m_RuntimeEngine.RestoreHold(v, cachedTarget);
 
                     if (!registryOnly && m_Runtime.EntityManager.HasComponent<PublicTransport>(v))
@@ -124,6 +185,7 @@ namespace RapidTransitMod.Dispatch.Persistence
                         return false;
 
                     m_Runtime.m_RuntimeEngine.RestoreRun(v);
+                    RestoreTimed(v, line);
 
                     float cachedLapDist = -1f;
                     bool restoredLapStart = false;
@@ -162,6 +224,109 @@ namespace RapidTransitMod.Dispatch.Persistence
             return false;
         }
 
+        private bool RestoreTimed(Entity vehicle, Entity line)
+        {
+            m_Runtime.m_StopRuntime.ClearTimedPlan(vehicle);
+            Entity city = m_Runtime.m_CitySystem.City;
+            if (city == Entity.Null
+                || !m_Runtime.EntityManager.HasBuffer<TimedPlanCacheElement>(city)
+                || !m_Runtime.EntityManager.HasBuffer<TimedStopCacheElement>(city))
+            {
+                return false;
+            }
+
+            DynamicBuffer<TimedPlanCacheElement> plans =
+                m_Runtime.EntityManager.GetBuffer<TimedPlanCacheElement>(city, true);
+            TimedPlanCacheElement header = default;
+            int headerCount = 0;
+            for (int i = 0; i < plans.Length; i++)
+            {
+                if (plans[i].m_VehicleEntity != vehicle)
+                    continue;
+                header = plans[i];
+                headerCount++;
+            }
+
+            if (headerCount != 1
+                || header.m_Version != 2
+                || header.m_LineEntity != line
+                || header.m_StopCount <= 0
+                || header.m_StopCount > 512
+                || header.m_SlotMinute < 0
+                || header.m_SlotMinute >= 1440
+                || header.m_CanBypass > 1
+                || header.m_ClockTicksPerDay <= 0
+                || string.IsNullOrEmpty(header.m_RowId.ToString())
+                || string.IsNullOrEmpty(header.m_StopSig.ToString())
+                || header.m_ServiceDateTicks <= DateTime.MinValue.Ticks
+                || header.m_ServiceDateTicks > DateTime.MaxValue.Ticks)
+            {
+                return false;
+            }
+
+            TimedStop[] stops = new TimedStop[header.m_StopCount];
+            int[] waypoints = new int[header.m_StopCount];
+            bool[] seen = new bool[header.m_StopCount];
+            int count = 0;
+            DynamicBuffer<TimedStopCacheElement> stopBuffer =
+                m_Runtime.EntityManager.GetBuffer<TimedStopCacheElement>(city, true);
+            for (int i = 0; i < stopBuffer.Length; i++)
+            {
+                TimedStopCacheElement element = stopBuffer[i];
+                if (element.m_VehicleEntity != vehicle)
+                    continue;
+                if (element.m_Version != 2
+                    || element.m_Order < 0
+                    || element.m_Order >= stops.Length
+                    || seen[element.m_Order]
+                    || string.IsNullOrEmpty(element.m_StopKey.ToString())
+                    || element.m_WaypointIndex < 0
+                    || element.m_Arrive < -1
+                    || element.m_Arrive >= 48 * 60
+                    || element.m_Depart < -1
+                    || element.m_Depart >= 48 * 60)
+                {
+                    return false;
+                }
+
+                seen[element.m_Order] = true;
+                count++;
+                stops[element.m_Order] = new TimedStop
+                {
+                    StopKey = element.m_StopKey.ToString(),
+                    Arrive = element.m_Arrive,
+                    Depart = element.m_Depart
+                };
+                waypoints[element.m_Order] = element.m_WaypointIndex;
+            }
+
+            if (count != stops.Length
+                || !m_Runtime.m_LineView.TryStopLayout(line, out string stopSig, out int[] currentWaypoints))
+            {
+                return false;
+            }
+
+            TimedStopPlan plan = new TimedStopPlan
+                {
+                    Line = line,
+                    RowId = header.m_RowId.ToString(),
+                    StopSig = header.m_StopSig.ToString(),
+                    ServiceDate = new DateTime(header.m_ServiceDateTicks).Date,
+                    SlotMinute = header.m_SlotMinute,
+                    Stops = stops,
+                    WaypointIndices = waypoints,
+                    NextStopOrder = header.m_NextStopOrder,
+                    ActiveStopOrder = header.m_ActiveStopOrder,
+                    CanBypass = header.m_CanBypass != 0
+                };
+            TimedPlanSnapshot snapshot = new TimedPlanSnapshot(
+                vehicle,
+                plan,
+                header.m_ArrivalWaitMinutes,
+                header.m_ClockTicksPerDay);
+            return m_Runtime.m_StopRuntime.RestoreTimedPlan(snapshot, stopSig, currentWaypoints);
+        }
+
         public bool RestoreRun(Entity v, Entity line, DynamicBuffer<RouteWaypoint> wps, string initReason)
         {
             float cachedLapFrames = m_ReadLap(line);
@@ -169,6 +334,7 @@ namespace RapidTransitMod.Dispatch.Persistence
             if (!m_Progress(v, out int nextWaypointIndex, out float segmentPosition)) return false;
 
             m_Runtime.m_RuntimeEngine.RestoreRun(v);
+            RestoreTimed(v, line);
 
             float segmentBase = nextWaypointIndex == 0 ? (wps.Length - 1) : (nextWaypointIndex - 1);
             float progress = (segmentBase + math.saturate(segmentPosition)) / math.max(1, wps.Length);

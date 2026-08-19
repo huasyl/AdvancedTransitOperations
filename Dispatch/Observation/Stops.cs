@@ -16,7 +16,6 @@ namespace RapidTransitMod.Dispatch.Observation
         private readonly Func<Entity, ResolvedStopKind, string> m_StopName;
         private readonly Func<Entity, string> m_LineId;
         private readonly Func<Entity, string> m_Kind;
-        private readonly Action<Entity, Entity, Entity, ResolvedStopKind, int, bool, bool, string, uint> m_RecordStop;
         private readonly Func<bool> m_ShouldLog;
         private readonly Action<TraceEvent> m_Log;
 
@@ -45,7 +44,8 @@ namespace RapidTransitMod.Dispatch.Observation
             m_StopName = stopName ?? throw new ArgumentNullException(nameof(stopName));
             m_LineId = lineId ?? throw new ArgumentNullException(nameof(lineId));
             m_Kind = kind ?? throw new ArgumentNullException(nameof(kind));
-            m_RecordStop = recordStop ?? throw new ArgumentNullException(nameof(recordStop));
+            // 保留旧 Bridge 构造参数；正式 StopFact 只由 Host 事实入口提交。
+            _ = recordStop;
             m_ShouldLog = shouldLog ?? throw new ArgumentNullException(nameof(shouldLog));
             m_Log = log ?? throw new ArgumentNullException(nameof(log));
         }
@@ -62,20 +62,6 @@ namespace RapidTransitMod.Dispatch.Observation
         internal string LineId(Entity line) => m_LineId(line);
         internal string Kind(Entity line) => m_Kind(line);
         internal bool ShouldLog() => m_ShouldLog();
-
-        internal void RecordStop(
-            Entity vehicle,
-            Entity line,
-            Entity stop,
-            ResolvedStopKind kind,
-            int waypointIndex,
-            bool origin,
-            bool boarding,
-            string time,
-            uint frame)
-        {
-            m_RecordStop(vehicle, line, stop, kind, waypointIndex, origin, boarding, time, frame);
-        }
 
         internal void Log(TraceEvent evt) => m_Log(evt);
     }
@@ -237,7 +223,6 @@ namespace RapidTransitMod.Dispatch.Observation
 
             stopTrace.Frame = nowFrame;
             trip.Frame = nowFrame;
-            m_Port.RecordStop(vehicle, line, stop.Ent, stop.Kind, stopWp, origin, boarding, nowTime, nowFrame);
 
             if (m_Port.ShouldLog())
             {

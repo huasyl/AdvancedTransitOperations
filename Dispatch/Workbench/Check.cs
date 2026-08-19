@@ -578,7 +578,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         }
 
         internal static List<string> AppliedRows(
-            string activeLineKey,
+            IEnumerable<string> targetLineIds,
             List<DispatchWorkbenchStagedRowDto> activeRows,
             List<WorkbenchLineRuntime> runtimeLines,
             IReadOnlyDictionary<string, AppliedLine> appliedLines,
@@ -592,21 +592,10 @@ namespace RapidTransitMod.Dispatch.Workbench
                 .GroupBy(line => line.Id, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal)
                 ?? new Dictionary<string, WorkbenchLineRuntime>(StringComparer.Ordinal);
-            HashSet<string> replacedLineIds = new HashSet<string>(StringComparer.Ordinal);
-            if (!string.IsNullOrEmpty(activeLineKey))
-            {
-                replacedLineIds.Add(activeLineKey);
-            }
-            if (activeRows != null)
-            {
-                foreach (DispatchWorkbenchStagedRowDto row in activeRows)
-                {
-                    if (!string.IsNullOrEmpty(row?.lineId))
-                    {
-                        replacedLineIds.Add(row.lineId);
-                    }
-                }
-            }
+            HashSet<string> replacedLineIds = new HashSet<string>(
+                (targetLineIds ?? Array.Empty<string>())
+                    .Where(lineId => !string.IsNullOrEmpty(lineId)),
+                StringComparer.Ordinal);
 
             List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)> departures =
                 new List<(string RowId, string LineId, string OriginId, string OriginName, int Minutes)>();

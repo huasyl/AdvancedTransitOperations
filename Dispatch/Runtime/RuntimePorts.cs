@@ -191,6 +191,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 TryProgress = runtime.m_RouteProgress.Try,
                 TryBlocker = (Entity vehicle, out Entity blocker) => runtime.m_Bypass.TryGetLatchedBlocker(vehicle, out blocker),
                 TrySessionArrival = runtime.m_StopRuntime.TryGetSessionArrivalFrame,
+                TryStopSession = runtime.m_StopRuntime.TryGetSession,
+                TryVehicleTimes = runtime.m_ObsRecorder.TryVehicleTimes,
                 ClearBypass = (vehicle, reason) => runtime.m_Bypass.ClearVehicle(vehicle, reason),
                 Stations = (Entity vehicle, Entity line, out string current, out string nextPhysical, out string nextStop, out bool nextPhysicalIsPass) =>
                 {
@@ -202,7 +204,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                         out nextPhysical,
                         out nextPhysicalIsPass,
                         out _);
-                }
+                },
+                TryPanelStations = runtime.m_StationContextQuery.TryPanelStations
             };
         }
 
@@ -222,7 +225,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     DispatchFallbackFramesPerMeter = ModRuntimeHostSystem.DISPATCH_FALLBACK_FRAMES_PER_METER,
                     DispatchEstimateMinFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_MIN_FRAMES,
                     DispatchEstimateDefaultFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_DEFAULT_FRAMES,
-                    DispatchEstimateMaxFrames = ModRuntimeHostSystem.DISPATCH_ESTIMATE_MAX_FRAMES,
+                    DispatchEstimateMaxFrames = runtime.m_DispatchScheduler.Policy.MaxSpawnLeadFrames,
                     ReadLapFrames = runtime.m_LapCache.Read,
                     ReadDispatchFrames = runtime.m_DispatchCache.Read,
                     DwellMinutes = line => runtime.m_LineView.Dwell(line),
@@ -447,7 +450,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Preferred = () => runtime.DraftStore().Preferred(),
                 LineId = runtime.LineStableId,
                 StationName = runtime.m_Resolve.StationName,
-                StopName = runtime.m_WorkbenchBridge.StopSvc().Name,
+                StopName = RuntimeRoot.StopService(runtime).Name,
                 StopId = runtime.m_Resolve.StopId,
                 OriginId = Stops.OriginId,
                 Origin = line =>

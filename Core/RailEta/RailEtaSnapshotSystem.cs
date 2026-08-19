@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
+using System.Threading.Tasks;
+using Colossal.Mathematics;
 using Game;
 using Game.Common;
 using Game.Net;
@@ -21,6 +23,7 @@ using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
+using Unity.Mathematics;
 using Unity.Profiling;
 
 #if RT_RAIL_ETA_HOT_BUILD
@@ -78,12 +81,18 @@ namespace RapidTransitMod.RailEta.BuiltIn
         private readonly List<ResolvedPathResult> m_ResolvedPaths = new List<ResolvedPathResult>();
         private RailEtaRequestFrameFacts m_FrozenRuntimeFacts;
         private List<RailEtaBatchRequest> m_Requests;
+        private RailEtaTheorySegmentRequest[] m_TheorySegments = Array.Empty<RailEtaTheorySegmentRequest>();
+        private List<RailEtaTheorySegmentPathResult> m_TheorySegmentPaths;
+        private bool m_TheoryCapturePending;
+        private bool m_TheoryFailureLogged;
+        private Entity m_TheoryLine;
         private long m_BatchId;
         private int m_Generation;
         private RailEtaMode m_Mode;
         private long m_PredictorGeneration;
         private uint m_IndexOriginFrame;
         private uint m_RequestStartFrame;
+        private long m_BatchStartTicks;
         private long m_IndexStartTicks;
         private long m_IndexWallTicks;
         private RailEtaService m_BatchService;
@@ -149,14 +158,32 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 {
                     Exception failure = service.Worker.LastFailure;
                     string detail = failure == null ? "Rail ETA worker is lost." : failure.GetType().Name + ": " + failure.Message;
+                    EnsureTheoryFailure(service, m_Requests, RailEtaFailure.WorkerLost, detail);
                     service.MarkWorkerLost(detail);
+                    LogTheoryFailure(service, m_Requests != null && m_Requests.Count > 0
+                        ? m_Requests[0].Ticket : default);
                     FinishBatch();
                 }
                 return;
             }
+            if (m_Phase != Phase.Idle && m_Mode == RailEtaMode.Theory
+                && m_TheorySegments.Length > 0)
+            {
+                if (BatchCancelled(service))
+                {
+                    CancelBatch(service);
+                    return;
+                }
+                if (BatchExpired())
+                {
+                    FailBatch(service, RailEtaFailure.FuturePathfindFailed,
+                        "Theory batch exceeded the 8-second wall-clock budget.");
+                    return;
+                }
+            }
             switch (m_Phase)
             {
-                case Phase.Idle: TryStartBatch(service); break;
+                case Phase.Idle: DrainStaleResults(); TryStartBatch(service); break;
                 case Phase.IndexJob: PollIndex(service); break;
                 case Phase.TheoryPaths: PollTheoryPaths(service); break;
                 case Phase.ScopeWorker: PollScope(service); break;
@@ -179,7 +206,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
             }
             RailEtaMode mode = pending.Descriptor.Mode;
             CaptureSeed seed = null;
-            if (mode != RailEtaMode.Full && !TryBuildTargetedCaptureSeed(pending.Descriptor, mode, out seed, out string seedFailure, out bool retrySeed))
+            if (mode != RailEtaMode.Full && mode != RailEtaMode.Theory
+                && !TryBuildTargetedCaptureSeed(pending.Descriptor, mode, out seed, out string seedFailure, out bool retrySeed))
             {
                 // Newly spawned consists receive their trailing-unit lane caches a few frames after
                 // the controller path. Keep the same queued request until vanilla finishes that work.
@@ -191,12 +219,41 @@ namespace RapidTransitMod.RailEta.BuiltIn
             RailEtaRequestFrameFacts runtimeFacts = CaptureRuntimeFactsAtRequestFrame(requestFrame, mode, seed?.Controllers);
             if (runtimeFacts == null) return;
             if (!service.TryDrain(out RailEtaRequestEnvelope envelope)) return;
-            // HotModule admits one active ticket. Keeping one request per frozen world prevents mode mixing.
-            var requests = new List<RailEtaBatchRequest>(1)
-            {
-                new RailEtaBatchRequest { Ticket = envelope.Ticket, Descriptor = envelope.Descriptor }
-            };
             m_BatchId = service.NextBatchId();
+            m_BatchStartTicks = Stopwatch.GetTimestamp();
+            m_TheoryFailureLogged = false;
+            // HotModule admits one active ticket. Theory keeps adjacent path slots inside the
+            // ticket, then creates one synthetic controller per actual stop-to-stop segment.
+            List<RailEtaBatchRequest> requests;
+            if (envelope.TheorySegments != null && envelope.TheorySegments.Length > 0)
+            {
+                if (!TryBuildTheoryBatchRequests(envelope, out requests, out string theoryBatchFailure))
+                {
+                    if (mode == RailEtaMode.Theory && envelope.TheorySegments.Length > 0)
+                    {
+                        RailEtaTheorySegmentRequest first = envelope.TheorySegments[0];
+                        service.SetTheoryFailure(envelope.Ticket, new RailEtaTheoryFailure
+                        {
+                            SegmentIndex = first.SegmentIndex,
+                            FromWaypointIndex = first.SegmentFromWaypointIndex,
+                            ToWaypointIndex = first.SegmentToWaypointIndex,
+                            Failure = RailEtaFailure.InvalidResult.ToString(),
+                            Detail = theoryBatchFailure
+                        }, generation);
+                    }
+                    service.Transition(envelope.Ticket, RailEtaRequestState.Failed, requestFrame, 0,
+                        generation, RailEtaFailure.InvalidResult, theoryBatchFailure);
+                    LogTheoryFailure(service, envelope.Ticket);
+                    return;
+                }
+            }
+            else
+            {
+                requests = new List<RailEtaBatchRequest>(1)
+                {
+                    new RailEtaBatchRequest { Ticket = envelope.Ticket, Descriptor = envelope.Descriptor }
+                };
+            }
             m_RequestStartFrame = requestFrame;
             m_IndexOriginFrame = requestFrame;
             m_FrozenRuntimeFacts = runtimeFacts;
@@ -207,6 +264,28 @@ namespace RapidTransitMod.RailEta.BuiltIn
             m_Mode = mode;
             m_PredictorGeneration = m_PredictorGenerationAccessor?.Invoke() ?? 0;
             m_Requests = requests;
+            m_TheorySegments = envelope.TheorySegments ?? Array.Empty<RailEtaTheorySegmentRequest>();
+            m_TheorySegmentPaths = null;
+            m_TheoryCapturePending = false;
+            m_TheoryLine = RailEtaEntityId.ToEntity(envelope.Descriptor);
+            if (mode == RailEtaMode.Theory)
+            {
+                Entity model = new Entity
+                {
+                    Index = envelope.Descriptor.ModelIndex,
+                    Version = envelope.Descriptor.ModelVersion
+                };
+                bool started = m_TheorySegments.Length > 0
+                    ? m_TheoryPaths.StartSegments(m_TheoryLine, model, m_TheorySegments, out string segmentFailure)
+                    : m_TheoryPaths.Start(envelope.Descriptor, out segmentFailure);
+                if (!started)
+                {
+                    FailBatch(service, RailEtaFailure.FuturePathfindFailed, segmentFailure);
+                    return;
+                }
+                m_Phase = Phase.TheoryPaths;
+                return;
+            }
             ScheduleIndex(service, seed);
         }
 
@@ -243,7 +322,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
             {
                 controllers = new NativeList<Entity>(Allocator.Persistent);
                 routeLines = ToNativeList(seed.RouteLines);
-                railLanes = m_RailLaneQuery.ToEntityListAsync(Allocator.Persistent, out railLaneHandle);
+                railLanes = new NativeList<Entity>(Allocator.Persistent);
                 trafficLights = new NativeList<Entity>(Allocator.Persistent);
             }
             else
@@ -272,6 +351,153 @@ namespace RapidTransitMod.RailEta.BuiltIn
             var result = new NativeList<Entity>(values?.Count ?? 0, Allocator.Persistent);
             if (values != null) for (int i = 0; i < values.Count; i++) result.Add(values[i]);
             return result;
+        }
+
+        private static Entity TheorySegmentEntity(long batchId, int segmentIndex)
+        {
+            int version = unchecked((int)(batchId ^ (batchId >> 32))) ^ segmentIndex;
+            return new Entity
+            {
+                Index = -1000000 - segmentIndex,
+                Version = version == 0 ? 1 : version
+            };
+        }
+
+        private bool TryBuildTheoryBatchRequests(
+            RailEtaRequestEnvelope envelope,
+            out List<RailEtaBatchRequest> requests,
+            out string failure)
+        {
+            requests = new List<RailEtaBatchRequest>();
+            failure = string.Empty;
+            RailEtaTheorySegmentRequest[] slots = envelope?.TheorySegments;
+            if (slots == null || slots.Length == 0 || slots.Length > 256)
+            {
+                failure = "Theory segment path slot count is outside the bounded range.";
+                return false;
+            }
+
+            var groups = new SortedDictionary<int, List<RailEtaTheorySegmentRequest>>();
+            var seenSlots = new HashSet<int>();
+            for (int i = 0; i < slots.Length; i++)
+            {
+                RailEtaTheorySegmentRequest slot = slots[i];
+                if (slot.SegmentIndex < 0
+                    || slot.PathSlotIndex < 0
+                    || !seenSlots.Add(slot.PathSlotIndex)
+                    || slot.SegmentFromWaypointIndex < 0
+                    || slot.SegmentToWaypointIndex < 0
+                    || slot.FromWaypointIndex < 0
+                    || slot.ToWaypointIndex < 0)
+                {
+                    failure = "Theory segment sequence is invalid.";
+                    return false;
+                }
+                if (!groups.TryGetValue(slot.SegmentIndex, out List<RailEtaTheorySegmentRequest> group))
+                {
+                    group = new List<RailEtaTheorySegmentRequest>();
+                    groups.Add(slot.SegmentIndex, group);
+                }
+                group.Add(slot);
+            }
+            if (groups.Count == 0 || groups.Count > 64)
+            {
+                failure = "Theory actual segment count is outside the bounded range.";
+                return false;
+            }
+
+            int expectedSegmentIndex = 0;
+            foreach (KeyValuePair<int, List<RailEtaTheorySegmentRequest>> entry in groups)
+            {
+                if (entry.Key != expectedSegmentIndex || entry.Value.Count == 0)
+                {
+                    failure = "Theory actual segment order is invalid.";
+                    return false;
+                }
+                RailEtaTheorySegmentRequest first = entry.Value[0];
+                RailEtaTheorySegmentRequest last = entry.Value[entry.Value.Count - 1];
+                if (first.FromWaypointIndex != first.SegmentFromWaypointIndex
+                    || last.ToWaypointIndex != last.SegmentToWaypointIndex)
+                {
+                    failure = "Theory actual segment endpoints are invalid.";
+                    return false;
+                }
+                for (int i = 1; i < entry.Value.Count; i++)
+                {
+                    RailEtaTheorySegmentRequest previous = entry.Value[i - 1];
+                    RailEtaTheorySegmentRequest current = entry.Value[i];
+                    if (previous.ToWaypointIndex != current.FromWaypointIndex
+                        || previous.ToWaypointVersion != current.FromWaypointVersion
+                        || previous.SegmentIndex != current.SegmentIndex)
+                    {
+                        failure = "Theory adjacent path slots are not contiguous.";
+                        return false;
+                    }
+                }
+
+                Entity synthetic = TheorySegmentEntity(m_BatchId, entry.Key);
+                Entity target = new Entity { Index = last.ToWaypointIndex, Version = last.ToWaypointVersion };
+                var request = new RailEtaBatchRequest
+                {
+                    Ticket = envelope.Ticket,
+                    Descriptor = new RailEtaRequestDescriptor(
+                        synthetic.Index,
+                        synthetic.Version,
+                        RailEtaEntityId.Pack(target),
+                        RailEtaMode.Theory,
+                        0,
+                        0,
+                        envelope.Descriptor.ModelIndex,
+                        envelope.Descriptor.ModelVersion,
+                        envelope.Descriptor.SecondaryModelIndex,
+                        envelope.Descriptor.SecondaryModelVersion,
+                        envelope.Descriptor.RouteSignature,
+                        envelope.Descriptor.PathSignature,
+                        envelope.Descriptor.ModelSignature),
+                    ExpectedTarget = target,
+                    SegmentIndex = entry.Key,
+                    FromWaypointIndex = first.SegmentFromWaypointIndex,
+                    ToWaypointIndex = last.SegmentToWaypointIndex
+                };
+                request.PathSlots.AddRange(entry.Value);
+                requests.Add(request);
+                expectedSegmentIndex++;
+            }
+            return true;
+        }
+
+        private bool BatchCancelled(RailEtaService service)
+        {
+            return service == null || m_Requests == null || m_Requests.Count == 0
+                || (service.TryGetState(m_Requests[0].Ticket, out RailEtaTicketStatus status)
+                    && status.State == RailEtaRequestState.Cancelled);
+        }
+
+        private bool BatchExpired()
+        {
+            return m_BatchStartTicks > 0
+                && (Stopwatch.GetTimestamp() - m_BatchStartTicks) * 1000d / Stopwatch.Frequency
+                    >= RailEtaLimits.TheoryBatchTimeoutMilliseconds;
+        }
+
+        private static bool WorkCancelled(
+            RailEtaService service,
+            RailEtaMode mode,
+            long batchStartTicks,
+            List<RailEtaBatchRequest> requests)
+        {
+            if (service == null || service.IsDisposed || service.WorkerLost)
+                return true;
+            if (mode == RailEtaMode.Theory && batchStartTicks > 0
+                && (Stopwatch.GetTimestamp() - batchStartTicks) * 1000d / Stopwatch.Frequency
+                    >= RailEtaLimits.TheoryBatchTimeoutMilliseconds)
+                return true;
+            if (requests == null || requests.Count == 0)
+                return false;
+            if (!service.TryGetState(requests[0].Ticket, out RailEtaTicketStatus status))
+                return true;
+            return status.State == RailEtaRequestState.Cancelled
+                || status.State == RailEtaRequestState.Failed;
         }
 
         private void AppendRequestedTargetControllers(NativeList<Entity> controllers)
@@ -434,6 +660,19 @@ namespace RapidTransitMod.RailEta.BuiltIn
             foreach (RailEtaBatchRequest request in m_Requests) service.Transition(request.Ticket, RailEtaRequestState.IndexReady, m_IndexOriginFrame, m_BatchId, m_Generation);
             if (m_Mode == RailEtaMode.Theory)
             {
+                if (m_TheoryCapturePending)
+                {
+                    m_TheoryCapturePending = false;
+                    if (!AppendTheoryPaths(service, out string appendFailure))
+                    {
+                        m_Staging.Dispose();
+                        m_Staging = null;
+                        FailBatch(service, RailEtaFailure.RouteGeometryMissing, appendFailure);
+                        return;
+                    }
+                    EnqueueScope(service);
+                    return;
+                }
                 if (!m_TheoryPaths.Start(m_Requests[0].Descriptor, out string theoryFailure))
                 {
                     m_Staging.Dispose();
@@ -455,52 +694,721 @@ namespace RapidTransitMod.RailEta.BuiltIn
                     "Theory depot path selection exceeded the 512-frame request budget.");
                 return;
             }
+            if (m_TheorySegments.Length > 0)
+            {
+                if (!m_TheoryPaths.PollSegments(
+                    out List<RailEtaTheorySegmentPathResult> paths,
+                    out string segmentFailure,
+                    out RailEtaTheoryFailure segmentFailureInfo))
+                    return;
+                if (!String.IsNullOrEmpty(segmentFailure) || paths == null || paths.Count != m_TheorySegments.Length)
+                {
+                    service.SetTheoryFailure(m_Requests[0].Ticket, segmentFailureInfo, m_Generation);
+                    FailBatch(service, RailEtaFailure.FuturePathfindFailed,
+                        String.IsNullOrEmpty(segmentFailure) ? "Theory segment path result is incomplete." : segmentFailure);
+                    return;
+                }
+                m_TheorySegmentPaths = paths;
+                HashSet<Entity> targetLanes = CollectPathLanes(paths);
+                ScheduleTheoryCapture(service, m_TheoryLine, targetLanes);
+                return;
+            }
             if (!m_TheoryPaths.Poll(out RailEtaTheoryPathResult result, out string failure)) return;
             if (result == null)
             {
-                m_Staging.Dispose();
-                m_Staging = null;
-                FailBatch(service, RailEtaFailure.FuturePathfindFailed, failure);
+                FailBatch(service, RailEtaFailure.FuturePathfindFailed,
+                    String.IsNullOrEmpty(failure) ? "Theory depot path result is missing." : failure);
                 return;
             }
-            RailEtaRequestDescriptor descriptor = m_Requests[0].Descriptor;
-            Entity line = RailEtaEntityId.ToEntity(descriptor);
-            Entity target = RailEtaEntityId.ToEntity(descriptor.TargetCheckpointId);
-            var missing = new RailEtaMissingRouteSegment
+            m_TheorySegmentPaths = new List<RailEtaTheorySegmentPathResult>
             {
-                Controller = line,
-                Target = target,
-                IsVehicleTarget = 1,
-                NeedsGeometry = 1
+                new RailEtaTheorySegmentPathResult { Path = result.Path }
             };
-            HashSet<Entity> targetLanes = CollectPathLanes(result.Path);
-            IReadOnlyDictionary<Entity, List<RailEtaScopedLaneRow>> facts = BuildFrozenLaneFactIndex(m_Staging, targetLanes);
-            bool pathAppended = AppendResolvedPathForWorker(
-                m_Staging, facts, missing, result.Path, 0u, out string appendFailure);
-            string vehicleFailure = string.Empty;
-            bool vehicleAppended = pathAppended
-                && RailEtaTheoryVehicle.Append(EntityManager, m_Staging, descriptor, result.Path, out vehicleFailure);
-            if (!pathAppended || !vehicleAppended)
+            ScheduleTheoryCapture(service, m_TheoryLine, CollectPathLanes(result.Path));
+        }
+
+        private void ScheduleTheoryCapture(RailEtaService service, Entity line, HashSet<Entity> targetLanes)
+        {
+            if (line == Entity.Null || targetLanes == null || targetLanes.Count == 0)
             {
-                m_Staging.Dispose();
-                m_Staging = null;
-                FailBatch(service, RailEtaFailure.RouteGeometryMissing,
-                    !String.IsNullOrEmpty(appendFailure) ? appendFailure : vehicleFailure);
+                FailBatch(service, RailEtaFailure.RouteGeometryMissing, "Theory path has no target rail lane.");
                 return;
             }
-            EnqueueScope(service);
+            if (targetLanes.Count > 8192)
+            {
+                FailBatch(service, RailEtaFailure.ScopeTruncated, "Theory path lane count exceeded the bounded query limit.");
+                return;
+            }
+
+            var controllers = new NativeList<Entity>(0, Allocator.Persistent);
+            var routeLines = new NativeList<Entity>(1, Allocator.Persistent);
+            routeLines.Add(line);
+            var railLanes = new NativeList<Entity>(targetLanes.Count, Allocator.Persistent);
+            foreach (Entity lane in targetLanes) railLanes.Add(lane);
+            var trafficLights = new NativeList<Entity>(0, Allocator.Persistent);
+            m_Staging = new RailEtaScopedStaging(controllers, routeLines, railLanes, trafficLights);
+            m_IndexOriginFrame = m_Simulation.frameIndex;
+            m_IndexStartTicks = Stopwatch.GetTimestamp();
+            CollectRailSnapshotJob snapshotJob = CreateSnapshotJob(m_Staging);
+            m_Handle = IJobExtensions.Schedule(snapshotJob, Dependency);
+            Dependency = m_Handle;
+            m_TheoryCapturePending = true;
+            foreach (RailEtaBatchRequest request in m_Requests)
+                service.Transition(request.Ticket, RailEtaRequestState.IndexJobScheduled, m_IndexOriginFrame, m_BatchId, m_Generation);
+            m_Phase = Phase.IndexJob;
+        }
+
+        private bool AppendTheoryPaths(RailEtaService service, out string failure)
+        {
+            failure = string.Empty;
+            if (m_Staging == null || m_TheorySegmentPaths == null || m_TheorySegmentPaths.Count == 0)
+            {
+                RailEtaTheoryFailure failureInfo = TheoryFailure(null, null, null,
+                    "path-staging-missing", Entity.Null, Entity.Null, -1);
+                StoreTheoryFailure(service, failureInfo);
+                failure = failureInfo.Detail;
+                return false;
+            }
+
+            HashSet<Entity> targetLanes = CollectPathLanes(m_TheorySegmentPaths);
+            IReadOnlyDictionary<Entity, List<RailEtaScopedLaneRow>> facts = BuildFrozenLaneFactIndex(m_Staging, targetLanes);
+            if (m_TheorySegments.Length == 0)
+            {
+                RailEtaRequestDescriptor descriptor = m_Requests[0].Descriptor;
+                RailEtaTheorySegmentPathResult pathResult = m_TheorySegmentPaths[0];
+                Entity line = RailEtaEntityId.ToEntity(descriptor);
+                Entity target = RailEtaEntityId.ToEntity(descriptor.TargetCheckpointId);
+                var missing = new RailEtaMissingRouteSegment
+                {
+                    Controller = line,
+                    Target = target,
+                    IsVehicleTarget = 1,
+                    NeedsGeometry = 1
+                };
+                if (!AppendResolvedPathForWorker(m_Staging, facts, missing, pathResult.Path, 0u, out failure)
+                    || !RailEtaTheoryVehicle.Append(EntityManager, m_Staging, descriptor, pathResult.Path, out failure))
+                    return false;
+                return true;
+            }
+
+            var pathsBySlot = new Dictionary<int, RailEtaTheorySegmentPathResult>();
+            for (int i = 0; i < m_TheorySegmentPaths.Count; i++)
+            {
+                RailEtaTheorySegmentPathResult pathResult = m_TheorySegmentPaths[i];
+                if (pathResult?.Request == null
+                    || pathsBySlot.ContainsKey(pathResult.Request.PathSlotIndex))
+                {
+                    RailEtaTheorySegmentRequest slot = pathResult?.Request;
+                    RailEtaTheoryFailure failureInfo = TheoryFailure(null, slot,
+                        pathResult == null ? (bool?)null : pathResult.FormalPath,
+                        pathResult?.Request == null
+                            ? "path-result-request-missing"
+                            : "path-result-slot-duplicate",
+                        Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, failureInfo);
+                    failure = failureInfo.Detail;
+                    return false;
+                }
+                pathsBySlot.Add(pathResult.Request.PathSlotIndex, pathResult);
+            }
+
+            var combinedPaths = new Dictionary<int, RailTravel.Path>();
+            ulong actualPathSignature = RailEtaTheorySignatures.Seed;
+            int totalPathFacts = 0;
+            long totalPathSourceElements = 0;
+            for (int i = 0; i < m_Requests.Count; i++)
+            {
+                RailEtaBatchRequest batchRequest = m_Requests[i];
+                if (!TryCombineTheoryPaths(batchRequest, pathsBySlot, out RailTravel.Path combinedPath,
+                        out RailEtaTheoryFailure failureInfo)
+                    || !TryBuildTheoryPathFacts(batchRequest, pathsBySlot, combinedPath,
+                        out RailEtaTheoryPathFact[] pathFacts, out failureInfo))
+                {
+                    StoreTheoryFailure(service, failureInfo);
+                    failure = failureInfo?.Detail ?? "code=path-facts-missing";
+                    return false;
+                }
+                totalPathSourceElements += combinedPath.SourceElementCount;
+                if (totalPathSourceElements > RailEtaLimits.MaxTheoryPathFacts)
+                {
+                    RailEtaTheoryFailure sourceLimitFailure = TheoryFailure(batchRequest, null, null,
+                        "batch-source-limit", Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, sourceLimitFailure);
+                    failure = sourceLimitFailure.Detail;
+                    return false;
+                }
+                totalPathFacts += pathFacts.Length;
+                if (totalPathFacts > RailEtaLimits.MaxTheoryPathFacts)
+                {
+                    RailEtaTheoryFailure factLimitFailure = TheoryFailure(batchRequest, null, null,
+                        "batch-fact-limit", Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, factLimitFailure);
+                    failure = factLimitFailure.Detail;
+                    return false;
+                }
+                combinedPaths.Add(batchRequest.SegmentIndex, combinedPath);
+                batchRequest.PathSourceElementCount = combinedPath.SourceElementCount;
+                batchRequest.PathSkippedElementCount = combinedPath.SkippedElementCount;
+                batchRequest.PathFacts = pathFacts;
+                actualPathSignature = RailEtaTheorySignatures.MixPath(actualPathSignature,
+                    batchRequest.SegmentIndex, batchRequest.FromWaypointIndex, batchRequest.ToWaypointIndex,
+                    batchRequest.PathSourceElementCount, batchRequest.PathSkippedElementCount, pathFacts);
+            }
+            for (int i = 0; i < m_Requests.Count; i++)
+                m_Requests[i].ActualPathSignature = actualPathSignature;
+
+            for (int i = 0; i < m_Requests.Count; i++)
+            {
+                RailEtaBatchRequest batchRequest = m_Requests[i];
+                if (!combinedPaths.TryGetValue(batchRequest.SegmentIndex, out RailTravel.Path combinedPath))
+                {
+                    RailEtaTheoryFailure failureInfo = TheoryFailure(batchRequest, null, null,
+                        "combined-path-missing", Entity.Null, Entity.Null, -1);
+                    StoreTheoryFailure(service, failureInfo);
+                    failure = failureInfo.Detail;
+                    return false;
+                }
+                Entity synthetic = RailEtaEntityId.ToEntity(batchRequest.Descriptor);
+                Entity target = batchRequest.ExpectedTarget;
+                ulong signature = TheorySignature(synthetic, batchRequest.FromWaypointIndex, batchRequest.ToWaypointIndex);
+                m_Staging.Lines.Add(new RailEtaLineRouteRow
+                {
+                    LineOrdinal = i,
+                    Line = synthetic,
+                    SegmentCount = 1,
+                    WaypointCount = 2,
+                    ChainSignature = signature,
+                    IsPassenger = 1
+                });
+                m_Staging.Segments.Add(new RailEtaRouteSegmentRow
+                {
+                    Line = synthetic,
+                    Segment = Entity.Null,
+                    FromWaypoint = new Entity
+                    {
+                        Index = batchRequest.FromWaypointIndex,
+                        Version = batchRequest.PathSlots[0].FromWaypointVersion
+                    },
+                    ToWaypoint = target,
+                    SegmentIndex = 0,
+                    PathState = 0,
+                    PathfindDelayFrames = 0,
+                    GeometryAvailable = 0,
+                    PathfindDelayKnown = 1,
+                    ToWaypointBoarding = 1
+                });
+                var routeMissing = new RailEtaMissingRouteSegment
+                {
+                    Line = synthetic,
+                    SegmentIndex = 0,
+                    NeedsGeometry = 1
+                };
+                if (!AppendResolvedPathForWorker(m_Staging, facts, routeMissing, combinedPath, 0u, out failure))
+                    return false;
+                var vehicleMissing = new RailEtaMissingRouteSegment
+                {
+                    Controller = synthetic,
+                    Target = target,
+                    IsVehicleTarget = 1,
+                    NeedsGeometry = 1
+                };
+                if (!AppendResolvedPathForWorker(m_Staging, facts, vehicleMissing, combinedPath, 0u, out failure)
+                    || !RailEtaTheoryVehicle.Append(EntityManager, m_Staging, batchRequest.Descriptor, combinedPath, out failure))
+                    return false;
+            }
+            return true;
+        }
+
+        private void StoreTheoryFailure(RailEtaService service, RailEtaTheoryFailure failure)
+        {
+            if (service == null || failure == null || m_Requests == null || m_Requests.Count == 0)
+                return;
+            RailEtaTheoryFailure existing;
+            RailEtaTicket ticket = m_Requests[0].Ticket;
+            if (!ticket.IsValid
+                || (service.TryGetTheoryFailure(ticket, out existing) && existing != null))
+                return;
+            service.SetTheoryFailure(ticket, failure, m_Generation);
+        }
+
+        private void LogTheoryFailure(RailEtaService service, RailEtaTicket ticket)
+        {
+            if (m_TheoryFailureLogged || service == null || !ticket.IsValid
+                || !service.TryGetTheoryFailure(ticket, out RailEtaTheoryFailure failure)
+                || failure == null)
+                return;
+            m_TheoryFailureLogged = true;
+            Mod.log.Info("[RailEtaTheoryFailure] ticket=" + ticket.Value
+                + ";failure=" + (failure.Failure ?? string.Empty)
+                + ";detail=" + (failure.Detail ?? string.Empty));
+        }
+
+        private static RailEtaTheoryFailure TheoryFailure(
+            RailEtaBatchRequest request,
+            RailEtaTheorySegmentRequest slot,
+            bool? formalPath,
+            string code,
+            Entity lane,
+            Entity nextLane,
+            int pathElementIndex)
+        {
+            int segmentIndex = request?.SegmentIndex ?? slot?.SegmentIndex ?? -1;
+            int fromWaypointIndex = request?.FromWaypointIndex
+                ?? slot?.SegmentFromWaypointIndex ?? -1;
+            int toWaypointIndex = request?.ToWaypointIndex
+                ?? slot?.SegmentToWaypointIndex ?? -1;
+            int pathSlotIndex = slot?.PathSlotIndex ?? -1;
+            string detail = "code=" + (code ?? "theory-path-failure")
+                + ";seg=" + segmentIndex
+                + ";from=" + fromWaypointIndex
+                + ";to=" + toWaypointIndex
+                + ";slot=" + pathSlotIndex
+                + ";formal=" + (formalPath.HasValue ? (formalPath.Value ? "1" : "0") : "-1")
+                + ";lane=" + lane.Index + ":" + lane.Version
+                + ";next=" + nextLane.Index + ":" + nextLane.Version
+                + ";element=" + pathElementIndex;
+            return new RailEtaTheoryFailure
+            {
+                SegmentIndex = segmentIndex,
+                FromWaypointIndex = fromWaypointIndex,
+                ToWaypointIndex = toWaypointIndex,
+                Failure = code ?? "theory-path-failure",
+                Detail = detail
+            };
+        }
+
+        private static bool TryCombineTheoryPaths(
+            RailEtaBatchRequest request,
+            Dictionary<int, RailEtaTheorySegmentPathResult> pathsBySlot,
+            out RailTravel.Path combined,
+            out RailEtaTheoryFailure failure)
+        {
+            combined = null;
+            failure = null;
+            if (request == null || request.PathSlots.Count == 0)
+            {
+                failure = TheoryFailure(request, null, null, "combine-slots-missing",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            var segments = new List<RailTravel.Segment>();
+            int sourceElementCount = 0;
+            int skippedElementCount = 0;
+            Entity sourceEntity = Entity.Null;
+            for (int i = 0; i < request.PathSlots.Count; i++)
+            {
+                RailEtaTheorySegmentRequest slot = request.PathSlots[i];
+                if (slot == null)
+                {
+                    failure = TheoryFailure(request, null, null, "combine-slot-missing",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (!pathsBySlot.TryGetValue(slot.PathSlotIndex, out RailEtaTheorySegmentPathResult pathResult))
+                {
+                    failure = TheoryFailure(request, slot, null, "combine-slot-missing",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (pathResult.Path == null || pathResult.Path.Segments.Length == 0)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, "combine-path-empty",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (sourceEntity == Entity.Null) sourceEntity = pathResult.Path.SourceEntity;
+                if (pathResult.Path.SourceElementCount < 0)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath,
+                        "combine-source-count-negative", Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (sourceElementCount > RailEtaLimits.MaxTheoryPathFacts - pathResult.Path.SourceElementCount)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath,
+                        "combine-source-count-limit", Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                sourceElementCount += pathResult.Path.SourceElementCount;
+                skippedElementCount += pathResult.Path.SkippedElementCount;
+                segments.AddRange(pathResult.Path.Segments);
+            }
+            if (segments.Count == 0 || sourceEntity == Entity.Null)
+            {
+                failure = TheoryFailure(request, null, null,
+                    segments.Count == 0 ? "combine-segments-empty" : "combine-source-missing",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            combined = new RailTravel.Path(sourceEntity, segments.ToArray(), sourceElementCount, skippedElementCount);
+            if (combined.IsEmpty)
+            {
+                failure = TheoryFailure(request, null, null, "combine-path-empty",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            return true;
+        }
+
+        private bool TryBuildTheoryPathFacts(
+            RailEtaBatchRequest request,
+            Dictionary<int, RailEtaTheorySegmentPathResult> pathsBySlot,
+            RailTravel.Path combinedPath,
+            out RailEtaTheoryPathFact[] facts,
+            out RailEtaTheoryFailure failure)
+        {
+            facts = Array.Empty<RailEtaTheoryPathFact>();
+            failure = null;
+            if (request == null)
+            {
+                failure = TheoryFailure(null, null, null, "facts-request-missing",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            if (combinedPath == null || combinedPath.Segments.Length == 0)
+            {
+                failure = TheoryFailure(request, null, null, "facts-path-empty",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            if (combinedPath.Segments.Length > RailEtaLimits.MaxTheoryPathFacts
+                || combinedPath.SourceElementCount > RailEtaLimits.MaxTheoryPathFacts)
+            {
+                failure = TheoryFailure(request, null, null, "facts-count-limit",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            var values = new List<RailEtaTheoryPathFact>(combinedPath.Segments.Length);
+            for (int slotIndex = 0; slotIndex < request.PathSlots.Count; slotIndex++)
+            {
+                RailEtaTheorySegmentRequest slot = request.PathSlots[slotIndex];
+                if (slot == null)
+                {
+                    failure = TheoryFailure(request, null, null, "facts-slot-missing",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (!pathsBySlot.TryGetValue(slot.PathSlotIndex, out RailEtaTheorySegmentPathResult pathResult))
+                {
+                    failure = TheoryFailure(request, slot, null, "facts-slot-missing",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (pathResult.Path == null || pathResult.Path.Segments.Length == 0)
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, "facts-slot-path-empty",
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (!TryBuildTheoryRouteFact(slot, pathResult.Path, pathResult.FormalPath,
+                    out RailEtaTheoryPathFact routeFact, out string routeFailure))
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, routeFailure,
+                        Entity.Null, Entity.Null, -1);
+                    return false;
+                }
+                if (!TryResolveRouteLaneSides(routeFact, pathResult.Path,
+                    out int fromRouteLaneSide, out int toRouteLaneSide,
+                    out Entity routeLane, out string routeLaneFailure))
+                {
+                    failure = TheoryFailure(request, slot, pathResult.FormalPath, routeLaneFailure,
+                        routeLane, Entity.Null, -1);
+                    return false;
+                }
+                for (int segmentIndex = 0; segmentIndex < pathResult.Path.Segments.Length; segmentIndex++)
+                {
+                    RailTravel.Segment segment = pathResult.Path.Segments[segmentIndex];
+                    int pathElementIndex = segment.PathElementIndex;
+                    if (pathResult.FormalPath && pathElementIndex < 0)
+                    {
+                        failure = TheoryFailure(request, slot, true, "formal-path-element-missing",
+                            segment.LaneEntity, Entity.Null, -1);
+                        return false;
+                    }
+                    RailTravel.Segment next = segmentIndex + 1 < pathResult.Path.Segments.Length
+                        ? pathResult.Path.Segments[segmentIndex + 1]
+                        : default;
+                    RailEtaTheoryPathFact fact = new RailEtaTheoryPathFact
+                    {
+                        PathSlotIndex = routeFact.PathSlotIndex,
+                        PathOwnerIndex = routeFact.PathOwnerIndex,
+                        PathOwnerVersion = routeFact.PathOwnerVersion,
+                        PathElementIndex = pathElementIndex,
+                        PathOwnerStable = pathResult.FormalPath ? 1 : 0,
+                        PreviousLaneIndex = segmentIndex == 0
+                            ? Entity.Null.Index : pathResult.Path.Segments[segmentIndex - 1].LaneEntity.Index,
+                        PreviousLaneVersion = segmentIndex == 0
+                            ? Entity.Null.Version : pathResult.Path.Segments[segmentIndex - 1].LaneEntity.Version,
+                        NextLaneIndex = segmentIndex + 1 >= pathResult.Path.Segments.Length
+                            ? Entity.Null.Index : next.LaneEntity.Index,
+                        NextLaneVersion = segmentIndex + 1 >= pathResult.Path.Segments.Length
+                            ? Entity.Null.Version : next.LaneEntity.Version,
+                        FromRouteLaneSide = fromRouteLaneSide,
+                        ToRouteLaneSide = toRouteLaneSide,
+                        Direction = segment.TargetDelta.y > segment.TargetDelta.x ? 1 : -1,
+                        FromWaypointIndex = routeFact.FromWaypointIndex,
+                        FromWaypointVersion = routeFact.FromWaypointVersion,
+                        FromWaypointEntityIndex = routeFact.FromWaypointEntityIndex,
+                        FromWaypointEntityVersion = routeFact.FromWaypointEntityVersion,
+                        ToWaypointIndex = routeFact.ToWaypointIndex,
+                        ToWaypointVersion = routeFact.ToWaypointVersion,
+                        ToWaypointEntityIndex = routeFact.ToWaypointEntityIndex,
+                        ToWaypointEntityVersion = routeFact.ToWaypointEntityVersion,
+                        FromRouteLanePresent = routeFact.FromRouteLanePresent,
+                        FromStartLaneIndex = routeFact.FromStartLaneIndex,
+                        FromStartLaneVersion = routeFact.FromStartLaneVersion,
+                        FromEndLaneIndex = routeFact.FromEndLaneIndex,
+                        FromEndLaneVersion = routeFact.FromEndLaneVersion,
+                        FromStartCurve = routeFact.FromStartCurve,
+                        FromEndCurve = routeFact.FromEndCurve,
+                        ToRouteLanePresent = routeFact.ToRouteLanePresent,
+                        ToStartLaneIndex = routeFact.ToStartLaneIndex,
+                        ToStartLaneVersion = routeFact.ToStartLaneVersion,
+                        ToEndLaneIndex = routeFact.ToEndLaneIndex,
+                        ToEndLaneVersion = routeFact.ToEndLaneVersion,
+                        ToStartCurve = routeFact.ToStartCurve,
+                        ToEndCurve = routeFact.ToEndCurve,
+                        PathElementsPresent = routeFact.PathElementsPresent,
+                        PathElementCount = routeFact.PathElementCount,
+                        PathElementsSignature = routeFact.PathElementsSignature,
+                        RouteNetworkSignature = routeFact.RouteNetworkSignature,
+                        LaneIndex = segment.LaneEntity.Index,
+                        LaneVersion = segment.LaneEntity.Version,
+                        Kind = (int)segment.Kind,
+                        StartFraction = segment.TargetDelta.x,
+                        EndFraction = segment.TargetDelta.y,
+                        CurveLength = segment.CurveLength,
+                        Length = segment.Length,
+                        PathFlags = (uint)segment.PathFlags,
+                        TrackFlags = (uint)segment.TrackFlags,
+                        ConnectionFlags = (uint)segment.ConnectionFlags,
+                        SpeedLimit = segment.SpeedLimit,
+                        Curviness = segment.Curviness
+                    };
+                    FillTheoryPathPhysics(segment, ref fact);
+                    values.Add(fact);
+                }
+            }
+            if (values.Count != combinedPath.Segments.Length)
+            {
+                failure = TheoryFailure(request, null, null, "facts-count-mismatch",
+                    Entity.Null, Entity.Null, -1);
+                return false;
+            }
+            facts = values.ToArray();
+            return true;
+        }
+
+        private bool TryBuildTheoryRouteFact(
+            RailEtaTheorySegmentRequest slot, RailTravel.Path path, bool formalPath,
+            out RailEtaTheoryPathFact fact,
+            out string failure)
+        {
+            fact = new RailEtaTheoryPathFact { PathSlotIndex = slot?.PathSlotIndex ?? -1 };
+            failure = string.Empty;
+            if (slot == null || path == null || path.Segments.Length == 0)
+            {
+                failure = slot == null ? "route-slot-missing" : "route-path-missing";
+                return false;
+            }
+            if (m_TheoryLine == Entity.Null
+                || !EntityManager.HasBuffer<RouteSegment>(m_TheoryLine)
+                || !EntityManager.HasBuffer<RouteWaypoint>(m_TheoryLine))
+            {
+                failure = "route-line-buffers-missing";
+                return false;
+            }
+            DynamicBuffer<RouteSegment> routeSegments = EntityManager.GetBuffer<RouteSegment>(m_TheoryLine, true);
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(m_TheoryLine, true);
+            if (slot.PathSlotIndex < 0 || slot.PathSlotIndex >= routeSegments.Length
+                || slot.FromWaypointIndex < 0 || slot.FromWaypointIndex >= waypoints.Length
+                || slot.ToWaypointIndex < 0 || slot.ToWaypointIndex >= waypoints.Length)
+            {
+                failure = "route-index-invalid";
+                return false;
+            }
+            Entity from = waypoints[slot.FromWaypointIndex].m_Waypoint;
+            Entity to = waypoints[slot.ToWaypointIndex].m_Waypoint;
+            if (from == Entity.Null || to == Entity.Null
+                || from.Version != slot.FromWaypointVersion
+                || to.Version != slot.ToWaypointVersion)
+            {
+                failure = "route-waypoint-version-mismatch";
+                return false;
+            }
+            Entity owner = routeSegments[slot.PathSlotIndex].m_Segment;
+            if (owner != Entity.Null && !EntityManager.Exists(owner))
+            {
+                failure = "route-owner-missing";
+                return false;
+            }
+            if (formalPath && owner != path.SourceEntity)
+            {
+                failure = "formal-path-owner-mismatch";
+                return false;
+            }
+            fact.PathOwnerIndex = owner.Index;
+            fact.PathOwnerVersion = owner.Version;
+            fact.FromWaypointIndex = slot.FromWaypointIndex;
+            fact.FromWaypointVersion = from.Version;
+            fact.FromWaypointEntityIndex = from.Index;
+            fact.FromWaypointEntityVersion = from.Version;
+            fact.ToWaypointIndex = slot.ToWaypointIndex;
+            fact.ToWaypointVersion = to.Version;
+            fact.ToWaypointEntityIndex = to.Index;
+            fact.ToWaypointEntityVersion = to.Version;
+            FillRouteLaneFact(EntityManager, from, out int fromPresent,
+                out int fromStartIndex, out int fromStartVersion,
+                out int fromEndIndex, out int fromEndVersion,
+                out float fromStartCurve, out float fromEndCurve);
+            FillRouteLaneFact(EntityManager, to, out int toPresent,
+                out int toStartIndex, out int toStartVersion,
+                out int toEndIndex, out int toEndVersion,
+                out float toStartCurve, out float toEndCurve);
+            fact.FromRouteLanePresent = fromPresent;
+            fact.FromStartLaneIndex = fromStartIndex;
+            fact.FromStartLaneVersion = fromStartVersion;
+            fact.FromEndLaneIndex = fromEndIndex;
+            fact.FromEndLaneVersion = fromEndVersion;
+            fact.FromStartCurve = fromStartCurve;
+            fact.FromEndCurve = fromEndCurve;
+            fact.ToRouteLanePresent = toPresent;
+            fact.ToStartLaneIndex = toStartIndex;
+            fact.ToStartLaneVersion = toStartVersion;
+            fact.ToEndLaneIndex = toEndIndex;
+            fact.ToEndLaneVersion = toEndVersion;
+            fact.ToStartCurve = toStartCurve;
+            fact.ToEndCurve = toEndCurve;
+            fact.PathElementsPresent = 1;
+            fact.PathElementCount = path.SourceElementCount;
+            fact.PathElementsSignature = path.SourceSignature;
+            fact.RouteNetworkSignature = RailEtaTheorySignatures.RouteNetworkSignature(fact);
+            return true;
+        }
+
+        private static bool TryResolveRouteLaneSides(
+            RailEtaTheoryPathFact routeFact, RailTravel.Path path,
+            out int fromSide, out int toSide, out Entity failedLane, out string failure)
+        {
+            fromSide = -1;
+            toSide = -1;
+            failedLane = Entity.Null;
+            failure = string.Empty;
+            if (routeFact == null || path == null || path.Segments.Length == 0
+                || routeFact.FromRouteLanePresent == 0 || routeFact.ToRouteLanePresent == 0)
+            {
+                failure = "route-lane-facts-missing";
+                return false;
+            }
+            Entity first = path.Segments[0].LaneEntity;
+            Entity last = path.Segments[path.Segments.Length - 1].LaneEntity;
+            fromSide = ResolveRouteLaneSide(
+                first, routeFact.FromStartLaneIndex, routeFact.FromStartLaneVersion,
+                routeFact.FromEndLaneIndex, routeFact.FromEndLaneVersion);
+            toSide = ResolveRouteLaneSide(
+                last, routeFact.ToStartLaneIndex, routeFact.ToStartLaneVersion,
+                routeFact.ToEndLaneIndex, routeFact.ToEndLaneVersion);
+            if (fromSide < 0)
+            {
+                failedLane = first;
+                failure = "route-lane-from-mismatch";
+                return false;
+            }
+            if (toSide < 0)
+            {
+                failedLane = last;
+                failure = "route-lane-to-mismatch";
+                return false;
+            }
+            return true;
+        }
+
+        private static int ResolveRouteLaneSide(
+            Entity lane, int startIndex, int startVersion, int endIndex, int endVersion)
+        {
+            if (lane.Index == startIndex && lane.Version == startVersion) return 0;
+            if (lane.Index == endIndex && lane.Version == endVersion) return 1;
+            return -1;
+        }
+
+        private static void FillTheoryPathPhysics(RailTravel.Segment segment,
+            ref RailEtaTheoryPathFact fact)
+        {
+            fact.CurveLength = segment.CurveLength;
+            fact.CurveAX = segment.Curve.m_Bezier.a.x;
+            fact.CurveAY = segment.Curve.m_Bezier.a.y;
+            fact.CurveAZ = segment.Curve.m_Bezier.a.z;
+            fact.CurveBX = segment.Curve.m_Bezier.b.x;
+            fact.CurveBY = segment.Curve.m_Bezier.b.y;
+            fact.CurveBZ = segment.Curve.m_Bezier.b.z;
+            fact.CurveCX = segment.Curve.m_Bezier.c.x;
+            fact.CurveCY = segment.Curve.m_Bezier.c.y;
+            fact.CurveCZ = segment.Curve.m_Bezier.c.z;
+            fact.CurveDX = segment.Curve.m_Bezier.d.x;
+            fact.CurveDY = segment.Curve.m_Bezier.d.y;
+            fact.CurveDZ = segment.Curve.m_Bezier.d.z;
+            fact.TrackFlags = (uint)segment.TrackFlags;
+            fact.ConnectionFlags = (uint)segment.ConnectionFlags;
+            fact.ConnectionTrackTypes = (uint)segment.ConnectionTrackTypes;
+            fact.ConnectionRoadTypes = (uint)segment.ConnectionRoadTypes;
+            fact.AccessRestrictionIndex = segment.AccessRestriction.Index;
+            fact.AccessRestrictionVersion = segment.AccessRestriction.Version;
+            fact.EdgeDeltaStart = segment.EdgeDeltaStart;
+            fact.EdgeDeltaEnd = segment.EdgeDeltaEnd;
+            fact.EdgeConnectedStartCount = segment.EdgeConnectedStartCount;
+            fact.EdgeConnectedEndCount = segment.EdgeConnectedEndCount;
+            if (segment.IsTrackLane)
+            {
+                fact.ConnectionFlags = 0;
+                fact.ConnectionTrackTypes = 0;
+                fact.ConnectionRoadTypes = 0;
+                fact.EdgeDeltaStart = 0f;
+                fact.EdgeDeltaEnd = 0f;
+                fact.EdgeConnectedStartCount = 0;
+                fact.EdgeConnectedEndCount = 0;
+            }
+        }
+
+        private static void FillRouteLaneFact(EntityManager entities, Entity waypoint,
+            out int present, out int startIndex, out int startVersion, out int endIndex,
+            out int endVersion, out float startCurve, out float endCurve)
+        {
+            present = 0;
+            startIndex = 0;
+            startVersion = 0;
+            endIndex = 0;
+            endVersion = 0;
+            startCurve = 0f;
+            endCurve = 0f;
+            if (!entities.HasComponent<RouteLane>(waypoint)) return;
+            RouteLane lane = entities.GetComponentData<RouteLane>(waypoint);
+            present = 1;
+            startIndex = lane.m_StartLane.Index;
+            startVersion = lane.m_StartLane.Version;
+            endIndex = lane.m_EndLane.Index;
+            endVersion = lane.m_EndLane.Version;
+            startCurve = lane.m_StartCurvePos;
+            endCurve = lane.m_EndCurvePos;
         }
 
         private void EnqueueScope(RailEtaService service)
         {
-            RailEtaScopeWork work = new RailEtaScopeWork { Mode = m_Mode, BatchId = m_BatchId, IndexOriginFrame = m_IndexOriginFrame, Generation = m_Generation, Requests = m_Requests, Staging = m_Staging, RequestFrameFacts = m_FrozenRuntimeFacts,
+            RailEtaScopeWork work = new RailEtaScopeWork { Mode = m_Mode, BatchId = m_BatchId, BatchStartTicks = m_BatchStartTicks, IndexOriginFrame = m_IndexOriginFrame, Generation = m_Generation, Requests = m_Requests, Staging = m_Staging, RequestFrameFacts = m_FrozenRuntimeFacts,
                 ExcludedVehicles = new HashSet<Entity>(), VehiclePathFailures = new List<RailEtaVehiclePathFailure>(), TicketFailures = new List<RailEtaTicketFailure>(), FailedSegments = new HashSet<RailEtaFailedSegmentKey>() };
             m_Staging = null;
             m_FrozenRuntimeFacts = null;
             if (!service.Worker.TryEnqueue(() =>
             {
                 RailEtaScopeResult result;
-                try { using (s_WorkerScope.Auto()) result = new RailEtaScopeBuilder().Build(work); }
+                try
+                {
+                    if (WorkCancelled(service, work.Mode, work.BatchStartTicks, work.Requests))
+                        result = new RailEtaScopeResult { Mode = work.Mode, BatchId = work.BatchId, IndexOriginFrame = work.IndexOriginFrame, Generation = work.Generation, Requests = work.Requests, Staging = work.Staging, Failure = RailEtaFailure.Cancelled, Detail = "Theory batch was cancelled or timed out." };
+                    else
+                    {
+                        using (s_WorkerScope.Auto()) result = new RailEtaScopeBuilder().Build(work);
+                    }
+                }
                 catch (Exception ex) { result = new RailEtaScopeResult { Mode = work.Mode, BatchId = work.BatchId, IndexOriginFrame = work.IndexOriginFrame, Generation = work.Generation, Requests = work.Requests, Staging = work.Staging, Failure = RailEtaFailure.InvalidResult, Detail = ex.GetType().Name + ": " + ex.Message }; }
                 lock (m_CallbackGate) { if (m_ShuttingDown) result.Dispose(); else m_ScopeResults.Enqueue(result); }
             }))
@@ -514,8 +1422,18 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private void PollScope(RailEtaService service)
         {
-            if (!m_ScopeResults.TryDequeue(out RailEtaScopeResult scope)) return;
-            if (!IsCurrentBatchService(service) || scope.Generation != service.Generation || scope.Generation != m_Generation) { scope.Dispose(); CancelBatch(service); return; }
+            RailEtaScopeResult scope = null;
+            while (m_ScopeResults.TryDequeue(out RailEtaScopeResult pending))
+            {
+                if (!IsCurrentScope(service, pending))
+                {
+                    pending?.Dispose();
+                    continue;
+                }
+                scope = pending;
+                break;
+            }
+            if (scope == null) return;
             if (scope.TicketFailures != null) foreach (RailEtaTicketFailure failure in scope.TicketFailures) service.Transition(failure.Ticket, RailEtaRequestState.Failed, scope.IndexOriginFrame, scope.BatchId, scope.Generation, failure.Failure, failure.Detail);
             if (scope.Failure != RailEtaFailure.None) { FailRequests(service, scope.Requests ?? m_Requests, scope.Failure, scope.Detail); scope.Dispose(); FinishBatch(); return; }
             if (scope.Requests == null || scope.Requests.Count == 0) { scope.Dispose(); FinishBatch(); return; }
@@ -540,14 +1458,19 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private void EnqueueMaterialize(RailEtaService service, RailEtaScopeResult scope)
         {
-            RailEtaMaterializeWork work = new RailEtaMaterializeWork { Scope = scope, OriginFrame = scope.IndexOriginFrame, IndexWallTicks = m_IndexWallTicks };
+            RailEtaMaterializeWork work = new RailEtaMaterializeWork { Scope = scope, OriginFrame = scope.IndexOriginFrame, IndexWallTicks = m_IndexWallTicks, BatchStartTicks = m_BatchStartTicks };
             if (!service.Worker.TryEnqueue(() =>
             {
                 RailEtaMaterializeResult result;
                 try
                 {
                     long materializeStart = Stopwatch.GetTimestamp();
-                    using (s_WorkerMaterialize.Auto()) result = new RailEtaSnapshotMaterializer().Materialize(work);
+                    if (WorkCancelled(service, work.Scope?.Mode ?? RailEtaMode.Full, work.BatchStartTicks, work.Scope?.Requests))
+                        result = new RailEtaMaterializeResult { Scope = work.Scope, Failure = RailEtaFailure.Cancelled, Detail = "Theory batch was cancelled or timed out." };
+                    else
+                    {
+                        using (s_WorkerMaterialize.Auto()) result = new RailEtaSnapshotMaterializer().Materialize(work);
+                    }
                     result.MaterializeWallTicks = Stopwatch.GetTimestamp() - materializeStart;
                 }
                 catch (Exception ex) { result = new RailEtaMaterializeResult { Scope = work.Scope, Failure = RailEtaFailure.InvalidResult, Detail = ex.GetType().Name + ": " + ex.Message }; }
@@ -1015,6 +1938,21 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return result;
         }
 
+        private static HashSet<Entity> CollectPathLanes(List<RailEtaTheorySegmentPathResult> paths)
+        {
+            var result = new HashSet<Entity>();
+            if (paths == null) return result;
+            for (int i = 0; i < paths.Count; i++)
+            {
+                RailTravel.Path path = paths[i]?.Path;
+                if (path == null) continue;
+                for (int segmentIndex = 0; segmentIndex < path.Segments.Length; segmentIndex++)
+                    if (path.Segments[segmentIndex].LaneEntity != Entity.Null)
+                        result.Add(path.Segments[segmentIndex].LaneEntity);
+            }
+            return result;
+        }
+
         private static HashSet<Entity> CollectPathLanes(ResolvedPathResult[] resolvedPaths)
         {
             int capacity = 0;
@@ -1032,6 +1970,18 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 }
             }
             return result;
+        }
+
+        private static ulong TheorySignature(Entity line, int fromWaypointIndex, int toWaypointIndex)
+        {
+            unchecked
+            {
+                ulong hash = 1469598103934665603UL;
+                hash = (hash ^ (uint)line.Index) * 1099511628211UL;
+                hash = (hash ^ (uint)line.Version) * 1099511628211UL;
+                hash = (hash ^ (uint)fromWaypointIndex) * 1099511628211UL;
+                return (hash ^ (uint)toWaypointIndex) * 1099511628211UL;
+            }
         }
 
         private static Dictionary<Entity, List<RailEtaScopedLaneRow>> BuildFrozenLaneFactIndex(
@@ -1147,8 +2097,25 @@ namespace RapidTransitMod.RailEta.BuiltIn
             m_ResolvedPaths.Clear();
         }
 
-        private List<RailEtaTicketPrediction> PredictBatch(RailEtaService service, RailEtaPredictionWork work, long predictorGeneration)
+        private List<RailEtaTicketPrediction> PredictBatch(
+            RailEtaService service,
+            RailEtaPredictionWork work,
+            long predictorGeneration,
+            out RailEtaTheorySegmentResult[] theorySegments,
+            out RailEtaFailure theoryFailure,
+            out string theoryDetail,
+            out RailEtaTheoryFailure theoryFailureInfo)
         {
+            theorySegments = null;
+            theoryFailure = RailEtaFailure.None;
+            theoryDetail = string.Empty;
+            theoryFailureInfo = null;
+            if (work.TheoryBatch)
+            {
+                theorySegments = PredictTheoryBatch(service, work, predictorGeneration,
+                    out theoryFailure, out theoryDetail, out theoryFailureInfo);
+                return new List<RailEtaTicketPrediction>();
+            }
             var predictions = new List<RailEtaTicketPrediction>(work.Scope.Requests.Count);
             RailPredictionSolver predictor = service.Predictor;
             foreach (RailEtaBatchRequest batchRequest in work.Scope.Requests)
@@ -1241,6 +2208,345 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return predictions;
         }
 
+        private RailEtaTheorySegmentResult[] PredictTheoryBatch(
+            RailEtaService service,
+            RailEtaPredictionWork work,
+            long predictorGeneration,
+            out RailEtaFailure failure,
+            out string detail,
+            out RailEtaTheoryFailure failureInfo)
+        {
+            failure = RailEtaFailure.None;
+            detail = string.Empty;
+            failureInfo = null;
+            int count = work.Scope?.Requests?.Count ?? 0;
+            if (count == 0)
+            {
+                failure = RailEtaFailure.InvalidResult;
+                detail = "Theory segment scope is empty.";
+                return Array.Empty<RailEtaTheorySegmentResult>();
+            }
+
+            for (int i = 0; i < count; i++)
+                service.Transition(work.Scope.Requests[i].Ticket, RailEtaRequestState.Predicting,
+                    service.LastObservedFrame, work.Scope.BatchId, work.Scope.Generation);
+
+            var results = new RailEtaTheorySegmentResult[count];
+            var details = new string[count];
+            Parallel.For(0, count, new ParallelOptions { MaxDegreeOfParallelism = 2 }, index =>
+            {
+                try
+                {
+                    results[index] = PredictTheorySegment(
+                        service,
+                        work,
+                        work.Scope.Requests[index],
+                        predictorGeneration,
+                        out details[index]);
+                }
+                catch (Exception ex)
+                {
+                    details[index] = ex.GetType().Name + ": " + ex.Message;
+                    results[index] = new RailEtaTheorySegmentResult
+                    {
+                        SegmentIndex = work.Scope.Requests[index].SegmentIndex,
+                        FromWaypointIndex = work.Scope.Requests[index].FromWaypointIndex,
+                        ToWaypointIndex = work.Scope.Requests[index].ToWaypointIndex,
+                        RouteSignature = work.Scope.Requests[index].Descriptor.RouteSignature,
+                        PathSignature = work.Scope.Requests[index].ActualPathSignature,
+                        ModelSignature = work.Scope.Requests[index].Descriptor.ModelSignature,
+                        PathSourceElementCount = work.Scope.Requests[index].PathSourceElementCount,
+                        PathSkippedElementCount = work.Scope.Requests[index].PathSkippedElementCount,
+                        PathFacts = work.Scope.Requests[index].PathFacts,
+                        State = "Failed",
+                        Failure = RailEtaFailure.InvalidResult.ToString(),
+                        Detail = details[index]
+                    };
+                }
+            });
+
+            for (int i = 0; i < results.Length; i++)
+            {
+                if (results[i] != null && String.Equals(results[i].State, "Completed", StringComparison.Ordinal))
+                    continue;
+                failure = RailEtaFailure.InvalidResult;
+                detail = !String.IsNullOrEmpty(details[i])
+                    ? details[i]
+                    : results[i]?.Detail ?? "Theory segment prediction failed.";
+                RailEtaTheorySegmentResult failed = results[i];
+                RailEtaBatchRequest request = work.Scope.Requests[i];
+                if (failed != null
+                    && Enum.TryParse(failed.Failure, out RailEtaFailure parsedFailure))
+                    failure = parsedFailure;
+                failureInfo = new RailEtaTheoryFailure
+                {
+                    SegmentIndex = request.SegmentIndex,
+                    FromWaypointIndex = request.FromWaypointIndex,
+                    ToWaypointIndex = request.ToWaypointIndex,
+                    Failure = failed?.Failure ?? RailEtaFailure.InvalidResult.ToString(),
+                    Detail = detail
+                };
+                return Array.Empty<RailEtaTheorySegmentResult>();
+            }
+            Array.Sort(results, (left, right) => left.SegmentIndex.CompareTo(right.SegmentIndex));
+            return results;
+        }
+
+        private RailEtaTheorySegmentResult PredictTheorySegment(
+            RailEtaService service,
+            RailEtaPredictionWork work,
+            RailEtaBatchRequest batchRequest,
+            long predictorGeneration,
+            out string detail)
+        {
+            detail = string.Empty;
+            Entity controller = RailEtaEntityId.ToEntity(batchRequest.Descriptor);
+            RailEtaFrozenWorld world = FilterTheoryWorld(work.FrozenWorld, controller, controller);
+            RailEtaWorldSnapshot snapshot = FilterTheorySnapshot(work.Snapshot, controller, controller, world);
+            var request = new RailEtaRequest
+            {
+                RequestId = batchRequest.Ticket.Value + ":" + batchRequest.SegmentIndex,
+                Mode = RailEtaMode.Theory,
+                VehicleId = new RailVehicleId(RailEtaEntityId.Pack(controller)),
+                TargetCheckpointId = new RailCheckpointId(RailEtaEntityId.Pack(batchRequest.ExpectedTarget)),
+                ExpectedTarget = new RailEntityIdentity
+                {
+                    Index = batchRequest.ExpectedTarget.Index,
+                    Version = batchRequest.ExpectedTarget.Version
+                }
+            };
+            var workspace = new RailEtaWorkspace
+            {
+                MaxEvents = RailEtaLimits.MaxEvents,
+                MaxTraceEvents = RailEtaLimits.MaxTraceEvents,
+                MaxDiagnostics = RailEtaLimits.MaxDiagnostics,
+                MaxCheckpoints = RailEtaLimits.MaxCheckpoints,
+                MaxVehicles = 1,
+                MaxResources = RailEtaLimits.MaxScopeResources,
+                MaxBlockerDepth = RailEtaLimits.MaxBlockerDepth
+            };
+            service.StoreRequest(batchRequest.Ticket, request, work.Scope.Generation);
+            RailPredictionSolver predictor = new RailPredictionSolver();
+            RailEtaPrediction prediction = null;
+            try
+            {
+                prediction = predictor.Predict(world, snapshot, request, workspace, new RailEtaCancellation(() =>
+                    WorkCancelled(service, RailEtaMode.Theory, work.BatchStartTicks, work.Scope?.Requests)));
+            }
+            catch (Exception ex)
+            {
+                detail = "Theory segment predictor threw " + ex.GetType().Name + ": " + ex.Message;
+            }
+
+            if (prediction == null)
+            {
+                prediction = new RailEtaPrediction
+                {
+                    RequestId = request.RequestId,
+                    Confidence = RailEtaConfidence.Unknown,
+                    Failure = RailEtaFailure.InvalidResult,
+                    Reason = String.IsNullOrEmpty(detail) ? "theory-prediction-missing" : detail
+                };
+            }
+            service.MarkPredictionFinished(batchRequest.Ticket, work.Scope.Generation);
+            service.Transition(batchRequest.Ticket, RailEtaRequestState.Validating,
+                service.LastObservedFrame, work.Scope.BatchId, work.Scope.Generation);
+            RailEtaResultValidator.ApplyHostMetadata(
+                prediction, snapshot, request, predictor.Version, predictorGeneration, new List<RailEtaStageTiming>());
+            bool valid = RailEtaResultValidator.TryValidate(prediction, snapshot, request, workspace, out string validationDetail);
+            if (!valid || prediction.Failure != RailEtaFailure.None)
+            {
+                detail = !String.IsNullOrEmpty(validationDetail)
+                    ? validationDetail
+                    : prediction.Reason ?? "theory-prediction-failed";
+                return new RailEtaTheorySegmentResult
+                {
+                    SegmentIndex = batchRequest.SegmentIndex,
+                    FromWaypointIndex = batchRequest.FromWaypointIndex,
+                    ToWaypointIndex = batchRequest.ToWaypointIndex,
+                    RouteSignature = batchRequest.Descriptor.RouteSignature,
+                    PathSignature = batchRequest.ActualPathSignature,
+                    ModelSignature = batchRequest.Descriptor.ModelSignature,
+                    PathSourceElementCount = batchRequest.PathSourceElementCount,
+                    PathSkippedElementCount = batchRequest.PathSkippedElementCount,
+                    PathFacts = batchRequest.PathFacts,
+                    State = "Failed",
+                    Failure = prediction.Failure.ToString(),
+                    Detail = detail
+                };
+            }
+
+            uint frames = unchecked(prediction.PredictedArrivalFrame - snapshot.OriginFrame);
+            if (frames == 0u || frames > 54613u)
+            {
+                detail = "Theory segment frame result is outside the bounded range.";
+                return new RailEtaTheorySegmentResult
+                {
+                    SegmentIndex = batchRequest.SegmentIndex,
+                    FromWaypointIndex = batchRequest.FromWaypointIndex,
+                    ToWaypointIndex = batchRequest.ToWaypointIndex,
+                    RouteSignature = batchRequest.Descriptor.RouteSignature,
+                    PathSignature = batchRequest.ActualPathSignature,
+                    ModelSignature = batchRequest.Descriptor.ModelSignature,
+                    PathSourceElementCount = batchRequest.PathSourceElementCount,
+                    PathSkippedElementCount = batchRequest.PathSkippedElementCount,
+                    PathFacts = batchRequest.PathFacts,
+                    State = "Failed",
+                    Failure = RailEtaFailure.InvalidResult.ToString(),
+                    Detail = detail
+                };
+            }
+            return new RailEtaTheorySegmentResult
+            {
+                SegmentIndex = batchRequest.SegmentIndex,
+                FromWaypointIndex = batchRequest.FromWaypointIndex,
+                ToWaypointIndex = batchRequest.ToWaypointIndex,
+                SegmentFrames = frames,
+                RouteSignature = batchRequest.Descriptor.RouteSignature,
+                PathSignature = batchRequest.ActualPathSignature,
+                ModelSignature = batchRequest.Descriptor.ModelSignature,
+                PathSourceElementCount = batchRequest.PathSourceElementCount,
+                PathSkippedElementCount = batchRequest.PathSkippedElementCount,
+                PathFacts = batchRequest.PathFacts,
+                State = "Completed"
+            };
+        }
+
+        private static RailEtaFrozenWorld FilterTheoryWorld(
+            RailEtaFrozenWorld source,
+            Entity controller,
+            Entity route)
+        {
+            var pathLanes = new HashSet<Entity>();
+            RailEtaRoutePathRow[] routePaths = source?.RoutePaths ?? Array.Empty<RailEtaRoutePathRow>();
+            for (int i = 0; i < routePaths.Length; i++)
+                if (routePaths[i].Line == route && routePaths[i].Lane != Entity.Null)
+                    pathLanes.Add(routePaths[i].Lane);
+            var vehicles = new List<RailEtaScopedVehicleRow>();
+            var layout = new List<RailEtaScopedUnitRow>();
+            var navigation = new List<RailEtaFrozenNavigationLaneRow>();
+            var pathElements = new List<RailEtaFrozenPathElementRow>();
+            var lanes = new List<RailEtaScopedLaneRow>();
+            var occupancies = new List<RailEtaLaneOccupancyRow>();
+            var signals = new List<RailEtaSignalPeerRow>();
+            var lines = new List<RailEtaLineRouteRow>();
+            var segments = new List<RailEtaRouteSegmentRow>();
+            var paths = new List<RailEtaRoutePathRow>();
+            for (int i = 0; i < source.Vehicles.Length; i++)
+                if (source.Vehicles[i].Controller == controller) vehicles.Add(source.Vehicles[i]);
+            for (int i = 0; i < source.Layout.Length; i++)
+                if (source.Layout[i].Controller == controller) layout.Add(source.Layout[i]);
+            for (int i = 0; i < source.NavigationLanes.Length; i++)
+                if (source.NavigationLanes[i].Controller == controller) navigation.Add(source.NavigationLanes[i]);
+            for (int i = 0; i < source.PathElements.Length; i++)
+                if (source.PathElements[i].Controller == controller) pathElements.Add(source.PathElements[i]);
+            for (int i = 0; i < source.Lanes.Length; i++)
+            {
+                RailEtaScopedLaneRow lane = source.Lanes[i];
+                if (lane.Controller == controller || lane.Line == route
+                    || pathLanes.Contains(lane.Lane) || pathLanes.Contains(lane.OtherLane))
+                {
+                    lanes.Add(lane);
+                    if (lane.Lane != Entity.Null) pathLanes.Add(lane.Lane);
+                }
+            }
+            for (int i = 0; i < source.Occupancies.Length; i++)
+                if (pathLanes.Contains(source.Occupancies[i].Lane)) occupancies.Add(source.Occupancies[i]);
+            for (int i = 0; i < source.SignalPeers.Length; i++)
+                if (pathLanes.Contains(source.SignalPeers[i].Lane)) signals.Add(source.SignalPeers[i]);
+            for (int i = 0; i < source.Lines.Length; i++)
+                if (source.Lines[i].Line == route) lines.Add(source.Lines[i]);
+            for (int i = 0; i < source.RouteSegments.Length; i++)
+                if (source.RouteSegments[i].Line == route) segments.Add(source.RouteSegments[i]);
+            for (int i = 0; i < source.RoutePaths.Length; i++)
+                if (source.RoutePaths[i].Line == route) paths.Add(source.RoutePaths[i]);
+            return new RailEtaFrozenWorld
+            {
+                Mode = RailEtaMode.Theory,
+                OriginFrame = source.OriginFrame,
+                Vehicles = vehicles.ToArray(),
+                Layout = layout.ToArray(),
+                NavigationLanes = navigation.ToArray(),
+                PathElements = pathElements.ToArray(),
+                Lanes = lanes.ToArray(),
+                Occupancies = occupancies.ToArray(),
+                SignalPeers = signals.ToArray(),
+                Lines = lines.ToArray(),
+                RouteSegments = segments.ToArray(),
+                RoutePaths = paths.ToArray(),
+                RuntimeFacts = source.RuntimeFacts
+            };
+        }
+
+        private static RailEtaWorldSnapshot FilterTheorySnapshot(
+            RailEtaWorldSnapshot source,
+            Entity controller,
+            Entity route,
+            RailEtaFrozenWorld world)
+        {
+            long vehicleId = RailEtaEntityId.Pack(controller);
+            long routeId = RailEtaEntityId.Pack(route);
+            var pathLanes = new HashSet<long>();
+            for (int i = 0; i < world.Lanes.Length; i++)
+                if (world.Lanes[i].Controller == controller || world.Lanes[i].Line == route)
+                    pathLanes.Add(RailEtaEntityId.Pack(world.Lanes[i].Lane));
+            var lines = new List<RailLineTopologySnapshot>();
+            var vehicles = new List<RailVehicleSnapshot>();
+            var blockers = new List<RailBlockerSnapshot>();
+            var reservations = new List<RailReservationSnapshot>();
+            var signals = new List<RailSignalSnapshot>();
+            var occupancies = new List<RailLaneOccupancySnapshot>();
+            var resources = new List<RailResourceSnapshot>();
+            for (int i = 0; i < source.Lines.Length; i++)
+                if (PackIdentity(source.Lines[i].Line) == routeId) lines.Add(source.Lines[i]);
+            for (int i = 0; i < source.Vehicles.Length; i++)
+                if (source.Vehicles[i].VehicleId.Value == vehicleId) vehicles.Add(source.Vehicles[i]);
+            for (int i = 0; i < source.Blockers.Length; i++)
+                if (source.Blockers[i].VehicleId.Value == vehicleId) blockers.Add(source.Blockers[i]);
+            for (int i = 0; i < source.Signals.Length; i++)
+                if (pathLanes.Contains(source.Signals[i].LaneId.Value)) signals.Add(source.Signals[i]);
+            for (int i = 0; i < source.Occupancies.Length; i++)
+                if (pathLanes.Contains(source.Occupancies[i].LaneId.Value)) occupancies.Add(source.Occupancies[i]);
+            var resourceIds = new HashSet<long>();
+            for (int i = 0; i < source.Resources.Length; i++)
+            {
+                RailResourceSnapshot resource = source.Resources[i];
+                bool relevant = false;
+                for (int laneIndex = 0; laneIndex < resource.LaneIds.Length; laneIndex++)
+                    if (pathLanes.Contains(resource.LaneIds[laneIndex].Value)) { relevant = true; break; }
+                if (relevant)
+                {
+                    resources.Add(resource);
+                    resourceIds.Add(resource.ResourceId.Value);
+                }
+            }
+            for (int i = 0; i < source.Reservations.Length; i++)
+                if (resourceIds.Contains(source.Reservations[i].ResourceId.Value)) reservations.Add(source.Reservations[i]);
+            return new RailEtaWorldSnapshot
+            {
+                Mode = RailEtaMode.Theory,
+                OriginFrame = source.OriginFrame,
+                NavigationPhase = source.NavigationPhase,
+                BatchId = source.BatchId,
+                ServiceGeneration = source.ServiceGeneration,
+                ClosureValidated = source.ClosureValidated,
+                SharedIndexVersion = source.SharedIndexVersion,
+                ScopeLineCount = lines.Count,
+                Lines = lines.ToArray(),
+                Vehicles = vehicles.ToArray(),
+                Blockers = blockers.ToArray(),
+                Reservations = reservations.ToArray(),
+                Signals = signals.ToArray(),
+                Occupancies = occupancies.ToArray(),
+                Resources = resources.ToArray()
+            };
+        }
+
+        private static long PackIdentity(RailEntityIdentity identity)
+        {
+            return identity == null ? 0L : ((long)(uint)identity.Index << 32) | (uint)identity.Version;
+        }
+
         private static void AppendPathFailureDiagnostics(RailEtaPrediction prediction, List<RailEtaVehiclePathFailure> failures)
         {
             if (prediction == null || failures == null || failures.Count == 0) return;
@@ -1264,9 +2570,19 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private void PollMaterialize(RailEtaService service)
         {
-            if (!m_MaterializeResults.TryDequeue(out RailEtaMaterializeResult result)) return;
+            RailEtaMaterializeResult result = null;
+            while (m_MaterializeResults.TryDequeue(out RailEtaMaterializeResult pending))
+            {
+                if (!IsCurrentScope(service, pending?.Scope))
+                {
+                    pending?.Scope?.Dispose();
+                    continue;
+                }
+                result = pending;
+                break;
+            }
+            if (result == null) return;
             RailEtaScopeResult scope = result.Scope;
-            if (!IsCurrentBatchService(service) || scope.Generation != service.Generation || scope.Generation != m_Generation) { scope.Dispose(); CancelBatch(service); return; }
             if (result.Snapshot == null)
             {
                 FailRequests(service, scope.Requests, result.Failure, result.Detail);
@@ -1283,11 +2599,13 @@ namespace RapidTransitMod.RailEta.BuiltIn
             RailEtaPredictionWork predictionWork = new RailEtaPredictionWork
             {
                 Scope = scope,
+                BatchStartTicks = m_BatchStartTicks,
                 Snapshot = result.Snapshot,
                 FrozenWorld = result.FrozenWorld,
                 IndexWallTicks = m_IndexWallTicks,
                 ScopedWallTicks = 0,
-                MaterializeWallTicks = result.MaterializeWallTicks
+                MaterializeWallTicks = result.MaterializeWallTicks,
+                TheoryBatch = m_TheorySegments.Length > 0
             };
             foreach (RailEtaBatchRequest request in scope.Requests)
                 service.Transition(request.Ticket, RailEtaRequestState.PredictorQueued, service.LastObservedFrame, scope.BatchId, scope.Generation);
@@ -1297,12 +2615,33 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 RailEtaPredictionResult predictionResult;
                 try
                 {
+                    if (WorkCancelled(service, predictionWork.Scope?.Mode ?? RailEtaMode.Full, predictionWork.BatchStartTicks, predictionWork.Scope?.Requests))
+                    {
+                        predictionResult = new RailEtaPredictionResult
+                        {
+                            Scope = predictionWork.Scope,
+                            Failure = RailEtaFailure.Cancelled,
+                            Detail = "Theory batch was cancelled or timed out."
+                        };
+                    }
+                    else
+                    {
+                    RailEtaTheorySegmentResult[] theorySegments;
+                    RailEtaFailure theoryFailure;
+                    string theoryDetail;
+                    RailEtaTheoryFailure theoryFailureInfo;
                     predictionResult = new RailEtaPredictionResult
                     {
                         Scope = predictionWork.Scope,
                         FrozenWorld = predictionWork.FrozenWorld,
-                        Predictions = PredictBatch(service, predictionWork, predictorGeneration)
+                        Predictions = PredictBatch(service, predictionWork, predictorGeneration,
+                            out theorySegments, out theoryFailure, out theoryDetail, out theoryFailureInfo),
+                        TheorySegments = theorySegments,
+                        TheoryFailure = theoryFailureInfo,
+                        Failure = theoryFailure,
+                        Detail = theoryDetail
                     };
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1320,12 +2659,43 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private void PollPrediction(RailEtaService service)
         {
-            if (!m_PredictionResults.TryDequeue(out RailEtaPredictionResult result)) return;
-            RailEtaScopeResult scope = result.Scope;
-            if (scope == null || !IsCurrentBatchService(service) || scope.Generation != service.Generation || scope.Generation != m_Generation)
+            RailEtaPredictionResult result = null;
+            while (m_PredictionResults.TryDequeue(out RailEtaPredictionResult pending))
             {
-                scope?.Dispose();
-                CancelBatch(service);
+                if (!IsCurrentScope(service, pending?.Scope))
+                {
+                    pending?.Scope?.Dispose();
+                    continue;
+                }
+                result = pending;
+                break;
+            }
+            if (result == null) return;
+            RailEtaScopeResult scope = result.Scope;
+            if (m_TheorySegments.Length > 0)
+            {
+                RailEtaFailure theoryFailure = result.Failure;
+                string theoryDetail = result.Detail;
+                RailEtaTheorySegmentResult[] theorySegments = result.TheorySegments;
+                RailEtaTheoryFailure theoryFailureInfo = result.TheoryFailure;
+                if (theoryFailure == RailEtaFailure.None
+                    && (theorySegments == null || theorySegments.Length != scope.Requests.Count))
+                {
+                    theoryFailure = RailEtaFailure.InvalidResult;
+                    theoryDetail = "Theory segment result count does not match the request batch.";
+                    theorySegments = Array.Empty<RailEtaTheorySegmentResult>();
+                }
+                if (theoryFailure != RailEtaFailure.None && theoryFailureInfo == null)
+                {
+                    EnsureTheoryFailure(service, scope.Requests, theoryFailure, theoryDetail);
+                    service.TryGetTheoryFailure(scope.Requests[0].Ticket, out theoryFailureInfo);
+                }
+                service.PublishTheorySegments(scope.Requests[0].Ticket,
+                    theoryFailure == RailEtaFailure.None ? theorySegments : Array.Empty<RailEtaTheorySegmentResult>(),
+                    scope.Generation, theoryFailure, theoryDetail, theoryFailureInfo);
+                LogTheoryFailure(service, scope.Requests[0].Ticket);
+                scope.Dispose();
+                FinishBatch();
                 return;
             }
             if (result.Failure != RailEtaFailure.None)
@@ -1426,19 +2796,105 @@ namespace RapidTransitMod.RailEta.BuiltIn
 
         private void FailBatch(RailEtaService service, RailEtaFailure failure, string detail)
         {
+            EnsureTheoryFailure(service, m_Requests, failure, detail);
             if (failure == RailEtaFailure.WorkerLost || service.WorkerLost)
             {
                 service.MarkWorkerLost(detail);
+                LogTheoryFailure(service, m_Requests != null && m_Requests.Count > 0
+                    ? m_Requests[0].Ticket : default);
                 FinishBatch();
                 return;
             }
             FailRequests(service, m_Requests, failure, detail);
             FinishBatch();
         }
-        private void FailRequests(RailEtaService service, List<RailEtaBatchRequest> requests, RailEtaFailure failure, string detail) { if (requests == null) return; foreach (RailEtaBatchRequest request in requests) service.Transition(request.Ticket, RailEtaRequestState.Failed, m_Simulation.frameIndex, m_BatchId, m_Generation, failure, detail); }
+        private void FailRequests(RailEtaService service, List<RailEtaBatchRequest> requests, RailEtaFailure failure, string detail)
+        {
+            if (requests == null) return;
+            EnsureTheoryFailure(service, requests, failure, detail);
+            foreach (RailEtaBatchRequest request in requests)
+                service.Transition(request.Ticket, RailEtaRequestState.Failed, m_Simulation.frameIndex, m_BatchId, m_Generation, failure, detail);
+            if (requests.Count > 0)
+                LogTheoryFailure(service, requests[0].Ticket);
+        }
+
+        private void EnsureTheoryFailure(
+            RailEtaService service,
+            List<RailEtaBatchRequest> requests,
+            RailEtaFailure failure,
+            string detail)
+        {
+            if (m_Mode != RailEtaMode.Theory || m_TheorySegments.Length == 0
+                || requests == null || requests.Count == 0)
+                return;
+            RailEtaTheoryFailure existing;
+            if (service.TryGetTheoryFailure(requests[0].Ticket, out existing) && existing != null)
+                return;
+            RailEtaTicket ticket = requests[0].Ticket;
+            service.SetTheoryFailure(ticket, new RailEtaTheoryFailure
+            {
+                SegmentIndex = -1,
+                FromWaypointIndex = -1,
+                ToWaypointIndex = -1,
+                Failure = failure.ToString(),
+                Detail = detail ?? string.Empty
+            }, m_Generation);
+        }
         private void CancelBatch(RailEtaService service) { if (m_Requests != null) foreach (RailEtaBatchRequest request in m_Requests) service.Cancel(request.Ticket); FinishBatch(); }
         private bool IsCurrentBatchService(RailEtaService service) => ReferenceEquals(service, m_BatchService) && ReferenceEquals(RailEtaService.Current, service) && service.InstanceId == m_BatchServiceId && !service.IsDisposed;
-        private void FinishBatch() { CancelPathRequests(); m_TheoryPaths?.Cancel(); m_Phase = Phase.Idle; m_Mode = RailEtaMode.Full; m_Requests = null; m_Scope = null; m_Staging = null; m_FrozenRuntimeFacts = null; m_RequestStartFrame = 0; m_Handle = default; m_BatchService = null; m_BatchServiceId = 0; }
+        private bool IsCurrentScope(RailEtaService service, RailEtaScopeResult scope)
+        {
+            if (scope == null || !IsCurrentBatchService(service)
+                || scope.Mode != m_Mode
+                || scope.BatchId != m_BatchId
+                || scope.Generation != service.Generation
+                || scope.Generation != m_Generation)
+                return false;
+            if (scope.Requests == null || m_Requests == null
+                || scope.Requests.Count != m_Requests.Count || scope.Requests.Count == 0)
+                return false;
+            for (int i = 0; i < scope.Requests.Count; i++)
+                if (scope.Requests[i] == null || m_Requests[i] == null
+                    || scope.Requests[i].Ticket.Value != m_Requests[i].Ticket.Value)
+                    return false;
+            return true;
+        }
+        private void FinishBatch()
+        {
+            CancelPathRequests();
+            m_TheoryPaths?.Cancel();
+            if (m_Staging != null)
+            {
+                m_Handle.Complete();
+                m_Staging.Dispose();
+                m_Staging = null;
+            }
+            if (m_Scope != null)
+            {
+                m_Scope.Dispose();
+                m_Scope = null;
+            }
+            m_Handle = default;
+            m_Phase = Phase.Idle;
+            m_Mode = RailEtaMode.Full;
+            m_Requests = null;
+            m_TheorySegments = Array.Empty<RailEtaTheorySegmentRequest>();
+            m_TheorySegmentPaths = null;
+            m_TheoryCapturePending = false;
+            m_TheoryLine = Entity.Null;
+            m_FrozenRuntimeFacts = null;
+            m_RequestStartFrame = 0;
+            m_BatchStartTicks = 0;
+            m_BatchService = null;
+            m_BatchServiceId = 0;
+        }
+
+        private void DrainStaleResults()
+        {
+            while (m_ScopeResults.TryDequeue(out RailEtaScopeResult scope)) scope.Dispose();
+            while (m_MaterializeResults.TryDequeue(out RailEtaMaterializeResult materialize)) materialize.Scope?.Dispose();
+            while (m_PredictionResults.TryDequeue(out RailEtaPredictionResult prediction)) prediction.Scope?.Dispose();
+        }
 
         protected override void OnDestroy()
         {

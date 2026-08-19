@@ -172,6 +172,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 OriginMessageKey = originMessageKey
             };
             runtimeLine.StableSignature = StableRuntimeSignature(runtimeLine);
+            runtimeLine.ModelSignature = ModelSignature(line);
             return true;
         }
 
@@ -274,33 +275,10 @@ namespace RapidTransitMod.Dispatch.Workbench
             {
                 for (int i = 0; i < depotEntities.Length; i++)
                 {
-                    Entity rawDepot = depotEntities[i];
-                    if (m_EntityManager.HasComponent<Game.Buildings.ServiceUpgrade>(rawDepot))
-                        continue;
-
-                    Entity depot = m_DepotCanon(rawDepot);
-                    if (depot == Entity.Null || !seenCanonicalDepots.Add(depot))
-                        continue;
-
-                    string name = Name(depot);
-                    if (string.IsNullOrEmpty(name))
+                    if (TryDepot(depotEntities[i], seenCanonicalDepots, out DispatchWorkbenchDepotDto depot))
                     {
-                        name = "Depot " + depot.Index;
+                        depots.Add(depot);
                     }
-
-                    string transportType = string.Empty;
-                    Entity prefab = m_EntityManager.GetComponentData<PrefabRef>(depot).m_Prefab;
-                    if (prefab != Entity.Null && m_EntityManager.HasComponent<TransportDepotData>(prefab))
-                    {
-                        transportType = m_EntityManager.GetComponentData<TransportDepotData>(prefab).m_TransportType.ToString();
-                    }
-
-                    depots.Add(new DispatchWorkbenchDepotDto
-                    {
-                        id = DepotId(depot),
-                        name = name,
-                        transportType = transportType
-                    });
                 }
             }
             finally
@@ -322,15 +300,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal bool TryDepot(Entity rawDepot, HashSet<Entity> seenCanonicalDepots, out DispatchWorkbenchDepotDto depotDto)
         {
             depotDto = null;
-            if (rawDepot == Entity.Null
-                || !m_EntityManager.Exists(rawDepot)
-                || m_EntityManager.HasComponent<Game.Buildings.ServiceUpgrade>(rawDepot))
-            {
-                return false;
-            }
-
-            Entity depot = m_DepotCanon(rawDepot);
-            if (depot == Entity.Null || (seenCanonicalDepots != null && !seenCanonicalDepots.Add(depot)))
+            if (!TryCanonicalDepot(rawDepot, out Entity depot)
+                || (seenCanonicalDepots != null && !seenCanonicalDepots.Add(depot)))
             {
                 return false;
             }
@@ -432,6 +403,25 @@ namespace RapidTransitMod.Dispatch.Workbench
             return sb.ToString();
         }
 
+        private string ModelSignature(Entity line)
+        {
+            if (line == Entity.Null || !m_EntityManager.HasBuffer<VehicleModel>(line))
+                return string.Empty;
+
+            DynamicBuffer<VehicleModel> models = m_EntityManager.GetBuffer<VehicleModel>(line, true);
+            StringBuilder sb = new StringBuilder(48 + models.Length * 24);
+            sb.Append(models.Length);
+            for (int i = 0; i < models.Length; i++)
+            {
+                VehicleModel model = models[i];
+                sb.Append('|').Append(model.m_PrimaryPrefab.Index).Append(':')
+                    .Append(model.m_PrimaryPrefab.Version).Append('/')
+                    .Append(model.m_SecondaryPrefab.Index).Append(':')
+                    .Append(model.m_SecondaryPrefab.Version);
+            }
+            return sb.ToString();
+        }
+
         internal static string StationId(int order)
         {
             return "station-" + order.ToString();
@@ -492,14 +482,17 @@ namespace RapidTransitMod.Dispatch.Workbench
                 for (int i = 0; i < depotEntities.Length; i++)
                 {
                     Entity rawDepot = depotEntities[i];
-                    Entity canonicalDepot = m_DepotCanon(rawDepot);
-                    Entity resolvedDepot = canonicalDepot != Entity.Null ? canonicalDepot : rawDepot;
+                    if (!TryCanonicalDepot(rawDepot, out Entity canonicalDepot))
+                    {
+                        continue;
+                    }
+
                     string canonicalId = DepotId(canonicalDepot);
                     string rawId = RawDepotId(rawDepot);
                     if (string.Equals(canonicalId, depotId, StringComparison.Ordinal)
                         || string.Equals(rawId, depotId, StringComparison.Ordinal))
                     {
-                        return resolvedDepot;
+                        return canonicalDepot;
                     }
 
                     if (string.IsNullOrEmpty(fallbackKey)
@@ -511,9 +504,9 @@ namespace RapidTransitMod.Dispatch.Workbench
 
                     if (fallbackDepot == Entity.Null)
                     {
-                        fallbackDepot = resolvedDepot;
+                        fallbackDepot = canonicalDepot;
                     }
-                    else if (fallbackDepot != resolvedDepot)
+                    else if (fallbackDepot != canonicalDepot)
                     {
                         fallbackAmbiguous = true;
                     }
@@ -528,6 +521,28 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return Entity.Null;
 
             return fallbackDepot;
+        }
+
+        private bool TryCanonicalDepot(Entity rawDepot, out Entity depot)
+        {
+            depot = Entity.Null;
+            if (rawDepot == Entity.Null || !m_EntityManager.Exists(rawDepot))
+            {
+                return false;
+            }
+
+            Entity canonicalDepot = m_DepotCanon(rawDepot);
+            if (canonicalDepot == Entity.Null
+                || !m_EntityManager.Exists(canonicalDepot)
+                || m_EntityManager.HasComponent<Game.Tools.Temp>(canonicalDepot)
+                || m_EntityManager.HasComponent<Deleted>(canonicalDepot)
+                || m_EntityManager.HasComponent<Game.Buildings.ServiceUpgrade>(canonicalDepot))
+            {
+                return false;
+            }
+
+            depot = canonicalDepot;
+            return true;
         }
 
         private static string DepotLocationKey(string depotId)

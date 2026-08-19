@@ -74,6 +74,12 @@ namespace RapidTransitMod
                 actions.HoldDeparture(vehicle, nowFrame, ecb);
         }
 
+        internal void HoldUntil(Entity vehicle, uint releaseFrame, EntityCommandBuffer ecb)
+        {
+            if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
+                actions.HoldUntil(vehicle, releaseFrame, ecb);
+        }
+
         internal void ForceDepart(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,
@@ -215,6 +221,28 @@ namespace RapidTransitMod
                 line,
                 ecb);
             LogRoadOriginGuard(vehicle, line, result);
+        }
+
+        internal void EnsureRunningTimedStop(
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            EntityCommandBuffer ecb)
+        {
+            if (!TryGetDispatchActions(vehicle, out _, out bool isRoad) || !isRoad)
+                return;
+
+            if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
+                || state != VehicleState.Running)
+            {
+                return;
+            }
+
+            m_RoadCommandHost.EnsureRunningTimedStop(
+                vehicle,
+                line,
+                waypointIndex,
+                ecb);
         }
 
         private bool TryGetDispatchActions(

@@ -46,7 +46,19 @@ namespace RapidTransitMod.Dispatch.Workbench
                 time = row.time,
                 kind = row.kind,
                 source = row.source,
-                note = row.note
+                note = row.note,
+                stopSig = row.stopSig,
+                timedStops = row.timedStops == null
+                    ? null
+                    : row.timedStops
+                        .Where(stop => stop != null)
+                        .Select(stop => new DispatchWorkbenchTimedStopDto
+                        {
+                            stopKey = stop.stopKey,
+                            arrive = stop.arrive,
+                            depart = stop.depart
+                        })
+                        .ToArray()
             };
         }
 
@@ -462,7 +474,31 @@ namespace RapidTransitMod.Dispatch.Workbench
                     || !string.Equals(a?.time, b?.time, StringComparison.Ordinal)
                     || !string.Equals(a?.kind, b?.kind, StringComparison.Ordinal)
                     || !string.Equals(a?.source, b?.source, StringComparison.Ordinal)
+                    || !string.Equals(a?.stopSig, b?.stopSig, StringComparison.Ordinal)
+                    || !SameTimedStops(a?.timedStops, b?.timedStops)
                     || (strict && !string.Equals(a?.note, b?.note, StringComparison.Ordinal)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool SameTimedStops(
+            DispatchWorkbenchTimedStopDto[] left,
+            DispatchWorkbenchTimedStopDto[] right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null || left.Length != right.Length)
+                return false;
+
+            for (int i = 0; i < left.Length; i++)
+            {
+                if (!string.Equals(left[i]?.stopKey, right[i]?.stopKey, StringComparison.Ordinal)
+                    || left[i]?.arrive != right[i]?.arrive
+                    || left[i]?.depart != right[i]?.depart)
                 {
                     return false;
                 }

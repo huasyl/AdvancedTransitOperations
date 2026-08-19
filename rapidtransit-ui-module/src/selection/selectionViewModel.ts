@@ -1,6 +1,10 @@
 export interface DetailRowData {
   label?: string;
-  value?: string;
+  value?: string | number;
+  valueKind?: string;
+  rowKind?: "detail" | "arrivalTimes";
+  plannedArrivalMinute?: number;
+  actualArrivalMinute?: number;
 }
 
 export interface DevSightData {
@@ -70,7 +74,22 @@ export interface PanelData {
   detail7Value?: string;
   detail8LabelKey?: string;
   detail8Value?: string;
+  nextPlannedArrivalMinute?: number;
+  plannedArrivalMinute?: number;
+  actualArrivalMinute?: number;
+  plannedDepartureMinute?: number;
   alertText?: string;
+  isManagedVehicle?: boolean;
+  showCurrentStop?: boolean;
+  currentStationName?: string;
+  stopDwellValue?: string;
+  nextPassStationName?: string;
+  nextStopStationName?: string;
+  showSchedule?: boolean;
+  currentSlotText?: string;
+  targetSlotText?: string;
+  showWaitingForFastTrain?: boolean;
+  waitingForFastTrainVehicleId?: number;
   showAlerts?: boolean;
   showBypassStationToggle?: boolean;
   bypassStationChecked?: boolean;
@@ -147,6 +166,35 @@ export function buildDetailRows(panelData: PanelData | null, mode: string) {
       if (row && !DETAIL_HIDE_KEYS[key]) {
         ordered.push(row);
         usedLabels[key] = true;
+        if (key === "currentStation"
+          && typeof panelData.plannedArrivalMinute === "number"
+          && panelData.plannedArrivalMinute >= 0
+          && typeof panelData.actualArrivalMinute === "number"
+          && panelData.actualArrivalMinute >= 0) {
+          ordered.push({
+            label: "scheduledArrival",
+            rowKind: "arrivalTimes",
+            plannedArrivalMinute: panelData.plannedArrivalMinute,
+            actualArrivalMinute: panelData.actualArrivalMinute
+          });
+          if (typeof panelData.plannedDepartureMinute === "number"
+            && panelData.plannedDepartureMinute >= 0) {
+            ordered.push({
+              label: "scheduledDeparture",
+              value: panelData.plannedDepartureMinute,
+              valueKind: "serviceMinute"
+            });
+          }
+        }
+        if (key === "nextStopStation"
+          && typeof panelData.nextPlannedArrivalMinute === "number"
+          && panelData.nextPlannedArrivalMinute >= 0) {
+          ordered.push({
+            label: "nextScheduledArrival",
+            value: panelData.nextPlannedArrivalMinute,
+            valueKind: "serviceMinute"
+          });
+        }
       }
     }
 
@@ -167,13 +215,33 @@ export function buildDetailRows(panelData: PanelData | null, mode: string) {
   return rows.filter((row) => row.label && !DETAIL_HIDE_KEYS[row.label]);
 }
 
-export function formatValue(value: string | undefined, valueKind: string | undefined, t: (key: string) => string) {
-  if (!value || value === "-") {
+export function formatServiceMinute(value: number | undefined) {
+  if (typeof value !== "number" || value < 0) {
     return "-";
   }
 
+  const rounded = Math.round(value);
+  const normalized = ((rounded % 1440) + 1440) % 1440;
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  const dayOffset = Math.floor(rounded / 1440);
+  return dayOffset > 0 ? `${time}（+${dayOffset}日）` : time;
+}
+
+export function formatValue(value: string | number | undefined, valueKind: string | undefined, t: (key: string) => string) {
+  if (valueKind === "serviceMinute") {
+    return formatServiceMinute(typeof value === "number" ? value : undefined);
+  }
+
+  if (value == null || value === "" || value === "-") {
+    return "-";
+  }
+
+  const text = String(value);
+
   if (valueKind === "key") {
-    return t(value);
+    return t(text);
   }
 
   if (valueKind === "state") {
@@ -192,18 +260,18 @@ export function formatValue(value: string | undefined, valueKind: string | undef
       Launched: "launched",
       Assigned: "assigned"
     };
-    return t(stateMap[value] || value);
+    return t(stateMap[text] || text);
   }
 
-  if (value === "yes") {
+  if (text === "yes") {
     return t("yes");
   }
 
-  if (value === "no") {
+  if (text === "no") {
     return t("no");
   }
 
-  return value;
+  return text;
 }
 
 export function formatAlertText(text: string | undefined, t: (key: string) => string) {

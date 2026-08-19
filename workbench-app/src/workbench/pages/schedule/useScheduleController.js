@@ -104,7 +104,7 @@ function getSnapshotRequestSequence(snapshot) {
   return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
 }
 
-export default function useScheduleController({ registerHostActions, activeTransportMode = "train", isActive = false } = {}) {
+export default function useScheduleController({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot } = {}) {
 
   const { t } = useNativeScheduleI18n();
   const scheduleMode = normalizeScheduleMode(activeTransportMode);
@@ -460,6 +460,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     if (!shouldConsumeSchedulePayload(snapshot, targetMode)) {
       return false;
     }
+    onSnapshot?.(targetMode, snapshot);
 
     const scopedMetadata = shouldConsumeSchedulePayload(metadataSnapshot, targetMode)
       ? metadataSnapshot
@@ -762,6 +763,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
         lineIds,
         reasons: Array.isArray(event?.reasons) ? event.reasons : []
       })}`);
+      onSnapshot?.(modeAtRequest, null);
       cleanupInvalidatedLinesLocally(lineIds);
       refreshCatalog(modeAtRequest);
     });
@@ -778,6 +780,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
         return;
       }
 
+      onSnapshot?.(modeAtRequest, null);
       refreshCatalog(modeAtRequest);
     });
 

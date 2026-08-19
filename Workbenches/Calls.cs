@@ -112,6 +112,20 @@ namespace RapidTransitMod.Workbenches
             Bind(view, ApiHost.Prefix + "startNativeSaveOperation", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Start));
             Bind(view, ApiHost.Prefix + "getNativeSaveOperationStatus", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.Status));
             Bind(view, ApiHost.Prefix + "setWorkbenchHostState", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.HostState));
+            Bind(view, ApiHost.Prefix + "startRunTimeQuery", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.StartRunTime));
+            Bind(view, ApiHost.Prefix + "getRunTimeQueryStatus", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.RunTimeStatus));
+            Bind(view, ApiHost.Prefix + "cancelRunTimeQuery", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.CancelRunTime));
+            Bind(view, ApiHost.Prefix + "closeRunTimeEditorSession", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.CloseRunTimeEditor));
+            Bind(view, ApiHost.Prefix + "loadTimetableLineLayout", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.LoadTimetableLineLayout));
+            Bind(view, ApiHost.Prefix + "saveScheduleBatch", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.SaveScheduleBatch));
+            Bind(view, ApiHost.Prefix + "loadRunChartStationDirectory", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.RunChartStations));
+            Bind(view, ApiHost.Prefix + "queryRunChartSections", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.RunChartSections));
+            Bind(view, ApiHost.Prefix + "loadMonitorTripHeaders", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorHeaders));
+            Bind(view, ApiHost.Prefix + "loadMonitorTripDetail", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorDetail));
+            Bind(view, ApiHost.Prefix + "loadMonitorTripDetails", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorDetails));
+            Bind(view, ApiHost.Prefix + "loadMonitorAverageState", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.MonitorAverageState));
+            Bind(view, ApiHost.Prefix + "queryMonitorAverage", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.QueryMonitorAverage));
+            Bind(view, ApiHost.Prefix + "setMonitorSubscription", new Func<string, string>(global::RapidTransitMod.Dispatch.Workbench.Api.SetMonitorSubscription));
             return true;
         }
 

@@ -26,7 +26,9 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public const int MaxTraceEvents = 256;
         public const int MaxDiagnostics = 32;
         public const int MaxCheckpoints = 2048;
+        public const int MaxTheoryPathFacts = RailEtaTheorySignatures.MaxPathFacts;
         public const int WorkerWatchdogMilliseconds = 10000;
+        public const int TheoryBatchTimeoutMilliseconds = 8000;
     }
 
     public readonly struct RailEtaTicket
@@ -40,7 +42,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
     {
         public RailEtaRequestDescriptor(int vehicleIndex, int vehicleVersion, long targetCheckpointId, RailEtaMode mode,
             int depotIndex = 0, int depotVersion = 0, int modelIndex = 0, int modelVersion = 0,
-            int secondaryModelIndex = 0, int secondaryModelVersion = 0)
+            int secondaryModelIndex = 0, int secondaryModelVersion = 0,
+            ulong routeSignature = 0, ulong pathSignature = 0, ulong modelSignature = 0)
         {
             VehicleIndex = vehicleIndex;
             VehicleVersion = vehicleVersion;
@@ -52,6 +55,9 @@ namespace RapidTransitMod.RailEta.BuiltIn
             ModelVersion = modelVersion;
             SecondaryModelIndex = secondaryModelIndex;
             SecondaryModelVersion = secondaryModelVersion;
+            RouteSignature = routeSignature;
+            PathSignature = pathSignature;
+            ModelSignature = modelSignature;
         }
 
         public int VehicleIndex { get; }
@@ -64,6 +70,9 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public int ModelVersion { get; }
         public int SecondaryModelIndex { get; }
         public int SecondaryModelVersion { get; }
+        public ulong RouteSignature { get; }
+        public ulong PathSignature { get; }
+        public ulong ModelSignature { get; }
     }
 
     public enum RailEtaRequestState
@@ -94,6 +103,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public uint IndexReadyFrame { get; internal set; }
         public uint ScopeReadyFrame { get; internal set; }
         public uint OriginFrame { get; internal set; }
+        public RailEtaTheoryFailure TheoryFailure { get; internal set; }
         public uint SnapshotReadyFrame { get; internal set; }
         public uint PredictorQueuedFrame { get; internal set; }
         public uint PredictionStartedFrame { get; internal set; }
@@ -109,6 +119,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
         public RailEtaTicket Ticket;
         public RailEtaRequestDescriptor Descriptor;
         public int EnqueueGeneration;
+        public RailEtaTheorySegmentRequest[] TheorySegments;
     }
 
     internal sealed class RailEtaRequestQueue
@@ -149,6 +160,8 @@ namespace RapidTransitMod.RailEta.BuiltIn
             public RailEtaWorldSnapshot Snapshot;
             public RailEtaRequest Request;
             public RailEtaPrediction Prediction;
+            public RailEtaTheorySegmentResult[] TheorySegments;
+            public RailEtaTheoryFailure TheoryFailure;
             public int RetentionQueued;
         }
 
@@ -218,6 +231,18 @@ namespace RapidTransitMod.RailEta.BuiltIn
             lock (entry.Gate) { prediction = entry.Prediction; return prediction != null; }
         }
 
+        public bool TryGetTheorySegments(RailEtaTicket ticket, out RailEtaTheorySegmentResult[] segments)
+        {
+            if (!m_Entries.TryGetValue(ticket.Value, out Entry entry)) { segments = null; return false; }
+            lock (entry.Gate) { segments = entry.TheorySegments; return segments != null; }
+        }
+
+        public bool TryGetTheoryFailure(RailEtaTicket ticket, out RailEtaTheoryFailure failure)
+        {
+            if (!m_Entries.TryGetValue(ticket.Value, out Entry entry)) { failure = null; return false; }
+            lock (entry.Gate) { failure = entry.TheoryFailure; return failure != null; }
+        }
+
         public void Transition(RailEtaTicket ticket, RailEtaRequestState state, uint stageFrame, long batchId, int generation, RailEtaFailure failure = RailEtaFailure.None, string detail = "")
         {
             if (!m_Entries.TryGetValue(ticket.Value, out Entry entry)) return;
@@ -274,6 +299,38 @@ namespace RapidTransitMod.RailEta.BuiltIn
                 entry.Status.State = prediction != null && prediction.Failure == RailEtaFailure.None ? RailEtaRequestState.Completed : RailEtaRequestState.Failed;
                 entry.Status.Failure = prediction?.Failure ?? RailEtaFailure.InvalidResult;
                 entry.Status.Detail = prediction?.Reason ?? "prediction-missing";
+                entry.Status.PublishedFrame = publishedFrame;
+                Retain(ticket.Value, entry);
+            }
+        }
+
+        public void SetTheoryFailure(RailEtaTicket ticket, RailEtaTheoryFailure failure, int generation)
+        {
+            if (!m_Entries.TryGetValue(ticket.Value, out Entry entry)) return;
+            lock (entry.Gate)
+            {
+                if (entry.Status.ServiceGeneration != generation || entry.Status.State == RailEtaRequestState.Cancelled) return;
+                entry.TheoryFailure = failure;
+                entry.Status.TheoryFailure = failure;
+            }
+        }
+
+        public void PublishTheorySegments(RailEtaTicket ticket, RailEtaTheorySegmentResult[] segments,
+            int generation, uint publishedFrame, RailEtaFailure failure, string detail,
+            RailEtaTheoryFailure theoryFailure)
+        {
+            if (!m_Entries.TryGetValue(ticket.Value, out Entry entry)) return;
+            lock (entry.Gate)
+            {
+                if (entry.Status.ServiceGeneration != generation || entry.Status.State == RailEtaRequestState.Cancelled) return;
+                entry.TheorySegments = segments ?? Array.Empty<RailEtaTheorySegmentResult>();
+                entry.TheoryFailure = theoryFailure;
+                entry.Status.TheoryFailure = theoryFailure;
+                entry.Status.State = failure == RailEtaFailure.None
+                    ? RailEtaRequestState.Completed
+                    : RailEtaRequestState.Failed;
+                entry.Status.Failure = failure;
+                entry.Status.Detail = detail ?? string.Empty;
                 entry.Status.PublishedFrame = publishedFrame;
                 Retain(ticket.Value, entry);
             }
@@ -346,6 +403,7 @@ namespace RapidTransitMod.RailEta.BuiltIn
             IndexReadyFrame = source.IndexReadyFrame,
             ScopeReadyFrame = source.ScopeReadyFrame,
             OriginFrame = source.OriginFrame,
+            TheoryFailure = source.TheoryFailure,
             SnapshotReadyFrame = source.SnapshotReadyFrame,
             PredictorQueuedFrame = source.PredictorQueuedFrame,
             PredictionStartedFrame = source.PredictionStartedFrame,

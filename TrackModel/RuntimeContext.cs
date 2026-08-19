@@ -39,6 +39,8 @@ namespace RapidTransitMod.TrackModel
     {
         Entity Stop(Entity waypoint);
         Entity StationOf(Entity stop);
+        string StopName(Entity stop);
+        string StopKey(Entity stop);
         Entity ResolvePassingStation(Entity entity);
         Entity GetBypassBuildingForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
         Entity GetStationBuildingForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);

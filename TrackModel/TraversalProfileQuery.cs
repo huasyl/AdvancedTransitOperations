@@ -1,7 +1,21 @@
+using Unity.Entities;
 using Unity.Mathematics;
 
 namespace RapidTransitMod.TrackModel
 {
+    internal sealed class PublishedTraversalSnapshot
+    {
+        internal Entity Line;
+        internal ulong PublishVersion;
+        internal ulong ChainSignature;
+        internal ulong TraversalSignature;
+        internal bool ChainComplete;
+        internal bool HasPhysicalTurnback;
+        internal bool Available;
+        internal TraversalEvent[] Events = System.Array.Empty<TraversalEvent>();
+        internal RunChartTurnbackRegion[] RunChartTurnbackRegions = System.Array.Empty<RunChartTurnbackRegion>();
+    }
+
     internal static class TraversalProfileQuery
     {
         internal static bool TryGetRunSliceForAtom(
@@ -138,7 +152,8 @@ namespace RapidTransitMod.TrackModel
         private static bool IsStationEvent(TraversalEvent traversalEvent)
         {
             return traversalEvent.Kind == TraversalEventKind.Stop
-                || traversalEvent.Kind == TraversalEventKind.Pass;
+                || traversalEvent.Kind == TraversalEventKind.Pass
+                || traversalEvent.Kind == TraversalEventKind.OutsideEndpointBoundary;
         }
     }
 }

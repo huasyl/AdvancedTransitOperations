@@ -12,6 +12,7 @@ namespace RapidTransitMod.Runtime
         PreparingCooldown,
         OriginBoardingGrace,
         ForcedMidStopBoardingGrace,
+        TimedStop,
         OriginSettle,
         RetireBoundary,
         RetireHardAck,

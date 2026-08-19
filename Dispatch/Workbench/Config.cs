@@ -197,7 +197,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return;
             }
 
-            AppliedTimetableValidationResult validation = m_Validator.Validate(key, state);
+            AppliedTimetableValidationResult validation = ValidateApplied(key, state);
             if (!validation.IsValid)
             {
                 m_LogInfo?.Invoke(
@@ -205,9 +205,18 @@ namespace RapidTransitMod.Dispatch.Workbench
                     + lineId
                     + " errors="
                     + string.Join(",", validation.Errors));
+                m_AppliedTimetables.Clear(key);
+                return;
             }
 
             m_AppliedTimetables.Apply(key, state);
+        }
+
+        internal AppliedTimetableValidationResult ValidateApplied(
+            LineKey lineKey,
+            AppliedTimetableState state)
+        {
+            return m_Validator.Validate(lineKey, state);
         }
 
         public AppliedTimetableState BuildAppliedState(string lineId, AppliedLine applied)
@@ -223,6 +232,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Managed = true,
                 DepartureMinutes = departureMinutes,
                 ServiceKind = GetAppliedKind(applied),
+                StopSig = ResolveStopSig(applied),
                 AppliedRows = BuildAppliedRows(applied.StagedRows, lineId)
             };
         }
@@ -252,9 +262,31 @@ namespace RapidTransitMod.Dispatch.Workbench
                     DepartureMinute = item.DepartureMinute,
                     ServiceKind = item.Row.kind ?? string.Empty,
                     OriginKey = string.Empty,
-                    Source = item.Row.source ?? string.Empty
+                    Source = item.Row.source ?? string.Empty,
+                    TimedStops = item.Row.timedStops == null
+                        ? Array.Empty<TimedStop>()
+                        : item.Row.timedStops
+                            .Where(stop => stop != null)
+                            .Select(stop => new TimedStop
+                            {
+                                StopKey = stop.stopKey ?? string.Empty,
+                                Arrive = stop.arrive ?? -1,
+                                Depart = stop.depart ?? -1
+                            })
+                            .ToArray()
                 })
                 .ToArray();
+        }
+
+        private static string ResolveStopSig(AppliedLine applied)
+        {
+            if (!string.IsNullOrWhiteSpace(applied?.StopSig))
+                return applied.StopSig;
+
+            return applied?.StagedRows?
+                .Select(row => row?.stopSig)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+                ?? string.Empty;
         }
 
         private static string GetAppliedKind(AppliedLine applied)

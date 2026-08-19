@@ -120,6 +120,60 @@ namespace RapidTransitMod.RailEta.BuiltIn
             return true;
         }
 
+        internal static bool TryGetModelSignature(EntityManager entities, Entity primary, Entity secondary, out ulong signature)
+        {
+            signature = 0;
+            var units = new List<UnitSpec>();
+            if (!BuildUnits(entities, primary, secondary, units, out _))
+                return false;
+
+            ulong hash = RailEtaTheorySignatures.Seed;
+            hash = RailEtaTheorySignatures.Mix(hash, units.Count);
+            for (int i = 0; i < units.Count; i++)
+            {
+                UnitSpec unit = units[i];
+                hash = MixEntity(hash, unit.Prefab);
+                hash = RailEtaTheorySignatures.Mix(hash, (int)unit.Flags);
+                TrainData train = entities.GetComponentData<TrainData>(unit.Prefab);
+                ObjectGeometryData geometry = entities.GetComponentData<ObjectGeometryData>(unit.Prefab);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_MaxSpeed);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_Acceleration);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_Braking);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_Turning.x);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_Turning.y);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_BogieOffsets.x);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_BogieOffsets.y);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_AttachOffsets.x);
+                hash = RailEtaTheorySignatures.Mix(hash, train.m_AttachOffsets.y);
+                hash = RailEtaTheorySignatures.Mix(hash, (int)train.m_TrackType);
+                hash = RailEtaTheorySignatures.Mix(hash, (int)train.m_TrainFlags);
+                hash = RailEtaTheorySignatures.Mix(hash, (int)train.m_EnergyType);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Bounds.min.x);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Bounds.min.y);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Bounds.min.z);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Bounds.max.x);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Bounds.max.y);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Bounds.max.z);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Size.x);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Size.y);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Size.z);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Pivot.x);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Pivot.y);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_Pivot.z);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_LegSize.x);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_LegSize.y);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_LegSize.z);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_LegOffset.x);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_LegOffset.y);
+                hash = RailEtaTheorySignatures.Mix(hash, (int)geometry.m_Flags);
+                hash = RailEtaTheorySignatures.Mix(hash, geometry.m_MinLod);
+                hash = RailEtaTheorySignatures.Mix(hash, (int)geometry.m_Layers);
+                hash = RailEtaTheorySignatures.Mix(hash, (int)geometry.m_SubObjectMask);
+            }
+            signature = hash;
+            return signature != 0;
+        }
+
         private static bool BuildUnits(EntityManager entities, Entity primary, Entity secondary,
             List<UnitSpec> units, out string failure)
         {
@@ -295,6 +349,12 @@ namespace RapidTransitMod.RailEta.BuiltIn
         {
             int version = line.Index ^ line.Version;
             return new Entity { Index = -1 - ordinal, Version = version == 0 ? 1 : version };
+        }
+
+        private static ulong MixEntity(ulong hash, Entity entity)
+        {
+            hash = RailEtaTheorySignatures.Mix(hash, entity.Index);
+            return RailEtaTheorySignatures.Mix(hash, entity.Version);
         }
 
         private static bool TryLane(RailEtaScopedStaging staging, Entity controller, Entity lane,

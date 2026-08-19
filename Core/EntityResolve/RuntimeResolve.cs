@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Game.Buildings;
 using Game.Common;
@@ -12,10 +13,12 @@ namespace RapidTransitMod
     internal sealed class RuntimeResolve
     {
         private readonly ModRuntimeHostSystem m_Runtime;
+        private readonly Stops m_StopService;
 
-        public RuntimeResolve(ModRuntimeHostSystem runtime)
+        public RuntimeResolve(ModRuntimeHostSystem runtime, Stops stopService)
         {
-            m_Runtime = runtime;
+            m_Runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+            m_StopService = stopService ?? throw new ArgumentNullException(nameof(stopService));
         }
 
         public Entity Line(Entity vehicle)
@@ -196,52 +199,52 @@ namespace RapidTransitMod
 
         public Entity Stop(Entity waypoint)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().Stop(waypoint);
+            return m_StopService.Stop(waypoint);
         }
 
         public Entity Anchor(Entity waypoint)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().Anchor(waypoint);
+            return m_StopService.Anchor(waypoint);
         }
 
         public Entity AnchorFromStop(Entity stopEntity)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().AnchorOf(stopEntity);
+            return m_StopService.AnchorOf(stopEntity);
         }
 
         public string Sak(Entity anchor)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().Key(anchor);
+            return m_StopService.Key(anchor);
         }
 
         public string EnsureSak(Entity anchor)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().EnsureKey(anchor);
+            return m_StopService.EnsureKey(anchor);
         }
 
         public StopRef StopRef(Entity waypoint)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().Ref(waypoint);
+            return m_StopService.Ref(waypoint);
         }
 
         public StopRef StopRef(Entity waypoint, StopRef fallback)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().Ref(waypoint, fallback);
+            return m_StopService.Ref(waypoint, fallback);
         }
 
         public string StopId(Entity entity, ResolvedStopKind kind)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().Id(entity, kind);
+            return m_StopService.Id(entity, kind);
         }
 
         public string StationName(Entity stopEntity)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().StationName(stopEntity);
+            return m_StopService.StationName(stopEntity);
         }
 
         public Entity StationOf(Entity stop)
         {
-            return m_Runtime.m_WorkbenchBridge.StopSvc().Station(stop);
+            return m_StopService.Station(stop);
         }
 
         public List<DispatchWorkbenchStationDto> Stations(Entity line)

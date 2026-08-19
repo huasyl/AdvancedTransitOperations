@@ -228,6 +228,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_BoardingFirstFrameGuardState.Clear();
             m_Runtime.m_StopRuntimeState.ClearStopSessions();
             m_Runtime.m_StopRuntimeState.ClearInvalidatedRecovery();
+            m_Runtime.m_StopRuntime.ClearTimedDeadlines();
             m_Runtime.m_CachedWpIdx.Clear();
             m_Runtime.m_StopRuntimeState.ClearForcedMidStopGrace();
             m_Runtime.m_CommandApplier.ClearRetireHandoffState();
@@ -291,6 +292,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_BoardingFirstFrameGuardState.Clear();
             m_Runtime.m_StopRuntimeState.ClearStopSessions();
             m_Runtime.m_StopRuntimeState.ClearInvalidatedRecovery();
+            m_Runtime.m_StopRuntime.ClearTimedDeadlines();
             m_Runtime.m_CachedWpIdx.Clear();
             m_Runtime.m_StopRuntimeState.ClearForcedMidStopGrace();
             m_Runtime.m_CommandApplier.ClearRetireHandoffState();

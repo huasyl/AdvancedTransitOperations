@@ -30,6 +30,46 @@ namespace RapidTransitMod.Dispatch.Runtime
             public bool MovingForDeparture;
             public Entity CurrentRoute;
             public bool OriginTargetMatched;
+            public bool TargetWaypointKnown;
+            public int TargetWaypoint;
+            public Entity TargetWaypointEntity;
+        }
+
+        internal readonly struct RoadSkipEvent
+        {
+            internal readonly Entity Vehicle;
+            internal readonly Entity Line;
+            internal readonly Entity Station;
+            internal readonly int WaypointIndex;
+            internal readonly uint Frame;
+
+            internal RoadSkipEvent(
+                Entity vehicle,
+                Entity line,
+                Entity station,
+                int waypointIndex,
+                uint frame)
+            {
+                Vehicle = vehicle;
+                Line = line;
+                Station = station;
+                WaypointIndex = waypointIndex;
+                Frame = frame;
+            }
+        }
+
+        internal readonly struct RoadTargetProbe
+        {
+            internal readonly Entity Vehicle;
+            internal readonly Entity Line;
+            internal readonly int WaypointIndex;
+
+            internal RoadTargetProbe(Entity vehicle, Entity line, int waypointIndex)
+            {
+                Vehicle = vehicle;
+                Line = line;
+                WaypointIndex = waypointIndex;
+            }
         }
 
         private struct RoadFrameRow
@@ -53,6 +93,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             public bool MovingForDeparture;
             public int CachedWaypoint;
             public bool OriginTargetMatched;
+            public bool TargetWaypointKnown;
+            public int TargetWaypoint;
+            public Entity TargetWaypointEntity;
         }
 
         private readonly ModRuntimeHostSystem m_Runtime;
@@ -64,6 +107,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Dictionary<Entity, int> m_FrameRowIndex = new Dictionary<Entity, int>(512);
         private readonly Dictionary<Entity, DynamicBuffer<RouteWaypoint>> m_WaypointBuffers = new Dictionary<Entity, DynamicBuffer<RouteWaypoint>>(64);
         private readonly List<Entity> m_StaleVehicles = new List<Entity>(32);
+        private readonly List<RoadSkipEvent> m_SkipEvents = new List<RoadSkipEvent>(64);
+        private readonly List<RoadTargetProbe> m_TargetProbes = new List<RoadTargetProbe>(64);
 
         private const float DepartureMovingSpeedSq = 0.01f;
 
@@ -78,7 +123,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRowIndex.Clear();
             m_WaypointBuffers.Clear();
             m_StaleVehicles.Clear();
+            m_SkipEvents.Clear();
+            m_TargetProbes.Clear();
         }
+
+        internal IReadOnlyList<RoadSkipEvent> SkipEvents => m_SkipEvents;
+        internal IReadOnlyList<RoadTargetProbe> TargetProbes => m_TargetProbes;
 
         public void Collect(uint frame)
         {
@@ -98,10 +148,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 RoadFrameRow row = m_FrameRows[rowIndex];
                 if ((frame & 15u) == 1u && row.RegistryState == VehicleState.Running)
                 {
+                    ProbeTargetProgress(ref row, frame);
                     ProbeRunningOrigin(ref row);
-                    UpdateBaseline(row);
                 }
                 m_FrameRows[rowIndex] = row;
+                UpdateBaseline(row);
                 if (row.CurrentRoute != row.RegisteredLine)
                     m_Runtime.m_VehicleRegistrar.ObserveRoadRoute(vehicle);
             }
@@ -227,11 +278,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             int waypointCount = hasWaypoints ? waypoints.Length : 0;
             int currentWaypoint = -1;
             bool running = row.RegistryState == VehicleState.Running;
-            bool targetResolved = running
-                ? row.OriginTargetMatched
-                : hasWaypoints && TryResolveTargetWaypoint(ref row, waypoints, out currentWaypoint);
-            if (running && targetResolved)
-                currentWaypoint = 0;
+            bool targetResolved = hasWaypoints
+                && TryResolveTargetWaypoint(ref row, waypoints, out currentWaypoint);
             int previousWaypoint = row.CachedWaypoint;
             bool hasStopState = stopStates.TryGetValue(row.Vehicle, out StopFrameState stop);
             bool boarding = running && hasStopState
@@ -250,9 +298,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 && currentWaypoint == 0
                 && boarding;
             bool atOrigin = targetAtOrigin && boarding;
-            bool hasTarget = running
-                ? targetAtOrigin
-                : row.HasTarget && row.Target.m_Target != Entity.Null;
+            bool hasTarget = row.HasTarget && row.Target.m_Target != Entity.Null;
             bool originBusy = false;
             bool preparingRouteNeedsRepair = row.RegistryState == VehicleState.Preparing
                 && (nowFrame & 15u) == 1u
@@ -567,6 +613,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRowIndex.Clear();
             m_WaypointBuffers.Clear();
             m_StaleVehicles.Clear();
+            m_SkipEvents.Clear();
+            m_TargetProbes.Clear();
         }
 
         public void Dispose() => Clear();
@@ -638,6 +686,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             fresh.IsSource = true;
             fresh.SourceFrame = frame;
             fresh.OriginTargetMatched = previous.OriginTargetMatched;
+            fresh.TargetWaypointKnown = previous.TargetWaypointKnown
+                && previous.CurrentRoute == fresh.CurrentRoute;
+            fresh.TargetWaypoint = previous.TargetWaypoint;
+            fresh.TargetWaypointEntity = fresh.TargetWaypointKnown
+                ? previous.TargetWaypointEntity
+                : Entity.Null;
             if (publicTransportWritten)
             {
                 fresh.PublicTransport = writtenPublicTransport;
@@ -681,8 +735,55 @@ namespace RapidTransitMod.Dispatch.Runtime
                 MovingKnown = row.MovingKnown,
                 MovingForDeparture = row.MovingForDeparture,
                 CurrentRoute = row.CurrentRoute,
-                OriginTargetMatched = row.OriginTargetMatched
+                OriginTargetMatched = row.OriginTargetMatched,
+                TargetWaypointKnown = row.TargetWaypointKnown,
+                TargetWaypoint = row.TargetWaypoint,
+                TargetWaypointEntity = row.TargetWaypointEntity
             };
+        }
+
+        private void ProbeTargetProgress(ref RoadFrameRow row, uint frame)
+        {
+            if (row.RegisteredLine == Entity.Null
+                || row.CurrentRoute != row.RegisteredLine
+                || !TryGetWaypointsForRoute(
+                    row.CurrentRoute,
+                    out _,
+                    out DynamicBuffer<RouteWaypoint> waypoints)
+                || !TryResolveTargetWaypoint(ref row, waypoints, out int waypoint))
+            {
+                row.TargetWaypointKnown = false;
+                row.TargetWaypointEntity = Entity.Null;
+                return;
+            }
+
+            Entity target = row.Target.m_Target;
+            if ((row.Changes & RoadChangeMask.RouteChanged) == 0
+                && row.TargetWaypointKnown
+                && (row.TargetWaypoint != waypoint || row.TargetWaypointEntity != target)
+                && row.TargetWaypoint >= 0
+                && row.TargetWaypoint < waypoints.Length
+                && waypoint == (row.TargetWaypoint + 1) % waypoints.Length
+                && waypoints[row.TargetWaypoint].m_Waypoint == row.TargetWaypointEntity)
+            {
+                Entity station = m_Runtime.m_Resolve.Stop(row.TargetWaypointEntity);
+                if (station != Entity.Null
+                    && !OfficialBoarding(row))
+                {
+                    m_SkipEvents.Add(new RoadSkipEvent(
+                        row.Vehicle,
+                        row.RegisteredLine,
+                        station,
+                        row.TargetWaypoint,
+                        frame));
+                }
+            }
+
+            row.TargetWaypointKnown = true;
+            row.TargetWaypoint = waypoint;
+            row.TargetWaypointEntity = target;
+            if (!OfficialBoarding(row))
+                m_TargetProbes.Add(new RoadTargetProbe(row.Vehicle, row.RegisteredLine, waypoint));
         }
 
         private void ProbeRunningOrigin(ref RoadFrameRow row)

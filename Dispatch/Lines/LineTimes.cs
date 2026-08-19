@@ -986,7 +986,7 @@ namespace RapidTransitMod.Dispatch.Lines
             cachedFrames = math.clamp(
                 cachedFrames,
                 m_Port.DispatchEstimateMinFrames,
-                m_Port.DispatchEstimateMaxFrames);
+                m_Port.DispatchEstimateMaxFrames(TransportModeProfile.GetProfile(m_Port.ResolveMode(line)).Lifecycle));
 
             if (wps.Length > 0
                 && m_Port.EntityManager.HasComponent<Target>(v)
@@ -1171,7 +1171,7 @@ namespace RapidTransitMod.Dispatch.Lines
             return math.clamp(
                 estimateFrames,
                 m_Port.DispatchEstimateMinFrames,
-                m_Port.DispatchEstimateMaxFrames);
+                m_Port.DispatchEstimateMaxFrames(TransportModeProfile.GetProfile(m_Port.ResolveMode(line)).Lifecycle));
         }
 
         public Entity FirstStop(Entity line)

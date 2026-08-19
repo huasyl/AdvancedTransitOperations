@@ -44,6 +44,20 @@ const CALLS = {
   getNativeSaveOperationStatus: "suhua::rt.workbench.getNativeSaveOperationStatus",
   startOverviewFeatureSettingsOperation: "suhua::rt.workbench.startOverviewFeatureSettingsOperation",
   getOverviewFeatureSettingsOperationStatus: "suhua::rt.workbench.getOverviewFeatureSettingsOperationStatus",
+  startRunTimeQuery: "suhua::rt.workbench.startRunTimeQuery",
+  getRunTimeQueryStatus: "suhua::rt.workbench.getRunTimeQueryStatus",
+  cancelRunTimeQuery: "suhua::rt.workbench.cancelRunTimeQuery",
+  closeRunTimeEditorSession: "suhua::rt.workbench.closeRunTimeEditorSession",
+  loadTimetableLineLayout: "suhua::rt.workbench.loadTimetableLineLayout",
+  saveScheduleBatch: "suhua::rt.workbench.saveScheduleBatch",
+  loadRunChartStationDirectory: "suhua::rt.workbench.loadRunChartStationDirectory",
+  queryRunChartSections: "suhua::rt.workbench.queryRunChartSections",
+  loadMonitorTripHeaders: "suhua::rt.workbench.loadMonitorTripHeaders",
+  loadMonitorTripDetail: "suhua::rt.workbench.loadMonitorTripDetail",
+  loadMonitorTripDetails: "suhua::rt.workbench.loadMonitorTripDetails",
+  loadMonitorAverageState: "suhua::rt.workbench.loadMonitorAverageState",
+  queryMonitorAverage: "suhua::rt.workbench.queryMonitorAverage",
+  setMonitorSubscription: "suhua::rt.workbench.setMonitorSubscription",
   setWorkbenchHostState: "suhua::rt.workbench.setWorkbenchHostState",
   getLocale: "suhua::rt.workbench.getLocale"
 };
@@ -52,6 +66,9 @@ const EVENTS = {
   snapshotChanged: "suhua::rt.workbench.onSnapshotChanged",
   catalog: "suhua::rt.workbench.onCatalog",
   lineInvalidated: "suhua::rt.workbench.onLineInvalidated",
+  runTimeQuery: "suhua::rt.workbench.onRunTimeQuery",
+  runTimeInvalidated: "suhua::rt.workbench.onRunTimeInvalidated",
+  monitorChanged: "suhua::rt.workbench.onMonitorChanged",
   broadcastSnapshotChanged: "suhua::rt.workbench.onBroadcastSnapshotChanged",
   broadcastAssetPreviewStateChanged: "suhua::rt.workbench.onBroadcastAssetPreviewStateChanged",
   broadcastRulePreviewStateChanged: "suhua::rt.workbench.onBroadcastRulePreviewStateChanged"
@@ -262,6 +279,30 @@ function createEmptyOverviewFeatureSettingsOperationStatus() {
   };
 }
 
+function createEmptyRunTimeStatus() {
+  return {
+    queryId: "",
+    editorSessionId: "",
+    state: "Failed",
+    resultId: "",
+    error: "",
+    lineId: "",
+    source: "",
+    segments: []
+  };
+}
+
+function createEmptyTimetableLineLayout() {
+  return {
+    success: false,
+    error: "",
+    lineId: "",
+    mode: "",
+    stopSig: "",
+    stops: []
+  };
+}
+
 function createBroadcastImportResult() {
   return {
     success: false,
@@ -373,6 +414,75 @@ function createLiveApi() {
       const engineCall = getEngineCall();
       const payload = await engineCall(CALLS.loadSnapshot, requestJson(request));
       return parsePayload(payload, createEmptySnapshot());
+    },
+    async startRunTimeQuery(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.startRunTimeQuery, plainRequestJson(request));
+      return parsePayload(payload, createEmptyRunTimeStatus());
+    },
+    async getRunTimeQueryStatus(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.getRunTimeQueryStatus, plainRequestJson(request));
+      return parsePayload(payload, createEmptyRunTimeStatus());
+    },
+    async cancelRunTimeQuery(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.cancelRunTimeQuery, plainRequestJson(request));
+      return parsePayload(payload, createEmptyRunTimeStatus());
+    },
+    async closeRunTimeEditorSession(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.closeRunTimeEditorSession, plainRequestJson(request));
+      return parsePayload(payload, createEmptyRunTimeStatus());
+    },
+    async loadTimetableLineLayout(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadTimetableLineLayout, plainRequestJson(request));
+      return parsePayload(payload, createEmptyTimetableLineLayout());
+    },
+    async saveScheduleBatch(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.saveScheduleBatch, plainRequestJson(request));
+      return parsePayload(payload, { success: false, editorSessionId: "", errors: [], snapshot: null });
+    },
+    async loadRunChartStationDirectory(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadRunChartStationDirectory, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", status: "invalid", publishedIndexVersion: 0, stations: [] });
+    },
+    async queryRunChartSections(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.queryRunChartSections, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", status: "invalid", publishedIndexVersion: 0, sections: [], truncated: false, truncatedPairs: [] });
+    },
+    async loadMonitorTripHeaders(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadMonitorTripHeaders, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", trips: [] });
+    },
+    async loadMonitorTripDetail(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadMonitorTripDetail, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", header: null, stops: [] });
+    },
+    async loadMonitorTripDetails(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadMonitorTripDetails, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", details: [] });
+    },
+    async loadMonitorAverageState(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.loadMonitorAverageState, plainRequestJson(request));
+      return parsePayload(payload, { success: false, error: "", lineId: "", stopSig: "", ready: false, revision: 0 });
+    },
+    async queryMonitorAverage(request = {}) {
+      const engineCall = getEngineCall();
+      const payload = await engineCall(CALLS.queryMonitorAverage, plainRequestJson(request));
+      return parsePayload(payload, createEmptyRunTimeStatus());
+    },
+    async setMonitorSubscription(request = {}) {
+      const engineCall = getEngineCall();
+      await engineCall(CALLS.setMonitorSubscription, plainRequestJson(request));
     },
     async loadOverviewSnapshot(request = {}) {
       const engineCall = getEngineCall();
@@ -676,6 +786,63 @@ function createLiveApi() {
       return () => {
         if (typeof window.engine.off === "function") {
           window.engine.off(EVENTS.lineInvalidated, handler);
+        }
+      };
+    },
+    onRunTimeQuery(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const event = parsePayload(payload, null);
+        if (event) {
+          callback(event);
+        }
+      };
+
+      window.engine.on(EVENTS.runTimeQuery, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.runTimeQuery, handler);
+        }
+      };
+    },
+    onRunTimeInvalidated(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const event = parsePayload(payload, null);
+        if (event) {
+          callback(event);
+        }
+      };
+
+      window.engine.on(EVENTS.runTimeInvalidated, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.runTimeInvalidated, handler);
+        }
+      };
+    },
+    onMonitorChanged(callback) {
+      if (typeof window.engine.on !== "function") {
+        return () => {};
+      }
+
+      const handler = (payload) => {
+        const event = parsePayload(payload, null);
+        if (event) {
+          callback(event);
+        }
+      };
+
+      window.engine.on(EVENTS.monitorChanged, handler);
+      return () => {
+        if (typeof window.engine.off === "function") {
+          window.engine.off(EVENTS.monitorChanged, handler);
         }
       };
     },

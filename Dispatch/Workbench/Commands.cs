@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using RapidTransitMod.Dispatch.Lines;
 
 namespace RapidTransitMod.Dispatch.Workbench
 {
@@ -14,6 +15,8 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Query m_Query;
         private readonly Snapshot m_Snap;
         private readonly Persist m_Persist;
+        private readonly Func<string, AppliedLine, AppliedTimetableState> m_BuildAppliedState;
+        private readonly AppliedTimetableValidator m_Validator;
         private readonly Func<DispatchWorkbenchStagedRowDto, DispatchWorkbenchStagedRowDto> m_CopyRow;
         private readonly Func<List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> m_LastById;
         private readonly Func<DispatchWorkbenchCleanupInfoDto> m_ConsumeCleanupInfo;
@@ -23,6 +26,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             Query query,
             Snapshot snap,
             Persist persist,
+            Func<string, AppliedLine, AppliedTimetableState> buildAppliedState,
+            AppliedTimetableValidator validator,
             Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo)
         {
             m_Host = host ?? throw new ArgumentNullException(nameof(host));
@@ -31,6 +36,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_Query = query ?? throw new ArgumentNullException(nameof(query));
             m_Snap = snap ?? throw new ArgumentNullException(nameof(snap));
             m_Persist = persist ?? throw new ArgumentNullException(nameof(persist));
+            m_BuildAppliedState = buildAppliedState ?? throw new ArgumentNullException(nameof(buildAppliedState));
+            m_Validator = validator ?? throw new ArgumentNullException(nameof(validator));
             m_CopyRow = Rows.CopyRow;
             m_LastById = Rows.LastById;
             m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
@@ -73,6 +80,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     request.mode = prepared.Scope.Token;
                 }
                 List<string> errors = Check.RawModeContract(request, prepared.Scope.Mode);
+                errors.AddRange(RejectDetailedScheduleFields(request));
                 if (errors.Count > 0)
                 {
                     prepared.Request = request;
@@ -148,6 +156,26 @@ namespace RapidTransitMod.Dispatch.Workbench
                 Array.Empty<string>(),
                 clearedAppliedLineIds,
                 Array.Empty<string>());
+            if (request.applyDraft)
+            {
+                List<string> appliedErrors = ValidateApplied(
+                    nextLineDraftRowsByKey.Keys,
+                    nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
+                    runtimeLines,
+                    prepared.Scope.Mode);
+                if (appliedErrors.Count > 0)
+                {
+                    result.success = false;
+                    result.errors = appliedErrors.ToArray();
+                    result.snapshot = BuildSnapshot(
+                        prepared.Scope,
+                        lineKey,
+                        clientRequestSequence);
+                    result.cleanupInfo = result.snapshot?.cleanupInfo;
+                    return result;
+                }
+            }
+
             bool requestedCleanupChanged = requestedCleanupReasons.Count > 0
                 && m_Run.CleanupRequestedLines(requestedCleanupReasons);
             HashSet<string> invalidatedLineIds = new HashSet<string>(requestedCleanupReasons.Keys, StringComparer.Ordinal);
@@ -169,26 +197,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             List<DispatchWorkbenchStagedRowDto> nextStagedRows = hasActiveLineDraftRows
                 ? m_LastById(activeLineDraftRows)
                 : state.StagedRows.Select(m_CopyRow).ToList();
-
-            if (request.applyDraft)
-            {
-                List<string> appliedErrors = ValidateApplied(
-                    lineKey,
-                    nextLineDraftRowsByKey.Values.SelectMany(rows => rows).ToList(),
-                    runtimeLines,
-                    prepared.Scope.Mode);
-                if (appliedErrors.Count > 0)
-                {
-                    result.success = false;
-                    result.errors = appliedErrors.ToArray();
-                    result.snapshot = BuildSnapshot(
-                        prepared.Scope,
-                        lineKey,
-                        clientRequestSequence);
-                    result.cleanupInfo = result.snapshot?.cleanupInfo;
-                    return result;
-                }
-            }
 
             Dictionary<string, DispatchWorkbenchPlannerImportContractDto> nextPlanRefsByKey =
                 PlanRefs(
@@ -587,18 +595,68 @@ namespace RapidTransitMod.Dispatch.Workbench
         }
 
         private List<string> ValidateApplied(
-            string lineKey,
+            IEnumerable<string> targetLineIds,
             List<DispatchWorkbenchStagedRowDto> rows,
             List<WorkbenchLineRuntime> runtimeLines,
             TransitMode mode)
         {
-            return Check.AppliedRows(
-                lineKey,
+            List<string> errors = Check.AppliedRows(
+                targetLineIds,
                 rows,
                 runtimeLines,
                 BuildAppliedState(mode),
                 Time.Parse,
                 Time.Slot);
+            foreach (IGrouping<string, DispatchWorkbenchStagedRowDto> group in (rows ?? new List<DispatchWorkbenchStagedRowDto>())
+                .Where(row => row != null && !string.IsNullOrEmpty(row.lineId))
+                .GroupBy(row => row.lineId, StringComparer.Ordinal))
+            {
+                AppliedLine applied = new AppliedLine
+                {
+                    StagedRows = group.Select(m_CopyRow).ToList()
+                };
+                AppliedTimetableState state = m_BuildAppliedState(group.Key, applied);
+                AppliedTimetableValidationResult validation = m_Validator.Validate(
+                    LineIdentityService.GetKey(group.Key, mode),
+                    state);
+                errors.AddRange(validation.Errors);
+            }
+
+            return errors;
+        }
+
+        private static List<string> RejectDetailedScheduleFields(DispatchWorkbenchSaveRequest request)
+        {
+            List<string> errors = new List<string>();
+            if (request == null)
+                return errors;
+
+            if (request.clearPartialTimetable)
+                errors.Add("ordinary-save-clear-partial-timetable-not-supported");
+
+            if (HasDetailedTimedStops(request.lineDraftRows)
+                || (request.lineDraftRowsByLineId ?? Array.Empty<DispatchWorkbenchLineDraftRowsDto>())
+                    .Any(group => HasDetailedTimedStops(group?.lineDraftRows)))
+            {
+                errors.Add("ordinary-save-detailed-timed-stops-not-supported");
+            }
+
+            return errors;
+        }
+
+        private static bool HasDetailedTimedStops(DispatchWorkbenchStagedRowDto[] rows)
+        {
+            if (rows == null)
+                return false;
+
+            for (int i = 0; i < rows.Length; i++)
+            {
+                DispatchWorkbenchStagedRowDto row = rows[i];
+                if (row?.timedStops != null)
+                    return true;
+            }
+
+            return false;
         }
 
         private Dictionary<string, AppliedLine> BuildAppliedState(TransitMode mode)

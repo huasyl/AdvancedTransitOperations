@@ -1,5 +1,6 @@
 using System;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.Runtime;
 using Game;
@@ -18,6 +19,25 @@ namespace RapidTransitMod
         internal delegate bool Progress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
         internal delegate bool Blocker(Entity vehicle, out Entity blockerVehicle);
         internal delegate bool SessionArrival(Entity vehicle, out uint arrivalFrame);
+        internal delegate bool StopSession(
+            Entity vehicle,
+            out Entity line,
+            out int waypointIndex,
+            out uint arrivalFrame);
+        internal delegate bool VehicleTimes(
+            Entity vehicle,
+            out int currentWaypointIndex,
+            out int nextWaypointIndex,
+            out int nextArrival,
+            out int plannedArrival,
+            out int actualArrival,
+            out int plannedDeparture);
+        internal delegate bool PanelStations(
+            Entity vehicle,
+            Entity line,
+            int preferredCurrentWaypointIndex,
+            bool includePhysical,
+            out VehicleStationContext context);
         internal delegate void StationText(
             Entity vehicle,
             Entity line,
@@ -65,7 +85,10 @@ namespace RapidTransitMod
         internal Progress TryProgress;
         internal Blocker TryBlocker;
         internal SessionArrival TrySessionArrival;
+        internal StopSession TryStopSession;
+        internal VehicleTimes TryVehicleTimes;
         internal Action<Entity, string> ClearBypass;
         internal StationText Stations;
+        internal PanelStations TryPanelStations;
     }
 }

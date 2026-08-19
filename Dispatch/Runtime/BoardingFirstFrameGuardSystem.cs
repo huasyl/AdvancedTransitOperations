@@ -49,10 +49,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                     PublicTransport publicTransport = m_PublicTransportLookup[vehicle];
                     bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
                     byte current = boarding ? (byte)1 : (byte)0;
-                    bool wasBoarding = runtime.m_BoardingFirstFrameGuardState.TryGetValue(vehicle, out byte previous)
+                    bool hadPrevious = runtime.m_BoardingFirstFrameGuardState.TryGetValue(vehicle, out byte previous);
+                    bool wasBoarding = hadPrevious
                         && previous != 0;
                     runtime.m_BoardingFirstFrameGuardState[vehicle] = current;
-
                     if (!boarding
                         || wasBoarding
                         || !runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state))

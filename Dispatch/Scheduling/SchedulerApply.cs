@@ -107,7 +107,7 @@ namespace RapidTransitMod
 
             try
             {
-                Apply(ecb, clockSnapshot, lineCandidates);
+                Apply(ecb, clockSnapshot, lineCandidates, fullMinuteSweep);
                 if (fullMinuteSweep)
                     m_Runtime.m_LastSchedulerTickMinute = nowMinute;
             }
@@ -121,9 +121,10 @@ namespace RapidTransitMod
         private void Apply(
             EntityCommandBuffer ecb,
             ClockSnapshot clockSnapshot,
-            IReadOnlyList<Entity> lineCandidates)
+            IReadOnlyList<Entity> lineCandidates,
+            bool fullMinuteSweep)
         {
-            m_Runtime.m_DispatchScheduler.Tick(clockSnapshot, lineCandidates);
+            m_Runtime.m_DispatchScheduler.Tick(clockSnapshot, lineCandidates, fullMinuteSweep);
 
             IReadOnlyList<DispatchScheduler.RetireDecision> retireDecisions = m_Runtime.m_DispatchScheduler.RetireDecisions;
             for (int i = 0; i < retireDecisions.Count; i++)

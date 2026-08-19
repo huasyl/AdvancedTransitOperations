@@ -4,6 +4,7 @@ using Game.Vehicles;
 using System;
 using System.Collections.Generic;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -74,7 +75,15 @@ namespace RapidTransitMod
         public string CurrentStationName;
         public string NextPhysicalStationName;
         public string NextStopStationName;
+        public int NextPlannedArrivalMinute;
+        public int PlannedArrivalMinute;
+        public int ActualArrivalMinute;
+        public int PlannedDepartureMinute;
         public string AlertText;
+        public bool HasStopSession;
+        public string NextPassStationName;
+        public bool WaitingForFastTrain;
+        public int WaitingForFastTrainVehicleId;
     }
 
     internal sealed class SelectQuery
@@ -82,7 +91,11 @@ namespace RapidTransitMod
         private readonly EntityManager m_EntityManager;
         private readonly Game.Simulation.SimulationSystem m_SimulationSystem;
         private readonly VehicleView m_VehicleView;
+        private readonly SelectPort.Blocker m_TryBlocker;
         private readonly SelectPort.SessionArrival m_TrySessionArrival;
+        private readonly SelectPort.StopSession m_TryStopSession;
+        private readonly SelectPort.VehicleTimes m_TryVehicleTimes;
+        private readonly SelectPort.PanelStations m_TryPanelStations;
         private readonly Unity.Collections.NativeHashMap<Entity, int> m_SpawningLines;
         private readonly Dictionary<Entity, string> m_LineLastSpawnTriggerSummary;
         private readonly Dictionary<Entity, string> m_LineLastVehicleRegisterSummary;
@@ -121,7 +134,11 @@ namespace RapidTransitMod
             SimulationSystem simulationSystem,
             Func<ClockSnapshot> clockSnapshot,
             VehicleView vehicleView,
+            SelectPort.Blocker tryBlocker,
             SelectPort.SessionArrival trySessionArrival,
+            SelectPort.StopSession tryStopSession,
+            SelectPort.VehicleTimes tryVehicleTimes,
+            SelectPort.PanelStations tryPanelStations,
             Unity.Collections.NativeHashMap<Entity, int> spawningLines,
             Dictionary<Entity, string> lineLastSpawnTriggerSummary,
             Dictionary<Entity, string> lineLastVehicleRegisterSummary,
@@ -158,7 +175,11 @@ namespace RapidTransitMod
             m_SimulationSystem = simulationSystem;
             m_ClockSnapshot = clockSnapshot;
             m_VehicleView = vehicleView;
+            m_TryBlocker = tryBlocker;
             m_TrySessionArrival = trySessionArrival;
+            m_TryStopSession = tryStopSession;
+            m_TryVehicleTimes = tryVehicleTimes;
+            m_TryPanelStations = tryPanelStations;
             m_SpawningLines = spawningLines;
             m_LineLastSpawnTriggerSummary = lineLastSpawnTriggerSummary;
             m_LineLastVehicleRegisterSummary = lineLastVehicleRegisterSummary;
@@ -326,6 +347,21 @@ namespace RapidTransitMod
             int targetMinute = m_VehicleView.TryGetTarget(vehicle, out int targetSlotMinute) ? targetSlotMinute : -1;
             int currentMinute = m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute) ? currentSlotMinute : -1;
             (string currentStationName, string nextPhysicalStationName, string nextStopStationName) = m_GetStationContext(vehicle, line);
+            int nextPlannedArrivalMinute = -1;
+            int plannedArrivalMinute = -1;
+            int actualArrivalMinute = -1;
+            int plannedDepartureMinute = -1;
+            if (m_TryVehicleTimes != null)
+            {
+                m_TryVehicleTimes(
+                    vehicle,
+                    out _,
+                    out _,
+                    out nextPlannedArrivalMinute,
+                    out plannedArrivalMinute,
+                    out actualArrivalMinute,
+                    out plannedDepartureMinute);
+            }
 
             data = new VehicleSelectData
             {
@@ -351,9 +387,128 @@ namespace RapidTransitMod
                 CurrentStationName = currentStationName ?? string.Empty,
                 NextPhysicalStationName = nextPhysicalStationName ?? string.Empty,
                 NextStopStationName = nextStopStationName ?? string.Empty,
+                NextPlannedArrivalMinute = nextPlannedArrivalMinute,
+                PlannedArrivalMinute = plannedArrivalMinute,
+                ActualArrivalMinute = actualArrivalMinute,
+                PlannedDepartureMinute = plannedDepartureMinute,
                 AlertText = isManagedVehicle
                     ? m_BuildVehicleAlert(vehicle, line, nowMinute, targetMinute)
                     : (line != Entity.Null ? "using-native-fallback" : "vehicle-not-tracked")
+            };
+            return true;
+        }
+
+        public bool TryVehiclePanel(Entity selectedEntity, out VehicleSelectData data)
+        {
+            data = default;
+            Entity vehicle = m_ResolveSelectedVehicle(selectedEntity);
+            if (vehicle == Entity.Null)
+                return false;
+
+            if (!m_VehicleView.TryGetState(vehicle, out VehicleState vehicleState))
+            {
+                data = new VehicleSelectData
+                {
+                    Vehicle = vehicle,
+                    IsManagedVehicle = false,
+                    StateText = "vanillaControl"
+                };
+                return true;
+            }
+
+            Entity sessionLine = Entity.Null;
+            int sessionWaypointIndex = -1;
+            uint sessionArrivalFrame = 0u;
+            bool hasStopSession = m_TryStopSession != null
+                && m_TryStopSession(
+                    vehicle,
+                    out sessionLine,
+                    out sessionWaypointIndex,
+                    out sessionArrivalFrame);
+            Entity line = hasStopSession ? sessionLine : m_ResolveVehicleLine(vehicle);
+            TransportModeProfile modeProfile = line != Entity.Null
+                ? TransportModeProfile.GetProfile(TransportModeResolver.Resolve(m_EntityManager, line))
+                : default;
+            bool includePhysical = modeProfile.Lifecycle == LifecycleKind.Rail;
+            bool canBypass = modeProfile.CanBypass;
+            VehicleStationContext stationContext = default;
+            bool hasStationContext = m_TryPanelStations != null
+                && m_TryPanelStations(
+                    vehicle,
+                    line,
+                    hasStopSession ? sessionWaypointIndex : -1,
+                    includePhysical,
+                    out stationContext);
+
+            int currentWaypointIndex = -1;
+            int nextWaypointIndex = -1;
+            int nextPlannedArrivalMinute = -1;
+            int plannedArrivalMinute = -1;
+            int actualArrivalMinute = -1;
+            int plannedDepartureMinute = -1;
+            if (m_TryVehicleTimes != null)
+            {
+                m_TryVehicleTimes(
+                    vehicle,
+                    out currentWaypointIndex,
+                    out nextWaypointIndex,
+                    out nextPlannedArrivalMinute,
+                    out plannedArrivalMinute,
+                    out actualArrivalMinute,
+                    out plannedDepartureMinute);
+            }
+
+            bool hasCurrentStop = hasStopSession
+                && hasStationContext
+                && stationContext.CurrentStopWaypointIndex == sessionWaypointIndex
+                && !string.IsNullOrWhiteSpace(stationContext.CurrentStationName);
+            bool hasCurrentTimes = hasCurrentStop && currentWaypointIndex == sessionWaypointIndex;
+            bool hasNextTimes = hasStationContext
+                && stationContext.NextStopWaypointIndex >= 0
+                && nextWaypointIndex == stationContext.NextStopWaypointIndex;
+            bool hasNextPass = hasStationContext
+                && stationContext.NextPhysicalIsPass
+                && !string.IsNullOrWhiteSpace(stationContext.NextPhysicalStationId)
+                && !string.IsNullOrWhiteSpace(stationContext.NextStopStationId)
+                && !string.Equals(
+                    stationContext.NextPhysicalStationId,
+                    stationContext.CurrentStationId,
+                    StringComparison.Ordinal)
+                && !string.Equals(
+                    stationContext.NextPhysicalStationId,
+                    stationContext.NextStopStationId,
+                    StringComparison.Ordinal);
+            int currentMinute = m_VehicleView.TryGetSlot(vehicle, out int currentSlotMinute)
+                ? currentSlotMinute
+                : -1;
+            int targetMinute = m_VehicleView.TryGetTarget(vehicle, out int targetSlotMinute)
+                ? targetSlotMinute
+                : -1;
+            string stateText = GetPanelStateCode(vehicle, vehicleState, canBypass, out Entity blockerVehicle);
+
+            data = new VehicleSelectData
+            {
+                Vehicle = vehicle,
+                Line = line,
+                IsManagedVehicle = true,
+                StateText = stateText,
+                CurrentMinute = currentMinute,
+                TargetMinute = targetMinute,
+                CurrentText = currentMinute >= 0 ? m_SlotText(currentMinute) : string.Empty,
+                TargetText = targetMinute >= 0 ? m_SlotText(targetMinute) : string.Empty,
+                HasStopSession = hasStopSession,
+                StopDwellValue = hasStopSession ? BuildStopDwellValue(sessionArrivalFrame) : string.Empty,
+                CurrentStationName = hasCurrentStop
+                    ? stationContext.CurrentStationName
+                    : string.Empty,
+                NextStopStationName = hasStationContext ? stationContext.NextStopStationName : string.Empty,
+                NextPassStationName = hasNextPass ? stationContext.NextPhysicalStationName : string.Empty,
+                NextPlannedArrivalMinute = hasNextTimes ? nextPlannedArrivalMinute : -1,
+                PlannedArrivalMinute = hasCurrentTimes ? plannedArrivalMinute : -1,
+                ActualArrivalMinute = hasCurrentTimes ? actualArrivalMinute : -1,
+                PlannedDepartureMinute = hasCurrentTimes ? plannedDepartureMinute : -1,
+                WaitingForFastTrain = stateText == "Yielding",
+                WaitingForFastTrainVehicleId = blockerVehicle != Entity.Null ? blockerVehicle.Index : -1
             };
             return true;
         }
@@ -363,9 +518,43 @@ namespace RapidTransitMod
             return m_ClockSnapshot().NowMinute;
         }
 
+        private string GetPanelStateCode(
+            Entity vehicle,
+            VehicleState vehicleState,
+            bool canBypass,
+            out Entity blockerVehicle)
+        {
+            blockerVehicle = Entity.Null;
+            if (canBypass
+                && m_TryBlocker != null
+                && m_TryBlocker(vehicle, out blockerVehicle)
+                && blockerVehicle != Entity.Null
+                && (vehicleState == VehicleState.Holding || vehicleState == VehicleState.Running))
+            {
+                return "Yielding";
+            }
+
+            if (vehicleState == VehicleState.Holding
+                && (!m_VehicleView.TryGetTarget(vehicle, out int holdingTarget) || holdingTarget < 0))
+            {
+                return "Idle";
+            }
+
+            return vehicleState.ToString();
+        }
+
         private string FormatMinutes(float frames)
         {
-            return frames > 0f ? m_ClockSnapshot().ToMinutes(frames).ToString("F1") + " min" : "-";
+            return frames > 0f ? m_ClockSnapshot().ToMinutes(frames).ToString("F1") + " " + MinuteUnit() : "-";
+        }
+
+        private string MinuteUnit()
+        {
+            if (SelectPanel.IsChineseLocale())
+                return "分";
+            if (SelectPanel.IsJapaneseLocale())
+                return "分";
+            return "min";
         }
 
         private string BuildStopDwellValue(Entity vehicle)
@@ -373,9 +562,14 @@ namespace RapidTransitMod
             if (!m_TrySessionArrival(vehicle, out uint dwellSinceFrame))
                 return "-";
 
+            return BuildStopDwellValue(dwellSinceFrame);
+        }
+
+        private string BuildStopDwellValue(uint dwellSinceFrame)
+        {
             uint nowFrame = m_SimulationSystem.frameIndex;
             uint elapsedFrames = unchecked(nowFrame - dwellSinceFrame);
-            return m_ClockSnapshot().ToMinutes(elapsedFrames).ToString("F1") + " min";
+            return m_ClockSnapshot().ToMinutes(elapsedFrames).ToString("F1") + " " + MinuteUnit();
         }
 
         private string BuildInboundTimeValue(Entity vehicle)

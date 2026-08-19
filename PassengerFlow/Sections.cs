@@ -62,7 +62,10 @@ namespace RapidTransitMod.PassengerFlow
                 return Array.Empty<SectionLoadEvent>();
             }
 
-            SectionCacheKey cacheKey = new SectionCacheKey(sample.Line, chain.Signature);
+            SectionCacheKey cacheKey = new SectionCacheKey(
+                sample.Line,
+                chain.Signature,
+                chain.TraversalSignature);
             if (!m_Cache.TryGetValue(cacheKey, out Dictionary<int, SectionSegment[]> segmentsByWaypoint))
             {
                 segmentsByWaypoint = BuildSegments(port, state, sample, waypoints, chain, frame);
@@ -111,7 +114,8 @@ namespace RapidTransitMod.PassengerFlow
             {
                 TraversalEvent traversalEvent = chain.TraversalProfile.Events[i];
                 if (traversalEvent.Kind == TraversalEventKind.Stop
-                    || traversalEvent.Kind == TraversalEventKind.Pass)
+                    || traversalEvent.Kind == TraversalEventKind.Pass
+                    || traversalEvent.Kind == TraversalEventKind.BreakBoundary)
                 {
                     stationEvents.Add(traversalEvent);
                 }
@@ -136,6 +140,12 @@ namespace RapidTransitMod.PassengerFlow
                 while (guard++ < stationEvents.Count)
                 {
                     TraversalEvent currentEvent = stationEvents[cursor];
+                    if (currentEvent.Kind == TraversalEventKind.BreakBoundary)
+                    {
+                        chainBroken = true;
+                        cursor = (cursor + 1) % stationEvents.Count;
+                        continue;
+                    }
                     if (TryResolveEventStation(port, state, sample, currentEvent, frame, out StationKey currentStation))
                     {
                         if (!chainBroken)
@@ -178,6 +188,20 @@ namespace RapidTransitMod.PassengerFlow
             out StationKey station)
         {
             station = default;
+            if (sample.Mode == TransitMode.Tram)
+            {
+                if (string.IsNullOrEmpty(traversalEvent.StationId))
+                    return false;
+
+                Entity entity = traversalEvent.Building;
+                bool isStop = entity != Entity.Null && port.IsTransportStop(entity);
+                return state.Anchors.TryRegisterSak(
+                    traversalEvent.StationId,
+                    entity,
+                    isStop ? entity : Entity.Null,
+                    isStop ? Entity.Null : entity,
+                    out station);
+            }
             if (traversalEvent.Kind == TraversalEventKind.Stop)
             {
                 if (traversalEvent.WaypointIndex >= 0
@@ -235,15 +259,19 @@ namespace RapidTransitMod.PassengerFlow
     {
         private readonly Entity m_Line;
         private readonly ulong m_Signature;
+        private readonly ulong m_TraversalSignature;
 
-        internal SectionCacheKey(Entity line, ulong signature)
+        internal SectionCacheKey(Entity line, ulong signature, ulong traversalSignature)
         {
             m_Line = line;
             m_Signature = signature;
+            m_TraversalSignature = traversalSignature;
         }
 
         public bool Equals(SectionCacheKey other)
-            => m_Line == other.m_Line && m_Signature == other.m_Signature;
+            => m_Line == other.m_Line
+                && m_Signature == other.m_Signature
+                && m_TraversalSignature == other.m_TraversalSignature;
 
         public override bool Equals(object obj)
             => obj is SectionCacheKey other && Equals(other);
@@ -252,7 +280,8 @@ namespace RapidTransitMod.PassengerFlow
         {
             unchecked
             {
-                return (m_Line.GetHashCode() * 397) ^ m_Signature.GetHashCode();
+                return ((m_Line.GetHashCode() * 397) ^ m_Signature.GetHashCode())
+                    * 397 ^ m_TraversalSignature.GetHashCode();
             }
         }
     }
