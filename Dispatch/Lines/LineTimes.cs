@@ -14,6 +14,18 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.Dispatch.Lines
 {
+    internal readonly struct LineTimesChangeResult
+    {
+        internal readonly LineTimesPlanKind Kind;
+        internal readonly bool Applied;
+
+        internal LineTimesChangeResult(LineTimesPlanKind kind, bool applied)
+        {
+            Kind = kind;
+            Applied = applied;
+        }
+    }
+
     internal sealed class LineTimes
     {
         private readonly LineTimesPort m_Port;
@@ -177,7 +189,25 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public bool Get(Entity line, DynamicBuffer<RouteWaypoint> wps, out LineTimeProfileHeader profile)
         {
+            return GetCore(line, wps, out profile, false);
+        }
+
+        internal bool GetForStructure(Entity line, DynamicBuffer<RouteWaypoint> wps, out LineTimeProfileHeader profile)
+        {
+            return GetCore(line, wps, out profile, true);
+        }
+
+        private bool GetCore(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> wps,
+            out LineTimeProfileHeader profile,
+            bool allowPending)
+        {
             profile = default;
+            if (!allowPending
+                && m_Port.IsLinePending != null
+                && m_Port.IsLinePending(line))
+                return false;
             if (IsBus(line))
                 return GetBus(line, wps, out profile);
 
@@ -277,6 +307,131 @@ namespace RapidTransitMod.Dispatch.Lines
 
             m_Profiles.Remove(line);
             Release(profile.m_Offset, profile.m_Count);
+        }
+
+        internal LineTimesChangeResult ApplyStructure(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTimesPlanKind kind,
+            LineStopLayout newLayout,
+            LineIntervalImpact impact)
+        {
+            if (line == Entity.Null)
+                return new LineTimesChangeResult(kind, false);
+
+            if (kind == LineTimesPlanKind.Remove)
+            {
+                bool hadProfile = m_Profiles.ContainsKey(line);
+                InvalidateLine(line);
+                return new LineTimesChangeResult(kind, hadProfile);
+            }
+
+            if (waypoints.Length == 0 || !m_Port.EntityManager.HasBuffer<RouteSegment>(line))
+                return new LineTimesChangeResult(LineTimesPlanKind.Remove, false);
+
+            if (kind == LineTimesPlanKind.Rebuild)
+            {
+                InvalidateLine(line);
+                return new LineTimesChangeResult(kind, GetForStructure(line, waypoints, out _));
+            }
+
+            if (newLayout == null
+                || impact == null
+                || !impact.IsValid
+                || !m_Profiles.TryGetValue(line, out LineTimeProfileHeader profile)
+                || profile.m_Count != waypoints.Length)
+            {
+                InvalidateLine(line);
+                return new LineTimesChangeResult(
+                    LineTimesPlanKind.Rebuild,
+                    GetForStructure(line, waypoints, out _));
+            }
+
+            DynamicBuffer<RouteSegment> segments = m_Port.EntityManager.GetBuffer<RouteSegment>(line, true);
+            if (segments.Length != waypoints.Length
+                || profile.m_Offset < 0
+                || profile.m_Offset + profile.m_Count > m_SegmentFrames.Length)
+            {
+                InvalidateLine(line);
+                return new LineTimesChangeResult(
+                    LineTimesPlanKind.Rebuild,
+                    GetForStructure(line, waypoints, out _));
+            }
+
+            bool[] affectedSegments = new bool[profile.m_Count];
+            if (!MarkAffectedSegments(newLayout, impact, affectedSegments))
+            {
+                InvalidateLine(line);
+                return new LineTimesChangeResult(
+                    LineTimesPlanKind.Rebuild,
+                    GetForStructure(line, waypoints, out _));
+            }
+
+            float[] refreshed = new float[profile.m_Count];
+            for (int i = 0; i < affectedSegments.Length; i++)
+            {
+                if (!affectedSegments[i])
+                    continue;
+                if (!TryRawFrames(line, i, out refreshed[i]))
+                {
+                    InvalidateLine(line);
+                    return new LineTimesChangeResult(
+                        LineTimesPlanKind.Rebuild,
+                        GetForStructure(line, waypoints, out _));
+                }
+            }
+
+            for (int i = 0; i < affectedSegments.Length; i++)
+            {
+                if (affectedSegments[i])
+                    m_SegmentFrames[profile.m_Offset + i] = refreshed[i];
+            }
+
+            profile.m_Signature = Signature(waypoints, segments);
+            profile.m_BaseLoopFrames = 0f;
+            for (int i = 0; i < profile.m_Count; i++)
+            {
+                profile.m_BaseLoopFrames += m_SegmentFrames[profile.m_Offset + i];
+                if (i != 0)
+                    profile.m_BaseLoopFrames += m_StopFrames[profile.m_Offset + i];
+            }
+            m_Profiles[line] = profile;
+            return new LineTimesChangeResult(kind, true);
+        }
+
+        private static bool MarkAffectedSegments(
+            LineStopLayout layout,
+            LineIntervalImpact impact,
+            bool[] affectedSegments)
+        {
+            if (layout.StopCount < 2 || affectedSegments == null)
+                return false;
+
+            for (int intervalIndex = 0; intervalIndex < layout.StopCount; intervalIndex++)
+            {
+                if (!impact.IsNewAffected(intervalIndex))
+                    continue;
+
+                int start = layout[intervalIndex].WaypointIndex;
+                int end = layout[(intervalIndex + 1) % layout.StopCount].WaypointIndex;
+                if (start < 0 || start >= affectedSegments.Length
+                    || end < 0 || end >= affectedSegments.Length)
+                {
+                    return false;
+                }
+
+                int cursor = start;
+                int guard = 0;
+                while (cursor != end && guard++ <= affectedSegments.Length)
+                {
+                    affectedSegments[cursor] = true;
+                    cursor = (cursor + 1) % affectedSegments.Length;
+                }
+                if (cursor != end)
+                    return false;
+            }
+
+            return true;
         }
 
         private bool GetBus(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTimeProfileHeader profile)

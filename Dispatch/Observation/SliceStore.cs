@@ -312,15 +312,23 @@ namespace RapidTransitMod.Dispatch.Observation
             m_LineObservationKeys.Clear();
         }
 
-        internal void RemoveLine(Entity line)
+        internal int RemoveLine(Entity line, out int endedSessions)
         {
+            int removed = 0;
             if (m_LineObservationKeys.TryGetValue(line, out HashSet<ulong> keys))
             {
                 foreach (ulong key in keys)
-                    m_Obs.Remove(key);
+                    if (m_Obs.Remove(key))
+                        removed++;
                 m_LineObservationKeys.Remove(line);
             }
 
+            endedSessions = RemoveLineVehicles(line);
+            return removed;
+        }
+
+        private int RemoveLineVehicles(Entity line)
+        {
             List<Entity> vehicles = new List<Entity>();
             foreach (KeyValuePair<Entity, VehicleTraversalSliceSession> pair in m_Sessions)
                 if (pair.Value.Line == line) vehicles.Add(pair.Key);
@@ -332,6 +340,25 @@ namespace RapidTransitMod.Dispatch.Observation
             m_LineEligibility.Remove(line);
             m_RecentActualSamples.RemoveAll(sample => sample.Line == line);
             m_RecentPositionSamples.RemoveAll(sample => sample.Line == line);
+            return vehicles.Count;
+        }
+
+        internal int SuspendLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return 0;
+
+            List<Entity> vehicles = new List<Entity>();
+            foreach (KeyValuePair<Entity, VehicleTraversalSliceSession> pair in m_Sessions)
+                if (pair.Value.Line == line)
+                    vehicles.Add(pair.Key);
+            foreach (KeyValuePair<Entity, TraversalSliceSamplingPlanCache> pair in m_Plans)
+                if (pair.Value.Line == line && !vehicles.Contains(pair.Key))
+                    vehicles.Add(pair.Key);
+            for (int i = 0; i < vehicles.Count; i++)
+                Remove(vehicles[i]);
+            m_LineEligibility.Remove(line);
+            return vehicles.Count;
         }
 
         internal void RecordActualSample(TraversalSliceActualSample sample)

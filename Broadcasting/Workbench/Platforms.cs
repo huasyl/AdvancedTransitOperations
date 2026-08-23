@@ -71,6 +71,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             result.error = "Line does not belong to mode " + scope.Token + ".";
                             return global::RapidTransitMod.Workbenches.Json.Write(result);
                         }
+                        if (!string.Equals(
+                                request?.uiTriggerId?.Trim(),
+                                "approach_station",
+                                StringComparison.Ordinal))
+                        {
+                            result.error = "Only approach_station platform announcements are supported.";
+                            return global::RapidTransitMod.Workbenches.Json.Write(result);
+                        }
 
                         List<WorkbenchLineRuntime> runtimeLines = Lines();
                         WorkbenchLineRuntime activeRuntime = FindLine(runtimeLines, lineId);
@@ -80,7 +88,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             m_Ctx.Drafts.EnsureLine(lineId, activeRuntime.Entity, out stationGroups);
                         }
                         BroadcastWorkbenchPlatformAnnouncementDto announcement =
-                            Normalize(lineId, stationId, request?.stationName, request?.title, request?.uiTriggerId, request?.enabled == true, request?.nodes);
+                            Normalize(lineId, stationId, request?.stationName, request?.title, "approach_station", request?.enabled == true, request?.nodes);
                         m_Ctx.Rules.ValidateNodeCatalog(announcement.nodes);
                         Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements =
                             EnsureDraft(lineId);
@@ -200,11 +208,15 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                             continue;
                         }
 
-                        result.Add(Clone(
+                        BroadcastWorkbenchPlatformAnnouncementDto clone = Clone(
                             announcement,
                             lineId,
                             announcement.stationId,
-                            stationName));
+                            stationName);
+                        if (clone != null)
+                        {
+                            result.Add(clone);
+                        }
                     }
 
                     return result.ToArray();
@@ -237,14 +249,13 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                 continue;
                             }
 
-                            BroadcastWorkbenchPlatformAnnouncementDto normalizedAnnouncement = Normalize(
-                                lineState.lineId,
-                                announcement.stationId,
-                                announcement.stationName,
-                                announcement.title,
-                                announcement.uiTriggerId,
-                                announcement.enabled,
-                                announcement.nodes);
+                            if (!TryNormalizePersisted(
+                                    lineState.lineId,
+                                    announcement,
+                                    out BroadcastWorkbenchPlatformAnnouncementDto normalizedAnnouncement))
+                            {
+                                continue;
+                            }
                             lineAnnouncements[Key(
                                 normalizedAnnouncement.stationId,
                                 normalizedAnnouncement.uiTriggerId)] = normalizedAnnouncement;
@@ -308,17 +319,103 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 {
                     if (announcement == null)
                     {
-                        return Normalize(lineId, stationId, stationName, string.Empty, "platform_idle_clear", false, null);
+                        return null;
                     }
 
-                    return Normalize(
+                    if (!TryNormalizePersisted(
+                            lineId,
+                            announcement,
+                            out BroadcastWorkbenchPlatformAnnouncementDto normalized))
+                    {
+                        return null;
+                    }
+
+                    normalized.lineId = lineId ?? string.Empty;
+                    normalized.stationId = stationId ?? string.Empty;
+                    normalized.stationName = string.IsNullOrWhiteSpace(stationName)
+                        ? normalized.stationName
+                        : stationName;
+                    return normalized;
+                }
+
+                internal static bool TryNormalizeApply(
+                    string lineId,
+                    BroadcastWorkbenchPlatformAnnouncementDto source,
+                    out BroadcastWorkbenchPlatformAnnouncementDto normalized)
+                {
+                    normalized = null;
+                    if (source == null
+                        || !string.Equals(
+                            source.uiTriggerId?.Trim(),
+                            "approach_station",
+                            StringComparison.Ordinal)
+                        || (!string.IsNullOrWhiteSpace(source.triggerId)
+                            && !string.Equals(
+                                source.triggerId.Trim(),
+                                TriggerConstants.PlatformApproachTriggerId,
+                                StringComparison.Ordinal)))
+                    {
+                        return false;
+                    }
+
+                    normalized = Normalize(
                         lineId,
-                        stationId,
-                        string.IsNullOrWhiteSpace(stationName) ? announcement.stationName : stationName,
-                        announcement.title,
-                        announcement.uiTriggerId,
-                        announcement.enabled,
-                        announcement.nodes);
+                        source.stationId,
+                        source.stationName,
+                        source.title,
+                        "approach_station",
+                        source.enabled,
+                        source.nodes);
+                    return true;
+                }
+
+                internal static bool TryNormalizePersisted(
+                    string lineId,
+                    BroadcastWorkbenchPlatformAnnouncementDto source,
+                    out BroadcastWorkbenchPlatformAnnouncementDto normalized)
+                {
+                    normalized = null;
+                    if (source == null)
+                    {
+                        return false;
+                    }
+
+                    string uiTriggerId = source.uiTriggerId?.Trim() ?? string.Empty;
+                    string runtimeTriggerId = source.triggerId?.Trim() ?? string.Empty;
+                    string normalizedUiTriggerId;
+                    if (!string.IsNullOrWhiteSpace(uiTriggerId))
+                    {
+                        if (!TryNormalizeUiTrigger(uiTriggerId, out normalizedUiTriggerId)
+                            || (!string.IsNullOrWhiteSpace(runtimeTriggerId)
+                                && !string.Equals(
+                                    runtimeTriggerId,
+                                    TriggerConstants.PlatformApproachTriggerId,
+                                    StringComparison.Ordinal)))
+                        {
+                            return false;
+                        }
+                    }
+                    else if (!string.Equals(
+                                 runtimeTriggerId,
+                                 TriggerConstants.PlatformApproachTriggerId,
+                                 StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+                    else
+                    {
+                        normalizedUiTriggerId = "approach_station";
+                    }
+
+                    normalized = BuildNormalized(
+                        lineId,
+                        source.stationId,
+                        source.stationName,
+                        source.title,
+                        normalizedUiTriggerId,
+                        source.enabled,
+                        source.nodes);
+                    return true;
                 }
 
                 internal static BroadcastWorkbenchPlatformAnnouncementDto Normalize(
@@ -330,7 +427,45 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     bool enabled,
                     IEnumerable<BroadcastWorkbenchRuleNodeDto> nodes)
                 {
-                    string normalizedUiTriggerId = UiTrigger(uiTriggerId);
+                    if (!TryNormalizeUiTrigger(uiTriggerId, out string normalizedUiTriggerId))
+                    {
+                        throw new InvalidOperationException(
+                            "Only approach_station platform announcements are supported.");
+                    }
+
+                    return BuildNormalized(
+                        lineId,
+                        stationId,
+                        stationName,
+                        title,
+                        normalizedUiTriggerId,
+                        enabled,
+                        nodes);
+                }
+
+                private static bool TryNormalizeUiTrigger(string triggerId, out string normalized)
+                {
+                    switch ((triggerId ?? string.Empty).Trim())
+                    {
+                        case "approach_station":
+                        case "platform_approach_station":
+                            normalized = "approach_station";
+                            return true;
+                        default:
+                            normalized = string.Empty;
+                            return false;
+                    }
+                }
+
+                private static BroadcastWorkbenchPlatformAnnouncementDto BuildNormalized(
+                    string lineId,
+                    string stationId,
+                    string stationName,
+                    string title,
+                    string normalizedUiTriggerId,
+                    bool enabled,
+                    IEnumerable<BroadcastWorkbenchRuleNodeDto> nodes)
+                {
                     return new BroadcastWorkbenchPlatformAnnouncementDto
                     {
                         lineId = lineId ?? string.Empty,
@@ -339,8 +474,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         title = title ?? string.Empty,
                         uiTriggerId = normalizedUiTriggerId,
                         enabled = enabled,
-                        triggerId = RuntimeTrigger(normalizedUiTriggerId),
-                        cooldownGameMinutes = 20,
+                        triggerId = TriggerConstants.PlatformApproachTriggerId,
                         nodes = nodes == null
                             ? Array.Empty<BroadcastWorkbenchRuleNodeDto>()
                             : nodes
@@ -350,26 +484,6 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                                     && !string.IsNullOrWhiteSpace(node.type))
                                 .ToArray()
                     };
-                }
-
-                internal static string UiTrigger(string uiTriggerId)
-                {
-                    switch ((uiTriggerId ?? string.Empty).Trim())
-                    {
-                        case "approach_station":
-                        case "platform_approach_station":
-                            return "approach_station";
-                        case "platform_idle_clear":
-                        default:
-                            return "platform_idle_clear";
-                    }
-                }
-
-                internal static string RuntimeTrigger(string uiTriggerId)
-                {
-                    return string.Equals(uiTriggerId, "approach_station", StringComparison.Ordinal)
-                        ? "platform_approach_station"
-                        : "platform_idle_clear";
                 }
 
                 internal static Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> CloneLine(
@@ -409,8 +523,9 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         return string.Empty;
                     }
 
-                    string normalizedUiTriggerId = UiTrigger(uiTriggerId);
-                    return normalizedStationId + "|" + normalizedUiTriggerId;
+                    return TryNormalizeUiTrigger(uiTriggerId, out string normalizedUiTriggerId)
+                        ? normalizedStationId + "|" + normalizedUiTriggerId
+                        : string.Empty;
                 }
     }
 }

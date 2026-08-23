@@ -238,6 +238,15 @@ namespace RapidTransitMod.Bypass
             m_SceneIndex.MarkDirty();
             m_StopSceneEligibilityLineCaches.Clear();
         }
+
+        internal void InvalidateStaticSceneIndex(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_SceneIndex.MarkDirty();
+            m_StopSceneEligibilityLineCaches.Remove(line);
+        }
         internal void WarmStaticSceneIndex() => m_SceneIndex.WarmAll();
         internal void ClearRescue(Entity vehicle)
         {
@@ -404,6 +413,21 @@ namespace RapidTransitMod.Bypass
         }
         internal BypassDecisionResult EvaluateDepartureGate(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex, uint nowFrame)
         {
+            if (m_Runtime.IsLinePending(line))
+            {
+                ClearVehicle(vehicle);
+                return new BypassDecisionResult(
+                    false,
+                    false,
+                    false,
+                    Entity.Null,
+                    false,
+                    Entity.Null,
+                    true,
+                    "line-structure-pending",
+                    BypassDecisionPath.ScopeUnavailable);
+            }
+
             return m_Decision.Evaluate(vehicle, line, waypoints, waypointIndex, nowFrame);
         }
         internal Entity FindBlocker(BypassDecisionResult result) => m_Decision.FindBlocker(result);
@@ -411,6 +435,12 @@ namespace RapidTransitMod.Bypass
         internal bool TryGetLatchedBlocker(Entity vehicle, out Entity blocker) => m_Decision.TryGetLatchedBlocker(vehicle, out blocker);
         internal bool IsStopSceneEligible(Entity line, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex, out bool known)
         {
+            if (m_Runtime.IsLinePending(line))
+            {
+                known = true;
+                return false;
+            }
+
             known = false;
             if (line == Entity.Null
                 || waypointIndex <= 0
@@ -468,6 +498,12 @@ namespace RapidTransitMod.Bypass
             bool sceneKnown,
             bool sceneEligible)
         {
+            if (line != Entity.Null && m_Runtime.IsLinePending(line))
+            {
+                ClearWatch(vehicle);
+                return;
+            }
+
             if (vehicle == Entity.Null || line == Entity.Null || !boarding || waypointIndex <= 0)
                 return;
 
@@ -691,11 +727,42 @@ namespace RapidTransitMod.Bypass
                     m_LocalSceneExpressStaticMatchSnapshots.Remove(staticMatchKeys[i]);
             }
 
-            m_LocalSceneCandidateExpressLinesSnapshots.Clear();
-            m_ActiveConflictCorridorSnapshots.Clear();
-            m_ActiveConflictCorridorSnapshotFrame = 0;
-            m_QueuedLocalReleaseFrameCache.Clear();
-            m_QueuedLocalReleaseFrameCacheFrame = 0;
+            List<LocalSceneCandidateExpressLinesCacheKey> candidateKeys = null;
+            foreach (KeyValuePair<LocalSceneCandidateExpressLinesCacheKey, LocalSceneCandidateExpressLinesSnapshot> entry in m_LocalSceneCandidateExpressLinesSnapshots)
+            {
+                if (entry.Key.LocalLine == line)
+                {
+                    candidateKeys ??= new List<LocalSceneCandidateExpressLinesCacheKey>();
+                    candidateKeys.Add(entry.Key);
+                }
+            }
+            if (candidateKeys != null)
+                for (int i = 0; i < candidateKeys.Count; i++)
+                    m_LocalSceneCandidateExpressLinesSnapshots.Remove(candidateKeys[i]);
+
+            List<ActiveConflictCorridorCacheKey> activeKeys = null;
+            foreach (KeyValuePair<ActiveConflictCorridorCacheKey, ActiveConflictCorridorSnapshot> entry in m_ActiveConflictCorridorSnapshots)
+            {
+                if (entry.Key.LocalLine != line && entry.Key.ExpressLine != line)
+                    continue;
+                activeKeys ??= new List<ActiveConflictCorridorCacheKey>();
+                activeKeys.Add(entry.Key);
+            }
+            if (activeKeys != null)
+                for (int i = 0; i < activeKeys.Count; i++)
+                    m_ActiveConflictCorridorSnapshots.Remove(activeKeys[i]);
+
+            List<QueuedLocalReleaseFrameCacheKey> queuedKeys = null;
+            foreach (KeyValuePair<QueuedLocalReleaseFrameCacheKey, bool> entry in m_QueuedLocalReleaseFrameCache)
+            {
+                if (entry.Key.SceneKey.Line != line)
+                    continue;
+                queuedKeys ??= new List<QueuedLocalReleaseFrameCacheKey>();
+                queuedKeys.Add(entry.Key);
+            }
+            if (queuedKeys != null)
+                for (int i = 0; i < queuedKeys.Count; i++)
+                    m_QueuedLocalReleaseFrameCache.Remove(queuedKeys[i]);
         }
         internal List<Entity> ForgetBlocker(Entity blocker)
         {
@@ -960,6 +1027,23 @@ namespace RapidTransitMod.Bypass
         internal Dictionary<Entity, BypassHoldCadenceSnapshot> Cadence => m_Decision.Cadence;
         internal Dictionary<Entity, BypassConflictEpisode> Conflict => m_Decision.Conflict;
 
+        private bool TryGetChainForLine(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out LineTrackChain chain)
+        {
+            chain = null;
+            if (m_Runtime.IsLinePending(line))
+                return false;
+            if (!m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out chain)
+                || m_Runtime.IsLinePending(line))
+            {
+                chain = null;
+                return false;
+            }
+            return true;
+        }
+
         private bool BypassRun() => m_Runtime.IsBypassRuntimeFeatureEnabled();
         private bool Managed(Entity line) => m_Runtime.IsDispatchRuntimeManagedLine(line);
         private bool Local(Entity line) => m_Runtime.IsAppliedLocal(line);
@@ -971,7 +1055,9 @@ namespace RapidTransitMod.Bypass
             LineTrackChain chain,
             DynamicBuffer<RouteWaypoint> waypoints)
         {
-            if (chain == null || waypoints.Length == 0)
+            if (chain == null
+                || waypoints.Length == 0
+                || m_Runtime.IsLinePending(chain.LineEntity))
                 return;
 
             m_Runtime.TrackModel.EnsureBypassPipelineReady(chain);
@@ -1275,7 +1361,7 @@ namespace RapidTransitMod.Bypass
             state = null;
             if (line == Entity.Null
                 || waypoints.Length == 0
-                || !m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
+                || !TryGetChainForLine(line, waypoints, out LineTrackChain chain))
             {
                 return false;
             }
@@ -1845,7 +1931,7 @@ namespace RapidTransitMod.Bypass
                         continue;
                     }
 
-                    if (!m_Runtime.TrackModel.TryGetChainForLine(expressLine, expressWaypoints, out LineTrackChain expressChain))
+                    if (!TryGetChainForLine(expressLine, expressWaypoints, out LineTrackChain expressChain))
                         continue;
 
                     m_Runtime.TrackModel.EnsureBypassPipelineReady(expressChain);
@@ -1881,7 +1967,7 @@ namespace RapidTransitMod.Bypass
             snapshot = default;
             if (localChain == null
                 || expressLine == Entity.Null
-                || !m_Runtime.TrackModel.TryGetChainForLine(expressLine, expressWaypoints, out expressChain))
+                || !TryGetChainForLine(expressLine, expressWaypoints, out expressChain))
             {
                 return false;
             }
@@ -3235,6 +3321,12 @@ namespace RapidTransitMod.Bypass
             fatalReason = string.Empty;
             if (IsBypassPerfProbeLoggingEnabled())
                 m_BypassPerfProbeSceneSamples++;
+            if (m_Runtime.IsLinePending(localLine))
+            {
+                fatalReason = "line-structure-pending";
+                return false;
+            }
+
             if (!m_SceneIndex.TryGetEntry(localChain, currentBypassBuilding, protectedIntervalIndex, out SceneStaticIndexEntry staticEntry)
                 || staticEntry.ExpressRelations.Count == 0)
                 return true;
@@ -3248,6 +3340,7 @@ namespace RapidTransitMod.Bypass
                     || expressLine == localLine
                     || !m_Runtime.EntityManager.Exists(expressLine)
                     || !m_Runtime.EntityManager.HasComponent<TransportLine>(expressLine)
+                    || m_Runtime.IsLinePending(expressLine)
                     || !Express(expressLine)
                     || !routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints))
                 {
@@ -6167,7 +6260,7 @@ namespace RapidTransitMod.Bypass
             protectedSharedCount = 0;
             hasMirroredContext = false;
 
-            if (!m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
+            if (!TryGetChainForLine(line, waypoints, out LineTrackChain chain))
                 return false;
 
             m_Runtime.TrackModel.EnsureBypassPipelineReady(chain);
@@ -6206,7 +6299,7 @@ namespace RapidTransitMod.Bypass
                 return true;
             }
 
-            if (!m_Runtime.TrackModel.TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain))
+            if (!TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain))
                 return false;
 
             if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition))
@@ -6255,7 +6348,7 @@ namespace RapidTransitMod.Bypass
             if (localVehicle == Entity.Null
                 || localLine == Entity.Null
                 || currentWaypointIndex < 0
-                || !m_Runtime.TrackModel.TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain))
+                || !TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain))
             {
                 return false;
             }
@@ -6298,7 +6391,7 @@ namespace RapidTransitMod.Bypass
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || bypassBuilding == Entity.Null
-                || !m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
+                || !TryGetChainForLine(line, waypoints, out LineTrackChain chain)
                 || !TryResolveVehicleCurrentProtectedInterval(vehicle, line, waypoints, chain, out _, out BypassProtectedInterval protectedInterval)
                 || !m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, line, waypoints, protectedInterval, out TrackModelRuntimePosition runtimePosition)
                 || runtimePosition.Confidence < 0.6f
@@ -6325,7 +6418,7 @@ namespace RapidTransitMod.Bypass
             protectedIntervalIndex = -1;
             risk = string.Empty;
             summary = string.Empty;
-            if (!m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
+            if (!TryGetChainForLine(line, waypoints, out LineTrackChain chain))
                 return false;
 
             m_Runtime.TrackModel.EnsureBypassPipelineReady(chain);
@@ -6353,6 +6446,12 @@ namespace RapidTransitMod.Bypass
             if (IsBypassPerfProbeLoggingEnabled())
                 m_BypassPerfProbeTrackDecisionCalls++;
             trackModelDecision = default;
+            if (m_Runtime.IsLinePending(localLine))
+            {
+                trackModelDecision = new BypassTrackModelDecision(false, false, "line-structure-pending", -1, false, Entity.Null, false);
+                return false;
+            }
+
             if (!m_Runtime.TrackModel.TryGetLocalSceneSnapshot(
                     localLine,
                     localWaypoints,
@@ -6361,6 +6460,12 @@ namespace RapidTransitMod.Bypass
                     out LocalBypassSceneStaticSnapshot localScene))
             {
                 trackModelDecision = new BypassTrackModelDecision(false, false, "local-chain-missing", -1, false, Entity.Null, false);
+                return false;
+            }
+
+            if (m_Runtime.IsLinePending(localLine))
+            {
+                trackModelDecision = new BypassTrackModelDecision(false, false, "line-structure-pending", -1, false, Entity.Null, false);
                 return false;
             }
 

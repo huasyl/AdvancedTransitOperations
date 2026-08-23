@@ -99,8 +99,10 @@ namespace RapidTransitMod
         internal Broadcasting.WorkbenchBackend.Workbench m_AnnouncementWorkbench;
         internal Broadcasting.Runtime m_Announcements;
         internal TrackModelService m_TrackModel = null!;
+        internal TrackChangeSource m_TrackChangeSource = null!;
         internal TrackProjectionService m_TrackProjection = null!;
         internal LineStructureInvalidator m_LineStructureInvalidator = null!;
+        internal LineStructurePendingStore m_LineStructurePendingStore = null!;
         internal RuntimeFacade m_Bypass = null!;
         internal SharedCorridorSupport m_SharedCorridor = null!;
         internal CatalogCache m_WorkbenchCatalogCache = null!;
@@ -518,6 +520,8 @@ namespace RapidTransitMod
             using (s_RailEtaMarker.Auto())
             {
                 m_SimClock.RefreshIfDue(simulationFrame);
+                if (GameManager.instance.gameMode == GameMode.Game)
+                    m_TrackChangeSource?.ConfirmChanges();
                 Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
             }
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.RailEta);
@@ -651,6 +655,7 @@ namespace RapidTransitMod
                 m_ObsBuffers.LoadMonitor();
                 m_ObsBuffers.LoadMonitorIntegrity();
                 m_ObsBuffers.LoadMonitorAverages();
+                m_LineStructureInvalidator.OnObservationRestored();
                 log.Info("[启动] 静默接管完成，系统就绪");
             }
 
@@ -667,7 +672,8 @@ namespace RapidTransitMod
                 using (s_SourceMarker.Auto())
                 {
                     m_RailEventSource.CollectIfDue(simulationFrame);
-                    m_RoadEventSource.Collect(simulationFrame);
+                    if ((simulationFrame & 15u) == 1u)
+                        m_RoadEventSource.Collect(simulationFrame);
                 }
                 RecordRoadSkips();
                 QueueRoadTimedStops();
@@ -2279,6 +2285,11 @@ namespace RapidTransitMod
 
         private void ConsumeDispatchBroadcast(DispatchEvent dispatchEvent)
         {
+            if (dispatchEvent.CurrentState != VehicleState.Preparing)
+            {
+                return;
+            }
+
             if (!RuntimePorts.TryResolveVehicleLifecycle(this, dispatchEvent.Vehicle, out LifecycleKind lifecycle)
                 || lifecycle != LifecycleKind.Rail)
             {
@@ -2291,28 +2302,13 @@ namespace RapidTransitMod
             int waypointIndex = m_CachedWpIdx.TryGetValue(dispatchEvent.Vehicle, out int cachedWaypointIndex)
                 ? cachedWaypointIndex
                 : -1;
-            bool boarding = m_StopRuntime.ReadEffectiveBoarding(dispatchEvent.Vehicle);
             bool atOrigin = waypointIndex == 0;
-            if (dispatchEvent.CurrentState == VehicleState.Preparing)
-            {
-                m_Announcements.Preparing(
-                    dispatchEvent.Vehicle,
-                    dispatchEvent.Line,
-                    waypoints,
-                    atOrigin,
-                    dispatchEvent.Frame);
-                return;
-            }
-
-            if (dispatchEvent.CurrentState == VehicleState.Holding
-                || dispatchEvent.CurrentState == VehicleState.Idle)
-            {
-                bool originBusy = atOrigin
-                    || boarding
-                    || m_VehicleStateStore.ForcedOriginReadyFrame.ContainsKey(dispatchEvent.Vehicle)
-                    || waypointIndex == 0;
-                m_Announcements.Origin(dispatchEvent.Line, waypoints, originBusy);
-            }
+            m_Announcements.Preparing(
+                dispatchEvent.Vehicle,
+                dispatchEvent.Line,
+                waypoints,
+                atOrigin,
+                dispatchEvent.Frame);
         }
 
         private bool TryGetLineWaypoints(Entity line, out DynamicBuffer<RouteWaypoint> waypoints)
@@ -2878,6 +2874,14 @@ namespace RapidTransitMod
             catch (Exception ex)
             {
                 log.Info("[ObservationPersistence] SaveSnapshot failed -> " + ex.GetType().Name + ": " + ex.Message);
+            }
+            try
+            {
+                m_LineStructurePendingStore?.Save(m_LineStructureInvalidator?.ExportPending());
+            }
+            catch (Exception ex)
+            {
+                log.Info("[LineStructurePending] Save failed -> " + ex.GetType().Name + ": " + ex.Message);
             }
             try
             {

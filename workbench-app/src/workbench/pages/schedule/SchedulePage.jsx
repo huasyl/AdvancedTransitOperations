@@ -2,13 +2,14 @@ import { memo } from "react";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
 import useScheduleController from "./useScheduleController";
 import AutoRuleSection from "./components/AutoRuleSection";
+import CopyLineSection from "./components/CopyLineSection";
 import ManualDraftSection from "./components/ManualDraftSection";
 import ScheduleTopbar from "./components/ScheduleTopbar";
 import SummarySection from "./components/SummarySection";
 
 function SchedulePage({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot }) {
   const { t } = useNativeScheduleI18n();
-  const { topbar, summary, auto, manual, refs, actions } = useScheduleController({
+  const { topbar, summary, auto, manual, copy, refs, actions } = useScheduleController({
     registerHostActions,
     activeTransportMode,
     isActive,
@@ -56,10 +57,22 @@ function SchedulePage({ registerHostActions, activeTransportMode = "train", isAc
               >
                 {t("nativeSchedule.tab.manual")}
               </button>
+              <button
+                type="button"
+                className={`dw-demo-tab ${copy.activeRightTab === "copy" ? "is-active" : ""}`}
+                onClick={() => actions.setActiveRightTab("copy")}
+              >
+                {t("nativeSchedule.tab.copy")}
+              </button>
             </div>
 
             {auto.activeRightTab === "auto" ? (
               <AutoRuleSection
+                autoSubMode={auto.autoSubMode}
+                quickSegments={auto.quickSegments}
+                quickFooterNote={auto.quickFooterNote}
+                quickImportDisabled={auto.quickImportDisabled}
+                quickImported={auto.quickImported}
                 editorStart={auto.editorStart}
                 editorEnd={auto.editorEnd}
                 autoFrequencyText={auto.autoFrequencyText}
@@ -75,14 +88,18 @@ function SchedulePage({ registerHostActions, activeTransportMode = "train", isAc
                 frequencyInputRef={refs.frequencyInputRef}
                 onEditorStartChange={actions.changeEditorStart}
                 onEditorEndChange={actions.changeEditorEnd}
+                onChangeAutoSubMode={actions.setAutoSubMode}
                 onAutoFrequencyChange={actions.changeAutoFrequency}
                 onAutoOffsetDirectionChange={actions.changeAutoOffsetDirection}
                 onAutoOffsetMinutesChange={actions.changeAutoOffsetMinutes}
                 onAddAutoRule={actions.addAutoRule}
                 onRemoveAutoRule={actions.removeAutoRule}
                 onImportAutoToSummary={actions.importAutoToSummary}
+                onChangeQuickBoundary={actions.changeQuickBoundary}
+                onChangeQuickCount={actions.changeQuickCount}
+                onImportQuickToSummary={actions.importQuickToSummary}
               />
-            ) : (
+            ) : manual.activeRightTab === "manual" ? (
               <ManualDraftSection
                 manualInput={manual.manualInput}
                 manualInputRef={refs.manualInputRef}
@@ -94,6 +111,23 @@ function SchedulePage({ registerHostActions, activeTransportMode = "train", isAc
                 onAddManualDraft={actions.addManualDraft}
                 onRemoveManualDraft={actions.removeManualDraft}
                 onImportManualToSummary={actions.importManualToSummary}
+              />
+            ) : (
+              <CopyLineSection
+                copySourceLineId={copy.copySourceLineId}
+                copySourceLabel={copy.copySourceLabel}
+                copySourceOptions={copy.copySourceOptions}
+                copyPreviewText={copy.copyPreviewText}
+                copyEmptyText={copy.copyEmptyText}
+                copyRows={copy.copyRows}
+                copyImportDisabled={copy.copyImportDisabled}
+                copyImported={copy.copyImported}
+                footerNote={copy.footerNote}
+                dropdownPortalHostRef={refs.dropdownPortalHostRef}
+                onCopySourceChange={actions.changeCopySource}
+                onRefreshNames={actions.refreshNames}
+                onImportCopyToSummary={actions.importCopyToSummary}
+                onRemoveCopyRow={actions.removeCopySourceRow}
               />
             )}
           </section>

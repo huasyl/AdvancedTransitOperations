@@ -21,6 +21,7 @@ namespace RapidTransitMod.Bypass
         TrackModelService TrackModel { get; }
         TrackProjectionService TrackProjection { get; }
         RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe HotPathProbe { get; }
+        bool IsLinePending(Entity line);
         BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData;
 
         bool IsBypassRuntimeFeatureEnabled();

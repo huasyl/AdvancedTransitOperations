@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import {
-  RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS,
   resolvePlatformRuntimeTriggerId,
   resolvePlatformUiTriggerId,
 } from "./broadcast-constants";
@@ -42,12 +41,12 @@ export default function useBroadcastPlatformRules(context) {
       const station = stationById.get(announcement?.stationId);
       const nodes = Array.isArray(announcement?.nodes) ? announcement.nodes : [];
       const enabled = Boolean(announcement?.enabled);
-      const uiTriggerId = announcement?.uiTriggerId || announcement?.triggerId || "platform_idle_clear";
+      const uiTriggerId = resolvePlatformUiTriggerId(announcement?.uiTriggerId || announcement?.triggerId);
       const signatureKey = `${enabled ? "1" : "0"}:${uiTriggerId}:${JSON.stringify(nodes)}`;
       const explicitTitle = typeof announcement?.title === "string" ? announcement.title.trim() : "";
       if (
         !station ||
-        RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS.includes(uiTriggerId) ||
+        !uiTriggerId ||
         (!enabled && nodes.length === 0)
       ) {
         return;
@@ -157,10 +156,10 @@ export default function useBroadcastPlatformRules(context) {
   }
 
   function buildPlatformAnnouncementKey(stationId, triggerId) {
-    return `${stationId || ""}:${resolvePlatformUiTriggerId(triggerId || "platform_idle_clear")}`;
+    return `${stationId || ""}:${resolvePlatformUiTriggerId(triggerId || "approach_station")}`;
   }
 
-  function createEmptyPlatformAnnouncement(station, triggerId = "platform_idle_clear") {
+  function createEmptyPlatformAnnouncement(station, triggerId = "approach_station") {
     const resolvedTriggerId = resolvePlatformUiTriggerId(triggerId);
     return {
       lineId: getActiveBroadcastLineId(),
@@ -170,12 +169,11 @@ export default function useBroadcastPlatformRules(context) {
       uiTriggerId: resolvedTriggerId,
       enabled: false,
       triggerId: resolvePlatformRuntimeTriggerId(resolvedTriggerId),
-      cooldownGameMinutes: 20,
       nodes: [],
     };
   }
 
-  function getPlatformAnnouncement(station, triggerId = "platform_idle_clear") {
+  function getPlatformAnnouncement(station, triggerId = "approach_station") {
     const resolvedTriggerId = resolvePlatformUiTriggerId(triggerId);
     const existing = platformAnnouncements.find(
       (entry) => entry.stationId === station.id && resolvePlatformUiTriggerId(entry?.uiTriggerId || entry?.triggerId) === resolvedTriggerId,
@@ -195,7 +193,6 @@ export default function useBroadcastPlatformRules(context) {
       stationName: station.name,
       uiTriggerId: resolvePlatformUiTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
       triggerId: resolvePlatformRuntimeTriggerId(nextAnnouncement?.uiTriggerId || nextAnnouncement?.triggerId),
-      cooldownGameMinutes: 20,
     });
     const nextPlatformAnnouncements = Array.from(nextByKey.values());
     markDirtyPlatformStations([station?.id], nextPlatformAnnouncements);
@@ -212,7 +209,6 @@ export default function useBroadcastPlatformRules(context) {
       uiTriggerId,
       enabled: Boolean(source?.enabled),
       triggerId: resolvePlatformRuntimeTriggerId(uiTriggerId),
-      cooldownGameMinutes: 20,
       nodes: Array.isArray(source?.nodes) ? source.nodes : [],
     };
   }
@@ -377,7 +373,7 @@ export default function useBroadcastPlatformRules(context) {
     };
     if (rememberedTitle) {
       const nodes = Array.isArray(targetRule.nodes) ? targetRule.nodes : [];
-      const signatureKey = `${targetRule.enabled ? "1" : "0"}:${targetRule.triggerId || "platform_idle_clear"}:${JSON.stringify(nodes)}`;
+      const signatureKey = `${targetRule.enabled ? "1" : "0"}:${targetRule.triggerId || "approach_station"}:${JSON.stringify(nodes)}`;
       platformRuleTitleMemoryRef.current[signatureKey] = rememberedTitle;
     }
     const nextByKey = new Map(platformAnnouncements.map((entry) => [buildPlatformAnnouncementKey(entry.stationId, entry?.uiTriggerId || entry?.triggerId), entry]));

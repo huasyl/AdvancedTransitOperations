@@ -14,5 +14,6 @@ namespace RapidTransitMod.Dispatch.Observation
         public Func<LineKey, TraversalSliceColdStart, bool> TryFlushColdStart = null!;
         public Action<LineKey> RemoveColdStart = null!;
         public Action<string> Log = null!;
+        public Func<Entity, bool> IsLinePending = null!;
     }
 }

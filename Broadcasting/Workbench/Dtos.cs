@@ -168,8 +168,6 @@ namespace RapidTransitMod
         [DataMember]
         public string triggerId;
         [DataMember]
-        public int cooldownGameMinutes;
-        [DataMember]
         public BroadcastWorkbenchRuleNodeDto[] nodes;
     }
 

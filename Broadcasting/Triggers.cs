@@ -20,15 +20,14 @@ namespace RapidTransitMod.Broadcasting
     {
         internal const uint AnchorDiagnosticCooldownFrames = 30u;
         internal const int IdleRouteCooldownAfterLeaveSeconds = 3;
-        internal const string PlatformIdleTriggerId = "platform_idle_clear";
         internal const string PlatformApproachTriggerId = "platform_approach_station";
         internal const float LeaveAnchorDistanceMeters = 100f;
         internal const float ApproachAnchorDistanceMeters = 200f;
         internal const float PlatformApproachAnchorDistanceMeters = 600f;
+        internal const float PlatformVehicleCullDistanceMeters = 1500f;
+        internal const float PlatformVehicleCullDistanceSquared = PlatformVehicleCullDistanceMeters * PlatformVehicleCullDistanceMeters;
         internal const float PlatformPreparingApproachLeadMinutes = 10f;
         internal const int PlatformPreparingApproachPhaseIndex = 999999;
-        internal const int PlatformIdleBusyGraceMinutes = 3;
-        internal const int PlatformIdleQuietConfirmMinutes = 1;
     }
 
         internal struct ProgressState
@@ -59,6 +58,7 @@ namespace RapidTransitMod.Broadcasting
             public int TriggerAtomIndex;
             public int CursorAtomIndex;
             public int TraversalPhaseIndex;
+            public uint LastSeenFrame;
             public uint LastObservedFrame;
             public bool Triggered;
             public VehicleStation StationContext;
@@ -1054,12 +1054,6 @@ namespace RapidTransitMod.Broadcasting
             new Dictionary<Entity, ApproachState>();
         private readonly HashSet<string> m_CheckedLineIds =
             new HashSet<string>(StringComparer.Ordinal);
-        private readonly Dictionary<string, uint> m_AnnouncementCooldownUntilFrame =
-            new Dictionary<string, uint>(StringComparer.Ordinal);
-        private readonly Dictionary<string, uint> m_StationBusyUntilFrame =
-            new Dictionary<string, uint>(StringComparer.Ordinal);
-        private readonly Dictionary<string, uint> m_StationQuietSinceFrame =
-            new Dictionary<string, uint>(StringComparer.Ordinal);
         internal Platforms(BroadcastAccess access, Config config, Stations stations, Playback playback, Diagnostics diagnostics)
         {
             m_Access = access ?? throw new ArgumentNullException(nameof(access));
@@ -1067,45 +1061,46 @@ namespace RapidTransitMod.Broadcasting
             m_Stations = stations ?? throw new ArgumentNullException(nameof(stations));
             m_Playback = playback ?? throw new ArgumentNullException(nameof(playback));
             m_Diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
-            m_Access.SubscribeClockChanged(OnClockChanged);
         }
 
-        private void OnClockChanged(ClockSnapshot oldClockSnapshot, ClockSnapshot newClockSnapshot)
-        {
-            _ = oldClockSnapshot;
-            _ = newClockSnapshot;
-            m_AnnouncementCooldownUntilFrame.Clear();
-            m_StationBusyUntilFrame.Clear();
-        }
-
-        internal bool HasState => m_AnnouncementCooldownUntilFrame.Count > 0
-            || m_StationBusyUntilFrame.Count > 0
-            || m_StationQuietSinceFrame.Count > 0
-            || m_ApproachStateByVehicle.Count > 0;
+        internal bool HasState => m_ApproachStateByVehicle.Count > 0;
 
         internal void Running(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            bool boarding,
             Config.LineFlags flags,
-            bool hasContext,
+            bool platformNear,
+            bool seen,
             FrameContext context)
         {
-            if (!m_Config.Enabled || !flags.HasPlatform)
+            if (!m_Config.Enabled || !flags.HasApproach)
             {
                 m_ApproachStateByVehicle.Remove(vehicle);
                 return;
             }
 
-            if (flags.HasIdle)
+            if (!platformNear)
             {
-                WatchBusy(line, waypoints, hasContext, boarding, context);
+                if (m_ApproachStateByVehicle.TryGetValue(vehicle, out ApproachState state)
+                    && state.TraversalPhaseIndex != TriggerConstants.PlatformPreparingApproachPhaseIndex)
+                {
+                    state.LastSeenFrame = m_Access.SimulationSystem != null
+                        ? m_Access.SimulationSystem.frameIndex
+                        : 0u;
+                    m_ApproachStateByVehicle[vehicle] = state;
+                }
+
+                return;
             }
 
-            if (flags.HasApproach)
+            if (seen)
             {
-                WatchApproach(vehicle, line, waypoints, hasContext, context);
+                WatchApproach(vehicle, line, waypoints, true, context);
+            }
+            else
+            {
+                m_ApproachStateByVehicle.Remove(vehicle);
             }
         }
 
@@ -1130,9 +1125,6 @@ namespace RapidTransitMod.Broadcasting
         {
             m_CheckedLineIds.Clear();
             m_ApproachStateByVehicle.Clear();
-            m_AnnouncementCooldownUntilFrame.Clear();
-            m_StationBusyUntilFrame.Clear();
-            m_StationQuietSinceFrame.Clear();
         }
 
         internal void ClearLineChecks()
@@ -1140,44 +1132,17 @@ namespace RapidTransitMod.Broadcasting
             m_CheckedLineIds.Clear();
             m_Config.ClearFlags();
             m_ApproachStateByVehicle.Clear();
-            m_AnnouncementCooldownUntilFrame.Clear();
-            m_StationBusyUntilFrame.Clear();
-            m_StationQuietSinceFrame.Clear();
             m_Diagnostics.ClearPlatformApproach();
         }
 
         internal void ClearAssetState()
         {
-            m_AnnouncementCooldownUntilFrame.Clear();
-            m_StationBusyUntilFrame.Clear();
-            m_StationQuietSinceFrame.Clear();
             m_ApproachStateByVehicle.Clear();
             m_Diagnostics.ClearPlatformApproach();
         }
 
         internal void ClearAssetState(ModeScope scope)
         {
-            foreach (string key in m_AnnouncementCooldownUntilFrame.Keys
-                .Where(key => ScopeMatchesStateKey(scope, key))
-                .ToArray())
-            {
-                m_AnnouncementCooldownUntilFrame.Remove(key);
-            }
-
-            foreach (string key in m_StationBusyUntilFrame.Keys
-                .Where(key => ScopeMatchesStateKey(scope, key))
-                .ToArray())
-            {
-                m_StationBusyUntilFrame.Remove(key);
-            }
-
-            foreach (string key in m_StationQuietSinceFrame.Keys
-                .Where(key => ScopeMatchesStateKey(scope, key))
-                .ToArray())
-            {
-                m_StationQuietSinceFrame.Remove(key);
-            }
-
             foreach (Entity vehicle in m_ApproachStateByVehicle
                 .Where(entry => MatchesRuntimeScope(scope, entry.Value.LineId))
                 .Select(entry => entry.Key)
@@ -1197,40 +1162,19 @@ namespace RapidTransitMod.Broadcasting
             uint nowFrame)
         {
             Config.LineFlags flags = PlatformFlags(line);
-            if (!flags.HasPlatform)
+            if (!flags.HasApproach)
                 return;
 
             float etaFrames = atOrigin
                 ? 0f
                 : m_Access.EstimatePreparing(vehicle, line, waypoints, nowFrame);
 
-            if (flags.HasIdle)
-            {
-                WatchOriginBusy(
-                    line,
-                    waypoints,
-                    atOrigin || etaFrames <= m_Access.ClockSnapshot.ToFramesCeil(
-                        TriggerConstants.PlatformPreparingApproachLeadMinutes));
-            }
-
-            if (flags.HasApproach)
-            {
-                WatchPreparingApproach(
-                    vehicle,
-                    line,
-                    waypoints,
-                    atOrigin,
-                    etaFrames);
-            }
-        }
-
-
-        internal void Origin(Entity line, DynamicBuffer<RouteWaypoint> waypoints, bool busy)
-        {
-            if (PlatformFlags(line).HasIdle)
-            {
-                WatchOriginBusy(line, waypoints, busy);
-            }
+            WatchPreparingApproach(
+                vehicle,
+                line,
+                waypoints,
+                atOrigin,
+                etaFrames);
         }
 
 
@@ -1260,7 +1204,7 @@ namespace RapidTransitMod.Broadcasting
                 DynamicBuffer<RouteWaypoint> waypoints = m_Access.EntityManager.GetBuffer<RouteWaypoint>(runtime.Entity, true);
                 EnsureBroadcastRuntimeLineState(runtime.Id, runtime.Entity);
                 Config.LineFlags flags = m_Config.Flags(runtime.Id);
-                if (!flags.HasPlatform)
+                if (!flags.HasApproach)
                 {
                     continue;
                 }
@@ -1276,48 +1220,6 @@ namespace RapidTransitMod.Broadcasting
                         || announcement.nodes == null
                         || announcement.nodes.Length == 0)
                     {
-                        continue;
-                    }
-
-                    if (string.Equals(announcement.triggerId, TriggerConstants.PlatformIdleTriggerId, StringComparison.Ordinal))
-                    {
-                        if (!flags.HasIdle)
-                        {
-                            continue;
-                        }
-
-                        string normalizedIdleStationId = m_Stations.NormalizeRepresentativeStationId(
-                            runtime.Entity,
-                            waypoints,
-                            stationId);
-                        string cooldownKey = runtime.Id + "|" + normalizedIdleStationId + "|" + TriggerConstants.PlatformIdleTriggerId;
-                        if (m_AnnouncementCooldownUntilFrame.TryGetValue(cooldownKey, out uint cooldownUntilFrame)
-                            && nowFrame < cooldownUntilFrame)
-                        {
-                            continue;
-                        }
-
-                        if (!IsBroadcastPlatformStationIdle(runtime.Entity, waypoints, normalizedIdleStationId)
-                            || !m_Stations.TryStation(runtime.Entity, waypoints, stationId, out ResolvedStation station)
-                            || !m_Stations.TryStationOnlyContext(runtime.Id, station, out TriggerContext context))
-                        {
-                            continue;
-                        }
-
-                        string sequenceKey = IdleSequenceKey(runtime.Id, stationId);
-                        if (m_Playback.StartPlatform(
-                                sequenceKey,
-                                station.StopEntity,
-                                context,
-                                announcement,
-                                TriggerConstants.PlatformIdleTriggerId,
-                                TriggerLabel))
-                        {
-                            uint cooldownFrames = m_Access.ClockSnapshot.ToFramesCeil(
-                                Math.Max(1, announcement.cooldownGameMinutes));
-                            m_AnnouncementCooldownUntilFrame[cooldownKey] = nowFrame + cooldownFrames;
-                        }
-
                         continue;
                     }
 
@@ -1366,7 +1268,7 @@ namespace RapidTransitMod.Broadcasting
                     || !m_Access.EntityManager.Exists(vehicle)
                     || !m_Access.VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
                     || vehicleState != VehicleState.Running
-                    || entry.Value.LastObservedFrame != nowFrame)
+                    || entry.Value.LastSeenFrame != nowFrame)
                 {
                     staleVehicles ??= new List<Entity>();
                     staleVehicles.Add(vehicle);
@@ -1440,7 +1342,7 @@ namespace RapidTransitMod.Broadcasting
                         station.StopEntity,
                         vehicleContext,
                         announcement,
-                        TriggerConstants.PlatformIdleTriggerId,
+                        TriggerConstants.PlatformApproachTriggerId,
                         TriggerLabel))
                 {
                     state.Triggered = true;
@@ -1560,182 +1462,6 @@ namespace RapidTransitMod.Broadcasting
         }
 
 
-        private void WatchBusy(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            bool hasRuntimeContext,
-            bool boarding,
-            FrameContext runtimeContext)
-        {
-            if (line == Entity.Null
-                || !hasRuntimeContext
-                || runtimeContext.Chain == null
-                || runtimeContext.Chain.TrackAtoms.Count == 0
-                || !m_Stations.TryCache(line, waypoints, out LineCache cache)
-                || cache?.Stations == null
-                || cache.Stations.Length == 0)
-            {
-                return;
-            }
-
-            uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
-            VehicleStation stationContext = runtimeContext.StationContext;
-            string lineId = stationContext.LineId;
-            int cursorAtomIndex = runtimeContext.Cursor.AtomCursorIndex;
-            if (string.IsNullOrWhiteSpace(lineId))
-            {
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(stationContext.CurrentStationId)
-                && (boarding
-                    || IsCursorNearBroadcastWaypointWindow(
-                        runtimeContext.Chain,
-                        stationContext.CurrentStopWaypointIndex,
-                        cursorAtomIndex,
-                        2,
-                        2)))
-            {
-                MarkBroadcastPlatformStationBusy(line, waypoints, lineId, stationContext.CurrentStationId, nowFrame);
-            }
-
-            if (!string.IsNullOrWhiteSpace(stationContext.NextStationId)
-                && (IsCursorNearBroadcastWaypointWindow(
-                        runtimeContext.Chain,
-                        stationContext.NextStopWaypointIndex,
-                        cursorAtomIndex,
-                        2,
-                        2)
-                    || IsCursorPastBroadcastPlatformApproachAnchor(runtimeContext, stationContext)))
-            {
-                MarkBroadcastPlatformStationBusy(line, waypoints, lineId, stationContext.NextStationId, nowFrame);
-            }
-
-            for (int i = 0; i < cache.Stations.Length; i++)
-            {
-                ResolvedStation station = cache.Stations[i];
-                if (station == null
-                    || string.IsNullOrWhiteSpace(station.StationId)
-                    || !IsCursorNearBroadcastWaypointWindow(
-                        runtimeContext.Chain,
-                        station.WaypointIndex,
-                        cursorAtomIndex,
-                        1,
-                        1))
-                {
-                    continue;
-                }
-
-                MarkBroadcastPlatformStationBusy(line, waypoints, lineId, station.StationId, nowFrame);
-            }
-        }
-
-
-        private void WatchOriginBusy(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            bool shouldMarkOrigin)
-        {
-            if (!shouldMarkOrigin
-                || line == Entity.Null
-                || waypoints.Length == 0
-                || !m_Stations.TryCache(line, waypoints, out LineCache cache)
-                || cache?.Stations == null
-                || cache.Stations.Length == 0
-                || cache.Stations[0] == null)
-            {
-                return;
-            }
-
-            string lineId = m_Access.DraftKey(m_Access.LineId(line));
-            if (string.IsNullOrWhiteSpace(lineId))
-            {
-                return;
-            }
-
-            uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
-            MarkBroadcastPlatformStationBusy(line, waypoints, lineId, cache.Stations[0].StationId, nowFrame);
-        }
-
-
-        private bool IsCursorPastBroadcastPlatformApproachAnchor(
-            FrameContext runtimeContext,
-            VehicleStation stationContext)
-        {
-            if (!Anchors.TryResolvePlatformApproachAtom(m_Access, 
-                    runtimeContext.Chain,
-                    runtimeContext.Cursor.AtomCursorIndex,
-                    stationContext.CurrentStopWaypointIndex,
-                    stationContext.NextStopWaypointIndex,
-                    out int triggerAtomIndex))
-            {
-                return false;
-            }
-
-            ApproachState state = new ApproachState
-            {
-                CurrentStopWaypointIndex = stationContext.CurrentStopWaypointIndex,
-                NextStopWaypointIndex = stationContext.NextStopWaypointIndex,
-                TriggerAtomIndex = triggerAtomIndex,
-                CursorAtomIndex = runtimeContext.Cursor.AtomCursorIndex
-            };
-            return runtimeContext.Cursor.AtomCursorIndex >= triggerAtomIndex
-                && !IsBroadcastPlatformApproachPastTriggerWindow(runtimeContext.Chain, state);
-        }
-
-
-        private bool IsCursorNearBroadcastWaypointWindow(
-            LineTrackChain chain,
-            int waypointIndex,
-            int cursorAtomIndex,
-            int beforeMarginAtoms,
-            int afterMarginAtoms)
-        {
-            if (chain == null
-                || chain.TrackAtoms.Count == 0
-                || waypointIndex < 0
-                || !m_Access.TryWindow(
-                    chain,
-                    waypointIndex,
-                    cursorAtomIndex,
-                    out int windowStart,
-                    out int windowEndExclusive))
-            {
-                return false;
-            }
-
-            int start = math.max(0, windowStart - math.max(0, beforeMarginAtoms));
-            int end = math.min(chain.TrackAtoms.Count, windowEndExclusive + math.max(0, afterMarginAtoms));
-            return cursorAtomIndex >= start && cursorAtomIndex < end;
-        }
-
-
-        private void MarkBroadcastPlatformStationBusy(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            string lineId,
-            string stationId,
-            uint nowFrame)
-        {
-            string normalizedStationId = m_Stations.NormalizeRepresentativeStationId(line, waypoints, stationId);
-            if (string.IsNullOrWhiteSpace(lineId) || string.IsNullOrWhiteSpace(normalizedStationId))
-            {
-                return;
-            }
-
-            string key = StationStateKey(lineId, normalizedStationId);
-            uint busyUntilFrame = nowFrame + m_Access.ClockSnapshot.ToFramesCeil(
-                TriggerConstants.PlatformIdleBusyGraceMinutes);
-            if (!m_StationBusyUntilFrame.TryGetValue(key, out uint existingUntil)
-                || existingUntil < busyUntilFrame)
-            {
-                m_StationBusyUntilFrame[key] = busyUntilFrame;
-            }
-
-            m_StationQuietSinceFrame.Remove(key);
-        }
-
-
         private void WatchApproach(
             Entity vehicle,
             Entity line,
@@ -1795,6 +1521,7 @@ namespace RapidTransitMod.Broadcasting
                     TriggerAtomIndex = triggerAtomIndex,
                     CursorAtomIndex = runtimeContext.Cursor.AtomCursorIndex,
                     TraversalPhaseIndex = runtimeContext.TraversalPhaseIndex,
+                    LastSeenFrame = nowFrame,
                     LastObservedFrame = nowFrame,
                     Triggered = false,
                     StationContext = stationContext
@@ -1806,6 +1533,7 @@ namespace RapidTransitMod.Broadcasting
                 state.TriggerAtomIndex = triggerAtomIndex;
                 state.CursorAtomIndex = runtimeContext.Cursor.AtomCursorIndex;
                 state.TraversalPhaseIndex = runtimeContext.TraversalPhaseIndex;
+                state.LastSeenFrame = nowFrame;
                 state.LastObservedFrame = nowFrame;
                 state.StationContext = stationContext;
             }
@@ -1896,6 +1624,7 @@ namespace RapidTransitMod.Broadcasting
                     TriggerAtomIndex = 1,
                     CursorAtomIndex = 1,
                     TraversalPhaseIndex = TriggerConstants.PlatformPreparingApproachPhaseIndex,
+                    LastSeenFrame = nowFrame,
                     LastObservedFrame = nowFrame,
                     Triggered = false,
                     StationContext = stationContext
@@ -1904,6 +1633,7 @@ namespace RapidTransitMod.Broadcasting
             else
             {
                 state.CursorAtomIndex = 1;
+                state.LastSeenFrame = nowFrame;
                 state.LastObservedFrame = nowFrame;
                 state.StationContext = stationContext;
             }
@@ -1919,30 +1649,6 @@ namespace RapidTransitMod.Broadcasting
             return vehicle != Entity.Null
                 && stationContext.NextStopWaypointIndex == 0
                 && m_Access.VehicleView.IsInbound(vehicle);
-        }
-
-
-        private static string IdleSequenceKey(string lineId, string stationId)
-        {
-            return "platform_idle|" + (lineId ?? string.Empty) + "|" + (stationId ?? string.Empty);
-        }
-
-
-        private static string StationStateKey(string lineId, string stationId)
-        {
-            return (lineId ?? string.Empty) + "|" + (stationId ?? string.Empty);
-        }
-
-        private static bool ScopeMatchesStateKey(ModeScope scope, string key)
-        {
-            if (string.IsNullOrWhiteSpace(key))
-            {
-                return false;
-            }
-
-            int separator = key.IndexOf('|');
-            string lineId = separator >= 0 ? key.Substring(0, separator) : key;
-            return MatchesRuntimeScope(scope, lineId);
         }
 
         private static bool MatchesRuntimeScope(ModeScope scope, string lineId)
@@ -1978,55 +1684,7 @@ namespace RapidTransitMod.Broadcasting
 
         private static string TriggerLabel(string triggerId)
         {
-            return string.Equals(triggerId, TriggerConstants.PlatformApproachTriggerId, StringComparison.Ordinal)
-                ? "即将进站"
-                : "空闲时";
-        }
-
-
-        private bool IsBroadcastPlatformStationIdle(
-            Entity line,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            string stationId)
-        {
-            if (line == Entity.Null || string.IsNullOrWhiteSpace(stationId))
-            {
-                return false;
-            }
-
-            string normalizedStationId = m_Stations.NormalizeRepresentativeStationId(
-                line,
-                waypoints,
-                stationId);
-            string lineId = m_Access.DraftKey(m_Access.LineId(line));
-            if (string.IsNullOrWhiteSpace(normalizedStationId) || string.IsNullOrWhiteSpace(lineId))
-            {
-                return false;
-            }
-
-            uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
-            string key = StationStateKey(lineId, normalizedStationId);
-            if (m_StationBusyUntilFrame.TryGetValue(key, out uint busyUntilFrame)
-                && nowFrame < busyUntilFrame)
-            {
-                m_StationQuietSinceFrame.Remove(key);
-                return false;
-            }
-
-            if (!m_StationQuietSinceFrame.TryGetValue(key, out uint quietSinceFrame))
-            {
-                m_StationQuietSinceFrame[key] = nowFrame;
-                return false;
-            }
-
-            uint quietConfirmFrames = m_Access.ClockSnapshot.ToFramesCeil(
-                TriggerConstants.PlatformIdleQuietConfirmMinutes);
-            if (nowFrame < quietSinceFrame + quietConfirmFrames)
-            {
-                return false;
-            }
-
-            return true;
+            return "即将进站";
         }
 
 

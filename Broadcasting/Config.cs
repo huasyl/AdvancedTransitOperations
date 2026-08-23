@@ -16,18 +16,15 @@ namespace RapidTransitMod.Broadcasting
         internal readonly struct LineFlags
         {
             internal readonly bool HasVehicle;
-            internal readonly bool HasIdle;
             internal readonly bool HasApproach;
 
-            internal LineFlags(bool hasVehicle, bool hasIdle, bool hasApproach)
+            internal LineFlags(bool hasVehicle, bool hasApproach)
             {
                 HasVehicle = hasVehicle;
-                HasIdle = hasIdle;
                 HasApproach = hasApproach;
             }
 
-            internal bool HasPlatform => HasIdle || HasApproach;
-            internal bool Any => HasVehicle || HasPlatform;
+            internal bool Any => HasVehicle || HasApproach;
         }
 
         internal Config(RuntimeConfig source)
@@ -83,7 +80,6 @@ namespace RapidTransitMod.Broadcasting
             bool hasVehicle = RulesByLine.TryGetValue(lineId, out List<BroadcastWorkbenchRuleDto> rules)
                 && rules != null
                 && rules.Exists(rule => rule != null && rule.nodes != null && rule.nodes.Length > 0);
-            bool hasIdle = false;
             bool hasApproach = false;
             if (PlatformsByLine.TryGetValue(
                     lineId,
@@ -102,27 +98,20 @@ namespace RapidTransitMod.Broadcasting
 
                     if (string.Equals(
                             announcement.triggerId,
-                            TriggerConstants.PlatformIdleTriggerId,
-                            System.StringComparison.Ordinal))
-                    {
-                        hasIdle = true;
-                    }
-                    else if (string.Equals(
-                            announcement.triggerId,
                             TriggerConstants.PlatformApproachTriggerId,
                             System.StringComparison.Ordinal))
                     {
                         hasApproach = true;
                     }
 
-                    if (hasIdle && hasApproach)
+                    if (hasApproach)
                     {
                         break;
                     }
                 }
             }
 
-            LineFlags flags = new LineFlags(hasVehicle, hasIdle, hasApproach);
+            LineFlags flags = new LineFlags(hasVehicle, hasApproach);
             m_LineFlags[lineId] = flags;
             return flags;
         }

@@ -55,6 +55,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             LineTimes lineTimes,
             Func<Entity, string> entityName,
             RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe,
+            Func<Entity, bool> isLinePending,
             Func<bool> isBypassRuntimeLoggingEnabled,
             Action<Entity, Entity, Entity, int, uint, string> recordHold,
             Action<Entity, Entity, uint, string> recordRelease,
@@ -93,7 +94,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 lineMileage,
                 lineTimes,
                 entityName,
-                hotPathProbe)
+                hotPathProbe,
+                isLinePending)
         {
             m_IsBypassRuntimeLoggingEnabled = isBypassRuntimeLoggingEnabled;
             m_RecordHold = recordHold;

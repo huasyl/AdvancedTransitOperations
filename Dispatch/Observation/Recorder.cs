@@ -104,7 +104,10 @@ namespace RapidTransitMod.Dispatch.Observation
             trip.LaunchFrame = launchFrame;
             trip.Stops[0].ActualDeparture = EventMinute(clock, serviceDate);
             trip.Stops[0].ActualDepartureFrame = launchFrame;
-            trip.Stops[0].OpenIntervalMaxFrames = clock.ToFramesCeil(1440d);
+            trip.Stops[0].OpenIntervalMaxFrames = m_Port.IsLinePending != null
+                && m_Port.IsLinePending(line)
+                ? 0u
+                : clock.ToFramesCeil(1440d);
             m_Store.ActiveTrips[vehicle] = trip;
             ClearMonitorClaim(vehicle);
             return trip.Key;
@@ -221,6 +224,37 @@ namespace RapidTransitMod.Dispatch.Observation
                 trip.SuppressPlanFrom = Math.Min(trip.SuppressPlanFrom, trip.NextArrivalOrder);
                 trip.UpdatedFrame = frame;
             }
+        }
+
+        internal int InvalidateLineOpenIntervals(Entity line)
+        {
+            if (line == Entity.Null)
+                return 0;
+
+            int invalidated = 0;
+            foreach (MonitorTrip trip in m_Store.ActiveTrips.Values)
+            {
+                if (trip == null || trip.Line != line)
+                    continue;
+                int stopCount = trip.Stops.Count;
+                if (stopCount < 2)
+                    continue;
+
+                int sourceOrder = Math.Max(0, Math.Min(stopCount - 1, trip.NextArrivalOrder - 1));
+                MonitorStop source = trip.Stops[sourceOrder];
+                int targetOrder = sourceOrder + 1 < stopCount ? sourceOrder + 1 : 0;
+                MonitorStop target = trip.Stops[targetOrder];
+                if (source.ActualDeparture < 0
+                    || target.ActualArrival >= 0
+                    || source.OpenIntervalMaxFrames == 0u)
+                {
+                    continue;
+                }
+
+                source.OpenIntervalMaxFrames = 0u;
+                invalidated++;
+            }
+            return invalidated;
         }
 
         internal bool TryVehicleTimes(
@@ -606,7 +640,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 && trip.LastFactArrival == arrival
                 && string.Equals(trip.LastFactStopKey, stopKey, StringComparison.Ordinal))
             {
-                TraceMonitor(trip, vehicle, frame, arrival, stopKey, waypointIndex, null, -1, "reject", "duplicate-fact", trip.SuppressPlanFrom == int.MaxValue);
                 return false;
             }
             DateTime serviceDate = ParseDateKey(trip.ServiceDateKey);
@@ -620,7 +653,6 @@ namespace RapidTransitMod.Dispatch.Observation
                     trip.Stops[0].ActualArrival = minute;
                     trip.Stops[0].ActualArrivalFrame = frame;
                 }
-                TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, trip.Stops[0], 0, "accept", originMatches ? "origin-complete" : "origin-mismatch-complete", false);
                 trip.NextArrivalOrder = trip.Stops.Count;
                 trip.State = MonitorTripState.Completed;
                 trip.UpdatedFrame = frame;
@@ -647,21 +679,17 @@ namespace RapidTransitMod.Dispatch.Observation
                 {
                     if (exactLayout)
                     {
-                        TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, trip.Stops[matched], matched, "reject", "arrival-layout-mismatch", true);
                         return false;
                     }
                     matched++;
                 }
                 if (matched >= trip.Stops.Count || trip.Stops[matched].ActualArrival >= 0)
                 {
-                    MonitorStop expected = matched < trip.Stops.Count ? trip.Stops[matched] : null;
-                    TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, expected, matched, "reject", matched >= trip.Stops.Count ? "arrival-after-plan" : "arrival-duplicate", exactLayout);
                     return false;
                 }
                 trip.Stops[matched].ActualArrival = minute;
                 trip.Stops[matched].ActualArrivalFrame = frame;
                 trip.NextArrivalOrder = matched + 1;
-                TraceMonitor(trip, vehicle, frame, true, stopKey, waypointIndex, trip.Stops[matched], matched, "accept", "arrival", exactLayout);
                 result = new MonitorStopResult(
                     true,
                     trip.Line,
@@ -674,7 +702,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 int matched = Math.Min(trip.NextArrivalOrder - 1, trip.Stops.Count - 1);
                 if (matched < 1)
                 {
-                    TraceMonitor(trip, vehicle, frame, false, stopKey, waypointIndex, null, matched, "reject", "departure-without-arrival", exactLayout);
                     return false;
                 }
                 MonitorStop stop = trip.Stops[matched];
@@ -687,18 +714,14 @@ namespace RapidTransitMod.Dispatch.Observation
                         waypointIndex,
                         exactLayout))
                 {
-                    string reason = stop.ActualArrival < 0
-                        ? "departure-before-arrival"
-                        : stop.ActualDeparture >= 0
-                            ? "departure-duplicate"
-                            : "departure-layout-mismatch";
-                    TraceMonitor(trip, vehicle, frame, false, stopKey, waypointIndex, stop, matched, "reject", reason, exactLayout);
                     return false;
                 }
                 trip.Stops[matched].ActualDeparture = minute;
                 trip.Stops[matched].ActualDepartureFrame = frame;
-                trip.Stops[matched].OpenIntervalMaxFrames = clock.ToFramesCeil(1440d);
-                TraceMonitor(trip, vehicle, frame, false, stopKey, waypointIndex, stop, matched, "accept", "departure", exactLayout);
+                trip.Stops[matched].OpenIntervalMaxFrames = m_Port.IsLinePending != null
+                    && m_Port.IsLinePending(trip.Line)
+                    ? 0u
+                    : clock.ToFramesCeil(1440d);
             }
             trip.UpdatedFrame = frame;
             trip.LastFactStopKey = stopKey;
@@ -837,38 +860,6 @@ namespace RapidTransitMod.Dispatch.Observation
                 && frames > 0u
                 && frames < 0x80000000u
                 && frames <= maxFrames;
-        }
-
-        private void TraceMonitor(
-            MonitorTrip trip,
-            Entity vehicle,
-            uint frame,
-            bool arrival,
-            string stopKey,
-            int waypointIndex,
-            MonitorStop expected,
-            int expectedOrder,
-            string outcome,
-            string reason,
-            bool exactLayout)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-
-            RtLog.Diagnostics(
-                "[StopTraceMonitor] frame=" + frame
-                + " vehicle=" + vehicle.Index
-                + " trip=" + (trip?.Key ?? string.Empty)
-                + " event=" + (arrival ? "arrival" : "departure")
-                + " outcome=" + outcome
-                + " reason=" + reason
-                + " actualKey=" + (stopKey ?? string.Empty)
-                + " actualWp=" + waypointIndex
-                + " expectedOrder=" + expectedOrder
-                + " expectedKey=" + (expected?.StopKey ?? string.Empty)
-                + " expectedWp=" + (expected?.WaypointIndex ?? -1)
-                + " nextOrder=" + (trip?.NextArrivalOrder ?? -1)
-                + " exact=" + (exactLayout ? 1 : 0));
         }
 
         private static bool MatchesMonitorStop(

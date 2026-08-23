@@ -9,6 +9,7 @@ using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Core;
 using RapidTransitMod.Dispatch.Lines;
+using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
@@ -16,6 +17,26 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.Dispatch.Observation
 {
+    internal readonly struct SliceLineClearResult
+    {
+        internal readonly int EndedSessions;
+        internal readonly int RemovedAdmissions;
+        internal readonly int RemovedMemoryObservations;
+        internal readonly int RemovedPersistedObservations;
+
+        internal SliceLineClearResult(
+            int endedSessions,
+            int removedAdmissions,
+            int removedMemoryObservations,
+            int removedPersistedObservations)
+        {
+            EndedSessions = endedSessions;
+            RemovedAdmissions = removedAdmissions;
+            RemovedMemoryObservations = removedMemoryObservations;
+            RemovedPersistedObservations = removedPersistedObservations;
+        }
+    }
+
     internal sealed class ObservationPort
     {
         private const float RailDispatchSampleOutlierFactor = 1.5f;
@@ -86,11 +107,16 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Admission.End(vehicle);
         }
 
-        public void InvalidateSliceLine(Entity line)
+        internal SliceLineClearResult InvalidateSliceLine(Entity line)
         {
-            m_Runtime.m_Slices.RemoveLine(line);
-            m_Admission.InvalidateLine(line);
-            m_Runtime.m_ObsBuffers.RemoveSliceLine(line);
+            int removedMemory = m_Runtime.m_Slices.RemoveLine(line, out int endedSessions);
+            int removedAdmissions = m_Admission.InvalidateLine(line);
+            int removedPersisted = m_Runtime.m_ObsBuffers.RemoveSliceLine(line);
+            return new SliceLineClearResult(
+                endedSessions,
+                removedAdmissions,
+                removedMemory,
+                removedPersisted);
         }
 
         public bool LapTiming(
@@ -568,6 +594,20 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Runtime.m_DispatchCache.RemoveLine(line);
         }
 
+        internal MonitorAverageRemapResult RemapMonitorAverage(
+            Entity line,
+            LineStopLayout newLayout,
+            LineIntervalImpact impact,
+            string oldStopSig)
+        {
+            return m_Averages.RemapLine(line, newLayout, impact, oldStopSig);
+        }
+
+        internal int RemoveMonitorAverage(Entity line)
+        {
+            return m_Averages.RemoveLine(line);
+        }
+
         private bool IsDispatchTimingInvalid(Entity line, uint sampleStart)
         {
             return line != Entity.Null
@@ -898,6 +938,18 @@ namespace RapidTransitMod.Dispatch.Observation
             if (m_Runtime.m_ObsRecorder == null)
                 return;
             m_Runtime.m_ObsRecorder.ReleaseLinePlan(line, frame);
+        }
+
+        internal int InvalidateLineOpenIntervals(Entity line)
+        {
+            return m_Runtime.m_ObsRecorder?.InvalidateLineOpenIntervals(line) ?? 0;
+        }
+
+        internal int SuspendLine(Entity line, out int endedSlices)
+        {
+            int invalidatedSamples = InvalidateLineOpenIntervals(line);
+            endedSlices = m_Admission.SuspendLine(line);
+            return invalidatedSamples;
         }
 
         internal void RestoreMonitorClaims(

@@ -33,7 +33,8 @@ namespace RapidTransitMod.Broadcasting
             internal abstract SelectPanel SelectionPanel { get; }
             internal abstract NativeHashMap<Entity, int> CachedWaypointIndex { get; }
             internal abstract ClockSnapshot ClockSnapshot { get; }
-            internal abstract void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler);
+            internal abstract bool TryViewerPosition(out float3 position);
+            internal abstract bool TryEntityPosition(Entity entity, out float3 position);
 
             internal abstract bool TryRelation(LineTrackChain chain, int waypointIndex, int cursorAtomIndex, out CursorAtomWindowRelation relation, out int startAtomIndex, out int endAtomIndexExclusive);
             internal abstract bool TryChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain);
@@ -79,8 +80,11 @@ namespace RapidTransitMod.Broadcasting
         internal SelectPanel SelectionPanel => m_Host.SelectionPanel;
         internal NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.CachedWaypointIndex;
         internal ClockSnapshot ClockSnapshot => m_Host.ClockSnapshot;
-        internal void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler)
-            => m_Host.SubscribeClockChanged(handler);
+        internal bool TryViewerPosition(out float3 position)
+            => m_Host.TryViewerPosition(out position);
+
+        internal bool TryEntityPosition(Entity entity, out float3 position)
+            => m_Host.TryEntityPosition(entity, out position);
 
         internal bool TryRelation(
             LineTrackChain chain,

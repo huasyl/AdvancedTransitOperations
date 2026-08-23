@@ -14,6 +14,7 @@ using RapidTransitMod.TrackProjection;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using UnityEngine;
 using LineRunningVehicleSnapshot = RapidTransitMod.TrackProjection.LineRunningVehicleSnapshot;
 using LineWaypointIndexLookup = RapidTransitMod.TrackModel.LineWaypointIndexLookup;
 
@@ -56,6 +57,11 @@ namespace RapidTransitMod
         private sealed class RuntimePort : Broadcasting.BroadcastAccess.Host
         {
             private readonly ModRuntimeHostSystem m_Host;
+            private ComponentLookup<Game.Objects.Transform> m_TransformLookup;
+            private float3 m_ViewerPosition;
+            private uint m_PositionFrame;
+            private bool m_PositionFrameReady;
+            private bool m_HasViewerPosition;
 
             internal RuntimePort(ModRuntimeHostSystem host)
             {
@@ -70,8 +76,62 @@ namespace RapidTransitMod
             internal override SelectPanel SelectionPanel => m_Host.m_SelectPanel;
             internal override NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.m_CachedWpIdx;
             internal override ClockSnapshot ClockSnapshot => m_Host.m_SimClock.Snapshot;
-            internal override void SubscribeClockChanged(Action<ClockSnapshot, ClockSnapshot> handler)
-                => m_Host.m_SimClock.ClockChanged += handler;
+
+            internal override bool TryViewerPosition(out float3 position)
+            {
+                if (!TryPreparePositionFrame())
+                {
+                    position = default;
+                    return false;
+                }
+
+                position = m_ViewerPosition;
+                return true;
+            }
+
+            internal override bool TryEntityPosition(Entity entity, out float3 position)
+            {
+                position = default;
+                if (!TryPreparePositionFrame()
+                    || entity == Entity.Null
+                    || !m_TransformLookup.TryGetComponent(
+                        entity,
+                        out Game.Objects.Transform transform))
+                {
+                    return false;
+                }
+
+                position = transform.m_Position;
+                return math.all(math.isfinite(position));
+            }
+
+            private bool TryPreparePositionFrame()
+            {
+                uint frame = m_Host.m_SimulationSystem != null
+                    ? m_Host.m_SimulationSystem.frameIndex
+                    : 0u;
+                if (m_PositionFrameReady && m_PositionFrame == frame)
+                {
+                    return m_HasViewerPosition;
+                }
+
+                m_PositionFrame = frame;
+                m_PositionFrameReady = true;
+                m_HasViewerPosition = false;
+                m_TransformLookup = m_Host.GetComponentLookup<Game.Objects.Transform>(true);
+                if (m_Host.m_CameraUpdateSystem == null
+                    || !m_Host.m_CameraUpdateSystem.TryGetViewer(out var viewer)
+                    || viewer.camera == null
+                    || viewer.camera.transform == null)
+                {
+                    return false;
+                }
+
+                Vector3 cameraPosition = viewer.camera.transform.position;
+                m_ViewerPosition = new float3(cameraPosition.x, cameraPosition.y, cameraPosition.z);
+                m_HasViewerPosition = math.all(math.isfinite(m_ViewerPosition));
+                return m_HasViewerPosition;
+            }
 
             internal override bool TryRelation(
                 LineTrackChain chain,

@@ -31,5 +31,6 @@ namespace RapidTransitMod.Dispatch.Observation
         internal Func<SnapshotDto, string> Json;
         internal Action<string> Log;
         internal Func<ClockSnapshot> ClockSnapshot;
+        internal Func<Entity, bool> IsLinePending;
     }
 }

@@ -71,6 +71,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         public bool Exists => Kind != StopFactKind.None;
     }
 
+    internal enum TimedPlanChangeKind : byte
+    {
+        None = 0,
+        Reprojected = 1,
+        Cleared = 2
+    }
+
     internal readonly struct StopInput
     {
         public readonly Entity Vehicle;
@@ -758,8 +765,18 @@ namespace RapidTransitMod.Dispatch.Runtime
             int[] waypointIndices,
             uint nowFrame)
         {
+            return ReprojectTimedPlanForStructure(vehicle, stopSig, waypointIndices, nowFrame)
+                == TimedPlanChangeKind.Reprojected;
+        }
+
+        internal TimedPlanChangeKind ReprojectTimedPlanForStructure(
+            Entity vehicle,
+            string stopSig,
+            int[] waypointIndices,
+            uint nowFrame)
+        {
             if (!m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan plan))
-                return false;
+                return TimedPlanChangeKind.None;
             if (string.IsNullOrEmpty(stopSig)
                 || !string.Equals(plan.StopSig, stopSig, StringComparison.Ordinal)
                 || waypointIndices == null
@@ -767,13 +784,21 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 ClearTimedPlan(vehicle);
                 QueueExpiredDwell(vehicle, nowFrame);
-                return false;
+                return TimedPlanChangeKind.Cleared;
             }
 
             plan.WaypointIndices = projected;
             if (plan.ActiveStopOrder >= 0)
                 SetTimedDeadline(vehicle, plan, nowFrame, m_Clock());
-            return true;
+            return TimedPlanChangeKind.Reprojected;
+        }
+
+        internal bool ClearTimedPlanForStructure(Entity vehicle)
+        {
+            bool hadPlan = m_State.TimedPlans.ContainsKey(vehicle)
+                || m_State.TimedStopPending.Contains(vehicle);
+            ClearTimedPlan(vehicle);
+            return hadPlan;
         }
 
         internal IEnumerable<TimedPlanSnapshot> TimedPlans()

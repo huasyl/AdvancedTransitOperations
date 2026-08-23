@@ -12,6 +12,7 @@ namespace RapidTransitMod.TrackProjection
         uint Frame { get; }
         NativeHashMap<Entity, int> CachedWaypointIndex { get; }
         TrackModelService TrackModel { get; }
+        bool IsLinePending(Entity line);
 
         BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData;
         void CountNavigationDetailRead();

@@ -12,7 +12,14 @@ namespace RapidTransitMod.TrackModel
         internal bool TryChain(Entity line, out LineTrackChain chain) => m_Store.Get(line, out chain);
         internal void PutChain(Entity line, LineTrackChain chain) => m_Store.Put(line, chain);
         internal bool IsDirty(Entity line) => m_Store.Dirty(line);
-        internal void MarkDirty(Entity line) => m_Store.MarkDirty(line);
+        internal void MarkDirty(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+
+            m_LineTrackChainFrameSnapshots.Remove(line);
+            m_Store.MarkDirty(line);
+        }
 
         internal bool RemoveLine(Entity line, out LineTrackChain chain)
         {

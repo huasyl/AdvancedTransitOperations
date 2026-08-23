@@ -48,6 +48,11 @@ namespace RapidTransitMod.TrackProjection
             LineRunningVehicleFrameSnapshots.Clear();
         }
 
+        internal bool ClearLineRunningVehicleSnapshots(Entity line)
+        {
+            return line != Entity.Null && LineRunningVehicleFrameSnapshots.Remove(line);
+        }
+
         internal bool TryGetLineRunningVehicleFrameSnapshot(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
@@ -56,6 +61,8 @@ namespace RapidTransitMod.TrackProjection
         {
             snapshot = null;
             if (line == Entity.Null || waypoints.Length == 0)
+                return false;
+            if (m_Runtime.IsLinePending(line))
                 return false;
 
             if (LineRunningVehicleFrameSnapshots.TryGetValue(line, out snapshot)
@@ -80,7 +87,8 @@ namespace RapidTransitMod.TrackProjection
             snapshot.Line = line;
             snapshot.Vehicles.Clear();
 
-            bool hasTrackChain = m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain trackChain);
+            bool hasTrackChain = m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain trackChain)
+                && !m_Runtime.IsLinePending(line);
 
             for (int i = 0; i < routeVehicles.Length; i++)
             {
@@ -137,6 +145,12 @@ namespace RapidTransitMod.TrackProjection
 
         internal bool TrySnapshot(Entity vehicle, Entity line, ulong chainSignature, uint frame, out VehicleTrackCursor cursor)
         {
+            if (m_Runtime.IsLinePending(line))
+            {
+                cursor = default;
+                return false;
+            }
+
             return m_Cursors.TrySnapshot(vehicle, line, chainSignature, frame, out cursor);
         }
 
@@ -151,6 +165,16 @@ namespace RapidTransitMod.TrackProjection
             ClearVehicleProgressSuspect(vehicle);
             m_Cursors.Remove(vehicle);
             m_Facts.Remove(vehicle);
+        }
+
+        internal bool ClearVehicleForStructure(Entity vehicle)
+        {
+            bool hadProjection = m_Facts.ContainsKey(vehicle)
+                || m_Cursors.TryCursor(vehicle, out _);
+            ClearVehicleProgressSuspect(vehicle);
+            m_Cursors.Remove(vehicle);
+            m_Facts.Remove(vehicle);
+            return hadProjection;
         }
 
         internal void MarkVehicleProgressSuspect(Entity vehicle, string reason) => m_ProgressCheck.MarkVehicleProgressSuspect(vehicle, reason);
@@ -713,7 +737,10 @@ namespace RapidTransitMod.TrackProjection
             out VehicleTrackCursor cursor)
         {
             cursor = default;
+            if (m_Runtime.IsLinePending(line))
+                return false;
             if (!m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
+                || m_Runtime.IsLinePending(line)
                 || chain.SegmentRanges.Count == 0)
             {
                 return false;
@@ -730,7 +757,8 @@ namespace RapidTransitMod.TrackProjection
             out VehicleTrackCursor cursor)
         {
             cursor = default;
-            if (chain == null || chain.SegmentRanges.Count == 0)
+            if (m_Runtime.IsLinePending(line)
+                || chain == null || chain.SegmentRanges.Count == 0)
                 return false;
 
             if (TryResolveTrainCurrentLaneCursor(
@@ -885,7 +913,7 @@ namespace RapidTransitMod.TrackProjection
             out VehicleTrackCursor cursor)
         {
             cursor = default;
-            if (vehicle == Entity.Null || line == Entity.Null || chain == null)
+            if (vehicle == Entity.Null || line == Entity.Null || m_Runtime.IsLinePending(line) || chain == null)
                 return false;
 
             uint nowFrame = m_Runtime.Frame;
@@ -911,7 +939,7 @@ namespace RapidTransitMod.TrackProjection
             out VehicleTrackFacts facts)
         {
             facts = default;
-            if (vehicle == Entity.Null || line == Entity.Null || chain == null)
+            if (vehicle == Entity.Null || line == Entity.Null || m_Runtime.IsLinePending(line) || chain == null)
                 return false;
 
             uint nowFrame = m_Runtime.Frame;
@@ -1058,7 +1086,9 @@ namespace RapidTransitMod.TrackProjection
             out TrackModelRuntimePosition runtimePosition)
         {
             runtimePosition = default;
-            if (!m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
+            if (m_Runtime.IsLinePending(line)
+                || !m_Runtime.TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain)
+                || m_Runtime.IsLinePending(line)
                 || !TryFacts(vehicle, line, waypoints, chain, out VehicleTrackFacts facts))
             {
                 return false;

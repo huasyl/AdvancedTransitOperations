@@ -44,13 +44,14 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Restored.Clear();
         }
 
-        internal void Remove(Entity vehicle)
+        internal bool Remove(Entity vehicle)
         {
-            m_StartOdo.Remove(vehicle);
-            m_Distance.Remove(vehicle);
-            m_StartFrame.Remove(vehicle);
-            m_Frames.Remove(vehicle);
-            m_Restored.Remove(vehicle);
+            bool removed = m_StartOdo.Remove(vehicle);
+            removed |= m_Distance.Remove(vehicle);
+            removed |= m_StartFrame.Remove(vehicle);
+            removed |= m_Frames.Remove(vehicle);
+            removed |= m_Restored.Remove(vehicle);
+            return removed;
         }
 
         internal void Start(Entity vehicle, float odometer, uint frame)

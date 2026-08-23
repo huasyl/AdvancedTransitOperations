@@ -1,17 +1,39 @@
+using System;
+using System.Collections.Generic;
+using Colossal.Serialization.Entities;
 using Game;
 using Game.Common;
 using Game.Pathfind;
 using Game.Routes;
+using Game.Serialization;
 using Game.Simulation;
 using Unity.Collections;
 using Unity.Entities;
 
 namespace RapidTransitMod
 {
-    public sealed partial class RtManagedVehicleRequestSystem : GameSystemBase
+    public sealed partial class RtManagedVehicleRequestSystem : GameSystemBase, IPreSerialize
     {
         private EntityQuery m_LineQuery;
+        private EntityQuery m_SentinelQuery;
         private EntityQuery m_SpawnPermitQuery;
+        private readonly List<SaveRestoreRecord> m_SaveRestoreRecords = new List<SaveRestoreRecord>();
+
+        private enum SaveRestoreKind
+        {
+            Sentinel,
+            SpawnPermit
+        }
+
+        private struct SaveRestoreRecord
+        {
+            public Entity Line;
+            public SaveRestoreKind Kind;
+            public Entity OriginalRequest;
+            public bool LineReferenceCleared;
+            public bool RequestDestroyed;
+            public Entity RestoredRequest;
+        }
 
         public override int GetUpdateInterval(SystemUpdatePhase phase)
         {
@@ -24,10 +46,118 @@ namespace RapidTransitMod
             m_LineQuery = GetEntityQuery(
                 ComponentType.ReadWrite<TransportLine>(),
                 ComponentType.Exclude<Deleted>());
+            m_SentinelQuery = GetEntityQuery(
+                ComponentType.ReadOnly<RtVehicleRequestSentinel>(),
+                ComponentType.ReadOnly<TransportVehicleRequest>(),
+                ComponentType.Exclude<Deleted>());
             m_SpawnPermitQuery = GetEntityQuery(
                 ComponentType.ReadOnly<RtSpawnPermitRequest>(),
                 ComponentType.ReadOnly<TransportVehicleRequest>(),
                 ComponentType.Exclude<Deleted>());
+        }
+
+        public void PreSerialize(Context context)
+        {
+            PrepareForSave();
+        }
+
+        internal void RestoreAfterSave()
+        {
+            int recordCount = m_SaveRestoreRecords.Count;
+            if (recordCount == 0)
+            {
+                Mod.log.Info("[RtRequestSave] 写入后恢复完成 记录=0 已恢复=0 已重新许可=0 跳过=0 失败=0");
+                return;
+            }
+
+            int restoredCount = 0;
+            int promotedCount = 0;
+            int skippedCount = 0;
+            int failedCount = 0;
+
+            try
+            {
+                LifecyclePort lifecycle = LifecyclePort.Current;
+                ManagedRequestPort managedRequests = lifecycle != null ? lifecycle.ManagedRequests : null;
+                if (managedRequests == null)
+                    Mod.log.Info("[RtRequestSave] 生命周期端口不可用，按保存事务所有权只恢复哨兵，不重新提升许可");
+
+                for (int i = 0; i < m_SaveRestoreRecords.Count; i++)
+                {
+                    SaveRestoreRecord record = m_SaveRestoreRecords[i];
+                    try
+                    {
+                        record.RestoredRequest = RestoreRequestRecord(managedRequests, record);
+                        if (record.RestoredRequest != Entity.Null)
+                            restoredCount++;
+                        else
+                            skippedCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failedCount++;
+                        Mod.log.Info("[RtRequestSave] 哨兵恢复失败 line=" + record.Line.Index
+                            + " kind=" + record.Kind + " -> " + ex.GetType().Name + ": " + ex.Message);
+                    }
+
+                    m_SaveRestoreRecords[i] = record;
+                }
+
+                if (managedRequests == null)
+                    return;
+
+                NativeHashSet<Entity> spawnPermitLines = default;
+                try
+                {
+                    spawnPermitLines = BuildSpawnPermitLineSet();
+                    for (int i = 0; i < m_SaveRestoreRecords.Count; i++)
+                    {
+                        SaveRestoreRecord record = m_SaveRestoreRecords[i];
+                        if (record.Kind != SaveRestoreKind.SpawnPermit
+                            || record.RestoredRequest == Entity.Null
+                            || !IsLiveRequest(record.RestoredRequest)
+                            || !EntityManager.HasComponent<RtVehicleRequestSentinel>(record.RestoredRequest))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            if (ShouldPromoteSentinel(managedRequests, record.Line, spawnPermitLines))
+                            {
+                                PromoteSentinelToSpawnPermit(record.RestoredRequest, record.Line);
+                                promotedCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            failedCount++;
+                            Mod.log.Info("[RtRequestSave] 许可恢复失败 line=" + record.Line.Index
+                                + " -> " + ex.GetType().Name + ": " + ex.Message);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failedCount++;
+                    Mod.log.Info("[RtRequestSave] 写入后重建许可集合失败 -> "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
+                finally
+                {
+                    if (spawnPermitLines.IsCreated)
+                        spawnPermitLines.Dispose();
+                }
+            }
+            finally
+            {
+                Mod.log.Info("[RtRequestSave] 写入后恢复完成 记录=" + recordCount
+                    + " 已恢复=" + restoredCount
+                    + " 已重新许可=" + promotedCount
+                    + " 跳过=" + skippedCount
+                    + " 失败=" + failedCount);
+                m_SaveRestoreRecords.Clear();
+            }
         }
 
         protected override void OnUpdate()
@@ -88,6 +218,214 @@ namespace RapidTransitMod
                         PromoteSentinelToSpawnPermit(sentinel, line);
                 }
             }
+        }
+
+        private void PrepareForSave()
+        {
+            m_SaveRestoreRecords.Clear();
+            try
+            {
+                m_LineQuery.CompleteDependency();
+                m_SentinelQuery.CompleteDependency();
+                m_SpawnPermitQuery.CompleteDependency();
+
+                using (NativeArray<Entity> sentinels = m_SentinelQuery.ToEntityArray(Allocator.Temp))
+                {
+                    for (int i = 0; i < sentinels.Length; i++)
+                        TryCleanRequestBeforeSave(sentinels[i], SaveRestoreKind.Sentinel);
+                }
+
+                using (NativeArray<Entity> permits = m_SpawnPermitQuery.ToEntityArray(Allocator.Temp))
+                {
+                    for (int i = 0; i < permits.Length; i++)
+                        TryCleanRequestBeforeSave(permits[i], SaveRestoreKind.SpawnPermit);
+                }
+            }
+            finally
+            {
+                int sentinelCount = 0;
+                int permitCount = 0;
+                int destroyedCount = 0;
+                for (int i = 0; i < m_SaveRestoreRecords.Count; i++)
+                {
+                    SaveRestoreRecord record = m_SaveRestoreRecords[i];
+                    if (record.Kind == SaveRestoreKind.Sentinel)
+                        sentinelCount++;
+                    else
+                        permitCount++;
+                    if (record.RequestDestroyed)
+                        destroyedCount++;
+                }
+
+                Mod.log.Info("[RtRequestSave] 保存前清理完成 记录=" + m_SaveRestoreRecords.Count
+                    + " 哨兵=" + sentinelCount
+                    + " 早期许可=" + permitCount
+                    + " 已销毁=" + destroyedCount
+                    + " 未完成=" + (m_SaveRestoreRecords.Count - destroyedCount));
+            }
+        }
+
+        private void TryCleanRequestBeforeSave(Entity request, SaveRestoreKind kind)
+        {
+            try
+            {
+                if (request == Entity.Null
+                    || !EntityManager.Exists(request)
+                    || EntityManager.HasComponent<Deleted>(request))
+                {
+                    LogSaveCandidateRejected(request, Entity.Null, kind, "请求实体不存在或已删除");
+                    return;
+                }
+
+                if (!EntityManager.HasComponent<TransportVehicleRequest>(request))
+                {
+                    LogSaveCandidateRejected(request, Entity.Null, kind, "缺少 TransportVehicleRequest");
+                    return;
+                }
+
+                if (EntityManager.HasComponent<PathInformation>(request)
+                    || EntityManager.HasComponent<Dispatched>(request))
+                {
+                    return;
+                }
+
+                if (kind == SaveRestoreKind.Sentinel
+                    && !EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
+                {
+                    return;
+                }
+
+                if (kind == SaveRestoreKind.SpawnPermit
+                    && !EntityManager.HasComponent<RtSpawnPermitRequest>(request))
+                {
+                    return;
+                }
+
+                Entity line = EntityManager.GetComponentData<TransportVehicleRequest>(request).m_Route;
+                if (line == Entity.Null
+                    || !EntityManager.Exists(line)
+                    || EntityManager.HasComponent<Deleted>(line)
+                    || !EntityManager.HasComponent<TransportLine>(line))
+                {
+                    LogSaveCandidateRejected(request, line, kind, "线路实体不存在、已删除或缺少 TransportLine");
+                    return;
+                }
+
+                TransportLine transportLine = EntityManager.GetComponentData<TransportLine>(line);
+                if (transportLine.m_VehicleRequest != request)
+                {
+                    LogSaveCandidateRejected(request, line, kind, "线路请求引用不精确指向候选实体");
+                    return;
+                }
+
+                int recordIndex = m_SaveRestoreRecords.Count;
+                m_SaveRestoreRecords.Add(new SaveRestoreRecord
+                {
+                    Line = line,
+                    Kind = kind,
+                    OriginalRequest = request,
+                    LineReferenceCleared = false,
+                    RequestDestroyed = false,
+                    RestoredRequest = Entity.Null
+                });
+
+                transportLine.m_VehicleRequest = Entity.Null;
+                EntityManager.SetComponentData(line, transportLine);
+                SaveRestoreRecord clearedRecord = m_SaveRestoreRecords[recordIndex];
+                clearedRecord.LineReferenceCleared = true;
+                m_SaveRestoreRecords[recordIndex] = clearedRecord;
+                EntityManager.DestroyEntity(request);
+                SaveRestoreRecord destroyedRecord = m_SaveRestoreRecords[recordIndex];
+                destroyedRecord.RequestDestroyed = true;
+                m_SaveRestoreRecords[recordIndex] = destroyedRecord;
+            }
+            catch (Exception ex)
+            {
+                string state = string.Empty;
+                int lastRecordIndex = m_SaveRestoreRecords.Count - 1;
+                if (lastRecordIndex >= 0
+                    && m_SaveRestoreRecords[lastRecordIndex].OriginalRequest == request)
+                {
+                    SaveRestoreRecord record = m_SaveRestoreRecords[lastRecordIndex];
+                    state = " lineReferenceCleared=" + record.LineReferenceCleared
+                        + " requestDestroyed=" + record.RequestDestroyed;
+                }
+
+                Mod.log.Info("[RtRequestSave] 保存前清理失败 request=" + request.Index
+                    + " kind=" + kind + state + " -> " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private Entity RestoreRequestRecord(
+            ManagedRequestPort managedRequests,
+            SaveRestoreRecord record)
+        {
+            Entity line = record.Line;
+            SaveRestoreKind kind = record.Kind;
+            if (line == Entity.Null
+                || !EntityManager.Exists(line)
+                || EntityManager.HasComponent<Deleted>(line)
+                || !EntityManager.HasComponent<TransportLine>(line))
+            {
+                Mod.log.Info("[RtRequestSave] 哨兵恢复跳过 line=" + line.Index
+                    + " kind=" + kind + "：线路不存在或已删除");
+                return Entity.Null;
+            }
+
+            TransportLine transportLine = EntityManager.GetComponentData<TransportLine>(line);
+            Entity originalRequest = record.OriginalRequest;
+            if (IsLiveRequest(originalRequest))
+            {
+                if (!EntityManager.HasComponent<TransportVehicleRequest>(originalRequest)
+                    || EntityManager.GetComponentData<TransportVehicleRequest>(originalRequest).m_Route != line)
+                {
+                    Mod.log.Info("[RtRequestSave] 原请求仍存活但线路不匹配，拒绝新建请求 line=" + line.Index
+                        + " kind=" + kind + " request=" + originalRequest.Index);
+                    return Entity.Null;
+                }
+
+                if (transportLine.m_VehicleRequest == originalRequest)
+                    return originalRequest;
+
+                if (IsLiveRequest(transportLine.m_VehicleRequest))
+                {
+                    Mod.log.Info("[RtRequestSave] 原请求仍存活且线路已有其他请求，拒绝新建请求 line="
+                        + line.Index + " kind=" + kind + " request=" + originalRequest.Index);
+                    return Entity.Null;
+                }
+
+                transportLine.m_VehicleRequest = originalRequest;
+                EntityManager.SetComponentData(line, transportLine);
+                Mod.log.Info("[RtRequestSave] 已回接保存前仍存活的原请求 line=" + line.Index
+                    + " kind=" + kind + " request=" + originalRequest.Index);
+                return originalRequest;
+            }
+
+            if (IsLiveRequest(transportLine.m_VehicleRequest))
+            {
+                Mod.log.Info("[RtRequestSave] 哨兵恢复跳过 line=" + line.Index
+                    + " kind=" + kind + "：线路已有有效请求");
+                return Entity.Null;
+            }
+
+            if (managedRequests != null && !managedRequests.IsManagedLine(line))
+            {
+                Mod.log.Info("[RtRequestSave] 哨兵恢复跳过 line=" + line.Index
+                    + " kind=" + kind + "：线路不再受模组管理");
+                return Entity.Null;
+            }
+
+            return InstallParkedSentinel(line);
+        }
+
+        private void LogSaveCandidateRejected(
+            Entity request,
+            Entity line,
+            SaveRestoreKind kind,
+            string reason)
+        {
+            Mod.log.Info("[RtRequestSave] 保存前保留候选 request=" + request.Index
+                + " line=" + line.Index + " kind=" + kind + "：" + reason);
         }
 
         private NativeHashSet<Entity> BuildSpawnPermitLineSet()

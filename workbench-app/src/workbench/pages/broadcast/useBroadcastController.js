@@ -7,7 +7,6 @@ import {
   TRIGGER_OPTIONS,
   PLATFORM_TRIGGER_OPTIONS,
   RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS,
-  RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS,
   LINE_OPTIONS,
   TAB_TRANSITION_MS,
   PAGE_ENTER_ANIMATION_MS,
@@ -52,9 +51,7 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
   const platformTriggerOptions = useMemo(
     () =>
       supportsPlatforms
-        ? PLATFORM_TRIGGER_OPTIONS.filter(
-            (option) => !RELEASE_HIDDEN_PLATFORM_TRIGGER_IDS.includes(option.id),
-          ).map((option) => ({ ...option, label: t(option.labelKey) }))
+        ? PLATFORM_TRIGGER_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) }))
         : [],
     [supportsPlatforms, t],
   );
@@ -776,11 +773,10 @@ export default function useBroadcastController({ pageEnterSequence = 0, activeTr
                 title: typeof entry?.title === "string" ? entry.title : "",
                 uiTriggerId: resolvePlatformUiTriggerId(entry?.uiTriggerId || entry?.triggerId),
                 enabled: Boolean(entry?.enabled),
-                triggerId: typeof entry?.triggerId === "string" ? entry.triggerId : "platform_idle_clear",
-                cooldownGameMinutes: Number.isFinite(Number(entry?.cooldownGameMinutes)) ? Number(entry.cooldownGameMinutes) : 20,
+                triggerId: resolvePlatformRuntimeTriggerId(entry?.uiTriggerId || entry?.triggerId),
                 nodes: Array.isArray(entry?.nodes) ? entry.nodes.map(normalizeRuleNode).filter((node) => node && node.id) : [],
               }))
-              .filter((entry) => entry.stationId)
+              .filter((entry) => entry.stationId && entry.uiTriggerId)
           : [],
       );
     }

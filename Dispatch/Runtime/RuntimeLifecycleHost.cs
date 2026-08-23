@@ -54,6 +54,17 @@ namespace RapidTransitMod.Dispatch.Runtime
                 throw;
             }
 
+            try
+            {
+                m_Runtime.m_LineStructureInvalidator.RestorePending(
+                    m_Runtime.m_LineStructurePendingStore.Restore());
+            }
+            catch (Exception ex)
+            {
+                m_Runtime.log.Info("[LineStructurePending] Restore failed -> "
+                    + ex.GetType().Name + ": " + ex.Message);
+            }
+
             // 阶段 B（后半，Reset 类）——保持原位，不动迁移语义。
             ResetCityBufferReadyFlags();
             m_Runtime.m_CommandApplier.ResetRetireDispatchLockStages();
@@ -202,6 +213,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearAll()
         {
+            m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
             m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_SpawnLeadTheory?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
@@ -276,6 +288,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearTracking()
         {
+            m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
             m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
             m_Runtime.m_Observation.ClearDispatchEta();

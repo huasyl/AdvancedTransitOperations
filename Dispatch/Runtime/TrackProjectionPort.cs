@@ -21,6 +21,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly LineMileage m_LineMileage;
         private readonly Func<Entity, bool> m_IsVehicleBoarding;
         private readonly RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe m_HotPathProbe;
+        private readonly Func<Entity, bool> m_IsLinePending;
 
         internal TrackProjectionPort(
             EntityManager entityManager,
@@ -33,7 +34,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             VehicleView vehicleView,
             LineMileage lineMileage,
             Func<Entity, bool> isVehicleBoarding,
-            RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe)
+            RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe,
+            Func<Entity, bool> isLinePending)
         {
             m_EntityManager = entityManager;
             m_Log = log;
@@ -46,6 +48,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_LineMileage = lineMileage;
             m_IsVehicleBoarding = isVehicleBoarding;
             m_HotPathProbe = hotPathProbe;
+            m_IsLinePending = isLinePending;
         }
 
         EntityManager ITrackProjectionRuntimeContext.EntityManager => m_EntityManager;
@@ -53,6 +56,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         uint ITrackProjectionRuntimeContext.Frame => m_Frame();
         NativeHashMap<Entity, int> ITrackProjectionRuntimeContext.CachedWaypointIndex => m_CachedWaypointIndex();
         TrackModelService ITrackProjectionRuntimeContext.TrackModel => m_TrackModel;
+        bool ITrackProjectionRuntimeContext.IsLinePending(Entity line) => m_IsLinePending != null && m_IsLinePending(line);
 
         void ITrackProjectionRuntimeContext.CountNavigationDetailRead() => m_HotPathProbe.CountNavigationDetailRead();
 

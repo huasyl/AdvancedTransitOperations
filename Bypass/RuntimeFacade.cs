@@ -70,10 +70,10 @@ namespace RapidTransitMod.Bypass
             m_Runtime.TrackModel.ClearAllStaticCaches();
         }
 
-        internal void ClearLine(Entity line)
+        internal int ClearLine(Entity line)
         {
             if (line == Entity.Null)
-                return;
+                return 0;
 
             List<Entity> yieldVehiclesToRelease = m_Admission.ReleaseLine(line, m_Runtime.ResolveLine);
             m_Admission.ClearWatchLine(line);
@@ -84,7 +84,7 @@ namespace RapidTransitMod.Bypass
             }
 
             m_Admission.ClearLineStaticCaches(line);
-            m_Admission.InvalidateStaticSceneIndex();
+            m_Admission.InvalidateStaticSceneIndex(line);
             m_Runtime.TrackModel.ClearStaticCachesForLine(line);
             if (RtLog.CacheInvalidationDiagnosticsEnabled)
             {
@@ -94,8 +94,24 @@ namespace RapidTransitMod.Bypass
                     + " releasedVehicles=" + releasedVehicleCount
                     + " clearAdmissionStaticCaches=1"
                     + " invalidateStaticSceneIndex=1"
-                    + " clearStaticCachesForLine=1");
+                        + " clearStaticCachesForLine=1");
             }
+            return yieldVehiclesToRelease != null ? yieldVehiclesToRelease.Count : 0;
+        }
+
+        internal int ReleaseLineForPending(Entity line)
+        {
+            if (line == Entity.Null)
+                return 0;
+
+            List<Entity> releasedVehicles = m_Admission.ReleaseLine(line, m_Runtime.ResolveLine);
+            m_Admission.ClearWatchLine(line);
+            if (releasedVehicles == null)
+                return 0;
+
+            for (int i = 0; i < releasedVehicles.Count; i++)
+                ClearVehicle(releasedVehicles[i], "线路结构等待");
+            return releasedVehicles.Count;
         }
 
         internal List<Entity> ForgetBlocker(Entity blocker)
@@ -170,6 +186,21 @@ namespace RapidTransitMod.Bypass
             bool boarding,
             uint nowFrame)
         {
+            if (m_Runtime.IsLinePending(line))
+            {
+                ClearVehicle(vehicle, "线路结构等待");
+                return new BypassControlResult(
+                    false,
+                    vehicle,
+                    line,
+                    waypointIndex,
+                    false,
+                    false,
+                    Entity.Null,
+                    true,
+                    null);
+            }
+
             return m_Control.Update(
                 vehicle,
                 line,

@@ -77,6 +77,8 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal void ClearLap(Entity vehicle) => m_Laps.Remove(vehicle);
 
+        internal bool ClearLapForStructure(Entity vehicle) => m_Laps.Remove(vehicle);
+
         internal void ClearDwell(Entity vehicle) => m_Dwell.Remove(vehicle);
 
         internal void ClearVehicleSlices(Entity vehicle) => m_Slices.Remove(vehicle);

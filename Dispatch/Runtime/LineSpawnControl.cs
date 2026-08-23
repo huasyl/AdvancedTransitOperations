@@ -113,7 +113,7 @@ namespace RapidTransitMod
                     m_Runtime.m_LineProfile.RemoveStability(lineStableKeys[i]);
                     m_Runtime.m_LineInitialAdopted.Remove(lineStableKeys[i]);
                     m_Runtime.TrackModel.InvalidateLine(lineStableKeys[i]);
-                    m_Runtime.m_LineTimes.Clear();
+                    m_Runtime.m_LineTimes.InvalidateLine(lineStableKeys[i]);
                 }
                 lineStableKeys.Dispose();
 

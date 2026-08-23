@@ -4,6 +4,36 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
+    [InternalBufferCapacity(16)]
+    public struct PendingLineStructureElement : IBufferElementData, ISerializable
+    {
+        public int m_Version;
+        public Entity m_LineEntity;
+        public FixedString128Bytes m_LineId;
+        public FixedString128Bytes m_OldStopSig;
+        public byte m_MissingOldBaseline;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_Version);
+            writer.Write(m_LineEntity);
+            writer.Write(m_LineId.ToString());
+            writer.Write(m_OldStopSig.ToString());
+            writer.Write(m_MissingOldBaseline);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out m_Version);
+            reader.Read(out m_LineEntity);
+            reader.Read(out string lineId);
+            reader.Read(out string oldStopSig);
+            reader.Read(out m_MissingOldBaseline);
+            m_LineId = lineId ?? string.Empty;
+            m_OldStopSig = oldStopSig ?? string.Empty;
+        }
+    }
+
     [InternalBufferCapacity(64)]
     public struct VehicleStateCacheElement : IBufferElementData, ISerializable
     {

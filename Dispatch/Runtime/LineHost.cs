@@ -51,6 +51,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public TryLineLapStartFrame TryLapStartFrame = null!;
         public TryLineBusSegFrames TryBusSegFrames = null!;
         public Func<Entity, TransitMode> ResolveMode = null!;
+        public Func<Entity, bool> IsLinePending = null!;
     }
 
     internal sealed class LineMileagePort

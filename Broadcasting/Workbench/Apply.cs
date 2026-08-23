@@ -193,14 +193,14 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 }
 
                 ValidateStationId(source.stationId, validStationIds);
-                BroadcastWorkbenchPlatformAnnouncementDto normalized = Platforms.Normalize(
-                    line.LineId,
-                    source.stationId,
-                    source.stationName,
-                    source.title,
-                    source.uiTriggerId,
-                    source.enabled,
-                    source.nodes);
+                if (!Platforms.TryNormalizeApply(
+                        line.LineId,
+                        source,
+                        out BroadcastWorkbenchPlatformAnnouncementDto normalized))
+                {
+                    throw new InvalidOperationException(
+                        "Only approach_station platform announcements are supported.");
+                }
                 ValidateRuleAssetNodes(normalized.nodes);
                 platforms[Platforms.Key(normalized.stationId, normalized.uiTriggerId)] = normalized;
             }
@@ -374,7 +374,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                 new Dictionary<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>>(StringComparer.Ordinal);
             foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> entry in source)
             {
-                clone[entry.Key] = Platforms.CloneLine(entry.Value);
+                Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> line = Platforms.CloneLine(entry.Value);
+                if (line.Count > 0)
+                {
+                    clone[entry.Key] = line;
+                }
             }
 
             return clone;
@@ -412,7 +416,11 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
             target.Clear();
             foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> entry in source)
             {
-                target[entry.Key] = Platforms.CloneLine(entry.Value);
+                Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> line = Platforms.CloneLine(entry.Value);
+                if (line.Count > 0)
+                {
+                    target[entry.Key] = line;
+                }
             }
         }
 

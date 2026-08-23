@@ -238,7 +238,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     TryLapStartFrame = (Entity vehicle, out uint lapStartFrame) => runtime.m_Observation.TryLapStartFrame(vehicle, out lapStartFrame),
                     TryBusSegFrames = (Entity line, Entity fromWaypoint, Entity fromStop, Entity toWaypoint, Entity toStop, out float frames) =>
                         runtime.m_Observation.TryBusSegFrames(line, fromWaypoint, fromStop, toWaypoint, toStop, out frames),
-                    ResolveMode = line => TransportModeResolver.Resolve(runtime.EntityManager, line)
+                    ResolveMode = line => TransportModeResolver.Resolve(runtime.EntityManager, line),
+                    IsLinePending = runtime.m_LineStructureInvalidator.IsLinePending
                 },
                 Mileage = new LineMileagePort
                 {
@@ -273,7 +274,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_VehicleView,
                 runtime.m_LineMileage,
                 runtime.IsVehicleBoarding,
-                runtime.m_RuntimeHotPathProbe);
+                runtime.m_RuntimeHotPathProbe,
+                runtime.m_LineStructureInvalidator.IsLinePending);
         }
 
         public static BypassAdmissionPort BuildBypassAdmission(ModRuntimeHostSystem runtime)
@@ -303,7 +305,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_LineMileage,
                 runtime.m_LineTimes,
                 runtime.EntityName,
-                runtime.m_RuntimeHotPathProbe);
+                runtime.m_RuntimeHotPathProbe,
+                runtime.m_LineStructureInvalidator.IsLinePending);
         }
 
         public static BypassRuntimePort BuildBypassRuntime(ModRuntimeHostSystem runtime)
@@ -334,6 +337,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_LineTimes,
                 runtime.EntityName,
                 runtime.m_RuntimeHotPathProbe,
+                runtime.m_LineStructureInvalidator.IsLinePending,
                 ModRuntimeHostSystem.IsBypassRuntimeLoggingEnabled,
                 (vehicle, blocker, station, waypointIndex, frame, reason) =>
                 {
@@ -433,7 +437,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 TryFlushDailyQuota = runtime.m_ObsBuffers.TryFlushDailyQuota,
                 TryFlushColdStart = runtime.m_ObsBuffers.TryFlushColdStart,
                 RemoveColdStart = runtime.m_ObsBuffers.RemoveColdStart,
-                Log = message => runtime.log.Info(message)
+                Log = message => runtime.log.Info(message),
+                IsLinePending = runtime.m_LineStructureInvalidator.IsLinePending
             };
         }
 
@@ -467,7 +472,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Slot = RapidTransitMod.Dispatch.Workbench.Time.Slot,
                 Json = Workbenches.Json.Write,
                 Log = message => runtime.log.Info(message),
-                ClockSnapshot = () => runtime.m_SimClock.Snapshot
+                ClockSnapshot = () => runtime.m_SimClock.Snapshot,
+                IsLinePending = runtime.m_LineStructureInvalidator.IsLinePending
             };
         }
     }

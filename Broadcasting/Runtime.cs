@@ -1,6 +1,7 @@
 using System;
 using Game.Routes;
 using Unity.Entities;
+using Unity.Mathematics;
 using WorkbenchBackendService = RapidTransitMod.Broadcasting.WorkbenchBackend.Workbench;
 
 namespace RapidTransitMod.Broadcasting
@@ -81,11 +82,6 @@ namespace RapidTransitMod.Broadcasting
             m_Platforms.Preparing(vehicle, line, waypoints, atOrigin, nowFrame);
         }
 
-        internal void Origin(Entity line, DynamicBuffer<RouteWaypoint> waypoints, bool busy)
-        {
-            m_Platforms.Origin(line, waypoints, busy);
-        }
-
         internal void StateChanged(
             Entity vehicle,
             VehicleState previousState,
@@ -114,7 +110,16 @@ namespace RapidTransitMod.Broadcasting
             }
 
             bool vehicleTracked = flags.HasVehicle && m_Vehicles.ShouldPlay(vehicle);
-            bool needsContext = vehicleTracked || flags.HasPlatform;
+            bool platformNear = true;
+            if (flags.HasApproach
+                && m_Access.TryViewerPosition(out float3 viewerPosition)
+                && m_Access.TryEntityPosition(vehicle, out float3 vehiclePosition))
+            {
+                platformNear = math.distancesq(viewerPosition, vehiclePosition)
+                    <= TriggerConstants.PlatformVehicleCullDistanceSquared;
+            }
+
+            bool needsContext = vehicleTracked || (flags.HasApproach && platformNear);
             FrameContext context = default;
             bool hasContext = needsContext
                 && FrameContexts.TryBuild(
@@ -130,9 +135,9 @@ namespace RapidTransitMod.Broadcasting
                 vehicle,
                 line,
                 waypoints,
-                boarding,
                 flags,
-                hasContext,
+                platformNear,
+                hasContext && platformNear,
                 context);
             m_Vehicles.Running(
                 vehicle,

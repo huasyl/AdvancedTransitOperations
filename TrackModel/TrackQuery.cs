@@ -21,7 +21,19 @@ namespace RapidTransitMod.TrackModel
 
         internal bool TryChain(Entity line, out LineTrackChain chain)
         {
-            return m_State.TryChain(line, out chain);
+            if (!m_State.TryChain(line, out chain)
+                || chain == null
+                || !chain.ChainComplete
+                || chain.TrackAtoms == null
+                || chain.TrackAtoms.Count == 0
+                || chain.SegmentRanges == null
+                || chain.SegmentRanges.Count == 0)
+            {
+                chain = null;
+                return false;
+            }
+
+            return true;
         }
 
         internal bool TryProfile(Entity line, out LineTraversalProfile profile)

@@ -4,6 +4,15 @@ export const MIN_DEPARTURE_INTERVAL_MINUTES = 5;
 export const MAX_AUTO_RULE_TRIPS_PER_HOUR = 60 / MIN_DEPARTURE_INTERVAL_MINUTES;
 export const MAX_AUTO_RULE_GENERATED_TRIPS = (24 * 60) / MIN_DEPARTURE_INTERVAL_MINUTES;
 
+export const QUICK_ADD_STEP_MINUTES = 30;
+export const QUICK_ADD_DEFAULT_SEGMENTS = [
+  { id: "night-early", labelKey: "nativeSchedule.quick.segment.night", start: 0, end: 390, count: 5 },
+  { id: "morning", labelKey: "nativeSchedule.quick.segment.morning", start: 390, end: 570, count: 6 },
+  { id: "off-peak", labelKey: "nativeSchedule.quick.segment.offPeak", start: 570, end: 990, count: 7 },
+  { id: "evening", labelKey: "nativeSchedule.quick.segment.evening", start: 990, end: 1260, count: 8 },
+  { id: "night-late", labelKey: "nativeSchedule.quick.segment.night", start: 1260, end: 1440, count: 3 }
+];
+
 function analyzeAutoRuleGeneration(rule) {
   const start = timeToMinutes(rule.start);
   const end = timeToMinutes(rule.end);
@@ -52,6 +61,18 @@ export function minutesToTime(totalMinutes) {
   const hours = Math.floor(wrapped / 60).toString().padStart(2, "0");
   const minutes = (wrapped % 60).toString().padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+export function quickMinutesToTime(totalMinutes) {
+  if (!Number.isFinite(Number(totalMinutes))) {
+    return "--:--";
+  }
+
+  if (Number(totalMinutes) === 1440) {
+    return "24:00";
+  }
+
+  return minutesToTime(totalMinutes);
 }
 
 export function hasMinimumDepartureGap(candidateMinute, existingMinutes) {
@@ -381,6 +402,109 @@ function distributeAutoDepartureMinutes({
   });
 }
 
+export function getQuickAddSegmentCapacity(start, end, minGapMinutes = MIN_DEPARTURE_INTERVAL_MINUTES) {
+  const startMinute = Number(start);
+  const endMinute = Number(end);
+  const gap = Number(minGapMinutes);
+  if (!Number.isFinite(startMinute) || !Number.isFinite(endMinute) || !Number.isFinite(gap) || gap <= 0 || endMinute <= startMinute) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor((endMinute - startMinute) / gap));
+}
+
+export function enumerateQuickAddMinutes(start, end, count) {
+  const startMinute = Number(start);
+  const endMinute = Number(end);
+  const targetCount = Math.max(0, Math.trunc(Number(count) || 0));
+  if (!Number.isFinite(startMinute) || !Number.isFinite(endMinute) || endMinute <= startMinute || targetCount <= 0) {
+    return [];
+  }
+
+  const duration = endMinute - startMinute;
+  return Array.from({ length: targetCount }, (_, index) => (
+    Math.round(startMinute + (index * duration) / targetCount)
+  )).filter((minute) => minute >= startMinute && minute < endMinute);
+}
+
+function isRowForLine(row, lineId) {
+  return row?.lineId === lineId || row?.serviceId === lineId;
+}
+
+export function buildQuickAddPlan({
+  segments = QUICK_ADD_DEFAULT_SEGMENTS,
+  currentRows = [],
+  selectedLineId = "",
+  originStationId = "",
+  kind = "local"
+}) {
+  const sourceSegments = Array.isArray(segments) ? segments : [];
+  const occupiedRows = (Array.isArray(currentRows) ? currentRows : [])
+    .filter((row) => !isRowForLine(row, selectedLineId))
+    .map((row) => ({
+      minute: timeToMinutes(row?.time),
+      originStationId: row?.originStationId || ""
+    }))
+    .filter((row) => row.minute !== null);
+  const plannedRows = [];
+  const previews = [];
+  let skippedCount = 0;
+
+  sourceSegments.forEach((segment, segmentIndex) => {
+    const start = Number(segment?.start);
+    const end = Number(segment?.end);
+    const targetCount = Math.max(0, Math.trunc(Number(segment?.count) || 0));
+    const baseMinutes = enumerateQuickAddMinutes(start, end, targetCount);
+    const preview = {
+      ...segment,
+      index: segmentIndex,
+      times: [],
+      entries: [],
+      skippedCount: 0
+    };
+
+    const distributedSlots = distributeAutoDepartureMinutes({
+      baseMinutes,
+      windowStart: start,
+      windowEnd: end,
+      originStationId,
+      occupiedRows
+    });
+    distributedSlots.forEach((slot) => {
+      const candidateMinute = slot?.minute;
+      const time = Number.isFinite(candidateMinute)
+        ? minutesToTime(candidateMinute)
+        : minutesToTime(slot?.anchorMinute);
+      if (!Number.isFinite(candidateMinute)
+        || !hasMinimumDepartureGapForOrigin(candidateMinute, originStationId, occupiedRows)) {
+        preview.entries.push({ time, skipped: true, reason: "gap" });
+        preview.skippedCount += 1;
+        skippedCount += 1;
+        return;
+      }
+
+      occupiedRows.push({ minute: candidateMinute, originStationId });
+      preview.times.push(time);
+      preview.entries.push({ time, skipped: false, reason: "" });
+      plannedRows.push({
+        segmentId: segment?.id || `segment-${segmentIndex}`,
+        generatedIndex: preview.entries.length - 1,
+        timeMinutes: candidateMinute,
+        kind: kind === "express" ? "express" : "local"
+      });
+    });
+    previews.push(preview);
+  });
+
+  return {
+    segments: previews,
+    plannedRows,
+    skippedCount,
+    targetCount: sourceSegments.reduce((sum, segment) => sum + Math.max(0, Math.trunc(Number(segment?.count) || 0)), 0),
+    successCount: plannedRows.length
+  };
+}
+
 export function getLineKinds(rows, lineId) {
   return new Set(
     rows
@@ -584,4 +708,3 @@ export function buildAutoStagedPlan({
     hasKindConflict: false
   };
 }
-

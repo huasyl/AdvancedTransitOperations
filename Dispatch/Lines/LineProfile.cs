@@ -26,6 +26,7 @@ namespace RapidTransitMod.Dispatch.Lines
         private NativeHashMap<Entity, uint> m_LineStableSinceFrame;
         private NativeHashSet<Entity> m_DiagnosedLines;
         private readonly Dictionary<Entity, Entity> m_OriginStopByWaypoint = new Dictionary<Entity, Entity>();
+        private readonly Dictionary<Entity, Entity> m_OriginWaypointByLine = new Dictionary<Entity, Entity>();
         private readonly Dictionary<Entity, RoadRouteSnapshot> m_RoadSnapshots = new Dictionary<Entity, RoadRouteSnapshot>();
         private readonly Dictionary<Entity, uint> m_LifecycleFailureFrames = new Dictionary<Entity, uint>();
 
@@ -60,7 +61,8 @@ namespace RapidTransitMod.Dispatch.Lines
             if (waypoints.Length == 0 || !entityManager.HasComponent<Game.Objects.Transform>(vehicle))
                 return false;
 
-            Entity stop = ResolveOriginStop(waypoints[0].m_Waypoint);
+            Entity line = m_Runtime.m_Resolve.Line(vehicle);
+            Entity stop = ResolveOriginStop(line, waypoints[0].m_Waypoint);
             if (stop == Entity.Null || !entityManager.HasComponent<Game.Objects.Transform>(stop))
                 return false;
 
@@ -70,10 +72,18 @@ namespace RapidTransitMod.Dispatch.Lines
             return true;
         }
 
-        private Entity ResolveOriginStop(Entity waypoint)
+        private Entity ResolveOriginStop(Entity line, Entity waypoint)
         {
             if (waypoint == Entity.Null)
                 return Entity.Null;
+
+            if (line != Entity.Null)
+            {
+                if (m_OriginWaypointByLine.TryGetValue(line, out Entity oldWaypoint)
+                    && oldWaypoint != waypoint)
+                    m_OriginStopByWaypoint.Remove(oldWaypoint);
+                m_OriginWaypointByLine[line] = waypoint;
+            }
 
             if (m_OriginStopByWaypoint.TryGetValue(waypoint, out Entity cachedStop))
                 return cachedStop;
@@ -119,6 +129,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
             Entity line = m_Runtime.m_Resolve.Line(vehicle);
             if (line == Entity.Null
+                || m_Runtime.m_LineStructureInvalidator.IsLinePending(line)
                 || !m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out LineTrackChain chain))
             {
                 return false;
@@ -160,8 +171,15 @@ namespace RapidTransitMod.Dispatch.Lines
             bool atOrigin,
             bool boarding,
             bool lastBoarding,
-            int targetMinute)
+            int targetMinute,
+            bool strictOriginRejected)
         {
+            if (strictOriginRejected)
+            {
+                m_Runtime.m_RuntimeEngine.ClearOriginCandidate(vehicle);
+                return false;
+            }
+
             bool waitingAtOrigin = atOrigin
                 && (boarding
                     || lastBoarding
@@ -360,6 +378,8 @@ namespace RapidTransitMod.Dispatch.Lines
                 return ObserveRoadRouteSnapshot(line, waypoints);
             if (lifecycle != LifecycleKind.Rail)
                 return false;
+            if (m_Runtime.m_LineStructureInvalidator.IsLinePending(line))
+                return false;
 
             ulong signature = ComputeWaypointSignature(waypoints);
             uint nowFrame = m_Runtime.m_SimulationSystem.frameIndex;
@@ -373,9 +393,8 @@ namespace RapidTransitMod.Dispatch.Lines
                         + " newSig=" + signature
                         + " waypoints=" + waypoints.Length
                         + " frame=" + nowFrame
-                        + " clearLineTimes=1");
+                        + " clearLineTimes=0");
                 }
-                m_Runtime.m_LineTimes.Clear();
                 m_LineWaypointSignature[line] = signature;
                 m_LineStableSinceFrame[line] = nowFrame;
                 m_DiagnosedLines.Remove(line);
@@ -389,6 +408,35 @@ namespace RapidTransitMod.Dispatch.Lines
             }
 
             return nowFrame - stableSince >= ModRuntimeHostSystem.NEW_LINE_STABLE_FRAMES;
+        }
+
+        internal void ResetRailStructure(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            if (line == Entity.Null)
+                return;
+
+            ulong signature = ComputeWaypointSignature(waypoints);
+            uint frame = m_Runtime.m_SimulationSystem.frameIndex;
+            bool signatureChanged = !m_LineWaypointSignature.TryGetValue(line, out ulong oldSignature)
+                || oldSignature != signature;
+            RemoveOriginBinding(line);
+            m_LineWaypointSignature[line] = signature;
+            if (signatureChanged || !m_LineStableSinceFrame.ContainsKey(line))
+                m_LineStableSinceFrame[line] = frame;
+            m_DiagnosedLines.Remove(line);
+            for (int i = 0; i < waypoints.Length; i++)
+                m_OriginStopByWaypoint.Remove(waypoints[i].m_Waypoint);
+            if (waypoints.Length > 0)
+                ResolveOriginStop(line, waypoints[0].m_Waypoint);
+        }
+
+        private void RemoveOriginBinding(Entity line)
+        {
+            if (line == Entity.Null || !m_OriginWaypointByLine.TryGetValue(line, out Entity waypoint))
+                return;
+
+            m_OriginStopByWaypoint.Remove(waypoint);
+            m_OriginWaypointByLine.Remove(line);
         }
 
         private void LogLifecycleFailure(Entity line)
@@ -513,9 +561,16 @@ namespace RapidTransitMod.Dispatch.Lines
             m_LineWaypointSignature.Remove(line);
             m_LineStableSinceFrame.Remove(line);
             m_DiagnosedLines.Remove(line);
+            RemoveOriginBinding(line);
             m_RoadSnapshots.Remove(line);
             m_LifecycleFailureFrames.Remove(line);
-            m_OriginStopByWaypoint.Clear();
+        }
+
+        internal void RemoveStability(Entity line, DynamicBuffer<RouteWaypoint> waypoints)
+        {
+            RemoveStability(line);
+            for (int i = 0; i < waypoints.Length; i++)
+                m_OriginStopByWaypoint.Remove(waypoints[i].m_Waypoint);
         }
 
         public void ClearStability()
@@ -526,6 +581,7 @@ namespace RapidTransitMod.Dispatch.Lines
             m_RoadSnapshots.Clear();
             m_LifecycleFailureFrames.Clear();
             m_OriginStopByWaypoint.Clear();
+            m_OriginWaypointByLine.Clear();
         }
 
         public void Dispose()

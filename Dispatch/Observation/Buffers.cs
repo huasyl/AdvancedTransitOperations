@@ -263,7 +263,6 @@ namespace RapidTransitMod.Dispatch.Observation
                         || (stop.m_ActualArrival < 0 && stop.m_ActualArrivalFrame != 0u)
                         || (stop.m_ActualDeparture < 0 && (stop.m_ActualDepartureFrame != 0u
                             || stop.m_OpenIntervalMaxFrames != 0u))
-                        || (stop.m_ActualDeparture >= 0 && stop.m_OpenIntervalMaxFrames == 0u)
                         || (stop.m_Skipped != 0 && stop.m_Skipped != 1)
                         || (stop.m_Skipped == 1 && (stop.m_ActualArrival < 0
                             || stop.m_ActualDeparture >= 0
@@ -764,7 +763,6 @@ namespace RapidTransitMod.Dispatch.Observation
                     || (stop.ActualArrival < 0 && stop.ActualArrivalFrame != 0u)
                     || (stop.ActualDeparture < 0 && (stop.ActualDepartureFrame != 0u
                         || stop.OpenIntervalMaxFrames != 0u))
-                    || (stop.ActualDeparture >= 0 && stop.OpenIntervalMaxFrames == 0u)
                     || (stop.Skipped && (stop.ActualArrival < 0
                         || stop.ActualDeparture >= 0
                         || stop.ActualDepartureFrame != 0u
@@ -1269,21 +1267,26 @@ namespace RapidTransitMod.Dispatch.Observation
             }
         }
 
-        public void RemoveSliceLine(Entity line)
+        public int RemoveSliceLine(Entity line)
         {
             if (line == Entity.Null || !m_Runtime.m_TraversalSliceObservationBufferReady)
-                return;
+                return 0;
 
             Entity city = m_Runtime.m_CitySystem.City;
             if (city == Entity.Null || !m_Runtime.EntityManager.HasBuffer<TraversalSliceObservationElement>(city))
-                return;
+                return 0;
 
             DynamicBuffer<TraversalSliceObservationElement> buffer = m_Runtime.EntityManager.GetBuffer<TraversalSliceObservationElement>(city);
+            int removed = 0;
             for (int i = buffer.Length - 1; i >= 0; i--)
             {
                 if (buffer[i].m_LineEntity == line)
+                {
                     buffer.RemoveAt(i);
+                    removed++;
+                }
             }
+            return removed;
         }
 
         internal bool TryFlushDailyQuota(LineKey lak, TraversalSliceDailyQuota quota)

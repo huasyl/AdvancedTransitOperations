@@ -77,6 +77,8 @@ namespace RapidTransitMod.TrackModel
         ITrackBypass,
         ITrackTurns
     {
-        void NotifyLineTrackChainRebuilt(Entity line, ulong oldSignature, ulong newSignature, int oldAtomCount, int newAtomCount);
+        void NotifyLineTrackChainCandidate(Entity line, LineTrackChain chain);
+        void NotifyLineTrackChainEstablished(Entity line, LineTrackChain chain);
+        void NotifyLineDeleted(Entity line);
     }
 }

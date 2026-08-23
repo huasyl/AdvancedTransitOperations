@@ -4,10 +4,10 @@ using Game.Common;
 using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
+using RapidTransitMod.Bypass;
 using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
 using Unity.Mathematics;
-
 namespace RapidTransitMod.TrackModel
 {
     internal sealed class TrackBuild
@@ -16,33 +16,133 @@ namespace RapidTransitMod.TrackModel
         private readonly TrackSupport m_Support;
         private readonly TrackProfile m_Profile;
         private readonly TrackDiag m_Diag;
+#if RT_DEBUG_TOOLS
+        private readonly TrackChangeDiagnostics m_ChangeDiagnostics;
+#endif
         private readonly Action m_MarkSharedDirty;
-        private readonly Action<Entity, ulong, ulong, int, int> m_NotifyLineTrackChainRebuilt;
+        private readonly Action<Entity, LineTrackChain> m_NotifyLineTrackChainCandidate;
+        private readonly Action<Entity, LineTrackChain> m_NotifyLineTrackChainEstablished;
         private readonly Action<Entity, LineTrackChain> m_PublishTraversal;
         private readonly Action<Entity> m_InvalidateLine;
-
+        private readonly Action<Entity> m_ClearStaticCachesForLine;
+        private readonly struct TrackChainScan
+        {
+            internal readonly List<TrackAtom> Atoms;
+            internal readonly List<TrackSegmentRange> Ranges;
+            internal readonly TrackWaypointInputBaseline[] WaypointInputs;
+            internal readonly TrackSegmentInputBaseline[] SegmentInputs;
+            internal readonly bool ChainComplete;
+            internal bool HasData => Atoms != null
+                && Ranges != null
+                && WaypointInputs != null
+                && SegmentInputs != null;
+            internal TrackChainScan(
+                List<TrackAtom> atoms,
+                List<TrackSegmentRange> ranges,
+                TrackWaypointInputBaseline[] waypointInputs,
+                TrackSegmentInputBaseline[] segmentInputs,
+                bool chainComplete)
+            {
+                Atoms = atoms;
+                Ranges = ranges;
+                WaypointInputs = waypointInputs;
+                SegmentInputs = segmentInputs;
+                ChainComplete = chainComplete;
+            }
+        }
         internal TrackBuild(
             TrackState state,
             TrackSupport support,
             TrackProfile profile,
             TrackDiag diag,
+#if RT_DEBUG_TOOLS
+            TrackChangeDiagnostics changeDiagnostics,
+#endif
             Action markSharedDirty,
-            Action<Entity, ulong, ulong, int, int> notifyLineTrackChainRebuilt,
+            Action<Entity, LineTrackChain> notifyLineTrackChainCandidate,
+            Action<Entity, LineTrackChain> notifyLineTrackChainEstablished,
             Action<Entity, LineTrackChain> publishTraversal,
-            Action<Entity> invalidateLine)
+            Action<Entity> invalidateLine,
+            Action<Entity> clearStaticCachesForLine)
         {
             m_State = state;
             m_Support = support;
             m_Profile = profile;
             m_Diag = diag;
+#if RT_DEBUG_TOOLS
+            m_ChangeDiagnostics = changeDiagnostics;
+#endif
             m_MarkSharedDirty = markSharedDirty;
-            m_NotifyLineTrackChainRebuilt = notifyLineTrackChainRebuilt;
+            m_NotifyLineTrackChainCandidate = notifyLineTrackChainCandidate;
+            m_NotifyLineTrackChainEstablished = notifyLineTrackChainEstablished;
             m_PublishTraversal = publishTraversal;
             m_InvalidateLine = invalidateLine;
+            m_ClearStaticCachesForLine = clearStaticCachesForLine;
         }
-
-        private EntityManager EntityManager => m_Support.EntityManager;
-
+        internal EntityManager EntityManager => m_Support.EntityManager;
+#if RT_DEBUG_TOOLS
+        private TrackInputSnapshot CaptureDiagnostics(
+            Entity line,
+            TransitMode mode,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            DynamicBuffer<RouteSegment> segments)
+        {
+            try
+            {
+                return m_ChangeDiagnostics.Capture(line, mode, waypoints, segments, this, 0UL);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        private void RecordBuiltDiagnostics(
+            TrackChangeCandidate candidate,
+            TrackInputSnapshot input,
+            LineTrackChain chain,
+            bool hasOldCache)
+        {
+            if (input == null)
+                return;
+            try
+            {
+                m_ChangeDiagnostics.RecordBuilt(candidate, input, chain, hasOldCache);
+            }
+            catch
+            {
+            }
+        }
+        private void RecordEquivalentRefreshDiagnostics(
+            TrackChangeCandidate candidate,
+            TrackInputSnapshot input,
+            LineTrackChain chain)
+        {
+            if (input == null)
+                return;
+            try
+            {
+                m_ChangeDiagnostics.RecordBuilt(candidate, input, chain, true, true);
+            }
+            catch
+            {
+            }
+        }
+        private void RecordUnavailableDiagnostics(
+            TrackChangeCandidate candidate,
+            Entity line,
+            bool hasOldCache,
+            string reason,
+            TrackInputSnapshot currentInput)
+        {
+            try
+            {
+                m_ChangeDiagnostics.RecordUnavailable(candidate, line, hasOldCache, reason, currentInput);
+            }
+            catch
+            {
+            }
+        }
+#endif
         internal static ulong MixLineTrackChainSignature(ulong hash, int value)
         {
             unchecked
@@ -50,26 +150,48 @@ namespace RapidTransitMod.TrackModel
                 return (hash ^ (uint)value) * 1099511628211UL;
             }
         }
-
-        private ulong ComputeLineTrackChainSignature(
+        private bool TryScanDirtyChain(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            DynamicBuffer<RouteSegment> segments)
+            DynamicBuffer<RouteSegment> segments,
+            LineTrackChain previousChain,
+            out ulong signature,
+            out List<TrackAtom> refreshedAtoms,
+            out List<TrackSegmentRange> refreshedRanges,
+            out TrackWaypointInputBaseline[] refreshedWaypointInputs,
+            out TrackSegmentInputBaseline[] refreshedSegmentInputs,
+            out bool scanComplete,
+            out bool scanUnchanged)
         {
             ulong hash = 1469598103934665603UL;
+            TransitMode mode = TransportModeResolver.Resolve(EntityManager, line);
             hash = MixLineTrackChainSignature(hash, line.Index);
-            hash = MixLineTrackChainSignature(
-                hash,
-                (int)TransportModeResolver.Resolve(EntityManager, line));
+            hash = MixLineTrackChainSignature(hash, (int)mode);
             hash = MixLineTrackChainSignature(hash, waypoints.Length);
             hash = MixLineTrackChainSignature(hash, segments.Length);
             bool chainComplete = segments.Length > 0 && segments.Length == waypoints.Length;
-
+            bool canCompare = previousChain != null
+                && previousChain.Mode == mode
+                && previousChain.WaypointInputs != null
+                && previousChain.WaypointInputs.Length == waypoints.Length
+                && previousChain.SegmentInputs != null
+                && previousChain.SegmentInputs.Length == segments.Length;
+            bool structureEqual = canCompare;
+            refreshedAtoms = new List<TrackAtom>(previousChain != null && previousChain.TrackAtoms != null
+                ? previousChain.TrackAtoms.Count
+                : 0);
+            refreshedRanges = new List<TrackSegmentRange>(segments.Length);
+            refreshedWaypointInputs = new TrackWaypointInputBaseline[waypoints.Length];
+            refreshedSegmentInputs = new TrackSegmentInputBaseline[segments.Length];
+            scanComplete = false;
+            scanUnchanged = false;
+            TrackTargetComparer targetComparer = canCompare
+                ? new TrackTargetComparer(EntityManager)
+                : null;
             for (int i = 0; i < waypoints.Length; i++)
             {
                 Entity waypoint = waypoints[i].m_Waypoint;
                 hash = MixLineTrackChainSignature(hash, waypoint.Index);
-
                 if (EntityManager.HasComponent<RouteLane>(waypoint))
                 {
                     RouteLane routeLane = EntityManager.GetComponentData<RouteLane>(waypoint);
@@ -78,15 +200,41 @@ namespace RapidTransitMod.TrackModel
                     hash = MixLineTrackChainSignature(hash, (int)math.round(routeLane.m_StartCurvePos * 1000f));
                     hash = MixLineTrackChainSignature(hash, (int)math.round(routeLane.m_EndCurvePos * 1000f));
                 }
+                refreshedWaypointInputs[i] = new TrackWaypointInputBaseline(waypoint, EntityManager);
+                if (canCompare)
+                {
+                    if (!previousChain.WaypointInputs[i].EqualsCurrent(waypoint, EntityManager))
+                        structureEqual = false;
+                }
             }
-
-            for (int i = 0; i < segments.Length; i++)
+            for (int segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
             {
-                Entity segmentEntity = segments[i].m_Segment;
+                int startAtomIndex = refreshedAtoms.Count;
+                Entity segmentEntity = segments[segmentIndex].m_Segment;
                 hash = MixLineTrackChainSignature(hash, segmentEntity.Index);
                 hash = MixLineTrackChainSignature(hash, segmentEntity.Version);
                 bool segmentComplete = TryGetSegmentPathElements(segmentEntity, out DynamicBuffer<PathElement> pathElements);
+                bool pathComplete = segmentComplete;
                 bool hasTrackAtom = false;
+                TrackSegmentInputBaseline previousSegment = default;
+                bool segmentComparable = false;
+                bool segmentUnchanged = true;
+                TrackPathElementBaseline[] currentElementInputs = segmentComplete
+                    ? new TrackPathElementBaseline[pathElements.Length]
+                    : Array.Empty<TrackPathElementBaseline>();
+                if (canCompare)
+                {
+                    previousSegment = previousChain.SegmentInputs[segmentIndex];
+                    segmentComparable = previousSegment.Segment == segmentEntity
+                        && previousSegment.PathComplete
+                        && segmentComplete;
+                    if (!segmentComparable)
+                        segmentUnchanged = false;
+                }
+                else
+                {
+                    segmentUnchanged = false;
+                }
                 if (segmentComplete)
                 {
                     hash = MixLineTrackChainSignature(hash, pathElements.Length);
@@ -98,51 +246,123 @@ namespace RapidTransitMod.TrackModel
                         hash = MixLineTrackChainSignature(hash, math.asint(pathElement.m_TargetDelta.x));
                         hash = MixLineTrackChainSignature(hash, math.asint(pathElement.m_TargetDelta.y));
                         hash = MixLineTrackChainSignature(hash, (int)pathElement.m_Flags);
-                        if (!TryClassifyTrackAtom(pathElements, pathIndex, out TrackAtom atom)
-                            || atom.AtomClass == TrackAtomClass.FilteredNoise)
+                        bool classified = TryClassifyTrackAtom(pathElements, pathIndex, out TrackAtom atom);
+                        bool contributes = classified
+                            && atom.AtomClass != TrackAtomClass.FilteredNoise
+                            && pathElement.m_Target != Entity.Null;
+                        TrackAtomClass atomClass = classified ? atom.AtomClass : TrackAtomClass.Unknown;
+                        TrackTraversalDir traversalDir = classified ? atom.TraversalDir : TrackTraversalDir.Unknown;
+                        if (!classified || atom.AtomClass == TrackAtomClass.FilteredNoise)
                         {
                             hash = MixLineTrackChainSignature(hash, 0);
-                            continue;
                         }
-
-                        hash = MixLineTrackChainSignature(hash, 1);
-                        hash = MixLineTrackChainSignature(hash, (int)atom.AtomClass);
-                        hash = MixLineTrackChainSignature(hash, (int)atom.TraversalDir);
-                        hasTrackAtom = true;
+                        else
+                        {
+                            hash = MixLineTrackChainSignature(hash, 1);
+                            hash = MixLineTrackChainSignature(hash, (int)atom.AtomClass);
+                            hash = MixLineTrackChainSignature(hash, (int)atom.TraversalDir);
+                            hasTrackAtom = true;
+                            refreshedAtoms.Add(atom);
+                        }
+                        bool elementStable = segmentComparable
+                            && pathIndex < previousSegment.Elements.Length
+                            && previousSegment.Elements[pathIndex].StableEquals(
+                                targetComparer,
+                                pathElement,
+                                atomClass,
+                                traversalDir,
+                                contributes);
+                        if (!elementStable)
+                            segmentUnchanged = false;
+                        currentElementInputs[pathIndex] = new TrackPathElementBaseline(
+                            pathElement,
+                            atomClass,
+                            traversalDir,
+                            contributes);
                     }
                 }
-
                 segmentComplete &= hasTrackAtom;
                 hash = MixLineTrackChainSignature(hash, segmentComplete ? 1 : 0);
                 chainComplete &= segmentComplete;
+                if (canCompare && previousSegment.Elements.Length != currentElementInputs.Length)
+                    segmentUnchanged = false;
+                if (canCompare && !segmentUnchanged)
+                    structureEqual = false;
+                refreshedRanges.Add(new TrackSegmentRange(
+                    startAtomIndex,
+                    refreshedAtoms.Count));
+                refreshedSegmentInputs[segmentIndex] = new TrackSegmentInputBaseline(
+                    segmentEntity,
+                    pathComplete,
+                    currentElementInputs);
             }
-
             hash = MixLineTrackChainSignature(hash, chainComplete ? 1 : 0);
-            return hash;
+            signature = hash;
+            scanComplete = chainComplete
+                && refreshedAtoms.Count > 0
+                && refreshedRanges.Count == segments.Length;
+            // The signature omits target components; keep the scan verdict for same-hash changes.
+            if (!canCompare || !structureEqual)
+                return false;
+            if (refreshedAtoms.Count != previousChain.TrackAtoms.Count
+                || refreshedRanges.Count != previousChain.SegmentRanges.Count)
+            {
+                return false;
+            }
+            for (int i = 0; i < refreshedRanges.Count; i++)
+            {
+                TrackSegmentRange oldRange = previousChain.SegmentRanges[i];
+                TrackSegmentRange newRange = refreshedRanges[i];
+                if (oldRange.StartAtomIndex != newRange.StartAtomIndex
+                    || oldRange.EndAtomIndexExclusive != newRange.EndAtomIndexExclusive)
+                {
+                    return false;
+                }
+            }
+            for (int i = 0; i < refreshedAtoms.Count; i++)
+            {
+                if (!refreshedAtoms[i].Key.Equals(previousChain.TrackAtoms[i].Key)
+                    || refreshedAtoms[i].SourceTarget != previousChain.TrackAtoms[i].SourceTarget)
+                {
+                    return true;
+                }
+            }
+            scanUnchanged = true;
+            return false;
         }
-
         internal bool TryGetLineTrackChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain)
         {
+#if RT_DEBUG_TOOLS
+            return TryGetChain(line, waypoints, default(TrackChangeCandidate), out chain);
+#else
             return TryGetChain(line, waypoints, out chain);
+#endif
         }
-
-        private bool TryGetChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain)
+        private bool TryGetChain(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+#if RT_DEBUG_TOOLS
+            TrackChangeCandidate candidate,
+#endif
+            out LineTrackChain chain)
         {
             chain = null;
             if (line == Entity.Null)
             {
                 return false;
             }
-
             uint nowFrame = m_Support.FrameIndex;
             if (!EntityManager.Exists(line)
                 || waypoints.Length == 0
                 || !EntityManager.HasBuffer<RouteSegment>(line))
             {
+#if RT_DEBUG_TOOLS
+                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "line-or-buffer-missing", null);
+#else
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
+#endif
                 return false;
             }
-
             if (m_State.TryFrameSnapshot(line, out LineTrackChainFrameSnapshot frameSnapshot)
                 && frameSnapshot.Frame == nowFrame
                 && frameSnapshot.WaypointCount == waypoints.Length)
@@ -150,39 +370,138 @@ namespace RapidTransitMod.TrackModel
                 chain = frameSnapshot.Chain;
                 return frameSnapshot.Available;
             }
-
-            DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
-            if (segments.Length != waypoints.Length)
+            if (!m_State.IsDirty(line)
+                && m_State.TryChain(line, out chain)
+                && chain != null)
             {
-                InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
-                return false;
-            }
-
-            ulong signature = ComputeLineTrackChainSignature(line, waypoints, segments);
-            LineTrackChain previousChain = null;
-            if (m_State.TryChain(line, out chain)
-                && chain != null
-                && chain.Signature == signature)
-            {
-                bool available = chain.TrackAtoms.Count > 0;
+                bool available = chain.ChainComplete && chain.TrackAtoms.Count > 0;
                 m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
                     nowFrame,
                     waypoints.Length,
                     available,
                     available ? chain : null));
+                if (!available)
+                    chain = null;
                 return available;
             }
-
-            previousChain = chain;
-            ulong previousSignature = previousChain != null ? previousChain.Signature : 0UL;
-            int previousAtomCount = previousChain != null ? previousChain.TrackAtoms.Count : 0;
-            chain = BuildLineTrackChain(line, waypoints, segments, signature);
-            if (chain == null || chain.TrackAtoms.Count == 0)
+            DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
+            if (segments.Length != waypoints.Length)
             {
+#if RT_DEBUG_TOOLS
+                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "waypoint-segment-count-mismatch", null);
+#else
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
+#endif
                 return false;
             }
-
+#if RT_DEBUG_TOOLS
+            TransitMode mode = TransportModeResolver.Resolve(EntityManager, line);
+            TrackInputSnapshot currentInput = RtLog.CacheInvalidationDiagnosticsEnabled
+                ? CaptureDiagnostics(line, mode, waypoints, segments)
+                : null;
+#endif
+            LineTrackChain previousChain = null;
+            m_State.TryChain(line, out previousChain);
+            chain = previousChain;
+            ulong signature;
+            bool equivalentRefresh = false;
+            List<TrackAtom> refreshedAtoms = null;
+            List<TrackSegmentRange> refreshedRanges = null;
+            TrackWaypointInputBaseline[] refreshedWaypointInputs = null;
+            TrackSegmentInputBaseline[] refreshedSegmentInputs = null;
+            bool scanComplete = false;
+            bool scanUnchanged = false;
+            equivalentRefresh = TryScanDirtyChain(
+                line,
+                waypoints,
+                segments,
+                previousChain,
+                out signature,
+                out refreshedAtoms,
+                out refreshedRanges,
+                out refreshedWaypointInputs,
+                out refreshedSegmentInputs,
+                out scanComplete,
+                out scanUnchanged);
+#if RT_DEBUG_TOOLS
+            if (currentInput != null)
+                currentInput.Signature = signature;
+#endif
+            if (previousChain != null && scanUnchanged && previousChain.Signature == signature)
+            {
+                bool available = previousChain.ChainComplete && previousChain.TrackAtoms.Count > 0;
+#if RT_DEBUG_TOOLS
+                RecordBuiltDiagnostics(candidate, currentInput, previousChain, true);
+#endif
+                m_State.PutChain(line, previousChain);
+                m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
+                    nowFrame,
+                    waypoints.Length,
+                    available,
+                    available ? previousChain : null));
+                if (!available)
+                    chain = null;
+                return available;
+            }
+            ulong previousSignature = previousChain != null ? previousChain.Signature : 0UL;
+            int previousAtomCount = previousChain != null ? previousChain.TrackAtoms.Count : 0;
+            if (equivalentRefresh)
+            {
+                m_Diag.RemoveDevSightChain(previousChain);
+                previousChain.TrackAtoms = refreshedAtoms;
+                previousChain.SegmentRanges = refreshedRanges;
+                previousChain.Signature = signature;
+                previousChain.WaypointInputs = refreshedWaypointInputs;
+                previousChain.SegmentInputs = refreshedSegmentInputs;
+                TrackIntervals.ResetBypassPipeline(previousChain);
+                previousChain.LocalBypassWaypointScenes = Array.Empty<LocalBypassWaypointSceneBinding>();
+                previousChain.LocalBypassWaypointScenesVersion = 0;
+                BuildAtomIndicesByLane(previousChain);
+                EquivalentTrackRefresh.RefreshTraversalLaneKeys(previousChain);
+                m_ClearStaticCachesForLine?.Invoke(line);
+                m_Profile.RegisterTramLine(line, previousChain, waypoints);
+                m_State.PutChain(line, previousChain);
+                m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
+                    nowFrame,
+                    waypoints.Length,
+                    true,
+                    previousChain));
+#if RT_DEBUG_TOOLS
+                RecordEquivalentRefreshDiagnostics(candidate, currentInput, previousChain);
+#endif
+                m_PublishTraversal?.Invoke(line, previousChain);
+                m_Diag.AddDevSightChain(previousChain);
+                m_MarkSharedDirty?.Invoke();
+                return true;
+            }
+            if (previousChain != null && !scanComplete)
+            {
+#if RT_DEBUG_TOOLS
+                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "path-unavailable-or-no-atoms", currentInput);
+#else
+                InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
+#endif
+                return false;
+            }
+            TrackChainScan scan = new TrackChainScan(
+                refreshedAtoms,
+                refreshedRanges,
+                refreshedWaypointInputs,
+                refreshedSegmentInputs,
+                scanComplete);
+            chain = BuildLineTrackChain(line, waypoints, segments, signature, scan);
+            if (chain == null || chain.TrackAtoms.Count == 0)
+            {
+#if RT_DEBUG_TOOLS
+                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "path-unavailable-or-no-atoms", currentInput);
+#else
+                InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
+#endif
+                return false;
+            }
+#if RT_DEBUG_TOOLS
+            RecordBuiltDiagnostics(candidate, currentInput, chain, previousChain != null);
+#endif
             if (RtLog.CacheInvalidationDiagnosticsEnabled)
             {
                 m_Support.Log.Info("[TrackChainRebuilt] line=" + line.Index
@@ -194,54 +513,82 @@ namespace RapidTransitMod.TrackModel
                     + " newAtoms=" + chain.TrackAtoms.Count
                     + " frame=" + nowFrame);
             }
-
             if (previousChain != null)
                 m_Diag.RemoveDevSightChain(previousChain);
-
             m_State.PutChain(line, chain);
+            bool chainAvailable = chain.ChainComplete && chain.TrackAtoms.Count > 0;
             m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
                 nowFrame,
                 waypoints.Length,
-                true,
-                chain));
-            if (previousChain != null)
-                m_NotifyLineTrackChainRebuilt?.Invoke(line, previousSignature, signature, previousAtomCount, chain.TrackAtoms.Count);
+                chainAvailable,
+                chainAvailable ? chain : null));
+            m_NotifyLineTrackChainCandidate?.Invoke(line, chain);
+            if (previousChain == null)
+                m_NotifyLineTrackChainEstablished?.Invoke(line, chain);
             m_PublishTraversal?.Invoke(line, chain);
             m_Diag.AddDevSightChain(chain);
             m_MarkSharedDirty?.Invoke();
-            return true;
+            if (!chainAvailable)
+                chain = null;
+            return chainAvailable;
         }
-
+#if RT_DEBUG_TOOLS
+        internal void ConfirmLineChange(Entity line, TrackChangeCandidate candidate)
+#else
+        internal void ConfirmLineChange(Entity line)
+#endif
+        {
+            if (line == Entity.Null
+                || !m_State.IsDirty(line))
+            {
+                return;
+            }
+            uint nowFrame = m_Support.FrameIndex;
+            if (!EntityManager.Exists(line)
+                || !EntityManager.HasComponent<TransportLine>(line)
+                || !EntityManager.HasBuffer<RouteWaypoint>(line)
+                || !EntityManager.HasBuffer<RouteSegment>(line))
+            {
+#if RT_DEBUG_TOOLS
+                InvalidateUnavailableChain(line, nowFrame, 0, candidate, "line-or-buffer-missing", null);
+#else
+                InvalidateUnavailableChain(line, nowFrame, 0);
+#endif
+                return;
+            }
+            DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
+#if RT_DEBUG_TOOLS
+            TryGetChain(line, waypoints, candidate, out _);
+#else
+            TryGetChain(line, waypoints, out _);
+#endif
+        }
         private LineTrackChain BuildLineTrackChain(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             DynamicBuffer<RouteSegment> segments,
-            ulong signature)
+            ulong signature,
+            TrackChainScan scan)
         {
+            if (!scan.HasData)
+                return null;
             var chain = new LineTrackChain
             {
                 LineEntity = line,
+                Mode = TransportModeResolver.Resolve(EntityManager, line),
                 Signature = signature,
-                ChainComplete = segments.Length > 0 && segments.Length == waypoints.Length
+                ChainComplete = scan.ChainComplete,
+                WaypointInputs = scan.WaypointInputs,
+                SegmentInputs = scan.SegmentInputs,
+                TrackAtoms = scan.Atoms,
+                SegmentRanges = scan.Ranges
             };
-
             for (int waypointIndex = 0; waypointIndex < segments.Length; waypointIndex++)
             {
-                int startAtomIndex = chain.TrackAtoms.Count;
-                Entity segmentEntity = segments[waypointIndex].m_Segment;
-                bool segmentComplete = TryGetSegmentPathElements(segmentEntity, out DynamicBuffer<PathElement> pathElements);
-                if (segmentComplete)
-                {
-                    AppendSegmentTrackAtoms(chain.TrackAtoms, pathElements);
-                }
-
-                int endAtomIndexExclusive = chain.TrackAtoms.Count;
-                chain.ChainComplete &= segmentComplete && endAtomIndexExclusive > startAtomIndex;
-                chain.SegmentRanges.Add(new TrackSegmentRange(startAtomIndex, endAtomIndexExclusive));
+                int startAtomIndex = chain.SegmentRanges[waypointIndex].StartAtomIndex;
                 TryAppendControlPoint(chain.ControlPoints, line, waypoints, waypointIndex, startAtomIndex);
                 TryAppendEndpointMarker(chain.EndpointMarkers, waypoints, waypointIndex, startAtomIndex);
             }
-
             BuildAtomStationBuildings(chain);
             BuildControlEdges(chain, line, waypoints);
             BuildAtomIndicesByLane(chain);
@@ -252,7 +599,6 @@ namespace RapidTransitMod.TrackModel
             m_Profile.LogTrackModelTurnbackBuild(chain);
             return chain;
         }
-
         private bool TryGetSegmentPathElements(
             Entity segment,
             out DynamicBuffer<PathElement> pathElements)
@@ -266,24 +612,29 @@ namespace RapidTransitMod.TrackModel
             {
                 return false;
             }
-
             pathElements = EntityManager.GetBuffer<PathElement>(segment, true);
             return pathElements.Length > 0;
         }
-
-        private void InvalidateUnavailableChain(Entity line, uint frame, int waypointCount)
+        private void InvalidateUnavailableChain(
+            Entity line,
+            uint frame,
+#if RT_DEBUG_TOOLS
+            int waypointCount,
+            TrackChangeCandidate candidate,
+            string reason,
+            TrackInputSnapshot currentInput)
+#else
+            int waypointCount)
+#endif
         {
             if (m_State.TryChain(line, out LineTrackChain previousChain)
                 && previousChain != null)
             {
-                m_NotifyLineTrackChainRebuilt?.Invoke(
-                    line,
-                    previousChain.Signature,
-                    0UL,
-                    previousChain.TrackAtoms.Count,
-                    0);
+#if RT_DEBUG_TOOLS
+                RecordUnavailableDiagnostics(candidate, line, true, reason, currentInput);
+#endif
             }
-
+            m_NotifyLineTrackChainCandidate?.Invoke(line, null);
             m_InvalidateLine?.Invoke(line);
             m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
                 frame,
@@ -291,7 +642,6 @@ namespace RapidTransitMod.TrackModel
                 false,
                 null));
         }
-
         internal void RebuildTraversal(Entity line)
         {
             if (line == Entity.Null
@@ -302,12 +652,10 @@ namespace RapidTransitMod.TrackModel
             {
                 return;
             }
-
             DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
             m_Profile.BuildTraversalProfile(chain, line, waypoints);
             m_PublishTraversal?.Invoke(line, chain);
         }
-
         private bool TryClassifyTrackAtom(
             DynamicBuffer<PathElement> pathElements,
             int pathIndex,
@@ -316,11 +664,9 @@ namespace RapidTransitMod.TrackModel
             atom = default;
             if (pathIndex < 0 || pathIndex >= pathElements.Length)
                 return false;
-
             PathElement element = pathElements[pathIndex];
             if (element.m_Target == Entity.Null)
                 return false;
-
             TrackAtomClass atomClass = ClassifyPathElementTarget(element);
             TrackTraversalDir traversalDir = ResolveTraversalDirection(pathElements, pathIndex);
             Entity previousTarget = pathIndex > 0 ? pathElements[pathIndex - 1].m_Target : Entity.Null;
@@ -329,7 +675,6 @@ namespace RapidTransitMod.TrackModel
             atom = new TrackAtom(key, element.m_Target, element.m_TargetDelta, element.m_Flags, atomClass, traversalDir);
             return true;
         }
-
         internal TrackAtomClass ClassifyPathElementTarget(PathElement element)
         {
             bool hasConnectionLane = EntityManager.HasComponent<ConnectionLane>(element.m_Target);
@@ -341,7 +686,6 @@ namespace RapidTransitMod.TrackModel
                 connectionTrackTypes,
                 EntityManager.HasComponent<EdgeLane>(element.m_Target));
         }
-
         internal static TrackAtomClass ClassifyPathElementTarget(PathElementFlags flags, bool hasTrackLane, bool hasConnectionLane, TrackTypes connectionTrackTypes, bool hasEdgeLane)
         {
             if ((flags & (PathElementFlags.Action | PathElementFlags.WaitPosition | PathElementFlags.Hangaround)) != 0)
@@ -356,13 +700,11 @@ namespace RapidTransitMod.TrackModel
                 return TrackAtomClass.ConnectionHelper;
             return TrackAtomClass.PrimaryLane;
         }
-
         internal TrackTraversalDir ResolveTraversalDirection(DynamicBuffer<PathElement> pathElements, int pathIndex)
         {
             PathElement current = pathElements[pathIndex];
             if (current.m_Target == Entity.Null)
                 return TrackTraversalDir.Unknown;
-
             bool reverseFlag = (current.m_Flags & PathElementFlags.Reverse) != 0;
             if (EntityManager.HasComponent<EdgeLane>(current.m_Target))
             {
@@ -374,13 +716,10 @@ namespace RapidTransitMod.TrackModel
                     if ((trackLane.m_Flags & TrackLaneFlags.Invert) != 0)
                         edgeForward = !edgeForward;
                 }
-
                 if (reverseFlag)
                     edgeForward = !edgeForward;
-
                 return edgeForward ? TrackTraversalDir.Forward : TrackTraversalDir.Reverse;
             }
-
             if (EntityManager.HasComponent<TrackLane>(current.m_Target))
             {
                 TrackLane trackLane = EntityManager.GetComponentData<TrackLane>(current.m_Target);
@@ -389,10 +728,8 @@ namespace RapidTransitMod.TrackModel
                     forward = !forward;
                 return forward ? TrackTraversalDir.Forward : TrackTraversalDir.Reverse;
             }
-
             if (pathElements.Length <= 1)
                 return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Unknown;
-
             float laneProgress = current.m_TargetDelta.y - current.m_TargetDelta.x;
             if (math.abs(laneProgress) > 0.0001f)
             {
@@ -401,18 +738,14 @@ namespace RapidTransitMod.TrackModel
                     forwardByDelta = !forwardByDelta;
                 return forwardByDelta ? TrackTraversalDir.Forward : TrackTraversalDir.Reverse;
             }
-
             if (pathIndex == 0 || pathIndex == pathElements.Length - 1)
                 return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Unknown;
-
             PathElement previous = pathElements[pathIndex - 1];
             PathElement next = pathElements[pathIndex + 1];
             if (previous.m_Target != Entity.Null && previous.m_Target == next.m_Target)
                 return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Unknown;
-
             return reverseFlag ? TrackTraversalDir.Reverse : TrackTraversalDir.Forward;
         }
-
         private void TryAppendControlPoint(
             List<ControlPointMarker> controlPoints,
             Entity line,
@@ -429,15 +762,12 @@ namespace RapidTransitMod.TrackModel
                 controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, building, kind));
                 return;
             }
-
             if (TransportModeResolver.Resolve(EntityManager, line) != TransitMode.Tram)
                 return;
-
             Entity stop = m_Support.Stop(waypoints[waypointIndex].m_Waypoint);
             if (stop != Entity.Null && EntityManager.HasComponent<TransportStop>(stop))
                 controlPoints.Add(new ControlPointMarker(atomIndex, waypointIndex, stop, ControlPointKind.Stop));
         }
-
         private void TryAppendEndpointMarker(
             List<EndpointMarker> endpointMarkers,
             DynamicBuffer<RouteWaypoint> waypoints,
@@ -450,7 +780,6 @@ namespace RapidTransitMod.TrackModel
                 endpointMarkers.Add(new EndpointMarker(atomIndex, waypointIndex, waypoint, endpoint.OutsideConnection, endpoint.Kind, endpoint.Direction));
             }
         }
-
         private void BuildAtomStationBuildings(LineTrackChain chain)
         {
             if (chain == null || chain.TrackAtoms.Count == 0)
@@ -459,7 +788,6 @@ namespace RapidTransitMod.TrackModel
                     chain.AtomStationBuildings = Array.Empty<Entity>();
                 return;
             }
-
             Entity[] atomStationBuildings = new Entity[chain.TrackAtoms.Count];
             const int stationWindowAtoms = 3;
             for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count; controlPointIndex++)
@@ -469,25 +797,20 @@ namespace RapidTransitMod.TrackModel
                     continue;
                 if (EntityManager.HasComponent<TransportStop>(controlPoint.Building))
                     continue;
-
                 int start = math.max(0, controlPoint.AtomIndex - stationWindowAtoms);
                 int endExclusive = math.min(chain.TrackAtoms.Count, controlPoint.AtomIndex + stationWindowAtoms + 1);
                 for (int atomIndex = start; atomIndex < endExclusive; atomIndex++)
                     atomStationBuildings[atomIndex] = controlPoint.Building;
             }
-
             chain.AtomStationBuildings = atomStationBuildings;
         }
-
         private void BuildControlEdges(LineTrackChain chain, Entity line, DynamicBuffer<RouteWaypoint> waypoints)
         {
             if (chain.ControlPoints.Count < 2)
                 return;
-
             float lineFrames = m_Support.GetLineLoopFramesEstimate(line, waypoints);
             int atomCount = math.max(1, chain.TrackAtoms.Count);
             bool hasProfile = m_Support.TryGetLineTimeProfile(line, waypoints, out LineTimeProfileHeader profile);
-
             for (int controlPointIndex = 0; controlPointIndex < chain.ControlPoints.Count - 1; controlPointIndex++)
             {
                 ControlPointMarker start = chain.ControlPoints[controlPointIndex];
@@ -501,13 +824,11 @@ namespace RapidTransitMod.TrackModel
                     int endWaypointIndex = math.clamp(end.WaypointIndex, 0, waypoints.Length - 1);
                     baseFrames = m_Support.ComputeDepartureToWaypointFramesFromProfile(profile, startWaypointIndex, endWaypointIndex);
                 }
-
                 if (!(baseFrames > 0f))
                 {
                     float ratio = (endAtomIndexExclusive - startAtomIndex) / (float)atomCount;
                     baseFrames = lineFrames > 0f ? lineFrames * ratio : 0f;
                 }
-
                 chain.ControlEdges.Add(new ControlEdge(
                     controlPointIndex,
                     controlPointIndex + 1,
@@ -516,29 +837,10 @@ namespace RapidTransitMod.TrackModel
                     baseFrames));
             }
         }
-
-        private void AppendSegmentTrackAtoms(List<TrackAtom> atoms, DynamicBuffer<PathElement> pathElements)
-        {
-            if (pathElements.Length == 0)
-                return;
-
-            for (int pathIndex = 0; pathIndex < pathElements.Length; pathIndex++)
-            {
-                if (!TryClassifyTrackAtom(pathElements, pathIndex, out TrackAtom atom))
-                    continue;
-
-                if (atom.AtomClass == TrackAtomClass.FilteredNoise)
-                    continue;
-
-                atoms.Add(atom);
-            }
-        }
-
         private void BuildAtomIndicesByLane(LineTrackChain chain)
         {
             if (chain == null)
                 return;
-
             chain.AtomIndicesByLane.Clear();
             for (int atomIndex = 0; atomIndex < chain.TrackAtoms.Count; atomIndex++)
             {
@@ -546,27 +848,22 @@ namespace RapidTransitMod.TrackModel
                 AddAtomIndexForLane(chain.AtomIndicesByLane, atom.Key.PhysicalLaneKey, atomIndex);
                 if (atom.SourceTarget != atom.Key.PhysicalLaneKey)
                     AddAtomIndexForLane(chain.AtomIndicesByLane, atom.SourceTarget, atomIndex);
-
                 AddAtomIndexForNetOwnerChain(chain.AtomIndicesByLane, atom.Key.PhysicalLaneKey, atomIndex);
                 if (atom.SourceTarget != atom.Key.PhysicalLaneKey)
                     AddAtomIndexForNetOwnerChain(chain.AtomIndicesByLane, atom.SourceTarget, atomIndex);
             }
         }
-
         private static void AddAtomIndexForLane(Dictionary<Entity, List<int>> indexByLane, Entity lane, int atomIndex)
         {
             if (lane == Entity.Null)
                 return;
-
             if (!indexByLane.TryGetValue(lane, out List<int> atomIndices))
             {
                 atomIndices = new List<int>();
                 indexByLane[lane] = atomIndices;
             }
-
             atomIndices.Add(atomIndex);
         }
-
         private void AddAtomIndexForNetOwnerChain(Dictionary<Entity, List<int>> indexByLane, Entity entity, int atomIndex)
         {
             Entity current = entity;
@@ -574,18 +871,15 @@ namespace RapidTransitMod.TrackModel
             {
                 if (!EntityManager.HasComponent<Owner>(current))
                     break;
-
                 Entity owner = EntityManager.GetComponentData<Owner>(current).m_Owner;
                 if (owner == Entity.Null || owner == current)
                     break;
-
                 if (EntityManager.HasComponent<Game.Net.Edge>(owner)
                     || EntityManager.HasComponent<Game.Net.Node>(owner)
                     || EntityManager.HasBuffer<Game.Net.SubLane>(owner))
                 {
                     AddAtomIndexForLane(indexByLane, owner, atomIndex);
                 }
-
                 current = owner;
             }
         }

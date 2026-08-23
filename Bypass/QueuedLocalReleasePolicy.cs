@@ -111,6 +111,13 @@ namespace RapidTransitMod.Bypass
             scope = default;
             failureReason = null;
 
+            if (m_Runtime.IsLinePending(localLine))
+            {
+                Remove(localVehicle, BypassEntryKind.Scope);
+                failureReason = "line-structure-pending";
+                return false;
+            }
+
             if (localVehicle == Entity.Null
                 || localLine == Entity.Null
                 || currentWaypointIndex < 0)
@@ -161,7 +168,9 @@ namespace RapidTransitMod.Bypass
             Entity vehicle,
             out float sceneCoordinate)
         {
-            if (!m_Runtime.TrackModel.TryGetChainForLine(scope.Line, localWaypoints, out LineTrackChain localChain))
+            if (m_Runtime.IsLinePending(scope.Line)
+                || !m_Runtime.TrackModel.TryGetChainForLine(scope.Line, localWaypoints, out LineTrackChain localChain)
+                || m_Runtime.IsLinePending(scope.Line))
             {
                 sceneCoordinate = 0f;
                 return false;
@@ -215,8 +224,10 @@ namespace RapidTransitMod.Bypass
                 return false;
 
             var routeWaypointBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
-            if (!routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
-                || !m_Runtime.TrackModel.TryGetChainForLine(expressLine, expressWaypoints, out LineTrackChain expressChain))
+            if (m_Runtime.IsLinePending(expressLine)
+                || !routeWaypointBuffers.TryGetBuffer(expressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
+                || !m_Runtime.TrackModel.TryGetChainForLine(expressLine, expressWaypoints, out LineTrackChain expressChain)
+                || m_Runtime.IsLinePending(expressLine))
             {
                 return false;
             }
@@ -306,7 +317,9 @@ namespace RapidTransitMod.Bypass
             if (scope.Line == Entity.Null || scope.WaypointIndex < 0 || waypoints.Length == 0)
                 return false;
 
-            if (!m_Runtime.TrackModel.TryGetChainForLine(scope.Line, waypoints, out LineTrackChain localChain))
+            if (m_Runtime.IsLinePending(scope.Line)
+                || !m_Runtime.TrackModel.TryGetChainForLine(scope.Line, waypoints, out LineTrackChain localChain)
+                || m_Runtime.IsLinePending(scope.Line))
                 return false;
 
             m_Runtime.TrackModel.EnsureBypassPipelineReady(localChain);
@@ -368,7 +381,9 @@ namespace RapidTransitMod.Bypass
             {
                 BufferLookup<RouteWaypoint> routeWaypointBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
                 if (!routeWaypointBuffers.TryGetBuffer(latchedProjection.ExpressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
+                    || m_Runtime.IsLinePending(latchedProjection.ExpressLine)
                     || !m_Runtime.TrackModel.TryGetChainForLine(latchedProjection.ExpressLine, expressWaypoints, out LineTrackChain expressChain)
+                    || m_Runtime.IsLinePending(latchedProjection.ExpressLine)
                     || expressChain == null
                     || expressChain.Signature != latchedProjection.ExpressChainSignature
                     || !m_Runtime.TrackProjection.TryGetVehicleTrackCursorCurrentFrame(

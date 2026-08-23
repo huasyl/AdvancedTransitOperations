@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildAutoStagedPlan, getLineKinds, hasMinimumDepartureGapForOrigin } from "../../../lib/auto-schedule";
+import {
+  buildAutoStagedPlan,
+  buildQuickAddPlan,
+  getLineKinds,
+  getQuickAddSegmentCapacity,
+  hasMinimumDepartureGapForOrigin,
+  QUICK_ADD_DEFAULT_SEGMENTS,
+  QUICK_ADD_STEP_MINUTES,
+  quickMinutesToTime
+} from "../../../lib/auto-schedule";
 import { getWorkbenchApi } from "../../shared/workbench-api";
 import { minutesToTime, timeToMinutes } from "../../../lib/time";
 import { useNativeScheduleI18n } from "../../shared/workbench-i18n";
@@ -14,6 +23,7 @@ import {
   buildCatalog,
   buildRuntimeCatalog,
   directionFromOffsetMode,
+  getLocalizedLineName,
   getReferenceLineIdsForLine,
   normalizeKind,
   offsetModeFromDirection,
@@ -35,6 +45,7 @@ import {
   sortManualDraftRows
 } from "./schedule-normalize";
 import { buildSummaryRowsWithConflicts, getSummaryRowKey, getSummaryRowsSignature } from "./schedule-conflicts";
+import { buildCopyPlan } from "./schedule-copy";
 import {
   createNativeMergedViewForSave,
   flattenSnapshotLineDraftRowsByLineId,
@@ -46,6 +57,7 @@ import {
 import { runNativeSaveOperation } from "./schedule-save-operation";
 
 const DEFAULT_SCHEDULE_MODE = "train";
+const RIGHT_TAB_IDS = new Set(["auto", "manual", "copy"]);
 const EMPTY_LINE_OPTION = {
   id: "",
   kind: "local",
@@ -104,6 +116,35 @@ function getSnapshotRequestSequence(snapshot) {
   return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
 }
 
+function cloneQuickSegments() {
+  return QUICK_ADD_DEFAULT_SEGMENTS.map((segment) => ({ ...segment }));
+}
+
+function getQuickLineRowId(row) {
+  return row?.lineId || row?.serviceId || "";
+}
+
+function getQuickLineSignature(rows, lineId) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => getQuickLineRowId(row) === lineId)
+    .map((row) => `${row?.time || ""}:${normalizeKind(row?.kind || row?.type)}`)
+    .sort()
+    .join("|");
+}
+
+function getQuickInputSignature(segments) {
+  return (Array.isArray(segments) ? segments : [])
+    .map((segment) => `${segment?.id || ""}:${segment?.start ?? ""}-${segment?.end ?? ""}:${segment?.count ?? ""}`)
+    .join("|");
+}
+
+function getQuickPlanSignature(plan) {
+  return (Array.isArray(plan?.plannedRows) ? plan.plannedRows : [])
+    .map((row) => `${row?.timeMinutes ?? ""}:${normalizeKind(row?.kind)}`)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+}
+
 export default function useScheduleController({ registerHostActions, activeTransportMode = "train", isActive = false, onSnapshot } = {}) {
 
   const { t } = useNativeScheduleI18n();
@@ -111,6 +152,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const supportsExpress = scheduleMode === "train" || scheduleMode === "subway";
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
+  const [autoSubMode, setAutoSubMode] = useState("quick");
+  const [quickConfigsByLine, setQuickConfigsByLine] = useState({});
+  const [quickImportRecordsByLine, setQuickImportRecordsByLine] = useState({});
   const [catalogRevision, setCatalogRevision] = useState(0);
   const dropdownPortalHostRef = useRef(null);
   const [selectedLineId, setSelectedLineId] = useState(LINE_OPTIONS[0]?.id || "");
@@ -130,6 +174,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const [manualDrafts, setManualDrafts] = useState([]);
   const [pendingRemovedLineIds, setPendingRemovedLineIds] = useState([]);
   const [manualInput, setManualInput] = useState("12:00");
+  const [copySourceLineId, setCopySourceLineId] = useState("");
+  const [copyExcludedSourceRowIds, setCopyExcludedSourceRowIds] = useState([]);
+  const [copyPreviewSnapshot, setCopyPreviewSnapshot] = useState(null);
+  const [copyImportLocked, setCopyImportLocked] = useState(false);
   const [editorStart, setEditorStart] = useState("08:00");
   const [editorEnd, setEditorEnd] = useState("10:00");
   const [autoFrequencyText, setAutoFrequencyText] = useState("1");
@@ -189,6 +237,10 @@ export default function useScheduleController({ registerHostActions, activeTrans
     () => (supportsExpress ? normalizeKind(selectedLineType) : "local"),
     [selectedLineType, supportsExpress]
   );
+  const currentQuickSegments = useMemo(
+    () => quickConfigsByLine[selectedLine.id] || cloneQuickSegments(),
+    [quickConfigsByLine, selectedLine.id]
+  );
   const normalizedManualInput = useMemo(
     () => normalizeTimeInput(String(manualInput || "").trim()),
     [manualInput]
@@ -237,6 +289,38 @@ export default function useScheduleController({ registerHostActions, activeTrans
       replaceExistingAutoRows: false
     });
   }, [currentAutoRules, currentKind, planLineOptions, selectedLine, summaryEntries]);
+  const currentQuickPlan = useMemo(
+    () => buildQuickAddPlan({
+      segments: currentQuickSegments,
+      currentRows: summaryEntries,
+      selectedLineId: selectedLine.id,
+      originStationId: selectedLine.originStationId || "",
+      kind: currentKind
+    }),
+    [currentKind, currentQuickSegments, selectedLine.id, selectedLine.originStationId, summaryEntries]
+  );
+  const quickInputSignature = useMemo(
+    () => getQuickInputSignature(currentQuickSegments),
+    [currentQuickSegments]
+  );
+  const quickPlanSignature = useMemo(
+    () => getQuickPlanSignature(currentQuickPlan),
+    [currentQuickPlan]
+  );
+  const quickActualLineSignature = useMemo(
+    () => getQuickLineSignature(summaryEntries, selectedLine.id),
+    [selectedLine.id, summaryEntries]
+  );
+  const quickImportRecord = quickImportRecordsByLine[selectedLine.id] || null;
+  const isQuickImported = !!quickImportRecord
+    && quickImportRecord.inputSignature === quickInputSignature
+    && quickImportRecord.planSignature === quickPlanSignature
+    && quickImportRecord.outputSignature === quickActualLineSignature;
+  const isQuickAllZero = currentQuickPlan.targetCount <= 0;
+  const isQuickImportDisabled = selectedLine.dispatchSupported === false
+    || isQuickAllZero
+    || currentQuickPlan.successCount <= 0
+    || isQuickImported;
   const renderedAutoRules = useMemo(
     () => currentAutoRules.map((rule) => {
       const preview = currentAutoPlan.previewsByRule[rule.id] || { times: [], entries: [], skippedCount: 0, skipReasons: [], reason: "" };
@@ -337,12 +421,75 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const summaryStateLabel = hasAppliedSchedule ? t("nativeSchedule.summary.section.applied") : t("nativeSchedule.summary.section.pending");
   const summaryFooterNote = panelMessage?.scope === "summary" ? panelMessage : null;
   const autoFooterNote =
-    panelMessage?.scope === "auto"
+    autoSubMode === "custom" && panelMessage?.scope === "auto"
       ? panelMessage
       : currentAutoPlan.hasKindConflict
+        && autoSubMode === "custom"
         ? { scope: "auto", tone: "error", text: t("nativeSchedule.message.auto.kindConflict") }
         : null;
+  const quickFooterNote = panelMessage?.scope === "quick" ? panelMessage : null;
   const manualFooterNote = panelMessage?.scope === "manual" ? panelMessage : null;
+  const copySourceOptions = useMemo(
+    () => LINE_OPTIONS
+      .filter((line) => line?.id && line.id !== selectedLine.id && line.dispatchSupported !== false)
+      .map((line) => ({
+        value: line.id,
+        label: getLocalizedLineName(line, t)
+      })),
+    [catalogRevision, selectedLine.id, t]
+  );
+  const copySourceLine = useMemo(
+    () => copySourceOptions.find((option) => option.value === copySourceLineId) ?? null,
+    [copySourceLineId, copySourceOptions]
+  );
+  const allCopySourceRows = useMemo(
+    () => (copySourceLine && copyPreviewSnapshot?.sourceLineId === copySourceLine.value
+      ? copyPreviewSnapshot.allSourceRows
+      : []),
+    [copyPreviewSnapshot, copySourceLine]
+  );
+  const copySourceRows = useMemo(
+    () => (copySourceLine && copyPreviewSnapshot?.sourceLineId === copySourceLine.value
+      ? copyPreviewSnapshot.sourceRows
+      : []),
+    [copyPreviewSnapshot, copySourceLine]
+  );
+  const copyPlan = useMemo(
+    () => buildCopyPlan({
+      sourceRows: copySourceRows,
+      occupiedRows: copyPreviewSnapshot?.occupiedRows || [],
+      targetOriginStationId: copyPreviewSnapshot?.targetOriginStationId || "",
+      targetKind: copyPreviewSnapshot?.targetKind || "local"
+    }),
+    [copyPreviewSnapshot, copySourceRows]
+  );
+  const copyPreviewText = useMemo(() => {
+    if (!copySourceLine) {
+      return t("nativeSchedule.copy.preview.noSource");
+    }
+
+    if (copySourceRows.length === 0) {
+      return t(allCopySourceRows.length === 0
+        ? "nativeSchedule.copy.preview.sourceEmpty"
+        : "nativeSchedule.copy.preview.noRows");
+    }
+
+    return t("nativeSchedule.copy.preview.summary", {
+      sourceTotal: copySourceRows.length,
+      copied: copyPlan.copiedCount,
+      adjusted: copyPlan.adjustedCount,
+      skipped: copyPlan.skippedCount
+    });
+  }, [allCopySourceRows.length, copyPlan, copySourceLine, copySourceRows.length, t]);
+  const copyEmptyText = copySourceLine && copySourceRows.length === 0
+    ? t(allCopySourceRows.length === 0
+      ? "nativeSchedule.copy.preview.sourceEmpty"
+      : "nativeSchedule.copy.preview.noRows")
+    : "";
+  const copyFooterNote = panelMessage?.scope === "copy" ? panelMessage : null;
+  const copyImportDisabled = copyImportLocked
+    || copySourceRows.length === 0
+    || copyPlan.copiedCount <= 0;
 
   function bumpCatalogRevision() {
     setCatalogRevision((current) => current + 1);
@@ -455,7 +602,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
   }
 
   function applyHydratedState(snapshot, metadataSnapshot = null, expectedMode = scheduleMode, options = {}) {
-    const { preservePendingRemovedLineIds = false } = options;
+    const { preservePendingRemovedLineIds = false, preserveQuickState = false } = options;
     const targetMode = normalizeScheduleMode(expectedMode);
     if (!shouldConsumeSchedulePayload(snapshot, targetMode)) {
       return false;
@@ -508,7 +655,12 @@ export default function useScheduleController({ registerHostActions, activeTrans
     const currentSummaryRowKeys = appliedSummaryEntries.map((row) => getSummaryRowKey(row));
     logBackendCleanup(snapshot?.cleanupInfo, "snapshot");
 
-    setActiveRightTab((current) => (current === "manual" ? "manual" : "auto"));
+    setActiveRightTab((current) => (RIGHT_TAB_IDS.has(current) ? current : "auto"));
+    if (!preserveQuickState) {
+      setAutoSubMode("quick");
+      setQuickConfigsByLine({});
+    }
+    setQuickImportRecordsByLine({});
     setSelectedLineId(sourceLine.id);
     setSelectedLineType(supportsExpress ? sourceLine.kind : "local");
     setSelectedDepot(sourceLine.depotId);
@@ -570,6 +722,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
       setOrigin("");
       setHoldMinutes("");
       setDwellMinutes("");
+      setCopyPreviewSnapshot(null);
+      setCopyImportLocked(false);
+      setCopyExcludedSourceRowIds([]);
       return;
     }
 
@@ -578,6 +733,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       && getLineRuntimeToken(nextLine) !== getLineRuntimeToken(previousSelectedLine);
     const changedLine = nextLine.id !== selectedLineId || selectedLineReplaced;
     if (changedLine) {
+      setCopyExcludedSourceRowIds([]);
       setSelectedLineId(nextLine.id);
       setSelectedLineType(supportsExpress ? nextLine.kind : "local");
       setSelectedDepot(nextLine.depotId);
@@ -681,6 +837,13 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setSummaryEntries([]);
     setAutoRules([]);
     setManualDrafts([]);
+    setAutoSubMode("quick");
+    setQuickConfigsByLine({});
+    setQuickImportRecordsByLine({});
+    setCopySourceLineId("");
+    setCopyExcludedSourceRowIds([]);
+    setCopyPreviewSnapshot(null);
+    setCopyImportLocked(false);
     setPendingRemovedLineIds([]);
     setAppliedSummarySignature("");
     setAppliedLineSettingsSignature("");
@@ -916,7 +1079,8 @@ export default function useScheduleController({ registerHostActions, activeTrans
       if (result?.snapshot) {
         if (isCurrentModeRequest(requestMode, requestGeneration)) {
           applyHydratedState(result.snapshot, null, requestMode, {
-            preservePendingRemovedLineIds: result?.success !== true
+            preservePendingRemovedLineIds: result?.success !== true,
+            preserveQuickState: true
           });
         }
       } else {
@@ -948,11 +1112,91 @@ export default function useScheduleController({ registerHostActions, activeTrans
     clearPanelMessage();
   }
 
+  function getCopyTargetKind(line = selectedLine) {
+    return supportsExpress ? normalizeKind(line?.kind || selectedLineType) : "local";
+  }
+
+  function buildCopyPreviewSnapshot({
+    rows = summaryEntries,
+    sourceId = copySourceLineId,
+    targetLine = selectedLine,
+    excludedRowIds = copyExcludedSourceRowIds,
+    targetKind = getCopyTargetKind(targetLine)
+  } = {}) {
+    if (!sourceId || !targetLine?.id || sourceId === targetLine.id) {
+      return null;
+    }
+
+    const allSourceRows = (Array.isArray(rows) ? rows : [])
+      .filter((row) => row?.lineId === sourceId || row?.serviceId === sourceId)
+      .map((row) => ({ ...row }));
+    const excludedRowIdSet = new Set(Array.isArray(excludedRowIds) ? excludedRowIds : []);
+    const sourceRows = allSourceRows.filter((row) => !excludedRowIdSet.has(row.id));
+    const occupiedRows = (Array.isArray(rows) ? rows : [])
+      .filter((row) => row?.lineId !== targetLine.id && row?.serviceId !== targetLine.id)
+      .map((row) => ({ ...row }));
+
+    return {
+      sourceLineId: sourceId,
+      allSourceRows,
+      sourceRows,
+      occupiedRows,
+      targetOriginStationId: targetLine.originStationId || "",
+      targetKind
+    };
+  }
+
+  function refreshCopyPreview({
+    rows = summaryEntries,
+    sourceId = copySourceLineId,
+    targetLine = selectedLine,
+    excludedRowIds = copyExcludedSourceRowIds,
+    targetKind = getCopyTargetKind(targetLine)
+  } = {}) {
+    setCopyPreviewSnapshot(buildCopyPreviewSnapshot({
+      rows,
+      sourceId,
+      targetLine,
+      excludedRowIds,
+      targetKind
+    }));
+    setCopyImportLocked(false);
+  }
+
+  function invalidateQuickImport(lineId = selectedLine.id) {
+    if (!lineId) {
+      return;
+    }
+
+    setQuickImportRecordsByLine((current) => {
+      if (!current[lineId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[lineId];
+      return next;
+    });
+  }
+
   function applySelectedLine(nextLine) {
     if (!nextLine) {
       return;
     }
 
+    if (nextLine.id !== selectedLineId) {
+      setCopyExcludedSourceRowIds([]);
+      setCopyPreviewSnapshot(null);
+      setCopyImportLocked(false);
+      if (copySourceLineId === nextLine.id) {
+        setCopySourceLineId("");
+      } else if (activeRightTab === "copy") {
+        refreshCopyPreview({
+          sourceId: copySourceLineId,
+          targetLine: nextLine,
+          targetKind: getCopyTargetKind(nextLine)
+        });
+      }
+    }
     setSelectedLineId(nextLine.id);
     setSelectedLineType(supportsExpress ? nextLine.kind : "local");
     setSelectedDepot(nextLine.depotId);
@@ -1013,6 +1257,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       )),
       t
     ));
+    invalidateQuickImport();
   }
 
   function handleDepotChange(value) {
@@ -1061,6 +1306,141 @@ export default function useScheduleController({ registerHostActions, activeTrans
   function handleManualInputChange(value) {
     clearPanelMessage();
     setManualInput(normalizeTimeInput(value));
+  }
+
+  function handleCopySourceChange(nextLineId) {
+    clearPanelMessage();
+    setCopyExcludedSourceRowIds([]);
+    const nextSourceId = String(nextLineId || "");
+    setCopySourceLineId(nextSourceId);
+    refreshCopyPreview({ sourceId: nextSourceId, excludedRowIds: [] });
+  }
+
+  function handleRightTabChange(nextTab) {
+    if (!RIGHT_TAB_IDS.has(nextTab)) {
+      return;
+    }
+
+    clearPanelMessage();
+    if (nextTab === "copy" && activeRightTab !== "copy") {
+      refreshCopyPreview();
+    }
+    setActiveRightTab(nextTab);
+  }
+
+  function handleAutoSubModeChange(nextMode) {
+    if (nextMode !== "quick" && nextMode !== "custom") {
+      return;
+    }
+    clearPanelMessage();
+    setAutoSubMode(nextMode);
+  }
+
+  function removeCopySourceRow(sourceRowId) {
+    if (copyImportLocked) {
+      return;
+    }
+
+    clearPanelMessage();
+    const nextExcludedRowIds = copyExcludedSourceRowIds.includes(sourceRowId)
+      ? copyExcludedSourceRowIds
+      : [...copyExcludedSourceRowIds, sourceRowId];
+    setCopyExcludedSourceRowIds(nextExcludedRowIds);
+    refreshCopyPreview({ excludedRowIds: nextExcludedRowIds });
+  }
+
+  function isQuickBoundaryDisabled(segmentIndex, field, direction) {
+    const segment = currentQuickSegments[segmentIndex];
+    if (!segment) {
+      return true;
+    }
+
+    const nextValue = Number(segment[field]) + direction * QUICK_ADD_STEP_MINUTES;
+    if (field === "start") {
+      if (nextValue < 0 || nextValue >= segment.end) {
+        return true;
+      }
+
+      const previous = currentQuickSegments[segmentIndex - 1];
+      return direction < 0
+        && previous
+        && nextValue < previous.end
+        && nextValue - previous.start < QUICK_ADD_STEP_MINUTES;
+    }
+
+    if (nextValue > 1440 || nextValue <= segment.start) {
+      return true;
+    }
+
+    const next = currentQuickSegments[segmentIndex + 1];
+    return direction > 0
+      && next
+      && nextValue > next.start
+      && next.end - nextValue < QUICK_ADD_STEP_MINUTES;
+  }
+
+  function updateQuickSegments(updater) {
+    clearPanelMessage();
+    setQuickConfigsByLine((current) => {
+      const source = current[selectedLine.id] || cloneQuickSegments();
+      const next = updater(source.map((segment) => ({ ...segment })))
+        .map((segment) => ({
+          ...segment,
+          count: Math.min(
+            Math.max(0, Math.trunc(Number(segment.count) || 0)),
+            getQuickAddSegmentCapacity(segment.start, segment.end)
+          )
+        }));
+      return { ...current, [selectedLine.id]: next };
+    });
+  }
+
+  function changeQuickBoundary(segmentIndex, field, direction) {
+    if (isQuickBoundaryDisabled(segmentIndex, field, direction)) {
+      return;
+    }
+
+    updateQuickSegments((segments) => {
+      const segment = segments[segmentIndex];
+      const nextValue = Number(segment[field]) + direction * QUICK_ADD_STEP_MINUTES;
+      segment[field] = nextValue;
+      if (field === "start" && direction < 0) {
+        const previous = segments[segmentIndex - 1];
+        if (previous && nextValue < previous.end) {
+          previous.end = nextValue;
+        }
+      }
+      if (field === "end" && direction > 0) {
+        const next = segments[segmentIndex + 1];
+        if (next && nextValue > next.start) {
+          next.start = nextValue;
+        }
+      }
+      return segments;
+    });
+  }
+
+  function changeQuickCount(segmentIndex, delta) {
+    const segment = currentQuickSegments[segmentIndex];
+    if (!segment) {
+      return;
+    }
+
+    const nextCount = Math.max(
+      0,
+      Math.min(
+        getQuickAddSegmentCapacity(segment.start, segment.end),
+        Math.trunc(Number(segment.count) || 0) + delta
+      )
+    );
+    if (nextCount === segment.count) {
+      return;
+    }
+
+    updateQuickSegments((segments) => {
+      segments[segmentIndex].count = nextCount;
+      return segments;
+    });
   }
 
   function handleAutoOffsetDirectionChange(nextDirection) {
@@ -1149,26 +1529,36 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
   function removeSummaryRow(rowId) {
     markLocalDataDirty();
-    setSummaryEntries((current) => current.filter((row) => row.id !== rowId));
+    const nextRows = summaryEntries.filter((row) => row.id !== rowId);
+    setSummaryEntries(nextRows);
+    if (activeRightTab === "copy") {
+      refreshCopyPreview({ rows: nextRows });
+    }
+    invalidateQuickImport();
   }
 
   function clearSummaryTable() {
     markLocalDataDirty();
-    setSummaryEntries((current) => {
+    const nextRows = summaryEntries.filter((row) => {
       if (summaryFilter === "current") {
-        return current.filter((row) => row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
+        return row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id;
       }
 
       if (summaryFilter === "local") {
-        return current.filter((row) => row.kind !== "local" || (row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id));
+        return row.kind !== "local" || (row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
       }
 
       if (summaryFilter === "express") {
-        return current.filter((row) => row.kind !== "express" || (row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id));
+        return row.kind !== "express" || (row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
       }
 
-      return current.filter((row) => row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id);
+      return row.lineId !== selectedLine.id && row.serviceId !== selectedLine.id;
     });
+    setSummaryEntries(nextRows);
+    if (activeRightTab === "copy") {
+      refreshCopyPreview({ rows: nextRows });
+    }
+    invalidateQuickImport();
   }
 
   function importManualToSummary() {
@@ -1243,6 +1633,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
 
     markLocalDataDirty();
     setSummaryEntries((current) => normalizeSummaryEntries([...current, ...importedRows], t));
+    invalidateQuickImport();
     setPanelMessage({
       scope: "manual",
       tone: "neutral",
@@ -1253,6 +1644,125 @@ export default function useScheduleController({ registerHostActions, activeTrans
           invalid: invalidRows
         })
         : t("nativeSchedule.message.manual.imported", { count: importedRows.length })
+    });
+  }
+
+  function importCopyToSummary() {
+    if (copyImportLocked) {
+      return;
+    }
+
+    if (selectedLine.dispatchSupported === false) {
+      setPanelMessage({ scope: "copy", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+      return;
+    }
+
+    if (!copySourceLine) {
+      setPanelMessage({ scope: "copy", tone: "warning", text: t("nativeSchedule.message.copy.noSource") });
+      return;
+    }
+
+    if (copySourceRows.length === 0) {
+      setPanelMessage({
+        scope: "copy",
+        tone: "warning",
+        text: t(allCopySourceRows.length === 0
+          ? "nativeSchedule.message.copy.sourceEmpty"
+          : "nativeSchedule.copy.preview.noRows")
+      });
+      return;
+    }
+
+    const importKind = supportsExpress ? normalizeKind(selectedLineType) : "local";
+    const importedRows = copyPlan.rows
+      .filter((row) => !row.skipped)
+      .map((row) => createSummaryEntry({
+        id: `summary-copy-${selectedLine.id}-${copySourceLine.value}-${row.key}-${row.time.replace(":", "")}`,
+        time: row.time,
+        serviceId: selectedLine.id,
+        kind: importKind,
+        source: "manual",
+        note: buildCombinedNote("direct", t)
+      }, t));
+
+    if (importedRows.length === 0) {
+      setPanelMessage({
+        scope: "copy",
+        tone: "neutral",
+        text: t("nativeSchedule.message.copy.blockedAll", { count: copyPlan.skippedCount })
+      });
+      return;
+    }
+
+    const nextRows = normalizeSummaryEntries([
+      ...summaryEntries.filter((row) => row?.lineId !== selectedLine.id && row?.serviceId !== selectedLine.id),
+      ...importedRows
+    ], t);
+    markLocalDataDirty();
+    setSummaryEntries(nextRows);
+    setCopyImportLocked(true);
+    invalidateQuickImport();
+    setPanelMessage({
+      scope: "copy",
+      tone: "neutral",
+      text: copyPlan.skippedCount > 0
+        ? t("nativeSchedule.message.copy.importedWithCounts", {
+          count: importedRows.length,
+          skipped: copyPlan.skippedCount
+        })
+        : t("nativeSchedule.message.copy.imported", { count: importedRows.length })
+    });
+  }
+
+  function importQuickToSummary() {
+    if (selectedLine.dispatchSupported === false) {
+      setPanelMessage({ scope: "quick", tone: "error", text: t("nativeSchedule.message.lineUnsupported") });
+      return;
+    }
+
+    if (currentQuickPlan.targetCount <= 0 || currentQuickPlan.successCount <= 0) {
+      setPanelMessage({ scope: "quick", tone: "neutral", text: t("nativeSchedule.message.quick.noTrips") });
+      return;
+    }
+
+    const importedRows = currentQuickPlan.plannedRows.map((row, index) => {
+      const segment = currentQuickSegments.find((item) => item.id === row.segmentId);
+      return createSummaryEntry({
+        id: `summary-quick-${selectedLine.id}-${row.segmentId}-${row.generatedIndex}-${index}`,
+        time: minutesToTime(row.timeMinutes),
+        serviceId: selectedLine.id,
+        kind: row.kind,
+        source: "auto",
+        note: buildCombinedNote("generated", t, {
+          start: quickMinutesToTime(segment?.start),
+          end: quickMinutesToTime(segment?.end)
+        })
+      }, t);
+    });
+    const nextRows = normalizeSummaryEntries([
+      ...summaryEntries.filter((row) => getQuickLineRowId(row) !== selectedLine.id),
+      ...importedRows
+    ], t);
+
+    markLocalDataDirty();
+    setSummaryEntries(nextRows);
+    setQuickImportRecordsByLine((current) => ({
+      ...current,
+      [selectedLine.id]: {
+        inputSignature: quickInputSignature,
+        planSignature: quickPlanSignature,
+        outputSignature: getQuickLineSignature(nextRows, selectedLine.id)
+      }
+    }));
+    setPanelMessage({
+      scope: "quick",
+      tone: "neutral",
+      text: currentQuickPlan.skippedCount > 0
+        ? t("nativeSchedule.message.quick.importedWithSkipped", {
+          count: importedRows.length,
+          skipped: currentQuickPlan.skippedCount
+        })
+        : t("nativeSchedule.message.quick.imported", { count: importedRows.length })
     });
   }
 
@@ -1316,6 +1826,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     setAutoRules((current) => current.filter((rule) => (
       rule?.lineId !== selectedLine.id && rule?.serviceId !== selectedLine.id
     )));
+    invalidateQuickImport();
     setPanelMessage({
       scope: "auto",
       tone: "neutral",
@@ -1440,6 +1951,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
     },
     auto: {
       activeRightTab,
+      autoSubMode,
       editorStart,
       editorEnd,
       autoFrequencyText,
@@ -1450,7 +1962,21 @@ export default function useScheduleController({ registerHostActions, activeTrans
       autoOffsetMinutesText,
       liveAutoPreview,
       autoRules: renderedAutoRules,
-      footerNote: autoFooterNote
+      footerNote: autoFooterNote,
+      quickFooterNote,
+      quickSegments: currentQuickPlan.segments.map((segment, index) => ({
+        ...segment,
+        count: currentQuickSegments[index]?.count || 0,
+        capacity: getQuickAddSegmentCapacity(segment.start, segment.end),
+        startMinusDisabled: isQuickBoundaryDisabled(index, "start", -1),
+        startPlusDisabled: isQuickBoundaryDisabled(index, "start", 1),
+        endMinusDisabled: isQuickBoundaryDisabled(index, "end", -1),
+        endPlusDisabled: isQuickBoundaryDisabled(index, "end", 1),
+        countMinusDisabled: (currentQuickSegments[index]?.count || 0) <= 0,
+        countPlusDisabled: (currentQuickSegments[index]?.count || 0) >= getQuickAddSegmentCapacity(segment.start, segment.end)
+      })),
+      quickImportDisabled: isQuickImportDisabled,
+      quickImported: isQuickImported
     },
     manual: {
       activeRightTab,
@@ -1460,6 +1986,18 @@ export default function useScheduleController({ registerHostActions, activeTrans
       isAddManualDisabled,
       footerNote: manualFooterNote
     },
+    copy: {
+      activeRightTab,
+      copySourceLineId,
+      copySourceLabel: copySourceLine?.label || t("nativeSchedule.copy.field.sourcePlaceholder"),
+      copySourceOptions,
+      copyPreviewText,
+      copyEmptyText,
+      copyRows: copyPlan.rows,
+      copyImportDisabled,
+      copyImported: copyImportLocked,
+      footerNote: copyFooterNote
+    },
     refs: {
       dropdownPortalHostRef,
       summaryScrollRef,
@@ -1468,7 +2006,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       frequencyInputRef
     },
     actions: {
-      setActiveRightTab,
+      setActiveRightTab: handleRightTabChange,
       selectLine: handleSelectLine,
       refreshNames,
       selectLineType: handleLineTypeSelect,
@@ -1484,16 +2022,23 @@ export default function useScheduleController({ registerHostActions, activeTrans
       locateConflict: handleLocateConflict,
       changeEditorStart: handleEditorStartChange,
       changeEditorEnd: handleEditorEndChange,
+      setAutoSubMode: handleAutoSubModeChange,
       changeAutoFrequency: handleAutoFrequencyChange,
       changeAutoOffsetDirection: handleAutoOffsetDirectionChange,
       changeAutoOffsetMinutes: handleAutoOffsetMinutesChange,
       addAutoRule,
       removeAutoRule,
       importAutoToSummary,
+      changeQuickBoundary,
+      changeQuickCount,
+      importQuickToSummary,
       changeManualInput: handleManualInputChange,
       addManualDraft,
       removeManualDraft,
-      importManualToSummary
+      importManualToSummary,
+      changeCopySource: handleCopySourceChange,
+      removeCopySourceRow,
+      importCopyToSummary
     }
   };
 }

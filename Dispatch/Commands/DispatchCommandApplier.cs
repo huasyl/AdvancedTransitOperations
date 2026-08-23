@@ -216,11 +216,10 @@ namespace RapidTransitMod
                 return;
             }
 
-            RoadOriginGuardResult result = m_RoadCommandHost.EnsureRunningOriginStop(
+            m_RoadCommandHost.EnsureRunningOriginStop(
                 vehicle,
                 line,
                 ecb);
-            LogRoadOriginGuard(vehicle, line, result);
         }
 
         internal void EnsureRunningTimedStop(
@@ -318,47 +317,6 @@ namespace RapidTransitMod
                 return;
 
             m_RoadCommandHost.Log.Info("[RoadPreparing] action=" + action
-                + " line=" + line.Index
-                + " vehicle=" + vehicle.Index
-                + " " + message);
-        }
-
-        private void LogRoadOriginGuard(
-            Entity vehicle,
-            Entity line,
-            RoadOriginGuardResult result)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-
-            string action;
-            string message;
-            switch (result)
-            {
-                case RoadOriginGuardResult.Pin:
-                    action = "origin-pin";
-                    message = "检测到严格wp0，补RequireStop";
-                    break;
-                case RoadOriginGuardResult.Protected:
-                    action = "origin-protected";
-                    message = "检测到严格wp0，RequireStop已保持";
-                    break;
-                case RoadOriginGuardResult.Boarding:
-                    action = "origin-boarding";
-                    message = "检测到严格wp0且已Boarding，等待Running转Idle";
-                    break;
-                case RoadOriginGuardResult.InvalidOrigin:
-                    action = "origin-invalid";
-                    message = "道路始发输入或线路契约无效，拒绝补停";
-                    break;
-                default:
-                    return;
-            }
-
-            if (!ShouldLogRoadCommand(vehicle, action))
-                return;
-
-            m_RoadCommandHost.Log.Info("[RoadOriginGuard] action=" + action
                 + " line=" + line.Index
                 + " vehicle=" + vehicle.Index
                 + " " + message);

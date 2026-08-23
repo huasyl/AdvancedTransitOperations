@@ -11,6 +11,18 @@ using Unity.Mathematics;
 
 namespace RapidTransitMod.Dispatch.Lines
 {
+    internal readonly struct LineMileageChangeResult
+    {
+        internal readonly bool RemovedModel;
+        internal readonly bool SharedRevisionAdvanced;
+
+        internal LineMileageChangeResult(bool removedModel, bool sharedRevisionAdvanced)
+        {
+            RemovedModel = removedModel;
+            SharedRevisionAdvanced = sharedRevisionAdvanced;
+        }
+    }
+
     internal sealed class LineMileage
     {
         private readonly LineMileagePort m_Port;
@@ -20,6 +32,7 @@ namespace RapidTransitMod.Dispatch.Lines
         private uint m_SharedSignatureFrame;
         private ulong m_SharedSignatureValue;
         private bool m_HasSharedSignatureFrame;
+        private uint m_SharedRevision;
         private bool m_Faulted;
 
         private readonly struct LineMileageFrameValidation
@@ -49,6 +62,7 @@ namespace RapidTransitMod.Dispatch.Lines
             m_SharedSignatureFrame = 0;
             m_SharedSignatureValue = 0;
             m_HasSharedSignatureFrame = false;
+            m_SharedRevision = 0;
             m_Faulted = false;
         }
 
@@ -108,6 +122,7 @@ namespace RapidTransitMod.Dispatch.Lines
                     signature = m_Port.MixSignature(signature, (int)(sharedGraph.Signature & 0x7FFFFFFF));
                     signature = m_Port.MixSignature(signature, (int)((sharedGraph.Signature >> 32) & 0x7FFFFFFF));
                 }
+                signature = m_Port.MixSignature(signature, (int)m_SharedRevision);
                 if (m_Models.TryGetValue(line, out model)
                     && model != null
                     && model.Signature == signature
@@ -208,6 +223,21 @@ namespace RapidTransitMod.Dispatch.Lines
 
         public void WriteBuf(Entity line, LineMileageModel model)
         {
+        }
+
+        internal LineMileageChangeResult InvalidateLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return default;
+
+            bool removed = m_Models.Remove(line);
+            m_FrameValidations.Clear();
+            m_Shared = null;
+            m_SharedSignatureFrame = 0;
+            m_SharedSignatureValue = 0;
+            m_HasSharedSignatureFrame = false;
+            m_SharedRevision++;
+            return new LineMileageChangeResult(removed, true);
         }
 
         public LineMileageModel Make(
@@ -325,6 +355,7 @@ namespace RapidTransitMod.Dispatch.Lines
             return new LineMileageModel
             {
                 Signature = signature,
+                SharedRevision = m_SharedRevision,
                 TotalDistanceMeters = cumulative,
                 WaypointDistances = anchors,
                 BypassWaypointDistances = bypassWaypointDistances,
@@ -739,6 +770,7 @@ namespace RapidTransitMod.Dispatch.Lines
     internal sealed class LineMileageModel
     {
         public ulong Signature;
+        public uint SharedRevision;
         public float TotalDistanceMeters;
         public float[] WaypointDistances = Array.Empty<float>();
         public float[] BypassWaypointDistances = Array.Empty<float>();

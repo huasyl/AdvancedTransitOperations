@@ -58,6 +58,9 @@ namespace RapidTransitMod.Dispatch.Observation
 
         internal bool Begin(Entity line, Entity vehicle, int slotMinute)
         {
+            if (m_Port.IsLinePending != null && m_Port.IsLinePending(line))
+                return false;
+
             (bool keySuccess, LineKey lak) = m_Port.StableKey(line);
             if (!keySuccess || lak.IsEmpty)
                 return LogDecision(LineKey.Empty, 0, slotMinute, 0, false, "invalid-lak");
@@ -262,11 +265,11 @@ namespace RapidTransitMod.Dispatch.Observation
             m_Port.RemoveColdStart(lak);
         }
 
-        internal void InvalidateLine(Entity line)
+        internal int InvalidateLine(Entity line)
         {
             (bool success, LineKey lak) = m_Port.StableKey(line);
             if (!success || lak.IsEmpty)
-                return;
+                return 0;
 
             InvalidateColdStart(lak);
             List<Entity> vehicles = new List<Entity>();
@@ -274,6 +277,24 @@ namespace RapidTransitMod.Dispatch.Observation
                 if (pair.Value == lak) vehicles.Add(pair.Key);
             for (int i = 0; i < vehicles.Count; i++)
                 m_AllowedVehicles.Remove(vehicles[i]);
+            return vehicles.Count;
+        }
+
+        internal int SuspendLine(Entity line)
+        {
+            (bool success, LineKey lak) = m_Port.StableKey(line);
+            int ended = m_Slices.SuspendLine(line);
+            if (!success || lak.IsEmpty)
+                return ended;
+
+            InvalidateColdStart(lak);
+            List<Entity> vehicles = new List<Entity>();
+            foreach (KeyValuePair<Entity, LineKey> pair in m_AllowedVehicles)
+                if (pair.Value == lak)
+                    vehicles.Add(pair.Key);
+            for (int i = 0; i < vehicles.Count; i++)
+                m_AllowedVehicles.Remove(vehicles[i]);
+            return ended;
         }
 
         private void LogPlan(

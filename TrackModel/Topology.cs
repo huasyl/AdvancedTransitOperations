@@ -6,7 +6,6 @@ using Game.Pathfind;
 using RapidTransitMod.Bypass;
 using Unity.Entities;
 using Unity.Mathematics;
-
 namespace RapidTransitMod.TrackModel
 {
     internal enum TrackTraversalDir : byte
@@ -15,14 +14,12 @@ namespace RapidTransitMod.TrackModel
         Forward = 1,
         Reverse = 2,
     }
-
     internal enum SharedTraversalRelation : byte
     {
         Unknown = 0,
         SameDirection = 1,
         OppositeDirection = 2,
     }
-
     internal enum RelativeToTrunkState : byte
     {
         Unknown = 0,
@@ -34,7 +31,6 @@ namespace RapidTransitMod.TrackModel
         DepartingFromTrunk = 6,
         FutureReturnOnly = 7,
     }
-
     internal enum TrackAtomClass : byte
     {
         Unknown = 0,
@@ -42,7 +38,6 @@ namespace RapidTransitMod.TrackModel
         ConnectionHelper = 2,
         FilteredNoise = 3,
     }
-
     internal enum ControlPointKind : byte
     {
         Unknown = 0,
@@ -53,32 +48,27 @@ namespace RapidTransitMod.TrackModel
         SharedEntry = 5,
         SharedExit = 6,
     }
-
     internal readonly struct TrackAtomKey : IEquatable<TrackAtomKey>
     {
         public readonly Entity PhysicalLaneKey;
         public readonly Entity PreviousTarget;
         public readonly Entity NextTarget;
-
         public TrackAtomKey(Entity physicalLaneKey, Entity previousTarget, Entity nextTarget)
         {
             PhysicalLaneKey = physicalLaneKey;
             PreviousTarget = previousTarget;
             NextTarget = nextTarget;
         }
-
         public bool Equals(TrackAtomKey other)
         {
             return PhysicalLaneKey == other.PhysicalLaneKey
                 && PreviousTarget == other.PreviousTarget
                 && NextTarget == other.NextTarget;
         }
-
         public override bool Equals(object obj)
         {
             return obj is TrackAtomKey other && Equals(other);
         }
-
         public override int GetHashCode()
         {
             unchecked
@@ -89,7 +79,6 @@ namespace RapidTransitMod.TrackModel
                 return hashCode;
             }
         }
-
         public override string ToString()
         {
             string previous = PreviousTarget == Entity.Null ? "null" : PreviousTarget.Index.ToString();
@@ -97,7 +86,6 @@ namespace RapidTransitMod.TrackModel
             return previous + "->" + PhysicalLaneKey.Index + "->" + next;
         }
     }
-
     internal readonly struct TrackAtom
     {
         public readonly TrackAtomKey Key;
@@ -106,7 +94,6 @@ namespace RapidTransitMod.TrackModel
         public readonly PathElementFlags SourceFlags;
         public readonly TrackAtomClass AtomClass;
         public readonly TrackTraversalDir TraversalDir;
-
         public TrackAtom(
             TrackAtomKey key,
             Entity sourceTarget,
@@ -123,26 +110,22 @@ namespace RapidTransitMod.TrackModel
             TraversalDir = traversalDir;
         }
     }
-
     internal readonly struct TrackSegmentRange
     {
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
-
         public TrackSegmentRange(int startAtomIndex, int endAtomIndexExclusive)
         {
             StartAtomIndex = startAtomIndex;
             EndAtomIndexExclusive = endAtomIndexExclusive;
         }
     }
-
     internal readonly struct ControlPointMarker
     {
         public readonly int AtomIndex;
         public readonly int WaypointIndex;
         public readonly Entity Building;
         public readonly ControlPointKind Kind;
-
         public ControlPointMarker(int atomIndex, int waypointIndex, Entity building, ControlPointKind kind)
         {
             AtomIndex = atomIndex;
@@ -151,7 +134,6 @@ namespace RapidTransitMod.TrackModel
             Kind = kind;
         }
     }
-
     internal readonly struct EndpointMarker
     {
         public readonly int AtomIndex;
@@ -160,7 +142,6 @@ namespace RapidTransitMod.TrackModel
         public readonly Entity OutsideConnection;
         public readonly RouteWaypointEndpointKind Kind;
         public readonly RouteWaypointEndpointDirection Direction;
-
         public EndpointMarker(
             int atomIndex,
             int waypointIndex,
@@ -177,7 +158,6 @@ namespace RapidTransitMod.TrackModel
             Direction = direction;
         }
     }
-
     internal readonly struct ControlEdge
     {
         public readonly int StartControlPointIndex;
@@ -185,7 +165,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
         public readonly float BaseFrames;
-
         public ControlEdge(
             int startControlPointIndex,
             int endControlPointIndex,
@@ -200,7 +179,6 @@ namespace RapidTransitMod.TrackModel
             BaseFrames = baseFrames;
         }
     }
-
     internal enum TraversalEventKind : byte
     {
         Unknown = 0,
@@ -211,7 +189,6 @@ namespace RapidTransitMod.TrackModel
         OutsideEndpointBoundary = 5,
         BreakBoundary = 6,
     }
-
     internal readonly struct TraversalEvent
     {
         public readonly int EventIndex;
@@ -223,7 +200,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int EndAtomIndexExclusive;
         public readonly float StopFrames;
         public readonly string StationId;
-
         public TraversalEvent(
             int eventIndex,
             TraversalEventKind kind,
@@ -246,7 +222,6 @@ namespace RapidTransitMod.TrackModel
             StationId = stationId ?? string.Empty;
         }
     }
-
     internal readonly struct TraversalRunSlice
     {
         public readonly int SliceIndex;
@@ -256,7 +231,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int EndEventIndex;
         public readonly Entity[] PhysicalLaneKeys;
         public readonly float RunFrames;
-
         public TraversalRunSlice(
             int sliceIndex,
             int startAtomIndex,
@@ -275,7 +249,6 @@ namespace RapidTransitMod.TrackModel
             RunFrames = runFrames;
         }
     }
-
     internal sealed class LineTraversalProfile
     {
         public readonly List<TraversalEvent> Events = new List<TraversalEvent>();
@@ -283,7 +256,6 @@ namespace RapidTransitMod.TrackModel
         public int[] AtomToRunSliceIndex = Array.Empty<int>();
         public float[][] SegmentSliceCutPointProgresses = Array.Empty<float[]>();
     }
-
     internal readonly struct TurnbackBoundary
     {
         public readonly int AtomIndex;
@@ -293,7 +265,6 @@ namespace RapidTransitMod.TrackModel
         public readonly bool IsLearned;
         public readonly int MatchedAtomCount;
         public readonly int MatchedUniqueLaneCount;
-
         public TurnbackBoundary(
             int atomIndex,
             int beforeSliceIndex,
@@ -312,13 +283,11 @@ namespace RapidTransitMod.TrackModel
             MatchedUniqueLaneCount = matchedUniqueLaneCount;
         }
     }
-
     internal readonly struct RunChartTurnbackRegion
     {
         public readonly int BoundaryAtomIndex;
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
-
         public RunChartTurnbackRegion(
             int boundaryAtomIndex,
             int startAtomIndex,
@@ -329,14 +298,12 @@ namespace RapidTransitMod.TrackModel
             EndAtomIndexExclusive = endAtomIndexExclusive;
         }
     }
-
     internal readonly struct TrackTurnbackStationBoundary
     {
         public readonly Entity StationEntity;
         public readonly int WaypointIndex;
         public readonly int AtomIndex;
         public readonly int BoundaryEventIndex;
-
         public TrackTurnbackStationBoundary(
             Entity stationEntity,
             int waypointIndex,
@@ -349,13 +316,11 @@ namespace RapidTransitMod.TrackModel
             BoundaryEventIndex = boundaryEventIndex;
         }
     }
-
     internal readonly struct TraversalTimingEstimate
     {
         public readonly float RunFrames;
         public readonly float StopFrames;
         public readonly float TotalFrames;
-
         public TraversalTimingEstimate(float runFrames, float stopFrames)
         {
             RunFrames = runFrames;
@@ -363,10 +328,10 @@ namespace RapidTransitMod.TrackModel
             TotalFrames = runFrames + stopFrames;
         }
     }
-
     internal sealed class LineTrackChain
     {
         public Entity LineEntity;
+        public TransitMode Mode;
         public ulong Signature;
         public ulong TraversalSignature;
         public bool ChainComplete;
@@ -387,6 +352,8 @@ namespace RapidTransitMod.TrackModel
         public List<TurnbackBoundary> TurnbackBoundaries = new List<TurnbackBoundary>();
         public List<RunChartTurnbackRegion> RunChartTurnbackRegions = new List<RunChartTurnbackRegion>();
         public LocalBypassWaypointSceneBinding[] LocalBypassWaypointScenes = Array.Empty<LocalBypassWaypointSceneBinding>();
+        public TrackWaypointInputBaseline[] WaypointInputs = Array.Empty<TrackWaypointInputBaseline>();
+        public TrackSegmentInputBaseline[] SegmentInputs = Array.Empty<TrackSegmentInputBaseline>();
         public uint LocalBypassWaypointScenesVersion;
         public uint SharedRunsVersion;
         public uint BypassPipelineReadyVersion;
@@ -398,13 +365,11 @@ namespace RapidTransitMod.TrackModel
         public string TurnbackBuildNote = string.Empty;
         public int TurnbackBuildSegmentPairIndex = -1;
     }
-
     internal readonly struct DevSightLaneOccurrence
     {
         public readonly Entity LineEntity;
         public readonly LineTrackChain Chain;
         public readonly List<int> AtomIndices;
-
         public DevSightLaneOccurrence(Entity lineEntity, LineTrackChain chain, List<int> atomIndices)
         {
             LineEntity = lineEntity;
@@ -412,14 +377,12 @@ namespace RapidTransitMod.TrackModel
             AtomIndices = atomIndices;
         }
     }
-
     internal readonly struct SharedTrackRun
     {
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
         public readonly bool HasMirroredContext;
         public readonly int SharedLineCount;
-
         public SharedTrackRun(int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount)
         {
             StartAtomIndex = startAtomIndex;
@@ -428,7 +391,6 @@ namespace RapidTransitMod.TrackModel
             SharedLineCount = sharedLineCount;
         }
     }
-
     internal readonly struct ControlEdgeSharedSpan
     {
         public readonly int ControlEdgeIndex;
@@ -436,7 +398,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int EndAtomIndexExclusive;
         public readonly bool HasMirroredContext;
         public readonly int SharedLineCount;
-
         public ControlEdgeSharedSpan(int controlEdgeIndex, int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount)
         {
             ControlEdgeIndex = controlEdgeIndex;
@@ -446,7 +407,6 @@ namespace RapidTransitMod.TrackModel
             SharedLineCount = sharedLineCount;
         }
     }
-
     internal readonly struct BypassProtectedInterval
     {
         public readonly int StartControlPointIndex;
@@ -456,7 +416,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int StartAtomIndex;
         public readonly int EndAtomIndexExclusive;
         public readonly float BaseFrames;
-
         public BypassProtectedInterval(int startControlPointIndex, int endControlPointIndex, int startControlEdgeIndex, int endControlEdgeIndexInclusive, int startAtomIndex, int endAtomIndexExclusive, float baseFrames)
         {
             StartControlPointIndex = startControlPointIndex;
@@ -468,7 +427,6 @@ namespace RapidTransitMod.TrackModel
             BaseFrames = baseFrames;
         }
     }
-
     internal readonly struct ProtectedSharedInterval
     {
         public readonly int ProtectedIntervalIndex;
@@ -479,7 +437,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int SharedLineCount;
         public readonly float EntryOffsetFrames;
         public readonly float ClearOffsetFrames;
-
         public ProtectedSharedInterval(int protectedIntervalIndex, int controlEdgeIndex, int startAtomIndex, int endAtomIndexExclusive, bool hasMirroredContext, int sharedLineCount, float entryOffsetFrames, float clearOffsetFrames)
         {
             ProtectedIntervalIndex = protectedIntervalIndex;
@@ -492,7 +449,6 @@ namespace RapidTransitMod.TrackModel
             ClearOffsetFrames = clearOffsetFrames;
         }
     }
-
     internal readonly struct ProtectedIntervalSummary
     {
         public readonly int ProtectedIntervalIndex;
@@ -501,7 +457,6 @@ namespace RapidTransitMod.TrackModel
         public readonly bool HasMirroredContext;
         public readonly float MinEntryOffsetFrames;
         public readonly float MaxClearOffsetFrames;
-
         public ProtectedIntervalSummary(int protectedIntervalIndex, int sharedSegmentCount, int maxSharedLineCount, bool hasMirroredContext, float minEntryOffsetFrames, float maxClearOffsetFrames)
         {
             ProtectedIntervalIndex = protectedIntervalIndex;
@@ -512,7 +467,6 @@ namespace RapidTransitMod.TrackModel
             MaxClearOffsetFrames = maxClearOffsetFrames;
         }
     }
-
     internal readonly struct TrunkSkeleton
     {
         public readonly int LocalSharedStartAtomIndex;
@@ -533,7 +487,6 @@ namespace RapidTransitMod.TrackModel
         public readonly bool HasCanonicalDirection;
         public readonly bool LocalAlongCanonical;
         public readonly bool ExpressAlongCanonical;
-
         public TrunkSkeleton(
             int localSharedStartAtomIndex,
             int localSharedEndAtomIndexExclusive,
@@ -574,7 +527,6 @@ namespace RapidTransitMod.TrackModel
             ExpressAlongCanonical = expressAlongCanonical;
         }
     }
-
     internal readonly struct SharedRunBand
     {
         public readonly int StartAtomIndex;
@@ -583,7 +535,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int BridgedGapAtoms;
         public readonly bool HasMirroredContext;
         public readonly int MaxSharedLineCount;
-
         public SharedRunBand(
             int startAtomIndex,
             int endAtomIndexExclusive,
@@ -600,7 +551,6 @@ namespace RapidTransitMod.TrackModel
             MaxSharedLineCount = maxSharedLineCount;
         }
     }
-
     internal readonly struct AtomWindowSlice
     {
         public readonly int StartAtomIndex;
@@ -609,7 +559,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int BridgedGapAtoms;
         public readonly bool HasMirroredContext;
         public readonly int MaxSharedLineCount;
-
         public AtomWindowSlice(
             int startAtomIndex,
             int endAtomIndexExclusive,
@@ -626,7 +575,6 @@ namespace RapidTransitMod.TrackModel
             MaxSharedLineCount = maxSharedLineCount;
         }
     }
-
     internal readonly struct DirectedSharedPairSegment
     {
         public readonly int LocalStartAtomIndex;
@@ -645,7 +593,6 @@ namespace RapidTransitMod.TrackModel
         public readonly bool HasCanonicalDirection;
         public readonly bool LocalAlongCanonical;
         public readonly bool ExpressAlongCanonical;
-
         public DirectedSharedPairSegment(
             int localStartAtomIndex,
             int localEndAtomIndexExclusive,
@@ -682,7 +629,6 @@ namespace RapidTransitMod.TrackModel
             ExpressAlongCanonical = expressAlongCanonical;
         }
     }
-
     internal readonly struct TrunkPhaseAlignment : IEquatable<TrunkPhaseAlignment>
     {
         public readonly bool Available;
@@ -692,7 +638,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int ExpressTraversalPhaseIndex;
         public readonly int ExpressPhaseStartAtomIndex;
         public readonly int ExpressPhaseEndAtomExclusive;
-
         public TrunkPhaseAlignment(
             bool available,
             int localTraversalPhaseIndex,
@@ -710,7 +655,6 @@ namespace RapidTransitMod.TrackModel
             ExpressPhaseStartAtomIndex = expressPhaseStartAtomIndex;
             ExpressPhaseEndAtomExclusive = expressPhaseEndAtomExclusive;
         }
-
         public bool Equals(TrunkPhaseAlignment other)
         {
             return Available == other.Available
@@ -721,12 +665,10 @@ namespace RapidTransitMod.TrackModel
                 && ExpressPhaseStartAtomIndex == other.ExpressPhaseStartAtomIndex
                 && ExpressPhaseEndAtomExclusive == other.ExpressPhaseEndAtomExclusive;
         }
-
         public override bool Equals(object obj)
         {
             return obj is TrunkPhaseAlignment other && Equals(other);
         }
-
         public override int GetHashCode()
         {
             unchecked
@@ -742,7 +684,6 @@ namespace RapidTransitMod.TrackModel
             }
         }
     }
-
     internal readonly struct GlobalSharedTrunkSegment : IEquatable<GlobalSharedTrunkSegment>
     {
         public readonly int LocalCorridorStartAtomIndex;
@@ -766,7 +707,6 @@ namespace RapidTransitMod.TrackModel
         public readonly bool LocalAlongCanonical;
         public readonly bool ExpressAlongCanonical;
         public readonly TrunkPhaseAlignment PhaseAlignment;
-
         public GlobalSharedTrunkSegment(
             int localCorridorStartAtomIndex,
             int localCorridorEndAtomIndexExclusive,
@@ -812,7 +752,6 @@ namespace RapidTransitMod.TrackModel
             ExpressAlongCanonical = expressAlongCanonical;
             PhaseAlignment = phaseAlignment;
         }
-
         public bool Equals(GlobalSharedTrunkSegment other)
         {
             return LocalCorridorStartAtomIndex == other.LocalCorridorStartAtomIndex
@@ -837,12 +776,10 @@ namespace RapidTransitMod.TrackModel
                 && ExpressAlongCanonical == other.ExpressAlongCanonical
                 && PhaseAlignment.Equals(other.PhaseAlignment);
         }
-
         public override bool Equals(object obj)
         {
             return obj is GlobalSharedTrunkSegment other && Equals(other);
         }
-
         public override int GetHashCode()
         {
             unchecked
@@ -872,13 +809,11 @@ namespace RapidTransitMod.TrackModel
             }
         }
     }
-
     internal readonly struct SharedTrackOccurrence
     {
         public readonly Entity LineEntity;
         public readonly int AtomIndex;
         public readonly int WaypointSegmentIndex;
-
         public SharedTrackOccurrence(Entity lineEntity, int atomIndex, int waypointSegmentIndex)
         {
             LineEntity = lineEntity;
@@ -886,14 +821,12 @@ namespace RapidTransitMod.TrackModel
             WaypointSegmentIndex = waypointSegmentIndex;
         }
     }
-
     internal readonly struct ProtectedIntervalMatch
     {
         public readonly bool Found;
         public readonly bool Ambiguous;
         public readonly int ProtectedIntervalIndex;
         public readonly int OverlapCount;
-
         public ProtectedIntervalMatch(bool found, bool ambiguous, int protectedIntervalIndex, int overlapCount)
         {
             Found = found;
@@ -902,7 +835,6 @@ namespace RapidTransitMod.TrackModel
             OverlapCount = overlapCount;
         }
     }
-
     internal readonly struct SharedPhysicalOccurrence
     {
         public readonly Entity LineEntity;
@@ -910,7 +842,6 @@ namespace RapidTransitMod.TrackModel
         public readonly int WaypointSegmentIndex;
         public readonly Entity PreviousTarget;
         public readonly Entity NextTarget;
-
         public SharedPhysicalOccurrence(Entity lineEntity, int atomIndex, int waypointSegmentIndex, Entity previousTarget, Entity nextTarget)
         {
             LineEntity = lineEntity;
@@ -920,7 +851,6 @@ namespace RapidTransitMod.TrackModel
             NextTarget = nextTarget;
         }
     }
-
     internal readonly struct PhysicalSharedWindowMatch
     {
         public readonly bool Found;
@@ -929,7 +859,6 @@ namespace RapidTransitMod.TrackModel
         public readonly BypassProtectedInterval ExpressSharedWindow;
         public readonly int OverlapCount;
         public readonly int OrderedRun;
-
         public PhysicalSharedWindowMatch(
             bool found,
             bool ambiguous,
@@ -946,13 +875,11 @@ namespace RapidTransitMod.TrackModel
             OrderedRun = orderedRun;
         }
     }
-
     internal readonly struct TrackModelSequenceItem
     {
         public readonly float DistanceMeters;
         public readonly int KindOrder;
         public readonly string Label;
-
         public TrackModelSequenceItem(float distanceMeters, int kindOrder, string label)
         {
             DistanceMeters = distanceMeters;

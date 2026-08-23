@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Observation
@@ -89,10 +90,17 @@ namespace RapidTransitMod.Dispatch.Observation
         private const int MaxSamplesPerSegment = 65536;
         private readonly Dictionary<Entity, MonitorAverageLine> m_Lines =
             new Dictionary<Entity, MonitorAverageLine>();
+        private readonly Func<Entity, bool> m_IsLinePending;
+
+        internal MonitorAverageStore(Func<Entity, bool> isLinePending = null)
+        {
+            m_IsLinePending = isLinePending;
+        }
 
         internal MonitorChange Add(MonitorIntervalSample sample)
         {
-            if (!ValidSample(sample))
+            if (!ValidSample(sample)
+                || (m_IsLinePending != null && m_IsLinePending(sample.Line)))
                 return default;
 
             if (!m_Lines.TryGetValue(sample.Line, out MonitorAverageLine line))
@@ -208,10 +216,76 @@ namespace RapidTransitMod.Dispatch.Observation
             return true;
         }
 
-        internal void RemoveLine(Entity line)
+        internal int RemoveLine(Entity line)
         {
-            if (line != Entity.Null)
-                m_Lines.Remove(line);
+            if (line == Entity.Null || !m_Lines.TryGetValue(line, out MonitorAverageLine value))
+                return 0;
+
+            m_Lines.Remove(line);
+            return value.Segments?.Length ?? 0;
+        }
+
+        internal MonitorAverageRemapResult RemapLine(
+            Entity line,
+            LineStopLayout newLayout,
+            LineIntervalImpact impact,
+            string oldStopSig)
+        {
+            if (line == Entity.Null)
+                return default;
+            if (newLayout != null
+                && !string.Equals(oldStopSig, newLayout.StopSig, StringComparison.Ordinal)
+                && m_Lines.TryGetValue(line, out MonitorAverageLine currentLine)
+                && string.Equals(currentLine.StopSig, newLayout.StopSig, StringComparison.Ordinal))
+                return default;
+            if (newLayout == null || newLayout.StopCount < 2 || impact == null || !impact.IsValid)
+            {
+                int removed = RemoveLine(line);
+                return new MonitorAverageRemapResult(removed, 0, removed);
+            }
+            if (!m_Lines.TryGetValue(line, out MonitorAverageLine oldLine)
+                || oldLine.Segments == null
+                || oldLine.Segments.Length == 0
+                || !string.Equals(oldLine.StopSig, oldStopSig, StringComparison.Ordinal))
+            {
+                int removed = RemoveLine(line);
+                return new MonitorAverageRemapResult(removed, 0, removed);
+            }
+
+            int count = newLayout.StopCount;
+            if (count > MaxSegmentsPerLine)
+            {
+                int removed = RemoveLine(line);
+                return new MonitorAverageRemapResult(removed, 0, removed);
+            }
+
+            MonitorAverageSegment[] segments = new MonitorAverageSegment[count];
+            int zeroed = 0;
+            int retained = 0;
+            for (int newIndex = 0; newIndex < count; newIndex++)
+            {
+                int oldIndex = impact.NewToOld(newIndex);
+                if (oldIndex >= 0
+                    && oldIndex < oldLine.Segments.Length
+                    && !impact.IsNewAffected(newIndex))
+                {
+                    segments[newIndex] = oldLine.Segments[oldIndex];
+                    retained++;
+                }
+                else
+                {
+                    zeroed++;
+                }
+            }
+
+            ulong revision = oldLine.Revision == ulong.MaxValue ? 1UL : oldLine.Revision + 1UL;
+            m_Lines[line] = new MonitorAverageLine(
+                line,
+                newLayout.StopSig,
+                revision,
+                segments,
+                HasCompleteCoverage(segments));
+            return new MonitorAverageRemapResult(zeroed, retained, 0);
         }
 
         internal void Clear()
@@ -309,6 +383,20 @@ namespace RapidTransitMod.Dispatch.Observation
             StopSig = stopSig ?? string.Empty;
             Revision = revision;
             AverageFrames = averageFrames ?? Array.Empty<double>();
+        }
+    }
+
+    internal readonly struct MonitorAverageRemapResult
+    {
+        internal readonly int ZeroedIntervals;
+        internal readonly int RetainedIntervals;
+        internal readonly int RemovedIntervals;
+
+        internal MonitorAverageRemapResult(int zeroedIntervals, int retainedIntervals, int removedIntervals)
+        {
+            ZeroedIntervals = zeroedIntervals;
+            RetainedIntervals = retainedIntervals;
+            RemovedIntervals = removedIntervals;
         }
     }
 }

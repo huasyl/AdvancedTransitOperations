@@ -211,6 +211,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RailEtaService.SetHotRuntime(runtime.m_RailEtaHotRuntime);
             runtime.m_SpawnLeadTheory = new SpawnLeadTheory(runtime);
             runtime.m_RuntimeLifecycleHost = new RuntimeLifecycleHost(runtime);
+            runtime.m_LineStructurePendingStore = new LineStructurePendingStore(runtime);
             runtime.m_LineStructureInvalidator = new LineStructureInvalidator(runtime);
             runtime.m_DispatchScheduler = new DispatchScheduler(
                 runtime,
@@ -251,7 +252,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineMileage = new LineMileage(lineHost.Mileage);
             runtime.m_LineVehicles = new LineVehicles(runtime);
             runtime.m_Obs = new TraceStore();
-            runtime.m_MonitorAverages = new MonitorAverageStore();
+            runtime.m_MonitorAverages = new MonitorAverageStore(
+                line => runtime.m_LineStructureInvalidator.IsLinePending(line));
             runtime.m_ObsRecorder = new Recorder(RuntimePorts.BuildObservation(runtime));
             runtime.m_TrackModel = new TrackModelService(new TrackModelContext(new TrackModelContext.Args
             {
@@ -283,8 +285,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 BuildCorridorMap = runtime.m_SharedCorridor.BuildLocalBypassCorridorWaypointMap,
                 CollectTurnback = Turnbacks.TryCollectTurnbackStationBoundaries,
                 ResolveTurnback = Turnbacks.TryResolveTurnbackStationBoundary,
-                NotifyLineTrackChainRebuilt = runtime.m_LineStructureInvalidator.Request
+                NotifyLineTrackChainCandidate = runtime.m_LineStructureInvalidator.RequestCandidate,
+                NotifyLineTrackChainEstablished = runtime.m_LineStructureInvalidator.ObserveChainEstablished,
+                NotifyLineDeleted = runtime.m_LineStructureInvalidator.ConfirmLineDeleted
             }));
+            runtime.m_TrackChangeSource = new TrackChangeSource(
+                runtime.EntityManager,
+                runtime.World.GetOrCreateSystemManaged<TrackChangeSourceSystem>(),
+                runtime.m_TrackModel);
             runtime.m_RoutePlans = new RoutePlanQuery(
                 runtime.EntityManager,
                 runtime.m_TrackModel,
@@ -516,7 +524,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RuntimeLog = null!;
             runtime.m_RuntimeLifecycleHost = null!;
             runtime.m_LineStructureInvalidator = null!;
+            runtime.m_LineStructurePendingStore = null!;
             if (runtime.m_Bypass != null) runtime.m_Bypass.Dispose();
+            runtime.m_TrackChangeSource?.Dispose();
+            runtime.m_TrackChangeSource = null!;
+            runtime.m_TrackModel?.Dispose();
             runtime.m_TrackModel = null!;
             runtime.m_Bypass = null!;
             runtime.m_TrackProjection = null!;

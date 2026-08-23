@@ -454,6 +454,21 @@ namespace RapidTransitMod
             m_LastLog = string.Empty;
         }
 
+        internal int InvalidateLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return 0;
+
+            int cleared = 0;
+            if (m_Frames.Remove(line))
+                cleared++;
+            if (m_ManagedFrames.Remove(line))
+                cleared++;
+            if (m_SupportCache.Remove(line))
+                cleared++;
+            return cleared;
+        }
+
         public void Dirty()
         {
             m_DirtyTrack();

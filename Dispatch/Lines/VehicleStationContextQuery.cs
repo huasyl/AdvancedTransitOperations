@@ -156,14 +156,20 @@ namespace RapidTransitMod.Dispatch.Lines
             m_CachedWaypointIndex = cachedWaypointIndex;
         }
 
-        internal void RemoveVehicle(Entity vehicle)
+        internal bool RemoveVehicle(Entity vehicle)
         {
-            m_CurrentStopWaypointIndexByVehicle.Remove(vehicle);
-            m_NextStopWaypointIndexByVehicle.Remove(vehicle);
-            m_CurrentStationNameByVehicle.Remove(vehicle);
-            m_NextStopStationNameByVehicle.Remove(vehicle);
-            m_NextPhysicalStationByVehicle.Remove(vehicle);
-            m_NextPhysicalIsPassByVehicle.Remove(vehicle);
+            bool removed = m_CurrentStopWaypointIndexByVehicle.Remove(vehicle);
+            removed |= m_NextStopWaypointIndexByVehicle.Remove(vehicle);
+            removed |= m_CurrentStationNameByVehicle.Remove(vehicle);
+            removed |= m_NextStopStationNameByVehicle.Remove(vehicle);
+            removed |= m_NextPhysicalStationByVehicle.Remove(vehicle);
+            removed |= m_NextPhysicalIsPassByVehicle.Remove(vehicle);
+            return removed;
+        }
+
+        internal bool RemoveLine(Entity line)
+        {
+            return line != Entity.Null && m_LineCaches.Remove(line);
         }
 
         internal void Clear()

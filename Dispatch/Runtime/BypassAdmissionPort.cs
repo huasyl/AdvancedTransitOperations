@@ -53,6 +53,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly LineTimes m_LineTimes;
         private readonly Func<Entity, string> m_EntityName;
         private readonly RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe m_HotPathProbe;
+        private readonly Func<Entity, bool> m_IsLinePending;
 
         internal BypassAdmissionPort(
             EntityManager entityManager,
@@ -78,7 +79,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             LineMileage lineMileage,
             LineTimes lineTimes,
             Func<Entity, string> entityName,
-            RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe)
+            RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe hotPathProbe,
+            Func<Entity, bool> isLinePending)
         {
             m_EntityManager = entityManager;
             m_Log = log;
@@ -104,6 +106,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_LineTimes = lineTimes;
             m_EntityName = entityName;
             m_HotPathProbe = hotPathProbe;
+            m_IsLinePending = isLinePending;
         }
 
         protected Func<uint> FrameGetter => m_Frame;
@@ -118,6 +121,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         TrackModelService IBypassAdmissionRuntimeContext.TrackModel => m_TrackModel;
         TrackProjectionService IBypassAdmissionRuntimeContext.TrackProjection => m_TrackProjection();
         RapidTransitMod.Dispatch.Diagnostics.RuntimeHotPathProbe IBypassAdmissionRuntimeContext.HotPathProbe => m_HotPathProbe;
+        bool IBypassAdmissionRuntimeContext.IsLinePending(Entity line) => m_IsLinePending != null && m_IsLinePending(line);
 
         BufferLookup<T> IBypassAdmissionRuntimeContext.GetBufferLookup<T>(bool isReadOnly)
         {

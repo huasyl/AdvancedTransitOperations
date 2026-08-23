@@ -646,9 +646,6 @@ namespace RapidTransitMod.Broadcasting
                 case "platform_approach_station":
                     triggerLabel = SelectPanel.IsChineseLocale() ? "站台即将进站" : "platform_approach_station";
                     break;
-                case "platform_idle_clear":
-                    triggerLabel = SelectPanel.IsChineseLocale() ? "站台空闲时" : "platform_idle_clear";
-                    break;
                 case "mid_route":
                     triggerLabel = SelectPanel.IsChineseLocale() ? "区间运行中" : "mid_route";
                     break;

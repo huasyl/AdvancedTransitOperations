@@ -23,6 +23,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private readonly string m_RequestDir;
         private readonly string m_ResponseDir;
         private uint m_NextPollFrame;
+        private uint m_LastFrame;
+        private bool m_HasLastFrame;
         private bool m_FileErrorLogged;
 
         internal RuntimeProbe(ModRuntimeHostSystem runtime)
@@ -37,6 +39,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         internal void Tick(uint frame)
         {
+            if (m_HasLastFrame && frame < m_LastFrame)
+                m_NextPollFrame = frame;
+            m_LastFrame = frame;
+            m_HasLastFrame = true;
+
             if (frame < m_NextPollFrame)
                 return;
 

@@ -96,7 +96,8 @@ namespace RapidTransitMod.Bypass
             out SceneStaticIndexEntry entry)
         {
             entry = null;
-            if (localChain == null)
+            if (localChain == null
+                || m_Runtime.IsLinePending(localChain.LineEntity))
                 return false;
 
             if (m_Dirty)
@@ -139,9 +140,11 @@ namespace RapidTransitMod.Bypass
                 SceneExpressRelation relation = entry.ExpressRelations[i];
                 if (relation.ExpressLine == Entity.Null
                     || relation.ExpressChain == null
+                    || m_Runtime.IsLinePending(relation.ExpressLine)
                     || !m_Runtime.EntityManager.Exists(relation.ExpressLine)
                     || !routeWaypointBuffers.TryGetBuffer(relation.ExpressLine, out DynamicBuffer<RouteWaypoint> expressWaypoints)
                     || !m_Runtime.TrackModel.TryGetChainForLine(relation.ExpressLine, expressWaypoints, out LineTrackChain currentExpressChain)
+                    || m_Runtime.IsLinePending(relation.ExpressLine)
                     || currentExpressChain.Signature != relation.ExpressChain.Signature)
                 {
                     return false;
@@ -165,8 +168,10 @@ namespace RapidTransitMod.Bypass
                     || !m_Runtime.EntityManager.Exists(localLine)
                     || !m_Runtime.EntityManager.HasComponent<TransportLine>(localLine)
                     || !m_Runtime.IsAppliedLocal(localLine)
+                    || m_Runtime.IsLinePending(localLine)
                     || !routeWaypointBuffers.TryGetBuffer(localLine, out DynamicBuffer<RouteWaypoint> localWaypoints)
-                    || !m_Runtime.TrackModel.TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain))
+                    || !m_Runtime.TrackModel.TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain)
+                    || m_Runtime.IsLinePending(localLine))
                 {
                     continue;
                 }

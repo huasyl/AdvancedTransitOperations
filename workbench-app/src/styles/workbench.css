@@ -1088,6 +1088,188 @@
   overflow-x: auto;
 }
 
+.dw-demo-copy-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: scroll;
+  overflow-x: auto;
+}
+
+.dw-demo-copy-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: start;
+  min-width: 0;
+}
+
+.dw-demo-copy-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 33.333%;
+  flex: 0 0 33.333%;
+  min-width: 0;
+  height: 48rem;
+  min-height: 48rem;
+  padding: 0 24rem 0 8rem;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background-color: transparent;
+  transition: background-color 180ms ease, border-bottom-color 180ms ease;
+  animation: dw-demo-copy-row-enter 520ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.dw-demo-copy-item:hover,
+.dw-demo-copy-item:focus-within {
+  border-bottom-color: rgba(116, 193, 193, 0.48);
+  background-color: rgba(116, 193, 193, 0.08);
+}
+
+.dw-demo-copy-times {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 16rem;
+}
+
+.dw-demo-copy-time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dw-demo-copy-time.is-previous {
+  color: #8fa0aa;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 500;
+}
+
+.dw-demo-copy-arrow {
+  width: 16rem;
+  flex: 0 0 16rem;
+  color: #71808a;
+  font-size: 12rem;
+  line-height: 16rem;
+  text-align: center;
+}
+
+.dw-demo-copy-time.is-final {
+  color: #f0fbff;
+  font-size: 14rem;
+  line-height: 16rem;
+  font-weight: 700;
+  transition: color 180ms ease;
+}
+
+.dw-demo-copy-item:hover .dw-demo-copy-time.is-final,
+.dw-demo-copy-item:focus-within .dw-demo-copy-time.is-final {
+  color: #81d4d4;
+}
+
+.dw-demo-copy-reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 8rem;
+  color: #aebdc7;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 500;
+}
+
+.dw-demo-copy-reason.is-warning {
+  color: #c7d1d8;
+}
+
+.dw-demo-copy-reason.is-neutral {
+  color: #aebdc7;
+}
+
+.dw-demo-copy-remove {
+  position: absolute;
+  top: 12rem;
+  right: 8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24rem;
+  height: 24rem;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background-color: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease, background-color 180ms ease;
+}
+
+.dw-demo-copy-remove svg {
+  width: 16rem;
+  height: 16rem;
+}
+
+.dw-demo-copy-remove svg path {
+  stroke: #8fa0aa;
+  transition: stroke 180ms ease;
+}
+
+.dw-demo-copy-item:hover .dw-demo-copy-remove,
+.dw-demo-copy-item:focus-within .dw-demo-copy-remove,
+.dw-demo-copy-remove:focus {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dw-demo-copy-remove:hover,
+.dw-demo-copy-remove:focus {
+  border: 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.dw-demo-copy-remove:hover svg path,
+.dw-demo-copy-remove:focus svg path {
+  stroke: #f3aaaa;
+}
+
+.dw-demo-copy-empty {
+  width: 100%;
+  flex: 0 0 100%;
+  padding: 16rem 8rem;
+  color: #aebdc7;
+  font-size: 12rem;
+  line-height: 16rem;
+  text-align: center;
+}
+
+@keyframes dw-demo-copy-row-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dw-demo-copy-item {
+    animation: none;
+    transition: background-color 180ms ease, border-bottom-color 180ms ease;
+  }
+}
+
 .dw-demo-summary-table {
   display: flex;
   flex-direction: column;
@@ -1531,13 +1713,241 @@
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  background-color: rgba(255, 255, 255, 0.025);
+}
+
+.dw-demo-quick-mode-head {
+  display: flex;
+  align-items: center;
+  flex: 0 0 42rem;
+  height: 42rem;
+  padding: 0 12rem;
+  box-sizing: border-box;
+  background-color: transparent;
+}
+
+.dw-demo-quick-mode-head.is-custom {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.dw-demo-quick-mode-switch {
+  display: flex;
+  align-items: center;
+  height: 24rem;
+  flex: 0 0 auto;
+}
+
+.dw-demo-quick-mode-button {
+  width: auto;
+  height: 24rem;
+  min-height: 24rem;
+  padding: 0 9rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999rem;
+  box-sizing: border-box;
+  background-color: rgba(255, 255, 255, 0.04);
+  color: #aebdc7;
+  font-size: 11rem;
+  line-height: 15rem;
+  font-weight: 600;
+}
+
+.dw-demo-quick-mode-button + .dw-demo-quick-mode-button {
+  margin-left: 6rem;
+}
+
+.dw-demo-quick-mode-button.is-active {
+  border-color: rgba(90, 180, 197, 0.30);
+  background-color: rgba(90, 180, 197, 0.12);
+  color: #5ab4c5;
+}
+
+.dw-demo-quick-mode-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 12rem;
+  color: #aebdc7;
+  font-size: 11rem;
+  line-height: 15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.dw-demo-quick-segment-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: scroll;
+}
+
+.dw-demo-quick-segment {
+  min-height: 114rem;
+  padding: 8rem 12rem;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: transparent;
+}
+
+.dw-demo-quick-time-row,
+.dw-demo-quick-count-row {
+  display: flex;
+  align-items: center;
+  min-width: 346rem;
+  height: 32rem;
+}
+
+.dw-demo-quick-time-row {
+  min-width: 378rem;
+}
+
+.dw-demo-quick-segment-label {
+  display: block;
+  width: 112rem;
+  flex: 0 1 112rem;
+  min-width: 80rem;
+  margin-right: 12rem;
+  overflow: hidden;
+  color: #d7e2e8;
+  font-size: 12rem;
+  line-height: 16rem;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dw-demo-quick-segment-label.is-count {
+  color: #b8c7d0;
+}
+
+.dw-demo-quick-stepper {
+  display: flex;
+  width: 112rem;
+  height: 32rem;
+  flex: 0 0 112rem;
+  box-sizing: border-box;
+  border-radius: 0;
+}
+
+.dw-demo-quick-stepper-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32rem;
+  height: 32rem;
+  min-width: 32rem;
+  min-height: 32rem;
+  padding: 0;
+  border: 0;
+  box-sizing: border-box;
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-radius: 0;
+  font-size: 15rem;
+  line-height: 15rem;
+  font-weight: 700;
+  transition: background-color 130ms ease, color 130ms ease;
+}
+
+.dw-demo-quick-stepper-button:hover {
+  background-color: rgba(90, 180, 197, 0.22);
+  color: #5ab4c5;
+}
+
+.dw-demo-quick-stepper-button.is-disabled,
+.dw-demo-quick-stepper-button.is-disabled:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: rgba(173, 185, 193, 0.56);
+  cursor: default;
+}
+
+.dw-demo-quick-stepper-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48rem;
+  height: 32rem;
+  flex: 0 0 48rem;
+  box-sizing: border-box;
+  border-right: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  background-color: rgba(255, 255, 255, 0.06);
+  border-radius: 0;
+  color: #edf5f9;
+  font-size: 13rem;
+  line-height: 16rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dw-demo-quick-stepper-value.is-count {
+  font-size: 14rem;
+}
+
+.dw-demo-quick-to {
+  display: block;
+  width: 14rem;
+  flex: 0 0 14rem;
+  margin-right: 8rem;
+  margin-left: 8rem;
+  color: #aebdc7;
+  font-size: 12rem;
+  line-height: 18rem;
+  text-align: center;
+}
+
+.dw-demo-quick-count-row {
+  margin-top: 8rem;
+}
+
+.dw-demo-quick-preview-row {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 18rem;
+  margin-top: 8rem;
+  color: #c7d4dc;
+  font-size: 11rem;
+  line-height: 18rem;
+  font-weight: 500;
+}
+
+.dw-demo-quick-preview-label {
+  display: block;
+  width: auto;
+  min-width: 44rem;
+  flex: 0 0 auto;
+  margin-right: 12rem;
+  color: #aebdc7;
+  font-size: 12rem;
+  line-height: 18rem;
+  white-space: nowrap;
+}
+
+.dw-demo-quick-preview-values {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 357rem) {
+  .dw-demo-quick-time-row {
+    flex-wrap: wrap;
+    height: 64rem;
+    min-width: 0;
+  }
+
+  .dw-demo-quick-time-row .dw-demo-quick-segment-label {
+    width: 100%;
+    flex: 0 0 100%;
+  }
 }
 
 .dw-demo-rule-editor {
   flex: 0 0 auto;
-  padding: 15rem 15rem 0;
+  padding: 8rem 15rem 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .dw-demo-rule-editor-row {
@@ -1611,6 +2021,32 @@
 
 .dw-demo-preview-inline.is-window > .dw-demo-preview-tag {
   margin-right: 12rem;
+}
+
+.dw-demo-copy-replace-note {
+  color: #8fa3b0;
+  font-size: 12rem;
+  line-height: 16rem;
+}
+
+.dw-demo-preview-panel.is-copy {
+  align-items: flex-start;
+  min-height: 0;
+  padding-top: 8rem;
+  padding-bottom: 8rem;
+}
+
+.dw-demo-preview-panel.is-copy .dw-demo-preview-content {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.dw-demo-preview-panel.is-copy .dw-demo-preview-inline {
+  min-height: 0;
+}
+
+.dw-demo-preview-panel.is-copy .dw-demo-copy-replace-note {
+  margin-top: 8rem;
 }
 
 .dw-demo-preview-values-slot {
@@ -1963,10 +2399,31 @@
   color: #5ab4c5;
 }
 
+.dw-demo-primary.is-disabled,
+.dw-demo-primary.is-disabled:hover {
+  border-color: transparent;
+  background-color: rgba(255, 255, 255, 0.05);
+  color: rgba(173, 185, 193, 0.56);
+  cursor: default;
+}
+
 .dw-demo-primary.is-secondary:hover {
   border-color: rgba(90, 180, 197, 0.52);
   background-color: rgba(54, 72, 79, 0.96);
   color: #9be0ec;
+}
+
+.dw-demo-primary.is-secondary.is-disabled,
+.dw-demo-primary.is-secondary.is-disabled:hover {
+  border-color: transparent;
+  background-color: rgba(255, 255, 255, 0.05);
+  color: rgba(173, 185, 193, 0.56);
+  cursor: default;
+}
+
+.dw-demo-primary.is-secondary.is-disabled .dw-demo-button-icon.is-import path,
+.dw-demo-primary.is-secondary.is-disabled:hover .dw-demo-button-icon.is-import path {
+  stroke: rgba(173, 185, 193, 0.56);
 }
 
 .dw-demo-cta {

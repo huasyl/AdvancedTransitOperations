@@ -494,13 +494,42 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_PreparingWaypointLiveFrames.Remove(vehicle);
         }
 
-        public void InvalidateLine(Entity line)
+        internal void InvalidateVehicleForStructure(Entity vehicle)
         {
-            if (line != Entity.Null)
+            if (vehicle == Entity.Null)
+                return;
+
+            m_Baselines.Remove(vehicle);
+            m_Demands.Remove(vehicle);
+            m_PreparingWaypointLiveFrames.Remove(vehicle);
+            if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
+                return;
+
+            if (rowIndex >= 0 && rowIndex < m_FrameRows.Count)
             {
-                m_WaypointBuffers.Remove(line);
-                m_WaypointCounts.Remove(line);
+                RailFrameRow row = m_FrameRows[rowIndex];
+                row.RegisteredLine = Entity.Null;
+                row.CurrentRoute = Entity.Null;
+                row.CachedWaypoint = -1;
+                row.WaypointCount = 0;
+                row.Demands = RuntimeDemandMask.None;
+                row.InputValid = false;
+                row.IsCompilable = false;
+                row.IsSource = false;
+                m_FrameRows[rowIndex] = row;
             }
+
+            m_FrameRowIndex.Remove(vehicle);
+        }
+
+        public bool InvalidateLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return false;
+
+            bool removed = m_WaypointBuffers.Remove(line);
+            removed |= m_WaypointCounts.Remove(line);
+            return removed;
         }
 
         public void BeginSliceBufferEpoch() => m_WaypointBuffers.Clear();
@@ -796,6 +825,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
                 int previousWaypoint = row.CachedWaypoint;
                 int currentWaypoint = row.CachedWaypoint;
+                bool runningWaypointComputed = false;
                 bool hasStopState = stopStates.TryGetValue(row.Vehicle, out StopFrameState stop);
                 bool boarding = row.RegistryState == VehicleState.Running && hasStopState
                     ? stop.Boarding
@@ -836,6 +866,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     m_PreparingWaypointLiveFrames.Remove(row.Vehicle);
                     if (runningOriginDetail && hasWaypoints && waypointCount >= 2)
                     {
+                        runningWaypointComputed = true;
                         currentWaypoint = m_Runtime.m_WaypointIndex.Compute(row.Vehicle, waypoints);
                         if (currentWaypoint >= 0 && currentWaypoint != previousWaypoint)
                         {
@@ -845,13 +876,48 @@ namespace RapidTransitMod.Dispatch.Runtime
                     }
                 }
 
+                bool strictOriginRejected = false;
+                if (row.RegistryState == VehicleState.Running
+                    && runningWaypointComputed
+                    && currentWaypoint == 0
+                    && !boarding
+                    && !stop.HadStopSession
+                    && hasWaypoints
+                    && waypointCount >= 2)
+                {
+                    Entity strictLine = m_Runtime.m_Resolve.Line(row.Vehicle);
+                    if (strictLine != Entity.Null
+                        && m_Runtime.m_TrackModel.TryGetChainForLine(strictLine, waypoints, out LineTrackChain strictChain)
+                        && m_Runtime.m_TrackProjection.TrySnapshot(
+                            row.Vehicle,
+                            strictLine,
+                            strictChain.Signature,
+                            nowFrame,
+                            out var strictCursor)
+                        && m_Runtime.m_WaypointIndex.TryRelation(
+                            strictChain,
+                            0,
+                            strictCursor.AtomCursorIndex,
+                            out CursorAtomWindowRelation strictRelation,
+                            out _,
+                            out _))
+                    {
+                        strictOriginRejected = strictRelation == CursorAtomWindowRelation.Before
+                            || strictRelation == CursorAtomWindowRelation.After;
+                    }
+                }
+
                 bool hasTargetComponent = row.HasTarget;
                 bool targetPresent = hasTargetComponent && row.Target.m_Target != Entity.Null;
                 bool preparingAtOrigin = row.RegistryState == VehicleState.Preparing
                     && hasWaypoints
                     && waypointCount >= 2
                     && m_Runtime.m_LineProfile.HasPreparingReachedOrigin(row.Vehicle, waypoints, boarding, currentWaypoint);
-                bool atOrigin = row.RegistryState == VehicleState.Preparing ? preparingAtOrigin : currentWaypoint == 0;
+                bool atOrigin = row.RegistryState == VehicleState.Preparing
+                    ? preparingAtOrigin
+                    : row.RegistryState == VehicleState.Running
+                        ? currentWaypoint == 0 && !strictOriginRejected
+                        : currentWaypoint == 0;
                 Entity originStation = hasWaypoints && waypointCount >= 2
                     ? waypoints[0].m_Waypoint
                     : Entity.Null;
@@ -889,7 +955,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     && !cooldownActive
                     && hasWaypoints
                     && waypointCount >= 2
-                    && (atOrigin || boarding || stop.HadStopSession || targetMinute >= 0
+                    && (strictOriginRejected || atOrigin || boarding || stop.HadStopSession || targetMinute >= 0
                         || m_Runtime.m_VehicleView.IsInbound(row.Vehicle));
                 bool settledAtOrigin = shouldEvaluateOriginSettle
                     && m_Runtime.m_LineProfile.ShouldSettleAtOrigin(
@@ -899,7 +965,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                         atOrigin,
                         boarding,
                         stop.HadStopSession,
-                        targetMinute);
+                        targetMinute,
+                        strictOriginRejected);
                 bool forcedAtOrigin = settledAtOrigin && !atOrigin;
                 bool brokenRecoveredRun = false;
                 bool runDistanceReady = false;
