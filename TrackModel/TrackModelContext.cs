@@ -31,7 +31,7 @@ namespace RapidTransitMod
         internal delegate bool ResolveTurnback(LineTrackChain chain, TurnbackBoundary boundary, out TrackTurnbackStationBoundary stationBoundary);
         internal delegate void LineTrackChainCandidate(Entity line, LineTrackChain chain);
         internal delegate void LineTrackChainEstablished(Entity line, LineTrackChain chain);
-        internal delegate void LineDeleted(Entity line);
+        internal delegate void LineDeleted(TrackLineDeletedFact fact);
 
         internal sealed class Args
         {
@@ -143,6 +143,6 @@ namespace RapidTransitMod
         public bool TryResolveTurnbackStationBoundary(LineTrackChain chain, TurnbackBoundary boundary, out TrackTurnbackStationBoundary stationBoundary) => m_Args.ResolveTurnback(chain, boundary, out stationBoundary);
         public void NotifyLineTrackChainCandidate(Entity line, LineTrackChain chain) => m_Args.NotifyLineTrackChainCandidate?.Invoke(line, chain);
         public void NotifyLineTrackChainEstablished(Entity line, LineTrackChain chain) => m_Args.NotifyLineTrackChainEstablished?.Invoke(line, chain);
-        public void NotifyLineDeleted(Entity line) => m_Args.NotifyLineDeleted?.Invoke(line);
+        public void NotifyLineDeleted(TrackLineDeletedFact fact) => m_Args.NotifyLineDeleted?.Invoke(fact);
     }
 }

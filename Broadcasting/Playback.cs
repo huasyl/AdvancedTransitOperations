@@ -258,7 +258,6 @@ namespace RapidTransitMod.Broadcasting
                     continue;
                 }
 
-                m_Audio.Move(state);
                 if (Advance(state, nowFrame))
                 {
                     continue;

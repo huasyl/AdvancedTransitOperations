@@ -21,15 +21,12 @@ namespace RapidTransitMod.TrackModel
         private readonly TrackQuery m_Query;
         private readonly TrackDiag m_Diag;
         private readonly TrackDump m_Dump;
-#if RT_DEBUG_TOOLS
-        internal readonly TrackChangeDiagnostics m_ChangeDiagnostics;
-#endif
         private readonly Dictionary<Entity, PublishedTraversalSnapshot> m_PublishedTraversals =
             new Dictionary<Entity, PublishedTraversalSnapshot>();
         private readonly List<Entity> m_PublishedTraversalOrder = new List<Entity>();
         private readonly List<PublishedTraversalSnapshot> m_PublishedChanges =
             new List<PublishedTraversalSnapshot>();
-        private readonly System.Action<Entity> m_NotifyLineDeleted;
+        private readonly System.Action<TrackLineDeletedFact> m_NotifyLineDeleted;
         private ulong m_PublishedTraversalVersion;
 
         internal TrackModelService(ITrackModelRuntimeContext runtime)
@@ -38,9 +35,6 @@ namespace RapidTransitMod.TrackModel
             m_State = new TrackState();
             m_Scene = new SceneCache();
             m_Diag = new TrackDiag(m_Support);
-#if RT_DEBUG_TOOLS
-            m_ChangeDiagnostics = new TrackChangeDiagnostics();
-#endif
             m_TramStops = new TramStopIndex(m_Support);
             m_Profile = new TrackProfile(m_Support, m_TramStops);
             m_Build = new TrackBuild(
@@ -48,9 +42,6 @@ namespace RapidTransitMod.TrackModel
                 m_Support,
                 m_Profile,
                 m_Diag,
-#if RT_DEBUG_TOOLS
-                m_ChangeDiagnostics,
-#endif
                 () => m_Shared.MarkDirty(),
                 runtime.NotifyLineTrackChainCandidate,
                 runtime.NotifyLineTrackChainEstablished,
@@ -69,9 +60,6 @@ namespace RapidTransitMod.TrackModel
         internal void MarkSharedIndexDirty() => m_Shared.MarkDirty();
         internal void Dispose()
         {
-#if RT_DEBUG_TOOLS
-            m_ChangeDiagnostics.Clear();
-#endif
         }
 
         internal ulong PublishedTraversalVersion => m_PublishedTraversalVersion;
@@ -145,9 +133,6 @@ namespace RapidTransitMod.TrackModel
 
             m_State.MarkDirty(line);
             m_Shared.MarkDirty();
-#if RT_DEBUG_TOOLS
-            m_ChangeDiagnostics.RemoveLine(line);
-#endif
             if (m_State.RemoveLine(line, out LineTrackChain existingChain) && existingChain != null)
                 m_Diag.RemoveDevSightChain(existingChain);
 
@@ -185,17 +170,9 @@ namespace RapidTransitMod.TrackModel
             m_State.RemoveWaypointLookup(line);
         }
 
-#if RT_DEBUG_TOOLS
-        internal void ConfirmLineChange(Entity line, TrackChangeCandidate candidate)
-#else
         internal void ConfirmLineChange(Entity line)
-#endif
         {
-#if RT_DEBUG_TOOLS
-            m_Build.ConfirmLineChange(line, candidate);
-#else
             m_Build.ConfirmLineChange(line);
-#endif
         }
 
         internal System.Func<Entity, Entity, bool> CreateTargetComparer()
@@ -204,13 +181,13 @@ namespace RapidTransitMod.TrackModel
             return comparer.AreEquivalent;
         }
 
-        internal void ConfirmLineDeleted(Entity line)
+        internal void ConfirmLineDeleted(TrackLineDeletedFact fact)
         {
-            if (line == Entity.Null)
+            if (fact.Line == Entity.Null)
                 return;
 
-            InvalidateLine(line);
-            m_NotifyLineDeleted?.Invoke(line);
+            InvalidateLine(fact.Line);
+            m_NotifyLineDeleted?.Invoke(fact);
         }
 
         internal void InvalidateAll()
@@ -226,9 +203,6 @@ namespace RapidTransitMod.TrackModel
             m_Profile.ClearAll();
             m_TramStops.Clear();
             m_Diag.ClearAll();
-#if RT_DEBUG_TOOLS
-            m_ChangeDiagnostics.Clear();
-#endif
         }
 
         internal bool TryGetChainForLine(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain)

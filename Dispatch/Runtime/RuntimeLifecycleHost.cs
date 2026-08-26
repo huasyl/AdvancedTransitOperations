@@ -214,6 +214,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void ClearAll()
         {
             m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
+            m_Runtime.m_TrackChangeSource?.ResetPending();
             m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_SpawnLeadTheory?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
@@ -289,6 +290,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         public void ClearTracking()
         {
             m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
+            m_Runtime.m_TrackChangeSource?.ResetPending();
             m_Runtime.m_SpawnIntentTrace?.Clear();
             m_Runtime.m_RailEtaService?.ResetCity();
             m_Runtime.m_Observation.ClearDispatchEta();

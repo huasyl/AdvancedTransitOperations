@@ -225,7 +225,12 @@ namespace RapidTransitMod
             }
 
             internal override Entity Vehicle(Entity vehicle) => m_Host.m_Resolve.RuntimeVehicle(vehicle);
-            internal override List<WorkbenchLineRuntime> Lines() => m_Host.Lines();
+            internal override bool TryLineEntity(LineKey key, out Entity line)
+            {
+                line = Entity.Null;
+                return m_Host.m_LineAnchorCatalog != null
+                    && m_Host.m_LineAnchorCatalog.TryEntity(key, out line);
+            }
             internal override Entity Stop(Entity waypoint) => m_Host.m_Resolve.Stop(waypoint);
             internal override Entity Anchor(Entity waypoint) => m_Host.m_Resolve.Anchor(waypoint);
             internal override Entity AnchorFromStop(Entity stopEntity) => m_Host.m_Resolve.AnchorFromStop(stopEntity);

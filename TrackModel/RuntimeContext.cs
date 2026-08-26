@@ -79,6 +79,6 @@ namespace RapidTransitMod.TrackModel
     {
         void NotifyLineTrackChainCandidate(Entity line, LineTrackChain chain);
         void NotifyLineTrackChainEstablished(Entity line, LineTrackChain chain);
-        void NotifyLineDeleted(Entity line);
+        void NotifyLineDeleted(TrackLineDeletedFact fact);
     }
 }

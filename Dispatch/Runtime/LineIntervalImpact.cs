@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Game.Pathfind;
 using RapidTransitMod.TrackModel;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -146,6 +147,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 if (newToOld[newIndex] < 0)
                     newAffected[newIndex] = true;
             }
+            retainedCount += RecoverJointShifts(oldLayout, newLayout, oldChain, newChain,
+                oldAffected, newAffected, oldToNew, newToOld, equivalentTarget);
             int affectedOldCount = CountAffected(oldAffected);
             int affectedNewCount = CountAffected(newAffected);
             return Valid(
@@ -158,6 +161,44 @@ namespace RapidTransitMod.Dispatch.Runtime
                 affectedOldCount,
                 affectedNewCount,
                 retainedCount);
+        }
+        private static int RecoverJointShifts(
+            LineStopLayout oldLayout, LineStopLayout newLayout,
+            LineTrackChain oldChain, LineTrackChain newChain,
+            bool[] oldAffected, bool[] newAffected,
+            int[] oldToNew, int[] newToOld,
+            Func<Entity, Entity, bool> equivalentTarget)
+        {
+            int oldCount = oldAffected.Length;
+            int newCount = newAffected.Length;
+            if (oldCount < 2 || newCount < 2)
+                return 0;
+            int recovered = 0;
+            for (int middle = 0; middle < oldLayout.StopCount; middle++)
+            {
+                int oldIncoming = (middle + oldCount - 1) % oldCount, oldOutgoing = middle;
+                int newIncoming = oldToNew[oldIncoming], newOutgoing = oldToNew[oldOutgoing];
+                if (!oldAffected[oldIncoming] || !oldAffected[oldOutgoing]
+                    || newIncoming < 0 || newIncoming >= newCount
+                    || newOutgoing < 0 || newOutgoing >= newCount
+                    || !newAffected[newIncoming] || !newAffected[newOutgoing])
+                    continue;
+                if (newToOld[newIncoming] != oldIncoming
+                    || newToOld[newOutgoing] != oldOutgoing
+                    || newOutgoing != (newIncoming + 1) % newCount
+                    || !string.Equals(oldLayout[middle].StopKey,
+                        newLayout[newOutgoing].StopKey, StringComparison.Ordinal))
+                    continue;
+                if (!TryJointShift(oldLayout, newLayout, oldChain, newChain,
+                    oldIncoming, oldOutgoing, newIncoming, newOutgoing, equivalentTarget))
+                    continue;
+                oldAffected[oldIncoming] = false;
+                oldAffected[oldOutgoing] = false;
+                newAffected[newIncoming] = false;
+                newAffected[newOutgoing] = false;
+                recovered += 2;
+            }
+            return recovered;
         }
         private static LineIntervalImpact Invalid(string reason)
         {
@@ -323,6 +364,138 @@ namespace RapidTransitMod.Dispatch.Runtime
                 }
             }
             return !oldCursor.MoveNext(out _) && !newCursor.MoveNext(out _);
+        }
+        private static bool TryJointShift(
+            LineStopLayout oldLayout, LineStopLayout newLayout,
+            LineTrackChain oldChain, LineTrackChain newChain,
+            int oldIncoming, int oldOutgoing,
+            int newIncoming, int newOutgoing,
+            Func<Entity, Entity, bool> equivalentTarget)
+        {
+            int oldStart = oldLayout[oldIncoming].WaypointIndex, oldBoundary = oldLayout[oldOutgoing].WaypointIndex;
+            int oldEnd = oldLayout[(oldOutgoing + 1) % oldLayout.StopCount].WaypointIndex;
+            int newStart = newLayout[newIncoming].WaypointIndex, newBoundary = newLayout[newOutgoing].WaypointIndex;
+            int newEnd = newLayout[(newOutgoing + 1) % newLayout.StopCount].WaypointIndex;
+            if (!TryJointRange(oldChain, oldStart, oldBoundary, oldEnd,
+                    out int oldLeft, out int oldRight, out bool oldZeroLeft)
+                || !TryJointRange(newChain, newStart, newBoundary, newEnd,
+                    out int newLeft, out int newRight, out bool newZeroLeft))
+                return false;
+            int oldAtomStart = oldChain.SegmentRanges[oldStart].StartAtomIndex;
+            int oldAtomEnd = oldChain.SegmentRanges[oldEnd].StartAtomIndex;
+            int newAtomStart = newChain.SegmentRanges[newStart].StartAtomIndex;
+            int newAtomEnd = newChain.SegmentRanges[newEnd].StartAtomIndex;
+            TrackAtom oldLeftAtom = oldChain.TrackAtoms[oldLeft], oldRightAtom = oldChain.TrackAtoms[oldRight];
+            TrackAtom newLeftAtom = newChain.TrackAtoms[newLeft], newRightAtom = newChain.TrackAtoms[newRight];
+            if (!SameJointAtom(oldLeftAtom, newLeftAtom, equivalentTarget)
+                || !SameJointAtom(oldRightAtom, newRightAtom, equivalentTarget)
+                || !SameAtomRange(oldChain, newChain, oldAtomStart, oldLeft, newAtomStart, newLeft, equivalentTarget)
+                || !SameAtomRange(oldChain, newChain, oldRight + 1, oldAtomEnd, newRight + 1, newAtomEnd, equivalentTarget))
+                return false;
+            if (!TryWaypointSide(oldChain, oldBoundary, oldLeftAtom, oldRightAtom, out bool oldSide)
+                || !TryWaypointSide(newChain, newBoundary, newLeftAtom, newRightAtom, out bool newSide))
+                return false;
+            if (oldChain.WaypointInputs[oldBoundary].Waypoint.Index
+                != newChain.WaypointInputs[newBoundary].Waypoint.Index)
+                return false;
+            return oldSide != newSide && oldZeroLeft == oldSide
+                && newZeroLeft == newSide;
+        }
+        private static bool TryJointRange(
+            LineTrackChain chain, int startWaypoint,
+            int boundaryWaypoint, int endWaypoint,
+            out int left, out int right, out bool zeroOnLeft)
+        {
+            left = right = -1;
+            zeroOnLeft = false;
+            if (startWaypoint < 0 || boundaryWaypoint < 0 || endWaypoint < 0
+                || startWaypoint >= chain.SegmentRanges.Count
+                || boundaryWaypoint >= chain.SegmentRanges.Count
+                || endWaypoint >= chain.SegmentRanges.Count)
+                return false;
+            int start = chain.SegmentRanges[startWaypoint].StartAtomIndex;
+            int boundary = chain.SegmentRanges[boundaryWaypoint].StartAtomIndex;
+            int end = chain.SegmentRanges[endWaypoint].StartAtomIndex;
+            if (start < 0 || start >= boundary || boundary >= end || end > chain.TrackAtoms.Count)
+                return false;
+            left = boundary - 1;
+            while (left >= start && math.asint(chain.TrackAtoms[left].TargetDelta.x) == math.asint(chain.TrackAtoms[left].TargetDelta.y))
+                left--;
+            right = boundary;
+            while (right < end && math.asint(chain.TrackAtoms[right].TargetDelta.x) == math.asint(chain.TrackAtoms[right].TargetDelta.y))
+                right++;
+            if (left < start || right >= end || right - left - 1 != 1)
+                return false;
+            TrackAtom zero = chain.TrackAtoms[left + 1];
+            bool attachesLeft = zero.Key.PhysicalLaneKey == chain.TrackAtoms[left].Key.PhysicalLaneKey;
+            bool attachesRight = zero.Key.PhysicalLaneKey == chain.TrackAtoms[right].Key.PhysicalLaneKey;
+            if (zero.SourceTarget != zero.Key.PhysicalLaneKey
+                || (zero.SourceFlags & ~PathElementFlags.PathStart) != 0
+                || attachesLeft == attachesRight)
+                return false;
+            TrackAtom attached = attachesLeft ? chain.TrackAtoms[left] : chain.TrackAtoms[right];
+            if (zero.AtomClass != attached.AtomClass || zero.TraversalDir != attached.TraversalDir
+                || math.asint(zero.TargetDelta.x) != math.asint(
+                    attachesLeft ? attached.TargetDelta.y : attached.TargetDelta.x))
+                return false;
+            zeroOnLeft = attachesLeft;
+            return true;
+        }
+        private static bool SameAtomRange(
+            LineTrackChain oldChain, LineTrackChain newChain,
+            int oldStart, int oldEnd, int newStart, int newEnd,
+            Func<Entity, Entity, bool> equivalentTarget)
+        {
+            if (oldEnd - oldStart != newEnd - newStart)
+                return false;
+            for (int i = 0; i < oldEnd - oldStart; i++)
+            {
+                if (!SameAtom(oldChain.TrackAtoms[oldStart + i], newChain.TrackAtoms[newStart + i], equivalentTarget))
+                    return false;
+            }
+            return true;
+        }
+        private static bool SameJointAtom(
+            TrackAtom oldAtom, TrackAtom newAtom,
+            Func<Entity, Entity, bool> equivalentTarget)
+        {
+            if (math.asint(oldAtom.TargetDelta.x) != math.asint(newAtom.TargetDelta.x)
+                || math.asint(oldAtom.TargetDelta.y) != math.asint(newAtom.TargetDelta.y)
+                || oldAtom.AtomClass != newAtom.AtomClass
+                || oldAtom.TraversalDir != newAtom.TraversalDir
+                || !SameTarget(oldAtom.Key.PhysicalLaneKey, newAtom.Key.PhysicalLaneKey, equivalentTarget))
+                return false;
+            bool oldSourceIsLane = oldAtom.SourceTarget == oldAtom.Key.PhysicalLaneKey;
+            bool newSourceIsLane = newAtom.SourceTarget == newAtom.Key.PhysicalLaneKey;
+            return (oldSourceIsLane && newSourceIsLane
+                    || SameTarget(oldAtom.SourceTarget, newAtom.SourceTarget, equivalentTarget))
+                && (oldAtom.SourceFlags & ~PathElementFlags.PathStart)
+                    == (newAtom.SourceFlags & ~PathElementFlags.PathStart);
+        }
+        private static bool TryWaypointSide(
+            LineTrackChain chain, int waypointIndex,
+            TrackAtom left, TrackAtom right,
+            out bool leftSide)
+        {
+            leftSide = false;
+            if (chain.WaypointInputs == null
+                || waypointIndex < 0 || waypointIndex >= chain.WaypointInputs.Length)
+                return false;
+            TrackWaypointInputBaseline input = chain.WaypointInputs[waypointIndex];
+            if (input.Waypoint == Entity.Null
+                || !input.HasRouteLane
+                || input.StartLaneIndex != input.EndLaneIndex
+                || input.StartCurveScaled != input.EndCurveScaled)
+                return false;
+            int curveLeft = (int)math.round(left.TargetDelta.y * 1000f), curveRight = (int)math.round(right.TargetDelta.x * 1000f);
+            bool matchesLeft = input.StartLaneIndex == left.Key.PhysicalLaneKey.Index
+                && input.StartCurveScaled == curveLeft;
+            bool matchesRight = input.StartLaneIndex == right.Key.PhysicalLaneKey.Index
+                && input.StartCurveScaled == curveRight;
+            if (matchesLeft == matchesRight)
+                return false;
+            leftSide = matchesLeft;
+            return true;
         }
         private static int CountAtoms(AtomCursor cursor)
         {

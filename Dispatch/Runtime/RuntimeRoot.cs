@@ -289,9 +289,12 @@ namespace RapidTransitMod.Dispatch.Runtime
                 NotifyLineTrackChainEstablished = runtime.m_LineStructureInvalidator.ObserveChainEstablished,
                 NotifyLineDeleted = runtime.m_LineStructureInvalidator.ConfirmLineDeleted
             }));
+            TrackChangeSourceSystem trackChangeSourceSystem =
+                runtime.World.GetOrCreateSystemManaged<TrackChangeSourceSystem>();
+            trackChangeSourceSystem.BindStableKey(runtime.m_LineAnchorCatalog.StableKey);
             runtime.m_TrackChangeSource = new TrackChangeSource(
                 runtime.EntityManager,
-                runtime.World.GetOrCreateSystemManaged<TrackChangeSourceSystem>(),
+                trackChangeSourceSystem,
                 runtime.m_TrackModel);
             runtime.m_RoutePlans = new RoutePlanQuery(
                 runtime.EntityManager,

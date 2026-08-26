@@ -204,11 +204,27 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             RequestCandidate(line, chain);
         }
-        internal void ConfirmLineDeleted(Entity line)
+        internal void ConfirmLineDeleted(TrackLineDeletedFact fact)
         {
-            if (line == Entity.Null)
+            if (fact.Line == Entity.Null || fact.Mode == TransitMode.Unknown)
                 return;
-            MarkDeleted(GetRailState(line));
+
+            if (m_RailStates.TryGetValue(fact.Line, out RailStructureState state))
+            {
+                MarkDeleted(state);
+                return;
+            }
+
+            if (fact.LineKey.IsEmpty)
+                return;
+
+            state = CreateRailState(
+                fact.Line,
+                LineIdentityService.GetId(fact.LineKey),
+                fact.Mode);
+            m_RailStates[fact.Line] = state;
+            ActivateRail(fact.Line);
+            MarkDeleted(state);
         }
         internal void ResetRuntimeState()
         {
@@ -286,17 +302,28 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             if (!m_RailStates.TryGetValue(line, out RailStructureState state))
             {
-                state = new RailStructureState
-                {
-                    Line = line,
-                    LineId = m_Runtime.LineStableId(line),
-                    Mode = TransitModeCodec.Format(TransportModeResolver.Resolve(m_Runtime.EntityManager, line)),
-                    Phase = RailPhase.Candidate
-                };
+                state = CreateRailState(
+                    line,
+                    m_Runtime.LineStableId(line),
+                    TransportModeResolver.Resolve(m_Runtime.EntityManager, line));
                 m_RailStates[line] = state;
                 ActivateRail(line);
             }
             return state;
+        }
+
+        private static RailStructureState CreateRailState(
+            Entity line,
+            string lineId,
+            TransitMode mode)
+        {
+            return new RailStructureState
+            {
+                Line = line,
+                LineId = lineId ?? string.Empty,
+                Mode = TransitModeCodec.Format(mode),
+                Phase = RailPhase.Candidate
+            };
         }
         private void ActivateRail(Entity line)
         {
@@ -567,7 +594,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 monitorAverage = new MonitorAverageRemapResult(removed, 0, removed);
             }
             DynamicBuffer<RouteWaypoint> waypoints = default;
-            bool hasWaypoints = m_Runtime.EntityManager.Exists(plan.Line)
+            bool hasWaypoints = plan.Kind != LineStructurePlanKind.LineDeleted
+                && m_Runtime.EntityManager.Exists(plan.Line)
                 && m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(plan.Line);
             if (hasWaypoints)
                 waypoints = m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(plan.Line, true);

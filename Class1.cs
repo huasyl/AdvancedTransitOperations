@@ -6,6 +6,7 @@ using Colossal.Logging;
 using Game;
 using Game.Modding;
 using Game.Pathfind;
+using Game.Routes;
 using Game.SceneFlow;
 using Game.Serialization;
 using Game.Simulation;
@@ -68,7 +69,7 @@ namespace RapidTransitMod
             updateSystem.UpdateBefore<TramTrain.AssetSystem, Game.Prefabs.PrefabInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
             updateSystem.UpdateAfter<TramTrain.ScopedPatchSystem, Game.Prefabs.NetInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
 #endif
-            updateSystem.UpdateAfter<TrackModel.TrackChangeSourceSystem, PathfindResultSystem>(SystemUpdatePhase.MainLoop);
+            updateSystem.UpdateAfter<TrackModel.TrackChangeSourceSystem, RoutePathReadySystem>(SystemUpdatePhase.Modification1);
             updateSystem.UpdateAfter<RailTravel.QuerySystem, PathfindSetupSystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<Dispatch.Runtime.BoardingFirstFrameGuardSystem, TransportTrainAISystem>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAfter<ModRuntimeHostSystem, TrainMoveSystem>(SystemUpdatePhase.GameSimulation);

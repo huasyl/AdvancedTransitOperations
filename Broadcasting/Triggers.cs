@@ -1187,23 +1187,24 @@ namespace RapidTransitMod.Broadcasting
 
             PruneRunningApproachStates(nowFrame);
 
-            List<WorkbenchLineRuntime> runtimeLines = m_Access.Lines();
-            for (int i = 0; i < runtimeLines.Count; i++)
+            foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in m_Config.PlatformsByLine)
             {
-                WorkbenchLineRuntime runtime = runtimeLines[i];
-                if (runtime == null
-                    || string.IsNullOrWhiteSpace(runtime.Id)
-                    || !m_Config.PlatformsByLine.TryGetValue(runtime.Id, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
-                    || lineAnnouncements == null
-                    || lineAnnouncements.Count == 0
-                    || !m_Access.EntityManager.HasBuffer<RouteWaypoint>(runtime.Entity))
+                string lineId = lineEntry.Key;
+                if (!LineKey.TryParse(lineId, out LineKey lineKey)
+                    || !m_Access.TryLineEntity(lineKey, out Entity line)
+                    || line == Entity.Null
+                    || !m_Access.EntityManager.Exists(line)
+                    || lineEntry.Value == null
+                    || lineEntry.Value.Count == 0
+                    || !m_Access.EntityManager.HasBuffer<RouteWaypoint>(line))
                 {
                     continue;
                 }
 
-                DynamicBuffer<RouteWaypoint> waypoints = m_Access.EntityManager.GetBuffer<RouteWaypoint>(runtime.Entity, true);
-                EnsureBroadcastRuntimeLineState(runtime.Id, runtime.Entity);
-                Config.LineFlags flags = m_Config.Flags(runtime.Id);
+                Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements = lineEntry.Value;
+                DynamicBuffer<RouteWaypoint> waypoints = m_Access.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                EnsureBroadcastRuntimeLineState(lineId, line);
+                Config.LineFlags flags = m_Config.Flags(lineId);
                 if (!flags.HasApproach)
                 {
                     continue;
@@ -1232,12 +1233,13 @@ namespace RapidTransitMod.Broadcasting
 
                         if (approachCandidatesByStation == null)
                         {
-                            approachCandidatesByStation = ApproachCandidatesByStation(runtime.Id, nowFrame);
+                            approachCandidatesByStation = ApproachCandidatesByStation(lineId, nowFrame);
                         }
 
                         TickBroadcastPlatformApproachAnnouncement(
                             nowFrame,
-                            runtime,
+                            lineId,
+                            line,
                             waypoints,
                             stationId,
                             announcement,
@@ -1289,25 +1291,25 @@ namespace RapidTransitMod.Broadcasting
 
         private void TickBroadcastPlatformApproachAnnouncement(
             uint nowFrame,
-            WorkbenchLineRuntime runtime,
+            string lineId,
+            Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
             string stationId,
             BroadcastWorkbenchPlatformAnnouncementDto announcement,
             Dictionary<string, Dictionary<int, Entity>> approachCandidatesByStation)
         {
             LineTrackChain chain = null;
-            if (runtime == null
-                || runtime.Entity == Entity.Null
-                || string.IsNullOrWhiteSpace(runtime.Id)
+            if (line == Entity.Null
+                || string.IsNullOrWhiteSpace(lineId)
                 || string.IsNullOrWhiteSpace(stationId)
                 || announcement == null
                 || approachCandidatesByStation == null
                 || !approachCandidatesByStation.TryGetValue(stationId, out Dictionary<int, Entity> candidatesByPhase)
                 || candidatesByPhase == null
                 || candidatesByPhase.Count == 0
-                || !m_Access.TryChain(runtime.Entity, waypoints, out chain)
+                || !m_Access.TryChain(line, waypoints, out chain)
                 || chain == null
-                || !m_Stations.TryStation(runtime.Entity, waypoints, stationId, out ResolvedStation station))
+                || !m_Stations.TryStation(line, waypoints, stationId, out ResolvedStation station))
             {
                 return;
             }
@@ -1332,7 +1334,7 @@ namespace RapidTransitMod.Broadcasting
                 }
 
                 string sequenceKey = ApproachSequenceKey(
-                    runtime.Id,
+                    lineId,
                     stationId,
                     vehicle,
                     state.CurrentStopWaypointIndex,

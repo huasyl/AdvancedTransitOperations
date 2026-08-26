@@ -8,6 +8,20 @@ using Unity.Entities;
 using Unity.Mathematics;
 namespace RapidTransitMod.TrackModel
 {
+    internal readonly struct TrackLineDeletedFact
+    {
+        internal readonly Entity Line;
+        internal readonly LineKey LineKey;
+        internal readonly TransitMode Mode;
+
+        internal TrackLineDeletedFact(Entity line, LineKey lineKey, TransitMode mode)
+        {
+            Line = line;
+            LineKey = lineKey;
+            Mode = mode;
+        }
+    }
+
     internal enum TrackTraversalDir : byte
     {
         Unknown = 0,

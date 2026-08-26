@@ -1,9 +1,9 @@
+using System;
 using System.Collections.Generic;
 using Game;
 using Game.Common;
 using Game.Objects;
 using Game.Pathfind;
-using Game.Simulation;
 using Game.Routes;
 using Game.Tools;
 using Unity.Collections;
@@ -24,55 +24,23 @@ namespace RapidTransitMod.TrackModel
     {
         internal readonly Entity Line;
         internal readonly TrackChangeKind Kind;
-#if RT_DEBUG_TOOLS
-        internal const int MaxSourceSegments = 16;
-        internal readonly uint Frame;
-        internal readonly Entity[] SourceSegments;
-        internal readonly int SourceSegmentTotal;
-        internal readonly bool SourceSegmentsExact;
-#endif
+        internal readonly TrackLineDeletedFact DeletedFact;
 
-#if RT_DEBUG_TOOLS
-        internal TrackChangeCandidate(
-            Entity line,
-            TrackChangeKind kind,
-            uint frame,
-            Entity sourceSegment,
-            bool sourceSegmentExact)
-        {
-            Line = line;
-            Kind = kind;
-            Frame = frame;
-            SourceSegments = sourceSegment == Entity.Null
-                ? System.Array.Empty<Entity>()
-                : new[] { sourceSegment };
-            SourceSegmentTotal = sourceSegment == Entity.Null ? 0 : 1;
-            SourceSegmentsExact = sourceSegmentExact;
-        }
-
-        internal TrackChangeCandidate(
-            Entity line,
-            TrackChangeKind kind,
-            uint frame,
-            Entity[] sourceSegments,
-            int sourceSegmentTotal,
-            bool sourceSegmentsExact)
-        {
-            Line = line;
-            Kind = kind;
-            Frame = frame;
-            SourceSegments = sourceSegments ?? System.Array.Empty<Entity>();
-            SourceSegmentTotal = sourceSegmentTotal;
-            SourceSegmentsExact = sourceSegmentsExact;
-        }
-#else
         internal TrackChangeCandidate(Entity line, TrackChangeKind kind)
         {
             Line = line;
             Kind = kind;
+            DeletedFact = default;
         }
-#endif
 
+        internal TrackChangeCandidate(TrackLineDeletedFact deletedFact)
+        {
+            Line = deletedFact.Line;
+            Kind = TrackChangeKind.Deleted;
+            DeletedFact = deletedFact;
+        }
+
+        internal bool IsDeleted => (Kind & TrackChangeKind.Deleted) != 0;
         internal bool LayoutChanged => (Kind & TrackChangeKind.Layout) != 0;
     }
 
@@ -82,22 +50,20 @@ namespace RapidTransitMod.TrackModel
             new List<TrackChangeCandidate>(128);
         private readonly Dictionary<Entity, int> m_PendingIndexes =
             new Dictionary<Entity, int>(128);
-#if RT_DEBUG_TOOLS
-        private SimulationSystem m_SimulationSystem;
-#endif
-        private EntityQuery m_LineChangeQuery;
-        private EntityQuery m_LineDeletedQuery;
-        private EntityQuery m_SegmentChangeQuery;
+        private EntityQuery m_UpdatedLineQuery;
+        private EntityQuery m_PathUpdatedQuery;
+        private EntityQuery m_DeletedLineQuery;
+        private Func<Entity, LineKey> m_StableKey;
+
         protected override void OnCreate()
         {
             base.OnCreate();
-            m_LineChangeQuery = GetEntityQuery(new EntityQueryDesc
+            m_UpdatedLineQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = new ComponentType[]
                 {
                     ComponentType.ReadOnly<TransportLine>(),
-                    ComponentType.ReadOnly<RouteWaypoint>(),
-                    ComponentType.ReadOnly<RouteSegment>()
+                    ComponentType.ReadOnly<Updated>()
                 },
                 None = new ComponentType[]
                 {
@@ -105,12 +71,15 @@ namespace RapidTransitMod.TrackModel
                     ComponentType.ReadOnly<Temp>()
                 }
             });
-            m_LineChangeQuery.SetChangedVersionFilter(new ComponentType[]
+            m_PathUpdatedQuery = GetEntityQuery(new EntityQueryDesc
             {
-                ComponentType.ReadOnly<RouteWaypoint>(),
-                ComponentType.ReadOnly<RouteSegment>()
+                All = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<Event>(),
+                    ComponentType.ReadOnly<PathUpdated>()
+                }
             });
-            m_LineDeletedQuery = GetEntityQuery(new EntityQueryDesc
+            m_DeletedLineQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All = new ComponentType[]
                 {
@@ -122,42 +91,17 @@ namespace RapidTransitMod.TrackModel
                     ComponentType.ReadOnly<Temp>()
                 }
             });
-            m_LineDeletedQuery.SetChangedVersionFilter(new ComponentType[]
-            {
-                ComponentType.ReadOnly<Deleted>()
-            });
-            m_SegmentChangeQuery = GetEntityQuery(new EntityQueryDesc
-            {
-                All = new ComponentType[]
-                {
-                    ComponentType.ReadOnly<Segment>(),
-                    ComponentType.ReadOnly<Owner>(),
-                    ComponentType.ReadOnly<PathElement>(),
-                    ComponentType.ReadOnly<PathInformation>()
-                },
-                None = new ComponentType[]
-                {
-                    ComponentType.ReadOnly<Deleted>()
-                }
-            });
-            m_SegmentChangeQuery.SetChangedVersionFilter(new ComponentType[]
-            {
-                ComponentType.ReadOnly<PathElement>(),
-                ComponentType.ReadOnly<PathInformation>()
-            });
-#if RT_DEBUG_TOOLS
-            m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
-#endif
+        }
+
+        internal void BindStableKey(Func<Entity, LineKey> stableKey)
+        {
+            m_StableKey = stableKey ?? throw new ArgumentNullException(nameof(stableKey));
         }
 
         protected override void OnUpdate()
         {
-            CompleteDependency();
-            m_LineChangeQuery.CompleteDependency();
-            m_LineDeletedQuery.CompleteDependency();
-            m_SegmentChangeQuery.CompleteDependency();
-            CollectLines();
-            CollectSegments();
+            CollectUpdatedLines();
+            CollectPathEvents();
             CollectDeletedLines();
         }
 
@@ -175,24 +119,29 @@ namespace RapidTransitMod.TrackModel
             m_PendingIndexes.Clear();
         }
 
-        protected override void OnDestroy()
+        internal void ResetPending()
         {
             m_PendingChanges.Clear();
             m_PendingIndexes.Clear();
+        }
+
+        protected override void OnDestroy()
+        {
+            ResetPending();
             base.OnDestroy();
         }
 
-        private void CollectLines()
+        private void CollectUpdatedLines()
         {
-            NativeArray<Entity> lines = m_LineChangeQuery.ToEntityArray(Allocator.Temp);
+            if (m_UpdatedLineQuery.IsEmptyIgnoreFilter)
+                return;
+
+            m_UpdatedLineQuery.CompleteDependency();
+            NativeArray<Entity> lines = m_UpdatedLineQuery.ToEntityArray(Allocator.Temp);
             try
             {
                 for (int i = 0; i < lines.Length; i++)
-#if RT_DEBUG_TOOLS
-                    AddChange(lines[i], TrackChangeKind.Layout, Entity.Null, false);
-#else
                     AddChange(lines[i], TrackChangeKind.Layout);
-#endif
             }
             finally
             {
@@ -201,40 +150,64 @@ namespace RapidTransitMod.TrackModel
             }
         }
 
-        private void CollectSegments()
+        private void CollectPathEvents()
         {
-            NativeArray<Entity> segments = m_SegmentChangeQuery.ToEntityArray(Allocator.Temp);
+            if (m_PathUpdatedQuery.IsEmptyIgnoreFilter)
+                return;
+
+            m_PathUpdatedQuery.CompleteDependency();
+            NativeArray<Entity> events = m_PathUpdatedQuery.ToEntityArray(Allocator.Temp);
             try
             {
-                for (int i = 0; i < segments.Length; i++)
+                for (int i = 0; i < events.Length; i++)
                 {
-                    Owner owner = EntityManager.GetComponentData<Owner>(segments[i]);
-#if RT_DEBUG_TOOLS
-                    // Changed-version queries identify a candidate chunk, not the exact changed item.
-                    AddChange(owner.m_Owner, TrackChangeKind.Path, segments[i], false);
-#else
-                    AddChange(owner.m_Owner, TrackChangeKind.Path);
-#endif
+                    PathUpdated pathUpdated = EntityManager.GetComponentData<PathUpdated>(events[i]);
+                    Entity segment = pathUpdated.m_Owner;
+                    if (segment == Entity.Null
+                        || !EntityManager.Exists(segment)
+                        || !EntityManager.HasComponent<Segment>(segment)
+                        || !EntityManager.HasComponent<Owner>(segment))
+                    {
+                        continue;
+                    }
+
+                    Entity line = EntityManager.GetComponentData<Owner>(segment).m_Owner;
+                    if (!IsLiveTransportLine(line))
+                        continue;
+
+                    AddChange(line, TrackChangeKind.Path);
                 }
             }
             finally
             {
-                if (segments.IsCreated)
-                    segments.Dispose();
+                if (events.IsCreated)
+                    events.Dispose();
             }
         }
 
         private void CollectDeletedLines()
         {
-            NativeArray<Entity> lines = m_LineDeletedQuery.ToEntityArray(Allocator.Temp);
+            if (m_StableKey == null)
+                return;
+
+            if (m_DeletedLineQuery.IsEmptyIgnoreFilter)
+                return;
+
+            m_DeletedLineQuery.CompleteDependency();
+
+            NativeArray<Entity> lines = m_DeletedLineQuery.ToEntityArray(Allocator.Temp);
             try
             {
                 for (int i = 0; i < lines.Length; i++)
-#if RT_DEBUG_TOOLS
-                    AddChange(lines[i], TrackChangeKind.Deleted, Entity.Null, true);
-#else
-                    AddChange(lines[i], TrackChangeKind.Deleted);
-#endif
+                {
+                    Entity line = lines[i];
+                    TransitMode mode = TransportModeResolver.Resolve(EntityManager, line);
+                    if (TransportModeProfile.GetProfile(mode).Lifecycle != LifecycleKind.Rail)
+                        continue;
+
+                    LineKey lineKey = m_StableKey(line);
+                    AddDeleted(new TrackLineDeletedFact(line, lineKey, mode));
+                }
             }
             finally
             {
@@ -243,11 +216,16 @@ namespace RapidTransitMod.TrackModel
             }
         }
 
-#if RT_DEBUG_TOOLS
-        private void AddChange(Entity line, TrackChangeKind kind, Entity sourceSegment, bool sourceSegmentExact)
-#else
+        private bool IsLiveTransportLine(Entity line)
+        {
+            return line != Entity.Null
+                && EntityManager.Exists(line)
+                && EntityManager.HasComponent<TransportLine>(line)
+                && !EntityManager.HasComponent<Deleted>(line)
+                && !EntityManager.HasComponent<Temp>(line);
+        }
+
         private void AddChange(Entity line, TrackChangeKind kind)
-#endif
         {
             if (line == Entity.Null)
                 return;
@@ -255,46 +233,32 @@ namespace RapidTransitMod.TrackModel
             if (m_PendingIndexes.TryGetValue(line, out int index))
             {
                 TrackChangeCandidate previous = m_PendingChanges[index];
-#if RT_DEBUG_TOOLS
-                Entity[] sourceSegments = previous.SourceSegments;
-                int sourceSegmentTotal = previous.SourceSegmentTotal;
-                bool containsSegment = sourceSegment == Entity.Null;
-                for (int segmentIndex = 0; !containsSegment && segmentIndex < sourceSegments.Length; segmentIndex++)
-                    containsSegment = sourceSegments[segmentIndex] == sourceSegment;
-                if (!containsSegment)
-                    sourceSegmentTotal++;
-                if (!containsSegment && sourceSegments.Length < TrackChangeCandidate.MaxSourceSegments)
-                {
-                    Entity[] expanded = new Entity[sourceSegments.Length + 1];
-                    for (int segmentIndex = 0; segmentIndex < sourceSegments.Length; segmentIndex++)
-                        expanded[segmentIndex] = sourceSegments[segmentIndex];
-                    expanded[sourceSegments.Length] = sourceSegment;
-                    sourceSegments = expanded;
-                }
+                if (previous.IsDeleted)
+                    return;
+
                 m_PendingChanges[index] = new TrackChangeCandidate(
                     line,
-                    previous.Kind | kind,
-                    m_SimulationSystem != null ? m_SimulationSystem.frameIndex : previous.Frame,
-                    sourceSegments,
-                    sourceSegmentTotal,
-                    previous.SourceSegmentsExact || sourceSegmentExact);
-#else
-                m_PendingChanges[index] = new TrackChangeCandidate(line, previous.Kind | kind);
-#endif
+                    previous.Kind | kind);
                 return;
             }
 
             m_PendingIndexes.Add(line, m_PendingChanges.Count);
-#if RT_DEBUG_TOOLS
-            m_PendingChanges.Add(new TrackChangeCandidate(
-                line,
-                kind,
-                m_SimulationSystem != null ? m_SimulationSystem.frameIndex : 0u,
-                sourceSegment,
-                sourceSegmentExact));
-#else
             m_PendingChanges.Add(new TrackChangeCandidate(line, kind));
-#endif
+        }
+
+        private void AddDeleted(TrackLineDeletedFact fact)
+        {
+            if (fact.Line == Entity.Null)
+                return;
+
+            if (m_PendingIndexes.TryGetValue(fact.Line, out int index))
+            {
+                m_PendingChanges[index] = new TrackChangeCandidate(fact);
+                return;
+            }
+
+            m_PendingIndexes.Add(fact.Line, m_PendingChanges.Count);
+            m_PendingChanges.Add(new TrackChangeCandidate(fact));
         }
     }
 }

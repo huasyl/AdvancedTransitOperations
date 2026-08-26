@@ -45,7 +45,7 @@ namespace RapidTransitMod.Broadcasting
             internal abstract void LogOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message);
             internal abstract bool ShouldLog(Dictionary<Entity, string> keyCache, Dictionary<Entity, uint> lastFrameCache, Entity vehicle, string key, uint nowFrame, uint cooldownFrames);
             internal abstract Entity Vehicle(Entity vehicle);
-            internal abstract List<WorkbenchLineRuntime> Lines();
+            internal abstract bool TryLineEntity(LineKey key, out Entity line);
             internal abstract Entity Stop(Entity waypoint);
             internal abstract Entity Anchor(Entity waypoint);
             internal abstract Entity AnchorFromStop(Entity stopEntity);
@@ -178,7 +178,7 @@ namespace RapidTransitMod.Broadcasting
         }
 
         internal Entity Vehicle(Entity vehicle) => m_Host.Vehicle(vehicle);
-        internal List<WorkbenchLineRuntime> Lines() => m_Host.Lines();
+        internal bool TryLineEntity(LineKey key, out Entity line) => m_Host.TryLineEntity(key, out line);
         internal Entity Stop(Entity waypoint) => m_Host.Stop(waypoint);
         internal Entity Anchor(Entity waypoint) => m_Host.Anchor(waypoint);
         internal Entity AnchorFromStop(Entity stopEntity) => m_Host.AnchorFromStop(stopEntity);

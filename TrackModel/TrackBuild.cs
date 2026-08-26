@@ -16,9 +16,6 @@ namespace RapidTransitMod.TrackModel
         private readonly TrackSupport m_Support;
         private readonly TrackProfile m_Profile;
         private readonly TrackDiag m_Diag;
-#if RT_DEBUG_TOOLS
-        private readonly TrackChangeDiagnostics m_ChangeDiagnostics;
-#endif
         private readonly Action m_MarkSharedDirty;
         private readonly Action<Entity, LineTrackChain> m_NotifyLineTrackChainCandidate;
         private readonly Action<Entity, LineTrackChain> m_NotifyLineTrackChainEstablished;
@@ -55,9 +52,6 @@ namespace RapidTransitMod.TrackModel
             TrackSupport support,
             TrackProfile profile,
             TrackDiag diag,
-#if RT_DEBUG_TOOLS
-            TrackChangeDiagnostics changeDiagnostics,
-#endif
             Action markSharedDirty,
             Action<Entity, LineTrackChain> notifyLineTrackChainCandidate,
             Action<Entity, LineTrackChain> notifyLineTrackChainEstablished,
@@ -69,9 +63,6 @@ namespace RapidTransitMod.TrackModel
             m_Support = support;
             m_Profile = profile;
             m_Diag = diag;
-#if RT_DEBUG_TOOLS
-            m_ChangeDiagnostics = changeDiagnostics;
-#endif
             m_MarkSharedDirty = markSharedDirty;
             m_NotifyLineTrackChainCandidate = notifyLineTrackChainCandidate;
             m_NotifyLineTrackChainEstablished = notifyLineTrackChainEstablished;
@@ -80,69 +71,6 @@ namespace RapidTransitMod.TrackModel
             m_ClearStaticCachesForLine = clearStaticCachesForLine;
         }
         internal EntityManager EntityManager => m_Support.EntityManager;
-#if RT_DEBUG_TOOLS
-        private TrackInputSnapshot CaptureDiagnostics(
-            Entity line,
-            TransitMode mode,
-            DynamicBuffer<RouteWaypoint> waypoints,
-            DynamicBuffer<RouteSegment> segments)
-        {
-            try
-            {
-                return m_ChangeDiagnostics.Capture(line, mode, waypoints, segments, this, 0UL);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-        private void RecordBuiltDiagnostics(
-            TrackChangeCandidate candidate,
-            TrackInputSnapshot input,
-            LineTrackChain chain,
-            bool hasOldCache)
-        {
-            if (input == null)
-                return;
-            try
-            {
-                m_ChangeDiagnostics.RecordBuilt(candidate, input, chain, hasOldCache);
-            }
-            catch
-            {
-            }
-        }
-        private void RecordEquivalentRefreshDiagnostics(
-            TrackChangeCandidate candidate,
-            TrackInputSnapshot input,
-            LineTrackChain chain)
-        {
-            if (input == null)
-                return;
-            try
-            {
-                m_ChangeDiagnostics.RecordBuilt(candidate, input, chain, true, true);
-            }
-            catch
-            {
-            }
-        }
-        private void RecordUnavailableDiagnostics(
-            TrackChangeCandidate candidate,
-            Entity line,
-            bool hasOldCache,
-            string reason,
-            TrackInputSnapshot currentInput)
-        {
-            try
-            {
-                m_ChangeDiagnostics.RecordUnavailable(candidate, line, hasOldCache, reason, currentInput);
-            }
-            catch
-            {
-            }
-        }
-#endif
         internal static ulong MixLineTrackChainSignature(ulong hash, int value)
         {
             unchecked
@@ -332,18 +260,11 @@ namespace RapidTransitMod.TrackModel
         }
         internal bool TryGetLineTrackChain(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTrackChain chain)
         {
-#if RT_DEBUG_TOOLS
-            return TryGetChain(line, waypoints, default(TrackChangeCandidate), out chain);
-#else
             return TryGetChain(line, waypoints, out chain);
-#endif
         }
         private bool TryGetChain(
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-#if RT_DEBUG_TOOLS
-            TrackChangeCandidate candidate,
-#endif
             out LineTrackChain chain)
         {
             chain = null;
@@ -356,11 +277,7 @@ namespace RapidTransitMod.TrackModel
                 || waypoints.Length == 0
                 || !EntityManager.HasBuffer<RouteSegment>(line))
             {
-#if RT_DEBUG_TOOLS
-                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "line-or-buffer-missing", null);
-#else
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
-#endif
                 return false;
             }
             if (m_State.TryFrameSnapshot(line, out LineTrackChainFrameSnapshot frameSnapshot)
@@ -387,19 +304,9 @@ namespace RapidTransitMod.TrackModel
             DynamicBuffer<RouteSegment> segments = EntityManager.GetBuffer<RouteSegment>(line, true);
             if (segments.Length != waypoints.Length)
             {
-#if RT_DEBUG_TOOLS
-                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "waypoint-segment-count-mismatch", null);
-#else
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
-#endif
                 return false;
             }
-#if RT_DEBUG_TOOLS
-            TransitMode mode = TransportModeResolver.Resolve(EntityManager, line);
-            TrackInputSnapshot currentInput = RtLog.CacheInvalidationDiagnosticsEnabled
-                ? CaptureDiagnostics(line, mode, waypoints, segments)
-                : null;
-#endif
             LineTrackChain previousChain = null;
             m_State.TryChain(line, out previousChain);
             chain = previousChain;
@@ -423,16 +330,9 @@ namespace RapidTransitMod.TrackModel
                 out refreshedSegmentInputs,
                 out scanComplete,
                 out scanUnchanged);
-#if RT_DEBUG_TOOLS
-            if (currentInput != null)
-                currentInput.Signature = signature;
-#endif
             if (previousChain != null && scanUnchanged && previousChain.Signature == signature)
             {
                 bool available = previousChain.ChainComplete && previousChain.TrackAtoms.Count > 0;
-#if RT_DEBUG_TOOLS
-                RecordBuiltDiagnostics(candidate, currentInput, previousChain, true);
-#endif
                 m_State.PutChain(line, previousChain);
                 m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
                     nowFrame,
@@ -466,9 +366,6 @@ namespace RapidTransitMod.TrackModel
                     waypoints.Length,
                     true,
                     previousChain));
-#if RT_DEBUG_TOOLS
-                RecordEquivalentRefreshDiagnostics(candidate, currentInput, previousChain);
-#endif
                 m_PublishTraversal?.Invoke(line, previousChain);
                 m_Diag.AddDevSightChain(previousChain);
                 m_MarkSharedDirty?.Invoke();
@@ -476,11 +373,7 @@ namespace RapidTransitMod.TrackModel
             }
             if (previousChain != null && !scanComplete)
             {
-#if RT_DEBUG_TOOLS
-                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "path-unavailable-or-no-atoms", currentInput);
-#else
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
-#endif
                 return false;
             }
             TrackChainScan scan = new TrackChainScan(
@@ -492,16 +385,9 @@ namespace RapidTransitMod.TrackModel
             chain = BuildLineTrackChain(line, waypoints, segments, signature, scan);
             if (chain == null || chain.TrackAtoms.Count == 0)
             {
-#if RT_DEBUG_TOOLS
-                InvalidateUnavailableChain(line, nowFrame, waypoints.Length, candidate, "path-unavailable-or-no-atoms", currentInput);
-#else
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
-#endif
                 return false;
             }
-#if RT_DEBUG_TOOLS
-            RecordBuiltDiagnostics(candidate, currentInput, chain, previousChain != null);
-#endif
             if (RtLog.CacheInvalidationDiagnosticsEnabled)
             {
                 m_Support.Log.Info("[TrackChainRebuilt] line=" + line.Index
@@ -532,11 +418,7 @@ namespace RapidTransitMod.TrackModel
                 chain = null;
             return chainAvailable;
         }
-#if RT_DEBUG_TOOLS
-        internal void ConfirmLineChange(Entity line, TrackChangeCandidate candidate)
-#else
         internal void ConfirmLineChange(Entity line)
-#endif
         {
             if (line == Entity.Null
                 || !m_State.IsDirty(line))
@@ -549,19 +431,11 @@ namespace RapidTransitMod.TrackModel
                 || !EntityManager.HasBuffer<RouteWaypoint>(line)
                 || !EntityManager.HasBuffer<RouteSegment>(line))
             {
-#if RT_DEBUG_TOOLS
-                InvalidateUnavailableChain(line, nowFrame, 0, candidate, "line-or-buffer-missing", null);
-#else
                 InvalidateUnavailableChain(line, nowFrame, 0);
-#endif
                 return;
             }
             DynamicBuffer<RouteWaypoint> waypoints = EntityManager.GetBuffer<RouteWaypoint>(line, true);
-#if RT_DEBUG_TOOLS
-            TryGetChain(line, waypoints, candidate, out _);
-#else
             TryGetChain(line, waypoints, out _);
-#endif
         }
         private LineTrackChain BuildLineTrackChain(
             Entity line,
@@ -618,22 +492,8 @@ namespace RapidTransitMod.TrackModel
         private void InvalidateUnavailableChain(
             Entity line,
             uint frame,
-#if RT_DEBUG_TOOLS
-            int waypointCount,
-            TrackChangeCandidate candidate,
-            string reason,
-            TrackInputSnapshot currentInput)
-#else
             int waypointCount)
-#endif
         {
-            if (m_State.TryChain(line, out LineTrackChain previousChain)
-                && previousChain != null)
-            {
-#if RT_DEBUG_TOOLS
-                RecordUnavailableDiagnostics(candidate, line, true, reason, currentInput);
-#endif
-            }
             m_NotifyLineTrackChainCandidate?.Invoke(line, null);
             m_InvalidateLine?.Invoke(line);
             m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(

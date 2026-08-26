@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using Game.Common;
-using Game.Objects;
 using Game.Routes;
 using Game.Tools;
 using Unity.Entities;
@@ -35,10 +34,9 @@ namespace RapidTransitMod.TrackModel
             for (int i = 0; i < m_Candidates.Count; i++)
             {
                 TrackChangeCandidate candidate = m_Candidates[i];
-                if ((candidate.Kind & TrackChangeKind.Deleted) != 0)
+                if (candidate.IsDeleted)
                 {
-                    if (TrySubmitDeletedLine(candidate.Line))
-                        m_TrackModel.ConfirmLineDeleted(candidate.Line);
+                    m_TrackModel.ConfirmLineDeleted(candidate.DeletedFact);
                     continue;
                 }
                 if (!TrySubmitLine(candidate.Line))
@@ -57,12 +55,14 @@ namespace RapidTransitMod.TrackModel
             }
 
             for (int i = 0; i < submittedCount; i++)
-#if RT_DEBUG_TOOLS
-                m_TrackModel.ConfirmLineChange(m_Candidates[i].Line, m_Candidates[i]);
-#else
                 m_TrackModel.ConfirmLineChange(m_Candidates[i].Line);
-#endif
 
+            m_Candidates.Clear();
+        }
+
+        internal void ResetPending()
+        {
+            m_SourceSystem.ResetPending();
             m_Candidates.Clear();
         }
 
@@ -84,17 +84,6 @@ namespace RapidTransitMod.TrackModel
 
             return TransportModeProfile.GetProfile(
                 TransportModeResolver.Resolve(m_EntityManager, line)).Lifecycle == LifecycleKind.Rail;
-        }
-
-        private bool TrySubmitDeletedLine(Entity line)
-        {
-            return line != Entity.Null
-                && m_EntityManager.Exists(line)
-                && m_EntityManager.HasComponent<TransportLine>(line)
-                && m_EntityManager.HasComponent<Deleted>(line)
-                && !m_EntityManager.HasComponent<Temp>(line)
-                && TransportModeProfile.GetProfile(
-                    TransportModeResolver.Resolve(m_EntityManager, line)).Lifecycle == LifecycleKind.Rail;
         }
     }
 }
