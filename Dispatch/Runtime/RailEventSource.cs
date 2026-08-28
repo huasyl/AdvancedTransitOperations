@@ -134,6 +134,65 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public bool CollectedThisFrame(uint frame) => m_LastCollectedFrame == frame;
 
+        internal int CollectedVehicleCount => m_FrameRows.Count;
+
+        internal bool ReadSignalNavigation(
+            Entity vehicle,
+            Entity lane0,
+            Entity lane1,
+            Entity lane2,
+            out byte forwardMask)
+        {
+            forwardMask = 0;
+            if (vehicle == Entity.Null
+                || !m_Runtime.EntityManager.Exists(vehicle)
+                || !m_Runtime.EntityManager.HasBuffer<TrainNavigationLane>(vehicle))
+            {
+                return false;
+            }
+            DynamicBuffer<TrainNavigationLane> navigation =
+                m_Runtime.EntityManager.GetBuffer<TrainNavigationLane>(vehicle, true);
+            m_Runtime.m_RuntimeHotPathProbe.CountNavigationDetailRead();
+            byte expectedMask = 0;
+            if (lane0 != Entity.Null) expectedMask |= 1;
+            if (lane1 != Entity.Null) expectedMask |= 2;
+            if (lane2 != Entity.Null) expectedMask |= 4;
+            for (int i = 0; i < navigation.Length; i++)
+            {
+                Entity lane = navigation[i].m_Lane;
+                if (lane0 != Entity.Null && lane == lane0)
+                    forwardMask |= 1;
+                if (lane1 != Entity.Null && lane == lane1)
+                    forwardMask |= 2;
+                if (lane2 != Entity.Null && lane == lane2)
+                    forwardMask |= 4;
+                if (forwardMask == expectedMask)
+                    break;
+            }
+            return true;
+        }
+
+        internal bool TryGetCollectedVehicle(
+            int index,
+            uint frame,
+            out ManagedSourceVehicle source)
+        {
+            source = default;
+            if (index < 0 || index >= m_FrameRows.Count)
+                return false;
+            RailFrameRow row = m_FrameRows[index];
+            if (!row.IsSource
+                || row.SourceFrame != frame
+                || !row.InputValid
+                || row.Vehicle == Entity.Null
+                || row.RegisteredLine == Entity.Null)
+            {
+                return false;
+            }
+            source = new ManagedSourceVehicle(row.Vehicle, row.RegistryState);
+            return true;
+        }
+
         public void CompileSourceRows(RuntimeFramePlan framePlan, uint frame)
         {
             for (int i = 0; i < m_FrameRows.Count; i++)

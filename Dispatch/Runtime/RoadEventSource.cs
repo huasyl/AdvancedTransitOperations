@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Game.Common;
 using Game.Objects;
+using Game.Net;
 using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Bypass;
@@ -69,6 +70,55 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
         }
 
+        internal readonly struct RoadNavigationSlice
+        {
+            internal readonly Entity Lane;
+            internal readonly float EntryDistanceMeters;
+
+            internal RoadNavigationSlice(Entity lane, float entryDistanceMeters)
+            {
+                Lane = lane;
+                EntryDistanceMeters = entryDistanceMeters;
+            }
+        }
+
+        internal enum RoadNavigationStatus : byte
+        {
+            Ready = 0,
+            NotGenerated = 1,
+            Unknown = 2,
+            Invalid = 3
+        }
+
+        internal readonly struct RoadNavigationResult
+        {
+            internal readonly RoadNavigationStatus Status;
+            internal readonly RoadNavigationRead Read;
+
+            internal RoadNavigationResult(RoadNavigationStatus status, RoadNavigationRead read)
+            {
+                Status = status;
+                Read = read;
+            }
+        }
+
+        internal readonly struct RoadNavigationRead
+        {
+            internal readonly Entity CurrentLane;
+            internal readonly Entity TargetWaypoint;
+            internal readonly bool CandidateTruncated;
+
+            internal RoadNavigationRead(
+                Entity currentLane,
+                Entity targetWaypoint,
+                bool candidateTruncated)
+            {
+                CurrentLane = currentLane;
+                TargetWaypoint = targetWaypoint;
+                CandidateTruncated = candidateTruncated;
+            }
+        }
+
         private struct RoadFrameRow
         {
             public Entity Vehicle;
@@ -108,6 +158,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly List<RoadTargetProbe> m_TargetProbes = new List<RoadTargetProbe>(64);
 
         private const float DepartureMovingSpeedSq = 0.01f;
+        private const float SignalLookAheadMeters = 320f;
+        private const int SignalNavigationLimit = 32;
 
         public RoadEventSource(ModRuntimeHostSystem runtime)
         {
@@ -126,6 +178,125 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal IReadOnlyList<RoadSkipEvent> SkipEvents => m_SkipEvents;
         internal IReadOnlyList<RoadTargetProbe> TargetProbes => m_TargetProbes;
+
+        internal int CollectedVehicleCount => m_FrameRows.Count;
+
+        internal bool TryGetCollectedVehicle(
+            int index,
+            uint frame,
+            out ManagedSourceVehicle source)
+        {
+            source = default;
+            if (index < 0 || index >= m_FrameRows.Count)
+                return false;
+            RoadFrameRow row = m_FrameRows[index];
+            if (!row.IsSource
+                || row.SourceFrame != frame
+                || !row.InputValid
+                || row.Vehicle == Entity.Null
+                || row.RegisteredLine == Entity.Null)
+            {
+                return false;
+            }
+            source = new ManagedSourceVehicle(row.Vehicle, row.RegistryState);
+            return true;
+        }
+
+        internal RoadNavigationResult ReadSignalNavigation(
+            Entity vehicle,
+            List<RoadNavigationSlice> slices)
+        {
+            slices?.Clear();
+            if (slices == null
+                || vehicle == Entity.Null
+                || !m_Runtime.EntityManager.Exists(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<CarCurrentLane>(vehicle)
+                || !m_Runtime.EntityManager.HasComponent<Target>(vehicle))
+            {
+                return new RoadNavigationResult(RoadNavigationStatus.Invalid, default);
+            }
+
+            Target target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
+            if (target.m_Target == Entity.Null
+                || !m_Runtime.EntityManager.Exists(target.m_Target)
+                || !m_Runtime.EntityManager.HasComponent<Waypoint>(target.m_Target))
+            {
+                return new RoadNavigationResult(RoadNavigationStatus.Invalid, default);
+            }
+
+            CarCurrentLane current = m_Runtime.EntityManager.GetComponentData<CarCurrentLane>(vehicle);
+            if (current.m_Lane == Entity.Null
+                || !m_Runtime.EntityManager.Exists(current.m_Lane)
+                || !m_Runtime.EntityManager.HasComponent<Curve>(current.m_Lane))
+            {
+                return new RoadNavigationResult(RoadNavigationStatus.Invalid, default);
+            }
+
+            Curve currentCurve = m_Runtime.EntityManager.GetComponentData<Curve>(current.m_Lane);
+            float remaining = currentCurve.m_Length
+                * math.abs(current.m_CurvePosition.z - current.m_CurvePosition.x);
+            if (!math.isfinite(remaining) || remaining < 0f)
+                return new RoadNavigationResult(RoadNavigationStatus.Invalid, default);
+
+            if (!m_Runtime.EntityManager.HasBuffer<CarNavigationLane>(vehicle))
+            {
+                return new RoadNavigationResult(
+                    RoadNavigationStatus.NotGenerated,
+                    new RoadNavigationRead(
+                        current.m_Lane,
+                        target.m_Target,
+                        false));
+            }
+
+            DynamicBuffer<CarNavigationLane> navigation =
+                m_Runtime.EntityManager.GetBuffer<CarNavigationLane>(vehicle, true);
+            if (navigation.Length == 0)
+            {
+                return new RoadNavigationResult(
+                    RoadNavigationStatus.NotGenerated,
+                    new RoadNavigationRead(
+                        current.m_Lane,
+                        target.m_Target,
+                        false));
+            }
+            m_Runtime.m_RuntimeHotPathProbe.CountNavigationDetailRead();
+            float distance = remaining;
+            int count = math.min(navigation.Length, SignalNavigationLimit);
+            for (int i = 0; i < count; i++)
+            {
+                CarNavigationLane item = navigation[i];
+                if (item.m_Lane == Entity.Null
+                    || !m_Runtime.EntityManager.Exists(item.m_Lane)
+                    || !m_Runtime.EntityManager.HasComponent<Curve>(item.m_Lane))
+                {
+                    slices.Clear();
+                    return new RoadNavigationResult(RoadNavigationStatus.Invalid, default);
+                }
+
+                Curve curve = m_Runtime.EntityManager.GetComponentData<Curve>(item.m_Lane);
+                float length = curve.m_Length
+                    * math.abs(item.m_CurvePosition.y - item.m_CurvePosition.x);
+                if (!math.isfinite(length) || length < 0f)
+                {
+                    slices.Clear();
+                    return new RoadNavigationResult(RoadNavigationStatus.Invalid, default);
+                }
+                float exit = distance + length;
+                slices.Add(new RoadNavigationSlice(item.m_Lane, distance));
+                distance = exit;
+            }
+
+            bool candidateTruncated = navigation.Length > SignalNavigationLimit
+                && distance <= SignalLookAheadMeters;
+            RoadNavigationRead read = new RoadNavigationRead(
+                current.m_Lane,
+                target.m_Target,
+                candidateTruncated);
+            RoadNavigationStatus status = candidateTruncated
+                    ? RoadNavigationStatus.Unknown
+                    : RoadNavigationStatus.Ready;
+            return new RoadNavigationResult(status, read);
+        }
 
         public void Collect(uint frame)
         {

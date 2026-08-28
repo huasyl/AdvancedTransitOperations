@@ -17,6 +17,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<Entity, int> m_GetOriginHoldLimitMinutes;
         private readonly Func<Entity, int> m_GetMaxStationDwellMinutes;
         private readonly Func<Entity, string> m_GetAllowedDepotId;
+        private readonly Func<Entity, bool> m_GetSignalPriorityEnabled;
         private readonly Func<bool> m_CleanupInvalidApplied;
         private readonly Func<DispatchWorkbenchCleanupInfoDto> m_ConsumeCleanupInfo;
         private readonly Action<WorkbenchLineRuntime, List<DispatchWorkbenchStationDto>, List<DispatchWorkbenchTripDto>, DispatchWorkbenchDraftState, List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> m_LogSnapshot;
@@ -30,6 +31,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<Entity, int> getOriginHoldLimitMinutes,
             Func<Entity, int> getMaxStationDwellMinutes,
             Func<Entity, string> getAllowedDepotId,
+            Func<Entity, bool> getSignalPriorityEnabled,
             Func<bool> cleanupInvalidApplied,
             Func<DispatchWorkbenchCleanupInfoDto> consumeCleanupInfo,
             Action<WorkbenchLineRuntime, List<DispatchWorkbenchStationDto>, List<DispatchWorkbenchTripDto>, DispatchWorkbenchDraftState, List<DispatchWorkbenchStagedRowDto>, List<DispatchWorkbenchStagedRowDto>> logSnapshot,
@@ -50,6 +52,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_GetOriginHoldLimitMinutes = getOriginHoldLimitMinutes ?? throw new ArgumentNullException(nameof(getOriginHoldLimitMinutes));
             m_GetMaxStationDwellMinutes = getMaxStationDwellMinutes ?? throw new ArgumentNullException(nameof(getMaxStationDwellMinutes));
             m_GetAllowedDepotId = getAllowedDepotId ?? throw new ArgumentNullException(nameof(getAllowedDepotId));
+            m_GetSignalPriorityEnabled = getSignalPriorityEnabled ?? throw new ArgumentNullException(nameof(getSignalPriorityEnabled));
             m_CleanupInvalidApplied = cleanupInvalidApplied ?? throw new ArgumentNullException(nameof(cleanupInvalidApplied));
             m_ConsumeCleanupInfo = consumeCleanupInfo ?? throw new ArgumentNullException(nameof(consumeCleanupInfo));
             m_LogSnapshot = logSnapshot ?? throw new ArgumentNullException(nameof(logSnapshot));
@@ -142,7 +145,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     runtimeLines,
                     m_GetOriginHoldLimitMinutes,
                     m_GetMaxStationDwellMinutes,
-                    m_GetAllowedDepotId),
+                    m_GetAllowedDepotId,
+                    m_GetSignalPriorityEnabled),
                 depots = depots.ToArray(),
                 stations = stations.ToArray(),
                 lineDraftRowsByLineId = lineDraftRowsByLineId,
@@ -184,7 +188,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     runtimeLines,
                     m_GetOriginHoldLimitMinutes,
                     m_GetMaxStationDwellMinutes,
-                    m_GetAllowedDepotId),
+                    m_GetAllowedDepotId,
+                    m_GetSignalPriorityEnabled),
                 depots = depots.ToArray(),
                 stations = Array.Empty<DispatchWorkbenchStationDto>(),
                 lineDraftRowsByLineId = Array.Empty<DispatchWorkbenchLineDraftRowsDto>(),

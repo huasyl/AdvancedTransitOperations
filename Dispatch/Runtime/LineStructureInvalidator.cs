@@ -139,6 +139,25 @@ namespace RapidTransitMod.Dispatch.Runtime
                 || state.Phase == RailPhase.MissingBaseline
                 || state.Phase == RailPhase.Deleted;
         }
+        internal bool TryGetStableSignalInputs(
+            Entity line,
+            out LineTrackChain chain,
+            out LineStopLayout layout)
+        {
+            chain = null;
+            layout = null;
+            if (line == Entity.Null
+                || !m_RailStates.TryGetValue(line, out RailStructureState state)
+                || state.Phase != RailPhase.Stable
+                || state.StableChain == null
+                || state.StableLayout == null)
+            {
+                return false;
+            }
+            chain = state.StableChain;
+            layout = state.StableLayout;
+            return true;
+        }
         internal void RequestCandidate(Entity line, LineTrackChain chain)
         {
             if (line == Entity.Null)
@@ -238,6 +257,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_ObservationRestored = false;
             m_NextLayoutRetryFrame = 0;
             m_PendingRoadLines.Clear();
+            m_Runtime.m_SignalLineCache.Clear();
         }
         internal void OnObservationRestored()
         {
@@ -373,6 +393,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             if (state == null || state.PendingApplied || !m_ObservationRestored)
                 return;
+            m_Runtime.m_SignalLineCache.Invalidate(state.Line);
             int invalidatedSamples = m_Runtime.m_Observation.SuspendLine(
                 state.Line,
                 out int endedSlices);
@@ -649,6 +670,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 plan.NewLayout,
                 plan.Impact);
             LineMileageChangeResult lineMileage = m_Runtime.m_LineMileage.InvalidateLine(plan.Line);
+            if (lineMileage.SharedRevisionAdvanced)
+                m_Runtime.m_SignalLineCache.Clear();
             int timedPlanNone = 0;
             int timedPlanReprojected = 0;
             int timedPlanCleared = 0;

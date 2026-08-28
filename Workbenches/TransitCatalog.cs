@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Serialization;
+using RapidTransitMod.Dispatch;
 using RapidTransitMod.Dispatch.Workbench;
 
 namespace RapidTransitMod.Workbenches
@@ -76,8 +77,9 @@ namespace RapidTransitMod.Workbenches
                 .Where(line => line != null && scope.MatchesLineId(line.Id))
                 .ToList();
             LineIds lineIds = runtime.m_WorkbenchBridge.Ids();
+            LineConfig lineConfig = runtime.m_WorkbenchBridge.LineCfg();
             DispatchWorkbenchLineDto[] lines = runtimeLines
-                .Select(line => ToLineDto(runtime, lineIds, line))
+                .Select(line => ToLineDto(runtime, lineIds, lineConfig, line))
                 .Where(line => line != null)
                 .ToArray();
             DispatchWorkbenchDepotDto[] depots = FilterDepots(
@@ -131,6 +133,7 @@ namespace RapidTransitMod.Workbenches
         private static DispatchWorkbenchLineDto ToLineDto(
             ModRuntimeHostSystem runtime,
             LineIds lineIds,
+            LineConfig lineConfig,
             WorkbenchLineRuntime line)
         {
             if (line == null)
@@ -152,6 +155,7 @@ namespace RapidTransitMod.Workbenches
                 maxStationDwellMinutes = runtime.GetDwell(lineId),
                 transportType = line.TransportType ?? string.Empty,
                 allowedDepotId = runtime.GetDepotId(lineId),
+                signalPriorityEnabled = lineConfig.GetSignalPriority(line.Entity),
                 dispatchSupported = line.DispatchSupported,
                 unsupportedReason = line.UnsupportedReason ?? string.Empty,
                 originStatus = line.OriginStatus ?? string.Empty,

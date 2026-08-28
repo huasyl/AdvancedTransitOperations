@@ -291,6 +291,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly StopRuntimeState m_State;
         private readonly RuntimeFramePlan m_FramePlan;
         private readonly Action<Entity, bool> m_SetDeparturePending;
+        private readonly Action<Entity, bool> m_PublishDeparturePending;
         private readonly List<StopFact> m_Facts = new List<StopFact>();
         private readonly List<StopControlResult> m_Controls = new List<StopControlResult>();
         private readonly List<Entity> m_DepartureCandidates = new List<Entity>();
@@ -312,11 +313,13 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal StopRuntime(
             StopRuntimeState state,
             RuntimeFramePlan framePlan,
-            Action<Entity, bool> setDeparturePending)
+            Action<Entity, bool> setDeparturePending,
+            Action<Entity, bool> publishDeparturePending)
         {
             m_State = state;
             m_FramePlan = framePlan;
             m_SetDeparturePending = setDeparturePending;
+            m_PublishDeparturePending = publishDeparturePending;
         }
 
         internal IReadOnlyList<StopFact> Facts => m_Facts;
@@ -1110,7 +1113,10 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal void StartDeparturePending(Entity vehicle, uint nowFrame)
         {
             if (!m_State.DeparturePendingSinceFrame.ContainsKey(vehicle))
+            {
                 m_State.DeparturePendingSinceFrame[vehicle] = nowFrame;
+                m_PublishDeparturePending(vehicle, true);
+            }
             m_SetDeparturePending(vehicle, true);
         }
 
@@ -1130,8 +1136,15 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal void CancelDeparturePending(Entity vehicle)
         {
-            m_State.DeparturePendingSinceFrame.Remove(vehicle);
+            RemoveDeparturePending(vehicle);
+        }
+
+        private void RemoveDeparturePending(Entity vehicle)
+        {
+            bool removed = m_State.DeparturePendingSinceFrame.Remove(vehicle);
             m_SetDeparturePending(vehicle, false);
+            if (removed)
+                m_PublishDeparturePending(vehicle, false);
         }
 
         internal bool TryRecoverInvalidatedMidStopSession(
@@ -1273,6 +1286,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.LastOfficialBoarding[vehicle] = boardingByte;
             ClearDwell(vehicle);
             uint arrivalFrame = m_TakeLegacyDwellStart?.Invoke(vehicle) ?? nowFrame;
+            RemoveDeparturePending(vehicle);
             if (!boarding || waypoint < 0)
             {
                 RejectTimedRestore(vehicle);
@@ -1283,7 +1297,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.StopSessionWaypointIndex[vehicle] = waypoint;
             m_State.StopSessionArrivalFrame[vehicle] = arrivalFrame;
             m_State.StopSessionBoardingChangeCount[vehicle] = 0;
-            m_State.DeparturePendingSinceFrame.Remove(vehicle);
             m_State.InvalidatedMidStopRecoveryPending.Remove(vehicle);
             BindTimedRestore(vehicle, line, nowFrame);
             return new StopFact(StopFactKind.Restored, vehicle, line, waypoint, nowFrame);
@@ -1347,12 +1360,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (!preserveArrival)
                 m_State.StopSessionArrivalFrame.Remove(vehicle);
             m_State.StopSessionBoardingChangeCount.Remove(vehicle);
-            m_State.DeparturePendingSinceFrame.Remove(vehicle);
+            RemoveDeparturePending(vehicle);
             if (!preserveArrival)
                 ClearDwell(vehicle);
             m_State.ForcedMidStopBoardingGraceUntil.Remove(vehicle);
             m_FramePlan.ClearDeadline(vehicle, DeadlineKind.ForcedMidStopBoardingGrace);
-            m_SetDeparturePending(vehicle, false);
         }
 
         public void Dispose()
@@ -1366,9 +1378,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_State.StopSessionWaypointIndex.Remove(vehicle);
             m_State.StopSessionArrivalFrame.Remove(vehicle);
             m_State.StopSessionBoardingChangeCount.Remove(vehicle);
-            m_State.DeparturePendingSinceFrame.Remove(vehicle);
+            RemoveDeparturePending(vehicle);
             m_State.InvalidatedMidStopRecoveryPending.Remove(vehicle);
-            m_SetDeparturePending(vehicle, false);
         }
 
         private void AddDepartureCandidate(Entity vehicle)

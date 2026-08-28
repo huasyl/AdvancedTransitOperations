@@ -8,6 +8,7 @@ using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.Dispatch.Scheduling;
+using RapidTransitMod.Dispatch.Signals;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.Core;
 using RapidTransitMod.RailEta.BuiltIn;
@@ -254,6 +255,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineTimes = new LineTimes(lineHost.Times);
             runtime.m_LineTimes.Init();
             runtime.m_LineMileage = new LineMileage(lineHost.Mileage);
+            runtime.m_SignalLineCache = new SignalLineCache(runtime.EntityManager);
             runtime.m_LineVehicles = new LineVehicles(runtime);
             runtime.m_Obs = new TraceStore();
             runtime.m_MonitorAverages = new MonitorAverageStore(
@@ -372,6 +374,10 @@ namespace RapidTransitMod.Dispatch.Runtime
                     runtime,
                     vehicle,
                     RuntimeDemandMask.DeparturePending,
+                    active),
+                (vehicle, active) => runtime.m_FrameEvents.AppendDeparturePending(
+                    vehicle,
+                    runtime.m_SimulationSystem.frameIndex,
                     active));
             runtime.m_StopRuntime.BindDwell(
                 line => runtime.m_LineView.Dwell(line),
@@ -388,6 +394,123 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_StopRuntime.BindClock(
                 () => runtime.m_SimClock.Snapshot,
                 () => runtime.m_SimulationSystem.frameIndex);
+            runtime.m_TransitSignalRuntime = new TransitSignalRuntime(new TransitSignalPort
+            {
+                TryVehicle = (Entity vehicle, out Entity line, out TransitMode mode, out VehicleState state) =>
+                {
+                    line = Entity.Null;
+                    mode = TransitMode.Unknown;
+                    state = default;
+                    if (vehicle == Entity.Null
+                        || !runtime.EntityManager.Exists(vehicle)
+                        || !runtime.m_VehicleView.TryGetLine(vehicle, out line)
+                        || line == Entity.Null
+                        || !runtime.EntityManager.Exists(line)
+                        || !runtime.m_VehicleView.TryGetState(vehicle, out state))
+                    {
+                        return false;
+                    }
+                    mode = TransportModeResolver.Resolve(runtime.EntityManager, line);
+                    return true;
+                },
+                TryStop = (Entity vehicle, out bool hasSession, out bool pending, out int waypoint) =>
+                {
+                    hasSession = runtime.m_StopRuntime.HasOpenStopSession(vehicle);
+                    pending = runtime.m_StopRuntime.IsDeparturePending(vehicle);
+                    waypoint = runtime.m_StopRuntime.TryGetSessionWaypoint(vehicle, out int value) ? value : -1;
+                    return vehicle != Entity.Null;
+                },
+                LineEnabled = runtime.m_LineView.SignalPriorityManaged,
+                LinePending = runtime.m_LineStructureInvalidator.IsLinePending,
+                Waypoint = (line, index) => line != Entity.Null
+                    && runtime.EntityManager.HasBuffer<RouteWaypoint>(line)
+                    && index >= 0
+                    && index < runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true).Length
+                        ? runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true)[index].m_Waypoint
+                        : Entity.Null,
+                RailSourceCount = () => runtime.m_RailEventSource.CollectedVehicleCount,
+                RoadSourceCount = () => runtime.m_RoadEventSource.CollectedVehicleCount,
+                RailSource = (index, frame) => runtime.m_RailEventSource.TryGetCollectedVehicle(index, frame, out ManagedSourceVehicle source)
+                    ? (true, source) : (false, default),
+                RoadSource = (index, frame) => runtime.m_RoadEventSource.TryGetCollectedVehicle(index, frame, out ManagedSourceVehicle source)
+                    ? (true, source) : (false, default),
+                RoadNavigation = runtime.m_RoadEventSource.ReadSignalNavigation,
+                TryTramPosition = (Entity vehicle, Entity line, out SignalLineModel model, out TramSignalPosition position, out TramSignalPositionDiagnostic diagnostic) =>
+                {
+                    model = null;
+                    position = default;
+                    diagnostic = default;
+                    if (!runtime.EntityManager.HasBuffer<RouteWaypoint>(line))
+                    {
+                        diagnostic = new TramSignalPositionDiagnostic(
+                            TramSignalPositionFailure.RouteWaypointsUnavailable,
+                            default);
+                        return false;
+                    }
+                    DynamicBuffer<RouteWaypoint> waypoints = runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
+                    if (!runtime.m_LineStructureInvalidator.TryGetStableSignalInputs(
+                            line,
+                            out LineTrackChain chain,
+                            out LineStopLayout layout))
+                    {
+                        diagnostic = new TramSignalPositionDiagnostic(
+                            TramSignalPositionFailure.StableLineInputsUnavailable,
+                            default);
+                        return false;
+                    }
+                    if (!runtime.m_LineMileage.Get(
+                            line,
+                            waypoints,
+                            out LineMileageModel mileage))
+                    {
+                        diagnostic = new TramSignalPositionDiagnostic(
+                            TramSignalPositionFailure.LineMileageUnavailable,
+                            default);
+                        return false;
+                    }
+                    if (!runtime.m_SignalLineCache.TryGet(
+                            line,
+                            chain,
+                            layout,
+                            mileage,
+                            out model))
+                    {
+                        diagnostic = new TramSignalPositionDiagnostic(
+                            TramSignalPositionFailure.SignalLineModelUnavailable,
+                            default);
+                        model = null;
+                        return false;
+                    }
+                    if (!runtime.m_TrackProjection.TryGetCurrentLanePosition(
+                            vehicle,
+                            line,
+                            waypoints,
+                            chain,
+                            out VehicleTrackCursor trackPosition,
+                            out Entity currentLane,
+                            out CurrentLanePositionDiagnostic projection))
+                    {
+                        diagnostic = new TramSignalPositionDiagnostic(
+                            TramSignalPositionFailure.ProjectionUnavailable,
+                            projection);
+                        model = null;
+                        return false;
+                    }
+                    position = SignalLineCache.MapPosition(
+                        model,
+                        trackPosition,
+                        currentLane);
+                    return true;
+                },
+                TryTramNavigation = runtime.m_RailEventSource.ReadSignalNavigation,
+                PendingFacts = () => runtime.m_FrameEvents.DeparturePendingEvents,
+                DispatchFacts = () => runtime.m_FrameEvents.DispatchEvents,
+                StopEvents = () => runtime.m_FrameEvents.StopEvents,
+                LifecycleFacts = () => runtime.m_FrameEvents.LifecycleEvents,
+                FactsBySequence = () => runtime.m_FrameEvents.MergeBySequence(),
+                Signals = new SignalLanePort(runtime.EntityManager),
+                Log = message => runtime.log.Info(message)
+            });
             runtime.m_SimClock.ClockChanged += (oldClockSnapshot, newClockSnapshot) =>
             {
                 runtime.m_StopRuntime.ReprojectDwell();
@@ -547,6 +670,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_RuntimeLog = null!;
             runtime.m_RuntimeLifecycleHost = null!;
             runtime.m_LineStructureInvalidator = null!;
+            runtime.m_TransitSignalRuntime?.Clear("runtime-destroyed");
+            runtime.m_TransitSignalRuntime = null!;
+            runtime.m_SignalLineCache?.Clear();
+            runtime.m_SignalLineCache = null!;
             runtime.m_LineStructurePendingStore = null!;
             if (runtime.m_Bypass != null) runtime.m_Bypass.Dispose();
             runtime.m_LineChangeSource?.Dispose();

@@ -624,6 +624,311 @@ namespace RapidTransitMod.TrackProjection
             return true;
         }
 
+        internal bool TryGetCurrentLanePosition(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LineTrackChain chain,
+            out VehicleTrackCursor cursor,
+            out Entity currentLane,
+            out CurrentLanePositionDiagnostic diagnostic)
+        {
+            cursor = default;
+            currentLane = Entity.Null;
+            diagnostic = new CurrentLanePositionDiagnostic(
+                CurrentLanePositionFailure.CurrentFrameCursorUnavailable,
+                Entity.Null,
+                float.NaN,
+                VehicleTrackCursorSource.Unknown,
+                -1,
+                -1);
+            if (vehicle == Entity.Null
+                || line == Entity.Null
+                || chain == null)
+                return false;
+            if (m_Runtime.IsLinePending(line))
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.LinePending,
+                    Entity.Null,
+                    float.NaN,
+                    VehicleTrackCursorSource.Unknown,
+                    -1,
+                    -1);
+                return false;
+            }
+            if (!TryGetVehicleTrackCursorCurrentFrame(
+                    vehicle,
+                    line,
+                    waypoints,
+                    chain,
+                    out VehicleTrackCursor snapshot)
+                || !snapshot.Available)
+            {
+                return false;
+            }
+
+            diagnostic = new CurrentLanePositionDiagnostic(
+                CurrentLanePositionFailure.None,
+                Entity.Null,
+                float.NaN,
+                snapshot.Source,
+                snapshot.SegmentIndex,
+                snapshot.AtomCursorIndex);
+            if (snapshot.Source != VehicleTrackCursorSource.CurrentLane)
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.CursorSourceNotCurrentLane,
+                    Entity.Null,
+                    float.NaN,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+            if (snapshot.LineEntity != line
+                || snapshot.ChainSignature != chain.Signature)
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.CursorLineOrSignatureMismatch,
+                    Entity.Null,
+                    float.NaN,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+            if (snapshot.SegmentIndex < 0
+                || snapshot.SegmentIndex >= chain.SegmentRanges.Count
+                || snapshot.AtomCursorIndex < 0
+                || snapshot.AtomCursorIndex >= chain.TrackAtoms.Count)
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.CursorIndexInconsistent,
+                    Entity.Null,
+                    float.NaN,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+            if (!m_Runtime.EntityManager.HasComponent<TrainCurrentLane>(vehicle))
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.TrainCurrentLaneUnavailable,
+                    Entity.Null,
+                    float.NaN,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+
+            TrainCurrentLane current = m_Runtime.EntityManager.GetComponentData<TrainCurrentLane>(vehicle);
+            currentLane = current.m_Front.m_Lane;
+            float position = current.m_Front.m_CurvePosition.y;
+            diagnostic = new CurrentLanePositionDiagnostic(
+                CurrentLanePositionFailure.None,
+                currentLane,
+                position,
+                snapshot.Source,
+                snapshot.SegmentIndex,
+                snapshot.AtomCursorIndex);
+            if (currentLane == Entity.Null)
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.CurrentLaneUnavailable,
+                    currentLane,
+                    position,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+            if (!math.isfinite(position))
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.CurvePositionNotFinite,
+                    currentLane,
+                    position,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+            if (!TryResolveCurrentLaneAtom(
+                    chain,
+                    currentLane,
+                    position,
+                    snapshot,
+                    out int segmentIndex,
+                    out int atomIndex,
+                    out CurrentLanePositionFailure atomFailure))
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    atomFailure,
+                    currentLane,
+                    position,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+
+            TrackAtom atom = chain.TrackAtoms[atomIndex];
+            float start = atom.TargetDelta.x;
+            float end = atom.TargetDelta.y;
+            float span = math.abs(end - start);
+            const float epsilon = 1e-5f;
+            if (!math.isfinite(start)
+                || !math.isfinite(end)
+                || !math.isfinite(span)
+                || span <= epsilon)
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.CurrentLaneAtomSpanInvalid,
+                    currentLane,
+                    position,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+            float progress = math.abs(position - start) / span;
+            if (!math.isfinite(progress))
+            {
+                diagnostic = new CurrentLanePositionDiagnostic(
+                    CurrentLanePositionFailure.CurrentLaneProgressNotFinite,
+                    currentLane,
+                    position,
+                    snapshot.Source,
+                    snapshot.SegmentIndex,
+                    snapshot.AtomCursorIndex);
+                return false;
+            }
+
+            TrackSegmentRange exactRange = chain.SegmentRanges[segmentIndex];
+            cursor = new VehicleTrackCursor(
+                line,
+                chain.Signature,
+                segmentIndex,
+                exactRange.StartAtomIndex,
+                exactRange.EndAtomIndexExclusive,
+                atomIndex,
+                math.saturate(progress),
+                snapshot.Confidence,
+                VehicleTrackCursorSource.CurrentLane);
+            return true;
+        }
+
+        private bool TryResolveCurrentLaneAtom(
+            LineTrackChain chain,
+            Entity currentLane,
+            float position,
+            VehicleTrackCursor snapshot,
+            out int segmentIndex,
+            out int atomIndex,
+            out CurrentLanePositionFailure failure)
+        {
+            segmentIndex = -1;
+            atomIndex = -1;
+            failure = CurrentLanePositionFailure.CurrentLaneNotIndexed;
+            if (chain == null
+                || currentLane == Entity.Null
+                || chain.TrackAtoms.Count == 0
+                || chain.SegmentRanges.Count == 0)
+                return false;
+
+            Entity indexLane = currentLane;
+            if (!chain.AtomIndicesByLane.TryGetValue(
+                    indexLane,
+                    out List<int> laneAtomIndices))
+            {
+                indexLane = ResolveLaneContainer(currentLane);
+                if (indexLane == Entity.Null
+                    || !chain.AtomIndicesByLane.TryGetValue(
+                        indexLane,
+                        out laneAtomIndices))
+                {
+                    return false;
+                }
+            }
+
+            int segmentCount = chain.SegmentRanges.Count;
+            int currentSegmentIndex = snapshot.SegmentIndex;
+            if (currentSegmentIndex < 0
+                || currentSegmentIndex >= segmentCount)
+                return false;
+
+            int nextSegmentIndex = (currentSegmentIndex + 1) % segmentCount;
+            int previousSegmentIndex = (currentSegmentIndex - 1 + segmentCount) % segmentCount;
+            TrackSegmentRange currentRange = chain.SegmentRanges[currentSegmentIndex];
+            TrackSegmentRange nextRange = chain.SegmentRanges[nextSegmentIndex];
+            TrackSegmentRange previousRange = chain.SegmentRanges[previousSegmentIndex];
+            const float epsilon = 1e-5f;
+            bool selectedStartsHere = false;
+            bool invalidSpan = false;
+            int selectedForwardDistance = int.MaxValue;
+            for (int i = 0; i < laneAtomIndices.Count; i++)
+            {
+                int candidateAtomIndex = laneAtomIndices[i];
+                if (candidateAtomIndex < 0
+                    || candidateAtomIndex >= chain.TrackAtoms.Count)
+                    continue;
+
+                int candidateSegmentIndex = -1;
+                if (candidateAtomIndex >= currentRange.StartAtomIndex
+                    && candidateAtomIndex < currentRange.EndAtomIndexExclusive)
+                    candidateSegmentIndex = currentSegmentIndex;
+                else if (candidateAtomIndex >= nextRange.StartAtomIndex
+                    && candidateAtomIndex < nextRange.EndAtomIndexExclusive)
+                    candidateSegmentIndex = nextSegmentIndex;
+                else if (candidateAtomIndex >= previousRange.StartAtomIndex
+                    && candidateAtomIndex < previousRange.EndAtomIndexExclusive)
+                    candidateSegmentIndex = previousSegmentIndex;
+                if (candidateSegmentIndex < 0)
+                    continue;
+
+                TrackAtom atom = chain.TrackAtoms[candidateAtomIndex];
+                float start = atom.TargetDelta.x;
+                float end = atom.TargetDelta.y;
+                float span = math.abs(end - start);
+                if (!math.isfinite(start)
+                    || !math.isfinite(end)
+                    || !math.isfinite(span)
+                    || span <= epsilon)
+                {
+                    invalidSpan = true;
+                    continue;
+                }
+                if (position < math.min(start, end) - epsilon
+                    || position > math.max(start, end) + epsilon)
+                    continue;
+
+                bool startsHere = math.abs(position - start) <= epsilon;
+                int forwardDistance = candidateAtomIndex - snapshot.AtomCursorIndex;
+                if (forwardDistance < 0)
+                    forwardDistance += chain.TrackAtoms.Count;
+                if (atomIndex >= 0
+                    && ((!startsHere && selectedStartsHere)
+                        || (startsHere == selectedStartsHere
+                            && forwardDistance >= selectedForwardDistance)))
+                    continue;
+
+                segmentIndex = candidateSegmentIndex;
+                atomIndex = candidateAtomIndex;
+                selectedStartsHere = startsHere;
+                selectedForwardDistance = forwardDistance;
+            }
+
+            failure = atomIndex >= 0
+                ? CurrentLanePositionFailure.None
+                : invalidSpan
+                    ? CurrentLanePositionFailure.CurrentLaneAtomSpanInvalid
+                    : CurrentLanePositionFailure.CurrentLaneAtomNotFound;
+            return atomIndex >= 0;
+        }
+
         private bool TryResolveSemanticLaneAtomCandidate(
             Entity vehicle,
             Entity line,
@@ -643,58 +948,59 @@ namespace RapidTransitMod.TrackProjection
             }
 
             int segmentCount = chain.SegmentRanges.Count;
-            List<int> semanticSegments = new List<int>(4);
-            void AddSegmentCandidate(int segmentIndex)
-            {
-                if (segmentIndex < 0)
-                    return;
-
-                int normalized = segmentIndex % segmentCount;
-                if (normalized < 0)
-                    normalized += segmentCount;
-
-                if (!semanticSegments.Contains(normalized))
-                    semanticSegments.Add(normalized);
-            }
-
-            void AddWaypointAnchor(int waypointIndex)
-            {
-                if (waypointIndex < 0 || waypointIndex >= waypoints.Length)
-                    return;
-
-                AddSegmentCandidate(waypointIndex == 0 ? segmentCount - 1 : waypointIndex - 1);
-            }
+            SemanticSegmentSlots semanticSegments = default;
 
             if (m_Cursors.TryCursor(vehicle, out VehicleTrackCursor hint)
                 && hint.LineEntity == line
                 && hint.ChainSignature == chain.Signature)
             {
-                AddSegmentCandidate(hint.SegmentIndex);
+                semanticSegments.Add(hint.SegmentIndex, segmentCount);
             }
 
-            if (m_Runtime.CachedWaypointIndex.TryGetValue(vehicle, out int cachedWaypointIndex))
-                AddWaypointAnchor(cachedWaypointIndex);
+            if (m_Runtime.CachedWaypointIndex.TryGetValue(vehicle, out int cachedWaypointIndex)
+                && cachedWaypointIndex >= 0
+                && cachedWaypointIndex < waypoints.Length)
+            {
+                semanticSegments.Add(
+                    cachedWaypointIndex == 0 ? segmentCount - 1 : cachedWaypointIndex - 1,
+                    segmentCount);
+            }
 
             if (m_Runtime.EntityManager.HasComponent<Target>(vehicle))
             {
                 Entity targetWaypoint = m_Runtime.EntityManager.GetComponentData<Target>(vehicle).m_Target;
                 if (m_Runtime.EntityManager.HasComponent<Waypoint>(targetWaypoint))
-                    AddWaypointAnchor(m_Runtime.EntityManager.GetComponentData<Waypoint>(targetWaypoint).m_Index);
+                {
+                    int targetWaypointIndex = m_Runtime.EntityManager.GetComponentData<Waypoint>(targetWaypoint).m_Index;
+                    if (targetWaypointIndex >= 0 && targetWaypointIndex < waypoints.Length)
+                    {
+                        semanticSegments.Add(
+                            targetWaypointIndex == 0 ? segmentCount - 1 : targetWaypointIndex - 1,
+                            segmentCount);
+                    }
+                }
             }
 
-            if (TryRouteProgress(vehicle, out int nextWaypointIndex, out _))
-                AddWaypointAnchor(nextWaypointIndex);
+            if (TryRouteProgress(vehicle, out int nextWaypointIndex, out _)
+                && nextWaypointIndex >= 0
+                && nextWaypointIndex < waypoints.Length)
+            {
+                semanticSegments.Add(
+                    nextWaypointIndex == 0 ? segmentCount - 1 : nextWaypointIndex - 1,
+                    segmentCount);
+            }
 
             if (semanticSegments.Count == 0)
                 return false;
 
-            int[] segmentOffsets = new[] { 0, -1, 1 };
             int bestDistance = int.MaxValue;
-            foreach (int baseSegmentIndex in semanticSegments)
+            for (int semanticIndex = 0; semanticIndex < semanticSegments.Count; semanticIndex++)
             {
-                for (int offsetIndex = 0; offsetIndex < segmentOffsets.Length; offsetIndex++)
+                int baseSegmentIndex = semanticSegments.Get(semanticIndex);
+                for (int offsetIndex = 0; offsetIndex < 3; offsetIndex++)
                 {
-                    int segmentIndex = baseSegmentIndex + segmentOffsets[offsetIndex];
+                    int segmentIndex = baseSegmentIndex
+                        + (offsetIndex == 0 ? 0 : offsetIndex == 1 ? -1 : 1);
                     if (segmentIndex < 0)
                         segmentIndex += segmentCount;
                     else if (segmentIndex >= segmentCount)
@@ -728,6 +1034,51 @@ namespace RapidTransitMod.TrackProjection
             }
 
             return atomIndex >= 0;
+        }
+
+        private struct SemanticSegmentSlots
+        {
+            internal int Count;
+            private int m_Segment0;
+            private int m_Segment1;
+            private int m_Segment2;
+            private int m_Segment3;
+
+            internal void Add(int segmentIndex, int segmentCount)
+            {
+                if (segmentIndex < 0 || segmentCount <= 0)
+                    return;
+                int normalized = segmentIndex % segmentCount;
+                if (normalized < 0)
+                    normalized += segmentCount;
+                if ((Count > 0 && m_Segment0 == normalized)
+                    || (Count > 1 && m_Segment1 == normalized)
+                    || (Count > 2 && m_Segment2 == normalized)
+                    || (Count > 3 && m_Segment3 == normalized))
+                {
+                    return;
+                }
+                switch (Count)
+                {
+                    case 0: m_Segment0 = normalized; break;
+                    case 1: m_Segment1 = normalized; break;
+                    case 2: m_Segment2 = normalized; break;
+                    case 3: m_Segment3 = normalized; break;
+                    default: return;
+                }
+                Count++;
+            }
+
+            internal int Get(int index)
+            {
+                return index == 0
+                    ? m_Segment0
+                    : index == 1
+                        ? m_Segment1
+                        : index == 2
+                            ? m_Segment2
+                            : m_Segment3;
+            }
         }
 
         internal bool TryProjectVehicleTrackCursor(

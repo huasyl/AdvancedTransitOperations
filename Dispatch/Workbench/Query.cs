@@ -223,7 +223,8 @@ namespace RapidTransitMod.Dispatch.Workbench
             IEnumerable<WorkbenchLineRuntime> runtimeLines,
             Func<Entity, int> getOriginHoldLimitMinutes,
             Func<Entity, int> getMaxStationDwellMinutes,
-            Func<Entity, string> getAllowedDepotId)
+            Func<Entity, string> getAllowedDepotId,
+            Func<Entity, bool> getSignalPriorityEnabled)
         {
             return (runtimeLines ?? Enumerable.Empty<WorkbenchLineRuntime>())
                 .Where(line => line != null)
@@ -242,6 +243,7 @@ namespace RapidTransitMod.Dispatch.Workbench
                     maxStationDwellMinutes = getMaxStationDwellMinutes(line.Entity),
                     transportType = line.TransportType,
                     allowedDepotId = getAllowedDepotId(line.Entity),
+                    signalPriorityEnabled = getSignalPriorityEnabled(line.Entity),
                     dispatchSupported = line.DispatchSupported,
                     unsupportedReason = line.UnsupportedReason,
                     originStatus = line.OriginStatus,

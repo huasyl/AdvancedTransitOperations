@@ -189,6 +189,16 @@ namespace RapidTransitMod.TrackModel
                             hash = MixLineTrackChainSignature(hash, 1);
                             hash = MixLineTrackChainSignature(hash, (int)atom.AtomClass);
                             hash = MixLineTrackChainSignature(hash, (int)atom.TraversalDir);
+                            if (TryResolveJunction(atom.SourceTarget, out Entity intersection))
+                            {
+                                hash = MixLineTrackChainSignature(hash, 1);
+                                hash = MixLineTrackChainSignature(hash, intersection.Index);
+                                hash = MixLineTrackChainSignature(hash, intersection.Version);
+                            }
+                            else
+                            {
+                                hash = MixLineTrackChainSignature(hash, 0);
+                            }
                             hasTrackAtom = true;
                             refreshedAtoms.Add(atom);
                         }
@@ -379,6 +389,7 @@ namespace RapidTransitMod.TrackModel
                     available ? previousChain : null));
                 if (!available)
                     chain = null;
+                m_NotifyLineTrackChainCandidate?.Invoke(line, chain);
                 return available;
             }
             ulong previousSignature = previousChain != null ? previousChain.Signature : 0UL;
@@ -395,6 +406,7 @@ namespace RapidTransitMod.TrackModel
                 previousChain.LocalBypassWaypointScenes = Array.Empty<LocalBypassWaypointSceneBinding>();
                 previousChain.LocalBypassWaypointScenesVersion = 0;
                 BuildAtomIndicesByLane(previousChain);
+                BuildJunctionMarkers(previousChain);
                 EquivalentTrackRefresh.RefreshTraversalLaneKeys(previousChain);
                 m_ClearStaticCachesForLine?.Invoke(line);
                 m_Profile.RegisterTramLine(line, previousChain, waypoints);
@@ -404,6 +416,7 @@ namespace RapidTransitMod.TrackModel
                     waypoints.Length,
                     true,
                     previousChain));
+                m_NotifyLineTrackChainCandidate?.Invoke(line, previousChain);
                 m_PublishTraversal?.Invoke(line, previousChain);
                 m_Diag.AddDevSightChain(previousChain);
                 m_MarkSharedDirty?.Invoke();
@@ -504,6 +517,7 @@ namespace RapidTransitMod.TrackModel
             BuildAtomStationBuildings(chain);
             BuildControlEdges(chain, line, waypoints);
             BuildAtomIndicesByLane(chain);
+            BuildJunctionMarkers(chain);
             m_Profile.RegisterTramLine(line, chain, waypoints);
             m_Profile.BuildTraversalProfile(chain, line, waypoints);
             m_Profile.BuildRunChartTurnbacks(chain, line);
@@ -583,6 +597,42 @@ namespace RapidTransitMod.TrackModel
                 hasConnectionLane,
                 connectionTrackTypes,
                 EntityManager.HasComponent<EdgeLane>(element.m_Target));
+        }
+        private void BuildJunctionMarkers(LineTrackChain chain)
+        {
+            chain.JunctionMarkers.Clear();
+            for (int segmentIndex = 0; segmentIndex < chain.SegmentRanges.Count; segmentIndex++)
+            {
+                TrackSegmentRange range = chain.SegmentRanges[segmentIndex];
+                for (int atomIndex = range.StartAtomIndex;
+                    atomIndex < range.EndAtomIndexExclusive;
+                    atomIndex++)
+                {
+                    Entity lane = chain.TrackAtoms[atomIndex].SourceTarget;
+                    if (!TryResolveJunction(lane, out _))
+                        continue;
+
+                    chain.JunctionMarkers.Add(new TrackJunctionMarker(
+                        segmentIndex,
+                        atomIndex,
+                        lane));
+                }
+            }
+        }
+        private bool TryResolveJunction(Entity lane, out Entity intersection)
+        {
+            intersection = Entity.Null;
+            if (lane == Entity.Null
+                || !EntityManager.Exists(lane)
+                || !EntityManager.HasComponent<Owner>(lane))
+            {
+                return false;
+            }
+            intersection = EntityManager.GetComponentData<Owner>(lane).m_Owner;
+            return intersection != Entity.Null
+                && EntityManager.Exists(intersection)
+                && EntityManager.HasComponent<Node>(intersection)
+                && EntityManager.HasBuffer<ConnectedEdge>(intersection);
         }
         internal static TrackAtomClass ClassifyPathElementTarget(PathElementFlags flags, bool hasTrackLane, bool hasConnectionLane, TrackTypes connectionTrackTypes, bool hasEdgeLane)
         {

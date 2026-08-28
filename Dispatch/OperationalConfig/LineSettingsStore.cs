@@ -57,6 +57,15 @@ namespace RapidTransitMod
             return TryGet(LineIdentityService.GetKey(lineId, mode), out state);
         }
 
+        internal bool IsSignalPriorityEnabled(LineKey lineKey)
+        {
+            LineKey key = RuntimeConfigStoreDefaults.NormalizeLineKey(lineKey);
+            return !key.IsEmpty
+                && m_Lines.TryGetValue(key, out LineConfigState state)
+                && state != null
+                && state.SignalPriorityEnabled;
+        }
+
         public void Set(LineKey lineKey, LineConfigState state)
         {
             LineKey key = RuntimeConfigStoreDefaults.NormalizeLineKey(lineKey);
@@ -223,6 +232,7 @@ namespace RapidTransitMod
                 MaxStationDwellMinutes = RuntimeConfigStoreDefaults.Dwell(state.MaxStationDwellMinutes),
                 AllowedDepotId = RuntimeConfigStoreDefaults.NormalizeAllowedDepotId(state.AllowedDepotId),
                 ConfiguredServiceKind = RuntimeConfigStoreDefaults.NormalizeConfiguredServiceKind(state.ConfiguredServiceKind),
+                SignalPriorityEnabled = state.SignalPriorityEnabled,
                 SettingsVersion = version
             };
         }
@@ -234,6 +244,7 @@ namespace RapidTransitMod
         public int MaxStationDwellMinutes { get; set; } = RuntimeConfigStoreDefaults.DefaultMaxStationDwellMinutes;
         public string AllowedDepotId { get; set; } = string.Empty;
         public string ConfiguredServiceKind { get; set; } = string.Empty;
+        public bool SignalPriorityEnabled { get; set; }
         public ulong SettingsVersion { get; set; } = 1;
 
         public LineConfigState Clone()
@@ -244,6 +255,7 @@ namespace RapidTransitMod
                 MaxStationDwellMinutes = MaxStationDwellMinutes,
                 AllowedDepotId = AllowedDepotId ?? string.Empty,
                 ConfiguredServiceKind = ConfiguredServiceKind ?? string.Empty,
+                SignalPriorityEnabled = SignalPriorityEnabled,
                 SettingsVersion = SettingsVersion
             };
         }
@@ -252,6 +264,7 @@ namespace RapidTransitMod
         {
             return new LineConfigState
             {
+                SignalPriorityEnabled = false,
                 SettingsVersion = version
             };
         }

@@ -48,6 +48,26 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
             </button>
           </div>
         </div>
+      ) : topbar.supportsSignalPriority ? (
+        <div className="dw-demo-field is-kind">
+          <label className="dw-demo-label">{t("nativeSchedule.topbar.signalPriority")}</label>
+          <div className="dw-demo-toggle-group">
+            <button
+              type="button"
+              className={`dw-demo-toggle ${!topbar.signalPriorityEnabled ? "is-active" : ""}`}
+              onClick={() => actions.selectSignalPriority(false)}
+            >
+              {t("nativeSchedule.signalPriority.off")}
+            </button>
+            <button
+              type="button"
+              className={`dw-demo-toggle ${topbar.signalPriorityEnabled ? "is-active" : ""}`}
+              onClick={() => actions.selectSignalPriority(true)}
+            >
+              {t("nativeSchedule.signalPriority.on")}
+            </button>
+          </div>
+        </div>
       ) : null}
 
       <DemoDisplayField

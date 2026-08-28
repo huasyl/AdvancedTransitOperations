@@ -47,7 +47,8 @@ export function serializeNativeLineSettings(lines = LINE_OPTIONS, mode = "train"
       originHoldLimitMinutes: clampPositiveMinutes(line.hold, 20),
       maxStationDwellMinutes: clampPositiveMinutes(line.dwell, 10),
       allowedDepotId: line.depotId === "any-depot" ? "" : (line.depotId || ""),
-      serviceKind: localOnly ? "local" : normalizeKind(line.kind)
+      serviceKind: localOnly ? "local" : normalizeKind(line.kind),
+      signalPriorityEnabled: line.signalPriorityEnabled === true
     }));
 }
 

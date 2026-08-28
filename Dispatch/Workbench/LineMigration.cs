@@ -87,7 +87,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     originHoldLimitMinutes = setting.originHoldLimitMinutes,
                     maxStationDwellMinutes = setting.maxStationDwellMinutes,
                     allowedDepotId = setting.allowedDepotId,
-                    serviceKind = setting.serviceKind
+                    serviceKind = setting.serviceKind,
+                    signalPriorityEnabled = setting.signalPriorityEnabled
                 };
             }
 

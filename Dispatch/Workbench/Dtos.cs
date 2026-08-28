@@ -100,6 +100,8 @@ namespace RapidTransitMod
         public string allowedDepotId;
         [DataMember]
         public string serviceKind;
+        [DataMember]
+        public bool signalPriorityEnabled;
     }
 
     [DataContract]
@@ -397,6 +399,8 @@ namespace RapidTransitMod
         public string transportType;
         [DataMember]
         public string allowedDepotId;
+        [DataMember]
+        public bool signalPriorityEnabled;
         [DataMember]
         public bool dispatchSupported;
         [DataMember]

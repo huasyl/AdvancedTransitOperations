@@ -35,6 +35,7 @@ using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.Dispatch.Runtime;
+using RapidTransitMod.Dispatch.Signals;
 using RapidTransitMod.Runtime;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.Core;
@@ -101,6 +102,8 @@ namespace RapidTransitMod
         internal TrackModelService m_TrackModel = null!;
         internal LineChangeSource m_LineChangeSource = null!;
         internal TrackProjectionService m_TrackProjection = null!;
+        internal SignalLineCache m_SignalLineCache = null!;
+        internal TransitSignalRuntime m_TransitSignalRuntime = null!;
         internal LineStructureInvalidator m_LineStructureInvalidator = null!;
         internal LineStructurePendingStore m_LineStructurePendingStore = null!;
         internal RuntimeFacade m_Bypass = null!;
@@ -874,6 +877,7 @@ namespace RapidTransitMod
             PublishRunningNotices();
             ClearRunningExitBypass();
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Notices);
+            m_TransitSignalRuntime.Tick(simulationFrame);
             ConsumeFrameEvents();
             if (fullMinuteSweep)
             {
@@ -1116,6 +1120,7 @@ namespace RapidTransitMod
                 StopDwellTimeout timeout = timeouts[i];
                 StopControlResult control = timeout.Control;
                 m_CommandApplier.ForceDepart(control.Vehicle, nowFrame, commandBuffer);
+                m_StopRuntime.StartDeparturePending(control.Vehicle, nowFrame);
                 ApplyStopControl(control.Vehicle, control.WaypointIndex, control);
                 if (!timeout.Fact.Exists)
                     continue;

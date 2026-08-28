@@ -63,6 +63,7 @@ const EMPTY_LINE_OPTION = {
   kind: "local",
   depotId: "",
   originId: "",
+  signalPriorityEnabled: false,
   hold: "",
   dwell: ""
 };
@@ -150,6 +151,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
   const { t } = useNativeScheduleI18n();
   const scheduleMode = normalizeScheduleMode(activeTransportMode);
   const supportsExpress = scheduleMode === "train" || scheduleMode === "subway";
+  const supportsSignalPriority = scheduleMode === "bus" || scheduleMode === "tram";
   const workbenchApi = useMemo(() => getWorkbenchApi(), []);
   const [activeRightTab, setActiveRightTab] = useState("auto");
   const [autoSubMode, setAutoSubMode] = useState("quick");
@@ -1260,6 +1262,19 @@ export default function useScheduleController({ registerHostActions, activeTrans
     invalidateQuickImport();
   }
 
+  function handleSignalPrioritySelect(enabled) {
+    if (!supportsSignalPriority) {
+      return;
+    }
+    const nextEnabled = enabled === true;
+    if (selectedLine.signalPriorityEnabled === nextEnabled) {
+      clearPanelMessage();
+      return;
+    }
+    markLocalDataDirty();
+    updateRuntimeLineOption(selectedLine.id, { signalPriorityEnabled: nextEnabled });
+  }
+
   function handleDepotChange(value) {
     markLocalDataDirty();
     setSelectedDepot(value);
@@ -1935,7 +1950,9 @@ export default function useScheduleController({ registerHostActions, activeTrans
       dwellMinutesTooSmall,
       availableDepots,
       lineOptions: LINE_OPTIONS,
-      supportsExpress
+      supportsExpress,
+      supportsSignalPriority,
+      signalPriorityEnabled: selectedLine.signalPriorityEnabled === true
     },
     summary: {
       summaryStateLabel,
@@ -2010,6 +2027,7 @@ export default function useScheduleController({ registerHostActions, activeTrans
       selectLine: handleSelectLine,
       refreshNames,
       selectLineType: handleLineTypeSelect,
+      selectSignalPriority: handleSignalPrioritySelect,
       changeDepot: handleDepotChange,
       changeHoldMinutes: handleHoldMinutesChange,
       changeDwellMinutes: handleDwellMinutesChange,

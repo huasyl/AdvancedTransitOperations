@@ -28,7 +28,24 @@ namespace RapidTransitMod.Dispatch.Runtime
         Lifecycle,
         Stop,
         Bypass,
-        Dispatch
+        Dispatch,
+        DeparturePending
+    }
+
+    internal readonly struct DeparturePendingEvent
+    {
+        internal readonly Entity Vehicle;
+        internal readonly uint Frame;
+        internal readonly ulong Sequence;
+        internal readonly bool Active;
+
+        internal DeparturePendingEvent(Entity vehicle, uint frame, ulong sequence, bool active)
+        {
+            Vehicle = vehicle;
+            Frame = frame;
+            Sequence = sequence;
+            Active = active;
+        }
     }
 
     internal readonly struct LifecycleEvent
@@ -212,14 +229,18 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly List<DispatchEvent> m_DispatchEvents = new List<DispatchEvent>();
         private readonly List<StopEvent> m_StopEvents = new List<StopEvent>();
         private readonly List<BypassEvent> m_BypassEvents = new List<BypassEvent>();
+        private readonly List<DeparturePendingEvent> m_DeparturePendingEvents = new List<DeparturePendingEvent>();
         private readonly List<FrameEventRef> m_Merged = new List<FrameEventRef>();
+        private static readonly Comparison<FrameEventRef> s_CompareBySequence = CompareBySequence;
         private Action m_FactCounter;
         private ulong m_NextSequence;
+        private ulong m_MergedAtSequence = ulong.MaxValue;
 
         public IReadOnlyList<LifecycleEvent> LifecycleEvents => m_LifecycleEvents;
         public IReadOnlyList<DispatchEvent> DispatchEvents => m_DispatchEvents;
         public IReadOnlyList<StopEvent> StopEvents => m_StopEvents;
         public IReadOnlyList<BypassEvent> BypassEvents => m_BypassEvents;
+        public IReadOnlyList<DeparturePendingEvent> DeparturePendingEvents => m_DeparturePendingEvents;
 
         public void SetFactCounter(Action factCounter) => m_FactCounter = factCounter;
 
@@ -229,8 +250,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_DispatchEvents.Clear();
             m_StopEvents.Clear();
             m_BypassEvents.Clear();
+            m_DeparturePendingEvents.Clear();
             m_Merged.Clear();
             m_NextSequence = 0;
+            m_MergedAtSequence = ulong.MaxValue;
         }
 
         public void ResetCity() => BeginFrame();
@@ -292,14 +315,25 @@ namespace RapidTransitMod.Dispatch.Runtime
             CountFact();
         }
 
+        public void AppendDeparturePending(Entity vehicle, uint frame, bool active)
+        {
+            m_DeparturePendingEvents.Add(new DeparturePendingEvent(vehicle, frame, NextSequence(), active));
+            CountFact();
+        }
+
         public IReadOnlyList<FrameEventRef> MergeBySequence()
         {
+            if (m_MergedAtSequence == m_NextSequence)
+                return m_Merged;
+
             m_Merged.Clear();
             for (int i = 0; i < m_LifecycleEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Lifecycle, m_LifecycleEvents[i].Sequence, i));
             for (int i = 0; i < m_StopEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Stop, m_StopEvents[i].Sequence, i));
             for (int i = 0; i < m_BypassEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Bypass, m_BypassEvents[i].Sequence, i));
             for (int i = 0; i < m_DispatchEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.Dispatch, m_DispatchEvents[i].Sequence, i));
-            m_Merged.Sort((left, right) => left.Sequence.CompareTo(right.Sequence));
+            for (int i = 0; i < m_DeparturePendingEvents.Count; i++) m_Merged.Add(new FrameEventRef(FrameEventKind.DeparturePending, m_DeparturePendingEvents[i].Sequence, i));
+            m_Merged.Sort(s_CompareBySequence);
+            m_MergedAtSequence = m_NextSequence;
             return m_Merged;
         }
 
@@ -311,5 +345,10 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private void CountFact() => m_FactCounter?.Invoke();
         private ulong NextSequence() => ++m_NextSequence;
+
+        private static int CompareBySequence(FrameEventRef left, FrameEventRef right)
+        {
+            return left.Sequence.CompareTo(right.Sequence);
+        }
     }
 }

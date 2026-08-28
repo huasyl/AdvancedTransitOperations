@@ -215,6 +215,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearAll()
         {
+            m_Runtime.m_TransitSignalRuntime?.Clear("city-cleared");
             m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
             m_Runtime.m_LineChangeSource?.ResetPending();
             m_Runtime.m_SpawnIntentTrace?.Clear();
@@ -293,6 +294,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void ClearTracking()
         {
+            m_Runtime.m_TransitSignalRuntime?.Clear("tracking-cleared");
             m_Runtime.m_LineStructureInvalidator?.ResetRuntimeState();
             m_Runtime.m_LineChangeSource?.ResetPending();
             m_Runtime.m_SpawnIntentTrace?.Clear();

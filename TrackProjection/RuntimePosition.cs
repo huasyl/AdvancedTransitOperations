@@ -54,6 +54,49 @@ namespace RapidTransitMod.TrackProjection
         AnchoredRouteProgress = 4,
     }
 
+    internal enum CurrentLanePositionFailure : byte
+    {
+        None = 0,
+        LinePending = 1,
+        CurrentFrameCursorUnavailable = 2,
+        CursorSourceNotCurrentLane = 3,
+        CursorLineOrSignatureMismatch = 4,
+        CursorIndexInconsistent = 5,
+        TrainCurrentLaneUnavailable = 6,
+        CurrentLaneUnavailable = 7,
+        CurvePositionNotFinite = 8,
+        CurrentLaneNotIndexed = 9,
+        CurrentLaneAtomNotFound = 10,
+        CurrentLaneAtomSpanInvalid = 11,
+        CurrentLaneProgressNotFinite = 12,
+    }
+
+    internal readonly struct CurrentLanePositionDiagnostic
+    {
+        internal readonly CurrentLanePositionFailure Failure;
+        internal readonly Entity CurrentLane;
+        internal readonly float CurveY;
+        internal readonly VehicleTrackCursorSource CursorSource;
+        internal readonly int CursorSegmentIndex;
+        internal readonly int CursorAtomIndex;
+
+        internal CurrentLanePositionDiagnostic(
+            CurrentLanePositionFailure failure,
+            Entity currentLane,
+            float curveY,
+            VehicleTrackCursorSource cursorSource,
+            int cursorSegmentIndex,
+            int cursorAtomIndex)
+        {
+            Failure = failure;
+            CurrentLane = currentLane;
+            CurveY = curveY;
+            CursorSource = cursorSource;
+            CursorSegmentIndex = cursorSegmentIndex;
+            CursorAtomIndex = cursorAtomIndex;
+        }
+    }
+
     internal readonly struct VehicleTrackCursor
     {
         public readonly bool Available;

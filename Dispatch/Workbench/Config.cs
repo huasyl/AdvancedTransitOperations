@@ -153,7 +153,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     ConfiguredServiceKind = serviceKinds != null
                         && serviceKinds.TryGetValue(lineId, out string serviceKind)
                         ? m_NormalizeServiceKind(serviceKind)
-                        : string.Empty
+                        : string.Empty,
+                    SignalPriorityEnabled = false
                 });
             }
 

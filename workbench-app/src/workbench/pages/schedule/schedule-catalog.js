@@ -30,6 +30,7 @@ export const DEFAULT_LINE_OPTIONS = [
     depotId: "any-depot",
     originId: "origin-industrial",
     originStationId: "origin-industrial",
+    signalPriorityEnabled: false,
     hold: "15",
     dwell: "6"
   },
@@ -44,6 +45,7 @@ export const DEFAULT_LINE_OPTIONS = [
     depotId: "north-depot",
     originId: "origin-industrial",
     originStationId: "origin-industrial",
+    signalPriorityEnabled: false,
     hold: "10",
     dwell: "4"
   }
@@ -112,6 +114,7 @@ export function buildNativeLineOptions(snapshotLines = [], t, { allowDefaultFall
       originId: line?.originStationId || originFallback,
       originStationId: line?.originStationId || originFallback,
       originStationName: line?.originStationName || line?.originStationId || originNameFallback,
+      signalPriorityEnabled: line?.signalPriorityEnabled === true,
       hold: String(clampPositiveMinutes(line?.originHoldLimitMinutes, 20)),
       dwell: String(clampPositiveMinutes(line?.maxStationDwellMinutes, 10)),
       dispatchSupported,
@@ -162,6 +165,7 @@ export function overlayPersistedLineSettings(lineOptions = [], persistedLineSett
     return {
       ...line,
       depotId: persisted.depotId || line.depotId,
+      signalPriorityEnabled: persisted.signalPriorityEnabled === true,
       hold: String(clampPositiveMinutes(persisted.hold, Number(line.hold) || 20)),
       dwell: String(clampPositiveMinutes(persisted.dwell, Number(line.dwell) || 10))
     };
@@ -345,6 +349,7 @@ export function serializePersistedLineSettings(lines = LINE_OPTIONS) {
     .map((line) => ({
       id: line.id || "",
       depotId: line.depotId || "",
+      signalPriorityEnabled: line.signalPriorityEnabled === true,
       hold: line.hold || "",
       dwell: line.dwell || ""
     }));

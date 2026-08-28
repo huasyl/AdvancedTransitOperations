@@ -19,6 +19,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly Func<string, int> m_GetMaxStationDwellMinutes;
         private readonly Func<string, string> m_GetAllowedDepotId;
         private readonly Func<string, string> m_GetConfiguredServiceKind;
+        private readonly Func<string, bool> m_GetSignalPriorityEnabled;
         private readonly Func<HashSet<string>> m_BuildRuntimeLineIdsForRestore;
         private readonly Action<DispatchWorkbenchMergedView> m_Window;
         private readonly Action<RuntimeFeatureSettingsDto> m_MigrateLegacyFeatureSettings;
@@ -46,6 +47,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             Func<string, int> getMaxStationDwellMinutes,
             Func<string, string> getAllowedDepotId,
             Func<string, string> getConfiguredServiceKind,
+            Func<string, bool> getSignalPriorityEnabled,
             Func<HashSet<string>> buildRuntimeLineIdsForRestore,
             Action<DispatchWorkbenchMergedView> window,
             Action<RuntimeFeatureSettingsDto> migrateLegacyFeatureSettings,
@@ -72,6 +74,7 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_GetMaxStationDwellMinutes = getMaxStationDwellMinutes ?? throw new ArgumentNullException(nameof(getMaxStationDwellMinutes));
             m_GetAllowedDepotId = getAllowedDepotId ?? throw new ArgumentNullException(nameof(getAllowedDepotId));
             m_GetConfiguredServiceKind = getConfiguredServiceKind ?? throw new ArgumentNullException(nameof(getConfiguredServiceKind));
+            m_GetSignalPriorityEnabled = getSignalPriorityEnabled ?? throw new ArgumentNullException(nameof(getSignalPriorityEnabled));
             m_BuildRuntimeLineIdsForRestore = buildRuntimeLineIdsForRestore ?? throw new ArgumentNullException(nameof(buildRuntimeLineIdsForRestore));
             m_Window = window ?? throw new ArgumentNullException(nameof(window));
             m_MigrateLegacyFeatureSettings = migrateLegacyFeatureSettings ?? throw new ArgumentNullException(nameof(migrateLegacyFeatureSettings));
@@ -187,7 +190,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     originHoldLimitMinutes = m_GetOriginHoldLimitMinutes(lineId),
                     maxStationDwellMinutes = m_GetMaxStationDwellMinutes(lineId),
                     allowedDepotId = m_GetAllowedDepotId(lineId),
-                    serviceKind = m_GetConfiguredServiceKind(lineId)
+                    serviceKind = m_GetConfiguredServiceKind(lineId),
+                    signalPriorityEnabled = m_GetSignalPriorityEnabled(lineId)
                 })
                 .ToArray();
 
@@ -428,7 +432,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     OriginHoldLimitMinutes = setting.originHoldLimitMinutes,
                     MaxStationDwellMinutes = setting.maxStationDwellMinutes,
                     AllowedDepotId = setting.allowedDepotId,
-                    ConfiguredServiceKind = setting.serviceKind
+                    ConfiguredServiceKind = setting.serviceKind,
+                    SignalPriorityEnabled = setting.signalPriorityEnabled
                 });
             }
         }
@@ -810,7 +815,8 @@ namespace RapidTransitMod.Dispatch.Workbench
                     originHoldLimitMinutes = setting.originHoldLimitMinutes,
                     maxStationDwellMinutes = setting.maxStationDwellMinutes,
                     allowedDepotId = setting.allowedDepotId,
-                    serviceKind = setting.serviceKind
+                    serviceKind = setting.serviceKind,
+                    signalPriorityEnabled = setting.signalPriorityEnabled
                 }).ToArray();
         }
 

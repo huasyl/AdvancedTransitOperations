@@ -134,7 +134,8 @@ namespace RapidTransitMod.Dispatch
                     OriginHoldLimitMinutes = m_NormHold(setting.originHoldLimitMinutes),
                     MaxStationDwellMinutes = m_NormDwell(setting.maxStationDwellMinutes),
                     AllowedDepotId = m_NormDepot(setting.allowedDepotId),
-                    ConfiguredServiceKind = m_NormKind(setting.serviceKind)
+                    ConfiguredServiceKind = m_NormKind(setting.serviceKind),
+                    SignalPriorityEnabled = setting.signalPriorityEnabled
                 });
             }
         }
@@ -197,7 +198,8 @@ namespace RapidTransitMod.Dispatch
                     OriginHoldLimitMinutes = m_NormHold(setting.originHoldLimitMinutes),
                     MaxStationDwellMinutes = m_NormDwell(setting.maxStationDwellMinutes),
                     AllowedDepotId = m_NormDepot(setting.allowedDepotId),
-                    ConfiguredServiceKind = m_NormKind(setting.serviceKind)
+                    ConfiguredServiceKind = m_NormKind(setting.serviceKind),
+                    SignalPriorityEnabled = setting.signalPriorityEnabled
                 });
             }
         }
@@ -273,7 +275,8 @@ namespace RapidTransitMod.Dispatch
                 if (m_NormHold(setting.originHoldLimitMinutes) != GetHold(lineId)
                     || m_NormDwell(setting.maxStationDwellMinutes) != GetDwell(lineId)
                     || !string.Equals(CompareDepotId(setting.allowedDepotId), CompareDepotId(GetDepotId(lineId)), StringComparison.Ordinal)
-                    || !string.Equals(m_NormKind(setting.serviceKind), GetKind(lineId), StringComparison.Ordinal))
+                    || !string.Equals(m_NormKind(setting.serviceKind), GetKind(lineId), StringComparison.Ordinal)
+                    || setting.signalPriorityEnabled != GetSignalPriority(lineId))
                 {
                     return false;
                 }
@@ -313,7 +316,8 @@ namespace RapidTransitMod.Dispatch
                 if (m_NormHold(setting.originHoldLimitMinutes) != GetHold(lineId)
                     || m_NormDwell(setting.maxStationDwellMinutes) != GetDwell(lineId)
                     || !string.Equals(CompareDepotId(setting.allowedDepotId), CompareDepotId(GetDepotId(lineId)), StringComparison.Ordinal)
-                    || !string.Equals(m_NormKind(setting.serviceKind), GetKind(lineId), StringComparison.Ordinal))
+                    || !string.Equals(m_NormKind(setting.serviceKind), GetKind(lineId), StringComparison.Ordinal)
+                    || setting.signalPriorityEnabled != GetSignalPriority(lineId))
                 {
                     return false;
                 }
@@ -376,6 +380,22 @@ namespace RapidTransitMod.Dispatch
         internal string GetKind(Entity line)
         {
             return m_NormKind(State(ResolveEntityKey(line, string.Empty)).ConfiguredServiceKind);
+        }
+
+        internal bool GetSignalPriority(string lineId)
+        {
+            return State(lineId).SignalPriorityEnabled;
+        }
+
+        internal bool GetSignalPriority(Entity line)
+        {
+            return State(ResolveEntityKey(line, string.Empty)).SignalPriorityEnabled;
+        }
+
+        internal bool IsSignalPriorityEnabled(Entity line)
+        {
+            LineKey key = ResolveEntityKey(line, string.Empty);
+            return LineKey.IsStableGuidKey(key) && m_Store.IsSignalPriorityEnabled(key);
         }
 
         internal LineKey Key(string lineId)

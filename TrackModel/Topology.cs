@@ -134,6 +134,21 @@ namespace RapidTransitMod.TrackModel
             EndAtomIndexExclusive = endAtomIndexExclusive;
         }
     }
+    internal readonly struct TrackJunctionMarker
+    {
+        public readonly int SegmentIndex;
+        public readonly int AtomIndex;
+        public readonly Entity SignalLane;
+        public TrackJunctionMarker(
+            int segmentIndex,
+            int atomIndex,
+            Entity signalLane)
+        {
+            SegmentIndex = segmentIndex;
+            AtomIndex = atomIndex;
+            SignalLane = signalLane;
+        }
+    }
     internal readonly struct ControlPointMarker
     {
         public readonly int AtomIndex;
@@ -353,6 +368,7 @@ namespace RapidTransitMod.TrackModel
         public Entity[] AtomStationBuildings = Array.Empty<Entity>();
         public Dictionary<Entity, List<int>> AtomIndicesByLane = new Dictionary<Entity, List<int>>();
         public List<TrackSegmentRange> SegmentRanges = new List<TrackSegmentRange>();
+        public List<TrackJunctionMarker> JunctionMarkers = new List<TrackJunctionMarker>();
         public List<ControlPointMarker> ControlPoints = new List<ControlPointMarker>();
         public List<EndpointMarker> EndpointMarkers = new List<EndpointMarker>();
         public List<ControlEdge> ControlEdges = new List<ControlEdge>();
