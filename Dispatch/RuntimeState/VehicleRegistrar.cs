@@ -826,8 +826,26 @@ namespace RapidTransitMod
                 if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
                     continue;
 
-                if (!TryGetRebindRoute(vehicle, routeVehicles, waypointBuffers, out Entity newLine, out DynamicBuffer<RouteWaypoint> waypoints))
+                if (m_Runtime.EntityManager.HasComponent<ParkedCar>(vehicle))
+                {
+                    ClearParkedRebind(vehicle);
+                    m_PendingRebindCandidates.Remove(vehicle);
                     continue;
+                }
+
+                if (!TryGetRebindRoute(
+                    vehicle,
+                    routeVehicles,
+                    waypointBuffers,
+                    out Entity newLine,
+                    out DynamicBuffer<RouteWaypoint> waypoints,
+                    out LifecycleKind lifecycle,
+                    out bool unsupportedMigration))
+                {
+                    if (unsupportedMigration)
+                        m_PendingRebindCandidates.Remove(vehicle);
+                    continue;
+                }
 
                 if (newLine == oldLine)
                 {
@@ -835,7 +853,7 @@ namespace RapidTransitMod
                     continue;
                 }
 
-                RebindVehicle(oldLine, newLine, vehicle, waypoints);
+                RebindVehicle(oldLine, newLine, vehicle, waypoints, lifecycle);
                 m_PendingRebindCandidates.Remove(vehicle);
             }
         }
@@ -845,10 +863,14 @@ namespace RapidTransitMod
             BufferLookup<RouteVehicle> routeVehicles,
             BufferLookup<RouteWaypoint> waypointBuffers,
             out Entity line,
-            out DynamicBuffer<RouteWaypoint> waypoints)
+            out DynamicBuffer<RouteWaypoint> waypoints,
+            out LifecycleKind lifecycle,
+            out bool unsupportedMigration)
         {
             line = Entity.Null;
             waypoints = default;
+            lifecycle = LifecycleKind.Unknown;
+            unsupportedMigration = false;
             if (!m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle)
                 || !m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle))
             {
@@ -876,7 +898,15 @@ namespace RapidTransitMod
             {
                 Entity member = m_Runtime.m_Resolve.RuntimeVehicle(members[i].m_Vehicle);
                 if (member == vehicle)
-                    return true;
+                {
+                    if (TryResolveRebindLifecycle(
+                        vehicle,
+                        line,
+                        out lifecycle,
+                        out unsupportedMigration))
+                        return true;
+                    return false;
+                }
             }
 
             return false;
@@ -886,13 +916,9 @@ namespace RapidTransitMod
             Entity oldLine,
             Entity newLine,
             Entity vehicle,
-            DynamicBuffer<RouteWaypoint> waypoints)
+            DynamicBuffer<RouteWaypoint> waypoints,
+            LifecycleKind lifecycle)
         {
-            if (!ConfirmRebindFacts(vehicle, newLine))
-                return;
-            if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, oldLine, out LifecycleKind lifecycle))
-                return;
-
             StopCancelResult cancelledStop = m_Runtime.m_StopRuntime.CancelRebind(
                 vehicle,
                 m_Runtime.m_SimulationSystem.frameIndex);
@@ -913,7 +939,8 @@ namespace RapidTransitMod
             try
             {
                 m_Runtime.m_VehicleRegistry.Remove(vehicle);
-                m_Runtime.m_SchedulerApply.MarkDirty(oldLine);
+                if (oldLine != Entity.Null && m_Runtime.EntityManager.Exists(oldLine))
+                    m_Runtime.m_SchedulerApply.MarkDirty(oldLine);
                 AdoptCandidate(
                     newLine,
                     vehicle,
@@ -943,22 +970,46 @@ namespace RapidTransitMod
 
         }
 
-        private bool ConfirmRebindFacts(Entity vehicle, Entity newLine)
+        private void ClearParkedRebind(Entity vehicle)
         {
-            if (!m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle)
-                || m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route != newLine
-                || !m_Runtime.EntityManager.HasBuffer<RouteVehicle>(newLine))
+            StopCancelResult cancelledStop = m_Runtime.m_StopRuntime.CancelRebind(
+                vehicle,
+                m_Runtime.m_SimulationSystem.frameIndex);
+            if (cancelledStop.Exists)
+            {
+                m_PublishStopFact(cancelledStop.Fact);
+                m_ApplyStopControl(vehicle, cancelledStop.Control.WaypointIndex, cancelledStop.Control);
+            }
+
+            ClearRebindRuntime(vehicle, LifecycleKind.Road);
+            m_Runtime.m_RoadEventSource.RebindSource(vehicle);
+            m_Runtime.m_RoadEventSource.RemoveVehicle(vehicle);
+            m_Runtime.m_VehicleRegistry.Remove(vehicle);
+        }
+
+        private bool TryResolveRebindLifecycle(
+            Entity vehicle,
+            Entity newLine,
+            out LifecycleKind lifecycle,
+            out bool unsupportedMigration)
+        {
+            lifecycle = LifecycleKind.Unknown;
+            unsupportedMigration = false;
+            if (!m_Runtime.m_VehicleWorksets.TryGetMode(vehicle, out TransitMode oldMode))
             {
                 return false;
             }
-
-            DynamicBuffer<RouteVehicle> members = m_Runtime.EntityManager.GetBuffer<RouteVehicle>(newLine, true);
-            for (int i = 0; i < members.Length; i++)
+            if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, newLine, out LifecycleKind newLifecycle))
+                return false;
+            LifecycleKind oldLifecycle = TransportModeProfile.GetProfile(oldMode).Lifecycle;
+            if (oldLifecycle != newLifecycle
+                || (oldLifecycle != LifecycleKind.Rail && oldLifecycle != LifecycleKind.Road))
             {
-                if (m_Runtime.m_Resolve.RuntimeVehicle(members[i].m_Vehicle) == vehicle)
-                    return true;
+                unsupportedMigration = true;
+                return false;
             }
-            return false;
+            lifecycle = oldLifecycle;
+            return true;
         }
 
         private void ClearRebindRuntime(Entity vehicle, LifecycleKind lifecycle)

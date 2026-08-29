@@ -83,6 +83,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             internal readonly string Mode;
             internal readonly LineProfile.RoadRouteSnapshot OldRoute;
             internal readonly LineProfile.RoadRouteSnapshot NewRoute;
+            internal readonly bool Deleted;
             internal readonly uint NextRetryFrame;
             internal readonly byte RetryCount;
             internal PendingRoadInvalidation(
@@ -91,6 +92,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 string mode,
                 LineProfile.RoadRouteSnapshot oldRoute,
                 LineProfile.RoadRouteSnapshot newRoute,
+                bool deleted = false,
                 uint nextRetryFrame = 0,
                 byte retryCount = 0)
             {
@@ -99,12 +101,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Mode = mode ?? string.Empty;
                 OldRoute = oldRoute;
                 NewRoute = newRoute;
+                Deleted = deleted;
                 NextRetryFrame = nextRetryFrame;
                 RetryCount = retryCount;
             }
             internal PendingRoadInvalidation WithLatest(LineProfile.RoadRouteSnapshot newRoute)
             {
-                return new PendingRoadInvalidation(Line, LineId, Mode, OldRoute, newRoute);
+                return new PendingRoadInvalidation(Line, LineId, Mode, OldRoute, newRoute, Deleted);
             }
             internal PendingRoadInvalidation WithRetry(uint frame)
             {
@@ -115,6 +118,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     Mode,
                     OldRoute,
                     NewRoute,
+                    Deleted,
                     frame + LayoutRetryFrames,
                     count);
             }
@@ -428,6 +432,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return;
             if (m_PendingRoadLines.TryGetValue(line, out PendingRoadInvalidation pending))
             {
+                if (pending.Deleted)
+                    return;
                 m_PendingRoadLines[line] = pending.WithLatest(newRoute);
                 m_NextLayoutRetryFrame = 0;
                 return;
@@ -439,6 +445,43 @@ namespace RapidTransitMod.Dispatch.Runtime
                 oldRoute,
                 newRoute);
             m_NextLayoutRetryFrame = 0;
+        }
+        internal bool RequestRoadDeleted(
+            Entity line,
+            LineKey key,
+            TransitMode mode,
+            LineProfile.RoadRouteSnapshot oldRoute)
+        {
+            if (line == Entity.Null
+                || key.IsEmpty
+                || TransportModeProfile.GetProfile(mode).Lifecycle != LifecycleKind.Road)
+            {
+                return false;
+            }
+
+            if (m_PendingRoadLines.TryGetValue(line, out PendingRoadInvalidation pending)
+                && pending.Deleted)
+            {
+                return true;
+            }
+
+            LineProfile.RoadRouteSnapshot firstOldRoute = pending.OldRoute ?? oldRoute;
+            string lineId = !string.IsNullOrEmpty(pending.LineId)
+                ? pending.LineId
+                : LineIdentityService.GetId(key);
+            string modeToken = !string.IsNullOrEmpty(pending.Mode)
+                ? pending.Mode
+                : TransitModeCodec.Format(mode);
+
+            m_PendingRoadLines[line] = new PendingRoadInvalidation(
+                line,
+                lineId,
+                modeToken,
+                firstOldRoute,
+                null,
+                deleted: true);
+            m_NextLayoutRetryFrame = 0;
+            return true;
         }
         internal void Drain()
         {
@@ -1035,7 +1078,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 QueueRetry(pending);
                 return;
             }
-            if (!m_Runtime.EntityManager.Exists(line))
+            if (pending.Deleted
+                || !m_Runtime.EntityManager.Exists(line)
+                || m_Runtime.EntityManager.HasComponent<Deleted>(line))
             {
                 ClearUnavailableRoad(pending, "line-deleted");
                 return;
@@ -1177,9 +1222,13 @@ namespace RapidTransitMod.Dispatch.Runtime
                 clearDetails: true,
                 publishEvent: false);
             ReleaseTimedPlans(line);
+            bool deleted = pending.Deleted || reason == "line-deleted";
             m_Runtime.m_Observation.ReleaseLineMonitor(line, frame);
+            if (deleted)
+                m_Runtime.m_Observation.RemoveLine(line);
+            else
+                m_Runtime.m_Observation.InvalidateBusRoute(line, pending.OldRoute, pending.NewRoute);
             RapidTransitMod.PassengerFlow.Runtime.Current?.InvalidateAnchors(line);
-            m_Runtime.m_Observation.InvalidateBusRoute(line, pending.OldRoute, pending.NewRoute);
             m_Runtime.m_LineTimes.InvalidateLine(line);
             m_Runtime.m_RoadEventSource.InvalidateLine(line);
             m_Runtime.m_LineProfile.RemoveStability(line);

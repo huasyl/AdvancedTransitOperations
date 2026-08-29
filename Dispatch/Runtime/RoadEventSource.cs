@@ -404,23 +404,16 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (!m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
                 return;
 
-            RoadFrameRow row = m_FrameRows[rowIndex];
-            row.RegisteredLine = Entity.Null;
-            row.CurrentRoute = Entity.Null;
-            row.RegistryState = default;
-            row.Demands = RuntimeDemandMask.None;
-            row.Changes = RoadChangeMask.None;
-            row.InputValid = false;
-            row.IsCompilable = false;
-            row.HasPublicTransport = false;
-            row.PublicTransport = default;
-            row.MovingKnown = false;
-            row.MovingForDeparture = false;
-            row.CachedWaypoint = -1;
-            row.IsSource = false;
-            row.SourceFrame = 0;
-            row.PublicTransportWritten = false;
-            m_FrameRows[rowIndex] = row;
+            int last = m_FrameRows.Count - 1;
+            if (rowIndex != last)
+            {
+                RoadFrameRow moved = m_FrameRows[last];
+                m_FrameRows[rowIndex] = moved;
+                m_FrameRowIndex[moved.Vehicle] = rowIndex;
+            }
+            m_FrameRows.RemoveAt(last);
+            m_FrameRowIndex.Remove(vehicle);
+            m_Demands.Remove(vehicle);
         }
 
         public void CommitWaypoint(Entity vehicle, int waypoint)

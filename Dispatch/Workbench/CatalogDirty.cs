@@ -31,6 +31,7 @@ namespace RapidTransitMod.Dispatch.Workbench
         private readonly EntityQuery m_DepotCountQuery;
         private readonly Action m_MarkDirty;
         private readonly Func<bool> m_ScanLineAnchors;
+        private readonly Action m_RefreshAfterAnchorScan;
         private uint m_LastCountGuardFrame;
         private uint m_PostDirtyProbeUntilFrame;
         private uint m_NextPostDirtyProbeFrame;
@@ -38,15 +39,19 @@ namespace RapidTransitMod.Dispatch.Workbench
         private int m_LastDepotCount;
         private int m_LastLineSignature;
         private bool m_WasDirty;
+        private bool m_PendingCreatedLineRefresh;
 
         internal CatalogDirty(
             EntityManager entityManager,
             Action markDirty,
-            Func<bool> scanLineAnchors)
+            Func<bool> scanLineAnchors,
+            Action refreshAfterAnchorScan)
         {
             m_EntityManager = entityManager;
             m_MarkDirty = markDirty ?? throw new ArgumentNullException(nameof(markDirty));
             m_ScanLineAnchors = scanLineAnchors ?? throw new ArgumentNullException(nameof(scanLineAnchors));
+            m_RefreshAfterAnchorScan = refreshAfterAnchorScan
+                ?? throw new ArgumentNullException(nameof(refreshAfterAnchorScan));
 
             m_LineDirtyQuery = entityManager.CreateEntityQuery(new EntityQueryDesc
             {
@@ -146,9 +151,26 @@ namespace RapidTransitMod.Dispatch.Workbench
         internal void Reset()
         {
             m_WasDirty = false;
+            m_PendingCreatedLineRefresh = false;
             m_PostDirtyProbeUntilFrame = 0;
             m_NextPostDirtyProbeFrame = 0;
             ResetCountGuard(0);
+        }
+
+        internal void ObserveCreatedLines(bool hasCreatedLines)
+        {
+            if (hasCreatedLines)
+            {
+                m_PendingCreatedLineRefresh = true;
+                return;
+            }
+
+            if (!m_PendingCreatedLineRefresh)
+                return;
+
+            m_PendingCreatedLineRefresh = false;
+            if (m_ScanLineAnchors())
+                m_RefreshAfterAnchorScan();
         }
 
         internal void Check(uint nowFrame)

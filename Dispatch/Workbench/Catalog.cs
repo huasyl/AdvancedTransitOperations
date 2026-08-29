@@ -125,6 +125,12 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return false;
             }
 
+            LineKey lineKey = m_LineKey(line);
+            if (lineKey.IsEmpty)
+            {
+                return false;
+            }
+
             int routeNumber = int.MaxValue;
             if (m_EntityManager.HasComponent<RouteNumber>(line))
             {
@@ -156,9 +162,9 @@ namespace RapidTransitMod.Dispatch.Workbench
             runtimeLine = new WorkbenchLineRuntime
             {
                 Entity = line,
-                Id = m_LineId(m_LineKey(line)),
+                Id = m_LineId(lineKey),
                 Name = name,
-                Kind = TransportModeProfile.GetProfile(m_LineKey(line)).Lifecycle == LifecycleKind.Road
+                Kind = TransportModeProfile.GetProfile(lineKey).Lifecycle == LifecycleKind.Road
                     ? "local"
                     : string.Empty,
                 RouteNumber = routeNumber,

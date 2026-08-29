@@ -273,19 +273,59 @@ namespace RapidTransitMod.TrackModel
                 return false;
             }
             uint nowFrame = m_Support.FrameIndex;
-            if (!EntityManager.Exists(line)
-                || waypoints.Length == 0
-                || !EntityManager.HasBuffer<RouteSegment>(line))
-            {
-                InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
-                return false;
-            }
             if (m_State.TryFrameSnapshot(line, out LineTrackChainFrameSnapshot frameSnapshot)
                 && frameSnapshot.Frame == nowFrame
                 && frameSnapshot.WaypointCount == waypoints.Length)
             {
                 chain = frameSnapshot.Chain;
+                if (chain != null
+                    && TransportModeProfile.GetProfile(chain.Mode).Lifecycle != LifecycleKind.Rail)
+                {
+                    chain = null;
+                    m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
+                        nowFrame,
+                        waypoints.Length,
+                        false,
+                        null));
+                    return false;
+                }
                 return frameSnapshot.Available;
+            }
+            m_State.TryChain(line, out LineTrackChain previousChain);
+            bool trustedRailChain = previousChain != null
+                && TransportModeProfile.GetProfile(previousChain.Mode).Lifecycle == LifecycleKind.Rail;
+            if (previousChain != null && !trustedRailChain)
+            {
+                m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
+                    nowFrame,
+                    waypoints.Length,
+                    false,
+                    null));
+                return false;
+            }
+            if (!EntityManager.Exists(line))
+            {
+                if (trustedRailChain)
+                    InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
+                return false;
+            }
+            if (!trustedRailChain)
+            {
+                TransitMode mode = TransportModeResolver.Resolve(EntityManager, line);
+                if (TransportModeProfile.GetProfile(mode).Lifecycle != LifecycleKind.Rail)
+                {
+                    m_State.PutFrameSnapshot(line, new LineTrackChainFrameSnapshot(
+                        nowFrame,
+                        waypoints.Length,
+                        false,
+                        null));
+                    return false;
+                }
+            }
+            if (waypoints.Length == 0 || !EntityManager.HasBuffer<RouteSegment>(line))
+            {
+                InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
+                return false;
             }
             if (!m_State.IsDirty(line)
                 && m_State.TryChain(line, out chain)
@@ -307,8 +347,6 @@ namespace RapidTransitMod.TrackModel
                 InvalidateUnavailableChain(line, nowFrame, waypoints.Length);
                 return false;
             }
-            LineTrackChain previousChain = null;
-            m_State.TryChain(line, out previousChain);
             chain = previousChain;
             ulong signature;
             bool equivalentRefresh = false;

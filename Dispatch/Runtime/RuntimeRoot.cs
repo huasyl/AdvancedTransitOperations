@@ -105,7 +105,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     if (runtime.m_LineView != null)
                         runtime.m_LineView.Clear();
                 },
-                () => ScanLineAnchors(runtime));
+                () => ScanLineAnchors(runtime),
+                () => runtime.m_WorkbenchCatalogCache.RefreshAfterAnchorScan());
             runtime.m_DispatchCache = new DispatchCache(runtime, runtime.LineStableId, runtime.GetDepot, runtime.DepotId, runtime.m_LineAnchorCatalog);
             runtime.m_LapCache = new LapCache(runtime);
             runtime.m_RouteProgress = new RouteProgress(runtime);
@@ -289,13 +290,17 @@ namespace RapidTransitMod.Dispatch.Runtime
                 NotifyLineTrackChainEstablished = runtime.m_LineStructureInvalidator.ObserveChainEstablished,
                 NotifyLineDeleted = runtime.m_LineStructureInvalidator.ConfirmLineDeleted
             }));
-            TrackChangeSourceSystem trackChangeSourceSystem =
-                runtime.World.GetOrCreateSystemManaged<TrackChangeSourceSystem>();
-            trackChangeSourceSystem.BindStableKey(runtime.m_LineAnchorCatalog.StableKey);
-            runtime.m_TrackChangeSource = new TrackChangeSource(
+            LineChangeSourceSystem lineChangeSourceSystem =
+                runtime.World.GetOrCreateSystemManaged<LineChangeSourceSystem>();
+            lineChangeSourceSystem.BindStableKey(runtime.m_LineAnchorCatalog.StableKey);
+            lineChangeSourceSystem.BindCreatedLines(
+                runtime.m_WorkbenchCatalogDirty.ObserveCreatedLines);
+            runtime.m_LineChangeSource = new LineChangeSource(
                 runtime.EntityManager,
-                trackChangeSourceSystem,
-                runtime.m_TrackModel);
+                lineChangeSourceSystem,
+                runtime.m_TrackModel,
+                runtime.m_LineProfile,
+                runtime.m_LineStructureInvalidator);
             runtime.m_RoutePlans = new RoutePlanQuery(
                 runtime.EntityManager,
                 runtime.m_TrackModel,
@@ -529,8 +534,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineStructureInvalidator = null!;
             runtime.m_LineStructurePendingStore = null!;
             if (runtime.m_Bypass != null) runtime.m_Bypass.Dispose();
-            runtime.m_TrackChangeSource?.Dispose();
-            runtime.m_TrackChangeSource = null!;
+            runtime.m_LineChangeSource?.Dispose();
+            runtime.m_LineChangeSource = null!;
             runtime.m_TrackModel?.Dispose();
             runtime.m_TrackModel = null!;
             runtime.m_Bypass = null!;

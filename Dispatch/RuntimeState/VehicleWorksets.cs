@@ -12,6 +12,20 @@ namespace RapidTransitMod
 
         public IReadOnlyCollection<Entity> Mode(TransitMode mode) => Bucket(m_ModeBuckets, mode);
         public IReadOnlyCollection<Entity> State(VehicleState state) => Bucket(m_StateBuckets, state);
+        public bool TryGetMode(Entity vehicle, out TransitMode mode)
+        {
+            foreach (KeyValuePair<TransitMode, HashSet<Entity>> entry in m_ModeBuckets)
+            {
+                if (entry.Value.Contains(vehicle))
+                {
+                    mode = entry.Key;
+                    return true;
+                }
+            }
+
+            mode = TransitMode.Unknown;
+            return false;
+        }
         public bool ContainsMode(Entity vehicle, TransitMode mode) => Bucket(m_ModeBuckets, mode).Contains(vehicle);
         public bool ContainsState(Entity vehicle, VehicleState state) => Bucket(m_StateBuckets, state).Contains(vehicle);
         public void AddMode(Entity vehicle, TransitMode mode) => Bucket(m_ModeBuckets, mode).Add(vehicle);

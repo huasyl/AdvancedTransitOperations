@@ -99,7 +99,7 @@ namespace RapidTransitMod
         internal Broadcasting.WorkbenchBackend.Workbench m_AnnouncementWorkbench;
         internal Broadcasting.Runtime m_Announcements;
         internal TrackModelService m_TrackModel = null!;
-        internal TrackChangeSource m_TrackChangeSource = null!;
+        internal LineChangeSource m_LineChangeSource = null!;
         internal TrackProjectionService m_TrackProjection = null!;
         internal LineStructureInvalidator m_LineStructureInvalidator = null!;
         internal LineStructurePendingStore m_LineStructurePendingStore = null!;
@@ -520,8 +520,8 @@ namespace RapidTransitMod
             using (s_RailEtaMarker.Auto())
             {
                 m_SimClock.RefreshIfDue(simulationFrame);
-                if (GameManager.instance.gameMode == GameMode.Game)
-                    m_TrackChangeSource?.ConfirmChanges();
+                if (GameManager.instance.gameMode == GameMode.Game && m_SystemReady)
+                    m_LineChangeSource?.ConfirmChanges();
                 Dependency = m_RailEtaService?.TickHot(simulationFrame, Dependency) ?? Dependency;
             }
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.RailEta);

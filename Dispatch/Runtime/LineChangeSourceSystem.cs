@@ -6,13 +6,14 @@ using Game.Objects;
 using Game.Pathfind;
 using Game.Routes;
 using Game.Tools;
+using RapidTransitMod.TrackModel;
 using Unity.Collections;
 using Unity.Entities;
 
-namespace RapidTransitMod.TrackModel
+namespace RapidTransitMod.Dispatch.Runtime
 {
     [System.Flags]
-    internal enum TrackChangeKind : byte
+    internal enum LineChangeKind : byte
     {
         None = 0,
         Path = 1 << 0,
@@ -20,40 +21,44 @@ namespace RapidTransitMod.TrackModel
         Deleted = 1 << 2
     }
 
-    internal readonly struct TrackChangeCandidate
+    internal readonly struct LineChangeCandidate
     {
         internal readonly Entity Line;
-        internal readonly TrackChangeKind Kind;
+        internal readonly LineChangeKind Kind;
         internal readonly TrackLineDeletedFact DeletedFact;
 
-        internal TrackChangeCandidate(Entity line, TrackChangeKind kind)
+        internal LineChangeCandidate(Entity line, LineChangeKind kind)
         {
             Line = line;
             Kind = kind;
             DeletedFact = default;
         }
 
-        internal TrackChangeCandidate(TrackLineDeletedFact deletedFact)
+        internal LineChangeCandidate(TrackLineDeletedFact deletedFact)
         {
             Line = deletedFact.Line;
-            Kind = TrackChangeKind.Deleted;
+            Kind = LineChangeKind.Deleted;
             DeletedFact = deletedFact;
         }
 
-        internal bool IsDeleted => (Kind & TrackChangeKind.Deleted) != 0;
-        internal bool LayoutChanged => (Kind & TrackChangeKind.Layout) != 0;
+        internal bool IsDeleted => (Kind & LineChangeKind.Deleted) != 0;
+        internal bool LayoutChanged => (Kind & LineChangeKind.Layout) != 0;
     }
 
-    internal sealed partial class TrackChangeSourceSystem : GameSystemBase
+    internal sealed partial class LineChangeSourceSystem : GameSystemBase
     {
-        private readonly List<TrackChangeCandidate> m_PendingChanges =
-            new List<TrackChangeCandidate>(128);
+        private readonly List<LineChangeCandidate> m_PendingChanges =
+            new List<LineChangeCandidate>(128);
         private readonly Dictionary<Entity, int> m_PendingIndexes =
             new Dictionary<Entity, int>(128);
+        private readonly HashSet<Entity> m_AcknowledgedRoadDeletes = new HashSet<Entity>();
+        private readonly List<Entity> m_RoadDeletePruneBuffer = new List<Entity>();
         private EntityQuery m_UpdatedLineQuery;
         private EntityQuery m_PathUpdatedQuery;
         private EntityQuery m_DeletedLineQuery;
         private Func<Entity, LineKey> m_StableKey;
+        private Action<bool> m_CreatedLines;
+        private uint m_RoadDeletePruneTick;
 
         protected override void OnCreate()
         {
@@ -98,14 +103,22 @@ namespace RapidTransitMod.TrackModel
             m_StableKey = stableKey ?? throw new ArgumentNullException(nameof(stableKey));
         }
 
-        protected override void OnUpdate()
+        internal void BindCreatedLines(Action<bool> createdLines)
         {
-            CollectUpdatedLines();
-            CollectPathEvents();
-            CollectDeletedLines();
+            m_CreatedLines = createdLines ?? throw new ArgumentNullException(nameof(createdLines));
         }
 
-        internal void DrainChanges(List<TrackChangeCandidate> output)
+        protected override void OnUpdate()
+        {
+            bool hasCreatedLines = CollectUpdatedLines();
+            CollectPathEvents();
+            CollectDeletedLines();
+            m_CreatedLines?.Invoke(hasCreatedLines);
+            if ((++m_RoadDeletePruneTick & 255u) == 0u)
+                PruneRoadDeletes();
+        }
+
+        internal void DrainChanges(List<LineChangeCandidate> output)
         {
             if (output == null)
                 return;
@@ -123,6 +136,28 @@ namespace RapidTransitMod.TrackModel
         {
             m_PendingChanges.Clear();
             m_PendingIndexes.Clear();
+            m_AcknowledgedRoadDeletes.Clear();
+            m_RoadDeletePruneBuffer.Clear();
+            m_RoadDeletePruneTick = 0;
+        }
+
+        internal void AcknowledgeRoadDeleted(Entity line)
+        {
+            if (line != Entity.Null)
+                m_AcknowledgedRoadDeletes.Add(line);
+        }
+
+        internal void PruneRoadDeletes()
+        {
+            m_RoadDeletePruneBuffer.Clear();
+            foreach (Entity line in m_AcknowledgedRoadDeletes)
+            {
+                if (!EntityManager.Exists(line))
+                    m_RoadDeletePruneBuffer.Add(line);
+            }
+            for (int i = 0; i < m_RoadDeletePruneBuffer.Count; i++)
+                m_AcknowledgedRoadDeletes.Remove(m_RoadDeletePruneBuffer[i]);
+            m_RoadDeletePruneBuffer.Clear();
         }
 
         protected override void OnDestroy()
@@ -131,23 +166,31 @@ namespace RapidTransitMod.TrackModel
             base.OnDestroy();
         }
 
-        private void CollectUpdatedLines()
+        private bool CollectUpdatedLines()
         {
             if (m_UpdatedLineQuery.IsEmptyIgnoreFilter)
-                return;
+                return false;
 
             m_UpdatedLineQuery.CompleteDependency();
             NativeArray<Entity> lines = m_UpdatedLineQuery.ToEntityArray(Allocator.Temp);
+            bool hasCreatedLines = false;
             try
             {
                 for (int i = 0; i < lines.Length; i++)
-                    AddChange(lines[i], TrackChangeKind.Layout);
+                {
+                    Entity line = lines[i];
+                    if (EntityManager.HasComponent<Created>(line))
+                        hasCreatedLines = true;
+                    AddChange(line, LineChangeKind.Layout);
+                }
             }
             finally
             {
                 if (lines.IsCreated)
                     lines.Dispose();
             }
+
+            return hasCreatedLines;
         }
 
         private void CollectPathEvents()
@@ -175,7 +218,7 @@ namespace RapidTransitMod.TrackModel
                     if (!IsLiveTransportLine(line))
                         continue;
 
-                    AddChange(line, TrackChangeKind.Path);
+                    AddChange(line, LineChangeKind.Path);
                 }
             }
             finally
@@ -202,7 +245,10 @@ namespace RapidTransitMod.TrackModel
                 {
                     Entity line = lines[i];
                     TransitMode mode = TransportModeResolver.Resolve(EntityManager, line);
-                    if (TransportModeProfile.GetProfile(mode).Lifecycle != LifecycleKind.Rail)
+                    LifecycleKind lifecycle = TransportModeProfile.GetProfile(mode).Lifecycle;
+                    if (lifecycle == LifecycleKind.Road && m_AcknowledgedRoadDeletes.Contains(line))
+                        continue;
+                    if (lifecycle != LifecycleKind.Rail && lifecycle != LifecycleKind.Road)
                         continue;
 
                     LineKey lineKey = m_StableKey(line);
@@ -225,25 +271,25 @@ namespace RapidTransitMod.TrackModel
                 && !EntityManager.HasComponent<Temp>(line);
         }
 
-        private void AddChange(Entity line, TrackChangeKind kind)
+        private void AddChange(Entity line, LineChangeKind kind)
         {
             if (line == Entity.Null)
                 return;
 
             if (m_PendingIndexes.TryGetValue(line, out int index))
             {
-                TrackChangeCandidate previous = m_PendingChanges[index];
+                LineChangeCandidate previous = m_PendingChanges[index];
                 if (previous.IsDeleted)
                     return;
 
-                m_PendingChanges[index] = new TrackChangeCandidate(
+                m_PendingChanges[index] = new LineChangeCandidate(
                     line,
                     previous.Kind | kind);
                 return;
             }
 
             m_PendingIndexes.Add(line, m_PendingChanges.Count);
-            m_PendingChanges.Add(new TrackChangeCandidate(line, kind));
+            m_PendingChanges.Add(new LineChangeCandidate(line, kind));
         }
 
         private void AddDeleted(TrackLineDeletedFact fact)
@@ -253,12 +299,12 @@ namespace RapidTransitMod.TrackModel
 
             if (m_PendingIndexes.TryGetValue(fact.Line, out int index))
             {
-                m_PendingChanges[index] = new TrackChangeCandidate(fact);
+                m_PendingChanges[index] = new LineChangeCandidate(fact);
                 return;
             }
 
             m_PendingIndexes.Add(fact.Line, m_PendingChanges.Count);
-            m_PendingChanges.Add(new TrackChangeCandidate(fact));
+            m_PendingChanges.Add(new LineChangeCandidate(fact));
         }
     }
 }

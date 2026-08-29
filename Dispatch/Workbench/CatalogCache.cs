@@ -160,6 +160,32 @@ namespace RapidTransitMod.Dispatch.Workbench
                 m_OnStableLines?.Invoke(m_Lines);
         }
 
+        internal void RefreshAfterAnchorScan()
+        {
+            CancelLineRebuild();
+            CancelDepotRebuild();
+            MarkDirty();
+
+            bool changed = false;
+            do
+            {
+                StartLineRebuild();
+                while (m_LineRebuildResult != null)
+                {
+                    changed |= TickLines();
+                }
+            }
+            while (m_LinesStale);
+
+            StartDepotRebuild();
+            while (m_DepotRebuildResult != null)
+            {
+                changed |= TickDepots();
+            }
+
+            PushIfReady(changed);
+        }
+
         internal void Tick(uint nowFrame)
         {
             m_TickWorkbenchQueries?.Invoke(nowFrame);
@@ -178,28 +204,35 @@ namespace RapidTransitMod.Dispatch.Workbench
             changed |= TickDepots();
             changed |= TickStations();
 
-            if (m_PendingEvent && IsReadyToPush(changed))
+            PushIfReady(changed);
+        }
+
+        private void PushIfReady(bool changed)
+        {
+            if (!m_PendingEvent || !IsReadyToPush(changed))
             {
-                m_PendingEvent = false;
-                if (m_PendingInvalidationReasons.Count > 0)
-                {
-                    PushInvalidations();
-                    Push(TransitMode.Train);
-                    Push(TransitMode.Subway);
-                    Push(TransitMode.Tram);
-                    Push(TransitMode.Bus);
-                }
-                else if (m_CanPushSnapshot())
-                {
-                    m_PushSnapshot(m_BuildSnapshot());
-                }
-                else
-                {
-                    Push(TransitMode.Train);
-                    Push(TransitMode.Subway);
-                    Push(TransitMode.Tram);
-                    Push(TransitMode.Bus);
-                }
+                return;
+            }
+
+            m_PendingEvent = false;
+            if (m_PendingInvalidationReasons.Count > 0)
+            {
+                PushInvalidations();
+                Push(TransitMode.Train);
+                Push(TransitMode.Subway);
+                Push(TransitMode.Tram);
+                Push(TransitMode.Bus);
+            }
+            else if (m_CanPushSnapshot())
+            {
+                m_PushSnapshot(m_BuildSnapshot());
+            }
+            else
+            {
+                Push(TransitMode.Train);
+                Push(TransitMode.Subway);
+                Push(TransitMode.Tram);
+                Push(TransitMode.Bus);
             }
         }
 
