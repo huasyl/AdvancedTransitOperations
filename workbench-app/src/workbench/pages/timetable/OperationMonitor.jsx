@@ -198,6 +198,9 @@ function getStopStatus(stop, index, trip, isClosing) {
   if (String(trip?.state || "").toLowerCase() === "missed") {
     return "timetable.status.missed";
   }
+  if (String(trip?.state || "").toLowerCase() === "suspended") {
+    return "timetable.status.suspended";
+  }
   if (String(trip?.state || "").toLowerCase() === "completed"
     && isClosing
     && stop.actualArrivalMinute != null) {
@@ -217,6 +220,7 @@ function getTripStatus(trip) {
     case "active": return "timetable.status.active";
     case "completed": return "timetable.status.completed";
     case "missed": return "timetable.status.missed";
+    case "suspended": return "timetable.status.suspended";
     case "cleared":
       switch (String(trip?.endReason || "").toLowerCase()) {
         case "rebound": return "timetable.status.interruptedRebound";

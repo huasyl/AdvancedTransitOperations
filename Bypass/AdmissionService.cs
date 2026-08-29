@@ -608,11 +608,25 @@ namespace RapidTransitMod.Bypass
         internal void RemoveEpisode(Entity vehicle) => m_Decision.Remove(vehicle, BypassEntryKind.Episode);
         internal List<Entity> ReleaseLine(Entity line, Func<Entity, Entity> resolveLine)
         {
+            return ReleaseLine(line, resolveLine, clearStaticCaches: true);
+        }
+
+        internal List<Entity> ReleaseLineRuntime(Entity line, Func<Entity, Entity> resolveLine)
+        {
+            return ReleaseLine(line, resolveLine, clearStaticCaches: false);
+        }
+
+        private List<Entity> ReleaseLine(
+            Entity line,
+            Func<Entity, Entity> resolveLine,
+            bool clearStaticCaches)
+        {
             if (line == Entity.Null)
                 return null;
 
             m_Decision.ClearLocalLineGateForLine(line);
-            m_StopSceneEligibilityLineCaches.Remove(line);
+            if (clearStaticCaches)
+                m_StopSceneEligibilityLineCaches.Remove(line);
 
             List<Entity> releasedVehicles = null;
             if (m_Decision.Blockers.IsCreated)

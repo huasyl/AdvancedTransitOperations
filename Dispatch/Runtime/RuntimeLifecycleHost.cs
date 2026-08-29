@@ -54,6 +54,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 throw;
             }
 
+            m_Runtime.m_ServiceWindowStore.Load();
+
             try
             {
                 m_Runtime.m_LineStructureInvalidator.RestorePending(
@@ -231,8 +233,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             entities.Dispose();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
-            m_Runtime.m_VehicleRegistrar.ClearDisabledLineLateSpawnRetireQueue();
             m_Runtime.m_VehicleRegistrar.ClearStartupGate();
+            m_Runtime.m_LineServiceState.Reset();
+            m_Runtime.m_DispatchScheduler.ClearServiceWindows();
+            m_Runtime.m_ServiceWindowStore.ClearAll();
             m_Runtime.m_RailEventSource.ResetTracking();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();
@@ -297,8 +301,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_Announcements.Clear();
             m_Runtime.m_VehicleRegistry.Clear();
             m_Runtime.m_VehicleRegistrar.ClearPendingRebindCandidates();
-            m_Runtime.m_VehicleRegistrar.ClearDisabledLineLateSpawnRetireQueue();
             m_Runtime.m_VehicleRegistrar.ClearStartupGate();
+            m_Runtime.m_LineServiceState.Reset();
+            m_Runtime.m_DispatchScheduler.ClearServiceWindows();
+            m_Runtime.m_ServiceWindowStore.ClearTracking();
             m_Runtime.m_RailEventSource.ResetTracking();
             m_Runtime.m_ObsPersist.ClearLaps();
             m_Runtime.m_UICache.Clear();

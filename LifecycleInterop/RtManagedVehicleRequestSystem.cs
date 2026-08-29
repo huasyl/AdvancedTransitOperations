@@ -123,7 +123,8 @@ namespace RapidTransitMod
 
                         try
                         {
-                            if (ShouldPromoteSentinel(managedRequests, record.Line, spawnPermitLines))
+                            TransportLine transportLine = EntityManager.GetComponentData<TransportLine>(record.Line);
+                            if (ShouldPromoteSentinel(managedRequests, record.Line, transportLine, spawnPermitLines))
                             {
                                 PromoteSentinelToSpawnPermit(record.RestoredRequest, record.Line);
                                 promotedCount++;
@@ -177,8 +178,18 @@ namespace RapidTransitMod
                         continue;
 
                     TransportLine transportLine = EntityManager.GetComponentData<TransportLine>(line);
-                    bool managed = managedRequests.IsManagedLine(line);
-                    if (!managed)
+                    ManagedRequestLineState lineState = managedRequests.GetLineState(line);
+                    if (lineState == ManagedRequestLineState.Paused)
+                    {
+                        ClosePausedLineRequest(line, ref transportLine);
+                        continue;
+                    }
+                    if (lineState == ManagedRequestLineState.WaitingStable)
+                    {
+                        ParkUnstableLineRequest(line, ref transportLine);
+                        continue;
+                    }
+                    if (lineState == ManagedRequestLineState.Unmanaged)
                     {
                         RemoveRtRequestFromUnmanagedLine(line, ref transportLine);
                         continue;
@@ -191,7 +202,7 @@ namespace RapidTransitMod
                         {
                             if (!IsParkedSentinelNormalized(request, line))
                                 NormalizeParkedSentinel(request, line);
-                            if (ShouldPromoteSentinel(managedRequests, line, spawnPermitLines))
+                            if (ShouldPromoteSentinel(managedRequests, line, transportLine, spawnPermitLines))
                                 PromoteSentinelToSpawnPermit(request, line);
                             continue;
                         }
@@ -214,7 +225,7 @@ namespace RapidTransitMod
                     }
 
                     Entity sentinel = InstallParkedSentinel(line);
-                    if (ShouldPromoteSentinel(managedRequests, line, spawnPermitLines))
+                    if (ShouldPromoteSentinel(managedRequests, line, transportLine, spawnPermitLines))
                         PromoteSentinelToSpawnPermit(sentinel, line);
                 }
             }
@@ -492,6 +503,92 @@ namespace RapidTransitMod
             EntityManager.RemoveComponent<RtSpawnPermitRequest>(request);
         }
 
+        private void ClosePausedLineRequest(Entity line, ref TransportLine transportLine)
+        {
+            bool transportLineChanged = false;
+            if ((transportLine.m_Flags & TransportLineFlags.RequireVehicles) != 0)
+            {
+                transportLine.m_Flags &= ~TransportLineFlags.RequireVehicles;
+                transportLineChanged = true;
+            }
+            Entity request = transportLine.m_VehicleRequest;
+            if (IsLiveRequest(request))
+            {
+                if (EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
+                {
+                    EntityManager.DestroyEntity(request);
+                    transportLine.m_VehicleRequest = Entity.Null;
+                    transportLineChanged = true;
+                }
+                else if (EntityManager.HasComponent<RtSpawnPermitRequest>(request))
+                {
+                    bool committed = EntityManager.HasComponent<PathInformation>(request)
+                        || EntityManager.HasComponent<Dispatched>(request);
+                    if (!committed)
+                    {
+                        EntityManager.DestroyEntity(request);
+                        transportLine.m_VehicleRequest = Entity.Null;
+                        transportLineChanged = true;
+                    }
+                    else
+                    {
+                        EntityManager.RemoveComponent<RtSpawnPermitRequest>(request);
+                    }
+                }
+            }
+
+            if (EntityManager.HasBuffer<DispatchedRequest>(line))
+            {
+                DynamicBuffer<DispatchedRequest> requests = EntityManager.GetBuffer<DispatchedRequest>(line, true);
+                for (int i = 0; i < requests.Length; i++)
+                {
+                    Entity dispatched = requests[i].m_VehicleRequest;
+                    if (IsLiveRequest(dispatched)
+                        && EntityManager.HasComponent<RtSpawnPermitRequest>(dispatched))
+                    {
+                        EntityManager.RemoveComponent<RtSpawnPermitRequest>(dispatched);
+                    }
+                }
+            }
+            if (transportLineChanged)
+                EntityManager.SetComponentData(line, transportLine);
+        }
+
+        private void ParkUnstableLineRequest(Entity line, ref TransportLine transportLine)
+        {
+            Entity request = transportLine.m_VehicleRequest;
+            bool owned = false;
+            if (IsLiveRequest(request) && EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
+            {
+                if (!IsParkedSentinelNormalized(request, line))
+                    NormalizeParkedSentinel(request, line);
+                owned = true;
+            }
+            else if (IsLiveRequest(request) && EntityManager.HasComponent<RtSpawnPermitRequest>(request))
+            {
+                bool committed = EntityManager.HasComponent<PathInformation>(request)
+                    || EntityManager.HasComponent<Dispatched>(request);
+                if (committed)
+                {
+                    EntityManager.RemoveComponent<RtSpawnPermitRequest>(request);
+                }
+                else
+                {
+                    if (!EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
+                        EntityManager.AddComponent<RtVehicleRequestSentinel>(request);
+                    NormalizeParkedSentinel(request, line);
+                }
+                owned = true;
+            }
+            if (!owned)
+                return;
+            if ((transportLine.m_Flags & TransportLineFlags.RequireVehicles) != 0)
+            {
+                transportLine.m_Flags &= ~TransportLineFlags.RequireVehicles;
+                EntityManager.SetComponentData(line, transportLine);
+            }
+        }
+
         private Entity InstallParkedSentinel(Entity line)
         {
             Entity request = EntityManager.CreateEntity();
@@ -557,9 +654,13 @@ namespace RapidTransitMod
         private bool ShouldPromoteSentinel(
             ManagedRequestPort managedRequests,
             Entity line,
+            TransportLine transportLine,
             NativeHashSet<Entity> spawnPermitLines)
         {
             if (spawnPermitLines.Contains(line))
+                return false;
+
+            if (HasLiveVanillaRequest(line, transportLine))
                 return false;
 
             if (!managedRequests.TryGetSpawnTarget(line, out int targetCount))
@@ -613,6 +714,33 @@ namespace RapidTransitMod
             transportLine.m_Flags &= ~TransportLineFlags.RequireVehicles;
             transportLine.m_VehicleRequest = request;
             EntityManager.SetComponentData(line, transportLine);
+        }
+
+        private bool HasLiveVanillaRequest(Entity line, in TransportLine transportLine)
+        {
+            Entity request = transportLine.m_VehicleRequest;
+            if (IsLiveRequest(request)
+                && EntityManager.HasComponent<TransportVehicleRequest>(request)
+                && EntityManager.GetComponentData<TransportVehicleRequest>(request).m_Route == line
+                && (EntityManager.HasComponent<PathInformation>(request)
+                    || EntityManager.HasComponent<Dispatched>(request)))
+            {
+                return true;
+            }
+            if (!EntityManager.HasBuffer<DispatchedRequest>(line))
+                return false;
+            DynamicBuffer<DispatchedRequest> requests = EntityManager.GetBuffer<DispatchedRequest>(line, true);
+            for (int i = 0; i < requests.Length; i++)
+            {
+                Entity dispatched = requests[i].m_VehicleRequest;
+                if (IsLiveRequest(dispatched)
+                    && EntityManager.HasComponent<TransportVehicleRequest>(dispatched)
+                    && EntityManager.GetComponentData<TransportVehicleRequest>(dispatched).m_Route == line)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private bool ShouldReplaceUnauthorizedPendingRequest(Entity request, Entity line)

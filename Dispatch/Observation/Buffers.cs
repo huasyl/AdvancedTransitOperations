@@ -213,7 +213,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     || element.m_VisibleStopCount > element.m_StopCount
                     || element.m_SuppressPlanFrom < 0
                     || element.m_State < 0
-                    || element.m_State > (int)MonitorTripState.Cleared
+                    || element.m_State > (int)MonitorTripState.Suspended
                     || element.m_EndReason < (int)MonitorEndReason.None
                     || element.m_EndReason > (int)MonitorEndReason.Relaunched
                     || (active && element.m_State != (int)MonitorTripState.Active)
@@ -745,7 +745,7 @@ namespace RapidTransitMod.Dispatch.Observation
             string expectedKey = trip.LineKey + "|" + trip.RowId + "|" + trip.ServiceDateKey;
             if (!string.Equals(trip.Key, expectedKey, StringComparison.Ordinal)
                 || (int)trip.State < (int)MonitorTripState.Active
-                || (int)trip.State > (int)MonitorTripState.Cleared)
+                || (int)trip.State > (int)MonitorTripState.Suspended)
             {
                 return false;
             }

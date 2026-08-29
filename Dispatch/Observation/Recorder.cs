@@ -118,6 +118,7 @@ namespace RapidTransitMod.Dispatch.Observation
             AppliedMonitorRow row,
             DateTime serviceDate,
             bool final,
+            MonitorTripState state,
             uint frame)
         {
             if (row.Stops != null && row.Stops.Length > MaxStopsPerTrip)
@@ -140,7 +141,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 Entity.Null,
                 row,
                 serviceDateKey,
-                MonitorTripState.Missed,
+                state,
                 frame);
             Archive(trip);
             ClearMonitorSlotClaim(line, row.SlotMinute, serviceDate);
@@ -1450,7 +1451,11 @@ namespace RapidTransitMod.Dispatch.Observation
                 deltaMinutes = delta,
                 vehicleIndex = trip.Vehicle != Entity.Null ? trip.Vehicle.Index : -1,
                 launchFrame = trip.LaunchFrame,
-                bindingConfidence = trip.State == MonitorTripState.Missed ? "final-missed" : "vehicle-launch",
+                bindingConfidence = trip.State == MonitorTripState.Missed
+                    ? "final-missed"
+                    : trip.State == MonitorTripState.Suspended
+                        ? "line-suspended"
+                        : "vehicle-launch",
                 reasonCode = trip.State.ToString().ToLowerInvariant(),
                 lastUpdatedFrame = trip.UpdatedFrame
             };

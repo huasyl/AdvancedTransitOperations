@@ -974,6 +974,7 @@ namespace RapidTransitMod.Dispatch.Observation
                     candidate.Row,
                     candidate.ServiceDate,
                     candidate.Final,
+                    candidate.State,
                     frame);
             }
         }

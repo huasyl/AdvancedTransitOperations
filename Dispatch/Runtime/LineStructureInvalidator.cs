@@ -744,6 +744,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Runtime.m_LapCache.RemoveLine(plan.Line);
             m_Runtime.m_DispatchCache.RemoveLine(plan.Line);
             m_Runtime.m_TrackModel.InvalidateWaypointIndexLookup(plan.Line);
+            if (plan.Kind == LineStructurePlanKind.LineDeleted)
+            {
+                m_Runtime.m_LineServiceState.Forget(plan.Line);
+                m_Runtime.m_ServiceWindowStore.RemoveLine(plan.Line);
+            }
             if (plan.Kind == LineStructurePlanKind.LineDeleted && hasWaypoints)
                 m_Runtime.m_LineProfile.RemoveStability(plan.Line, waypoints);
             else if (hasWaypoints)
@@ -1223,6 +1228,11 @@ namespace RapidTransitMod.Dispatch.Runtime
                 publishEvent: false);
             ReleaseTimedPlans(line);
             bool deleted = pending.Deleted || reason == "line-deleted";
+            if (deleted)
+            {
+                m_Runtime.m_LineServiceState.Forget(line);
+                m_Runtime.m_ServiceWindowStore.RemoveLine(line);
+            }
             m_Runtime.m_Observation.ReleaseLineMonitor(line, frame);
             if (deleted)
                 m_Runtime.m_Observation.RemoveLine(line);

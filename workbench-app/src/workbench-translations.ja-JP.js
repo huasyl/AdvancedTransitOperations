@@ -288,6 +288,7 @@ export const nativeScheduleTranslationsJaJp = {
   "timetable.status.interruptedRetired": "車庫へ回送",
   "timetable.status.interruptedRelaunched": "次便へ引き継ぎ",
   "timetable.status.missed": "欠便",
+  "timetable.status.suspended": "路線閉鎖",
   "timetable.status.completed": "運行完了",
   "timetable.status.departed": "発車済み",
   "timetable.status.arrived": "到着済み",

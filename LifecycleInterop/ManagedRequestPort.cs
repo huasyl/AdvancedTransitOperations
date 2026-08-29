@@ -8,6 +8,14 @@ using Unity.Entities;
 
 namespace RapidTransitMod
 {
+    internal enum ManagedRequestLineState : byte
+    {
+        Unmanaged,
+        WaitingStable,
+        Paused,
+        Managed
+    }
+
     internal sealed class ManagedRequestPort
     {
         private readonly ModRuntimeHostSystem m_Runtime;
@@ -19,10 +27,21 @@ namespace RapidTransitMod
 
         public bool IsManagedLine(Entity line)
         {
-            return line != Entity.Null
-                && m_Runtime.EntityManager.Exists(line)
-                && !m_Runtime.EntityManager.HasComponent<Disabled>(line)
-                && m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch());
+            return GetLineState(line) == ManagedRequestLineState.Managed;
+        }
+
+        public ManagedRequestLineState GetLineState(Entity line)
+        {
+            if (line == Entity.Null || !m_Runtime.EntityManager.Exists(line))
+                return ManagedRequestLineState.Unmanaged;
+            if (!m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch()))
+                return ManagedRequestLineState.Unmanaged;
+            return m_Runtime.m_LineServiceState.GetGate(line) switch
+            {
+                LineServiceGate.Operational => ManagedRequestLineState.Managed,
+                LineServiceGate.Paused => ManagedRequestLineState.Paused,
+                _ => ManagedRequestLineState.WaitingStable
+            };
         }
 
         public bool TryGetSpawnTarget(Entity line, out int targetCount)

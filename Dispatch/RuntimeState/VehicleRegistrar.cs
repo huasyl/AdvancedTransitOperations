@@ -8,7 +8,6 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
-using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
@@ -100,14 +99,12 @@ namespace RapidTransitMod
         }
 
         private readonly ModRuntimeHostSystem m_Runtime;
-        private readonly List<Entity> m_DisabledLineLateSpawnRetireQueue = new List<Entity>();
-        private readonly HashSet<Entity> m_DisabledLineLateSpawnRetireQueueSeen = new HashSet<Entity>();
-        private readonly HashSet<Entity> m_DisabledLineLateSpawnHandledLines = new HashSet<Entity>();
         // 跨来源帧候选：第二步只保留完整 Entity，第三步才由 Register 唯一消费。
         private readonly HashSet<Entity> m_PendingRebindCandidates = new HashSet<Entity>();
         private readonly Dictionary<Entity, StopFact> m_DeferredRestoredStops = new Dictionary<Entity, StopFact>();
         // 启动期索引只保存当前批次的实体、线路和稳定线路序号。
         private readonly List<StartupCandidate> m_StartupCandidates = new List<StartupCandidate>();
+        private readonly List<StartupCandidate> m_OperationalStartupCandidates = new List<StartupCandidate>();
         private readonly List<Entity> m_StartupLines = new List<Entity>();
         private readonly List<Entity> m_StartupWaitingLines = new List<Entity>();
         private readonly List<Entity> m_StartupOrderedLines = new List<Entity>();
@@ -117,7 +114,6 @@ namespace RapidTransitMod
         private readonly List<Entity> m_StartupCheckLines = new List<Entity>();
         private bool m_StartupGate;
         private bool m_StartupAwaitingStable;
-        private bool m_StartupAwaitingBaseline;
         private int m_StartupBucket;
         private readonly System.Action<StopFact> m_PublishStopFact;
         private readonly System.Action<Entity, int, StopControlResult> m_ApplyStopControl;
@@ -129,26 +125,19 @@ namespace RapidTransitMod
             m_ApplyStopControl = runtime.ApplyStopControl;
         }
 
-        internal IReadOnlyList<Entity> DisabledLineLateSpawnRetireQueue => m_DisabledLineLateSpawnRetireQueue;
         internal IReadOnlyCollection<Entity> PendingRebindCandidates => m_PendingRebindCandidates;
         internal bool StartupGateActive => m_StartupGate;
         internal bool IsStartupActivationFrame(uint frame) => m_StartupGate
             && !m_StartupAwaitingStable
-            && m_StartupAwaitingBaseline
+            && m_StartupBucket >= STARTUP_BUCKET_COUNT
             && (frame & 15u) == 3u;
-
-        internal void ClearDisabledLineLateSpawnRetireQueue()
-        {
-            m_DisabledLineLateSpawnRetireQueue.Clear();
-            m_DisabledLineLateSpawnRetireQueueSeen.Clear();
-            m_DisabledLineLateSpawnHandledLines.Clear();
-        }
 
         internal void ClearPendingRebindCandidates() => m_PendingRebindCandidates.Clear();
 
         internal void ClearStartupGate()
         {
             m_StartupCandidates.Clear();
+            m_OperationalStartupCandidates.Clear();
             m_StartupLines.Clear();
             m_StartupWaitingLines.Clear();
             m_StartupOrderedLines.Clear();
@@ -158,7 +147,6 @@ namespace RapidTransitMod
             m_StartupCheckLines.Clear();
             m_StartupGate = false;
             m_StartupAwaitingStable = false;
-            m_StartupAwaitingBaseline = false;
             m_StartupBucket = 0;
         }
 
@@ -167,11 +155,13 @@ namespace RapidTransitMod
             ClearStartupGate();
             m_StartupAwaitingStable = !CollectStartupIndex(m_StartupCandidates, m_StartupLines);
             m_StartupGate = true;
+            if (!m_StartupAwaitingStable)
+                BuildOperationalStartupCandidates();
         }
 
         internal void TickStartupGate()
         {
-            if (!m_StartupGate || m_StartupAwaitingBaseline || m_StartupBucket >= STARTUP_BUCKET_COUNT)
+            if (!m_StartupGate || m_StartupBucket >= STARTUP_BUCKET_COUNT)
                 return;
 
             if (m_StartupAwaitingStable)
@@ -183,12 +173,13 @@ namespace RapidTransitMod
                     return;
                 m_StartupAwaitingStable = false;
                 m_StartupBucket = 0;
+                BuildOperationalStartupCandidates();
             }
 
             int bucket = m_StartupBucket;
-            for (int i = 0; i < m_StartupCandidates.Count; i++)
+            for (int i = 0; i < m_OperationalStartupCandidates.Count; i++)
             {
-                StartupCandidate candidate = m_StartupCandidates[i];
+                StartupCandidate candidate = m_OperationalStartupCandidates[i];
                 if ((candidate.Order & STARTUP_BUCKET_MASK) != bucket)
                     continue;
 
@@ -199,8 +190,6 @@ namespace RapidTransitMod
             }
 
             m_StartupBucket++;
-            if (m_StartupBucket == STARTUP_BUCKET_COUNT)
-                m_StartupAwaitingBaseline = true;
         }
 
         internal bool TryActivateStartup(uint frame)
@@ -214,9 +203,9 @@ namespace RapidTransitMod
                 PruneStartupVehicles(m_StartupCheckCandidates);
                 m_StartupCandidates.Clear();
                 m_StartupLines.Clear();
+                m_OperationalStartupCandidates.Clear();
                 m_StartupBucket = 0;
                 m_StartupAwaitingStable = true;
-                m_StartupAwaitingBaseline = false;
                 return false;
             }
 
@@ -224,23 +213,22 @@ namespace RapidTransitMod
             {
                 PruneStartupVehicles(m_StartupCheckCandidates);
                 ReplaceStartupIndex(m_StartupCheckCandidates, m_StartupCheckLines);
+                BuildOperationalStartupCandidates();
                 m_StartupBucket = 0;
                 m_StartupAwaitingStable = false;
-                m_StartupAwaitingBaseline = false;
                 return false;
             }
 
-            var railVehicles = new List<Entity>(m_StartupCandidates.Count);
-            var roadVehicles = new List<Entity>(m_StartupCandidates.Count);
-            for (int i = 0; i < m_StartupCandidates.Count; i++)
+            var railVehicles = new List<Entity>(m_OperationalStartupCandidates.Count);
+            var roadVehicles = new List<Entity>(m_OperationalStartupCandidates.Count);
+            for (int i = 0; i < m_OperationalStartupCandidates.Count; i++)
             {
-                StartupCandidate candidate = m_StartupCandidates[i];
+                StartupCandidate candidate = m_OperationalStartupCandidates[i];
                 if (!m_Runtime.m_VehicleView.TryGetLine(candidate.Vehicle, out Entity line)
                     || line != candidate.Line)
                 {
                     m_StartupBucket = 0;
                     m_StartupAwaitingStable = false;
-                    m_StartupAwaitingBaseline = false;
                     return false;
                 }
                 if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, candidate.Line, out LifecycleKind lifecycle))
@@ -261,9 +249,9 @@ namespace RapidTransitMod
                 return false;
             }
 
-            for (int i = 0; i < m_StartupCandidates.Count; i++)
+            for (int i = 0; i < m_OperationalStartupCandidates.Count; i++)
             {
-                StartupCandidate candidate = m_StartupCandidates[i];
+                StartupCandidate candidate = m_OperationalStartupCandidates[i];
                 if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, candidate.Line, out LifecycleKind lifecycle)
                     || lifecycle != LifecycleKind.Rail)
                 {
@@ -281,9 +269,9 @@ namespace RapidTransitMod
                 }
             }
 
-            for (int i = 0; i < m_StartupCandidates.Count; i++)
+            for (int i = 0; i < m_OperationalStartupCandidates.Count; i++)
             {
-                StartupCandidate candidate = m_StartupCandidates[i];
+                StartupCandidate candidate = m_OperationalStartupCandidates[i];
                 if (!RuntimePorts.TryResolveLineLifecycle(m_Runtime, candidate.Line, out LifecycleKind lifecycle))
                     return false;
 
@@ -446,7 +434,7 @@ namespace RapidTransitMod
             }
 
             PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-            if ((publicTransport.m_State & PublicTransportFlags.Returning) != 0
+            if ((publicTransport.m_State & (PublicTransportFlags.Returning | PublicTransportFlags.AbandonRoute)) != 0
                 || m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route != line)
             {
                 return false;
@@ -497,6 +485,20 @@ namespace RapidTransitMod
             m_StartupCandidates.AddRange(candidates);
             m_StartupLines.Clear();
             m_StartupLines.AddRange(lines);
+        }
+
+        private void BuildOperationalStartupCandidates()
+        {
+            m_Runtime.m_VanillaServiceControl.BaselineStartup(
+                m_StartupLines,
+                m_Runtime.m_SimClock.Snapshot);
+            m_OperationalStartupCandidates.Clear();
+            for (int i = 0; i < m_StartupCandidates.Count; i++)
+            {
+                StartupCandidate candidate = m_StartupCandidates[i];
+                if (m_Runtime.m_LineServiceState.IsOperational(candidate.Line))
+                    m_OperationalStartupCandidates.Add(candidate);
+            }
         }
 
         private void PruneStartupVehicles(List<StartupCandidate> candidates)
@@ -598,20 +600,18 @@ namespace RapidTransitMod
             NativeArray<Entity> spawnRequestLines = default;
             BufferLookup<RouteVehicle> rvBuffers = m_Runtime.GetBufferLookup<RouteVehicle>(true);
             BufferLookup<RouteWaypoint> wpBuffers = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
-            BufferLookup<RouteModifier> modBuffers = m_Runtime.GetBufferLookup<RouteModifier>(false);
-            ClearDisabledLineLateSpawnRetireQueue();
             try
             {
                 if (fullSweep)
                 {
                     lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.TempJob);
-                    RegisterFullSweep(lines, rvBuffers, wpBuffers, modBuffers);
+                    RegisterFullSweep(lines, rvBuffers, wpBuffers);
                 }
                 else if (scanSpawnLines)
                 {
                     spawnLines = m_Runtime.m_SpawningLines.GetKeyArray(Allocator.Temp);
                     for (int i = 0; i < spawnLines.Length; i++)
-                        RegisterLine(spawnLines[i], fullSweep, rvBuffers, wpBuffers, modBuffers);
+                        RegisterLine(spawnLines[i], fullSweep, rvBuffers, wpBuffers);
 
                     spawnRequestLines = m_Runtime.m_LineSpawnRequestFrame.GetKeyArray(Allocator.Temp);
                     for (int i = 0; i < spawnRequestLines.Length; i++)
@@ -625,7 +625,7 @@ namespace RapidTransitMod
                             break;
                         }
                         if (!alreadyRegistered)
-                            RegisterLine(line, fullSweep, rvBuffers, wpBuffers, modBuffers);
+                            RegisterLine(line, fullSweep, rvBuffers, wpBuffers);
                     }
                 }
             }
@@ -643,8 +643,7 @@ namespace RapidTransitMod
         private void RegisterFullSweep(
             NativeArray<Entity> lines,
             BufferLookup<RouteVehicle> rvBuffers,
-            BufferLookup<RouteWaypoint> wpBuffers,
-            BufferLookup<RouteModifier> modBuffers)
+            BufferLookup<RouteWaypoint> wpBuffers)
         {
             using var eligible = new NativeList<Entity>(lines.Length, Allocator.TempJob);
             int candidateCapacity = 0;
@@ -652,18 +651,12 @@ namespace RapidTransitMod
             {
                 Entity line = lines[i];
                 if (line == Entity.Null || !m_Runtime.EntityManager.Exists(line)) continue;
-                bool hasPendingSpawn = m_Runtime.m_SpawningLines.ContainsKey(line)
-                    || m_Runtime.m_LineSpawnRequestFrame.ContainsKey(line);
-                if (hasPendingSpawn && m_Runtime.EntityManager.HasComponent<Disabled>(line))
-                {
-                    m_DisabledLineLateSpawnHandledLines.Add(line);
-                    HandleDisabledLinePendingSpawn(line, rvBuffers, modBuffers);
-                    continue;
-                }
                 if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> vehicles)) continue;
                 if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> waypoints) || waypoints.Length < 2) continue;
                 if (!m_Runtime.m_LineProfile.IsStable(line, waypoints)) continue;
                 if (!m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch())) continue;
+                m_Runtime.m_LineServiceState.EnsureObserved(line);
+                if (!m_Runtime.m_LineServiceState.IsOperational(line)) continue;
                 eligible.Add(line);
                 candidateCapacity += vehicles.Length;
                 DiagnoseLine(line, waypoints);
@@ -738,25 +731,15 @@ namespace RapidTransitMod
             Entity line,
             bool fullSweep,
             BufferLookup<RouteVehicle> rvBuffers,
-            BufferLookup<RouteWaypoint> wpBuffers,
-            BufferLookup<RouteModifier> modBuffers)
+            BufferLookup<RouteWaypoint> wpBuffers)
         {
             if (line == Entity.Null || !m_Runtime.EntityManager.Exists(line)) return;
-            if (m_DisabledLineLateSpawnHandledLines.Contains(line)) return;
-
-            bool hasPendingSpawn = m_Runtime.m_SpawningLines.ContainsKey(line)
-                || m_Runtime.m_LineSpawnRequestFrame.ContainsKey(line);
-            if (hasPendingSpawn && m_Runtime.EntityManager.HasComponent<Disabled>(line))
-            {
-                m_DisabledLineLateSpawnHandledLines.Add(line);
-                HandleDisabledLinePendingSpawn(line, rvBuffers, modBuffers);
-                return;
-            }
-
             if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs)) return;
             if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2) return;
             if (!m_Runtime.m_LineProfile.IsStable(line, wps)) return;
             if (!m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch())) return;
+            m_Runtime.m_LineServiceState.EnsureObserved(line);
+            if (!m_Runtime.m_LineServiceState.IsOperational(line)) return;
             bool adoptExistingVehicles = !m_Runtime.m_LineInitialAdopted.Contains(line);
             bool isHotLine = adoptExistingVehicles || m_Runtime.m_SpawningLines.ContainsKey(line);
             if (!fullSweep && !isHotLine) return;
@@ -877,7 +860,8 @@ namespace RapidTransitMod
                 return false;
             }
 
-            if ((m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle).m_State & PublicTransportFlags.Returning) != 0)
+            if ((m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle).m_State
+                    & (PublicTransportFlags.Returning | PublicTransportFlags.AbandonRoute)) != 0)
                 return false;
 
             line = m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route;
@@ -888,11 +872,15 @@ namespace RapidTransitMod
                 || !routeVehicles.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> members)
                 || !waypointBuffers.TryGetBuffer(line, out waypoints)
                 || waypoints.Length < 2
-                || !m_Runtime.m_LineProfile.IsStable(line, waypoints)
-                || !m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch()))
+                || !m_Runtime.m_LineProfile.IsStable(line, waypoints))
             {
                 return false;
             }
+            if (!m_Runtime.m_LineView.ManagedRuntime(line, m_Runtime.m_Features.Dispatch()))
+                return false;
+            m_Runtime.m_LineServiceState.EnsureObserved(line);
+            if (!m_Runtime.m_LineServiceState.IsOperational(line))
+                return false;
 
             for (int i = 0; i < members.Length; i++)
             {
@@ -1093,7 +1081,7 @@ namespace RapidTransitMod
                 return;
 
             PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-            if ((publicTransport.m_State & PublicTransportFlags.Returning) != 0)
+            if ((publicTransport.m_State & (PublicTransportFlags.Returning | PublicTransportFlags.AbandonRoute)) != 0)
                 return;
 
             bool waypointKnown = m_Runtime.m_RoadEventSource.TryReadCurrentWaypoint(
@@ -1236,7 +1224,7 @@ namespace RapidTransitMod
 
             PublicTransport publicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
             bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
-            if ((publicTransport.m_State & PublicTransportFlags.Returning) != 0) return;
+            if ((publicTransport.m_State & (PublicTransportFlags.Returning | PublicTransportFlags.AbandonRoute)) != 0) return;
 
             int waypointIndex = !startupSilent && boarding
                 ? m_Runtime.m_WaypointIndex.Compute(vehicle, waypoints)
@@ -1402,69 +1390,6 @@ namespace RapidTransitMod
                 m_Runtime.m_SelectPanel.RecordLineVehicleRegisterSummary(line, m_Runtime.m_RuntimeLifecycleHost.Minute(), vehicle, finalState);
         }
 
-        private void HandleDisabledLinePendingSpawn(
-            Entity line,
-            BufferLookup<RouteVehicle> rvBuffers,
-            BufferLookup<RouteModifier> modBuffers)
-        {
-            m_Runtime.m_SpawningLines.Remove(line);
-            m_Runtime.m_LineSpawnRequestFrame.Remove(line);
-            RestoreVehicleIntervalModifier(line, modBuffers);
-
-            int queuedRetires = 0;
-            if (rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs))
-            {
-                HashSet<Entity> seenVehicles = new HashSet<Entity>();
-                for (int i = 0; i < rvs.Length; i++)
-                {
-                    Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(rvs[i].m_Vehicle);
-                    if (!m_Runtime.EntityManager.Exists(vehicle)) continue;
-                    if (!seenVehicles.Add(vehicle)) continue;
-                    if (m_Runtime.m_VehicleView.Contains(vehicle)) continue;
-                    if (m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
-                    {
-                        continue;
-                    }
-                    if (m_Runtime.EntityManager.HasComponent<Deleted>(vehicle)
-                        || m_Runtime.EntityManager.HasComponent<ParkedTrain>(vehicle))
-                    {
-                        continue;
-                    }
-                    if (!m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle)
-                        || !m_Runtime.EntityManager.HasComponent<Target>(vehicle)
-                        || !m_Runtime.EntityManager.HasComponent<Owner>(vehicle))
-                    {
-                        continue;
-                    }
-                    if (!m_DisabledLineLateSpawnRetireQueueSeen.Add(vehicle)) continue;
-
-                    m_DisabledLineLateSpawnRetireQueue.Add(vehicle);
-                    queuedRetires++;
-                }
-            }
-
-            if (RtLog.VerboseEnabled)
-            {
-                m_Runtime.log.Info("[DisabledLineLateSpawnCleanup] 线路" + line.Index
-                    + " 清理关闭线路残留产车状态 queuedRetires=" + queuedRetires);
-            }
-        }
-
-        private static void RestoreVehicleIntervalModifier(
-            Entity line,
-            BufferLookup<RouteModifier> modBuffers)
-        {
-            if (!modBuffers.TryGetBuffer(line, out DynamicBuffer<RouteModifier> mods))
-                return;
-
-            int modifierIndex = (int)RouteModifierType.VehicleInterval;
-            if (mods.Length <= modifierIndex)
-                return;
-
-            RouteModifier modifier = mods[modifierIndex];
-            modifier.m_Delta = float2.zero;
-            mods[modifierIndex] = modifier;
-        }
 
         internal VehicleState InferInitialState(
             Entity vehicle,

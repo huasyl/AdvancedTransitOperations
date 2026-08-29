@@ -285,6 +285,7 @@ export const nativeScheduleTranslationsEnUs = {
   "timetable.status.active": "In Progress",
   "timetable.status.completed": "Completed",
   "timetable.status.missed": "Missed Departure",
+  "timetable.status.suspended": "Line Closed",
   "timetable.status.arrived": "Arrived",
   "timetable.status.awaitingArrival": "Awaiting Arrival",
   "timetable.monitor.skipped": "Skipped",

@@ -141,6 +141,12 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_Vehicles.Remove(vehicle);
         }
 
+        internal void RemoveLine(Entity line)
+        {
+            if (line != Entity.Null)
+                m_Pending.Remove(line);
+        }
+
         internal void Clear()
         {
             m_Pending.Clear();

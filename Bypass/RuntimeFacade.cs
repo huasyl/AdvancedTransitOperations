@@ -114,6 +114,30 @@ namespace RapidTransitMod.Bypass
             return releasedVehicles.Count;
         }
 
+        internal List<Entity> ReleaseLineForServicePause(Entity line)
+        {
+            if (line == Entity.Null)
+                return null;
+
+            List<Entity> releasedVehicles = m_Admission.ReleaseLineRuntime(line, m_Runtime.ResolveLine);
+            m_Admission.ClearWatchLine(line);
+            if (releasedVehicles == null)
+                return null;
+
+            List<Entity> externalVehicles = null;
+            for (int i = 0; i < releasedVehicles.Count; i++)
+            {
+                Entity vehicle = releasedVehicles[i];
+                Entity vehicleLine = m_Runtime.ResolveLine(vehicle);
+                ClearVehicle(vehicle, "线路暂停运营");
+                if (vehicleLine == line)
+                    continue;
+                externalVehicles ??= new List<Entity>();
+                externalVehicles.Add(vehicle);
+            }
+            return externalVehicles;
+        }
+
         internal List<Entity> ForgetBlocker(Entity blocker)
         {
             return m_Admission.ForgetBlocker(blocker);

@@ -46,7 +46,8 @@ namespace RapidTransitMod.Dispatch.Observation
         Active,
         Completed,
         Missed,
-        Cleared
+        Cleared,
+        Suspended
     }
 
     internal enum MonitorEndReason : byte

@@ -4,6 +4,8 @@ using Game;
 using Game.Common;
 using Game.Routes;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Observation;
+using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.Dispatch.Scheduling;
 using Unity.Collections;
 using Unity.Entities;
@@ -49,22 +51,26 @@ namespace RapidTransitMod
             public readonly AppliedMonitorRow Row;
             public readonly DateTime ServiceDate;
             public readonly bool Final;
+            public readonly MonitorTripState State;
 
             public MissedCandidate(
                 Entity line,
                 AppliedMonitorRow row,
                 DateTime serviceDate,
-                bool final)
+                bool final,
+                MonitorTripState state)
             {
                 Line = line;
                 Row = row;
                 ServiceDate = serviceDate.Date;
                 Final = final;
+                State = state;
             }
         }
 
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Func<Entity, bool> m_Managed;
+        private readonly Func<Entity, bool> m_IsOperational;
         private readonly Func<Entity, int[]> m_Times;
         private readonly Func<Entity, int> m_Hold;
         private readonly Func<Entity, float> m_ReadDispatchCache;
@@ -81,6 +87,8 @@ namespace RapidTransitMod
         private readonly List<SlotClaim> m_SlotClaims = new List<SlotClaim>();
         private readonly List<RetireDecision> m_RetireDecisions = new List<RetireDecision>();
         private readonly List<MissedCandidate> m_MissedCandidates = new List<MissedCandidate>();
+        private readonly Dictionary<Entity, List<ServiceWindow>> m_ServiceWindows =
+            new Dictionary<Entity, List<ServiceWindow>>();
 
         internal IReadOnlyList<SlotClaim> SlotClaims => m_SlotClaims;
         internal IReadOnlyList<RetireDecision> RetireDecisions => m_RetireDecisions;
@@ -91,6 +99,7 @@ namespace RapidTransitMod
         public DispatchScheduler(
             ModRuntimeHostSystem runtime,
             Func<Entity, bool> managed,
+            Func<Entity, bool> isOperational,
             Func<Entity, int[]> times,
             Func<Entity, int> hold,
             Func<Entity, float> readDispatchCache,
@@ -104,6 +113,7 @@ namespace RapidTransitMod
         {
             m_Runtime = runtime;
             m_Managed = managed;
+            m_IsOperational = isOperational;
             m_Times = times;
             m_Hold = hold;
             m_ReadDispatchCache = readDispatchCache;
@@ -142,8 +152,6 @@ namespace RapidTransitMod
                         continue;
                     if (!DispatchLineEligibility.IsDispatchTransportLine(m_Runtime.EntityManager, line))
                         continue;
-                    if (fullMinuteSweep)
-                        CollectMissed(line, clockSnapshot);
                     if (!rvBuffers.TryGetBuffer(line, out DynamicBuffer<RouteVehicle> rvs))
                         continue;
                     if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2)
@@ -154,6 +162,14 @@ namespace RapidTransitMod
                             waypoint => m_Runtime.m_Resolve.Stop(waypoint)).Supported)
                         continue;
                     if (!m_IsLineStable(line, wps))
+                        continue;
+
+                    m_Runtime.m_LineServiceState.EnsureObserved(line);
+                    bool operational = m_IsOperational(line);
+                    PruneServiceWindows(line, clockSnapshot);
+                    if (fullMinuteSweep && (operational || HasOpenServiceWindow(line)))
+                        CollectMissed(line, clockSnapshot);
+                    if (!operational)
                         continue;
 
                     bool useManagedTimes = m_Managed(line);
@@ -286,6 +302,12 @@ namespace RapidTransitMod
                                 if (slotMinute == previousAppliedTarget)
                                     continue;
                             }
+                        }
+
+                        if (IsServiceClosed(line, OccurrenceTime(clockSnapshot, slotMinute)))
+                        {
+                            slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                            continue;
                         }
 
                         int minutesToSlot = useManagedTimes
@@ -577,11 +599,16 @@ namespace RapidTransitMod
             if (!m_Runtime.m_LineView.TryMonitorRow(line, slotMinute, out AppliedMonitorRow row))
                 return;
 
+            DateTime occurrenceDate = ScheduleClock.MonitorOccurrenceDate(clock, slotMinute);
+            DateTime occurrence = occurrenceDate.Date.AddMinutes(slotMinute);
             m_MissedCandidates.Add(new MissedCandidate(
                 line,
                 row,
-                ScheduleClock.MonitorServiceDate(clock, slotMinute),
-                final));
+                occurrenceDate,
+                final,
+                IsServiceClosed(line, occurrence)
+                    ? MonitorTripState.Suspended
+                    : MonitorTripState.Missed));
         }
 
         public int NextSlotMin(int nowMinute)
@@ -611,11 +638,196 @@ namespace RapidTransitMod
 
         public int NextManagedTarget(Entity line, int nowMinute)
         {
-            if (line == Entity.Null || !m_Managed(line))
+            if (line == Entity.Null || !m_Managed(line) || !m_IsOperational(line))
                 return -1;
 
             int[] appliedTargets = m_Times(line);
             return ScheduleTargets.Next(nowMinute, appliedTargets);
+        }
+
+        internal void PauseLine(Entity line, ClockSnapshot clock)
+        {
+            if (line == Entity.Null)
+                return;
+            List<ServiceWindow> windows = GetServiceWindows(line);
+            for (int i = 0; i < windows.Count; i++)
+            {
+                if (windows[i].Open)
+                    return;
+            }
+            DateTime now = ClockTime(clock);
+            windows.Add(new ServiceWindow(now, DateTime.MinValue, true));
+            m_Runtime.m_ServiceWindowStore.MarkDirty();
+            m_Runtime.m_SchedulerApply.MarkDirty(line);
+        }
+
+        internal void ResumeLine(Entity line, ClockSnapshot clock)
+        {
+            if (line == Entity.Null || !m_ServiceWindows.TryGetValue(line, out List<ServiceWindow> windows))
+                return;
+            DateTime now = ClockTime(clock);
+            for (int i = windows.Count - 1; i >= 0; i--)
+            {
+                if (!windows[i].Open)
+                    continue;
+                windows[i] = new ServiceWindow(windows[i].Start, now, false);
+                NormalizeServiceWindows(windows);
+                m_Runtime.m_ServiceWindowStore.MarkDirty();
+                break;
+            }
+            m_Runtime.m_SchedulerApply.MarkDirty(line);
+        }
+
+        internal void BaselineLine(
+            Entity line,
+            bool operational,
+            ClockSnapshot clock,
+            List<ServiceWindow> restored)
+        {
+            if (line == Entity.Null)
+                return;
+            List<ServiceWindow> windows = GetServiceWindows(line);
+            if (restored != null)
+                windows.AddRange(restored);
+            NormalizeServiceWindows(windows);
+            bool changed = false;
+            DateTime now = ClockTime(clock);
+            bool open = HasOpenWindow(windows);
+            if (!operational && !open)
+            {
+                windows.Add(new ServiceWindow(now, DateTime.MinValue, true));
+                changed = true;
+            }
+            else if (operational && open)
+            {
+                for (int i = windows.Count - 1; i >= 0; i--)
+                {
+                    if (!windows[i].Open)
+                        continue;
+                    windows[i] = new ServiceWindow(windows[i].Start, now, false);
+                    changed = true;
+                    break;
+                }
+            }
+            NormalizeServiceWindows(windows);
+            if (changed || restored != null)
+                m_Runtime.m_ServiceWindowStore.MarkDirty();
+        }
+
+        internal void RemoveServiceWindows(Entity line)
+        {
+            if (line != Entity.Null && m_ServiceWindows.Remove(line))
+                m_Runtime.m_ServiceWindowStore.MarkDirty();
+        }
+
+        internal void ClearServiceWindows()
+        {
+            m_ServiceWindows.Clear();
+        }
+
+        internal IEnumerable<KeyValuePair<Entity, List<ServiceWindow>>> ServiceWindows()
+        {
+            return m_ServiceWindows;
+        }
+
+        private List<ServiceWindow> GetServiceWindows(Entity line)
+        {
+            if (!m_ServiceWindows.TryGetValue(line, out List<ServiceWindow> windows))
+            {
+                windows = new List<ServiceWindow>();
+                m_ServiceWindows[line] = windows;
+            }
+            return windows;
+        }
+
+        private bool IsServiceClosed(Entity line, DateTime occurrence)
+        {
+            if (!m_ServiceWindows.TryGetValue(line, out List<ServiceWindow> windows))
+                return false;
+            for (int i = 0; i < windows.Count; i++)
+            {
+                ServiceWindow window = windows[i];
+                if (occurrence < window.Start)
+                    continue;
+                if (window.Open || occurrence < window.End)
+                    return true;
+            }
+            return false;
+        }
+
+        private bool HasOpenServiceWindow(Entity line)
+        {
+            return m_ServiceWindows.TryGetValue(line, out List<ServiceWindow> windows)
+                && HasOpenWindow(windows);
+        }
+
+        private void PruneServiceWindows(Entity line, ClockSnapshot clock)
+        {
+            if (!m_ServiceWindows.TryGetValue(line, out List<ServiceWindow> windows))
+                return;
+            DateTime now = ClockTime(clock);
+            bool removed = false;
+            for (int i = windows.Count - 1; i >= 0; i--)
+            {
+                ServiceWindow window = windows[i];
+                if (!window.Open && window.End.AddMinutes(ScheduleClock.MonitorFinalMinutes) < now)
+                {
+                    windows.RemoveAt(i);
+                    removed = true;
+                }
+            }
+            if (removed)
+                m_Runtime.m_ServiceWindowStore.MarkDirty();
+        }
+
+        private static bool HasOpenWindow(List<ServiceWindow> windows)
+        {
+            for (int i = 0; i < windows.Count; i++)
+            {
+                if (windows[i].Open)
+                    return true;
+            }
+            return false;
+        }
+
+        private static DateTime ClockTime(ClockSnapshot clock)
+        {
+            return clock.NowDate.Date.AddMinutes(clock.NowMinute);
+        }
+
+        private static DateTime OccurrenceTime(ClockSnapshot clock, int slotMinute)
+        {
+            return ScheduleClock.MonitorOccurrenceDate(clock, slotMinute)
+                .Date.AddMinutes(slotMinute);
+        }
+
+        private static void NormalizeServiceWindows(List<ServiceWindow> windows)
+        {
+            if (windows == null || windows.Count < 2)
+                return;
+            windows.Sort((left, right) => left.Start.CompareTo(right.Start));
+            for (int i = windows.Count - 1; i >= 0; i--)
+            {
+                ServiceWindow window = windows[i];
+                if (!window.Open && window.End <= window.Start)
+                    windows.RemoveAt(i);
+            }
+            for (int i = 1; i < windows.Count;)
+            {
+                ServiceWindow previous = windows[i - 1];
+                ServiceWindow current = windows[i];
+                if (!previous.Open && current.Start > previous.End)
+                {
+                    i++;
+                    continue;
+                }
+                bool open = previous.Open || current.Open;
+                DateTime end = open
+                    ? DateTime.MinValue
+                    : previous.End >= current.End ? previous.End : current.End;
+                windows[i - 1] = new ServiceWindow(previous.Start, end, open);
+                windows.RemoveAt(i);
+            }
         }
 
         private void TryLogSpawnBlocked(Entity line, string lineTag, int slotMinute)

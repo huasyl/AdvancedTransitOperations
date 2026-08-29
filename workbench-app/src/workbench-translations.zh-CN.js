@@ -288,6 +288,7 @@ export const nativeScheduleTranslationsZhCn = {
   "timetable.status.interruptedRetired": "回库中断",
   "timetable.status.interruptedRelaunched": "新班次接续",
   "timetable.status.missed": "班次漏发",
+  "timetable.status.suspended": "线路关闭",
   "timetable.status.completed": "已完成",
   "timetable.status.departed": "已发车",
   "timetable.status.arrived": "已到达",

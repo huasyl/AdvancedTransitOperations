@@ -357,4 +357,36 @@ namespace RapidTransitMod
             m_DepotId = depotId ?? string.Empty;
         }
     }
+
+    [InternalBufferCapacity(8)]
+    public struct LineServiceWindowElement : IBufferElementData, ISerializable
+    {
+        public FixedString128Bytes m_LineKey;
+        public int m_StartDateKey;
+        public int m_StartMinute;
+        public int m_EndDateKey;
+        public int m_EndMinute;
+        public byte m_Open;
+
+        public void Serialize<TWriter>(TWriter writer) where TWriter : IWriter
+        {
+            writer.Write(m_LineKey.ToString());
+            writer.Write(m_StartDateKey);
+            writer.Write(m_StartMinute);
+            writer.Write(m_EndDateKey);
+            writer.Write(m_EndMinute);
+            writer.Write(m_Open);
+        }
+
+        public void Deserialize<TReader>(TReader reader) where TReader : IReader
+        {
+            reader.Read(out string lineKey);
+            reader.Read(out m_StartDateKey);
+            reader.Read(out m_StartMinute);
+            reader.Read(out m_EndDateKey);
+            reader.Read(out m_EndMinute);
+            reader.Read(out m_Open);
+            m_LineKey = lineKey ?? string.Empty;
+        }
+    }
 }

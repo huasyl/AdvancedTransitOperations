@@ -80,6 +80,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_VehicleRegistrar = new VehicleRegistrar(runtime);
             runtime.m_VehicleLabels = new RuntimeVehicleLabels(runtime);
             runtime.m_LineAnchorCatalog = new LineAnchorCatalog(runtime.EntityManager);
+            runtime.m_LineServiceState = new LineServiceState(runtime.EntityManager);
+            runtime.m_ServiceWindowStore = new ServiceWindowStore(runtime);
             runtime.m_Resolve = new RuntimeResolve(runtime, stopService);
             runtime.m_SharedCorridor = new SharedCorridorSupport(runtime.m_Resolve, runtime.IsBypassStationSetting);
             runtime.m_StationAnchorDiagnostics = new StationAnchorDiagnostics(runtime);
@@ -217,6 +219,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_DispatchScheduler = new DispatchScheduler(
                 runtime,
                 line => runtime.m_LineView.Managed(line, runtime.m_Features.Dispatch()),
+                line => runtime.m_LineServiceState.IsOperational(line),
                 line => runtime.m_LineView.Times(line),
                 line => runtime.m_LineView.Hold(line),
                 runtime.m_DispatchCache.Read,
@@ -301,6 +304,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_TrackModel,
                 runtime.m_LineProfile,
                 runtime.m_LineStructureInvalidator);
+            runtime.m_LineServiceChangeSourceSystem =
+                runtime.World.GetOrCreateSystemManaged<LineServiceChangeSourceSystem>();
+            runtime.m_LineServiceChangeSourceSystem.Bind(runtime.m_LineServiceState.Observe);
             runtime.m_RoutePlans = new RoutePlanQuery(
                 runtime.EntityManager,
                 runtime.m_TrackModel,
@@ -427,6 +433,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             runtime.m_LineSpawnRequestFrame = new NativeHashMap<Entity, uint>(64, Allocator.Persistent);
 
             runtime.m_CommandApplier = new DispatchCommandApplier(runtime);
+            runtime.m_VanillaServiceControl = new VanillaServiceControl(
+                runtime,
+                runtime.m_LineServiceState);
 
             LifecyclePort.Bind(new LifecyclePort(
                 new ManagedRequestPort(runtime),
@@ -466,6 +475,12 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public static void Clear(ModRuntimeHostSystem runtime)
         {
+            runtime.m_LineServiceChangeSourceSystem?.Unbind();
+            runtime.m_LineServiceState?.Reset();
+            runtime.m_VanillaServiceControl = null!;
+            runtime.m_ServiceWindowStore = null!;
+            runtime.m_LineServiceChangeSourceSystem = null!;
+            runtime.m_LineServiceState = null!;
             runtime.m_RoutePlans = null!;
             runtime.m_RuntimeStops = null!;
             runtime.m_RuntimeNames = null!;

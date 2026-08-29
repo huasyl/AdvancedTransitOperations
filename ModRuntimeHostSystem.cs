@@ -108,6 +108,10 @@ namespace RapidTransitMod
         internal CatalogCache m_WorkbenchCatalogCache = null!;
         internal CatalogDirty m_WorkbenchCatalogDirty = null!;
         internal LineAnchorCatalog m_LineAnchorCatalog = null!;
+        internal LineServiceState m_LineServiceState = null!;
+        internal VanillaServiceControl m_VanillaServiceControl = null!;
+        internal LineServiceChangeSourceSystem m_LineServiceChangeSourceSystem = null!;
+        internal ServiceWindowStore m_ServiceWindowStore = null!;
 
         internal IReadOnlyDictionary<string, AppliedLine> AppliedLines => m_WorkbenchBridge.AppliedLines;
 
@@ -210,6 +214,7 @@ namespace RapidTransitMod
         internal StopRuntime m_StopRuntime = null!;
         private readonly List<StopInput> m_StopInputs = new List<StopInput>();
         private readonly List<DispatchInput> m_DispatchInputs = new List<DispatchInput>();
+        private readonly List<LineServiceChange> m_LineServiceChanges = new List<LineServiceChange>();
         private readonly Dictionary<Entity, uint> m_LifecycleResolveLogFrames = new Dictionary<Entity, uint>();
         private Func<Entity, bool> m_HasOpenStopSession = null!;
         private Func<Entity, bool> m_HasInvalidatedRecovery = null!;
@@ -598,6 +603,7 @@ namespace RapidTransitMod
                 if (!m_VehicleRegistrar.IsStartupActivationFrame(simulationFrame))
                 {
                     m_VehicleCache.Ensure();
+                    m_ServiceWindowStore.Ensure();
                     m_VehicleRegistrar.TickStartupGate();
                     return;
                 }
@@ -619,6 +625,7 @@ namespace RapidTransitMod
             m_LapCache.Ensure();
             m_VehicleCache.Ensure();
             m_DispatchCache.Ensure();
+            m_ServiceWindowStore.Ensure();
             m_ObsBuffers.EnsureMonitor();
             m_ObsBuffers.EnsureMonitorAverages();
             if (IsStationDwellObservationPersistenceEnabled())
@@ -664,6 +671,7 @@ namespace RapidTransitMod
                 m_CommandApplier.ReconcileRetireDispatchLocksOnReady();
                 m_RuntimeFramePlan.DrainUiCommands();
                 ApplyUiCommands(commandBuffer, clockSnapshot);
+                ApplyLineServiceChanges(clockSnapshot);
             }
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Setup);
 
@@ -702,8 +710,6 @@ namespace RapidTransitMod
 
             railSourceFrame = m_RailEventSource.CollectedThisFrame(simulationFrame);
             m_LineStructureInvalidator.Drain();
-            if (!startupActivation)
-                DrainDisabledLineLateSpawnRetireQueue();
             bool fullMinuteSweep = nowMinute != m_LastSchedulerTickMinute;
             if (fullMinuteSweep)
                 m_SchedulerApply.MarkAllDirty();
@@ -849,6 +855,7 @@ namespace RapidTransitMod
                     m_SchedulerApply.ResolvedDirtyLines,
                     fullMinuteSweep);
             }
+            m_ServiceWindowStore.Flush();
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Scheduler);
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Retire);
             IReadOnlyList<FramePlanEntry> retireEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Retire);
@@ -1853,6 +1860,8 @@ namespace RapidTransitMod
             Entity line = m_Resolve.SelectedLine(command.Line, Entity.Null);
             if (line == Entity.Null || !EntityManager.Exists(line) || !m_LineView.Applied(line))
                 return;
+            if (!m_LineServiceState.IsOperational(line))
+                return;
 
             BufferLookup<RouteVehicle> routeVehicles = GetBufferLookup<RouteVehicle>(true);
             int actualCount = m_LineVehicles.Count(line, routeVehicles);
@@ -2809,44 +2818,16 @@ namespace RapidTransitMod
                 : EntityManager.GetComponentData<Game.Vehicles.PublicTransport>(vehicle);
         }
 
-        private void DrainDisabledLineLateSpawnRetireQueue()
+        private void ApplyLineServiceChanges(ClockSnapshot clockSnapshot)
         {
-            IReadOnlyList<Entity> queue = m_VehicleRegistrar.DisabledLineLateSpawnRetireQueue;
-            if (queue.Count == 0)
-                return;
-
-            try
+            m_LineServiceState.DrainChanges(m_LineServiceChanges);
+            for (int i = 0; i < m_LineServiceChanges.Count; i++)
             {
-                for (int i = 0; i < queue.Count; i++)
-                {
-                    Entity vehicle = queue[i];
-                    if (vehicle == Entity.Null || !EntityManager.Exists(vehicle))
-                        continue;
-                    if (EntityManager.HasComponent<RtRetireDispatchLock>(vehicle))
-                    {
-                        continue;
-                    }
-                    if (EntityManager.HasComponent<Deleted>(vehicle)
-                        || EntityManager.HasComponent<ParkedTrain>(vehicle))
-                    {
-                        continue;
-                    }
-                    if (!EntityManager.HasComponent<Game.Vehicles.PublicTransport>(vehicle)
-                        || !EntityManager.HasComponent<Target>(vehicle)
-                        || !EntityManager.HasComponent<Owner>(vehicle))
-                    {
-                        log.Info("[DisabledLineLateSpawnSkip] 车辆" + vehicle.Index
-                            + " 缺少回库前置组件，跳过误产车回库");
-                        continue;
-                    }
-
-                    m_CommandApplier.Retire(vehicle, "关闭线路误产车");
-                }
+                LineServiceChange change = m_LineServiceChanges[i];
+                m_VanillaServiceControl.Apply(change, clockSnapshot);
+                m_LineServiceState.MarkApplied(change.Line, change.Operational);
             }
-            finally
-            {
-                m_VehicleRegistrar.ClearDisabledLineLateSpawnRetireQueue();
-            }
+            m_LineServiceChanges.Clear();
         }
 
         protected override void OnGameLoaded(Context serializationContext)

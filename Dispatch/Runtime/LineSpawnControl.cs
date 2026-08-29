@@ -25,6 +25,26 @@ namespace RapidTransitMod
             PuppetMasterControl(nowMin);
         }
 
+        internal void SuspendLine(Entity line)
+        {
+            if (line == Entity.Null)
+                return;
+            m_Runtime.m_SpawningLines.Remove(line);
+            m_Runtime.m_LineSpawnRequestFrame.Remove(line);
+            m_Runtime.m_LastSpawnBlockedLogFrame.Remove(line);
+            m_Runtime.m_SpawnIntentTrace.RemoveLine(line);
+        }
+
+        internal void ResumeLine(Entity line)
+        {
+            if (line == Entity.Null || !EntityManager.Exists(line))
+                return;
+            BufferLookup<RouteVehicle> routeVehicles = m_Runtime.GetBufferLookup<RouteVehicle>(true);
+            BufferLookup<RouteModifier> modifiers = m_Runtime.GetBufferLookup<RouteModifier>(false);
+            BufferLookup<RouteWaypoint> waypoints = m_Runtime.GetBufferLookup<RouteWaypoint>(true);
+            ApplyPuppetMasterControlForLine(line, routeVehicles, modifiers, waypoints);
+        }
+
         public void ApplyCleanupTargetReduction(Dictionary<Entity, int> removedCountByLine)
         {
             if (removedCountByLine == null || removedCountByLine.Count == 0)
@@ -132,6 +152,8 @@ namespace RapidTransitMod
             if (!EntityManager.Exists(line)) return;
             if (!wpBuffers.TryGetBuffer(line, out DynamicBuffer<RouteWaypoint> wps) || wps.Length < 2) return;
             if (!m_Runtime.m_LineProfile.IsStable(line, wps)) return;
+            m_Runtime.m_LineServiceState.EnsureObserved(line);
+            if (!m_Runtime.m_LineServiceState.IsOperational(line)) return;
             if (!m_Runtime.m_LineView.Managed(line, m_Runtime.m_Features.Dispatch())) return;
             if (!EntityManager.HasComponent<PrefabRef>(line)) return;
             Entity prefab = EntityManager.GetComponentData<PrefabRef>(line).m_Prefab;
