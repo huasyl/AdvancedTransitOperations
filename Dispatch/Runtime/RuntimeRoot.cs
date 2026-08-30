@@ -420,7 +420,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                     waypoint = runtime.m_StopRuntime.TryGetSessionWaypoint(vehicle, out int value) ? value : -1;
                     return vehicle != Entity.Null;
                 },
-                LineEnabled = runtime.m_LineView.SignalPriorityManaged,
+                LineEnabled = line => runtime.m_LineServiceState.IsOperational(line)
+                    && runtime.m_LineView.SignalPriorityManaged(line),
                 LinePending = runtime.m_LineStructureInvalidator.IsLinePending,
                 Waypoint = (line, index) => line != Entity.Null
                     && runtime.EntityManager.HasBuffer<RouteWaypoint>(line)

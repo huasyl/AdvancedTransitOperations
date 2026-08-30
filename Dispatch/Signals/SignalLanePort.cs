@@ -6,7 +6,38 @@ using Unity.Entities;
 
 namespace RapidTransitMod.Dispatch.Signals
 {
-#if RT_SIGNAL_WAIT_MEASURE
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+    internal enum BusSignalBlockerKind : byte
+    {
+        None,
+        DirectSignal,
+        QueuedSignal,
+    }
+
+    internal readonly struct BusSignalBlocker
+    {
+        internal readonly bool Available;
+        internal readonly BusSignalBlockerKind Kind;
+        internal readonly Entity TerminalVehicle;
+        internal readonly Entity SignalPetitioner;
+        internal readonly byte ChainDepth;
+
+        internal BusSignalBlocker(
+            BusSignalBlockerKind kind,
+            Entity terminalVehicle,
+            Entity signalPetitioner,
+            byte chainDepth)
+        {
+            Available = true;
+            Kind = kind;
+            TerminalVehicle = terminalVehicle;
+            SignalPetitioner = signalPetitioner;
+            ChainDepth = chainDepth;
+        }
+    }
+#endif
+
+#if RT_SIGNAL_WAIT_MEASURE || RT_BUS_SIGNAL_WAIT_MEASURE
     internal enum SignalTraceEntityKind : byte
     {
         Null,
@@ -38,6 +69,7 @@ namespace RapidTransitMod.Dispatch.Signals
         internal SignalTraceEntityKind HighestPetitionerKind;
     }
 
+#if RT_SIGNAL_WAIT_MEASURE
     internal struct SignalTraceBlocker
     {
         internal Entity Entity;
@@ -45,6 +77,7 @@ namespace RapidTransitMod.Dispatch.Signals
         internal byte MaxSpeed;
         internal SignalTraceEntityKind Kind;
     }
+#endif
 #endif
 
     internal readonly struct SignalLaneFact
@@ -55,6 +88,7 @@ namespace RapidTransitMod.Dispatch.Signals
         internal readonly ushort CurrentGroupBit;
         internal readonly sbyte Priority;
         internal readonly Entity Petitioner;
+        internal readonly Entity Blocker;
         internal readonly LaneSignalType Signal;
         internal readonly uint UpdateFrame;
 
@@ -71,6 +105,7 @@ namespace RapidTransitMod.Dispatch.Signals
             CurrentGroupBit = currentGroupBit;
             Priority = signal.m_Priority;
             Petitioner = signal.m_Petitioner;
+            Blocker = signal.m_Blocker;
             Signal = signal.m_Signal;
             UpdateFrame = updateFrame;
         }
@@ -145,13 +180,113 @@ namespace RapidTransitMod.Dispatch.Signals
             if (!TryRead(lane, out before) || priority <= before.Priority)
                 return false;
             LaneSignal signal = m_Entities.GetComponentData<LaneSignal>(lane);
-            signal.m_Petitioner = vehicle;
+            signal.m_Petitioner = lane;
             signal.m_Priority = priority;
             m_Entities.SetComponentData(lane, signal);
             return true;
         }
 
-#if RT_SIGNAL_WAIT_MEASURE
+        internal bool HasBusTargetSignalBlocker(
+            Entity vehicle,
+            Entity targetLane,
+            Entity targetIntersection,
+            ushort targetGroup)
+        {
+            if (!TryReadControllerBlocker(
+                    vehicle,
+                    out Entity controller,
+                    out Blocker blocker)
+                || blocker.m_Type != BlockerType.Signal
+                || blocker.m_MaxSpeed >= 6
+                || !m_Entities.HasBuffer<CarNavigationLane>(controller))
+            {
+                return false;
+            }
+            DynamicBuffer<CarNavigationLane> lanes = m_Entities.GetBuffer<
+                CarNavigationLane>(controller, true);
+            return lanes.Length > 0
+                && lanes[0].m_Lane == targetLane
+                && TryRead(targetLane, out SignalLaneFact signal)
+                && signal.Intersection == targetIntersection
+                && signal.GroupMask == targetGroup
+                && signal.Signal != LaneSignalType.Go;
+        }
+
+        private bool TryReadControllerBlocker(
+            Entity entity,
+            out Entity controller,
+            out Blocker blocker)
+        {
+            controller = Entity.Null;
+            blocker = default;
+            if (entity == Entity.Null || !m_Entities.Exists(entity))
+                return false;
+            if (m_Entities.HasComponent<Controller>(entity))
+            {
+                entity = m_Entities.GetComponentData<Controller>(entity)
+                    .m_Controller;
+            }
+            if (entity == Entity.Null
+                || !m_Entities.Exists(entity)
+                || !m_Entities.HasComponent<Blocker>(entity))
+            {
+                return false;
+            }
+            controller = entity;
+            blocker = m_Entities.GetComponentData<Blocker>(entity);
+            return true;
+        }
+
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+        internal BusSignalBlocker ReadBusBlocker(Entity vehicle)
+        {
+            if (!TryReadControllerBlocker(vehicle, out Entity terminalVehicle, out Blocker blocker))
+                return default;
+            if (blocker.m_MaxSpeed >= 6)
+                return new BusSignalBlocker(BusSignalBlockerKind.None, terminalVehicle, blocker.m_Blocker, 0);
+            if (blocker.m_Type == BlockerType.Signal)
+                return new BusSignalBlocker(BusSignalBlockerKind.DirectSignal, terminalVehicle, blocker.m_Blocker, 0);
+            if (blocker.m_Type != BlockerType.Continuing
+                || blocker.m_Blocker == Entity.Null)
+            {
+                return new BusSignalBlocker(BusSignalBlockerKind.None, terminalVehicle, blocker.m_Blocker, 0);
+            }
+
+            Entity next = blocker.m_Blocker;
+            for (byte depth = 1; depth < 100; depth++)
+            {
+                if (!TryReadControllerBlocker(next, out terminalVehicle, out blocker))
+                    return default;
+                if (blocker.m_MaxSpeed >= 6)
+                    return new BusSignalBlocker(BusSignalBlockerKind.None, terminalVehicle, blocker.m_Blocker, depth);
+                if (blocker.m_Type == BlockerType.Signal)
+                    return new BusSignalBlocker(BusSignalBlockerKind.QueuedSignal, terminalVehicle, blocker.m_Blocker, depth);
+                if (blocker.m_Type != BlockerType.Continuing
+                    || blocker.m_Blocker == Entity.Null)
+                {
+                    return new BusSignalBlocker(BusSignalBlockerKind.None, terminalVehicle, blocker.m_Blocker, depth);
+                }
+                next = blocker.m_Blocker;
+            }
+
+            return default;
+        }
+
+        internal bool TryReadBusTerminalSignal(Entity terminalVehicle, out SignalLaneFact fact)
+        {
+            fact = default;
+            if (terminalVehicle == Entity.Null || !m_Entities.Exists(terminalVehicle)
+                || !m_Entities.HasBuffer<CarNavigationLane>(terminalVehicle))
+            {
+                return false;
+            }
+            DynamicBuffer<CarNavigationLane> navigation = m_Entities.GetBuffer<CarNavigationLane>(terminalVehicle, true);
+            return navigation.Length > 0 && TryRead(navigation[0].m_Lane, out fact);
+        }
+
+#endif
+
+#if RT_SIGNAL_WAIT_MEASURE || RT_BUS_SIGNAL_WAIT_MEASURE
         internal bool TryReadTrace(Entity lane, out SignalTraceSnapshot snapshot)
         {
             snapshot = default;
@@ -209,6 +344,7 @@ namespace RapidTransitMod.Dispatch.Signals
             return true;
         }
 
+#if RT_SIGNAL_WAIT_MEASURE
         internal bool TryReadTraceBlocker(Entity vehicle, out SignalTraceBlocker blocker)
         {
             blocker = default;
@@ -226,6 +362,7 @@ namespace RapidTransitMod.Dispatch.Signals
             blocker.Kind = Classify(source.m_Blocker);
             return true;
         }
+#endif
 
         private SignalTraceEntityKind Classify(Entity entity)
         {

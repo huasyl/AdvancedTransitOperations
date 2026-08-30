@@ -18,16 +18,49 @@ namespace RapidTransitMod.Dispatch.Signals
         private const uint TramMaxPriorityFrames = 1800u;
         private const uint BusMaxPriorityFrames = 3600u;
         private const uint GroupCooldownFrames = 900u;
+        private const uint BusProgressGuardFrames = 320u;
+        private const float BusProgressGuardMeters = 20f;
         internal const int MaxTargetsPerVehicle = 3;
         private const byte NavigationUnknown = 0;
         private const byte NavigationAbsent = 1;
         private const byte NavigationForward = 2;
 
+        private static bool IsTrafficLightFrame(
+            uint frame,
+            uint updateFrame)
+        {
+            return (frame & 3u) == 1u
+                && ((frame >> 2) & 15u) == updateFrame;
+        }
+
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+        private const uint BusQueueTraceFrames = 512u;
+        private const int BusCycleIntersectionIndex = 136712;
+        private const int BusCycleHistorySize = 8;
+        private enum BusMeasureDecision : byte { None, Position, Ineligible, Signal, Identity, Cooldown, Lost, Rejected, Submitted }
+        private struct BusCycleSample
+        {
+            internal uint CycleFrame, ObserveFrame, CarriedWriteFrame;
+            internal float Distance; internal BusMeasureDecision Decision;
+            internal Entity Related, BeforePetitioner; internal sbyte BeforePriority;
+            internal bool Open, WaitingPost, Eligible, GuardSuppressed, Wrote, PreOwn, PostOwn, PostAvailable;
+            internal SignalTraceSnapshot Pre, Post; internal BusSignalBlocker Blocker;
+            internal SignalLaneFact Terminal;
+        }
+        private sealed class BusCycleState
+        {
+            internal Entity Vehicle, Line, Lane, Intersection, LastTerminal; internal ushort Group;
+            internal uint UpdateFrame, LastWriteFrame, Cycles, Writes, StillPresent, PhaseCovered, Go, GreenQueued, GuardQueued, PhaseMissed, NonRealWrites, TerminalChanges;
+            internal byte MaxChainDepth; internal bool Locked, Armed, HasTerminal;
+            internal BusCycleSample Sample; internal readonly BusCycleSample[] History = new BusCycleSample[BusCycleHistorySize];
+            internal int HistoryHead, HistoryCount;
+        }
+#endif
+
 #if RT_SIGNAL_WAIT_MEASURE
         private const int TraceSlots = 17;
         private const uint TraceWaitFrames = 640u;
         private const byte TracePosition = 1;
-        private const byte TracePending = 2;
         private const byte TraceLong = 3;
 
         private enum TraceResult : byte
@@ -39,7 +72,6 @@ namespace RapidTransitMod.Dispatch.Signals
             Identity,
             Cooldown,
             Lost,
-            Pending,
             Rejected,
             Submitted,
             Green,
@@ -100,6 +132,23 @@ namespace RapidTransitMod.Dispatch.Signals
             internal uint FirstGreenFrame;
             internal bool FirstGreenObserved;
             internal bool SelectedCurrentFrame;
+            internal uint ProgressAnchorFrame, ProgressSuppressedFrame;
+            internal float ProgressAnchorDistance, ProgressSuppressedDistance;
+            internal bool ProgressSuppressed;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            internal bool BusMeasureActive, BusMeasureApply;
+            internal uint BusMeasureStartFrame, BusMeasureLastFrame;
+            internal uint BusMeasureObservedFrames, BusMeasureDirectFrames,
+                BusMeasureQueuedFrames;
+            internal BusMeasureDecision BusMeasureLastDecision;
+            internal Entity BusMeasureDecisionRelated;
+            internal uint BusMeasureDecisionFrame, BusMeasureDecisionValue,
+                BusMeasureDecisionMask;
+            internal bool BusMeasureTraceLogged;
+            internal BusSignalBlocker BusMeasureLastQueuedBlocker;
+            internal uint BusMeasureTerminalChangeCount;
+            internal bool GuardAwaitResubmit, GuardAwaitGreen;
+#endif
 
             internal void Reset()
             {
@@ -119,6 +168,16 @@ namespace RapidTransitMod.Dispatch.Signals
                 FirstGreenFrame = 0;
                 FirstGreenObserved = false;
                 SelectedCurrentFrame = false;
+                ProgressAnchorFrame = uint.MaxValue;
+                ProgressAnchorDistance = float.NaN;
+                ProgressSuppressed = false;
+                ProgressSuppressedFrame = 0;
+                ProgressSuppressedDistance = float.NaN;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                TransitSignalRuntime.ResetBusMeasure(this);
+                GuardAwaitResubmit = false;
+                GuardAwaitGreen = false;
+#endif
             }
         }
 
@@ -183,15 +242,23 @@ namespace RapidTransitMod.Dispatch.Signals
             internal ushort SelectedGroup;
             internal uint SelectedMaxPriorityFrames;
             internal readonly List<GroupCooldown> Cooldowns = new List<GroupCooldown>(4);
-            internal Entity PendingLane;
-            internal Entity PendingVehicle;
-            internal ushort PendingGroup;
-            internal sbyte PendingPriority;
             internal ushort GreenGroups;
             internal int CandidateCount;
             internal ushort CandidateGroups;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            internal ushort GuardWatchGroup;
+#endif
         }
 
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+        private sealed class GuardAudit
+        {
+            internal uint RoadRetryQueued, RoadRetryResolved, RoadRetryCancelled;
+            internal uint CandidateTruncatedFrames, CandidateTruncatedTargets;
+            internal uint RefreshDedupHits, DropFallbackHits;
+            internal bool DropFallbackLogged;
+        }
+#endif
         private readonly struct GroupCooldown
         {
             internal readonly ushort GroupMask;
@@ -215,6 +282,10 @@ namespace RapidTransitMod.Dispatch.Signals
         private readonly List<Entity> m_Entities = new List<Entity>(512);
         private readonly List<Entity> m_DueVehicles = new List<Entity>(128);
         private readonly HashSet<Entity> m_RoadRetries = new HashSet<Entity>(64);
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+        private GuardAudit m_GuardAudit = new GuardAudit();
+        private readonly BusCycleState m_BusCycle = new BusCycleState();
+#endif
 #if RT_SIGNAL_WAIT_MEASURE
         private readonly TraceState m_Trace = new TraceState();
 #endif
@@ -229,6 +300,10 @@ namespace RapidTransitMod.Dispatch.Signals
         internal void Tick(uint frame)
         {
             m_CurrentFrame = frame;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            PostBusCycle(frame);
+            OpenBusCycle(frame);
+#endif
 #if RT_SIGNAL_WAIT_MEASURE
             TracePost(frame);
             TraceOpen(frame);
@@ -239,6 +314,9 @@ namespace RapidTransitMod.Dispatch.Signals
             RetryRoadVehicles(frame);
             ObserveGreen(frame);
             ArbitrateDue(frame);
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            FinishBusCycle(frame);
+#endif
 #if RT_SIGNAL_WAIT_MEASURE
             TraceFinish();
 #endif
@@ -265,7 +343,7 @@ namespace RapidTransitMod.Dispatch.Signals
                 EndAllTargets(state, reason, m_CurrentFrame);
                 m_States.Remove(vehicle);
             }
-            m_RoadRetries.Remove(vehicle);
+            CancelRoadRetry(vehicle);
         }
 
         internal void Clear(string reason)
@@ -290,6 +368,10 @@ namespace RapidTransitMod.Dispatch.Signals
             m_Winners.Clear();
             m_DueVehicles.Clear();
             m_RoadRetries.Clear();
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            m_GuardAudit = new GuardAudit();
+            ResetBusCycle();
+#endif
             m_Entities.Clear();
         }
 
@@ -327,13 +409,25 @@ namespace RapidTransitMod.Dispatch.Signals
                             out SignalLaneFact signal)
                         || signal.Intersection != target.Intersection
                         || signal.GroupMask != target.GroupMask
-                        || signal.Signal != LaneSignalType.Go
-                        || target.FirstGreenObserved)
+                        || signal.Signal != LaneSignalType.Go)
                     {
                         continue;
                     }
-                    target.FirstGreenFrame = frame;
-                    target.FirstGreenObserved = true;
+                    if (!target.FirstGreenObserved)
+                    {
+                        target.FirstGreenFrame = frame;
+                        target.FirstGreenObserved = true;
+                    }
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                    if (target.GuardAwaitGreen)
+                    {
+                        target.GuardAwaitGreen = false;
+                        LogProgressGuard(vehicleState, target,
+                            "green-after-resubmit",
+                            " group=" + target.GroupMask
+                            + " frame=" + frame);
+                    }
+#endif
                 }
 
                 if (HasDueTarget(vehicleState, frame))
@@ -367,18 +461,34 @@ namespace RapidTransitMod.Dispatch.Signals
                     {
                         continue;
                     }
+                    bool shouldReadSignal = intersectionState.PriorityGroup != 0
+                        || intersectionState.SelectedGroup != 0;
+                    SignalLaneFact signal = default;
+                    bool targetGreen = shouldReadSignal
+                        && m_Signals.TryRead(
+                            target.SignalLane,
+                            out signal)
+                        && signal.Intersection == target.Intersection
+                        && signal.GroupMask == target.GroupMask
+                        && signal.Signal == LaneSignalType.Go
+                        && signal.CurrentGroupBit != 0
+                        && (signal.CurrentGroupBit & target.GroupMask) != 0;
+                    bool actualPriorityGreen = targetGreen
+                        && intersectionState.PriorityGroup != 0
+                        && (signal.CurrentGroupBit
+                            & intersectionState.PriorityGroup) != 0;
+                    if (ShouldSuppressBusTarget(
+                            vehicleState,
+                            target,
+                            intersectionState,
+                            actualPriorityGreen,
+                            frame))
+                    {
+                        continue;
+                    }
                     intersectionState.CandidateCount++;
                     intersectionState.CandidateGroups |= target.GroupMask;
-                    if ((intersectionState.PriorityGroup == 0
-                            && intersectionState.SelectedGroup == 0)
-                        || !m_Signals.TryRead(
-                            target.SignalLane,
-                            out SignalLaneFact signal)
-                        || signal.Intersection != target.Intersection
-                        || signal.GroupMask != target.GroupMask
-                        || signal.Signal != LaneSignalType.Go
-                        || signal.CurrentGroupBit == 0
-                        || (signal.CurrentGroupBit & target.GroupMask) == 0)
+                    if (!shouldReadSignal || !targetGreen)
                     {
                         continue;
                     }
@@ -446,8 +556,7 @@ namespace RapidTransitMod.Dispatch.Signals
                 if (state.CandidateCount == 0
                     && state.PriorityGroup == 0
                     && state.SelectedGroup == 0
-                    && state.Cooldowns.Count == 0
-                    && !PendingActive(state, frame))
+                    && state.Cooldowns.Count == 0)
                 {
                     m_Entities.Add(intersection);
                 }
@@ -456,6 +565,72 @@ namespace RapidTransitMod.Dispatch.Signals
                 m_Intersections.Remove(m_Entities[i]);
         }
 
+        private bool ShouldSuppressBusTarget(
+            VehicleSignalState state,
+            VehicleTarget target,
+            IntersectionState intersectionState,
+            bool actualPriorityGreen,
+            uint frame)
+        {
+            if (state.Mode != TransitMode.Bus)
+                return false;
+            if (target.ProgressSuppressed)
+                return true;
+            if (!actualPriorityGreen
+                || target.ProgressAnchorFrame == uint.MaxValue
+                || !math.isfinite(target.ProgressAnchorDistance))
+            {
+                return false;
+            }
+            ushort actualGroup = intersectionState.PriorityGroup;
+            if (target.ProgressAnchorFrame
+                <= intersectionState.PriorityStartFrame)
+            {
+                target.ProgressAnchorFrame = frame;
+                target.ProgressAnchorDistance = target.DistanceMeters;
+                return false;
+            }
+            uint elapsedFrames = frame - target.ProgressAnchorFrame;
+            float progress = target.ProgressAnchorDistance
+                - target.DistanceMeters;
+            if (elapsedFrames < BusProgressGuardFrames
+                || progress >= BusProgressGuardMeters)
+            {
+                return false;
+            }
+            target.ProgressSuppressed = true;
+            target.ProgressSuppressedFrame = frame;
+            target.ProgressSuppressedDistance = target.DistanceMeters;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            intersectionState.GuardWatchGroup = actualGroup;
+            LogProgressGuard(state, target, "guard-suppressed",
+                " frame=" + frame
+                + " actualGroup=" + actualGroup
+                + " priorityStartFrame=" + intersectionState.PriorityStartFrame
+                + " anchorFrame=" + target.ProgressAnchorFrame
+                + " anchorDistance=" + target.ProgressAnchorDistance
+                + " currentDistance=" + target.DistanceMeters
+                + " elapsedFrames=" + elapsedFrames
+                + " progressMeters=" + progress);
+#endif
+            return true;
+        }
+
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+        private void LogProgressGuard(
+            VehicleSignalState state,
+            VehicleTarget target,
+            string stage,
+            string details)
+        {
+            m_Port.Log("[BusSignalProgressGuard] stage=" + stage
+                + " vehicle=" + target.Vehicle
+                + " line=" + state.Line
+                + " lane=" + target.SignalLane
+                + " intersection=" + target.Intersection
+                + details);
+        }
+#endif
         private void EndPriorityWindow(
             Entity intersection,
             IntersectionState state,
@@ -469,6 +644,17 @@ namespace RapidTransitMod.Dispatch.Signals
             {
                 AddCooldown(state, endedGroup, frame);
             }
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            if (state.GuardWatchGroup == endedGroup)
+            {
+                m_Port.Log("[BusSignalProgressGuard] stage=priority-ended"
+                    + " intersection=" + intersection
+                    + " group=" + endedGroup
+                    + " frame=" + frame
+                    + " reason=" + (reason ?? string.Empty));
+                state.GuardWatchGroup = 0;
+            }
+#endif
             state.PriorityGroup = 0;
             state.PriorityStartFrame = 0;
             state.MaxPriorityFrames = 0;
@@ -601,7 +787,7 @@ namespace RapidTransitMod.Dispatch.Signals
                         out VehicleSignalState state)
                     || state.Mode != TransitMode.Bus)
                 {
-                    m_RoadRetries.Remove(vehicle);
+                    CancelRoadRetry(vehicle);
                     continue;
                 }
                 if (state.RefreshFrame != frame)
@@ -610,12 +796,40 @@ namespace RapidTransitMod.Dispatch.Signals
             m_Entities.Clear();
         }
 
+        private void QueueRoadRetry(Entity vehicle)
+        {
+            if (!m_RoadRetries.Add(vehicle))
+                return;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            m_GuardAudit.RoadRetryQueued++;
+#endif
+        }
+        private void ResolveRoadRetry(Entity vehicle)
+        {
+            if (!m_RoadRetries.Remove(vehicle))
+                return;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            m_GuardAudit.RoadRetryResolved++;
+#endif
+        }
+        private void CancelRoadRetry(Entity vehicle)
+        {
+            if (!m_RoadRetries.Remove(vehicle))
+                return;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            m_GuardAudit.RoadRetryCancelled++;
+#endif
+        }
         private string IneligibleReason(VehicleSignalState state)
         {
             if (m_Port.LinePending(state.Line))
                 return "line-structure-pending";
             if (!m_Port.LineEnabled(state.Line))
             {
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                if (state.Mode == TransitMode.Bus)
+                    return null;
+#endif
                 return "qualification-ended";
             }
             return null;
@@ -680,10 +894,16 @@ namespace RapidTransitMod.Dispatch.Signals
                 return false;
             }
 
-            if (!m_Port.LineEnabled(line)
-                || (checkLinePending && m_Port.LinePending(line)))
+            if (checkLinePending && m_Port.LinePending(line))
             {
                 return false;
+            }
+            if (!m_Port.LineEnabled(line))
+            {
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                if (mode != TransitMode.Bus)
+#endif
+                    return false;
             }
             if (!m_Port.TryStop(
                     vehicle,
@@ -696,8 +916,16 @@ namespace RapidTransitMod.Dispatch.Signals
             return !hasSession || pending;
         }
 
-        private static bool CanApplyPriority(VehicleSignalState state)
+        private bool CanApplyPriority(VehicleSignalState state)
         {
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            if (state != null
+                && state.Mode == TransitMode.Bus
+                && !m_Port.LineEnabled(state.Line))
+            {
+                return false;
+            }
+#endif
             return true;
         }
 
@@ -707,11 +935,16 @@ namespace RapidTransitMod.Dispatch.Signals
             bool requireTargetAdvance)
         {
             if (state.RefreshFrame == frame)
+            {
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                m_GuardAudit.RefreshDedupHits++;
+#endif
                 return;
+            }
 
             state.RefreshFrame = frame;
             if (state.Mode != TransitMode.Bus)
-                m_RoadRetries.Remove(state.Vehicle);
+                CancelRoadRetry(state.Vehicle);
             for (int i = 0; i < state.TargetCount; i++)
             {
                 state.Targets[i].PositionCurrentFrame = uint.MaxValue;
@@ -729,21 +962,29 @@ namespace RapidTransitMod.Dispatch.Signals
             uint frame,
             bool requireTargetAdvance)
         {
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            if ((frame & 15u) == 1u)
+                SettleBusMeasureMode(state, frame);
+#endif
             RoadEventSource.RoadNavigationResult result =
                 m_Port.RoadNavigation(state.Vehicle, state.RoadSlices);
             if (result.Status == RoadEventSource.RoadNavigationStatus.Invalid)
             {
-                m_RoadRetries.Remove(state.Vehicle);
+                CancelRoadRetry(state.Vehicle);
                 EndAllTargets(state, "navigation-invalid", frame);
                 return;
             }
             if (result.Status == RoadEventSource.RoadNavigationStatus.NotGenerated)
             {
-                m_RoadRetries.Add(state.Vehicle);
+                QueueRoadRetry(state.Vehicle);
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                if ((frame & 15u) == 1u)
+                    PauseBusMeasures(state);
+#endif
                 return;
             }
 
-            m_RoadRetries.Remove(state.Vehicle);
+            ResolveRoadRetry(state.Vehicle);
 
             RoadEventSource.RoadNavigationRead read = result.Read;
             if (requireTargetAdvance)
@@ -755,6 +996,10 @@ namespace RapidTransitMod.Dispatch.Signals
                         out int pendingWaypoint)
                     || !pending)
                 {
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                    if ((frame & 15u) == 1u)
+                        PauseBusMeasures(state);
+#endif
                     return;
                 }
                 Entity sessionWaypoint = m_Port.Waypoint(
@@ -767,13 +1012,17 @@ namespace RapidTransitMod.Dispatch.Signals
                 }
                 if (sessionWaypoint == read.TargetWaypoint)
                 {
-                    m_RoadRetries.Add(state.Vehicle);
+                    QueueRoadRetry(state.Vehicle);
                     for (int i = 0; i < state.TargetCount; i++)
                     {
                         state.Targets[i].PositionCurrentFrame =
                             uint.MaxValue;
                         state.Targets[i].DistanceMeters = float.NaN;
                     }
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                    if ((frame & 15u) == 1u)
+                        PauseBusMeasures(state);
+#endif
                     return;
                 }
             }
@@ -859,6 +1108,70 @@ namespace RapidTransitMod.Dispatch.Signals
                 frame,
                 candidateTruncated,
                 "navigation-target-ended");
+            ObserveRoadProgress(state, frame);
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            if ((frame & 15u) == 1u)
+                ObserveBusMeasure(state, frame);
+#endif
+        }
+
+        private void ObserveRoadProgress(
+            VehicleSignalState state,
+            uint frame)
+        {
+            for (int i = 0; i < state.TargetCount; i++)
+            {
+                VehicleTarget target = state.Targets[i];
+                if (target.PositionCurrentFrame != frame
+                    || !math.isfinite(target.DistanceMeters))
+                {
+                    continue;
+                }
+                if (target.ProgressAnchorFrame == uint.MaxValue
+                    || !math.isfinite(target.ProgressAnchorDistance))
+                {
+                    target.ProgressAnchorFrame = frame;
+                    target.ProgressAnchorDistance = target.DistanceMeters;
+                    continue;
+                }
+                if (target.ProgressSuppressed)
+                {
+                    float advanced = target.ProgressSuppressedDistance
+                        - target.DistanceMeters;
+                    bool directTargetSignal = m_Signals.HasBusTargetSignalBlocker(
+                            state.Vehicle,
+                            target.SignalLane,
+                            target.Intersection,
+                            target.GroupMask);
+                    if (advanced < BusProgressGuardMeters
+                        && !directTargetSignal)
+                        continue;
+                    target.ProgressSuppressed = false;
+                    target.ProgressAnchorFrame = frame;
+                    target.ProgressAnchorDistance = target.DistanceMeters;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                    target.GuardAwaitResubmit = true;
+                    LogProgressGuard(state, target, "guard-rearmed",
+                        " suppressedFrame=" + target.ProgressSuppressedFrame
+                        + " suppressedDistance=" + target.ProgressSuppressedDistance
+                        + " frame=" + frame
+                        + " currentDistance=" + target.DistanceMeters
+                        + " advancedMeters=" + advanced
+                        + " reason=" + (directTargetSignal
+                            ? "direct-target-signal"
+                            : "progress-20m"));
+#endif
+                    continue;
+                }
+                float progress = target.ProgressAnchorDistance
+                    - target.DistanceMeters;
+                if (progress >= BusProgressGuardMeters
+                    || target.DistanceMeters > target.ProgressAnchorDistance)
+                {
+                    target.ProgressAnchorFrame = frame;
+                    target.ProgressAnchorDistance = target.DistanceMeters;
+                }
+            }
         }
 
         private int CollectRoadCandidates(
@@ -897,6 +1210,475 @@ namespace RapidTransitMod.Dispatch.Signals
             }
             return count;
         }
+
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+        private void SettleBusMeasureMode(
+            VehicleSignalState state,
+            uint frame)
+        {
+            bool apply = m_Port.LineEnabled(state.Line);
+            for (int i = 0; i < state.TargetCount; i++)
+            {
+                VehicleTarget target = state.Targets[i];
+                if (target.BusMeasureActive
+                    && target.BusMeasureApply != apply)
+                {
+                    EndBusMeasure(
+                        state,
+                        target,
+                        "signal-measure-mode-changed",
+                        frame);
+                }
+            }
+        }
+
+        private static void PauseBusMeasures(
+            VehicleSignalState state)
+        {
+            for (int i = 0; i < state.TargetCount; i++)
+            {
+                VehicleTarget target = state.Targets[i];
+                if (target.BusMeasureActive)
+                    target.BusMeasureLastFrame = uint.MaxValue;
+            }
+        }
+
+        private void ObserveBusMeasure(
+            VehicleSignalState state,
+            uint frame)
+        {
+            for (int i = 1; i < state.TargetCount; i++)
+            {
+                EndBusMeasure(
+                    state,
+                    state.Targets[i],
+                    "target-not-nearest",
+                    frame);
+            }
+            if (state.Mode != TransitMode.Bus || state.TargetCount == 0)
+                return;
+
+            VehicleTarget target = state.Targets[0];
+            if (!m_Port.TryVehicle(
+                    state.Vehicle,
+                    out _,
+                    out TransitMode mode,
+                    out VehicleState vehicleState)
+                || mode != TransitMode.Bus
+                || vehicleState != VehicleState.Running)
+            {
+                EndBusMeasure(
+                    state,
+                    target,
+                    "qualification-ended",
+                    frame);
+                return;
+            }
+            if (!m_Port.TryStop(
+                    state.Vehicle,
+                    out bool hasSession,
+                    out _,
+                    out _)
+                || hasSession)
+            {
+                EndBusMeasure(
+                    state,
+                    target,
+                    hasSession
+                        ? "stop-opened"
+                        : "qualification-ended",
+                    frame);
+                return;
+            }
+            if (target.PositionCurrentFrame != frame
+                || !math.isfinite(target.DistanceMeters)
+                || target.DistanceMeters <= 0f
+                || target.DistanceMeters > LookAheadMeters)
+            {
+                if (target.BusMeasureActive)
+                    target.BusMeasureLastFrame = uint.MaxValue;
+                return;
+            }
+
+            bool apply = m_Port.LineEnabled(state.Line);
+            if (target.BusMeasureActive
+                && target.BusMeasureApply != apply)
+            {
+                EndBusMeasure(
+                    state,
+                    target,
+                    "signal-measure-mode-changed",
+                    frame);
+            }
+            if (!target.BusMeasureActive)
+            {
+                BeginBusMeasure(target, apply, frame);
+                LockBusCycle(state, target, apply);
+                return;
+            }
+
+            LockBusCycle(state, target, apply);
+            if (target.BusMeasureLastFrame == uint.MaxValue)
+            {
+                target.BusMeasureLastFrame = frame;
+                return;
+            }
+
+            uint observedFrames = frame - target.BusMeasureLastFrame;
+            target.BusMeasureLastFrame = frame;
+            target.BusMeasureObservedFrames += observedFrames;
+            BusSignalBlocker blocker = m_Signals.ReadBusBlocker(
+                state.Vehicle);
+            RememberBusBlocker(target, blocker);
+            if (blocker.Kind == BusSignalBlockerKind.DirectSignal)
+            {
+                target.BusMeasureDirectFrames += observedFrames;
+            }
+            else if (blocker.Kind == BusSignalBlockerKind.QueuedSignal)
+            {
+                target.BusMeasureQueuedFrames += observedFrames;
+                if (!target.BusMeasureTraceLogged
+                    && target.BusMeasureQueuedFrames >= BusQueueTraceFrames)
+                {
+                    target.BusMeasureTraceLogged = true;
+                    LogBusQueueTrace(
+                        state,
+                        target,
+                        "threshold",
+                        null,
+                        frame,
+                        blocker);
+                    ArmBusCycle(target);
+                }
+            }
+        }
+
+        private static void BeginBusMeasure(
+            VehicleTarget target,
+            bool apply,
+            uint frame)
+        {
+            ResetBusMeasure(target);
+            target.BusMeasureActive = true;
+            target.BusMeasureApply = apply;
+            target.BusMeasureStartFrame = frame;
+            target.BusMeasureLastFrame = frame;
+        }
+
+        private void RecordBusMeasureDecision(
+            VehicleTarget target,
+            BusMeasureDecision decision,
+            uint value = 0,
+            Entity related = default)
+        {
+            if (!target.BusMeasureActive)
+                return;
+            target.BusMeasureLastDecision = decision;
+            target.BusMeasureDecisionFrame = m_CurrentFrame;
+            target.BusMeasureDecisionRelated = related;
+            target.BusMeasureDecisionValue = value;
+            target.BusMeasureDecisionMask |= 1u << (int)decision;
+            RecordBusCycleDecision(target, decision, related);
+        }
+
+        private static bool IsBusCycleTarget(BusCycleState cycle, VehicleTarget target) =>
+            cycle.Locked && target != null
+            && target.Vehicle == cycle.Vehicle && target.SignalLane == cycle.Lane
+            && target.Intersection == cycle.Intersection && target.GroupMask == cycle.Group;
+        private static bool IsOwnBusRequest(SignalTraceSnapshot trace, Entity lane) =>
+            trace.TargetPriority == BusPriority && trace.TargetPetitioner == lane;
+        private static bool TraceCoversGroup(SignalTraceSnapshot trace, ushort group)
+        {
+            int current = trace.CurrentSignalGroup, next = trace.NextSignalGroup;
+            ushort phase = (ushort)((current > 0 && current <= 16 ? 1 << current - 1 : 0) | (next > 0 && next <= 16 ? 1 << next - 1 : 0));
+            return (phase & group) != 0;
+        }
+        private void LockBusCycle(VehicleSignalState state, VehicleTarget target, bool apply)
+        {
+            if (m_BusCycle.Locked || !apply || state.Mode != TransitMode.Bus
+                || target.Intersection.Index != BusCycleIntersectionIndex || target.Intersection.Version != 1)
+                return;
+            m_BusCycle.Locked = true; m_BusCycle.Vehicle = target.Vehicle;
+            m_BusCycle.Line = state.Line; m_BusCycle.Lane = target.SignalLane;
+            m_BusCycle.Intersection = target.Intersection; m_BusCycle.Group = target.GroupMask;
+            m_BusCycle.UpdateFrame = target.UpdateFrame;
+        }
+        private void OpenBusCycle(uint frame)
+        {
+            if (!m_BusCycle.Locked || m_BusCycle.Sample.Open
+                || m_BusCycle.Sample.WaitingPost || !IsTrafficLightFrame(frame, m_BusCycle.UpdateFrame))
+                return;
+            m_BusCycle.Sample = new BusCycleSample { Open = true, CycleFrame = frame, Distance = float.NaN, CarriedWriteFrame = m_BusCycle.LastWriteFrame };
+            ref BusCycleSample sample = ref m_BusCycle.Sample;
+            if (!m_Signals.TryReadTrace(m_BusCycle.Lane, out sample.Pre)
+                || sample.Pre.Intersection != m_BusCycle.Intersection || sample.Pre.TargetGroupMask != m_BusCycle.Group)
+                return;
+            sample.PreOwn = IsOwnBusRequest(sample.Pre, m_BusCycle.Lane);
+            sample.BeforePriority = sample.Pre.TargetPriority; sample.BeforePetitioner = sample.Pre.TargetPetitioner;
+        }
+        private void RecordBusCycleDecision(VehicleTarget target, BusMeasureDecision decision, Entity related)
+        {
+            if (!IsBusCycleTarget(m_BusCycle, target) || !m_BusCycle.Sample.Open)
+                return;
+            m_BusCycle.Sample.Decision = decision; m_BusCycle.Sample.Related = related;
+            m_BusCycle.Sample.Distance = target.DistanceMeters;
+        }
+        private void RecordBusCycleWrite(VehicleTarget target, SignalLaneFact before, uint frame)
+        {
+            if (!IsBusCycleTarget(m_BusCycle, target)) return;
+            m_BusCycle.LastWriteFrame = frame;
+            if (!IsTrafficLightFrame(frame, m_BusCycle.UpdateFrame)) m_BusCycle.NonRealWrites++;
+            if (!m_BusCycle.Sample.Open) return;
+            m_BusCycle.Sample.Wrote = true; m_BusCycle.Sample.BeforePriority = before.Priority;
+            m_BusCycle.Sample.BeforePetitioner = before.Petitioner;
+        }
+        private void FinishBusCycle(uint frame)
+        {
+            if (!m_BusCycle.Sample.Open || m_BusCycle.Sample.CycleFrame != frame) return;
+            ref BusCycleSample sample = ref m_BusCycle.Sample;
+            if (m_States.TryGetValue(m_BusCycle.Vehicle, out VehicleSignalState state))
+                for (int i = 0; i < state.TargetCount; i++) {
+                    VehicleTarget target = state.Targets[i]; if (!IsBusCycleTarget(m_BusCycle, target)) continue;
+                    sample.Eligible = m_Port.LineEnabled(m_BusCycle.Line) && target.PositionCurrentFrame == frame && math.isfinite(target.DistanceMeters) && target.DistanceMeters > 0f && target.DistanceMeters <= LookAheadMeters;
+                    sample.GuardSuppressed = target.ProgressSuppressed; sample.Distance = target.DistanceMeters; break;
+                }
+            sample.Open = false; sample.WaitingPost = true;
+        }
+        private void PostBusCycle(uint frame)
+        {
+            if (!m_BusCycle.Sample.WaitingPost || frame != m_BusCycle.Sample.CycleFrame + 1u) return;
+            ref BusCycleSample sample = ref m_BusCycle.Sample; sample.ObserveFrame = frame;
+            sample.PostAvailable = m_Signals.TryReadTrace(m_BusCycle.Lane, out sample.Post) && sample.Post.Intersection == m_BusCycle.Intersection && sample.Post.TargetGroupMask == m_BusCycle.Group;
+            if (!sample.PostAvailable) sample.Post = default;
+            sample.PostOwn = IsOwnBusRequest(sample.Post, m_BusCycle.Lane);
+            sample.Blocker = m_Signals.ReadBusBlocker(m_BusCycle.Vehicle);
+            if (sample.Blocker.Available) m_Signals.TryReadBusTerminalSignal(sample.Blocker.TerminalVehicle, out sample.Terminal);
+            CompleteBusCycle();
+        }
+        private void CompleteBusCycle()
+        {
+            ref BusCycleSample sample = ref m_BusCycle.Sample;
+            sample.Open = false; sample.WaitingPost = false;
+            if (m_BusCycle.Armed) { EmitBusCycle(sample); return; }
+            if (!sample.PostAvailable) return;
+            m_BusCycle.History[m_BusCycle.HistoryHead] = sample;
+            m_BusCycle.HistoryHead = (m_BusCycle.HistoryHead + 1) % BusCycleHistorySize;
+            if (m_BusCycle.HistoryCount < BusCycleHistorySize) m_BusCycle.HistoryCount++;
+        }
+        private void ArmBusCycle(VehicleTarget target)
+        {
+            if (!IsBusCycleTarget(m_BusCycle, target) || m_BusCycle.Armed) return;
+            m_BusCycle.Armed = true;
+            int first = (m_BusCycle.HistoryHead - m_BusCycle.HistoryCount + BusCycleHistorySize) % BusCycleHistorySize;
+            for (int i = 0; i < m_BusCycle.HistoryCount; i++)
+                EmitBusCycle(m_BusCycle.History[(first + i) % BusCycleHistorySize]);
+            m_BusCycle.HistoryCount = 0;
+        }
+        private void CloseBusCycle(VehicleTarget target, string reason, uint frame)
+        {
+            if (!IsBusCycleTarget(m_BusCycle, target)) return;
+            if (m_BusCycle.Sample.Open || m_BusCycle.Sample.WaitingPost)
+            {
+                if (m_BusCycle.Armed)
+                {
+                    m_BusCycle.Sample.ObserveFrame = frame;
+                    m_BusCycle.Sample.Post = default;
+                    m_BusCycle.Sample.PostAvailable = false;
+                    EmitBusCycle(m_BusCycle.Sample);
+                }
+                m_BusCycle.Sample.Open = false;
+                m_BusCycle.Sample.WaitingPost = false;
+            }
+            if (m_BusCycle.Armed)
+            {
+                m_Port.Log("[BusSignalCycleSummary] cycles=" + m_BusCycle.Cycles + " writes=" + m_BusCycle.Writes
+                    + " stillPresent=" + m_BusCycle.StillPresent + " phaseCovered=" + m_BusCycle.PhaseCovered + " go=" + m_BusCycle.Go
+                    + " greenQueued=" + m_BusCycle.GreenQueued + " guardQueued=" + m_BusCycle.GuardQueued + " phaseMissed=" + m_BusCycle.PhaseMissed
+                    + " maxChainDepth=" + m_BusCycle.MaxChainDepth + " terminalChanges=" + m_BusCycle.TerminalChanges + " end=" + reason
+                    + " totalDirectFrames=" + target.BusMeasureDirectFrames + " totalQueuedFrames=" + target.BusMeasureQueuedFrames + " nonRealWrites=" + m_BusCycle.NonRealWrites);
+            }
+            ResetBusCycle();
+        }
+        private void EmitBusCycle(BusCycleSample sample)
+        {
+            bool phase = sample.PostAvailable && TraceCoversGroup(sample.Post, m_BusCycle.Group), go = sample.PostAvailable && sample.Post.TargetSignal == (byte)LaneSignalType.Go;
+            bool queued = sample.Blocker.Kind == BusSignalBlockerKind.QueuedSignal;
+            if (sample.Wrote) m_BusCycle.Writes++; if (sample.PostOwn) m_BusCycle.StillPresent++;
+            if (phase) m_BusCycle.PhaseCovered++; else if (sample.PostAvailable) m_BusCycle.PhaseMissed++;
+            if (go) m_BusCycle.Go++; if (go && queued) m_BusCycle.GreenQueued++;
+            if (sample.GuardSuppressed && queued) m_BusCycle.GuardQueued++;
+            if (sample.Blocker.ChainDepth > m_BusCycle.MaxChainDepth) m_BusCycle.MaxChainDepth = sample.Blocker.ChainDepth;
+            if (sample.Blocker.TerminalVehicle != Entity.Null)
+            {
+                if (m_BusCycle.HasTerminal && m_BusCycle.LastTerminal != sample.Blocker.TerminalVehicle) m_BusCycle.TerminalChanges++;
+                m_BusCycle.LastTerminal = sample.Blocker.TerminalVehicle; m_BusCycle.HasTerminal = true;
+            }
+            m_BusCycle.Cycles++;
+            string request = !sample.PostAvailable ? "post-unavailable" : sample.PostOwn ? "own-request-still-present" : "own-request-cleared-or-changed";
+            m_Port.Log("[BusSignalCycle] cycleFrame=" + sample.CycleFrame + " observeFrame=" + sample.ObserveFrame
+                + " vehicle=" + m_BusCycle.Vehicle + " line=" + m_BusCycle.Line + " targetLane=" + m_BusCycle.Lane + " intersection=" + m_BusCycle.Intersection
+                + " targetGroup=" + m_BusCycle.Group + " distance=" + sample.Distance + " eligible=" + sample.Eligible + " guardSuppressed=" + sample.GuardSuppressed
+                + " decision=" + sample.Decision + " related=" + sample.Related + " wrote=" + sample.Wrote + " beforePriority=" + sample.BeforePriority + " beforePetitioner=" + sample.BeforePetitioner
+                + " own-request-carried-in=" + sample.PreOwn + " carriedWriteFrame=" + sample.CarriedWriteFrame + " pre=" + BusCycleTrace(sample.Pre)
+                + " post=" + BusCycleTrace(sample.Post) + " request=" + request + " phaseCovered=" + phase + " green-but-queued=" + (go && queued)
+                + " priority-off-queue-persists=" + (sample.GuardSuppressed && queued) + " blocker=" + sample.Blocker.Kind + "/" + sample.Blocker.ChainDepth + "/" + sample.Blocker.TerminalVehicle
+                + " terminal=" + BusCycleTerminal(sample.Terminal));
+        }
+        private static string BusCycleTerminal(SignalLaneFact fact) => fact.Lane == Entity.Null ? "-" : fact.Lane + "/" + fact.Intersection + "/" + fact.GroupMask + "/" + fact.Signal + "/" + fact.Priority + "/" + fact.Petitioner + "/" + fact.Blocker;
+        private static string BusCycleTrace(SignalTraceSnapshot s) => s.Intersection == Entity.Null ? "-" : s.State + "/" + s.Timer + "/" + s.CurrentSignalGroup + "/" + s.NextSignalGroup + "/" + s.TargetSignal + "/" + s.TargetPriority + "/" + s.TargetDefault + "/" + s.TargetPetitioner + "/" + s.TargetBlocker + "/" + s.HighestPriority + "/" + s.HighestGroupMask + "/" + s.HighestPetitioner;
+
+        private void ResetBusCycle()
+        {
+            m_BusCycle.Vehicle = Entity.Null;
+            m_BusCycle.Line = Entity.Null;
+            m_BusCycle.Lane = Entity.Null;
+            m_BusCycle.Intersection = Entity.Null;
+            m_BusCycle.LastTerminal = Entity.Null;
+            m_BusCycle.Group = 0;
+            m_BusCycle.UpdateFrame = uint.MaxValue;
+            m_BusCycle.LastWriteFrame = 0;
+            m_BusCycle.Cycles = 0;
+            m_BusCycle.Writes = 0;
+            m_BusCycle.StillPresent = 0;
+            m_BusCycle.PhaseCovered = 0;
+            m_BusCycle.Go = 0;
+            m_BusCycle.GreenQueued = 0;
+            m_BusCycle.GuardQueued = 0;
+            m_BusCycle.PhaseMissed = 0;
+            m_BusCycle.NonRealWrites = 0;
+            m_BusCycle.TerminalChanges = 0;
+            m_BusCycle.MaxChainDepth = 0;
+            m_BusCycle.Locked = false;
+            m_BusCycle.Armed = false;
+            m_BusCycle.HasTerminal = false;
+            m_BusCycle.Sample = default;
+            Array.Clear(m_BusCycle.History, 0, BusCycleHistorySize);
+            m_BusCycle.HistoryHead = 0;
+            m_BusCycle.HistoryCount = 0;
+        }
+
+        private static void ResetBusMeasure(VehicleTarget target)
+        {
+            target.BusMeasureActive = false; target.BusMeasureApply = false;
+            target.BusMeasureStartFrame = 0; target.BusMeasureLastFrame = 0;
+            target.BusMeasureObservedFrames = 0; target.BusMeasureDirectFrames = 0;
+            target.BusMeasureQueuedFrames = 0;
+            target.BusMeasureLastDecision = BusMeasureDecision.None;
+            target.BusMeasureDecisionRelated = Entity.Null;
+            target.BusMeasureDecisionFrame = 0; target.BusMeasureDecisionValue = 0;
+            target.BusMeasureDecisionMask = 0;
+            target.BusMeasureTraceLogged = false;
+            target.BusMeasureLastQueuedBlocker = default;
+            target.BusMeasureTerminalChangeCount = 0;
+        }
+
+        private static void RememberBusBlocker(
+            VehicleTarget target,
+            BusSignalBlocker blocker)
+        {
+            if (!blocker.Available)
+                return;
+            if (blocker.Kind != BusSignalBlockerKind.QueuedSignal)
+                return;
+            if (target.BusMeasureLastQueuedBlocker.Kind
+                    == BusSignalBlockerKind.QueuedSignal
+                && (target.BusMeasureLastQueuedBlocker.TerminalVehicle
+                        != blocker.TerminalVehicle
+                    || target.BusMeasureLastQueuedBlocker.SignalPetitioner
+                        != blocker.SignalPetitioner))
+            {
+                target.BusMeasureTerminalChangeCount++;
+            }
+            target.BusMeasureLastQueuedBlocker = blocker;
+        }
+
+        private void LogBusQueueTrace(
+            VehicleSignalState owner,
+            VehicleTarget target,
+            string stage,
+            string reason,
+            uint frame,
+            BusSignalBlocker blocker)
+        {
+            bool targetTraceAvailable = m_Signals.TryReadTrace(target.SignalLane, out SignalTraceSnapshot targetTrace);
+            bool intersectionStateAvailable = m_Intersections.TryGetValue(target.Intersection, out IntersectionState intersectionState);
+            uint cooldownUntil = 0;
+            bool cooldownActive = intersectionStateAvailable && TryReadCooldown(intersectionState, target.GroupMask, frame, out cooldownUntil);
+            SignalLaneFact terminalSignal = default;
+            bool terminalSignalAvailable = blocker.Available && m_Signals.TryReadBusTerminalSignal(blocker.TerminalVehicle, out terminalSignal);
+            SignalTraceSnapshot terminalTrace = default;
+            bool terminalTraceAvailable = terminalSignalAvailable && m_Signals.TryReadTrace(terminalSignal.Lane, out terminalTrace);
+            string sameTerminalLane = !terminalSignalAvailable ? "unknown" : terminalSignal.Lane == target.SignalLane ? "true" : "false";
+            string sameTerminalIntersection = !terminalSignalAvailable ? "unknown" : terminalSignal.Intersection == target.Intersection ? "true" : "false";
+            string petitionerMatchesTargetLane = !targetTraceAvailable ? "unknown" : targetTrace.TargetPetitioner == target.SignalLane ? "true" : "false";
+            m_Port.Log("[BusSignalQueueTrace] vehicle=" + target.Vehicle + " line=" + owner.Line + " frame=" + frame + " stage=" + stage
+                + " reason=" + (reason ?? string.Empty) + " targetLane=" + target.SignalLane + " targetIntersection=" + target.Intersection
+                + " targetGroup=" + target.GroupMask + " distance=" + target.DistanceMeters + " apply=" + (target.BusMeasureApply ? "true" : "false")
+                + " submittedFrame=" + target.SubmittedFrame + " firstGreenObserved=" + target.FirstGreenObserved + " firstGreenFrame=" + target.FirstGreenFrame
+                + " lastDecision=" + target.BusMeasureLastDecision + " decisionFrame=" + target.BusMeasureDecisionFrame + " decisionRelated=" + target.BusMeasureDecisionRelated
+                + " decisionValue=" + target.BusMeasureDecisionValue + " decisionMask=" + target.BusMeasureDecisionMask + " targetTraceAvailable=" + targetTraceAvailable
+                + " traceSignal=" + targetTrace.TargetSignal + " tracePriority=" + targetTrace.TargetPriority + " traceDefault=" + targetTrace.TargetDefault
+                + " tracePetitioner=" + targetTrace.TargetPetitioner + " traceBlocker=" + targetTrace.TargetBlocker + " petitionerMatchesTargetLane=" + petitionerMatchesTargetLane
+                + " traceCurrentGroup=" + targetTrace.CurrentSignalGroup + " traceNextGroup=" + targetTrace.NextSignalGroup + " traceHighestPriority=" + targetTrace.HighestPriority
+                + " traceHighestGroup=" + targetTrace.HighestGroupMask + " traceHighestPetitioner=" + targetTrace.HighestPetitioner + " intersectionStateAvailable=" + intersectionStateAvailable
+                + " priorityGroup=" + (intersectionStateAvailable ? intersectionState.PriorityGroup : 0) + " priorityStartFrame=" + (intersectionStateAvailable ? intersectionState.PriorityStartFrame : 0)
+                + " maxPriorityFrames=" + (intersectionStateAvailable ? intersectionState.MaxPriorityFrames : 0) + " selectedGroup=" + (intersectionStateAvailable ? intersectionState.SelectedGroup : 0)
+                + " cooldownActive=" + cooldownActive + " cooldownUntil=" + cooldownUntil
+                + " blockerAvailable=" + blocker.Available + " blockerKind=" + blocker.Kind + " chainDepth=" + blocker.ChainDepth
+                + " terminalVehicle=" + blocker.TerminalVehicle + " signalPetitioner=" + blocker.SignalPetitioner + " terminalChangeCount=" + target.BusMeasureTerminalChangeCount
+                + " latestQueuedKind=" + target.BusMeasureLastQueuedBlocker.Kind + " latestQueuedTerminal=" + target.BusMeasureLastQueuedBlocker.TerminalVehicle
+                + " latestQueuedPetitioner=" + target.BusMeasureLastQueuedBlocker.SignalPetitioner + " latestQueuedDepth=" + target.BusMeasureLastQueuedBlocker.ChainDepth
+                + " terminalSignalAvailable=" + terminalSignalAvailable + " terminalLane=" + terminalSignal.Lane + " terminalIntersection=" + terminalSignal.Intersection
+                + " terminalGroup=" + terminalSignal.GroupMask + " terminalSignal=" + terminalSignal.Signal + " terminalPriority=" + terminalSignal.Priority
+                + " terminalPetitioner=" + terminalSignal.Petitioner + " terminalTraceAvailable=" + terminalTraceAvailable + " terminalBlocker=" + terminalTrace.TargetBlocker
+                + " sameTerminalLane=" + sameTerminalLane + " sameTerminalIntersection=" + sameTerminalIntersection + " observedFrames=" + target.BusMeasureObservedFrames
+                + " directFrames=" + target.BusMeasureDirectFrames + " queuedFrames=" + target.BusMeasureQueuedFrames);
+        }
+
+        private void EndBusMeasure(
+            VehicleSignalState state,
+            VehicleTarget target,
+            string reason,
+            uint frame)
+        {
+            if (!target.BusMeasureActive)
+                return;
+
+            CloseBusCycle(target, reason, frame);
+
+            if (target.BusMeasureTraceLogged)
+            {
+                LogBusQueueTrace(
+                    state,
+                    target,
+                    "end",
+                    reason,
+                    frame,
+                    target.BusMeasureLastQueuedBlocker);
+            }
+
+            if (target.BusMeasureObservedFrames > 0u)
+            {
+                uint blockedFrames = target.BusMeasureDirectFrames
+                    + target.BusMeasureQueuedFrames;
+                m_Port.Log("[BusSignalMeasure] vehicle="
+                    + target.Vehicle
+                    + " line=" + state.Line
+                    + " lane=" + target.SignalLane
+                    + " intersection=" + target.Intersection
+                    + " apply=" + (target.BusMeasureApply ? "true" : "false")
+                    + " startFrame=" + target.BusMeasureStartFrame
+                    + " endFrame=" + frame
+                    + " observedFrames=" + target.BusMeasureObservedFrames
+                    + " directSignalFrames=" + target.BusMeasureDirectFrames
+                    + " queuedSignalFrames=" + target.BusMeasureQueuedFrames
+                    + " blockedFrames=" + blockedFrames
+                    + " reason=" + (reason ?? string.Empty));
+            }
+
+            ResetBusMeasure(target);
+        }
+#endif
 
         private void RefreshTram(
             VehicleSignalState state,
@@ -1193,6 +1975,9 @@ namespace RapidTransitMod.Dispatch.Signals
         {
             for (int i = 0; i < state.TargetCount; i++)
                 state.Targets[i].SelectedCurrentFrame = false;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            bool keptTruncatedTarget = false;
+#endif
 
             for (int candidateIndex = 0;
                 candidateIndex < candidateCount;
@@ -1236,7 +2021,21 @@ namespace RapidTransitMod.Dispatch.Signals
                             candidateIndex,
                             candidateCount);
                         if (dropIndex < 0)
+                        {
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                            m_GuardAudit.DropFallbackHits++;
+                            if (!m_GuardAudit.DropFallbackLogged)
+                            {
+                                m_GuardAudit.DropFallbackLogged = true;
+                                m_Port.Log("[SignalGuardAudit] kind=drop-fallback"
+                                    + " vehicle=" + state.Vehicle
+                                    + " lane=" + candidate.SignalLane
+                                    + " intersection=" + candidate.Intersection
+                                    + " frame=" + frame);
+                            }
+#endif
                             dropIndex = state.TargetCount - 1;
+                        }
                         EndTarget(
                             state,
                             state.Targets[dropIndex],
@@ -1282,6 +2081,10 @@ namespace RapidTransitMod.Dispatch.Signals
                 {
                     target.DistanceMeters = float.NaN;
                     target.PositionCurrentFrame = uint.MaxValue;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                    keptTruncatedTarget = true;
+                    m_GuardAudit.CandidateTruncatedTargets++;
+#endif
                     index++;
                 }
                 else
@@ -1290,6 +2093,10 @@ namespace RapidTransitMod.Dispatch.Signals
                 }
             }
 
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            if (keptTruncatedTarget)
+                m_GuardAudit.CandidateTruncatedFrames++;
+#endif
             for (int i = 0; i < state.TargetCount; i++)
                 state.Targets[i].SelectedCurrentFrame = false;
         }
@@ -1447,11 +2254,10 @@ namespace RapidTransitMod.Dispatch.Signals
         {
             if (!CanApplyPriority(state))
                 return false;
-            uint due = (frame / 4u) & 15u;
             for (int i = 0; i < state.TargetCount; i++)
             {
                 VehicleTarget target = state.Targets[i];
-                if (target.UpdateFrame == due)
+                if (IsTrafficLightFrame(frame, target.UpdateFrame))
                 {
                     return true;
                 }
@@ -1485,6 +2291,9 @@ namespace RapidTransitMod.Dispatch.Signals
 #if RT_SIGNAL_WAIT_MEASURE
                         RecordTrace(target, TraceResult.Position);
 #endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        RecordBusMeasureDecision(target, BusMeasureDecision.Position);
+#endif
                         targetIndex++;
                         continue;
                     }
@@ -1492,6 +2301,9 @@ namespace RapidTransitMod.Dispatch.Signals
                     {
 #if RT_SIGNAL_WAIT_MEASURE
                         RecordTrace(target, TraceResult.Ineligible);
+#endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        RecordBusMeasureDecision(target, BusMeasureDecision.Ineligible);
 #endif
                         targetIndex++;
                         continue;
@@ -1503,6 +2315,9 @@ namespace RapidTransitMod.Dispatch.Signals
 #if RT_SIGNAL_WAIT_MEASURE
                         RecordTrace(target, TraceResult.Signal);
 #endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        RecordBusMeasureDecision(target, BusMeasureDecision.Signal);
+#endif
                         EndTarget(state, target, "qualification-ended", frame);
                         continue;
                     }
@@ -1512,13 +2327,19 @@ namespace RapidTransitMod.Dispatch.Signals
 #if RT_SIGNAL_WAIT_MEASURE
                         RecordTrace(target, TraceResult.Identity);
 #endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        RecordBusMeasureDecision(target, BusMeasureDecision.Identity);
+#endif
                         EndTarget(state, target, "signal-identity-changed", frame);
                         continue;
                     }
-                    if (signal.UpdateFrame != ((frame / 4u) & 15u))
+                    if (!IsTrafficLightFrame(frame, signal.UpdateFrame))
                     {
 #if RT_SIGNAL_WAIT_MEASURE
                         RecordTrace(target, TraceResult.Identity);
+#endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        RecordBusMeasureDecision(target, BusMeasureDecision.Identity);
 #endif
                         targetIndex++;
                         continue;
@@ -1537,6 +2358,23 @@ namespace RapidTransitMod.Dispatch.Signals
                             RecordTrace(target, TraceResult.Ineligible);
                         }
 #endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        if (m_Intersections.TryGetValue(
+                                target.Intersection,
+                                out IntersectionState busState)
+                            && IsCooling(
+                                busState,
+                                target.GroupMask,
+                                frame,
+                                out uint busUntil))
+                        {
+                            RecordBusMeasureDecision(target, BusMeasureDecision.Cooldown, busUntil);
+                        }
+                        else
+                        {
+                            RecordBusMeasureDecision(target, BusMeasureDecision.Ineligible);
+                        }
+#endif
                         targetIndex++;
                         continue;
                     }
@@ -1551,12 +2389,20 @@ namespace RapidTransitMod.Dispatch.Signals
 #if RT_SIGNAL_WAIT_MEASURE
                         RecordTrace(winner, TraceResult.Lost, 0, target.Vehicle);
 #endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        RecordBusMeasureDecision(winner, BusMeasureDecision.Lost, 0, target.Vehicle);
+#endif
                         m_Winners[target.Intersection] = target;
                     }
-#if RT_SIGNAL_WAIT_MEASURE
+#if RT_SIGNAL_WAIT_MEASURE || RT_BUS_SIGNAL_WAIT_MEASURE
                     else
                     {
+#if RT_SIGNAL_WAIT_MEASURE
                         RecordTrace(target, TraceResult.Lost, 0, winner.Vehicle);
+#endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                        RecordBusMeasureDecision(target, BusMeasureDecision.Lost, 0, winner.Vehicle);
+#endif
                     }
 #endif
                     targetIndex++;
@@ -1585,6 +2431,8 @@ namespace RapidTransitMod.Dispatch.Signals
             {
                 return false;
             }
+            if (owner.Mode == TransitMode.Bus && target.ProgressSuppressed)
+                return false;
             if (!m_Intersections.TryGetValue(
                     target.Intersection,
                     out IntersectionState state))
@@ -1657,31 +2505,23 @@ namespace RapidTransitMod.Dispatch.Signals
                         ? TraceResult.Signal
                         : TraceResult.Ineligible);
 #endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                RecordBusMeasureDecision(target, CanApplyPriority(owner)
+                    ? BusMeasureDecision.Signal : BusMeasureDecision.Ineligible);
+#endif
                 return;
             }
             IntersectionState state = GetIntersection(
                 target.Intersection);
-            if (PendingActive(state, frame))
-            {
-#if RT_SIGNAL_WAIT_MEASURE
-                RecordTrace(
-                    target,
-                    TraceResult.Pending, 0, state.PendingVehicle);
-                if (TraceMatch(target) && m_Trace.LastWrite != 0
-                    && frame - m_Trace.LastWrite >= 128u
-                    && m_Trace.Trigger == 0)
-                {
-                    m_Trace.Trigger = TracePending;
-                }
-#endif
-                return;
-            }
             if (IsCooling(state, target.GroupMask, frame, out uint cooldownUntil))
             {
 #if RT_SIGNAL_WAIT_MEASURE
                 RecordTrace(
                     target,
                     TraceResult.Cooldown, cooldownUntil);
+#endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                RecordBusMeasureDecision(target, BusMeasureDecision.Cooldown, cooldownUntil);
 #endif
                 return;
             }
@@ -1704,13 +2544,16 @@ namespace RapidTransitMod.Dispatch.Signals
                         ? before.Petitioner
                         : signal.Petitioner);
 #endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+                RecordBusMeasureDecision(target, BusMeasureDecision.Rejected, 0,
+                    before.Petitioner != Entity.Null ? before.Petitioner : signal.Petitioner);
+#endif
                 return;
             }
 
-            state.PendingLane = target.SignalLane;
-            state.PendingVehicle = target.Vehicle;
-            state.PendingGroup = target.GroupMask;
-            state.PendingPriority = priority;
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            RecordBusCycleWrite(target, before, frame);
+#endif
             state.SelectedGroup = target.GroupMask;
             state.SelectedMaxPriorityFrames = tram
                 ? TramMaxPriorityFrames
@@ -1744,6 +2587,17 @@ namespace RapidTransitMod.Dispatch.Signals
                 m_Trace.Waiting = true;
                 m_Trace.LastWrite = frame;
                 m_Trace.PostSample = m_Trace.Cycle;
+            }
+#endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            RecordBusMeasureDecision(target, BusMeasureDecision.Submitted, (uint)priority);
+            if (target.GuardAwaitResubmit)
+            {
+                target.GuardAwaitResubmit = false;
+                target.GuardAwaitGreen = true;
+                LogProgressGuard(owner, target, "resubmitted",
+                    " group=" + target.GroupMask
+                    + " frame=" + frame);
             }
 #endif
             if (target.Submitted)
@@ -1783,27 +2637,6 @@ namespace RapidTransitMod.Dispatch.Signals
             return state;
         }
 
-        private bool PendingActive(IntersectionState state, uint frame)
-        {
-            if (state.PendingLane == Entity.Null)
-                return false;
-            if (m_Signals.TryRead(
-                    state.PendingLane,
-                    out SignalLaneFact pending)
-                && pending.Lane == state.PendingLane
-                && pending.Petitioner == state.PendingVehicle
-                && pending.GroupMask == state.PendingGroup
-                && pending.Priority == state.PendingPriority)
-            {
-                return true;
-            }
-            state.PendingLane = Entity.Null;
-            state.PendingVehicle = Entity.Null;
-            state.PendingGroup = 0;
-            state.PendingPriority = 0;
-            return false;
-        }
-
         private static void AddCooldown(
             IntersectionState state,
             ushort groupMask,
@@ -1839,6 +2672,26 @@ namespace RapidTransitMod.Dispatch.Signals
                 if ((state.Cooldowns[i].GroupMask & groupMask) != 0)
                 {
                     untilFrame = state.Cooldowns[i].UntilFrame;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool TryReadCooldown(
+            IntersectionState state,
+            ushort groupMask,
+            uint frame,
+            out uint untilFrame)
+        {
+            untilFrame = 0;
+            for (int i = 0; i < state.Cooldowns.Count; i++)
+            {
+                GroupCooldown cooldown = state.Cooldowns[i];
+                if ((cooldown.GroupMask & groupMask) != 0
+                    && FrameBefore(frame, cooldown.UntilFrame))
+                {
+                    untilFrame = cooldown.UntilFrame;
                     return true;
                 }
             }
@@ -1898,6 +2751,28 @@ namespace RapidTransitMod.Dispatch.Signals
             if (index < 0)
                 return;
 
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            if (state.Mode == TransitMode.Bus
+                && (target.ProgressSuppressed
+                    || target.GuardAwaitResubmit
+                    || target.GuardAwaitGreen))
+            {
+                string phase = target.ProgressSuppressed
+                    ? "suppressed"
+                    : target.GuardAwaitResubmit
+                        ? "await-resubmit"
+                        : "await-green";
+                LogProgressGuard(state, target, "guard-ended",
+                    " phase=" + phase
+                    + " frame=" + frame
+                    + " reason=" + (reason ?? string.Empty)
+                    + " suppressedFrame=" + target.ProgressSuppressedFrame
+                    + " suppressedDistance=" + target.ProgressSuppressedDistance);
+            }
+#endif
+#if RT_BUS_SIGNAL_WAIT_MEASURE
+            EndBusMeasure(state, target, reason, frame);
+#endif
             LogTargetEnd(state, target, reason);
 #if RT_SIGNAL_WAIT_MEASURE
             TraceEnd(target, reason);
@@ -1982,7 +2857,7 @@ namespace RapidTransitMod.Dispatch.Signals
             m_Trace.LastWrite = 0;
             m_Trace.Trigger = 0;
             m_Trace.PostCycles = 0;
-            if (target.UpdateFrame == ((frame / 4u) & 15u))
+            if (IsTrafficLightFrame(frame, target.UpdateFrame))
             {
                 TraceOpen(frame);
             }
@@ -2014,7 +2889,7 @@ namespace RapidTransitMod.Dispatch.Signals
                 sample.Consumption = 1;
             }
             else if (post.TargetPriority == TramPriority
-                && post.TargetPetitioner == m_Trace.Vehicle)
+                && post.TargetPetitioner == m_Trace.Lane)
             {
                 sample.Consumption = 3;
             }
@@ -2040,7 +2915,7 @@ namespace RapidTransitMod.Dispatch.Signals
         {
             if (!m_Trace.Active
                 || m_Trace.CycleOpen
-                || m_Trace.UpdateFrame != ((frame / 4u) & 15u))
+                || !IsTrafficLightFrame(frame, m_Trace.UpdateFrame))
             {
                 return;
             }
