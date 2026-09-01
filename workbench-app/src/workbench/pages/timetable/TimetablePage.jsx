@@ -196,7 +196,7 @@ function trainOverlapsRange(train, startMinute, endMinute) {
   return lastMinute >= startMinute && firstMinute <= endMinute;
 }
 
-export default function TimetablePage({ activeTransportMode = "train", isActive = true, sharedSnapshot = null }) {
+export default function TimetablePage({ activeTransportMode = "train", isActive = true, sharedSnapshot = null, debugToolsEnabled = false }) {
   const { t } = useNativeScheduleI18n();
   const portalHostRef = useRef(null);
   const controller = useTimetableController({ activeTransportMode, isActive, sharedSnapshot });
@@ -1092,7 +1092,9 @@ export default function TimetablePage({ activeTransportMode = "train", isActive 
               : showFooterControlNote
                 ? t("timetable.footer.controlNote")
             : controller.saveError
-              ? t("timetable.footer.error")
+              ? debugToolsEnabled
+                ? `${t("timetable.footer.error")}：${controller.saveError}`
+                : t("timetable.footer.error")
               : controller.loadError
                 ? t("timetable.footer.dataError")
                 : controller.saveState === "saving"

@@ -293,6 +293,7 @@ export default function WorkbenchApp({ registerHostActions }) {
             activeTransportMode={modeForPage("timetable")}
             isActive={renderedPage === "timetable"}
             sharedSnapshot={snapshotsByMode[modeForPage("timetable")] || null}
+            debugToolsEnabled={debugToolsEnabled}
           />
         </div>
         <div

@@ -108,21 +108,48 @@ function isRetryableLayoutError(error) {
     || error === "timetable-line-layout-invalid";
 }
 
-function buildTrain(row, layout, runtime, stationNames) {
+function buildTrain(row, layout, runtime, stationNames, previousRow = null) {
   const slotMinute = timeToMinutes(row?.time);
-  const stored = asArray(row?.timedStops);
+  const stored = continuousTimedStops(row?.timedStops);
+  const previousStops = continuousTimedStops(previousRow?.timedStops);
   const layoutStops = asArray(layout?.stops).filter((stop) => stop?.stopKey);
   const stopKeys = buildStopKeys(layout);
   const segments = asArray(runtime?.segments);
+  const hasStoredStops = stored.length > 0;
   const storedClosing = stored.length === stopKeys.length + 1
     && stored[stored.length - 1]?.stopKey === stopKeys[0];
-  const includeClosing = storedClosing || hasClosingSegment(runtime, stopKeys.length);
-  const displayKeys = includeClosing ? [...stopKeys, stopKeys[0]] : stopKeys;
+  const previousClosing = previousStops.length === stopKeys.length + 1
+    && previousStops[previousStops.length - 1]?.stopKey === stopKeys[0];
+  const includeClosing = storedClosing
+    || previousClosing
+    || ((!hasStoredStops || stored.length >= stopKeys.length)
+      && hasClosingSegment(runtime, stopKeys.length));
+  const allKeys = includeClosing ? [...stopKeys, stopKeys[0]] : stopKeys;
+  const displayKeys = allKeys;
   let previousDeparture = slotMinute;
   let runtimeGap = false;
   const stops = displayKeys.map((stopKey, index) => {
     const storedStop = stored[index];
     const layoutStop = index === stopKeys.length ? layoutStops[0] : layoutStops[index];
+    if (hasStoredStops) {
+      return {
+        stationId: stopKey,
+        stationName: layoutStop?.name || stationNames.get(stopKey) || stopKey,
+        stopKey,
+        waypointIndex: layoutStop?.waypointIndex,
+        order: index,
+        occurrence: index,
+        arrivalMinute: index === 0 ? null : storedStop?.arrive ?? null,
+        departureMinute: index === displayKeys.length - 1
+          ? null
+          : index === 0 ? slotMinute : storedStop?.depart ?? null,
+        arrivalTime: index === 0 || storedStop?.arrive == null ? "--" : minutesToTime(storedStop.arrive),
+        departureTime: index === displayKeys.length - 1
+          ? "--"
+          : index === 0 ? minutesToTime(slotMinute)
+            : storedStop?.depart == null ? "--" : minutesToTime(storedStop.depart)
+      };
+    }
     const segmentMinutes = segments[index - 1]?.segmentMinutes;
     const missingSlice = runtime?.source === "sliceHistoricalEstimate"
       && index > 0
@@ -161,32 +188,33 @@ function buildTrain(row, layout, runtime, stationNames) {
     kind: row?.kind || "local",
     source: row?.source || "manual",
     stopSig: row?.stopSig || "",
-    scheduleType: stored.length > 0 ? "custom" : "default",
+    scheduleType: hasStoredStops ? "custom" : "default",
     slotMinute,
-    canEdit: hasRunTimeSegments(runtime, stopKeys.length),
+    canEdit: hasStoredStops || hasRunTimeSegments(runtime, stopKeys.length),
     stops
   };
 }
 
-function buildBatchTimedStops(row, layout, runtime, stationNames, intervalMinutes) {
-  const train = buildTrain(row, layout, runtime, stationNames);
-  if (train.stops.length !== buildStopKeys(layout).length + 1) {
+function buildBatchTimedStops(row, layout, runtime, intervalMinutes) {
+  const stopKeys = buildStopKeys(layout);
+  if (!hasClosingSegment(runtime, stopKeys.length)) {
     return { error: "runtime", timedStops: [] };
   }
   const workingTrain = {
-    ...train,
-    stops: train.stops.map((stop, index) => ({
-      ...stop,
+    slotMinute: timeToMinutes(row?.time),
+    stops: [...stopKeys, stopKeys[0]].map((stopKey, index) => ({
+      stopKey,
+      occurrence: index,
       arrivalMinute: null,
-      departureMinute: index === 0 ? train.slotMinute : null
+      departureMinute: index === 0 ? timeToMinutes(row?.time) : null
     }))
   };
-  let previousDeparture = train.slotMinute;
+  let previousDeparture = workingTrain.slotMinute;
   const timedStops = [];
   for (let index = 0; index < workingTrain.stops.length; index += 1) {
     const stop = workingTrain.stops[index];
     if (index === 0) {
-      timedStops.push({ stopKey: stop.stopKey, arrive: null, depart: train.slotMinute });
+      timedStops.push({ stopKey: stop.stopKey, arrive: null, depart: workingTrain.slotMinute });
       continue;
     }
     const segmentMinutes = runtime?.segments?.[index - 1]?.segmentMinutes;
@@ -202,6 +230,8 @@ function buildBatchTimedStops(row, layout, runtime, stationNames, intervalMinute
     const departure = Math.ceil((arrival + 5) / intervalMinutes) * intervalMinutes;
     const validation = validateDepartureValue(
       workingTrain,
+      null,
+      null,
       runtime,
       stop.occurrence,
       minutesToTime(departure)
@@ -315,6 +345,72 @@ function continuousTimedStops(value) {
   return prefix.length >= 2 ? prefix : [];
 }
 
+function appliedRow(snapshot, lineId, rowId) {
+  return buildAppliedRows(snapshot, lineId).find((row) => row?.id === rowId) || null;
+}
+
+function intervalMinutes(stops, index, fromKey = "", toKey = "") {
+  const items = continuousTimedStops(stops);
+  if (index <= 0 || index >= items.length) {
+    return null;
+  }
+  const previous = items[index - 1];
+  const next = items[index];
+  if ((fromKey && previous?.stopKey !== fromKey)
+    || (toKey && next?.stopKey !== toKey)
+    || !Number.isFinite(previous?.depart)
+    || !Number.isFinite(next?.arrive)) {
+    return null;
+  }
+  return next.arrive - previous.depart;
+}
+
+function runtimeMinutes(runtime, index, fromKey, toKey) {
+  const segment = runtime?.segments?.[index - 1];
+  if (!Number.isFinite(segment?.segmentMinutes)
+    || segment.fromStopKey !== fromKey
+    || segment.toStopKey !== toKey) {
+    return null;
+  }
+  return segment.segmentMinutes;
+}
+
+function editIntervalMinutes(row, previousRow, index, fromKey, toKey, runtime) {
+  const draft = intervalMinutes(row?.timedStops, index, fromKey, toKey);
+  if (Number.isFinite(draft)) {
+    return draft;
+  }
+  const saved = intervalMinutes(previousRow?.timedStops, index, fromKey, toKey);
+  if (Number.isFinite(saved)) {
+    return saved;
+  }
+  return runtimeMinutes(runtime, index, fromKey, toKey);
+}
+
+function rowNeedsRuntime(row, previousRow) {
+  const stops = continuousTimedStops(row?.timedStops);
+  for (let index = 1; index < stops.length; index += 1) {
+    const minutes = intervalMinutes(stops, index);
+    const saved = intervalMinutes(
+      previousRow?.timedStops,
+      index,
+      stops[index - 1].stopKey,
+      stops[index].stopKey
+    );
+    if (!Number.isFinite(minutes) || saved !== minutes) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function lineNeedsRuntime(snapshot, lineId) {
+  return buildRows(snapshot, lineId).some((row) => rowNeedsRuntime(
+    row,
+    appliedRow(snapshot, lineId, row?.id)
+  ));
+}
+
 function rebuildTimedStops(row, layout, runtime) {
   const original = continuousTimedStops(row?.timedStops);
   const stopKeys = buildStopKeys(layout);
@@ -379,7 +475,7 @@ function lineRuntime(runtimes, sources, lineId) {
   return runtimes[lineId]?.[sources[lineId] || "theory"] || null;
 }
 
-function validateDepartureValue(train, runtime, occurrence, value) {
+function validateDepartureValue(train, row, previousRow, runtime, occurrence, value) {
   if (!isValidTimeValue(value)) {
     return { error: "format", minute: null };
   }
@@ -402,7 +498,14 @@ function validateDepartureValue(train, runtime, occurrence, value) {
   let previousDeparture = minute;
   let reachesThirdDay = minute >= 2880;
   for (let index = stopIndex + 1; index <= lastIndex; index += 1) {
-    const segmentMinutes = runtime?.segments?.[index - 1]?.segmentMinutes;
+    const segmentMinutes = editIntervalMinutes(
+      row,
+      previousRow,
+      index,
+      train.stops[index - 1]?.stopKey,
+      train.stops[index]?.stopKey,
+      runtime
+    );
     if (!Number.isFinite(previousDeparture) || !Number.isFinite(segmentMinutes)) {
       break;
     }
@@ -426,19 +529,22 @@ function validateDepartureValue(train, runtime, occurrence, value) {
 }
 
 function collectLineDwellErrors(snapshot, lineId, layout, runtime, directory) {
-  if (!layout || !runtime) {
+  if (!layout) {
     return {};
   }
   const stationNames = new Map(asArray(directory).map((station) => [station.stationId, station.name]));
   const errors = {};
   buildRows(snapshot, lineId).forEach((row) => {
-    const train = buildTrain(row, layout, runtime, stationNames);
+    const previousRow = appliedRow(snapshot, lineId, row?.id);
+    const train = buildTrain(row, layout, runtime, stationNames, previousRow);
     train.stops.slice(1, -1).forEach((stop) => {
       if (!Number.isFinite(stop.departureMinute)) {
         return;
       }
       const result = validateDepartureValue(
         train,
+        row,
+        previousRow,
         runtime,
         stop.occurrence,
         minutesToTime(stop.departureMinute)
@@ -486,7 +592,13 @@ function buildLines(snapshot, section, directory, runtimes, runtimeSources, layo
         runtime,
         stations,
         stopSig: layout?.stopSig || rows[0]?.stopSig || "",
-        trains: rows.map((row) => buildTrain(row, layout, runtime, stationNames)),
+        trains: rows.map((row) => buildTrain(
+          row,
+          layout,
+          runtime,
+          stationNames,
+          appliedRow(snapshot, line.id, row?.id)
+        )),
         sliceTrains: rows.map((row) => buildSliceTrain(
           row,
           layout,
@@ -568,6 +680,9 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     && Object.keys(sourceTransactions).length === 0
     && Object.keys(inputErrors).length === 0
     && dirtyLineIds.every((lineId) => {
+      if (!lineNeedsRuntime(snapshot, lineId)) {
+        return true;
+      }
       const source = runtimeSources[lineId]
         || (activeTransportMode === "bus" ? "busHistorical" : "theory");
       return Boolean(runtimes[lineId]?.[source]?.resultId);
@@ -664,11 +779,19 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     const layout = layouts[lineId]?.value;
     const runtime = lineRuntime(runtimes, runtimeSources, lineId);
     const row = buildRows(snapshot, lineId).find((item) => item?.id === trainId);
-    if (!row || !layout || !runtime) {
+    if (!row || !layout) {
       return { error: "", minute: null };
     }
     const stationNames = new Map(directory.map((station) => [station.stationId, station.name]));
-    return validateDepartureValue(buildTrain(row, layout, runtime, stationNames), runtime, occurrence, value);
+    const previousRow = appliedRow(snapshot, lineId, trainId);
+    return validateDepartureValue(
+      buildTrain(row, layout, runtime, stationNames, previousRow),
+      row,
+      previousRow,
+      runtime,
+      occurrence,
+      value
+    );
   }, [directory, layouts, runtimeSources, runtimes, snapshot]);
 
   const resetLineLayouts = useCallback(() => {
@@ -1519,6 +1642,45 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   }), [acceptRuntime, api]);
 
   useEffect(() => api.onRunTimeInvalidated?.((event) => {
+    if (event?.reason === "run-time-backend-reset") {
+      runtimeRequestGenerationRef.current.forEach((generation, key) => {
+        runtimeRequestGenerationRef.current.set(key, generation + 1);
+      });
+      runtimeRequestRef.current.clear();
+      pendingQueriesRef.current = {};
+      setPendingQueries({});
+      runtimesRef.current = {};
+      setRuntimes({});
+      runtimeSourcesRef.current = {};
+      setRuntimeSources({});
+      sourceTransactionsRef.current = {};
+      setSourceTransactions({});
+      resetLineLayouts();
+      layoutTimingRef.current = null;
+      directoryGenerationRef.current += 1;
+      directoryRequestRef.current += 1;
+      if (directoryRetryRef.current != null) {
+        window.clearTimeout(directoryRetryRef.current);
+        directoryRetryRef.current = null;
+      }
+      snapshotRef.current = EMPTY_SNAPSHOT;
+      setSnapshot(EMPTY_SNAPSHOT);
+      setDirectory([]);
+      startStationIdRef.current = "";
+      endStationIdRef.current = "";
+      indexVersionRef.current = 0;
+      setStartStationId("");
+      setEndStationId("");
+      setIndexVersion(0);
+      setSections([]);
+      setSectionId("");
+      setDirtyLineIds([]);
+      setInputErrors({});
+      setLoadError("");
+      setSaveError("");
+      setSaveState("clean");
+      return;
+    }
     if (event?.editorSessionId !== editorIdRef.current) {
       return;
     }
@@ -1543,7 +1705,7 @@ export default function useTimetableController({ activeTransportMode, isActive, 
     delete nextTransactions[event.lineId];
     sourceTransactionsRef.current = nextTransactions;
     setSourceTransactions(nextTransactions);
-  }), [api, invalidateRuntimeSource, markRuntimeQueued, setRuntimeSource]);
+  }), [api, invalidateRuntimeSource, markRuntimeQueued, resetLineLayouts, setRuntimeSource]);
 
   useEffect(() => api.onMonitorChanged?.((event) => {
     if (event?.monitorAverageBecameReady && event?.lineId) {
@@ -1664,53 +1826,67 @@ export default function useTimetableController({ activeTransportMode, isActive, 
   const updateDeparture = useCallback((lineId, trainId, occurrence, minute) => {
     const layout = layouts[lineId]?.value;
     const runtime = lineRuntime(runtimes, runtimeSources, lineId);
-    const stopCount = asArray(layout?.stops).filter((stop) => stop?.stopKey).length;
-    if (stopCount === 0) {
+    if (buildStopKeys(layout).length === 0) {
       setLoadError("timetable-line-layout-required");
       return;
     }
-    if (!hasRunTimeSegments(runtime, stopCount)) {
+    const currentSnapshot = snapshotRef.current;
+    let requiresRuntime = false;
+    const blocks = asArray(currentSnapshot.lineDraftRowsByLineId).map((block) => ({
+      ...block,
+      lineDraftRows: asArray(block.lineDraftRows).map((row) => {
+        if (block.lineId !== lineId || row.id !== trainId) {
+          return row;
+        }
+        const previousRow = appliedRow(currentSnapshot, lineId, row.id);
+        const train = buildTrain(
+          row,
+          layout,
+          runtime,
+          new Map(directory.map((station) => [station.stationId, station.name])),
+          previousRow
+        );
+        const stopIndex = train.stops.findIndex((stop) => stop.occurrence === occurrence);
+        if (stopIndex <= 0 || stopIndex >= train.stops.length - 1
+          || !Number.isFinite(train.stops[stopIndex].arrivalMinute)) {
+          requiresRuntime = true;
+          return row;
+        }
+        const nextStop = train.stops[stopIndex + 1];
+        const minutes = editIntervalMinutes(
+          row,
+          previousRow,
+          stopIndex + 1,
+          train.stops[stopIndex].stopKey,
+          nextStop?.stopKey,
+          runtime
+        );
+        if (!Number.isFinite(minutes)) {
+          requiresRuntime = true;
+          return row;
+        }
+        train.stops[stopIndex].departureMinute = minute;
+        train.stops[stopIndex + 1].arrivalMinute = minute + minutes;
+        const storedCount = continuousTimedStops(row.timedStops).length;
+        const stopCount = Math.max(storedCount, stopIndex + 2);
+        if (stopIndex + 1 >= storedCount) {
+          train.stops[stopIndex + 1].departureMinute = null;
+        }
+        return {
+          ...row,
+          source: row.source || "manual",
+          timedStops: train.stops.slice(0, stopCount).map((stop, index) => ({
+            stopKey: stop.stopKey,
+            arrive: index === 0 ? null : stop.arrivalMinute,
+            depart: index === stopCount - 1 ? null : stop.departureMinute
+          }))
+        };
+      })
+    }));
+    if (requiresRuntime) {
       setLoadError("run-time-query-required");
       return;
     }
-    if (!hasClosingSegment(runtime, stopCount)) {
-      setLoadError("run-time-closing-segment-required");
-      return;
-    }
-    const currentSnapshot = snapshotRef.current;
-    const blocks = asArray(currentSnapshot.lineDraftRowsByLineId).map((block) => ({
-        ...block,
-        lineDraftRows: asArray(block.lineDraftRows).map((row) => {
-          if (block.lineId !== lineId || row.id !== trainId) {
-            return row;
-          }
-          const train = buildTrain(row, layout, runtime, new Map(directory.map((station) => [station.stationId, station.name])));
-          const stopIndex = train.stops.findIndex((stop) => stop.occurrence === occurrence);
-          if (stopIndex < 0 || stopIndex === train.stops.length - 1) {
-            return row;
-          }
-          train.stops[stopIndex].departureMinute = minute;
-          for (let index = stopIndex + 1; index < train.stops.length; index++) {
-            const previousDeparture = train.stops[index - 1].departureMinute;
-            const arrival = previousDeparture == null
-              ? null
-              : previousDeparture + runtime.segments[index - 1].segmentMinutes;
-            train.stops[index].arrivalMinute = arrival;
-            if (index === train.stops.length - 1) {
-              train.stops[index].departureMinute = null;
-            }
-          }
-          return {
-            ...row,
-            source: row.source || "manual",
-            timedStops: train.stops.map((stop, index) => ({
-              stopKey: stop.stationId,
-              arrive: index === 0 ? null : stop.arrivalMinute,
-              depart: index === train.stops.length - 1 ? null : stop.departureMinute
-            }))
-          };
-        })
-      }));
     const nextSnapshot = { ...currentSnapshot, lineDraftRowsByLineId: blocks };
     snapshotRef.current = nextSnapshot;
     setSnapshot(nextSnapshot);
@@ -1844,10 +2020,9 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       setLoadError("timetable-batch-train-required");
       return false;
     }
-    const stationNames = new Map(directory.map((station) => [station.stationId, station.name]));
     const replacements = new Map();
     for (const row of targets) {
-      const result = buildBatchTimedStops(row, layout, runtime, stationNames, intervalMinutes);
+      const result = buildBatchTimedStops(row, layout, runtime, intervalMinutes);
       if (result.error) {
         setLoadError(`timetable-batch-${result.error}`);
         return false;
@@ -1884,10 +2059,11 @@ export default function useTimetableController({ activeTransportMode, isActive, 
       const runtime = lineRuntime(runtimes, runtimeSources, lineId);
       const layout = layouts[lineId]?.value;
       const rows = buildRows(snapshot, lineId);
+      const requiresRuntime = lineNeedsRuntime(snapshot, lineId);
       return {
         lineId,
         stopSig: layout?.stopSig || rows[0]?.stopSig || "",
-        runtimeResultId: runtime?.resultId || "",
+        runtimeResultId: requiresRuntime ? runtime?.resultId || "" : "",
         rows: rows.map((row) => {
           const timedStops = continuousTimedStops(row.timedStops);
           return {

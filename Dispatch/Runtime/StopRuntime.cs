@@ -1114,6 +1114,20 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_SetDeparturePending(vehicle, true);
         }
 
+        internal void ReleaseTimedStop(Entity vehicle, uint nowFrame)
+        {
+            if (!m_State.TimedPlans.TryGetValue(vehicle, out TimedStopPlan plan)
+                || plan.ActiveStopOrder < 0)
+            {
+                return;
+            }
+
+            plan.EarliestReleaseFrame = nowFrame;
+            plan.HoldApplied = true;
+            m_State.TimedStopPending.Remove(vehicle);
+            m_FramePlan.ClearDeadline(vehicle, DeadlineKind.TimedStop);
+        }
+
         internal void CancelDeparturePending(Entity vehicle)
         {
             m_State.DeparturePendingSinceFrame.Remove(vehicle);

@@ -12,7 +12,6 @@ namespace RapidTransitMod.TramTrain
     {
         private PrefabSystem m_PrefabSystem;
         private EntityQuery m_TrackQuery;
-        private EntityQuery m_LaneQuery;
 
         protected override void OnCreate()
         {
@@ -22,9 +21,6 @@ namespace RapidTransitMod.TramTrain
                 ComponentType.ReadOnly<PrefabData>(),
                 ComponentType.ReadWrite<NetData>(),
                 ComponentType.ReadWrite<NetGeometryData>());
-            m_LaneQuery = GetEntityQuery(
-                ComponentType.ReadOnly<PrefabData>(),
-                ComponentType.ReadWrite<TrackLaneData>());
         }
 
         protected override void OnUpdate()
@@ -44,9 +40,8 @@ namespace RapidTransitMod.TramTrain
             geometryData.m_IntersectLayers |= railLayers;
             EntityManager.SetComponentData(track, geometryData);
 
-            int laneCount = PatchRailLanes();
             Mod.log.Info("[TramTrainAsset] scoped network patch completed track="
-                + AssetSystem.TrackName + " railLanes=" + laneCount);
+                + AssetSystem.TrackName);
             Enabled = false;
         }
 
@@ -63,22 +58,6 @@ namespace RapidTransitMod.TramTrain
             return Entity.Null;
         }
 
-        private int PatchRailLanes()
-        {
-            int count = 0;
-            using NativeArray<Entity> lanes = m_LaneQuery.ToEntityArray(Allocator.Temp);
-            for (int i = 0; i < lanes.Length; i++)
-            {
-                TrackLaneData data = EntityManager.GetComponentData<TrackLaneData>(lanes[i]);
-                if (data.m_TrackTypes != TrackTypes.Train
-                    && data.m_TrackTypes != TrackTypes.Tram)
-                    continue;
-                data.m_TrackTypes = TrackTypes.Train | TrackTypes.Tram;
-                EntityManager.SetComponentData(lanes[i], data);
-                count++;
-            }
-            return count;
-        }
     }
 }
 #endif

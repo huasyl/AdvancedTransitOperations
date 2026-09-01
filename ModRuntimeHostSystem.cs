@@ -1842,6 +1842,7 @@ namespace RapidTransitMod
             }
             uint nowFrame = m_SimulationSystem.frameIndex;
             m_StopRuntime.SetForcedMidStopGrace(vehicle, nowFrame + FORCED_MIDSTOP_BV_GRACE_FRAMES);
+            m_StopRuntime.ReleaseTimedStop(vehicle, nowFrame);
             m_CommandApplier.ForceDepart(vehicle, nowFrame, commandBuffer);
             m_StopRuntime.StartDeparturePending(vehicle, nowFrame);
             PublishStopFact(new StopFact(

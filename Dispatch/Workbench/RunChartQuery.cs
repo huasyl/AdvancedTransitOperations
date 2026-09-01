@@ -1187,6 +1187,12 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         internal void Clear()
         {
+            bool hadState = m_Active.Count > 0
+                || m_Results.Count > 0
+                || m_Theory.Count > 0
+                || m_TheoryWaiters.Count > 0
+                || m_TheoryQueue.Count > 0
+                || m_TheoryQueued.Count > 0;
             foreach (FullRunTimeSession session in m_Active.Values)
             {
                 if (session.Ticket.IsValid) RailEtaBridgeService.Current?.Cancel(session.Ticket);
@@ -1208,6 +1214,16 @@ namespace RapidTransitMod.Dispatch.Workbench
             m_TheoryActive = null;
             m_TheoryPaused = false;
             m_TheoryWakeFrame = 0;
+            if (hadState)
+            {
+                m_PushInvalidation(new RunTimeInvalidationDto
+                {
+                    editorSessionId = string.Empty,
+                    lineId = string.Empty,
+                    source = string.Empty,
+                    reason = "run-time-backend-reset"
+                });
+            }
         }
 
         private void Poll(FullRunTimeSession session)

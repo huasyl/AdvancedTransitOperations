@@ -907,6 +907,13 @@ namespace RapidTransitMod.Dispatch.Workbench
             TransitMode mode = LineIdentityService.GetKey(block.lineId).Mode;
             if (mode == TransitMode.Unknown)
                 mode = TransportModeResolver.Resolve(m_Runtime.EntityManager, runtimeLine.Entity);
+            string appliedKey = LineIdentityService.GetId(LineIdentityService.GetKey(block.lineId, mode));
+            Applied().Lines.TryGetValue(appliedKey, out AppliedLine previous);
+            Dictionary<string, DispatchWorkbenchStagedRowDto> previousRows = previous?.StagedRows
+                ?.Where(row => row != null && !string.IsNullOrEmpty(row.id))
+                .GroupBy(row => row.id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal)
+                ?? new Dictionary<string, DispatchWorkbenchStagedRowDto>(StringComparer.Ordinal);
             string stopSig = block.stopSig ?? string.Empty;
             FullRunTimeResult runtimeResult = null;
             if (!string.IsNullOrEmpty(block.runtimeResultId)
@@ -965,8 +972,16 @@ namespace RapidTransitMod.Dispatch.Workbench
                     }
                     timedStops = timedStops.Take(row.truncateFromStopIndex).ToArray();
                 }
+                previousRows.TryGetValue(row.rowId, out DispatchWorkbenchStagedRowDto previousRow);
                 if (timedStops.Length > 0
-                    && !ValidateBatchTimedStops(runtimeResult, row.slotMinute, timedStops, block.lineId, row.rowId, errors))
+                    && !ValidateBatchTimedStops(
+                        runtimeResult,
+                        previousRow?.timedStops,
+                        row.slotMinute,
+                        timedStops,
+                        block.lineId,
+                        row.rowId,
+                        errors))
                     continue;
                 rows.Add(new DispatchWorkbenchStagedRowDto
                 {
@@ -981,8 +996,6 @@ namespace RapidTransitMod.Dispatch.Workbench
             }
             if (errors.Count > blockErrorStart)
                 return false;
-            string appliedKey = LineIdentityService.GetId(LineIdentityService.GetKey(block.lineId, mode));
-            Applied().Lines.TryGetValue(appliedKey, out AppliedLine previous);
             applied = new AppliedLine
             {
                 LineEntity = runtimeLine.Entity,
@@ -1042,23 +1055,30 @@ namespace RapidTransitMod.Dispatch.Workbench
 
         private static bool ValidateBatchTimedStops(
             FullRunTimeResult runtimeResult,
+            DispatchWorkbenchTimedStopDto[] previousStops,
             int slotMinute,
             DispatchWorkbenchTimedStopDto[] stops,
             string lineId,
             string rowId,
             List<string> errors)
         {
-            if (runtimeResult == null || stops.Length < 2 || stops.Length > runtimeResult.StopKeys.Length + 1
-                || runtimeResult.Segments.Length < stops.Length - 1)
+            if (stops.Length < 2
+                || (runtimeResult != null
+                    && (stops.Length > runtimeResult.StopKeys.Length + 1
+                        || runtimeResult.Segments.Length < stops.Length - 1))
+                || (runtimeResult == null
+                    && (previousStops == null || previousStops.Length < stops.Length)))
             {
                 errors.Add("schedule-batch-runtime-result-required:" + lineId + ":" + rowId);
                 return false;
             }
             for (int i = 0; i < stops.Length; i++)
             {
-                string expectedStopKey = i == runtimeResult.StopKeys.Length
-                    ? runtimeResult.StopKeys[0]
-                    : runtimeResult.StopKeys[i];
+                string expectedStopKey = runtimeResult != null
+                    ? i == runtimeResult.StopKeys.Length
+                        ? runtimeResult.StopKeys[0]
+                        : runtimeResult.StopKeys[i]
+                    : previousStops[i]?.stopKey ?? string.Empty;
                 if (stops[i] == null || string.IsNullOrEmpty(stops[i].stopKey)
                     || !string.Equals(stops[i].stopKey, expectedStopKey, StringComparison.Ordinal))
                 {
@@ -1084,20 +1104,31 @@ namespace RapidTransitMod.Dispatch.Workbench
                     errors.Add("schedule-batch-arrive-required:" + lineId + ":" + rowId);
                     return false;
                 }
-                RunChartSegment segment = runtimeResult.Segments[i - 1];
-                if (!string.Equals(segment.FromStopKey, stops[i - 1].stopKey, StringComparison.Ordinal)
-                    || !string.Equals(segment.ToStopKey, stops[i].stopKey, StringComparison.Ordinal))
-                {
-                    errors.Add("schedule-batch-runtime-segment-invalid:" + lineId + ":" + rowId);
-                    return false;
-                }
-                int expected = stops[i - 1].depart.HasValue
-                    ? stops[i - 1].depart.Value + segment.Minutes
-                    : -1;
-                if (expected < 0 || stops[i].arrive.Value != expected)
+                if (!stops[i - 1].depart.HasValue)
                 {
                     errors.Add("schedule-batch-arrive-not-from-result:" + lineId + ":" + rowId);
                     return false;
+                }
+                if (!SameBatchInterval(previousStops, stops, i))
+                {
+                    if (runtimeResult == null)
+                    {
+                        errors.Add("schedule-batch-runtime-result-required:" + lineId + ":" + rowId);
+                        return false;
+                    }
+                    RunChartSegment segment = runtimeResult.Segments[i - 1];
+                    if (!string.Equals(segment.FromStopKey, stops[i - 1].stopKey, StringComparison.Ordinal)
+                        || !string.Equals(segment.ToStopKey, stops[i].stopKey, StringComparison.Ordinal))
+                    {
+                        errors.Add("schedule-batch-runtime-segment-invalid:" + lineId + ":" + rowId);
+                        return false;
+                    }
+                    int expected = stops[i - 1].depart.Value + segment.Minutes;
+                    if (stops[i].arrive.Value != expected)
+                    {
+                        errors.Add("schedule-batch-arrive-not-from-result:" + lineId + ":" + rowId);
+                        return false;
+                    }
                 }
                 if (stops[i].depart.HasValue)
                 {
@@ -1114,6 +1145,30 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return false;
             }
             return true;
+        }
+
+        private static bool SameBatchInterval(
+            DispatchWorkbenchTimedStopDto[] previousStops,
+            DispatchWorkbenchTimedStopDto[] stops,
+            int index)
+        {
+            if (previousStops == null || index <= 0 || index >= previousStops.Length
+                || stops == null || index >= stops.Length)
+                return false;
+
+            DispatchWorkbenchTimedStopDto previousFrom = previousStops[index - 1];
+            DispatchWorkbenchTimedStopDto previousTo = previousStops[index];
+            DispatchWorkbenchTimedStopDto submittedFrom = stops[index - 1];
+            DispatchWorkbenchTimedStopDto submittedTo = stops[index];
+            if (previousFrom == null || previousTo == null || submittedFrom == null || submittedTo == null
+                || !string.Equals(previousFrom.stopKey, submittedFrom.stopKey, StringComparison.Ordinal)
+                || !string.Equals(previousTo.stopKey, submittedTo.stopKey, StringComparison.Ordinal)
+                || !previousFrom.depart.HasValue || !previousTo.arrive.HasValue
+                || !submittedFrom.depart.HasValue || !submittedTo.arrive.HasValue)
+                return false;
+
+            return previousTo.arrive.Value - previousFrom.depart.Value
+                == submittedTo.arrive.Value - submittedFrom.depart.Value;
         }
 
         internal string SetHostState(string requestJson)

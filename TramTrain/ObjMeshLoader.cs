@@ -51,7 +51,7 @@ namespace RapidTransitMod.TramTrain
             }
         }
 
-        public static Result Load(string path, float heightOffset)
+        public static Result Load(string path)
         {
             List<Vector3> sourcePositions = new List<Vector3>();
             List<Vector2> sourceTexCoords = new List<Vector2>();
@@ -80,7 +80,7 @@ namespace RapidTransitMod.TramTrain
                     case "v" when parts.Length >= 4:
                         sourcePositions.Add(new Vector3(
                             ParseFloat(parts[1]),
-                            ParseFloat(parts[2]) + heightOffset,
+                            ParseFloat(parts[2]),
                             ParseFloat(parts[3])));
                         break;
                     case "vt" when parts.Length >= 3:
