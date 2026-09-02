@@ -420,9 +420,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                     waypoint = runtime.m_StopRuntime.TryGetSessionWaypoint(vehicle, out int value) ? value : -1;
                     return vehicle != Entity.Null;
                 },
-                LineEnabled = line => runtime.m_LineServiceState.IsOperational(line)
-                    && runtime.m_LineView.SignalPriorityManaged(line),
-                LinePending = runtime.m_LineStructureInvalidator.IsLinePending,
+                LineEnabled = line => runtime.m_LineView.SignalPriorityManaged(
+                    line,
+                    runtime.m_Features.Dispatch()),
                 Waypoint = (line, index) => line != Entity.Null
                     && runtime.EntityManager.HasBuffer<RouteWaypoint>(line)
                     && index >= 0
@@ -449,44 +449,47 @@ namespace RapidTransitMod.Dispatch.Runtime
                         return false;
                     }
                     DynamicBuffer<RouteWaypoint> waypoints = runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
-                    if (!runtime.m_LineStructureInvalidator.TryGetStableSignalInputs(
-                            line,
-                            out LineTrackChain chain,
-                            out LineStopLayout layout))
+                    if (!runtime.m_SignalLineCache.TryGetCached(line, out model))
                     {
-                        diagnostic = new TramSignalPositionDiagnostic(
-                            TramSignalPositionFailure.StableLineInputsUnavailable,
-                            default);
-                        return false;
-                    }
-                    if (!runtime.m_LineMileage.Get(
-                            line,
-                            waypoints,
-                            out LineMileageModel mileage))
-                    {
-                        diagnostic = new TramSignalPositionDiagnostic(
-                            TramSignalPositionFailure.LineMileageUnavailable,
-                            default);
-                        return false;
-                    }
-                    if (!runtime.m_SignalLineCache.TryGet(
-                            line,
-                            chain,
-                            layout,
-                            mileage,
-                            out model))
-                    {
-                        diagnostic = new TramSignalPositionDiagnostic(
-                            TramSignalPositionFailure.SignalLineModelUnavailable,
-                            default);
-                        model = null;
-                        return false;
+                        if (!runtime.m_LineStructureInvalidator.TryGetStableSignalInputs(
+                                line,
+                                out LineTrackChain chain,
+                                out LineStopLayout layout))
+                        {
+                            diagnostic = new TramSignalPositionDiagnostic(
+                                TramSignalPositionFailure.StableLineInputsUnavailable,
+                                default);
+                            return false;
+                        }
+                        if (!runtime.m_LineMileage.Get(
+                                line,
+                                waypoints,
+                                out LineMileageModel mileage))
+                        {
+                            diagnostic = new TramSignalPositionDiagnostic(
+                                TramSignalPositionFailure.LineMileageUnavailable,
+                                default);
+                            return false;
+                        }
+                        if (!runtime.m_SignalLineCache.TryGet(
+                                line,
+                                chain,
+                                layout,
+                                mileage,
+                                out model))
+                        {
+                            diagnostic = new TramSignalPositionDiagnostic(
+                                TramSignalPositionFailure.SignalLineModelUnavailable,
+                                default);
+                            model = null;
+                            return false;
+                        }
                     }
                     if (!runtime.m_TrackProjection.TryGetCurrentLanePosition(
                             vehicle,
                             line,
                             waypoints,
-                            chain,
+                            model.Chain,
                             out VehicleTrackCursor trackPosition,
                             out Entity currentLane,
                             out CurrentLanePositionDiagnostic projection))

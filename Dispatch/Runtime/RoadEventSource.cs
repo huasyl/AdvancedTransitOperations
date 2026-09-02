@@ -198,7 +198,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 return false;
             }
-            source = new ManagedSourceVehicle(row.Vehicle, row.RegistryState);
+            source = new ManagedSourceVehicle(
+                row.Vehicle,
+                row.RegisteredLine,
+                row.RegistryState);
             return true;
         }
 

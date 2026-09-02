@@ -61,7 +61,6 @@ namespace RapidTransitMod.Dispatch.Signals
         internal TrySignalVehicle TryVehicle;
         internal TrySignalStop TryStop;
         internal Func<Entity, bool> LineEnabled;
-        internal Func<Entity, bool> LinePending;
         internal Func<Entity, int, Entity> Waypoint;
         internal Func<int> RailSourceCount;
         internal Func<int> RoadSourceCount;

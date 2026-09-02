@@ -27,14 +27,6 @@
     <DefineConstants Condition="'$(EnablePerfLogs)'=='true'">$(DefineConstants);RT_PERF_LOGS</DefineConstants>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(EnableSignalWaitMeasure)'=='true'">
-    <DefineConstants>$(DefineConstants);RT_SIGNAL_WAIT_MEASURE</DefineConstants>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(EnableBusSignalWaitMeasure)'=='true'">
-    <DefineConstants>$(DefineConstants);RT_BUS_SIGNAL_WAIT_MEASURE</DefineConstants>
-  </PropertyGroup>
-
   <ItemGroup>
     <Compile Remove="references\**\*.cs" />
     <Compile Remove="tools\**\*.cs" />

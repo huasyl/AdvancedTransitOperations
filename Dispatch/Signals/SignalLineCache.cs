@@ -81,12 +81,18 @@ namespace RapidTransitMod.Dispatch.Signals
 
     internal sealed class SignalLineModel
     {
+        internal readonly LineTrackChain Chain;
         internal float TotalDistanceMeters;
         internal SignalTrackAtom[] Atoms = Array.Empty<SignalTrackAtom>();
         internal SignalJunction[] Junctions = Array.Empty<SignalJunction>();
         internal SignalTrackSection[] Sections = Array.Empty<SignalTrackSection>();
         internal int[] SectionBySegment = Array.Empty<int>();
         internal int[] DepartureSectionByWaypoint = Array.Empty<int>();
+
+        internal SignalLineModel(LineTrackChain chain)
+        {
+            Chain = chain;
+        }
     }
 
     internal sealed class SignalLineCache
@@ -104,6 +110,16 @@ namespace RapidTransitMod.Dispatch.Signals
         {
             if (line != Entity.Null)
                 m_Lines.Remove(line);
+        }
+
+        internal bool TryGetCached(
+            Entity line,
+            out SignalLineModel model)
+        {
+            model = null;
+            return line != Entity.Null
+                && m_Lines.TryGetValue(line, out model)
+                && model != null;
         }
 
         internal bool TryGet(
@@ -258,7 +274,7 @@ namespace RapidTransitMod.Dispatch.Signals
                 return null;
             }
 
-            return new SignalLineModel
+            return new SignalLineModel(chain)
             {
                 TotalDistanceMeters = mileage.TotalDistanceMeters,
                 Atoms = atoms,

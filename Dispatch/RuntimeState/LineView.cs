@@ -573,22 +573,11 @@ namespace RapidTransitMod
             return applied;
         }
 
-        internal bool SignalPriorityManaged(Entity line)
+        internal bool SignalPriorityManaged(Entity line, bool dispatchOn)
         {
-            LineKey storeKey = ResolveStoreKey(line);
-            return LineKey.IsStableGuidKey(storeKey)
-                && m_AppliedStore.IsManaged(storeKey)
+            return ManagedRuntime(line, dispatchOn)
                 && m_Cfg.IsSignalPriorityEnabled(line);
         }
-
-#if RT_SIGNAL_WAIT_MEASURE
-        internal bool SignalPriorityApplied(Entity line)
-        {
-            LineKey storeKey = ResolveStoreKey(line);
-            return LineKey.IsStableGuidKey(storeKey)
-                && m_AppliedStore.IsManaged(storeKey);
-        }
-#endif
 
         public bool TrySnapshot(Entity line, bool dispatchOn, out LineRuntimeSnapshot snapshot)
         {
