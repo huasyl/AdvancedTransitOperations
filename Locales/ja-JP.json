@@ -94,6 +94,6 @@
   "Options.SECTION[RapidTransitMod.RapidTransitMod.Mod]": "Advanced Transit Operations",
   "Options.TAB[RapidTransitMod.RapidTransitMod.Mod.General]": "一般",
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.SelectionPanel]": "選択情報パネル",
-  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.GameOptions.AutoOpenSelectionPanel]": "選択情報パネルを自動で開く",
-  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.GameOptions.AutoOpenSelectionPanel]": "対応する駅、交通路線または公共交通車両を選択すると、Advanced Transit Operations の選択情報パネルを自動で開きます。"
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AutoOpenSelectionPanel]": "選択情報パネルを自動で開く",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AutoOpenSelectionPanel]": "対応する駅、交通路線または公共交通車両を選択すると、Advanced Transit Operations の選択情報パネルを自動で開きます。"
 }

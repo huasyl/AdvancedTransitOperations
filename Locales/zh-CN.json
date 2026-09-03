@@ -113,6 +113,6 @@
   "Options.SECTION[RapidTransitMod.RapidTransitMod.Mod]": "\u9ad8\u7ea7\u516c\u5171\u4ea4\u901a\u8fd0\u8425",
   "Options.TAB[RapidTransitMod.RapidTransitMod.Mod.General]": "\u5e38\u89c4",
   "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.SelectionPanel]": "\u9009\u4e2d\u4fe1\u606f\u9762\u677f",
-  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.GameOptions.AutoOpenSelectionPanel]": "\u81ea\u52a8\u5c55\u5f00\u9009\u4e2d\u4fe1\u606f\u9762\u677f",
-  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.GameOptions.AutoOpenSelectionPanel]": "\u9009\u4e2d\u53d7\u652f\u6301\u7684\u8f66\u7ad9\u3001\u4ea4\u901a\u7ebf\u8def\u6216\u516c\u5171\u4ea4\u901a\u8f66\u8f86\u65f6\uff0c\u81ea\u52a8\u5c55\u5f00\u9ad8\u7ea7\u516c\u5171\u4ea4\u901a\u8fd0\u8425\u7684\u9009\u4e2d\u4fe1\u606f\u9762\u677f\u3002"
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AutoOpenSelectionPanel]": "\u81ea\u52a8\u5c55\u5f00\u9009\u4e2d\u4fe1\u606f\u9762\u677f",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.AtoGameOptions.AutoOpenSelectionPanel]": "\u9009\u4e2d\u53d7\u652f\u6301\u7684\u8f66\u7ad9\u3001\u4ea4\u901a\u7ebf\u8def\u6216\u516c\u5171\u4ea4\u901a\u8f66\u8f86\u65f6\uff0c\u81ea\u52a8\u5c55\u5f00\u9ad8\u7ea7\u516c\u5171\u4ea4\u901a\u8fd0\u8425\u7684\u9009\u4e2d\u4fe1\u606f\u9762\u677f\u3002"
 }

@@ -11,7 +11,8 @@
     <OutputPath Condition="'$(Configuration)'=='Debug'">$(RapidTransitDeployDir)\</OutputPath>
     <OutputPath Condition="'$(Configuration)'!='Debug'">bin\$(Configuration)\net6.0\</OutputPath>
     <PublishConfigurationPath>Properties\PublishConfiguration.xml</PublishConfigurationPath>
-    <EnableOfficialToolchain>true</EnableOfficialToolchain>
+    <EnableOfficialToolchain Condition="'$(Configuration)'=='Debug'">false</EnableOfficialToolchain>
+    <EnableOfficialToolchain Condition="'$(Configuration)'!='Debug'">true</EnableOfficialToolchain>
     <StripSymbolsForPackage>false</StripSymbolsForPackage>
     <OfficialToolPath>$([System.Environment]::GetEnvironmentVariable('CSII_TOOLPATH', 'EnvironmentVariableTarget.User'))</OfficialToolPath>
     <OfficialToolPath Condition="'$(OfficialToolPath)'==''">D:\steam\steamapps\common\Cities Skylines II\Cities2_Data\Content\Game\.ModdingToolchain</OfficialToolPath>
@@ -55,14 +56,6 @@
     </None>
     <None Include="mod.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="tools\TramTrainAssets\output\tramtrain_transition_v03.obj" Condition="'$(Configuration)'=='Debug'">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Assets\TramTrain\tramtrain_transition_v03.obj</TargetPath>
-    </None>
-    <None Update="tools\TramTrainAssets\output\tramtrain_transition_lod1_v03.obj" Condition="'$(Configuration)'=='Debug'">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Assets\TramTrain\tramtrain_transition_lod1_v03.obj</TargetPath>
     </None>
   </ItemGroup>
 

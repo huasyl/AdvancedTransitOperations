@@ -10,21 +10,25 @@
 <LongDescription>
 Advanced Transit Operations (ATO) is a public transit dispatch mod for Cities: Skylines II.
 
-If you are tired of controlling public transit only with sliders, or if you want more precise control over when a line departs, how Rapid and Local services operate, and what broadcasts play on vehicles and platforms, ATO gives your public transit system more operational possibilities.
-
 The current version supports Train, Subway, Tram, and Bus. Supported languages: English, Simplified Chinese, and Japanese.
 
-## Real Timetables Are Here
+## What's New in 0.4.1
 
-ATO now supports scheduled departures at intermediate stops, extending timetable control beyond the origin station. Trip records now show actual arrival and departure times stop by stop, and rail services can be viewed together in the new time–distance diagram.
+This update adds signal priority for buses and trams, while also improving the timetable editing workflow.
 
-Please refer to the Update History for the complete changelog.
+Buses and trams can now request priority before reaching intersections. When used together with dedicated bus or tram lanes, this can significantly improve transit efficiency. In response to community feedback, ATO also adds Quick Add and the ability to copy departure times from other lines, making it easier to set up origin departures.
+
+This update also includes further performance optimizations and multiple bug fixes. In testing, mod CPU overhead was reduced by approximately 30% compared with the previous version.
 
 ## Core Gameplay
 
 ### Build Timetables That Fit Your Service
 
 Control only origin departures when that is all you need, or create a full timetable with scheduled departure times at intermediate stops. Different services can use different schedules for peak, off-peak, and final operations, giving you precise control without requiring a full timetable for every line.
+
+### Signal Priority
+
+ATO begins preparing green lights while vehicles are still hundreds of meters away. It checks up to 3 intersections within 320 meters ahead and uses the vanilla game's mechanisms to request the required green phases in advance, helping buses and trams pass through multiple intersections with fewer stops. In testing, trams on semi-exclusive right-of-way can achieve green lights for almost the entire journey. For best results, enable signal priority only on a few key lines and use dedicated lanes.
 
 ### Run Passing Operations
 
@@ -58,7 +62,7 @@ This mod does not use Harmony.
 
 - **Xtended Transport Manager (XTM):** Full compatibility has been implemented. After using Set first stop, ATO will collect updated running data for the line, and dispatch may take some time to stabilize again.
 
-- **Traffic Tool Essentials:** Its Depot Zone conflicts with ATO’s Depot Selection feature because both affect depot assignment. Please enable only one of these two features. Other features can coexist.
+- **Traffic Tool Essentials:** Its Depot Zone conflicts with ATO’s Depot Selection feature because both affect depot assignment. Please enable only one of these two features. Other features can coexist. At intersections where Green Wave is enabled, ATO’s Signal Priority will not take effect.
 
 - **FastBoarding:** Can coexist, but using rail fast boarding or late-passenger skipping on rail lines controlled by ATO is not recommended.
 
@@ -85,19 +89,23 @@ Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交
 
 当前支持火车、地铁、有轨电车和公交。支持语言：英语、简体中文、日语。
 
-## v0.4.0 真正的时刻表
+## v0.4.1 更新内容
 
-ATO 现在不再只控制始发站发车。
+本次更新为公交和有轨电车加入了信号优先功能，并优化了时刻表的编辑流程。
 
-你仍然可以只设置始发时间，保持简单的发车控制；也可以选择进一步创建完整时刻表，为中途站设置计划发车时间。运行记录现在也会逐站显示实际到达和发车时间，方便直接对比计划与实际运行情况。
+公交和有轨电车现在可以在经过路口前申请优先通行，配合公交专用道或有轨电车专用道使用，可极大提升公共交通的运行效率。此外，响应社区的意见，模组新增了快速添加和复制始发时刻功能，进一步简化始发时刻的添加流程。
 
-轨道交通还新增了运行图功能，可在同一区间内同时查看不同线路的运行情况。
+本次更新还进一步降低了性能开销，并修复了多项问题。经测试，本次更新相比上一版本可降低约 30% 的模组 CPU 开销
 
 ## 核心玩法
 
 ### 按需设置运行时刻
 
 如果只需要控制始发站发车，可以仅设置始发时间；也可以进一步创建完整时刻表，为中途站设置计划发车时间。不同班次可分别使用高峰、平峰和末班时段的运行计划，在提供更精细控制的同时，也无需为每条线路都设置完整时刻表。
+
+### 信号优先
+
+车辆仍在数百米外时，ATO 就会开始为前方路口准备绿灯。系统会检查车辆前方 320 米范围内最多 3 个路口，并利用原版机制提前申请对应相位的绿灯，让公交和有轨电车能够连续通过多个路口，尽量减少停车等灯。经测试，对于采用半独立路权的有轨电车几乎可以实现全程绿灯通行。建议仅在部分线路上启用信号优先，并配合专用道使用，以获得最佳效果。
 
 ### 开行快车、慢车与越行服务
 
@@ -131,7 +139,7 @@ ATO 有两个界面。左键单击游戏右上角的 Mod 按钮打开工作台�
 
 - **Xtended Transport Manager（XTM）：** 已实现全面兼容。使用“设置首站”后，ATO 会重新观测线路运行数据，调度可能需要一点时间重新稳定。
 
-- **Traffic Tool Essentials：** 其 Depot Zone 功能与 ATO 的车库选择功能会同时影响车库分配，建议只启用其中一个；其他功能可以共存。
+- **Traffic Tool Essentials：** 其 Depot Zone 功能与 ATO 的车库选择功能会同时影响车库分配，建议只启用其中一个；其他功能可以共存。在启用绿波的路口，ATO 的信号优先功能不会生效。
 
 - **FastBoarding：** 可以共存，但不建议在 ATO 接管的轨道线路上启用轨道快速上客或跳过迟到乘客。
 
@@ -152,7 +160,7 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <!--Thumbnail-->
   <Thumbnail Value="Properties/Cover2.jpg" />
   <!--Screenshot, can be set multiple times-->
-  <Screenshot Value="Properties/Screenshots/Screenshot01.pub.jpg" />
+  <Screenshot Value="Properties/Screenshots/Screenshot-v0.4.1-signal-priority.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot12.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot13.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot02.pub.jpg" />
@@ -168,7 +176,7 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.4.0" />
+  <ModVersion Value="0.4.1" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -179,18 +187,29 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <ChangeLog>
 ## New Features
 
-- Added timetable support. Vehicle departure times can now be edited for each stop, with actual arrival and departure times available in trip records.
-- Added time-distance diagrams for rail transit, allowing services from different lines sharing the same corridor to be viewed together.
+- Added signal priority for buses and trams.
+- Added Quick Add, allowing trips to be added quickly by setting the trip count for each time period with fewer repetitive steps.
+- Added the ability to copy departure times from other lines.
 
-## Bug Fixes
+## Performance
 
-- Fixed an issue where temporary entities could enter the depot catalog and prevent timetables from being saved.
-- Fixed an issue where recorded dwell times were not saved correctly.
-- Fixed an issue where vehicles could occasionally be incorrectly associated with the previous stop, resulting in inaccurate data recording.
+- Reduced the update frequency for buses to match the vanilla game's update interval.
+- Reduced track path scanning. Cached track paths are now rescanned only when the route or pathfinding changes.
+- Platform broadcasts now check for vehicles based on camera distance. Platforms outside the audible range no longer perform unnecessary scans.
 
 ## Improvements
 
-- Increased the maximum depot departure lead time for buses, reducing missed services on routes with longer depot travel times.
+- Selection panels can now open automatically. This behavior can still be disabled in Settings.
+- Buses and trams no longer display the "Local" badge.
+
+## Bug Fixes
+
+- Fixed an issue where bus lines could incorrectly enter the track path building process.
+- Fixed an issue where manually clicking Depart in the Selection Panel did not properly end the dwell state when a per-stop timetable was active.
+- Fixed an issue where detailed timetables could not be saved after reloading a save because previously calculated theoretical results had become invalid.
+- Fixed an issue where ATO dispatching did not fully pause after a line was disabled.
+- Fixed delayed cleanup of deleted bus lines and an issue where vehicles assigned to a new line could remain bound to their previous line.
+- Fixed an issue where vehicles queueing before the origin stop could be incorrectly marked as having arrived at the origin, causing subsequent departures to occur without proper departure control.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />

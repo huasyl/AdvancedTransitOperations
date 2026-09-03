@@ -45,7 +45,7 @@ namespace RapidTransitMod
         private const int CohtmlDebuggerPort = 9444;
         private static readonly ILog s_RawLog = LogManager.GetLogger(nameof(RapidTransitMod)).SetShowsErrorsInUI(false);
         public static TimedLogger log = new TimedLogger(s_RawLog);
-        public static GameOptions Options { get; private set; } = null!;
+        public static AtoGameOptions Options { get; private set; } = null!;
         internal static string RootPath { get; private set; } = string.Empty;
 
         internal static string PrefixWithGameTime(string message)
@@ -67,7 +67,7 @@ namespace RapidTransitMod
         public void OnLoad(UpdateSystem updateSystem)
         {
             log.Info(nameof(OnLoad));
-            Options = new GameOptions(this);
+            Options = new AtoGameOptions(this);
 #if RT_DEBUG_TOOLS
             TryEnableCohtmlDebugger();
             updateSystem.UpdateBefore<TramTrain.AssetSystem, Game.Prefabs.PrefabInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
@@ -106,7 +106,7 @@ namespace RapidTransitMod
                 Workbenches.ApiHost.Init(modRootPath);
             }
 
-            AssetDatabase.global.LoadSettings("AdvancedTransitOperations.GameOptions", Options, userSetting: true);
+            AssetDatabase.global.LoadSettings("AdvancedTransitOperations.AtoGameOptions", Options, userSetting: true);
             Options.RegisterInOptionsUI();
 
             World.DefaultGameObjectInjectionWorld
