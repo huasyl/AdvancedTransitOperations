@@ -35,7 +35,7 @@ using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.Dispatch.Runtime;
-using RapidTransitMod.Dispatch.Signals;
+using RapidTransitMod.SignalPriority;
 using RapidTransitMod.Runtime;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.Core;

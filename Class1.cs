@@ -13,6 +13,7 @@ using Game.Serialization;
 using Game.Simulation;
 using Game.Tools;
 using Game.UI.InGame;
+using RapidTransitMod.Settings;
 using Unity.Entities;
 
 namespace RapidTransitMod
@@ -44,6 +45,7 @@ namespace RapidTransitMod
         private const int CohtmlDebuggerPort = 9444;
         private static readonly ILog s_RawLog = LogManager.GetLogger(nameof(RapidTransitMod)).SetShowsErrorsInUI(false);
         public static TimedLogger log = new TimedLogger(s_RawLog);
+        public static GameOptions Options { get; private set; } = null!;
         internal static string RootPath { get; private set; } = string.Empty;
 
         internal static string PrefixWithGameTime(string message)
@@ -65,6 +67,7 @@ namespace RapidTransitMod
         public void OnLoad(UpdateSystem updateSystem)
         {
             log.Info(nameof(OnLoad));
+            Options = new GameOptions(this);
 #if RT_DEBUG_TOOLS
             TryEnableCohtmlDebugger();
             updateSystem.UpdateBefore<TramTrain.AssetSystem, Game.Prefabs.PrefabInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
@@ -102,6 +105,9 @@ namespace RapidTransitMod
                 I18n.LoadAll(Path.Combine(modRootPath, "Locales"));
                 Workbenches.ApiHost.Init(modRootPath);
             }
+
+            AssetDatabase.global.LoadSettings("AdvancedTransitOperations.GameOptions", Options, userSetting: true);
+            Options.RegisterInOptionsUI();
 
             World.DefaultGameObjectInjectionWorld
                 .GetOrCreateSystemManaged<GamePanelUISystem>()
@@ -143,6 +149,11 @@ namespace RapidTransitMod
         public void OnDispose()
         {
             log.Info(nameof(OnDispose));
+            if (Options != null)
+            {
+                Options.UnregisterInOptionsUI();
+                Options = null!;
+            }
             Workbenches.ApiHost.Dispose();
             log.Info("RapidTransitMod disposed.");
         }

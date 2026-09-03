@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 export const GROUP = "RapidTransitPanel";
 export const visible$ = bindValue<boolean>(GROUP, "visible");
+export const autoOpenPanel$ = bindValue<boolean>(GROUP, "autoOpenPanel");
 export const panelDataJson$ = bindValue<string>(GROUP, "panelDataJson");
 export const devSightVisible$ = bindValue<boolean>(GROUP, "devSightVisible");
 export const devSightJson$ = bindValue<string>(GROUP, "devSightJson");

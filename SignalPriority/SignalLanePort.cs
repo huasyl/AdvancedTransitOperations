@@ -4,7 +4,7 @@ using Game.Simulation;
 using Game.Vehicles;
 using Unity.Entities;
 
-namespace RapidTransitMod.Dispatch.Signals
+namespace RapidTransitMod.SignalPriority
 {
     internal readonly struct SignalLaneFact
     {

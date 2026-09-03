@@ -8,7 +8,7 @@ using RapidTransitMod.TrackProjection;
 using Unity.Entities;
 using Unity.Mathematics;
 
-namespace RapidTransitMod.Dispatch.Signals
+namespace RapidTransitMod.SignalPriority
 {
     internal readonly struct TramSignalPosition
     {

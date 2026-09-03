@@ -109,5 +109,10 @@
   "RapidTransit.EtaComparisonExportState": "Export",
   "RapidTransit.EtaComparisonExporting": "writing",
   "RapidTransit.EtaComparisonExportCompleted": "completed",
-  "RapidTransit.EtaComparisonExportFailed": "failed"
+  "RapidTransit.EtaComparisonExportFailed": "failed",
+  "Options.SECTION[RapidTransitMod.RapidTransitMod.Mod]": "Advanced Transit Operations",
+  "Options.TAB[RapidTransitMod.RapidTransitMod.Mod.General]": "General",
+  "Options.GROUP[RapidTransitMod.RapidTransitMod.Mod.SelectionPanel]": "Selection Panel",
+  "Options.OPTION[RapidTransitMod.RapidTransitMod.Mod.GameOptions.AutoOpenSelectionPanel]": "Automatically open the selection panel",
+  "Options.OPTION_DESCRIPTION[RapidTransitMod.RapidTransitMod.Mod.GameOptions.AutoOpenSelectionPanel]": "Automatically open the Advanced Transit Operations selection panel when selecting a supported station, transport line, or public transport vehicle."
 }

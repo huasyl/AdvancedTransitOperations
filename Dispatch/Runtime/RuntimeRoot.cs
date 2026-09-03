@@ -8,7 +8,7 @@ using RapidTransitMod.Dispatch.Lines;
 using RapidTransitMod.Dispatch.Observation;
 using RapidTransitMod.Dispatch.Persistence;
 using RapidTransitMod.Dispatch.Scheduling;
-using RapidTransitMod.Dispatch.Signals;
+using RapidTransitMod.SignalPriority;
 using RapidTransitMod.Dispatch.Workbench;
 using RapidTransitMod.Core;
 using RapidTransitMod.RailEta.BuiltIn;

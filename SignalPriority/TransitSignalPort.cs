@@ -4,7 +4,7 @@ using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
 
-namespace RapidTransitMod.Dispatch.Signals
+namespace RapidTransitMod.SignalPriority
 {
     internal delegate bool TrySignalVehicle(
         Entity vehicle,

@@ -9,6 +9,7 @@ using Game.Vehicles;
 using Unity.Entities;
 using UnityEngine;
 using UnityEngine.Scripting;
+using Unity.Mathematics;
 
 namespace RapidTransitMod
 {
@@ -19,6 +20,7 @@ namespace RapidTransitMod
 
         private SelectedInfoUISystem m_SelectedInfoUISystem = null!;
         private ValueBinding<bool> m_VisibleBinding = null!;
+        private ValueBinding<bool> m_AutoOpenPanelBinding = null!;
         private ValueBinding<string> m_PanelDataJsonBinding = null!;
         private ValueBinding<bool> m_DevSightVisibleBinding = null!;
         private ValueBinding<string> m_DevSightJsonBinding = null!;
@@ -30,6 +32,8 @@ namespace RapidTransitMod
 #endif
 
         private bool m_PanelOpen;
+        private bool m_AutoOpenPending;
+        private bool m_PanelAutoOpened;
         private bool m_LastVisible;
         private Entity m_PendingVehicle;
         private Entity m_PendingRoute;
@@ -53,6 +57,7 @@ namespace RapidTransitMod
             m_LastRoute = Entity.Null;
 
             AddBinding(m_VisibleBinding = new ValueBinding<bool>(kGroup, "visible", initialValue: false));
+            AddBinding(m_AutoOpenPanelBinding = new ValueBinding<bool>(kGroup, "autoOpenPanel", initialValue: false));
             AddBinding(m_PanelDataJsonBinding = new ValueBinding<string>(kGroup, "panelDataJson", string.Empty));
             AddBinding(m_DevSightVisibleBinding = new ValueBinding<bool>(kGroup, "devSightVisible", initialValue: false));
             AddBinding(m_DevSightJsonBinding = new ValueBinding<string>(kGroup, "devSightJson", string.Empty));
@@ -79,11 +84,25 @@ namespace RapidTransitMod
         }
 
         [Preserve]
+        protected override void OnStartRunning()
+        {
+            base.OnStartRunning();
+            m_SelectedInfoUISystem.eventSelectionChanged += OnSelectionChanged;
+        }
+
+        [Preserve]
+        protected override void OnStopRunning()
+        {
+            m_SelectedInfoUISystem.eventSelectionChanged -= OnSelectionChanged;
+            base.OnStopRunning();
+        }
+
+        [Preserve]
         protected override void OnUpdate()
         {
             base.OnUpdate();
 
-            if (!m_PanelOpen)
+            if (!m_PanelOpen && !m_AutoOpenPending)
             {
                 ResetState(clearSnapshot: true);
                 SetHidden();
@@ -124,8 +143,12 @@ namespace RapidTransitMod
                 TrackPendingSelection(selectedEntity, selectedRoute, currentFrame);
                 if (HasSelectionSettled(currentFrame))
                 {
+                    bool closeAutoOpenedPanel = Mod.Options.AutoOpenSelectionPanel && m_PanelAutoOpened;
                     ResetState(clearSnapshot: true);
+                    m_AutoOpenPending = false;
                     SetHidden();
+                    if (closeAutoOpenedPanel)
+                        SetAutoOpenPanel(false);
                 }
                 return;
             }
@@ -148,7 +171,8 @@ namespace RapidTransitMod
             }
             if (needsSelectionPush)
             {
-                TryPushSnapshot(panel, selectedEntity, selectedRoute, isInspectableVehicle, "refresh", currentFrame);
+                bool pushed = TryPushSnapshot(panel, selectedEntity, selectedRoute, isInspectableVehicle, "refresh", currentFrame);
+                CompleteAutoOpen(pushed);
                 return;
             }
 
@@ -179,9 +203,48 @@ namespace RapidTransitMod
             return true;
         }
 
+        private void OnSelectionChanged(Entity selectedEntity, Entity selectedPrefab, float3 selectedPosition)
+        {
+            if (!Mod.Options.AutoOpenSelectionPanel)
+                return;
+
+            if (m_PanelOpen && !m_PanelAutoOpened)
+                return;
+
+            TrackPendingSelection(selectedEntity, m_SelectedInfoUISystem.selectedRoute, UnityEngine.Time.frameCount);
+            m_AutoOpenPending = true;
+        }
+
+        private void CompleteAutoOpen(bool snapshotBuilt)
+        {
+            if (!m_AutoOpenPending)
+                return;
+
+            if (!snapshotBuilt)
+            {
+                m_AutoOpenPending = false;
+                if (Mod.Options.AutoOpenSelectionPanel && m_PanelAutoOpened)
+                    SetAutoOpenPanel(false);
+                return;
+            }
+
+            if (!Mod.Options.AutoOpenSelectionPanel)
+            {
+                m_AutoOpenPending = false;
+                return;
+            }
+
+            m_PanelAutoOpened = true;
+            SetAutoOpenPanel(true);
+            if (m_PanelOpen)
+                m_AutoOpenPending = false;
+        }
+
         private void TrackPendingSelection(Entity vehicle, Entity selectedRoute, int currentFrame)
         {
-            if (vehicle == m_PendingVehicle && selectedRoute == m_PendingRoute)
+            if (vehicle == m_PendingVehicle
+                && selectedRoute == m_PendingRoute
+                && m_PendingSelectionFrame >= 0)
                 return;
 
             m_PendingVehicle = vehicle;
@@ -425,11 +488,28 @@ namespace RapidTransitMod
         private void SetPanelOpen(bool open)
         {
             m_PanelOpen = open;
+            if (open)
+            {
+                m_AutoOpenPending = false;
+                return;
+            }
+
             if (!open)
             {
+                if (m_PanelAutoOpened)
+                    SetAutoOpenPanel(false);
+
+                m_PanelAutoOpened = false;
+                m_AutoOpenPending = false;
                 ResetState(clearSnapshot: true);
                 SetHidden();
             }
+        }
+
+        private void SetAutoOpenPanel(bool open)
+        {
+            if (m_AutoOpenPanelBinding.value != open)
+                m_AutoOpenPanelBinding.Update(open);
         }
 
         private void RequestVehicleRetire()

@@ -156,7 +156,7 @@ function SummaryTable({
                   <div className="dw-demo-line-meta">
                     <div className="dw-demo-line-meta-top">
                       <span className="dw-demo-line-name">{row.lineName}</span>
-                      <SummaryBadge kind={row.kind} />
+                      {supportsExpress ? <SummaryBadge kind={row.kind} /> : null}
                     </div>
                   </div>
                 </div>
