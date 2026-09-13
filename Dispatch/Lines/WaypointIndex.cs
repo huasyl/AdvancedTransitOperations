@@ -449,7 +449,6 @@ namespace RapidTransitMod.Dispatch.Lines
 
             int bestWaypointIndex = -1;
             int bestDistance = int.MaxValue;
-            const int anchorSlackAtoms = 3;
             for (int candidateSlot = 0; candidateSlot < candidateCount; candidateSlot++)
             {
                 int candidate = candidateSlot == 0 ? candidate0
@@ -468,9 +467,7 @@ namespace RapidTransitMod.Dispatch.Lines
                     continue;
                 }
 
-                int expandedStart = math.max(0, windowStart - anchorSlackAtoms);
-                int expandedEndExclusive = math.min(chain.TrackAtoms.Count, windowEndExclusive + anchorSlackAtoms);
-                if (cursor.AtomCursorIndex < expandedStart || cursor.AtomCursorIndex >= expandedEndExclusive)
+                if (cursor.AtomCursorIndex < windowStart || cursor.AtomCursorIndex >= windowEndExclusive)
                     continue;
 
                 int distance = cursor.AtomCursorIndex < windowStart

@@ -15,22 +15,9 @@ namespace RapidTransitMod
 {
     public sealed partial class OriginArrivingStallRepairSystem : GameSystemBase
     {
-        private const uint CandidateSettleFrames = 16;
-        private const uint RepairAckTimeoutFrames = 32;
-        private const int MaxRepairsPerUpdate = 2;
-
         private EntityQuery m_Query;
         private SimulationSystem m_SimulationSystem;
-        private readonly Dictionary<Entity, RepairRecord> m_Records = new Dictionary<Entity, RepairRecord>();
-        private readonly Dictionary<Entity, string> m_LastRejectKeys = new Dictionary<Entity, string>();
-
-        private struct RepairRecord
-        {
-            public Entity Target;
-            public uint FirstFrame;
-            public uint RepairFrame;
-            public bool Repaired;
-        }
+        private readonly Dictionary<Entity, string> m_LastDiagnosticKeys = new Dictionary<Entity, string>();
 
         public override int GetUpdateInterval(SystemUpdatePhase phase)
         {
@@ -67,8 +54,7 @@ namespace RapidTransitMod
 
         protected override void OnDestroy()
         {
-            m_Records.Clear();
-            m_LastRejectKeys.Clear();
+            m_LastDiagnosticKeys.Clear();
             base.OnDestroy();
         }
 
@@ -83,7 +69,6 @@ namespace RapidTransitMod
                 return;
 
             uint nowFrame = m_SimulationSystem.frameIndex;
-            int repairs = 0;
             NativeArray<Entity> vehicles = m_Query.ToEntityArray(Allocator.Temp);
             try
             {
@@ -93,99 +78,19 @@ namespace RapidTransitMod
                     if (!EntityManager.Exists(vehicle))
                         continue;
 
-                    if (TryProcessRepairAck(vehicle, nowFrame))
-                        continue;
-
                     if (!TryBuildCandidate(originRepair, vehicle, out Candidate candidate, out RejectDiagnostic reject))
                     {
                         LogRejectOnce(vehicle, reject, nowFrame);
-                        m_Records.Remove(vehicle);
                         continue;
                     }
 
-                    m_LastRejectKeys.Remove(vehicle);
-
-                    if (!m_Records.TryGetValue(vehicle, out RepairRecord record)
-                        || record.Target != candidate.Target)
-                    {
-                        m_Records[vehicle] = new RepairRecord
-                        {
-                            Target = candidate.Target,
-                            FirstFrame = nowFrame
-                        };
-                        LogCandidate(vehicle, candidate, nowFrame);
-                        continue;
-                    }
-
-                    if (record.Repaired || nowFrame - record.FirstFrame < CandidateSettleFrames)
-                        continue;
-
-                    if (repairs >= MaxRepairsPerUpdate)
-                        continue;
-
-                    if (TryRepairCandidate(vehicle, candidate, nowFrame))
-                    {
-                        record.Repaired = true;
-                        record.RepairFrame = nowFrame;
-                        m_Records[vehicle] = record;
-                        repairs++;
-                    }
+                    LogCandidateOnce(vehicle, candidate, nowFrame);
                 }
             }
             finally
             {
                 vehicles.Dispose();
             }
-        }
-
-        private bool TryProcessRepairAck(Entity vehicle, uint nowFrame)
-        {
-            if (!m_Records.TryGetValue(vehicle, out RepairRecord record) || !record.Repaired)
-                return false;
-
-            if (!EntityManager.Exists(vehicle)
-                || !EntityManager.HasComponent<PublicTransport>(vehicle)
-                || !EntityManager.HasComponent<Target>(vehicle))
-            {
-                m_Records.Remove(vehicle);
-                return true;
-            }
-
-            PublicTransport publicTransport = EntityManager.GetComponentData<PublicTransport>(vehicle);
-            Target target = EntityManager.GetComponentData<Target>(vehicle);
-            if ((publicTransport.m_State & PublicTransportFlags.Boarding) != 0)
-            {
-                if (RtLog.VerboseEnabled)
-                {
-                    Mod.log.Info("[OriginArrivingStallAck] vehicle=" + vehicle.Index
-                        + " target=" + record.Target.Index
-                        + " frame=" + nowFrame
-                        + " ptState=" + publicTransport.m_State);
-                }
-                m_Records.Remove(vehicle);
-                return true;
-            }
-
-            if (target.m_Target != record.Target)
-            {
-                m_Records.Remove(vehicle);
-                return true;
-            }
-
-            if (nowFrame - record.RepairFrame >= RepairAckTimeoutFrames)
-            {
-                if (RtLog.VerboseEnabled)
-                {
-                    Mod.log.Info("[OriginArrivingStallRepairMiss] vehicle=" + vehicle.Index
-                        + " target=" + record.Target.Index
-                        + " frame=" + nowFrame
-                        + " ptState=" + publicTransport.m_State);
-                }
-                m_Records.Remove(vehicle);
-                return true;
-            }
-
-            return true;
         }
 
         private bool TryBuildCandidate(
@@ -329,7 +234,7 @@ namespace RapidTransitMod
                 return false;
             }
 
-            DynamicBuffer<TrainNavigationLane> navigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(vehicle);
+            DynamicBuffer<TrainNavigationLane> navigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(vehicle, true);
             reject.NavigationLaneCount = navigationLanes.Length;
             int navigationEndIndex = FindNavigationEndIndex(navigationLanes);
             reject.NavigationEndIndex = navigationEndIndex;
@@ -355,7 +260,6 @@ namespace RapidTransitMod
             }
 
             candidate = new Candidate(
-                vehicle,
                 headVehicle,
                 currentRoute.m_Route,
                 target.m_Target,
@@ -377,15 +281,15 @@ namespace RapidTransitMod
         {
             if (!reject.KeepState || string.IsNullOrEmpty(reject.Reason))
             {
-                m_LastRejectKeys.Remove(vehicle);
+                m_LastDiagnosticKeys.Remove(vehicle);
                 return;
             }
 
             string key = BuildRejectKey(reject);
-            if (m_LastRejectKeys.TryGetValue(vehicle, out string lastKey) && lastKey == key)
+            if (m_LastDiagnosticKeys.TryGetValue(vehicle, out string lastKey) && lastKey == key)
                 return;
 
-            m_LastRejectKeys[vehicle] = key;
+            m_LastDiagnosticKeys[vehicle] = key;
             if (RtLog.VerboseEnabled)
             {
                 Mod.log.Info("[OriginArrivingStallReject] vehicle=" + GetEntityIndex(vehicle)
@@ -432,64 +336,6 @@ namespace RapidTransitMod
             return entity == Entity.Null ? -1 : entity.Index;
         }
 
-        private bool TryRepairCandidate(Entity vehicle, Candidate candidate, uint nowFrame)
-        {
-            if (!EntityManager.Exists(candidate.HeadVehicle)
-                || !EntityManager.HasComponent<TrainCurrentLane>(candidate.HeadVehicle)
-                || !EntityManager.HasBuffer<TrainNavigationLane>(vehicle))
-            {
-                return false;
-            }
-
-            TrainCurrentLane currentLane = EntityManager.GetComponentData<TrainCurrentLane>(candidate.HeadVehicle);
-            TrainLaneFlags beforeFlags = currentLane.m_Front.m_LaneFlags;
-            TrainLaneFlags movedFlags = 0;
-            DynamicBuffer<TrainNavigationLane> navigationLanes = EntityManager.GetBuffer<TrainNavigationLane>(vehicle);
-            int consumedNavigationLanes = 0;
-
-            if ((currentLane.m_Front.m_LaneFlags & TrainLaneFlags.EndOfPath) == 0)
-            {
-                int endIndex = FindNavigationEndIndex(navigationLanes);
-                if (endIndex < 0)
-                    return false;
-
-                movedFlags = navigationLanes[endIndex].m_Flags & (TrainLaneFlags.EndOfPath | TrainLaneFlags.Return);
-                currentLane.m_Front.m_LaneFlags |= movedFlags;
-                consumedNavigationLanes = endIndex + 1;
-                navigationLanes.RemoveRange(0, consumedNavigationLanes);
-            }
-
-            if ((currentLane.m_Front.m_LaneFlags & TrainLaneFlags.EndOfPath) == 0)
-                return false;
-
-            currentLane.m_Front.m_LaneFlags |= TrainLaneFlags.EndReached;
-            EntityManager.SetComponentData(candidate.HeadVehicle, currentLane);
-
-            if (RtLog.VerboseEnabled)
-            {
-                Mod.log.Info("[OriginArrivingStallRepair] vehicle=" + vehicle.Index
-                    + " head=" + candidate.HeadVehicle.Index
-                    + " line=" + candidate.Line.Index
-                    + " target=" + candidate.Target.Index
-                    + " stop=" + candidate.Stop.Index
-                    + " frame=" + nowFrame
-                    + " speed=" + candidate.Speed
-                    + " frontBefore=" + beforeFlags
-                    + " frontAfter=" + currentLane.m_Front.m_LaneFlags
-                    + " movedFlags=" + movedFlags
-                    + " navLenBefore=" + candidate.NavigationLaneCount
-                    + " navEndIndex=" + candidate.NavigationEndIndex
-                    + " computeWp=" + candidate.WaypointIndex
-                    + " routeWp=" + candidate.RouteProgressWaypointIndex
-                    + " routeSeg=" + candidate.RouteProgressSegmentPosition.ToString("F2")
-                    + " routeOrigin=" + candidate.RouteProgressAtOrigin
-                    + " navConsumed=" + consumedNavigationLanes
-                    + " ptState=" + candidate.PublicTransportState
-                    + " pathState=" + candidate.PathState);
-            }
-            return true;
-        }
-
         private Entity ResolveHeadVehicle(Entity vehicle)
         {
             if (EntityManager.HasBuffer<LayoutElement>(vehicle))
@@ -533,8 +379,13 @@ namespace RapidTransitMod
             return -1;
         }
 
-        private static void LogCandidate(Entity vehicle, Candidate candidate, uint nowFrame)
+        private void LogCandidateOnce(Entity vehicle, Candidate candidate, uint nowFrame)
         {
+            string key = BuildCandidateKey(candidate);
+            if (m_LastDiagnosticKeys.TryGetValue(vehicle, out string lastKey) && lastKey == key)
+                return;
+
+            m_LastDiagnosticKeys[vehicle] = key;
             if (!RtLog.VerboseEnabled)
                 return;
 
@@ -556,9 +407,14 @@ namespace RapidTransitMod
                 + " pathState=" + candidate.PathState);
         }
 
+        private static string BuildCandidateKey(Candidate candidate)
+        {
+            return "candidate|line=" + GetEntityIndex(candidate.Line)
+                + "|target=" + GetEntityIndex(candidate.Target);
+        }
+
         private readonly struct Candidate
         {
-            public readonly Entity Vehicle;
             public readonly Entity HeadVehicle;
             public readonly Entity Line;
             public readonly Entity Target;
@@ -575,7 +431,6 @@ namespace RapidTransitMod
             public readonly PathFlags PathState;
 
             public Candidate(
-                Entity vehicle,
                 Entity headVehicle,
                 Entity line,
                 Entity target,
@@ -591,7 +446,6 @@ namespace RapidTransitMod
                 PublicTransportFlags publicTransportState,
                 PathFlags pathState)
             {
-                Vehicle = vehicle;
                 HeadVehicle = headVehicle;
                 Line = line;
                 Target = target;
