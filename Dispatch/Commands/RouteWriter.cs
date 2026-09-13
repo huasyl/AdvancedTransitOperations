@@ -103,6 +103,7 @@ namespace RapidTransitMod.Dispatch.Commands
             for (int i = 0; i < segmentPath.Length; i++)
                 targetPath.Add(segmentPath[i]);
 
+            m_Host.ResetLaunchNavigation(vehicle, ecb);
             ecb.AddComponent<Updated>(vehicle);
             return true;
         }

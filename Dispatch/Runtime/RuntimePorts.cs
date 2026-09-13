@@ -272,8 +272,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Buffers(runtime),
                 runtime.m_RouteProgress,
                 runtime.m_VehicleView,
-                runtime.m_LineMileage,
                 runtime.IsVehicleBoarding,
+                runtime.m_RailEventSource,
                 runtime.m_RuntimeHotPathProbe,
                 runtime.m_LineStructureInvalidator.IsLinePending);
         }
@@ -299,6 +299,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_Observation,
                 (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
                     runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
+                (vehicle, line, waypointIndex) => runtime.m_StopRuntime.HasActiveStopSession(vehicle, line, waypointIndex),
                 runtime.m_SharedCorridor,
                 runtime.m_RuntimeLog.Once,
                 runtime.m_VehicleView,
@@ -330,6 +331,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_Observation,
                 (Entity vehicle, Entity line, int waypointIndex, uint nowFrame, out DwellSnapshot snapshot) =>
                     runtime.m_StopRuntime.TryGetDwellSnapshot(vehicle, line, waypointIndex, nowFrame, out snapshot),
+                (vehicle, line, waypointIndex) => runtime.m_StopRuntime.HasActiveStopSession(vehicle, line, waypointIndex),
                 runtime.m_SharedCorridor,
                 runtime.m_RuntimeLog.Once,
                 runtime.m_VehicleView,

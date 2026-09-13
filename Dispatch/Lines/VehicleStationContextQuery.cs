@@ -109,6 +109,7 @@ namespace RapidTransitMod.Dispatch.Lines
         private readonly Func<Entity, DynamicBuffer<RouteWaypoint>, LineWaypointIndexLookup> m_TryLookupUnsafe;
         private readonly Func<Entity, DynamicBuffer<RouteWaypoint>, LineTrackChain> m_TryChainUnsafe;
         private readonly Func<Entity, Entity, DynamicBuffer<RouteWaypoint>, LineTrackChain, VehicleTrackCursor?> m_TryCursorUnsafe;
+        private readonly Func<Entity, Entity, DynamicBuffer<RouteWaypoint>, LineTrackChain, VehicleTrackCursor?> m_TryExactCursorUnsafe;
         private readonly Func<Entity, string> m_LineId;
         private readonly Func<string, string> m_DraftKey;
         private readonly NativeHashMap<Entity, int> m_CachedWaypointIndex;
@@ -134,6 +135,7 @@ namespace RapidTransitMod.Dispatch.Lines
             Func<Entity, DynamicBuffer<RouteWaypoint>, LineWaypointIndexLookup> tryLookupUnsafe,
             Func<Entity, DynamicBuffer<RouteWaypoint>, LineTrackChain> tryChainUnsafe,
             Func<Entity, Entity, DynamicBuffer<RouteWaypoint>, LineTrackChain, VehicleTrackCursor?> tryCursorUnsafe,
+            Func<Entity, Entity, DynamicBuffer<RouteWaypoint>, LineTrackChain, VehicleTrackCursor?> tryExactCursorUnsafe,
             Func<Entity, string> lineId,
             Func<string, string> draftKey,
             NativeHashMap<Entity, int> cachedWaypointIndex)
@@ -151,6 +153,7 @@ namespace RapidTransitMod.Dispatch.Lines
             m_TryLookupUnsafe = tryLookupUnsafe;
             m_TryChainUnsafe = tryChainUnsafe;
             m_TryCursorUnsafe = tryCursorUnsafe;
+            m_TryExactCursorUnsafe = tryExactCursorUnsafe;
             m_LineId = lineId;
             m_DraftKey = draftKey;
             m_CachedWaypointIndex = cachedWaypointIndex;
@@ -606,7 +609,7 @@ namespace RapidTransitMod.Dispatch.Lines
             if (chain == null || chain.TraversalProfile == null || chain.TraversalProfile.Events == null)
                 return false;
 
-            VehicleTrackCursor? cursor = m_TryCursorUnsafe(vehicle, line, waypoints, chain);
+            VehicleTrackCursor? cursor = m_TryExactCursorUnsafe(vehicle, line, waypoints, chain);
             int referenceAtomIndex = cursor?.AtomCursorIndex ?? -1;
             if (referenceAtomIndex < 0)
                 return false;

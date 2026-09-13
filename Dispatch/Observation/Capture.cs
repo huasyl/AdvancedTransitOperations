@@ -637,7 +637,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 && existingSession.SliceIndex >= 0
                 && eligibleChain?.TraversalProfile != null
                 && existingSession.SliceIndex < eligibleChain.TraversalProfile.RunSlices.Count
-                && m_TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, eligibleChain, out VehicleTrackCursor existingCursor))
+                && m_TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, eligibleChain, out VehicleTrackCursor existingCursor, ProjectionRequestSource.Observation))
             {
                 TraversalRunSlice existingSlice = eligibleChain.TraversalProfile.RunSlices[existingSession.SliceIndex];
                 int existingAtomIndex = math.clamp(existingCursor.AtomCursorIndex, 0, eligibleChain.TrackAtoms.Count - 1);
@@ -1104,7 +1104,7 @@ namespace RapidTransitMod.Dispatch.Observation
                 || chain == null
                 || chain.TraversalProfile == null
                 || chain.TraversalProfile.RunSlices.Count == 0
-                || !m_TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor))
+                || !m_TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor, ProjectionRequestSource.Observation))
             {
                 return false;
             }

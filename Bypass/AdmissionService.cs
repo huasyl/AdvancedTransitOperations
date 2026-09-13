@@ -1399,7 +1399,7 @@ namespace RapidTransitMod.Bypass
             uint nowFrame,
             out LineRunningVehicleFrameSnapshot snapshot)
         {
-            return m_Runtime.TrackProjection.TryGetLineRunningVehicleFrameSnapshot(line, waypoints, nowFrame, out snapshot);
+            return m_Runtime.TrackProjection.TryGetLineRunningVehicleFrameSnapshot(line, waypoints, nowFrame, out snapshot, ProjectionRequestSource.Bypass);
         }
 
         internal bool TryGetBypassControlScope(
@@ -2149,7 +2149,7 @@ namespace RapidTransitMod.Bypass
             if (vehicle == Entity.Null || line == Entity.Null || chain == null || waypoints.Length == 0)
                 return false;
 
-            if (!m_Runtime.TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+            if (!m_Runtime.TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor, ProjectionRequestSource.Bypass))
                 return false;
 
             int currentControlEdgeIndex = TrackProjectionService.ResolveControlEdgeIndexForAtom(chain, cursor.AtomCursorIndex);
@@ -2254,7 +2254,7 @@ namespace RapidTransitMod.Bypass
                 || chain == null
                 || localChain == null
                 || waypoints.Length == 0
-                || !m_Runtime.TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor))
+                || !m_Runtime.TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out VehicleTrackCursor cursor, ProjectionRequestSource.Bypass))
             {
                 return false;
             }
@@ -3946,17 +3946,29 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            bool hasLocalTraversalTiming = TryEstimateTraversalTimingWithinCorridor(localChain, localCorridor, localPosition, out TraversalTimingEstimate localTraversalTiming);
+            bool hasRemainingBoarding = m_Runtime.TryEstimateRemainingBoardingTime(
+                localVehicle,
+                localLine,
+                currentWaypointIndex,
+                m_Runtime.Frame,
+                out float estimatedBoardingFrames);
+            bool hasActiveStationSession = m_Runtime.HasActiveStopSession(
+                localVehicle,
+                localLine,
+                currentWaypointIndex);
+            bool hasLocalTraversalTiming = TryEstimateTraversalTimingWithinCorridor(
+                localChain,
+                localCorridor,
+                localPosition,
+                currentWaypointIndex,
+                hasActiveStationSession,
+                out TraversalTimingEstimate localTraversalTiming,
+                out string localStationTiming);
             float localClearFrames = hasLocalTraversalTiming
                 ? localTraversalTiming.TotalFrames
                 : EstimateRuntimeFramesToAtomBoundary(localChain, localPosition, localCorridor.EndAtomIndexExclusive);
             float localBoardingFrames = 0f;
-            if (m_Runtime.TryEstimateRemainingBoardingTime(
-                    localVehicle,
-                    localLine,
-                    currentWaypointIndex,
-                    m_Runtime.Frame,
-                    out float estimatedBoardingFrames))
+            if (hasRemainingBoarding)
             {
                 localBoardingFrames = estimatedBoardingFrames;
                 if (localClearFrames != float.MaxValue)
@@ -3964,7 +3976,7 @@ namespace RapidTransitMod.Bypass
             }
             float expressEntryFrames = EstimateRuntimeFramesToAtomBoundary(expressChain, expressPosition, expressCorridor.StartAtomIndex);
             blockerEntryFrames = expressEntryFrames;
-            bool hasExpressTraversalTiming = TryEstimateTraversalTimingWithinCorridor(expressChain, expressCorridor, expressPosition, out TraversalTimingEstimate expressTraversalTiming);
+            bool hasExpressTraversalTiming = TryEstimateTraversalTimingWithinCorridor(expressChain, expressCorridor, expressPosition, -1, false, out TraversalTimingEstimate expressTraversalTiming, out _);
             float expressClearFrames = hasExpressTraversalTiming
                 ? (expressPosition.CurrentAtomIndex < expressCorridor.StartAtomIndex
                     ? expressEntryFrames + expressTraversalTiming.TotalFrames
@@ -3984,6 +3996,7 @@ namespace RapidTransitMod.Bypass
                 + " localRun=" + FormatEtaFrames(hasLocalTraversalTiming ? localTraversalTiming.RunFrames : float.MaxValue)
                 + " localStop=" + FormatEtaFrames(hasLocalTraversalTiming ? localTraversalTiming.StopFrames : 0f)
                 + " localBoarding=" + FormatEtaFrames(localBoardingFrames)
+                + " localStationTiming=" + localStationTiming
                 + " expressRun=" + FormatEtaFrames(hasExpressTraversalTiming ? expressTraversalTiming.RunFrames : float.MaxValue)
                 + " expressStop=" + FormatEtaFrames(hasExpressTraversalTiming ? expressTraversalTiming.StopFrames : 0f)
                 + " gap=" + FormatEtaFrames(safetyGapFrames)
@@ -4034,9 +4047,15 @@ namespace RapidTransitMod.Bypass
             LineTrackChain chain,
             ConflictCorridor corridor,
             TrackModelRuntimePosition runtimePosition,
-            out TraversalTimingEstimate estimate)
+            int currentStationWaypointIndex,
+            bool hasActiveStationSession,
+            out TraversalTimingEstimate estimate,
+            out string stationTiming)
         {
             estimate = default;
+            stationTiming = currentStationWaypointIndex < 0 ? "n/a"
+                : !hasActiveStationSession ? "inactive"
+                : "outside";
             if (chain == null
                 || chain.TraversalProfile == null
                 || chain.TraversalProfile.RunSlices.Count == 0
@@ -4062,6 +4081,10 @@ namespace RapidTransitMod.Bypass
             }
 
             float runFrames = 0f;
+            bool correctedCurrentStation = false;
+            float actualFromCoordinate = runtimePosition.CurrentAtomIndex + math.saturate(runtimePosition.AtomPosition01);
+            bool withinCurrentStation = currentStationWaypointIndex >= 0
+                && IsWithinStationEvent(chain, currentStationWaypointIndex, actualFromCoordinate);
             for (int sliceIndex = 0; sliceIndex < chain.TraversalProfile.RunSlices.Count; sliceIndex++)
             {
                 TraversalRunSlice slice = chain.TraversalProfile.RunSlices[sliceIndex];
@@ -4075,7 +4098,29 @@ namespace RapidTransitMod.Bypass
                     continue;
 
                 float sliceLength = math.max(1f, slice.EndAtomIndexExclusive - slice.StartAtomIndex);
-                runFrames += effectiveRunFrames * ((overlapEnd - overlapStart) / sliceLength);
+                float remainingRunRatio = (overlapEnd - overlapStart) / sliceLength;
+                if (!correctedCurrentStation
+                    && currentStationWaypointIndex >= 0
+                    && hasActiveStationSession
+                    && withinCurrentStation
+                    && actualFromCoordinate >= slice.StartAtomIndex
+                    && actualFromCoordinate < slice.EndAtomIndexExclusive)
+                {
+                    if (!m_Runtime.TryGetTraversalRunSliceAverageFrames(chain.LineEntity, slice, out float fullSliceAverage))
+                        stationTiming = "no-average";
+                    else if (!m_Runtime.TryGetObservedWaypointDwell(chain.LineEntity, currentStationWaypointIndex, out float historicalDwell))
+                        stationTiming = "no-dwell";
+                    else if (fullSliceAverage <= historicalDwell)
+                        stationTiming = "dwell>=full";
+                    else
+                    {
+                        runFrames += (fullSliceAverage - historicalDwell) * remainingRunRatio;
+                        correctedCurrentStation = true;
+                        stationTiming = "applied";
+                        continue;
+                    }
+                }
+                runFrames += effectiveRunFrames * remainingRunRatio;
             }
 
             float stopFrames = 0f;
@@ -4101,6 +4146,22 @@ namespace RapidTransitMod.Bypass
 
             estimate = new TraversalTimingEstimate(runFrames, stopFrames);
             return true;
+        }
+
+        private static bool IsWithinStationEvent(LineTrackChain chain, int waypointIndex, float coordinate)
+        {
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                if (traversalEvent.WaypointIndex == waypointIndex
+                    && (traversalEvent.Kind == TraversalEventKind.Stop || traversalEvent.Kind == TraversalEventKind.Pass)
+                    && coordinate >= traversalEvent.StartAtomIndex
+                    && coordinate < traversalEvent.EndAtomIndexExclusive)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private bool TryEvaluateLinearCatchRiskCurrentScene(
@@ -6313,10 +6374,17 @@ namespace RapidTransitMod.Bypass
                 return true;
             }
 
+            // StopRuntime owns this station fact even after its natural dwell
+            // estimate reaches zero while the bypass hold is still active.
+            if (m_Runtime.HasActiveStopSession(localVehicle, localLine, currentWaypointIndex))
+            {
+                return false;
+            }
+
             if (!TryGetChainForLine(localLine, localWaypoints, out LineTrackChain localChain))
                 return false;
 
-            if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition))
+            if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition, ProjectionRequestSource.Bypass))
                 return false;
 
             if (localPosition.Confidence < 0.6f)
@@ -6380,7 +6448,7 @@ namespace RapidTransitMod.Bypass
             if (!m_Runtime.TrackModel.TryResolveBypassProtectedInterval(localChain, localWaypoints, currentWaypointIndex, out _, out BypassProtectedInterval protectedInterval))
                 return false;
 
-            if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition)
+            if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out TrackModelRuntimePosition localPosition, ProjectionRequestSource.Bypass)
                 || localPosition.Confidence < 0.6f)
             {
                 return false;
@@ -6407,7 +6475,7 @@ namespace RapidTransitMod.Bypass
                 || bypassBuilding == Entity.Null
                 || !TryGetChainForLine(line, waypoints, out LineTrackChain chain)
                 || !TryResolveVehicleCurrentProtectedInterval(vehicle, line, waypoints, chain, out _, out BypassProtectedInterval protectedInterval)
-                || !m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, line, waypoints, protectedInterval, out TrackModelRuntimePosition runtimePosition)
+                || !m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, line, waypoints, protectedInterval, out TrackModelRuntimePosition runtimePosition, ProjectionRequestSource.Bypass)
                 || runtimePosition.Confidence < 0.6f
                 || runtimePosition.CurrentAtomIndex < protectedInterval.StartAtomIndex
                 || runtimePosition.CurrentAtomIndex >= protectedInterval.EndAtomIndexExclusive
@@ -6487,7 +6555,7 @@ namespace RapidTransitMod.Bypass
             BypassProtectedInterval protectedInterval = localScene.ProtectedInterval;
             ProtectedIntervalSummary localSummary = localScene.Summary;
             TrackModelRuntimePosition localPosition = default;
-            bool hasLocalPosition = m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out localPosition);
+            bool hasLocalPosition = m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(localVehicle, localLine, localWaypoints, protectedInterval, out localPosition, ProjectionRequestSource.Bypass);
             Entity currentBypassBuilding = localScene.CurrentBypassBuilding;
 
             if (localSummary.SharedSegmentCount <= 0)

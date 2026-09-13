@@ -630,7 +630,8 @@ namespace RapidTransitMod.Bypass
                     scope.Line,
                     localWaypoints,
                     localScene.ProtectedInterval,
-                    out TrackModelRuntimePosition localPosition))
+                    out TrackModelRuntimePosition localPosition,
+                    ProjectionRequestSource.Bypass))
             {
                 unavailableReason = "unavailable:local-projection-miss";
                 return false;
@@ -1425,7 +1426,8 @@ namespace RapidTransitMod.Bypass
                         out int traversalPhaseIndex,
                         out int traversalPhaseStartAtomIndex,
                         out int traversalPhaseEndAtomExclusive,
-                        out int nextTurnbackBoundaryAtomIndex))
+                        out int nextTurnbackBoundaryAtomIndex,
+                        ProjectionRequestSource.Bypass))
                 {
                     continue;
                 }

@@ -205,7 +205,7 @@ namespace RapidTransitMod.Bypass
 
             if (m_Runtime.ResolveLine(vehicle) == scope.Line)
             {
-                if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, scope.Line, localWaypoints, localProtectedInterval, out TrackModelRuntimePosition localPosition)
+                if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, scope.Line, localWaypoints, localProtectedInterval, out TrackModelRuntimePosition localPosition, ProjectionRequestSource.Bypass)
                     || localPosition.Confidence < 0.6f)
                 {
                     return false;
@@ -259,7 +259,7 @@ namespace RapidTransitMod.Bypass
                 return false;
             }
 
-            if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition)
+            if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(vehicle, expressLine, expressWaypoints, expressProtectedInterval, out TrackModelRuntimePosition expressPosition, ProjectionRequestSource.Bypass)
                 || expressPosition.Confidence < 0.6f)
             {
                 return false;
@@ -391,7 +391,8 @@ namespace RapidTransitMod.Bypass
                         latchedProjection.ExpressLine,
                         expressWaypoints,
                         expressChain,
-                        out cursor))
+                        out cursor,
+                        ProjectionRequestSource.Bypass))
                 {
                     return false;
                 }
@@ -776,7 +777,7 @@ namespace RapidTransitMod.Bypass
                     continue;
                 }
 
-                if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(otherVehicle, scope.Line, waypoints, releaseScope.LocalProtectedInterval, out TrackModelRuntimePosition otherPosition)
+                if (!m_Runtime.TrackProjection.TryProjectTrackModelRuntimePosition(otherVehicle, scope.Line, waypoints, releaseScope.LocalProtectedInterval, out TrackModelRuntimePosition otherPosition, ProjectionRequestSource.Bypass)
                     || otherPosition.Confidence < 0.6f)
                 {
                     continue;
