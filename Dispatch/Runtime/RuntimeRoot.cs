@@ -544,7 +544,17 @@ namespace RapidTransitMod.Dispatch.Runtime
                         line,
                         waypoints,
                         chain,
-                        out VehicleTrackCursor cursor)
+                        out VehicleTrackCursor cursor,
+                        ProjectionRequestSource.StationContext)
+                    ? (VehicleTrackCursor?)cursor
+                    : null,
+                (vehicle, line, waypoints, chain) => runtime.m_TrackProjection.TryGetExactCurrentFrameCursor(
+                        vehicle,
+                        line,
+                        waypoints,
+                        chain,
+                        out VehicleTrackCursor cursor,
+                        ProjectionRequestSource.StationContext)
                     ? (VehicleTrackCursor?)cursor
                     : null,
                 runtime.LineStableId,

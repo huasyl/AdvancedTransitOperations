@@ -3,6 +3,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using RapidTransitMod.Runtime;
+using RapidTransitMod.TrackProjection;
+using Unity.Entities;
+using Unity.Mathematics;
 
 namespace RapidTransitMod.Dispatch.Diagnostics
 {
@@ -84,6 +87,43 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         public int Gc2;
     }
 
+    internal enum WaypointStationEvidence : byte
+    {
+        None = 0,
+        TargetUnavailable = 1,
+        TargetNotOnLine = 2,
+        StopUnavailable = 3,
+        BoardingVehicleMismatch = 4,
+        TrackStationUnavailable = 5,
+        TrackStationMismatch = 6,
+        TrackLaneUnavailable = 7,
+        TrackLaneMismatch = 8,
+        Confirmed = 9,
+        CurrentLaneUnavailable = 10,
+        CurrentLaneWindow = 11,
+        OutsideConfirmed = 12,
+    }
+
+    internal struct WaypointStationOutcome
+    {
+        internal uint Frame;
+        internal Entity Vehicle;
+        internal Entity Target;
+        internal int TargetWaypointIndex;
+        internal int CachedWaypointIndex;
+        internal Entity BoardingStop;
+        internal Entity BoardingVehicle;
+        internal Entity Carriage;
+        internal Entity TrackLane;
+        internal bool TrackLaneRear;
+        internal Entity TargetBuilding;
+        internal Entity TrackBuilding;
+        internal Entity OutsideAnchor;
+        internal Entity LaneOwner;
+        internal int WaypointIndex;
+        internal WaypointStationEvidence Evidence;
+    }
+
     internal sealed class RuntimeHotPathProbe
     {
         private const uint FlushIntervalFrames = 512;
@@ -122,6 +162,63 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private ulong m_RescueStageExecuted;
         private ulong m_SliceStageExecuted;
         private ulong m_SchedulerExternalDirtyLines;
+        private ulong m_ProjectionCacheRequests;
+        private ulong m_ProjectionCacheSuccessHits;
+        private ulong m_ProjectionCacheFailureHits;
+        private readonly ulong[] m_ProjectionRequestsBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionCacheHitsBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionAvailableBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionUnavailableBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionExactAvailableBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionFallbackAvailableBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionStrictFailedBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionOrdinaryFailedBySource = new ulong[7];
+        private readonly ulong[] m_ProjectionLineSnapshotHitsBySource = new ulong[7];
+        private ulong m_ProjectionCalculations;
+        private ulong m_ProjectionExactInitial;
+        private ulong m_ProjectionExactDirection;
+        private ulong m_ProjectionExactNavigation;
+        private ulong m_ProjectionExactPathTail;
+        private ulong m_ProjectionCurrentLaneUnavailable;
+        private ulong m_ProjectionNoCandidates;
+        private ulong m_ProjectionAllExcluded;
+        private ulong m_ProjectionAmbiguous;
+        private ulong m_ProjectionZeroParameterSpan;
+        private ulong m_ProjectionProgressUnavailable;
+        private ulong m_ProjectionLaneNotInModel;
+        private ulong m_ProjectionParameterOutsideRange;
+        private ulong m_ProjectionInvalidParameter;
+        private ulong m_ProjectionIndexedLaneMismatch;
+        private ulong m_ProjectionPreparingLaneNotInModel;
+        private ulong m_ProjectionFinalExact;
+        private ulong m_ProjectionFinalRouteProgress;
+        private ulong m_ProjectionFinalCachedWaypoint;
+        private ulong m_ProjectionFinalAnchoredRouteProgress;
+        private ulong m_ProjectionFinalFailures;
+        private ulong m_WaypointStationConfirmed;
+        private ulong m_WaypointStationRejected;
+        private ulong m_ProjectionCurrentLaneReads;
+        private ulong m_ProjectionNavigationReads;
+        private ulong m_ProjectionPathReads;
+        private long m_ProjectionCurrentLaneReadTicks;
+        private long m_ProjectionNavigationReadTicks;
+        private long m_ProjectionPathReadTicks;
+        private long m_ProjectionCurrentLaneReadMaxTicks;
+        private long m_ProjectionNavigationReadMaxTicks;
+        private long m_ProjectionPathReadMaxTicks;
+        private long m_ProjectionMatcherTicks;
+        private long m_ProjectionMatcherMaxTicks;
+        private readonly ProjectionOutcome[] m_ProjectionIssueSamples = new ProjectionOutcome[3];
+        private int m_ProjectionIssueSampleCount;
+        private ulong m_ProjectionIssueCandidates;
+        private uint m_ProjectionIssueSampleSeed;
+        private ProjectionOutcome m_ProjectionSuccessSample;
+        private bool m_HasProjectionSuccessSample;
+        private readonly WaypointStationOutcome[] m_WaypointStationIssueSamples = new WaypointStationOutcome[3];
+        private int m_WaypointStationIssueSampleCount;
+        private int m_WaypointStationIssueSampleCursor;
+        private WaypointStationOutcome m_WaypointStationSuccessSample;
+        private bool m_HasWaypointStationSuccessSample;
         private long m_CostWindowStart;
         private long m_CostFrames;
         private long m_CostSlowFrames;
@@ -389,6 +486,280 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 m_SchedulerExternalDirtyLines += (ulong)count;
         }
 
+        internal void RecordProjectionCacheAccess(ProjectionRequestSource source, bool cacheHit, bool available, VehicleTrackCursorSource cursorSource, bool exactOnly)
+        {
+            if (!Enabled())
+                return;
+
+            m_ProjectionCacheRequests++;
+            int sourceIndex = (int)source;
+            if (sourceIndex >= 0 && sourceIndex < m_ProjectionRequestsBySource.Length)
+            {
+                m_ProjectionRequestsBySource[sourceIndex]++;
+                if (cacheHit)
+                    m_ProjectionCacheHitsBySource[sourceIndex]++;
+                if (available)
+                {
+                    m_ProjectionAvailableBySource[sourceIndex]++;
+                    if (cursorSource == VehicleTrackCursorSource.CurrentLane)
+                        m_ProjectionExactAvailableBySource[sourceIndex]++;
+                    else
+                        m_ProjectionFallbackAvailableBySource[sourceIndex]++;
+                }
+                else
+                {
+                    m_ProjectionUnavailableBySource[sourceIndex]++;
+                    if (exactOnly)
+                        m_ProjectionStrictFailedBySource[sourceIndex]++;
+                    else
+                        m_ProjectionOrdinaryFailedBySource[sourceIndex]++;
+                }
+            }
+            if (!cacheHit)
+                return;
+
+            if (available)
+                m_ProjectionCacheSuccessHits++;
+            else
+                m_ProjectionCacheFailureHits++;
+        }
+
+        internal void RecordProjectionLineSnapshotAccess(ProjectionRequestSource source, bool cacheHit)
+        {
+            if (!Enabled() || !cacheHit)
+                return;
+            int sourceIndex = (int)source;
+            if (sourceIndex >= 0 && sourceIndex < m_ProjectionLineSnapshotHitsBySource.Length)
+                m_ProjectionLineSnapshotHitsBySource[sourceIndex]++;
+        }
+
+        internal void RecordProjectionRead(ProjectionReadKind kind, long ticks)
+        {
+            if (!Enabled())
+                return;
+
+            switch (kind)
+            {
+                case ProjectionReadKind.CurrentLane:
+                    AddProjectionRead(
+                        ref m_ProjectionCurrentLaneReads,
+                        ref m_ProjectionCurrentLaneReadTicks,
+                        ref m_ProjectionCurrentLaneReadMaxTicks,
+                        ticks);
+                    break;
+                case ProjectionReadKind.Navigation:
+                    AddProjectionRead(
+                        ref m_ProjectionNavigationReads,
+                        ref m_ProjectionNavigationReadTicks,
+                        ref m_ProjectionNavigationReadMaxTicks,
+                        ticks);
+                    break;
+                case ProjectionReadKind.Path:
+                    AddProjectionRead(
+                        ref m_ProjectionPathReads,
+                        ref m_ProjectionPathReadTicks,
+                        ref m_ProjectionPathReadMaxTicks,
+                        ticks);
+                    break;
+            }
+        }
+
+        internal void RecordProjectionOutcome(ProjectionOutcome outcome)
+        {
+            if (!Enabled())
+                return;
+
+            if (!outcome.ExactCounted)
+            {
+                m_ProjectionCalculations++;
+                AddProjectionMatcherTicks(outcome.MatcherTicks);
+                CountProjectionExact(outcome);
+            }
+            CountProjectionFinal(outcome);
+            StoreProjectionSample(outcome);
+        }
+
+        internal void RecordProjectionExactFailure(ProjectionOutcome outcome)
+        {
+            if (!Enabled())
+                return;
+            m_ProjectionCalculations++;
+            AddProjectionMatcherTicks(outcome.MatcherTicks);
+            CountProjectionExact(outcome);
+            StoreProjectionSample(outcome);
+        }
+
+        internal void RecordWaypointStationOutcome(WaypointStationOutcome outcome)
+        {
+            if (!Enabled())
+                return;
+
+            if (outcome.Evidence == WaypointStationEvidence.Confirmed
+                || outcome.Evidence == WaypointStationEvidence.OutsideConfirmed
+                || outcome.Evidence == WaypointStationEvidence.CurrentLaneWindow)
+            {
+                m_WaypointStationConfirmed++;
+                if (!m_HasWaypointStationSuccessSample)
+                {
+                    m_WaypointStationSuccessSample = outcome;
+                    m_HasWaypointStationSuccessSample = true;
+                }
+                return;
+            }
+
+            m_WaypointStationRejected++;
+            if (m_WaypointStationIssueSampleCount < m_WaypointStationIssueSamples.Length)
+            {
+                m_WaypointStationIssueSamples[m_WaypointStationIssueSampleCount++] = outcome;
+                return;
+            }
+
+            int replace = m_WaypointStationIssueSampleCursor++ % m_WaypointStationIssueSamples.Length;
+            m_WaypointStationIssueSamples[replace] = outcome;
+        }
+
+        private void CountProjectionExact(ProjectionOutcome outcome)
+        {
+            if (IsPreparingWaypointLaneNotInModel(outcome))
+            {
+                m_ProjectionPreparingLaneNotInModel++;
+                return;
+            }
+            if (outcome.ExactFailure != ProjectionExactFailure.None)
+            {
+                switch (outcome.ExactFailure)
+                {
+                    case ProjectionExactFailure.CurrentLaneUnavailable: m_ProjectionCurrentLaneUnavailable++; break;
+                    case ProjectionExactFailure.NoCandidates: m_ProjectionNoCandidates++; break;
+                    case ProjectionExactFailure.AllExcluded: m_ProjectionAllExcluded++; break;
+                    case ProjectionExactFailure.Ambiguous: m_ProjectionAmbiguous++; break;
+                    case ProjectionExactFailure.ZeroParameterSpan: m_ProjectionZeroParameterSpan++; break;
+                    case ProjectionExactFailure.ProgressUnavailable: m_ProjectionProgressUnavailable++; break;
+                    case ProjectionExactFailure.LaneNotInModel: m_ProjectionLaneNotInModel++; break;
+                    case ProjectionExactFailure.ParameterOutsideRange: m_ProjectionParameterOutsideRange++; break;
+                    case ProjectionExactFailure.InvalidParameter: m_ProjectionInvalidParameter++; break;
+                    case ProjectionExactFailure.IndexedLaneMismatch: m_ProjectionIndexedLaneMismatch++; break;
+                }
+                return;
+            }
+
+            switch (outcome.ExactBasis)
+            {
+                case ProjectionMatchBasis.Initial: m_ProjectionExactInitial++; break;
+                case ProjectionMatchBasis.Direction: m_ProjectionExactDirection++; break;
+                case ProjectionMatchBasis.Navigation: m_ProjectionExactNavigation++; break;
+                case ProjectionMatchBasis.PathTail: m_ProjectionExactPathTail++; break;
+            }
+        }
+
+        private void CountProjectionFinal(ProjectionOutcome outcome)
+        {
+            if (!outcome.FinalSuccess)
+            {
+                m_ProjectionFinalFailures++;
+                return;
+            }
+
+            switch (outcome.FinalSource)
+            {
+                case VehicleTrackCursorSource.CurrentLane: m_ProjectionFinalExact++; break;
+                case VehicleTrackCursorSource.RouteProgress: m_ProjectionFinalRouteProgress++; break;
+                case VehicleTrackCursorSource.CachedWaypoint: m_ProjectionFinalCachedWaypoint++; break;
+                case VehicleTrackCursorSource.AnchoredRouteProgress: m_ProjectionFinalAnchoredRouteProgress++; break;
+                default: m_ProjectionFinalFailures++; break;
+            }
+        }
+
+        private void StoreProjectionSample(ProjectionOutcome outcome)
+        {
+            for (int i = 0; i < m_ProjectionIssueSampleCount; i++)
+            {
+                ProjectionOutcome existing = m_ProjectionIssueSamples[i];
+                if (existing.Frame == outcome.Frame
+                    && existing.Vehicle == outcome.Vehicle
+                    && existing.Line == outcome.Line
+                    && existing.ChainSignature == outcome.ChainSignature)
+                {
+                    m_ProjectionIssueSamples[i] = outcome;
+                    return;
+                }
+            }
+            if (outcome.FinalSuccess
+                && outcome.FinalSource == VehicleTrackCursorSource.CurrentLane
+                && outcome.InitialCandidates > 1
+                && outcome.ExactBasis != ProjectionMatchBasis.Initial
+                && !m_HasProjectionSuccessSample)
+            {
+                m_ProjectionSuccessSample = outcome;
+                m_HasProjectionSuccessSample = true;
+            }
+
+            if (outcome.FinalSuccess
+                && outcome.ExactFailure == ProjectionExactFailure.None
+                && outcome.FinalSource == VehicleTrackCursorSource.CurrentLane)
+                return;
+
+            if (IsPreparingWaypointLaneNotInModel(outcome))
+                return;
+
+            for (int i = 0; i < m_ProjectionIssueSampleCount; i++)
+            {
+                ProjectionOutcome existing = m_ProjectionIssueSamples[i];
+                if (existing.Vehicle == outcome.Vehicle
+                    && existing.Line == outcome.Line
+                    && existing.ExactFailure == outcome.ExactFailure
+                    && existing.FallbackFailure == outcome.FallbackFailure)
+                {
+                    m_ProjectionIssueSamples[i] = outcome;
+                    return;
+                }
+            }
+
+            if (m_ProjectionIssueSampleCount < m_ProjectionIssueSamples.Length)
+            {
+                m_ProjectionIssueSamples[m_ProjectionIssueSampleCount++] = outcome;
+                m_ProjectionIssueCandidates++;
+                return;
+            }
+
+            m_ProjectionIssueCandidates++;
+            m_ProjectionIssueSampleSeed = m_ProjectionIssueSampleSeed * 1664525u + 1013904223u;
+            if ((ulong)m_ProjectionIssueSampleSeed % m_ProjectionIssueCandidates < (ulong)m_ProjectionIssueSamples.Length)
+                m_ProjectionIssueSamples[m_ProjectionIssueSampleSeed % (uint)m_ProjectionIssueSamples.Length] = outcome;
+        }
+
+        private static bool IsPreparingWaypointLaneNotInModel(ProjectionOutcome outcome)
+        {
+            return outcome.RequestSource == ProjectionRequestSource.Waypoint
+                && outcome.ExactFailure == ProjectionExactFailure.LaneNotInModel
+                && outcome.RuntimeContext.VehicleStateKnown
+                && outcome.RuntimeContext.VehicleState == VehicleState.Preparing
+                && outcome.RuntimeContext.PublicTransportKnown
+                && !outcome.RuntimeContext.OfficialBoarding;
+        }
+
+        private static void AddProjectionRead(
+            ref ulong count,
+            ref long totalTicks,
+            ref long maxTicks,
+            long ticks)
+        {
+            count++;
+            totalTicks += ticks;
+            if (ticks > maxTicks)
+                maxTicks = ticks;
+        }
+
+        private void AddProjectionMatcherTicks(long ticks)
+        {
+            if (ticks <= 0)
+                return;
+
+            m_ProjectionMatcherTicks += ticks;
+            if (ticks > m_ProjectionMatcherMaxTicks)
+                m_ProjectionMatcherMaxTicks = ticks;
+        }
+
         internal void FlushIfDue(uint nowFrame)
         {
             if (!Enabled())
@@ -422,6 +793,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     + "/" + m_DispatchStageExecuted + "/" + m_RetireStageExecuted + "/" + m_SliceStageExecuted
                     + " schedulerExternalDirty=" + m_SchedulerExternalDirtyLines);
             }
+
+            FlushProjectionDiagnostics(elapsedFrames);
 
             ClearCounts();
             m_LastFlushFrame = nowFrame;
@@ -464,6 +837,220 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_RescueStageExecuted = 0;
             m_SliceStageExecuted = 0;
             m_SchedulerExternalDirtyLines = 0;
+            m_ProjectionCacheRequests = 0;
+            m_ProjectionCacheSuccessHits = 0;
+            m_ProjectionCacheFailureHits = 0;
+            Array.Clear(m_ProjectionRequestsBySource, 0, m_ProjectionRequestsBySource.Length);
+            Array.Clear(m_ProjectionCacheHitsBySource, 0, m_ProjectionCacheHitsBySource.Length);
+            Array.Clear(m_ProjectionAvailableBySource, 0, m_ProjectionAvailableBySource.Length);
+            Array.Clear(m_ProjectionUnavailableBySource, 0, m_ProjectionUnavailableBySource.Length);
+            Array.Clear(m_ProjectionExactAvailableBySource, 0, m_ProjectionExactAvailableBySource.Length);
+            Array.Clear(m_ProjectionFallbackAvailableBySource, 0, m_ProjectionFallbackAvailableBySource.Length);
+            Array.Clear(m_ProjectionStrictFailedBySource, 0, m_ProjectionStrictFailedBySource.Length);
+            Array.Clear(m_ProjectionOrdinaryFailedBySource, 0, m_ProjectionOrdinaryFailedBySource.Length);
+            Array.Clear(m_ProjectionLineSnapshotHitsBySource, 0, m_ProjectionLineSnapshotHitsBySource.Length);
+            m_ProjectionCalculations = 0;
+            m_ProjectionExactInitial = 0;
+            m_ProjectionExactDirection = 0;
+            m_ProjectionExactNavigation = 0;
+            m_ProjectionExactPathTail = 0;
+            m_ProjectionCurrentLaneUnavailable = 0;
+            m_ProjectionNoCandidates = 0;
+            m_ProjectionAllExcluded = 0;
+            m_ProjectionAmbiguous = 0;
+            m_ProjectionZeroParameterSpan = 0;
+            m_ProjectionProgressUnavailable = 0;
+            m_ProjectionLaneNotInModel = 0;
+            m_ProjectionParameterOutsideRange = 0;
+            m_ProjectionInvalidParameter = 0;
+            m_ProjectionIndexedLaneMismatch = 0;
+            m_ProjectionPreparingLaneNotInModel = 0;
+            m_ProjectionFinalExact = 0;
+            m_ProjectionFinalRouteProgress = 0;
+            m_ProjectionFinalCachedWaypoint = 0;
+            m_ProjectionFinalAnchoredRouteProgress = 0;
+            m_ProjectionFinalFailures = 0;
+            m_WaypointStationConfirmed = 0;
+            m_WaypointStationRejected = 0;
+            m_ProjectionCurrentLaneReads = 0;
+            m_ProjectionNavigationReads = 0;
+            m_ProjectionPathReads = 0;
+            m_ProjectionCurrentLaneReadTicks = 0;
+            m_ProjectionNavigationReadTicks = 0;
+            m_ProjectionPathReadTicks = 0;
+            m_ProjectionCurrentLaneReadMaxTicks = 0;
+            m_ProjectionNavigationReadMaxTicks = 0;
+            m_ProjectionPathReadMaxTicks = 0;
+            m_ProjectionMatcherTicks = 0;
+            m_ProjectionMatcherMaxTicks = 0;
+            m_ProjectionIssueSampleCount = 0;
+            m_ProjectionIssueCandidates = 0;
+            m_ProjectionIssueSampleSeed = 0x9E3779B9u;
+            m_ProjectionSuccessSample = default;
+            m_HasProjectionSuccessSample = false;
+            Array.Clear(m_ProjectionIssueSamples, 0, m_ProjectionIssueSamples.Length);
+            m_WaypointStationIssueSampleCount = 0;
+            m_WaypointStationIssueSampleCursor = 0;
+            m_WaypointStationSuccessSample = default;
+            m_HasWaypointStationSuccessSample = false;
+            Array.Clear(m_WaypointStationIssueSamples, 0, m_WaypointStationIssueSamples.Length);
+        }
+
+        private void FlushProjectionDiagnostics(uint elapsedFrames)
+        {
+            if (!HasProjectionCounts())
+                return;
+
+            double tickMs = 1000d / Stopwatch.Frequency;
+            m_Log.Info("[TrackProjectionProbe] frames=" + elapsedFrames
+                + " cache=request/hitOk/hitFail/calc:"
+                + m_ProjectionCacheRequests + "/" + m_ProjectionCacheSuccessHits + "/"
+                + m_ProjectionCacheFailureHits + "/" + m_ProjectionCalculations
+                + " exact=initial/direction/navigation/path:"
+                + m_ProjectionExactInitial + "/" + m_ProjectionExactDirection + "/"
+                + m_ProjectionExactNavigation + "/" + m_ProjectionExactPathTail
+                + " exactFail=current/noCandidate/allExcluded/ambiguous/zeroSpan/progress/laneMissing/paramOutside/invalidParam/indexMismatch:"
+                + m_ProjectionCurrentLaneUnavailable + "/" + m_ProjectionNoCandidates + "/"
+                + m_ProjectionAllExcluded + "/" + m_ProjectionAmbiguous + "/"
+                + m_ProjectionZeroParameterSpan + "/" + m_ProjectionProgressUnavailable + "/"
+                + m_ProjectionLaneNotInModel + "/" + m_ProjectionParameterOutsideRange + "/"
+                + m_ProjectionInvalidParameter + "/" + m_ProjectionIndexedLaneMismatch
+                + " preparingLaneMissing=" + m_ProjectionPreparingLaneNotInModel
+                + " final=exact/route/cached/anchored/fail:"
+                + m_ProjectionFinalExact + "/" + m_ProjectionFinalRouteProgress + "/"
+                + m_ProjectionFinalCachedWaypoint + "/" + m_ProjectionFinalAnchoredRouteProgress + "/"
+                + m_ProjectionFinalFailures
+                + " readOpsMs=current[count/total/max]:"
+                + FormatProjectionRead(m_ProjectionCurrentLaneReads, m_ProjectionCurrentLaneReadTicks, m_ProjectionCurrentLaneReadMaxTicks, tickMs)
+                + " navigation:" + FormatProjectionRead(m_ProjectionNavigationReads, m_ProjectionNavigationReadTicks, m_ProjectionNavigationReadMaxTicks, tickMs)
+                + " path:" + FormatProjectionRead(m_ProjectionPathReads, m_ProjectionPathReadTicks, m_ProjectionPathReadMaxTicks, tickMs)
+                + " match[total/max]:" + FormatProjectionTicks(m_ProjectionMatcherTicks, tickMs)
+                + "/" + FormatProjectionTicks(m_ProjectionMatcherMaxTicks, tickMs));
+
+            for (int source = 1; source < m_ProjectionRequestsBySource.Length; source++)
+            {
+                if (m_ProjectionRequestsBySource[source] == 0 && m_ProjectionLineSnapshotHitsBySource[source] == 0)
+                    continue;
+                m_Log.Info("[TrackProjectionProbeSource] source=" + ((ProjectionRequestSource)source)
+                    + " request/hit/exact/fallback/strictFail/ordinaryFail/lineSnapshotHit="
+                    + m_ProjectionRequestsBySource[source] + "/" + m_ProjectionCacheHitsBySource[source]
+                    + "/" + m_ProjectionExactAvailableBySource[source] + "/" + m_ProjectionFallbackAvailableBySource[source]
+                    + "/" + m_ProjectionStrictFailedBySource[source] + "/" + m_ProjectionOrdinaryFailedBySource[source]
+                    + "/" + m_ProjectionLineSnapshotHitsBySource[source]);
+            }
+
+            for (int i = 0; i < m_ProjectionIssueSampleCount; i++)
+                m_Log.Info("[TrackProjectionProbeCase] kind=issue " + FormatProjectionOutcome(m_ProjectionIssueSamples[i]));
+            if (m_HasProjectionSuccessSample)
+                m_Log.Info("[TrackProjectionProbeCase] kind=success " + FormatProjectionOutcome(m_ProjectionSuccessSample));
+
+            if (m_WaypointStationConfirmed > 0 || m_WaypointStationRejected > 0)
+            {
+                m_Log.Info("[WaypointStationProbe] frames=" + elapsedFrames
+                    + " confirmed/rejected=" + m_WaypointStationConfirmed + "/" + m_WaypointStationRejected);
+                for (int i = 0; i < m_WaypointStationIssueSampleCount; i++)
+                    m_Log.Info("[WaypointStationProbeCase] kind=issue " + FormatWaypointStationOutcome(m_WaypointStationIssueSamples[i]));
+                if (m_HasWaypointStationSuccessSample)
+                    m_Log.Info("[WaypointStationProbeCase] kind=success " + FormatWaypointStationOutcome(m_WaypointStationSuccessSample));
+            }
+        }
+
+        private static string FormatProjectionRead(ulong count, long totalTicks, long maxTicks, double tickMs)
+        {
+            return count + "/" + FormatProjectionTicks(totalTicks, tickMs)
+                + "/" + FormatProjectionTicks(maxTicks, tickMs);
+        }
+
+        private static string FormatProjectionTicks(long ticks, double tickMs)
+        {
+            return (ticks * tickMs).ToString("F3", CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatProjectionOutcome(ProjectionOutcome outcome)
+        {
+            ProjectionMatchEvidence evidence = outcome.Evidence;
+            return "frame=" + outcome.Frame
+                + " caller=" + outcome.RequestSource
+                + " vehicle=" + FormatEntity(outcome.Vehicle)
+                + " line=" + FormatEntity(outcome.Line)
+                + " lane=" + FormatEntity(outcome.FrontLane)
+                + " overlap=" + FormatEntity(outcome.OverlapLane)
+                + " chain=" + outcome.ChainSignature.ToString("X16", CultureInfo.InvariantCulture)
+                + " front=" + FormatFloat4(outcome.FrontCurvePosition)
+                + " flags=" + ((uint)outcome.FrontFlags).ToString(CultureInfo.InvariantCulture)
+                + " extensionReturn=" + (outcome.ExtensionReturnMatched
+                    ? "range:" + outcome.ExtensionStartAtomIndex + ">" + outcome.ExtensionForwardEndAtomIndexExclusive
+                        + ">" + outcome.ExtensionResumeAtomIndex
+                        + "/candidate:" + outcome.ExtensionCandidateAtomIndex
+                        + "/stage:" + outcome.ExtensionStage + "/queue:" + outcome.ExtensionQueueIndex
+                        + "/lane:" + FormatEntity(outcome.ExtensionReturnLane)
+                        + "/param:" + outcome.ExtensionReturnPosition.ToString("G9", CultureInfo.InvariantCulture)
+                    : "none")
+                + " candidates=indexed/physical/coordinate/initial/direction/navigation/path:" + outcome.IndexedCandidates + "/"
+                + outcome.PhysicalCandidates + "/" + outcome.CoordinateCandidates + "/" + outcome.InitialCandidates + "/" + outcome.DirectionCandidates
+                + "/" + outcome.NavigationCandidates + "/" + outcome.PathCandidates
+                + " matcherInputInvalid=" + outcome.MatcherInputInvalid
+                + " lastAtom=" + outcome.LastCandidateAtomIndex
+                + " lastRange=" + FormatFloat2(outcome.LastCandidateRange)
+                + " exact=" + outcome.ExactBasis + "/" + outcome.ExactFailure
+                + " stop=" + outcome.ReadStop
+                + " fallback=rawWp/proportion:" + (outcome.RouteProgressKnown ? outcome.RouteProgressWaypoint.ToString() : "unknown")
+                + "/" + outcome.RouteProgressProportion.ToString("G9", CultureInfo.InvariantCulture)
+                + " cachedWp=" + (outcome.CachedWaypointUsed ? outcome.CachedWaypoint.ToString() : "no")
+                + " anchorWp=" + (outcome.StationAnchorUsed ? outcome.StationAnchorWaypoint.ToString() : "no")
+                + " historyAtom=" + outcome.HistoryAtomBefore + ">" + outcome.HistoryAtomAfter
+                + " fallbackFailure=" + outcome.FallbackFailure
+                + " runtime=state:" + (outcome.RuntimeContext.VehicleStateKnown ? outcome.RuntimeContext.VehicleState.ToString() : "unknown")
+                + " boarding:" + (outcome.RuntimeContext.PublicTransportKnown ? outcome.RuntimeContext.OfficialBoarding.ToString() : "unknown")
+                + " session:" + (outcome.RuntimeContext.StopSessionKnown
+                    ? FormatEntity(outcome.RuntimeContext.StopSessionLine) + "/" + outcome.RuntimeContext.StopSessionWaypoint + "/" + outcome.RuntimeContext.StopSessionArrivalFrame
+                    : "unknown")
+                + " final=atom/proportion/source:" + outcome.FinalAtomIndex + "/"
+                + outcome.FinalAtomPosition01.ToString("F4", CultureInfo.InvariantCulture)
+                + "/" + outcome.FinalSource
+                + " evidence=" + evidence.Kind + "/" + evidence.Reason + "/" + evidence.Stage
+                + "/atom:" + evidence.CandidateAtomIndex + "/queue:" + evidence.QueueIndex
+                + "/expected:" + FormatEntity(evidence.ExpectedLane) + ":" + FormatFloat2(evidence.ExpectedParameters)
+                + "/actual:" + FormatEntity(evidence.ActualLane) + ":" + FormatFloat4(evidence.ActualParameters);
+        }
+
+        private static string FormatWaypointStationOutcome(WaypointStationOutcome outcome)
+        {
+            return "frame=" + outcome.Frame
+                + " vehicle=" + FormatEntity(outcome.Vehicle)
+                + " target=" + FormatEntity(outcome.Target)
+                + " targetWp=" + outcome.TargetWaypointIndex
+                + " cachedWp=" + outcome.CachedWaypointIndex
+                + " bvStop=" + FormatEntity(outcome.BoardingStop)
+                + " bv=" + FormatEntity(outcome.BoardingVehicle)
+                + " carriage=" + FormatEntity(outcome.Carriage)
+                + " lane=" + (outcome.TrackLaneRear ? "rear:" : "front:") + FormatEntity(outcome.TrackLane)
+                + " targetBuilding=" + FormatEntity(outcome.TargetBuilding)
+                + " trackBuilding=" + FormatEntity(outcome.TrackBuilding)
+                + " outsideAnchor=" + FormatEntity(outcome.OutsideAnchor)
+                + " laneOwner=" + FormatEntity(outcome.LaneOwner)
+                + " resolvedWp=" + outcome.WaypointIndex
+                + " evidence=" + outcome.Evidence;
+        }
+
+        private static string FormatEntity(Entity entity)
+        {
+            return entity.Index.ToString(CultureInfo.InvariantCulture)
+                + ":" + entity.Version.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatFloat4(float4 value)
+        {
+            return value.x.ToString("G9", CultureInfo.InvariantCulture)
+                + "," + value.y.ToString("G9", CultureInfo.InvariantCulture)
+                + "," + value.z.ToString("G9", CultureInfo.InvariantCulture)
+                + "," + value.w.ToString("G9", CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatFloat2(float2 value)
+        {
+            return value.x.ToString("G9", CultureInfo.InvariantCulture)
+                + "," + value.y.ToString("G9", CultureInfo.InvariantCulture);
         }
 
         private void StoreSlowFrame(
@@ -722,7 +1309,24 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 || m_RetireStageExecuted > 0
                 || m_RescueStageExecuted > 0
                 || m_SliceStageExecuted > 0
-                || m_SchedulerExternalDirtyLines > 0;
+                || m_SchedulerExternalDirtyLines > 0
+                || HasProjectionCounts();
+        }
+
+        private bool HasProjectionCounts()
+        {
+            return m_ProjectionCacheRequests > 0
+                || m_ProjectionCalculations > 0
+                || m_ProjectionPreparingLaneNotInModel > 0
+                || m_ProjectionCurrentLaneReads > 0
+                || m_ProjectionNavigationReads > 0
+                || m_ProjectionPathReads > 0
+                || m_ProjectionIssueSampleCount > 0
+                || m_HasProjectionSuccessSample
+                || m_WaypointStationConfirmed > 0
+                || m_WaypointStationRejected > 0
+                || m_WaypointStationIssueSampleCount > 0
+                || m_HasWaypointStationSuccessSample;
         }
     }
 }

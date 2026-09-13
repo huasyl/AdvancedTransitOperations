@@ -766,7 +766,7 @@ namespace RapidTransitMod
             PublishStopFacts();
             ApplyStopControls(commandBuffer);
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Stop);
-            m_TrackProjection.ClearLineRunningVehicleSnapshots();
+            m_TrackProjection.InvalidateLineRunningVehicleSnapshots();
             m_RuntimeFramePlan.Freeze(RuntimeStageMask.Rescue);
             IReadOnlyList<FramePlanEntry> rescueEntries = m_RuntimeFramePlan.ForStage(RuntimeStageMask.Rescue);
             m_RuntimeHotPathProbe.CountStagePlan(RuntimeStageMask.Rescue, rescueEntries.Count);

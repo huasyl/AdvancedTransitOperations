@@ -35,7 +35,10 @@ namespace RapidTransitMod.Bypass
         Entity GetStationBuildingForWaypoint(DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex);
         Entity ResolvePassingStation(Entity entity);
         bool TryEstimateRemainingBoardingTime(Entity vehicle, Entity line, int currentWaypointIndex, uint nowFrame, out float remainingFrames);
+        bool HasActiveStopSession(Entity vehicle, Entity line, int currentWaypointIndex);
         bool TryGetEffectiveTraversalRunSliceFrames(Entity line, TraversalRunSlice slice, out float effectiveRunFrames);
+        bool TryGetTraversalRunSliceAverageFrames(Entity line, TraversalRunSlice slice, out float averageFrames);
+        bool TryGetObservedWaypointDwell(Entity line, int waypointIndex, out float dwellFrames);
         bool TryGetBypassWaypointContext(DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out Entity currentBypassBuilding, out int nextBypassWaypointIndex, out Entity nextBypassBuilding);
         void LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message);
         Entity ResolveVehicle(Entity vehicle);

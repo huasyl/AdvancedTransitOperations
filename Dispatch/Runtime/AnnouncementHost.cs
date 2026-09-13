@@ -179,7 +179,8 @@ namespace RapidTransitMod
                     out traversalPhaseIndex,
                     out traversalPhaseStartAtomIndex,
                     out traversalPhaseEndAtomExclusive,
-                    out nextTurnbackBoundaryAtomIndex);
+                    out nextTurnbackBoundaryAtomIndex,
+                    ProjectionRequestSource.Announcement);
             }
 
             internal override bool TryCursor(
@@ -189,7 +190,7 @@ namespace RapidTransitMod
                 LineTrackChain chain,
                 out VehicleTrackCursor cursor)
             {
-                return m_Host.TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor);
+                return m_Host.TrackProjection.TryGetVehicleTrackCursorCurrentFrame(vehicle, line, waypoints, chain, out cursor, ProjectionRequestSource.Announcement);
             }
 
             internal override bool TryWindow(

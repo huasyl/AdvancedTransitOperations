@@ -2206,7 +2206,27 @@ namespace RapidTransitMod.Dispatch.Observation
                 geometry = m_Runtime.m_LineProfile.MixSignature(geometry, distance);
             }
 
-            if (TransportModeResolver.Resolve(m_Runtime.EntityManager, line) != TransitMode.Tram)
+            TransitMode mode = TransportModeResolver.Resolve(m_Runtime.EntityManager, line);
+            bool railLine = TransportModeProfile.GetProfile(mode).Lifecycle == LifecycleKind.Rail;
+            LineTrackChain geometryChain = null;
+            if (railLine
+                && (m_Runtime.m_TrackModel == null
+                    || !m_Runtime.m_TrackModel.TryGetChainForLine(line, waypoints, out geometryChain)
+                    || geometryChain == null))
+            {
+                geometry = 0UL;
+                legacyFull = 0UL;
+                return false;
+            }
+
+            if (railLine && geometryChain.HasStationTrackExtensions)
+            {
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, (int)geometryChain.Signature);
+                geometry = m_Runtime.m_LineProfile.MixSignature(geometry, (int)(geometryChain.Signature >> 32));
+                legacyFull = m_Runtime.m_LineProfile.MixSignature(legacyFull, int.MinValue);
+            }
+
+            if (mode != TransitMode.Tram)
                 return geometry != 0UL && legacyFull != 0UL;
 
             if (m_Runtime.m_TrackModel == null

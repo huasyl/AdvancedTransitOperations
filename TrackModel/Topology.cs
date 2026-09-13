@@ -357,6 +357,22 @@ namespace RapidTransitMod.TrackModel
             TotalFrames = runFrames + stopFrames;
         }
     }
+    internal readonly struct TrackExtensionRange
+    {
+        public readonly int StartAtomIndex;
+        public readonly int ForwardEndAtomIndexExclusive;
+        public readonly int ResumeAtomIndex;
+
+        public TrackExtensionRange(
+            int startAtomIndex,
+            int forwardEndAtomIndexExclusive,
+            int resumeAtomIndex)
+        {
+            StartAtomIndex = startAtomIndex;
+            ForwardEndAtomIndexExclusive = forwardEndAtomIndexExclusive;
+            ResumeAtomIndex = resumeAtomIndex;
+        }
+    }
     internal sealed class LineTrackChain
     {
         public Entity LineEntity;
@@ -364,6 +380,8 @@ namespace RapidTransitMod.TrackModel
         public ulong Signature;
         public ulong TraversalSignature;
         public bool ChainComplete;
+        public bool HasStationTrackExtensions;
+        public List<TrackExtensionRange> TrackExtensionRanges = new List<TrackExtensionRange>();
         public List<TrackAtom> TrackAtoms = new List<TrackAtom>();
         public Entity[] AtomStationBuildings = Array.Empty<Entity>();
         public Dictionary<Entity, List<int>> AtomIndicesByLane = new Dictionary<Entity, List<int>>();

@@ -19,6 +19,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         int waypointIndex,
         uint nowFrame,
         out DwellSnapshot snapshot);
+    internal delegate bool StopSessionReader(Entity vehicle, Entity line, int waypointIndex);
 
     internal class BypassAdmissionPort : IBypassAdmissionRuntimeContext
     {
@@ -46,6 +47,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly WaypointIndex m_WaypointIndex;
         private readonly ObservationPort m_Observation;
         private readonly DwellSnapshotReader m_TryGetDwellSnapshot;
+        private readonly StopSessionReader m_HasActiveStopSession;
         private readonly SharedCorridorSupport m_Shared;
         private readonly Action<Dictionary<Entity, string>, Entity, string, string> m_LogVehicleStateOnce;
         private readonly VehicleView m_VehicleView;
@@ -73,6 +75,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             WaypointIndex waypointIndex,
             ObservationPort observation,
             DwellSnapshotReader tryGetDwellSnapshot,
+            StopSessionReader hasActiveStopSession,
             SharedCorridorSupport shared,
             Action<Dictionary<Entity, string>, Entity, string, string> logVehicleStateOnce,
             VehicleView vehicleView,
@@ -99,6 +102,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_WaypointIndex = waypointIndex;
             m_Observation = observation;
             m_TryGetDwellSnapshot = tryGetDwellSnapshot;
+            m_HasActiveStopSession = hasActiveStopSession;
             m_Shared = shared;
             m_LogVehicleStateOnce = logVehicleStateOnce;
             m_VehicleView = vehicleView;
@@ -150,7 +154,24 @@ namespace RapidTransitMod.Dispatch.Runtime
             remainingFrames = snapshot.RemainingFrames;
             return remainingFrames > 0f;
         }
+        bool IBypassAdmissionRuntimeContext.HasActiveStopSession(Entity vehicle, Entity line, int currentWaypointIndex)
+        {
+            return m_HasActiveStopSession != null && m_HasActiveStopSession(vehicle, line, currentWaypointIndex);
+        }
         bool IBypassAdmissionRuntimeContext.TryGetEffectiveTraversalRunSliceFrames(Entity line, TraversalRunSlice slice, out float effectiveRunFrames) => m_Observation.EffectiveFrames(line, slice, out effectiveRunFrames);
+        bool IBypassAdmissionRuntimeContext.TryGetTraversalRunSliceAverageFrames(Entity line, TraversalRunSlice slice, out float averageFrames)
+        {
+            averageFrames = 0f;
+            return slice.SliceIndex >= 0
+                && m_Observation.TrySlice(Keys.Slice(line, slice.SliceIndex), out TraversalSliceObservation observation)
+                && observation.SampleCount > 0
+                && observation.AverageFrames > 0f
+                && (averageFrames = observation.AverageFrames) > 0f;
+        }
+        bool IBypassAdmissionRuntimeContext.TryGetObservedWaypointDwell(Entity line, int waypointIndex, out float dwellFrames)
+        {
+            return m_Observation.TryGetObservedWaypointStopFrames(line, waypointIndex, out dwellFrames);
+        }
         bool IBypassAdmissionRuntimeContext.TryGetBypassWaypointContext(DynamicBuffer<RouteWaypoint> waypoints, int currentWaypointIndex, out Entity currentBypassBuilding, out int nextBypassWaypointIndex, out Entity nextBypassBuilding) => m_Shared.TryGetBypassWaypointContext(waypoints, currentWaypointIndex, out currentBypassBuilding, out nextBypassWaypointIndex, out nextBypassBuilding);
         void IBypassAdmissionRuntimeContext.LogVehicleStateOnce(Dictionary<Entity, string> cache, Entity vehicle, string key, string message) => m_LogVehicleStateOnce(cache, vehicle, key, message);
         Entity IBypassAdmissionRuntimeContext.ResolveVehicle(Entity vehicle) => m_Resolve.RuntimeVehicle(vehicle);

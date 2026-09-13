@@ -2161,7 +2161,8 @@ namespace RapidTransitMod.TrackModel
                 }
 
                 if (IsCoveredByRanges(stationPasses, originalRangeCount, atomIndex)
-                    || HasStopRange(stationPasses, stop, atomIndex)
+                    || !TryGetTramStopRangeEnd(chain, atomIndex, out int endAtomIndexExclusive)
+                    || HasStopRange(stationPasses, stop, atomIndex, endAtomIndexExclusive)
                     || atomIndex < 0
                     || atomIndex >= chain.TrackAtoms.Count)
                 {
@@ -2175,7 +2176,7 @@ namespace RapidTransitMod.TrackModel
                 stationPasses.Add(new StationPassRange(
                     stop,
                     atomIndex,
-                    atomIndex + 1,
+                    endAtomIndexExclusive,
                     waypointIndex,
                     stopFrames,
                     0,
@@ -2315,14 +2316,15 @@ namespace RapidTransitMod.TrackModel
         private static bool HasStopRange(
             List<StationPassRange> stationPasses,
             Entity stop,
-            int atomIndex)
+            int atomIndex,
+            int endAtomIndexExclusive)
         {
             for (int i = 0; i < stationPasses.Count; i++)
             {
                 StationPassRange range = stationPasses[i];
                 if (range.Building == stop
                     && range.StartAtomIndex == atomIndex
-                    && range.EndAtomIndexExclusive == atomIndex + 1)
+                    && range.EndAtomIndexExclusive == endAtomIndexExclusive)
                 {
                     return true;
                 }
@@ -2337,8 +2339,8 @@ namespace RapidTransitMod.TrackModel
             {
                 StationPassRange range = stationPasses[i];
                 if (range.WaypointIndex >= 0
-                    && range.StartAtomIndex == atomIndex
-                    && range.EndAtomIndexExclusive == atomIndex + 1
+                    && atomIndex >= range.StartAtomIndex
+                    && atomIndex < range.EndAtomIndexExclusive
                     && EntityManager.HasComponent<TransportStop>(range.Building))
                 {
                     return true;
@@ -2346,6 +2348,31 @@ namespace RapidTransitMod.TrackModel
             }
 
             return false;
+        }
+
+        private static bool TryGetTramStopRangeEnd(
+            LineTrackChain chain,
+            int atomIndex,
+            out int endAtomIndexExclusive)
+        {
+            endAtomIndexExclusive = atomIndex + 1;
+            if (chain == null
+                || atomIndex < 0
+                || atomIndex >= chain.TrackAtoms.Count)
+            {
+                return false;
+            }
+
+            for (int rangeIndex = 0; rangeIndex < chain.TrackExtensionRanges.Count; rangeIndex++)
+            {
+                TrackExtensionRange extension = chain.TrackExtensionRanges[rangeIndex];
+                if (extension.StartAtomIndex == atomIndex)
+                {
+                    endAtomIndexExclusive = extension.ResumeAtomIndex;
+                    break;
+                }
+            }
+            return true;
         }
 
         private static void RemoveProjectedPasses(

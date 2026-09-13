@@ -140,20 +140,38 @@ namespace RapidTransitMod.TrackProjection
         public readonly ulong ChainSignature;
         public readonly uint Frame;
         public readonly bool Available;
+        public readonly bool FinalKnown;
         public readonly VehicleTrackCursor Cursor;
+        public readonly bool ExactKnown;
+        public readonly bool ExactAvailable;
+        public readonly VehicleTrackCursor ExactCursor;
+        public readonly bool HasExactOutcome;
+        public readonly ProjectionOutcome ExactOutcome;
 
         public VehicleTrackCursorFrameSnapshot(
             Entity lineEntity,
             ulong chainSignature,
             uint frame,
             bool available,
-            VehicleTrackCursor cursor)
+            VehicleTrackCursor cursor,
+            bool finalKnown = false,
+            bool exactKnown = false,
+            bool exactAvailable = false,
+            VehicleTrackCursor exactCursor = default,
+            bool hasExactOutcome = false,
+            ProjectionOutcome exactOutcome = default)
         {
             LineEntity = lineEntity;
             ChainSignature = chainSignature;
             Frame = frame;
             Available = available;
+            FinalKnown = finalKnown;
             Cursor = cursor;
+            ExactKnown = exactKnown;
+            ExactAvailable = exactAvailable;
+            ExactCursor = exactCursor;
+            HasExactOutcome = hasExactOutcome;
+            ExactOutcome = exactOutcome;
         }
     }
 

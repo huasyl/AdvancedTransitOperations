@@ -1086,6 +1086,17 @@ namespace RapidTransitMod.Dispatch.Runtime
             return true;
         }
 
+        internal bool HasActiveStopSession(Entity vehicle, Entity line, int waypointIndex)
+        {
+            return vehicle != Entity.Null
+                && line != Entity.Null
+                && waypointIndex >= 0
+                && m_State.StopSessionLine.TryGetValue(vehicle, out Entity sessionLine)
+                && sessionLine == line
+                && TryGetSessionWaypoint(vehicle, out int sessionWaypoint)
+                && sessionWaypoint == waypointIndex;
+        }
+
         internal StopControlResult OpenStopSession(Entity vehicle, Entity line, int waypoint, uint nowFrame)
         {
             m_State.InvalidatedMidStopRecoveryPending.Remove(vehicle);
