@@ -2839,6 +2839,9 @@ namespace RapidTransitMod
         protected override void OnGameLoaded(Context serializationContext)
         {
             base.OnGameLoaded(serializationContext);
+#if RT_DEBUG_TOOLS
+            m_RuntimeProbe.StopTrace("gameLoaded");
+#endif
             m_RuntimeLifecycleHost.Loaded(serializationContext);
         }
 
@@ -2885,6 +2888,9 @@ namespace RapidTransitMod
             try
             {
                 if (ReferenceEquals(Instance, this)) Instance = null!;
+#if RT_DEBUG_TOOLS
+                m_RuntimeProbe.StopTrace("destroyed");
+#endif
                 RuntimeRoot.Clear(this);
 #if RT_DEBUG_TOOLS
                 m_RuntimeProbe = null!;

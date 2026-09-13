@@ -15,13 +15,14 @@ using UnityEngine;
 namespace RapidTransitMod.Dispatch.Diagnostics
 {
     // 仅调试构建启用：文件请求只读取当前运行时与 ECS，不参与调度阶段。
-    internal sealed class RuntimeProbe
+    internal sealed partial class RuntimeProbe
     {
         private const uint PollIntervalFrames = 15;
         private const int DefaultLimit = 50;
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly string m_RequestDir;
         private readonly string m_ResponseDir;
+        private readonly string m_TraceDir;
         private uint m_NextPollFrame;
         private uint m_LastFrame;
         private bool m_HasLastFrame;
@@ -33,6 +34,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             string root = Path.Combine(Application.persistentDataPath, "RapidTransitMod", "Probe");
             m_RequestDir = Path.Combine(root, "requests");
             m_ResponseDir = Path.Combine(root, "responses");
+            m_TraceDir = Path.Combine(root, "traces");
             Directory.CreateDirectory(m_RequestDir);
             Directory.CreateDirectory(m_ResponseDir);
         }
@@ -43,6 +45,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 m_NextPollFrame = frame;
             m_LastFrame = frame;
             m_HasLastFrame = true;
+
+            CaptureTrace(frame);
 
             if (frame < m_NextPollFrame)
                 return;
@@ -110,6 +114,19 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     return ReadComponent(request, false);
                 case "entity.buffer":
                     return ReadComponent(request, true);
+                case "trace.start":
+                    return StartTrace(request);
+                case "trace.status":
+                    return TraceStatus();
+                case "trace.stop":
+                    StopTrace("requested");
+                    return TraceStatus();
+                case "trace.read":
+                    return ReadTrace(request);
+                case "trace.snapshot":
+                    return ReadTraceSnapshot(request);
+                case "trace.export":
+                    return ExportTrace();
                 default:
                     throw new ProbeError("未知 command: " + command);
             }
@@ -261,29 +278,9 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         private JObject BufferNode(Entity entity, Type type, int offset, int limit)
         {
-            MethodInfo method = typeof(EntityManager).GetMethod(
-                "GetBuffer",
-                new[] { typeof(Entity), typeof(bool) });
-            if (method == null)
-                throw new ProbeError("未找到 ECS 动态缓冲区读取接口。");
-
-            object buffer;
-            try
-            {
-                buffer = method.MakeGenericMethod(type).Invoke(
-                    m_Runtime.EntityManager,
-                    new object[] { entity, true });
-            }
-            catch (TargetInvocationException ex)
-            {
-                throw new ProbeError("读取动态缓冲区失败: " + (ex.InnerException?.Message ?? ex.Message));
-            }
-
-            Type bufferType = buffer.GetType();
-            int total = (int)bufferType.GetProperty("Length").GetValue(buffer, null);
+            object buffer = ReadBuffer(entity, type, out int total, out PropertyInfo item);
             int start = Math.Min(offset, total);
             int end = Math.Min(start + limit, total);
-            PropertyInfo item = bufferType.GetProperty("Item");
             JArray items = new JArray();
             for (int i = start; i < end; i++)
             {
@@ -612,6 +609,32 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             };
         }
 
+        private object ReadBuffer(Entity entity, Type type, out int total, out PropertyInfo item)
+        {
+            MethodInfo method = typeof(EntityManager).GetMethod(
+                "GetBuffer",
+                new[] { typeof(Entity), typeof(bool) });
+            if (method == null)
+                throw new ProbeError("未找到 ECS 动态缓冲区读取接口。");
+
+            object buffer;
+            try
+            {
+                buffer = method.MakeGenericMethod(type).Invoke(
+                    m_Runtime.EntityManager,
+                    new object[] { entity, true });
+            }
+            catch (TargetInvocationException ex)
+            {
+                throw new ProbeError("读取动态缓冲区失败: " + (ex.InnerException?.Message ?? ex.Message));
+            }
+
+            Type bufferType = buffer.GetType();
+            total = (int)bufferType.GetProperty("Length").GetValue(buffer, null);
+            item = bufferType.GetProperty("Item");
+            return buffer;
+        }
+
         private object FindSystem(string name)
         {
             if (string.IsNullOrWhiteSpace(name))
@@ -749,6 +772,27 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         private static JToken ValueNode(object value, Type type, int depth, ReadView view)
         {
+            return ValueNode(value, type, depth, view, false);
+        }
+
+        private static bool TryFullValueNode(object value, out JToken node, out string reason)
+        {
+            try
+            {
+                node = ValueNode(value, value?.GetType(), 0, new ReadView(0, DefaultLimit, 4, null, null), true);
+                reason = null;
+                return true;
+            }
+            catch (ProbeError ex)
+            {
+                node = null;
+                reason = ex.Message;
+                return false;
+            }
+        }
+
+        private static JToken ValueNode(object value, Type type, int depth, ReadView view, bool full)
+        {
             if (value == null)
                 return JValue.CreateNull();
             type = value.GetType();
@@ -773,6 +817,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 return new JValue(value.ToString());
             if (type.IsPrimitive || type == typeof(decimal))
                 return JToken.FromObject(value);
+            if (full && (type.IsPointer || type.IsByRef || type == typeof(IntPtr) || type == typeof(UIntPtr)))
+                throw new ProbeError("字段类型 " + type.FullName + " 不能安全展开。");
             if (type == typeof(DateTime)
                 || type == typeof(TimeSpan)
                 || type == typeof(Guid)
@@ -787,24 +833,42 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             {
                 return new JValue(value.ToString());
             }
+            if (full && (type.IsClass || type.IsArray || typeof(Delegate).IsAssignableFrom(type)))
+                throw new ProbeError("托管字段类型 " + type.FullName + " 不在追踪范围内。");
             if (value is IDictionary dictionary)
+            {
+                if (full)
+                    throw new ProbeError("字典字段不能完整展开。");
                 return DictionaryNode(dictionary, depth, view);
+            }
             if (value is IEnumerable enumerable && !(value is string))
+            {
+                if (full)
+                    throw new ProbeError("集合字段不能完整展开。");
                 return EnumerableNode(enumerable, depth, view);
-            if (depth >= view.MaxDepth)
+            }
+            if (!full && depth >= view.MaxDepth)
                 return new JValue(value.ToString());
             if (type.Namespace == "Unity.Collections" || typeof(Delegate).IsAssignableFrom(type))
+            {
+                if (full)
+                    throw new ProbeError("字段类型 " + type.FullName + " 不能完整展开。");
                 return new JValue(value.ToString());
+            }
 
             List<FieldInfo> fields = Fields(type);
             if (fields.Count == 0)
+            {
+                if (full)
+                    return new JObject();
                 return new JValue(value.ToString());
+            }
 
             JObject node = new JObject();
             for (int i = 0; i < fields.Count; i++)
             {
                 FieldInfo field = fields[i];
-                node[field.Name] = ValueNode(field.GetValue(value), field.FieldType, depth + 1, view);
+                node[field.Name] = ValueNode(field.GetValue(value), field.FieldType, depth + 1, view, full);
             }
             return node;
         }
