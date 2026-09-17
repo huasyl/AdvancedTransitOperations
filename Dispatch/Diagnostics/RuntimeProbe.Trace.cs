@@ -16,7 +16,10 @@ namespace RapidTransitMod.Dispatch.Diagnostics
     internal sealed partial class RuntimeProbe
     {
         private const int DefaultTraceMaxMegabytes = 32;
+        private const int DefaultTraceIntervalFrames = 16;
         private const string TraceSamplePoint = "宿主 OnUpdate 末尾，EndFrameBarrier 回放之前";
+        private static readonly Dictionary<Type, TraceValueInfo> s_TraceValueInfos
+            = new Dictionary<Type, TraceValueInfo>();
         private TraceSession m_Trace;
 
         private JObject StartTrace(JObject request)
@@ -33,16 +36,21 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             if (maxMegabytes < 1)
                 throw new ProbeError("maxMb 必须是大于 0 的整数。");
 
+            int intervalFrames = request.Value<int?>("intervalFrames") ?? DefaultTraceIntervalFrames;
+            if (intervalFrames < 1)
+                throw new ProbeError("intervalFrames 必须是大于 0 的整数。");
+
             bool followConsist = request.Value<bool?>("consist") ?? false;
             uint frame = m_Runtime.m_SimulationSystem.frameIndex;
             TraceSession session = new TraceSession(
                 root,
                 followConsist,
                 frame,
+                (uint)intervalFrames,
                 (long)maxMegabytes * 1024L * 1024L);
 
             HashSet<Entity> targets = BuildTraceTargets(session, out HashSet<Entity> members);
-            JObject baseline = BuildBaseline(targets, members, frame);
+            JObject baseline = BuildBaseline(targets, members, frame, out Dictionary<Entity, TraceEntitySnapshot> snapshots);
             long baselineBytes = SerializedBytes(baseline) + SampleFrameBytes(frame);
             if (baselineBytes > session.LimitBytes)
                 throw new ProbeError("完整基线超过记录上限，请提高 --max-mb。");
@@ -51,13 +59,9 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             session.RecordBytes = baselineBytes;
             session.SampleFrames.Add(frame);
             session.LastSampleFrame = frame;
+            session.LastCaptureFrame = frame;
             session.CurrentMembers = members;
-            JArray baselineEntities = baseline["entities"] as JArray;
-            for (int i = 0; i < baselineEntities.Count; i++)
-            {
-                JObject snapshot = (JObject)baselineEntities[i];
-                session.LastSnapshots[EntityFromNode(snapshot["entity"] as JObject)] = snapshot;
-            }
+            session.LastSnapshots = snapshots;
 
             m_Trace = session;
             return TraceStatus();
@@ -81,6 +85,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 ["active"] = session.Active,
                 ["root"] = EntityNode(session.Root),
                 ["consist"] = session.FollowConsist,
+                ["intervalFrames"] = session.IntervalFrames,
                 ["baselineFrame"] = session.StartFrame,
                 ["samplePoint"] = TraceSamplePoint,
                 ["sampleCount"] = session.SampleFrames.Count,
@@ -91,6 +96,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             };
             if (session.LastSampleFrame.HasValue)
                 node["lastSampleFrame"] = session.LastSampleFrame.Value;
+            if (session.LastCaptureFrame.HasValue)
+                node["lastCaptureFrame"] = session.LastCaptureFrame.Value;
             if (!string.IsNullOrEmpty(session.StopReason))
                 node["stopReason"] = session.StopReason;
             if (session.CutoffSampleFrame.HasValue)
@@ -167,35 +174,67 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private void CaptureTrace(uint frame)
         {
             TraceSession session = m_Trace;
-            if (session == null || !session.Active || session.LastSampleFrame == frame)
+            if (session == null || !session.Active || session.LastCaptureFrame == frame)
                 return;
 
             try
             {
                 HashSet<Entity> targets = BuildTraceTargets(session, out HashSet<Entity> members);
+                JArray events = CaptureTraceEvents(targets);
+                bool sample = !m_Runtime.EntityManager.Exists(session.Root)
+                    || (uint)(frame - session.LastSampleFrame.Value) >= session.IntervalFrames;
+                if (!sample)
+                {
+                    if (events.Count == 0)
+                    {
+                        session.LastCaptureFrame = frame;
+                        return;
+                    }
+
+                    JObject eventRecord = new JObject
+                    {
+                        ["frame"] = frame,
+                        ["events"] = events
+                    };
+                    long eventBytes = SerializedBytes(eventRecord) + 1L;
+                    if (session.RecordBytes + eventBytes > session.LimitBytes)
+                    {
+                        StopTrace("capacity");
+                        return;
+                    }
+
+                    session.RecordBytes += eventBytes;
+                    session.Records.Add(eventRecord);
+                    session.LastCaptureFrame = frame;
+                    return;
+                }
+
                 JObject membership = BuildMembershipChange(session.CurrentMembers, members);
                 JArray entities = new JArray();
-                Dictionary<Entity, JObject> snapshots = new Dictionary<Entity, JObject>();
+                Dictionary<Entity, TraceEntitySnapshot> snapshots = new Dictionary<Entity, TraceEntitySnapshot>();
                 foreach (Entity target in SortEntities(targets))
                 {
-                    JObject current = CaptureEntity(target);
+                    TraceEntitySnapshot current = CaptureEntity(target);
                     snapshots[target] = current;
-                    session.LastSnapshots.TryGetValue(target, out JObject previous);
+                    session.LastSnapshots.TryGetValue(target, out TraceEntitySnapshot previous);
                     JObject change = BuildEntityChange(target, previous, current);
                     if (change != null)
                         entities.Add(change);
                 }
 
-                JArray events = CaptureTraceEvents(targets);
-                JObject record = new JObject { ["frame"] = frame };
-                if (membership != null)
-                    record["membership"] = membership;
-                if (entities.Count > 0)
-                    record["entities"] = entities;
-                if (events.Count > 0)
-                    record["events"] = events;
-
                 bool hasRecord = membership != null || entities.Count > 0 || events.Count > 0;
+                JObject record = null;
+                if (hasRecord)
+                {
+                    record = new JObject { ["frame"] = frame };
+                    if (membership != null)
+                        record["membership"] = membership;
+                    if (entities.Count > 0)
+                        record["entities"] = entities;
+                    if (events.Count > 0)
+                        record["events"] = events;
+                }
+
                 long bytes = SampleFrameBytes(frame) + (hasRecord ? SerializedBytes(record) + 1L : 0L);
                 if (session.RecordBytes + bytes > session.LimitBytes)
                 {
@@ -208,20 +247,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 session.LastSampleFrame = frame;
                 if (hasRecord)
                     session.Records.Add(record);
-
+                session.LastCaptureFrame = frame;
                 session.CurrentMembers = members;
-                foreach (Entity left in session.LastSnapshots.Keys)
-                {
-                    if (!targets.Contains(left))
-                        session.RemovedSnapshots.Add(left);
-                }
-                for (int i = 0; i < session.RemovedSnapshots.Count; i++)
-                    session.LastSnapshots.Remove(session.RemovedSnapshots[i]);
-                session.RemovedSnapshots.Clear();
-                foreach (KeyValuePair<Entity, JObject> pair in snapshots)
-                    session.LastSnapshots[pair.Key] = pair.Value;
+                session.LastSnapshots = snapshots;
 
-                if (!snapshots[session.Root].Value<bool>("exists"))
+                if (!snapshots[session.Root].Exists)
                     StopTrace("rootMissing");
             }
             catch (Exception ex)
@@ -256,11 +286,20 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             return targets;
         }
 
-        private JObject BuildBaseline(HashSet<Entity> targets, HashSet<Entity> members, uint frame)
+        private JObject BuildBaseline(
+            HashSet<Entity> targets,
+            HashSet<Entity> members,
+            uint frame,
+            out Dictionary<Entity, TraceEntitySnapshot> snapshots)
         {
             JArray entities = new JArray();
+            snapshots = new Dictionary<Entity, TraceEntitySnapshot>();
             foreach (Entity target in SortEntities(targets))
-                entities.Add(CaptureEntity(target));
+            {
+                TraceEntitySnapshot snapshot = CaptureEntity(target);
+                snapshots[target] = snapshot;
+                entities.Add(TraceEntityNode(snapshot));
+            }
 
             JArray memberNodes = new JArray();
             foreach (Entity member in SortEntities(members))
@@ -273,121 +312,111 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             };
         }
 
-        private JObject CaptureEntity(Entity entity)
+        private TraceEntitySnapshot CaptureEntity(Entity entity)
         {
-            JObject node = new JObject
-            {
-                ["entity"] = EntityNode(entity)
-            };
+            TraceEntitySnapshot snapshot = new TraceEntitySnapshot(entity);
             if (!m_Runtime.EntityManager.Exists(entity))
             {
-                node["exists"] = false;
-                node["components"] = new JArray();
-                return node;
+                snapshot.Exists = false;
+                return snapshot;
             }
 
-            node["exists"] = true;
+            snapshot.Exists = true;
             NativeArray<ComponentType> types = m_Runtime.EntityManager.GetComponentTypes(entity, Allocator.Temp);
             try
             {
-                List<JObject> components = new List<JObject>();
                 for (int i = 0; i < types.Length; i++)
-                    components.Add(CaptureComponent(entity, types[i]));
-                components.Sort(CompareTraceComponents);
-                JArray componentNodes = new JArray();
-                for (int i = 0; i < components.Count; i++)
-                    componentNodes.Add(components[i]);
-                node["components"] = componentNodes;
+                {
+                    TraceComponentSnapshot component = CaptureComponent(entity, types[i]);
+                    snapshot.Components[component.Type] = component;
+                }
             }
             finally
             {
                 types.Dispose();
             }
-            return node;
+            return snapshot;
         }
 
-        private JObject CaptureComponent(Entity entity, ComponentType componentType)
+        private TraceComponentSnapshot CaptureComponent(Entity entity, ComponentType componentType)
         {
             Type type = componentType.GetManagedType();
             string name = type?.FullName ?? componentType.ToString();
-            JObject node = new JObject
-            {
-                ["type"] = name,
-                ["kind"] = TraceComponentKind(componentType)
-            };
+            TraceComponentSnapshot snapshot = new TraceComponentSnapshot(name, TraceComponentKind(componentType));
             if (type == null)
-                return UnsupportedComponent(node, "ECS 未提供该组件的托管类型。");
+                return UnsupportedComponent(snapshot, "ECS 未提供该组件的托管类型。");
             if (componentType.IsSharedComponent || componentType.IsManagedComponent || type.IsClass)
-                return UnsupportedComponent(node, "托管或共享组件不在追踪范围内。");
+                return UnsupportedComponent(snapshot, "托管或共享组件不在追踪范围内。");
 
             if (componentType.IsZeroSized)
             {
-                node["supported"] = true;
-                node["present"] = true;
-                AddEnableState(node, entity, componentType);
-                return node;
+                snapshot.Supported = true;
+                snapshot.Present = true;
+                AddEnableState(snapshot, entity, componentType);
+                return snapshot;
             }
 
             if (componentType.IsBuffer)
             {
                 if (!typeof(IBufferElementData).IsAssignableFrom(type))
-                    return UnsupportedComponent(node, "ECS 缓冲区类型不实现 IBufferElementData。");
+                    return UnsupportedComponent(snapshot, "ECS 缓冲区类型不实现 IBufferElementData。");
                 try
                 {
-                    node["items"] = TraceBufferItems(entity, type);
-                    node["supported"] = true;
-                    AddEnableState(node, entity, componentType);
-                    return node;
+                    snapshot.Items = TraceBufferItems(entity, type);
+                    snapshot.Supported = true;
+                    AddEnableState(snapshot, entity, componentType);
+                    return snapshot;
                 }
                 catch (Exception ex)
                 {
-                    return UnsupportedComponent(node, "无法完整展开动态缓冲区: " + Describe(ex));
+                    return UnsupportedComponent(snapshot, "无法完整展开动态缓冲区: " + Describe(ex));
                 }
             }
 
             if (!typeof(IComponentData).IsAssignableFrom(type))
-                return UnsupportedComponent(node, "该 ECS 类型不是普通 IComponentData。");
+                return UnsupportedComponent(snapshot, "该 ECS 类型不是普通 IComponentData。");
 
             try
             {
-                if (!TryFullValueNode(GetComponent(entity, type), out JToken value, out string reason))
-                    return UnsupportedComponent(node, reason);
-                node["value"] = value;
-                node["supported"] = true;
-                AddEnableState(node, entity, componentType);
-                return node;
+                object value = GetComponent(entity, type);
+                if (!TryFullTraceValue(value, out string reason))
+                    return UnsupportedComponent(snapshot, reason);
+                snapshot.Value = value;
+                snapshot.Supported = true;
+                AddEnableState(snapshot, entity, componentType);
+                return snapshot;
             }
             catch (Exception ex)
             {
-                return UnsupportedComponent(node, "无法读取普通组件: " + Describe(ex));
+                return UnsupportedComponent(snapshot, "无法读取普通组件: " + Describe(ex));
             }
         }
 
-        private JArray TraceBufferItems(Entity entity, Type type)
+        private object[] TraceBufferItems(Entity entity, Type type)
         {
             object buffer = ReadBuffer(entity, type, out int length, out PropertyInfo item);
-            JArray items = new JArray();
+            object[] items = new object[length];
             for (int i = 0; i < length; i++)
             {
                 object value = item.GetValue(buffer, new object[] { i });
-                if (!TryFullValueNode(value, out JToken itemNode, out string reason))
+                if (!TryFullTraceValue(value, out string reason))
                     throw new ProbeError("元素 " + i + " 无法完整展开: " + reason);
-                items.Add(itemNode);
+                items[i] = value;
             }
             return items;
         }
 
-        private void AddEnableState(JObject node, Entity entity, ComponentType componentType)
+        private void AddEnableState(TraceComponentSnapshot snapshot, Entity entity, ComponentType componentType)
         {
             if (componentType.IsEnableable)
-                node["enabled"] = m_Runtime.EntityManager.IsComponentEnabled(entity, componentType);
+                snapshot.Enabled = m_Runtime.EntityManager.IsComponentEnabled(entity, componentType);
         }
 
-        private static JObject UnsupportedComponent(JObject node, string reason)
+        private static TraceComponentSnapshot UnsupportedComponent(TraceComponentSnapshot snapshot, string reason)
         {
-            node["supported"] = false;
-            node["reason"] = reason;
-            return node;
+            snapshot.Supported = false;
+            snapshot.Reason = reason;
+            return snapshot;
         }
 
         private static string TraceComponentKind(ComponentType componentType)
@@ -401,9 +430,193 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             return "component";
         }
 
-        private static int CompareTraceComponents(JObject left, JObject right)
+        private static JObject TraceEntityNode(TraceEntitySnapshot snapshot)
         {
-            return string.CompareOrdinal(left.Value<string>("type"), right.Value<string>("type"));
+            JObject node = new JObject
+            {
+                ["entity"] = EntityNode(snapshot.Entity),
+                ["exists"] = snapshot.Exists
+            };
+            JArray components = new JArray();
+            if (snapshot.Exists)
+            {
+                List<string> names = new List<string>(snapshot.Components.Keys);
+                names.Sort(StringComparer.Ordinal);
+                for (int i = 0; i < names.Count; i++)
+                    components.Add(TraceComponentNode(snapshot.Components[names[i]]));
+            }
+            node["components"] = components;
+            return node;
+        }
+
+        private static JObject TraceComponentNode(TraceComponentSnapshot snapshot)
+        {
+            JObject node = new JObject
+            {
+                ["type"] = snapshot.Type,
+                ["kind"] = snapshot.Kind
+            };
+            if (!snapshot.Supported)
+                return UnsupportedComponentNode(node, snapshot.Reason);
+
+            if (snapshot.Present)
+            {
+                node["supported"] = true;
+                node["present"] = true;
+            }
+            else if (snapshot.Kind == "buffer")
+            {
+                JArray items = new JArray();
+                for (int i = 0; i < snapshot.Items.Length; i++)
+                {
+                    object value = snapshot.Items[i];
+                    items.Add(ValueNode(value, value?.GetType(), 0, new ReadView(0, DefaultLimit, 4, null, null), true));
+                }
+                node["items"] = items;
+                node["supported"] = true;
+            }
+            else
+            {
+                node["value"] = ValueNode(
+                    snapshot.Value,
+                    snapshot.Value?.GetType(),
+                    0,
+                    new ReadView(0, DefaultLimit, 4, null, null),
+                    true);
+                node["supported"] = true;
+            }
+
+            if (snapshot.Enabled.HasValue)
+                node["enabled"] = snapshot.Enabled.Value;
+            return node;
+        }
+
+        private static JObject UnsupportedComponentNode(JObject node, string reason)
+        {
+            node["supported"] = false;
+            node["reason"] = reason;
+            return node;
+        }
+
+        private static bool TraceComponentEquals(
+            TraceComponentSnapshot left,
+            TraceComponentSnapshot right)
+        {
+            if (!string.Equals(left.Type, right.Type, StringComparison.Ordinal)
+                || !string.Equals(left.Kind, right.Kind, StringComparison.Ordinal)
+                || left.Supported != right.Supported
+                || left.Present != right.Present
+                || left.Enabled != right.Enabled)
+            {
+                return false;
+            }
+            if (!left.Supported)
+                return string.Equals(left.Reason, right.Reason, StringComparison.Ordinal);
+            if (left.Present)
+                return true;
+            if (left.Kind != "buffer")
+                return TraceValueEquals(left.Value, right.Value);
+            if (left.Items.Length != right.Items.Length)
+                return false;
+            for (int i = 0; i < left.Items.Length; i++)
+            {
+                if (!TraceValueEquals(left.Items[i], right.Items[i]))
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool TraceValueEquals(object left, object right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null)
+                return false;
+
+            Type type = left.GetType();
+            if (type != right.GetType())
+                return false;
+            if (type == typeof(Entity))
+            {
+                Entity first = (Entity)left;
+                Entity second = (Entity)right;
+                return first.Index == second.Index && first.Version == second.Version;
+            }
+            if (type.IsEnum)
+                return left.Equals(right);
+            if (type == typeof(string))
+                return string.Equals((string)left, (string)right, StringComparison.Ordinal);
+            if (type == typeof(char)
+                || type.IsPrimitive
+                || type == typeof(decimal)
+                || type == typeof(DateTime)
+                || type == typeof(TimeSpan)
+                || type == typeof(Guid))
+            {
+                return left.Equals(right);
+            }
+            if (type == typeof(Type))
+                return ReferenceEquals(left, right);
+            if (type.Namespace == "Unity.Collections"
+                && type.Name.StartsWith("FixedString", StringComparison.Ordinal))
+            {
+                return left.Equals(right);
+            }
+
+            List<FieldInfo> fields = Fields(type);
+            for (int i = 0; i < fields.Count; i++)
+            {
+                FieldInfo field = fields[i];
+                if (!TraceValueEquals(field.GetValue(left), field.GetValue(right)))
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool TryFullTraceValue(object value, out string reason)
+        {
+            try
+            {
+                EnsureFullTraceValue(value);
+                reason = null;
+                return true;
+            }
+            catch (ProbeError ex)
+            {
+                reason = ex.Message;
+                return false;
+            }
+        }
+
+        private static void EnsureFullTraceValue(object value)
+        {
+            if (value == null)
+                return;
+
+            Type type = value.GetType();
+            TraceValueInfo info = GetTraceValueInfo(type);
+            if (!string.IsNullOrEmpty(info.Reason))
+                throw new ProbeError(info.Reason);
+            if (!info.RequiresValueCheck)
+                return;
+
+            for (int i = 0; i < info.Fields.Count; i++)
+            {
+                FieldInfo field = info.Fields[i];
+                TraceValueInfo fieldInfo = GetTraceValueInfo(field.FieldType);
+                if (!string.IsNullOrEmpty(fieldInfo.Reason) || fieldInfo.RequiresValueCheck)
+                    EnsureFullTraceValue(field.GetValue(value));
+            }
+        }
+
+        private static TraceValueInfo GetTraceValueInfo(Type type)
+        {
+            if (s_TraceValueInfos.TryGetValue(type, out TraceValueInfo cached))
+                return cached;
+
+            TraceValueInfo info = new TraceValueInfo(type, Fields(type));
+            s_TraceValueInfos.Add(type, info);
+            return info;
         }
 
         private static JObject BuildMembershipChange(HashSet<Entity> previous, HashSet<Entity> current)
@@ -429,27 +642,32 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             };
         }
 
-        private static JObject BuildEntityChange(Entity entity, JObject previous, JObject current)
+        private static JObject BuildEntityChange(
+            Entity entity,
+            TraceEntitySnapshot previous,
+            TraceEntitySnapshot current)
         {
-            bool currentExists = current.Value<bool>("exists");
-            bool previousExists = previous != null && previous.Value<bool>("exists");
+            bool currentExists = current.Exists;
+            bool previousExists = previous != null && previous.Exists;
             bool entityChanged = previous == null || currentExists != previousExists;
             JArray changes = new JArray();
-            Dictionary<string, JObject> before = ComponentMap(previous);
-            Dictionary<string, JObject> after = ComponentMap(current);
-            List<string> names = new List<string>(before.Keys);
-            foreach (string name in after.Keys)
+            List<string> names = previous == null
+                ? new List<string>()
+                : new List<string>(previous.Components.Keys);
+            foreach (string name in current.Components.Keys)
             {
-                if (!before.ContainsKey(name))
+                if (previous == null || !previous.Components.ContainsKey(name))
                     names.Add(name);
             }
             names.Sort(StringComparer.Ordinal);
             for (int i = 0; i < names.Count; i++)
             {
                 string name = names[i];
-                bool hadBefore = before.TryGetValue(name, out JObject beforeNode);
-                bool hasAfter = after.TryGetValue(name, out JObject afterNode);
-                if (hadBefore && hasAfter && JToken.DeepEquals(beforeNode, afterNode))
+                TraceComponentSnapshot before = null;
+                bool hadBefore = previous != null
+                    && previous.Components.TryGetValue(name, out before);
+                bool hasAfter = current.Components.TryGetValue(name, out TraceComponentSnapshot after);
+                if (hadBefore && hasAfter && TraceComponentEquals(before, after))
                     continue;
 
                 JObject change = new JObject
@@ -458,9 +676,9 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     ["change"] = !hadBefore ? "added" : !hasAfter ? "removed" : "modified"
                 };
                 if (hadBefore)
-                    change["before"] = beforeNode.DeepClone();
+                    change["before"] = TraceComponentNode(before);
                 if (hasAfter)
-                    change["after"] = afterNode.DeepClone();
+                    change["after"] = TraceComponentNode(after);
                 changes.Add(change);
             }
 
@@ -844,8 +1062,12 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                     {
                         ["root"] = EntityNode(session.Root),
                         ["consist"] = session.FollowConsist,
+                        ["intervalFrames"] = session.IntervalFrames,
                         ["samplePoint"] = TraceSamplePoint,
                         ["baselineFrame"] = session.StartFrame,
+                        ["lastCaptureFrame"] = session.LastCaptureFrame.HasValue
+                            ? new JValue(session.LastCaptureFrame.Value)
+                            : JValue.CreateNull(),
                         ["stopReason"] = session.StopReason == null ? JValue.CreateNull() : new JValue(session.StopReason),
                         ["cutoffSampleFrame"] = session.CutoffSampleFrame.HasValue
                             ? new JValue(session.CutoffSampleFrame.Value)
@@ -889,31 +1111,132 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             return values;
         }
 
+        private sealed class TraceValueInfo
+        {
+            internal readonly List<FieldInfo> Fields;
+            internal readonly string Reason;
+            internal readonly bool RequiresValueCheck;
+
+            internal TraceValueInfo(Type type, List<FieldInfo> fields)
+            {
+                Fields = fields;
+                if (type == typeof(Entity)
+                    || type.IsEnum
+                    || type == typeof(string)
+                    || type == typeof(char)
+                    || type.IsPrimitive
+                    || type == typeof(decimal)
+                    || type == typeof(DateTime)
+                    || type == typeof(TimeSpan)
+                    || type == typeof(Guid)
+                    || type == typeof(Type)
+                    || (type.Namespace == "Unity.Collections"
+                        && type.Name.StartsWith("FixedString", StringComparison.Ordinal)))
+                {
+                    return;
+                }
+                if (type.IsPointer || type.IsByRef || type == typeof(IntPtr) || type == typeof(UIntPtr))
+                {
+                    Reason = "字段类型 " + type.FullName + " 不能安全展开。";
+                    return;
+                }
+                if (type.IsClass || type.IsArray || typeof(Delegate).IsAssignableFrom(type))
+                {
+                    Reason = "托管字段类型 " + type.FullName + " 不在追踪范围内。";
+                    return;
+                }
+                if (typeof(System.Collections.IDictionary).IsAssignableFrom(type))
+                {
+                    Reason = "字典字段不能完整展开。";
+                    return;
+                }
+                if (typeof(System.Collections.IEnumerable).IsAssignableFrom(type))
+                {
+                    Reason = "集合字段不能完整展开。";
+                    return;
+                }
+                if (type.Namespace == "Unity.Collections" || typeof(Delegate).IsAssignableFrom(type))
+                {
+                    Reason = "字段类型 " + type.FullName + " 不能完整展开。";
+                    return;
+                }
+
+                for (int i = 0; i < fields.Count; i++)
+                {
+                    TraceValueInfo fieldInfo = GetTraceValueInfo(fields[i].FieldType);
+                    if (!string.IsNullOrEmpty(fieldInfo.Reason) || fieldInfo.RequiresValueCheck)
+                    {
+                        RequiresValueCheck = true;
+                        return;
+                    }
+                }
+            }
+        }
+
+        private sealed class TraceEntitySnapshot
+        {
+            internal readonly Entity Entity;
+            internal readonly Dictionary<string, TraceComponentSnapshot> Components
+                = new Dictionary<string, TraceComponentSnapshot>(StringComparer.Ordinal);
+            internal bool Exists;
+
+            internal TraceEntitySnapshot(Entity entity)
+            {
+                Entity = entity;
+            }
+        }
+
+        private sealed class TraceComponentSnapshot
+        {
+            internal readonly string Type;
+            internal readonly string Kind;
+            internal bool Supported;
+            internal bool Present;
+            internal bool? Enabled;
+            internal string Reason;
+            internal object Value;
+            internal object[] Items;
+
+            internal TraceComponentSnapshot(string type, string kind)
+            {
+                Type = type;
+                Kind = kind;
+            }
+        }
+
         private sealed class TraceSession
         {
             internal readonly Entity Root;
             internal readonly bool FollowConsist;
             internal readonly uint StartFrame;
+            internal readonly uint IntervalFrames;
             internal readonly long LimitBytes;
             internal readonly List<uint> SampleFrames = new List<uint>();
             internal readonly JArray Records = new JArray();
-            internal readonly Dictionary<Entity, JObject> LastSnapshots = new Dictionary<Entity, JObject>();
-            internal readonly List<Entity> RemovedSnapshots = new List<Entity>();
+            internal Dictionary<Entity, TraceEntitySnapshot> LastSnapshots
+                = new Dictionary<Entity, TraceEntitySnapshot>();
             internal HashSet<Entity> CurrentMembers = new HashSet<Entity>();
             internal JObject Baseline;
             internal bool Active = true;
             internal long RecordBytes;
             internal uint? LastSampleFrame;
+            internal uint? LastCaptureFrame;
             internal uint? CutoffSampleFrame;
             internal string StopReason;
             internal string LastExportPath;
             internal string ExportError;
 
-            internal TraceSession(Entity root, bool followConsist, uint startFrame, long limitBytes)
+            internal TraceSession(
+                Entity root,
+                bool followConsist,
+                uint startFrame,
+                uint intervalFrames,
+                long limitBytes)
             {
                 Root = root;
                 FollowConsist = followConsist;
                 StartFrame = startFrame;
+                IntervalFrames = intervalFrames;
                 LimitBytes = limitBytes;
             }
         }
