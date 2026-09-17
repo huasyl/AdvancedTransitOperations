@@ -92,6 +92,16 @@ namespace RapidTransitMod.Dispatch.Lines
             return m_Runtime.TrackModel.TryGetWaypointIndexLookup(line, ways, out lookup);
         }
 
+        internal bool TryResolveProjectionTargetWaypoint(
+            Entity vehicle,
+            DynamicBuffer<RouteWaypoint> ways,
+            out int waypointIndex)
+        {
+            waypointIndex = -1;
+            WaypointStationOutcome outcome = CreateStationOutcome(vehicle);
+            return TryResolveTargetWaypoint(vehicle, ways, ref outcome, out waypointIndex, out _);
+        }
+
         public bool TryWindow(
             LineTrackChain chain,
             int waypointIndex,
@@ -414,16 +424,10 @@ namespace RapidTransitMod.Dispatch.Lines
         {
             targetWaypointIndex = -1;
             targetWaypoint = Entity.Null;
-            Target target;
-            if (!m_Runtime.m_RailEventSource.TryGetWrittenTarget(vehicle, out target))
+            if (!m_Runtime.m_RailEventSource.TryReadTargetForWrite(vehicle, out Target target))
             {
-                if (!m_Runtime.EntityManager.HasComponent<Target>(vehicle))
-                {
-                    outcome.Evidence = WaypointStationEvidence.TargetUnavailable;
-                    return false;
-                }
-
-                target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
+                outcome.Evidence = WaypointStationEvidence.TargetUnavailable;
+                return false;
             }
 
             targetWaypoint = target.m_Target;

@@ -314,8 +314,107 @@ namespace RapidTransitMod
             for (int i = 0; i < m_StartupLines.Count; i++)
                 m_Runtime.m_LineInitialAdopted.Add(m_StartupLines[i]);
 
+            LogStartupAdoption(frame);
             ClearStartupGate();
             return true;
+        }
+
+        private void LogStartupAdoption(uint frame)
+        {
+            if (!RtLog.VerboseEnabled)
+                return;
+
+            // 只在成功激活时读取一次，保留清空候选及周期写回车辆缓存前的证据。
+            var candidateLines = new Dictionary<Entity, Entity>();
+            for (int i = 0; i < m_StartupCandidates.Count; i++)
+                candidateLines[m_StartupCandidates[i].Vehicle] = m_StartupCandidates[i].Line;
+
+            Entity city = m_Runtime.m_CitySystem.City;
+            bool hasCache = city != Entity.Null
+                && m_Runtime.EntityManager.HasBuffer<VehicleStateCacheElement>(city);
+            m_Runtime.log.Info("[StartupAdoption] phase=complete frame=" + frame
+                + " lines=" + m_StartupLines.Count
+                + " candidates=" + m_StartupCandidates.Count
+                + " operationalCandidates=" + m_OperationalStartupCandidates.Count
+                + " registered=" + m_Runtime.m_VehicleView.Count
+                + " cacheReady=" + m_Runtime.m_VehicleCacheBufferReady
+                + " hasCache=" + hasCache);
+            if (hasCache)
+            {
+                DynamicBuffer<VehicleStateCacheElement> cache =
+                    m_Runtime.EntityManager.GetBuffer<VehicleStateCacheElement>(city, true);
+                for (int i = 0; i < cache.Length; i++)
+                {
+                    VehicleStateCacheElement item = cache[i];
+                    m_Runtime.log.Info("[StartupVehicleCache] frame=" + frame
+                        + " vehicle=" + item.m_VehicleEntity.Index + ":" + item.m_VehicleEntity.Version
+                        + " state=" + item.m_State + " targetMin=" + item.m_TargetMin);
+                }
+            }
+
+            NativeArray<Entity> lines = m_Runtime.m_LineQuery.ToEntityArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    Entity line = lines[i];
+                    bool hasMembers = m_Runtime.EntityManager.HasBuffer<RouteVehicle>(line);
+                    bool collected = m_StartupLines.Contains(line);
+                    bool operational = m_Runtime.m_LineServiceState.IsOperational(line);
+                    m_Runtime.log.Info("[StartupAdoptionLine] frame=" + frame
+                        + " line=" + line.Index + ":" + line.Version
+                        + " name=" + m_Runtime.EntityName(line)
+                        + " collected=" + collected + " operational=" + operational
+                        + " hasMembers=" + hasMembers);
+                    if (!hasMembers)
+                        continue;
+
+                    DynamicBuffer<RouteVehicle> members =
+                        m_Runtime.EntityManager.GetBuffer<RouteVehicle>(line, true);
+                    for (int memberIndex = 0; memberIndex < members.Length; memberIndex++)
+                    {
+                        Entity member = members[memberIndex].m_Vehicle;
+                        Entity vehicle = m_Runtime.m_Resolve.RuntimeVehicle(member);
+                        bool exists = vehicle != Entity.Null && m_Runtime.EntityManager.Exists(vehicle);
+                        bool hasTransport = exists && m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle);
+                        bool hasRoute = exists && m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle);
+                        bool hasTarget = exists && m_Runtime.EntityManager.HasComponent<Target>(vehicle);
+                        bool retireLock = exists && m_Runtime.EntityManager.HasComponent<RtRetireDispatchLock>(vehicle);
+                        Entity route = hasRoute
+                            ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route : Entity.Null;
+                        Entity target = hasTarget
+                            ? m_Runtime.EntityManager.GetComponentData<Target>(vehicle).m_Target : Entity.Null;
+                        bool candidate = candidateLines.TryGetValue(vehicle, out Entity candidateLine);
+                        bool registered = m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state);
+                        m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity registeredLine);
+                        string selection = !collected ? "line-not-collected"
+                            : vehicle == Entity.Null ? "unresolved-member"
+                            : !candidate ? "not-collected"
+                            : candidateLine != line ? "collected-on-other-line"
+                            : !operational ? "line-not-operational"
+                            : "operational-candidate";
+                        m_Runtime.log.Info("[StartupAdoptionVehicle] frame=" + frame
+                            + " line=" + line.Index + ":" + line.Version
+                            + " member=" + member.Index + ":" + member.Version
+                            + " vehicle=" + vehicle.Index + ":" + vehicle.Version
+                            + " selection=" + selection
+                            + " candidateLine=" + candidateLine.Index + ":" + candidateLine.Version
+                            + " exists=" + exists + " retireLock=" + retireLock
+                            + " hasRoute=" + hasRoute + " route=" + route.Index + ":" + route.Version
+                            + " pt=" + (hasTransport
+                                ? m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle).m_State.ToString()
+                                : "missing")
+                            + " hasTarget=" + hasTarget + " target=" + target.Index + ":" + target.Version
+                            + " registered=" + registered
+                            + " state=" + (registered ? state.ToString() : "missing")
+                            + " registeredLine=" + registeredLine.Index + ":" + registeredLine.Version);
+                    }
+                }
+            }
+            finally
+            {
+                lines.Dispose();
+            }
         }
 
         private bool CollectStartupIndex(List<StartupCandidate> candidates, List<Entity> lines)

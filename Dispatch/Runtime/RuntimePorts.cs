@@ -280,7 +280,14 @@ namespace RapidTransitMod.Dispatch.Runtime
                 runtime.m_WaypointIndex,
                 runtime.m_RailEventSource,
                 runtime.m_RuntimeHotPathProbe,
-                runtime.m_LineStructureInvalidator.IsLinePending);
+                runtime.m_LineStructureInvalidator.IsLinePending,
+                vehicle => runtime.m_StopRuntime != null && runtime.m_StopRuntime.HasOpenStopSession(vehicle),
+                (vehicle, line) => runtime.m_StopRuntime != null
+                    && runtime.m_StopRuntime.IsDeparturePending(vehicle)
+                    && runtime.m_StopRuntime.TryGetSession(vehicle, out Entity sessionLine, out int waypoint, out _)
+                    && sessionLine == line
+                        ? waypoint
+                        : -1);
         }
 
         public static BypassAdmissionPort BuildBypassAdmission(ModRuntimeHostSystem runtime)

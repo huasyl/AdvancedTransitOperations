@@ -31,7 +31,11 @@ namespace RapidTransitMod.TrackProjection
         bool TryRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
         bool TryGetVehicleRuntimeState(Entity vehicle, out VehicleState state);
         bool IsVehicleBoarding(Entity vehicle);
+        bool IsVehicleArriving(Entity vehicle);
+        bool HasProjectionStopSession(Entity vehicle);
+        bool TryGetDeparturePendingStopWaypoint(Entity vehicle, Entity line, out int waypointIndex);
         bool TryConfirmProjectionBoardingWaypoint(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, TrainCurrentLane currentLane, out int waypointIndex);
+        bool TryResolveProjectionTargetWaypoint(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, out int waypointIndex);
         bool TryReadProjectionRuntimeContext(Entity vehicle, out ProjectionRuntimeContext context);
     }
 }

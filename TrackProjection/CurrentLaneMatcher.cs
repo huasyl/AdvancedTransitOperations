@@ -137,10 +137,12 @@ namespace RapidTransitMod.TrackProjection
             return StateForSingleCandidate(chain, candidates[0], out atomIndex);
         }
 
-        internal static CurrentLaneMatchState SelectIndependentBoardingWaypoint(
+        internal static CurrentLaneMatchState SelectWaypointCandidates(
             LineTrackChain chain,
             int waypointIndex,
             List<int> candidates,
+            bool includeIncomingSegment,
+            ProjectionMatchBasis basis,
             bool captureDiagnostic,
             out int atomIndex,
             out CurrentLaneMatchDiagnostic diagnostic)
@@ -152,9 +154,7 @@ namespace RapidTransitMod.TrackProjection
                 || chain.TraversalProfile.Events == null
                 || waypointIndex < 0
                 || candidates == null)
-            {
                 return CurrentLaneMatchState.Ambiguous;
-            }
 
             if (captureDiagnostic)
                 diagnostic.FutureCandidates = candidates.Count;
@@ -164,12 +164,12 @@ namespace RapidTransitMod.TrackProjection
             for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
             {
                 int candidate = candidates[candidateIndex];
-                if (!IsInWaypointWindow(chain, waypointIndex, candidate))
+                if (!IsInWaypointWindow(chain, waypointIndex, candidate)
+                    && (!includeIncomingSegment || !IsInIncomingSegment(chain, waypointIndex, candidate)))
                     continue;
 
                 matched = candidate;
-                matchCount++;
-                if (matchCount > 1)
+                if (++matchCount > 1)
                     return CurrentLaneMatchState.Ambiguous;
             }
 
@@ -181,8 +181,7 @@ namespace RapidTransitMod.TrackProjection
             if (captureDiagnostic)
             {
                 diagnostic.FutureCandidates = 1;
-                diagnostic.Basis = ProjectionMatchBasis.IndependentBoarding;
-                diagnostic.IndependentBoardingWaypoint = waypointIndex;
+                diagnostic.Basis = basis;
             }
             return StateForSingleCandidate(chain, matched, out atomIndex);
         }
@@ -206,6 +205,21 @@ namespace RapidTransitMod.TrackProjection
             }
 
             return false;
+        }
+
+        private static bool IsInIncomingSegment(LineTrackChain chain, int waypointIndex, int atomIndex)
+        {
+            if (chain.SegmentRanges == null || chain.SegmentRanges.Count == 0)
+                return false;
+
+            int incoming = waypointIndex == 0
+                ? chain.SegmentRanges.Count - 1
+                : waypointIndex - 1;
+            if (incoming < 0 || incoming >= chain.SegmentRanges.Count)
+                return false;
+
+            TrackSegmentRange range = chain.SegmentRanges[incoming];
+            return atomIndex >= range.StartAtomIndex && atomIndex < range.EndAtomIndexExclusive;
         }
 
         private static CurrentLaneMatchState StateForSingleCandidate(
@@ -349,11 +363,12 @@ namespace RapidTransitMod.TrackProjection
             for (int i = candidates.Count - 1; i >= 0; i--)
             {
                 int index = candidates[i];
-                if (index + 1 >= chain.TrackAtoms.Count || !Contains(candidates, index + 1))
+                int nextIndex = NextAtomIndex(chain, index);
+                if (!Contains(candidates, nextIndex))
                     continue;
 
                 TrackAtom atom = chain.TrackAtoms[index];
-                TrackAtom next = chain.TrackAtoms[index + 1];
+                TrackAtom next = chain.TrackAtoms[nextIndex];
                 // 只合并实际命中的同一接缝，不把容差内的短片段端点合并。
                 if (HasUsableParameterSpan(atom)
                     && HasUsableParameterSpan(next)
