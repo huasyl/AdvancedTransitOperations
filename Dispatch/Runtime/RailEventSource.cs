@@ -812,6 +812,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (changed)
             {
                 m_Runtime.m_WaypointIndex.Remove(vehicle);
+                m_Runtime.m_TrackProjection.Cursors.Remove(vehicle, keepCursor: true);
+                m_Runtime.m_TrackProjection.ClearFacts(vehicle);
+                m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots(row.RegisteredLine);
                 LogTargetWrite(vehicle, frame, before, hadTarget, value, row);
             }
             if ((frame & 15u) != 3u || CollectedThisFrame(frame))

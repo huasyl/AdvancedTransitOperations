@@ -28,6 +28,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly RailEventSource m_RailSource;
         private readonly RuntimeHotPathProbe m_HotPathProbe;
         private readonly Func<Entity, bool> m_IsLinePending;
+        private readonly Func<Entity, bool> m_HasStopSession;
+        private readonly Func<Entity, Entity, int> m_DeparturePendingWaypoint;
 
         internal TrackProjectionPort(
             EntityManager entityManager,
@@ -41,7 +43,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             WaypointIndex waypointIndex,
             RailEventSource railSource,
             RuntimeHotPathProbe hotPathProbe,
-            Func<Entity, bool> isLinePending)
+            Func<Entity, bool> isLinePending,
+            Func<Entity, bool> hasStopSession,
+            Func<Entity, Entity, int> departurePendingWaypoint)
         {
             m_EntityManager = entityManager;
             m_Log = log;
@@ -55,6 +59,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_RailSource = railSource;
             m_HotPathProbe = hotPathProbe;
             m_IsLinePending = isLinePending;
+            m_HasStopSession = hasStopSession;
+            m_DeparturePendingWaypoint = departurePendingWaypoint;
         }
 
         EntityManager ITrackProjectionRuntimeContext.EntityManager => m_EntityManager;
@@ -170,6 +176,26 @@ namespace RapidTransitMod.Dispatch.Runtime
                 && (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
         }
 
+        bool ITrackProjectionRuntimeContext.IsVehicleArriving(Entity vehicle)
+        {
+            return m_RailSource.TryReadPublicTransportForWrite(vehicle, out PublicTransport publicTransport)
+                && (publicTransport.m_State & PublicTransportFlags.Arriving) != 0;
+        }
+
+        bool ITrackProjectionRuntimeContext.HasProjectionStopSession(Entity vehicle)
+        {
+            return m_HasStopSession(vehicle);
+        }
+
+        bool ITrackProjectionRuntimeContext.TryGetDeparturePendingStopWaypoint(
+            Entity vehicle,
+            Entity line,
+            out int waypointIndex)
+        {
+            waypointIndex = m_DeparturePendingWaypoint(vehicle, line);
+            return waypointIndex >= 0;
+        }
+
         bool ITrackProjectionRuntimeContext.TryConfirmProjectionBoardingWaypoint(
             Entity vehicle,
             Entity line,
@@ -185,6 +211,16 @@ namespace RapidTransitMod.Dispatch.Runtime
                 currentLane,
                 out _,
                 out waypointIndex);
+        }
+
+        bool ITrackProjectionRuntimeContext.TryResolveProjectionTargetWaypoint(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            out int waypointIndex)
+        {
+            return m_WaypointIndex.TryResolveProjectionTargetWaypoint(
+                vehicle, waypoints, out waypointIndex);
         }
 
         bool ITrackProjectionRuntimeContext.TryReadProjectionRuntimeContext(Entity vehicle, out ProjectionRuntimeContext context)

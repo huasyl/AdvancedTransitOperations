@@ -54,6 +54,8 @@ namespace RapidTransitMod.TrackProjection
         Navigation = 3,
         PathTail = 4,
         IndependentBoarding = 5,
+        DepartureSession = 6,
+        ArrivalTarget = 7,
     }
 
     internal enum ProjectionExactFailure : byte
@@ -187,7 +189,6 @@ namespace RapidTransitMod.TrackProjection
         internal int FutureCandidates;
         internal Entity OverlapLane;
         internal ProjectionMatchBasis Basis;
-        internal int IndependentBoardingWaypoint;
         internal ProjectionMatchEvidence Evidence;
         internal ProjectionMismatchSamples Mismatches;
         internal bool ExtensionReturnMatched;
@@ -224,6 +225,8 @@ namespace RapidTransitMod.TrackProjection
         internal Entity OverlapLane;
         internal ProjectionMatchBasis ExactBasis;
         internal int IndependentBoardingWaypoint;
+        internal int DepartureSessionWaypoint;
+        internal int ArrivalTargetWaypoint;
         internal ProjectionExactFailure ExactFailure;
         internal ProjectionReadStop ReadStop;
         internal ProjectionMatchEvidence Evidence;

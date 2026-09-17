@@ -436,6 +436,12 @@ namespace RapidTransitMod.TrackProjection
             ProjectionMatchEvidence evidence = first.Evidence;
             int finalCandidates = first.FutureCandidates;
             bool independentBoardingUsed = false;
+            bool departureSessionUsed = false;
+            bool arrivalTargetUsed = false;
+            bool pathReady = false;
+            bool hasPathWrite = false;
+            if (state == CurrentLaneMatchState.Ambiguous)
+                hasPathWrite = m_Runtime.HasProjectionPathWrite(vehicle);
             if (captureDiagnostic)
             {
                 outcome.InitialCandidates = first.InitialCandidates;
@@ -450,7 +456,7 @@ namespace RapidTransitMod.TrackProjection
             }
 
             if (state == CurrentLaneMatchState.Ambiguous
-                && !m_Runtime.HasProjectionPathWrite(vehicle)
+                && !hasPathWrite
                 && m_Runtime.IsVehicleBoarding(vehicle)
                 && m_Runtime.TryConfirmProjectionBoardingWaypoint(
                     vehicle,
@@ -460,10 +466,12 @@ namespace RapidTransitMod.TrackProjection
                     out int boardingWaypointIndex))
             {
                 CurrentLaneMatchDiagnostic independentBoarding = default;
-                state = CurrentLaneMatcher.SelectIndependentBoardingWaypoint(
+                state = CurrentLaneMatcher.SelectWaypointCandidates(
                     chain,
                     boardingWaypointIndex,
                     m_CurrentLaneCandidates,
+                    false,
+                    ProjectionMatchBasis.IndependentBoarding,
                     captureDiagnostic,
                     out atomIndex,
                     out independentBoarding);
@@ -477,7 +485,7 @@ namespace RapidTransitMod.TrackProjection
             }
 
             if (state == CurrentLaneMatchState.Ambiguous
-                && !m_Runtime.HasProjectionPathWrite(vehicle))
+                && !hasPathWrite)
             {
                 bool navigationComplete = LoadNavigation(vehicle, out ProjectionReadStop navigationStop);
                 if (captureDiagnostic && navigationStop != ProjectionReadStop.None)
@@ -508,7 +516,7 @@ namespace RapidTransitMod.TrackProjection
                 finalCandidates = navigation.FutureCandidates;
                 if (CanReadPathTail(state, navigationComplete))
                 {
-                    ProjectionReadStop pathStop = LoadPathTail(vehicle);
+                    ProjectionReadStop pathStop = LoadPathTail(vehicle, out pathReady);
                     if (captureDiagnostic && pathStop != ProjectionReadStop.None)
                         outcome.ReadStop = pathStop;
 
@@ -545,6 +553,57 @@ namespace RapidTransitMod.TrackProjection
                 m_PathTailScratch.Clear();
             }
 
+            if (state == CurrentLaneMatchState.Ambiguous
+                && !hasPathWrite
+                && m_Runtime.TryGetDeparturePendingStopWaypoint(vehicle, line, out int sessionWaypointIndex))
+            {
+                CurrentLaneMatchDiagnostic departureSession = default;
+                state = CurrentLaneMatcher.SelectWaypointCandidates(
+                    chain,
+                    sessionWaypointIndex,
+                    m_CurrentLaneCandidates,
+                    false,
+                    ProjectionMatchBasis.DepartureSession,
+                    captureDiagnostic,
+                    out atomIndex,
+                    out departureSession);
+                departureSessionUsed = state == CurrentLaneMatchState.Unique;
+                if (captureDiagnostic && departureSessionUsed)
+                {
+                    outcome.DepartureSessionWaypoint = sessionWaypointIndex;
+                    MergeProjectionEvidence(ref evidence, departureSession.Evidence);
+                }
+                finalCandidates = departureSession.FutureCandidates;
+            }
+
+            if (state == CurrentLaneMatchState.Ambiguous
+                && !hasPathWrite
+                && pathReady
+                && !m_Runtime.IsVehicleBoarding(vehicle)
+                && !m_Runtime.HasProjectionStopSession(vehicle)
+                && m_Runtime.IsVehicleArriving(vehicle)
+                && m_Runtime.TryResolveProjectionTargetWaypoint(
+                    vehicle, line, waypoints, out int targetWaypointIndex))
+            {
+                CurrentLaneMatchDiagnostic arrivalTarget = default;
+                state = CurrentLaneMatcher.SelectWaypointCandidates(
+                    chain,
+                    targetWaypointIndex,
+                    m_CurrentLaneCandidates,
+                    true,
+                    ProjectionMatchBasis.ArrivalTarget,
+                    captureDiagnostic,
+                    out atomIndex,
+                    out arrivalTarget);
+                arrivalTargetUsed = state == CurrentLaneMatchState.Unique;
+                if (captureDiagnostic && arrivalTargetUsed)
+                {
+                    outcome.ArrivalTargetWaypoint = targetWaypointIndex;
+                    MergeProjectionEvidence(ref evidence, arrivalTarget.Evidence);
+                }
+                finalCandidates = arrivalTarget.FutureCandidates;
+            }
+
             if (state != CurrentLaneMatchState.Unique
                 || !TryGetCurrentLaneProgress(
                     chain,
@@ -576,7 +635,11 @@ namespace RapidTransitMod.TrackProjection
                 outcome.ExactBasis = state == CurrentLaneMatchState.Unique
                     ? independentBoardingUsed
                         ? ProjectionMatchBasis.IndependentBoarding
-                        : ResolveMatchBasis(first, outcome.NavigationCandidates, outcome.PathCandidates)
+                        : departureSessionUsed
+                            ? ProjectionMatchBasis.DepartureSession
+                            : arrivalTargetUsed
+                                ? ProjectionMatchBasis.ArrivalTarget
+                                : ResolveMatchBasis(first, outcome.NavigationCandidates, outcome.PathCandidates)
                     : ProjectionMatchBasis.None;
             }
 
@@ -765,8 +828,9 @@ namespace RapidTransitMod.TrackProjection
             return false;
         }
 
-        private ProjectionReadStop LoadPathTail(Entity vehicle)
+        private ProjectionReadStop LoadPathTail(Entity vehicle, out bool pathReady)
         {
+            pathReady = false;
             m_PathTailScratch.Clear();
             if (!m_Runtime.TryReadProjectionPath(
                     vehicle,
@@ -778,6 +842,9 @@ namespace RapidTransitMod.TrackProjection
             }
             if ((pathOwner.m_State & (PathFlags.Failed | PathFlags.Obsolete | PathFlags.Updated)) != 0)
                 return ProjectionReadStop.PathFlagsDisabled;
+
+            if ((pathOwner.m_State & PathFlags.Pending) == 0)
+                pathReady = true;
 
             int start = math.clamp(pathOwner.m_ElementIndex, 0, pathElements.Length);
             int endExclusive = pathElements.Length;
@@ -983,6 +1050,8 @@ namespace RapidTransitMod.TrackProjection
                 outcome.CachedWaypoint = -1;
                 outcome.StationAnchorWaypoint = -1;
                 outcome.IndependentBoardingWaypoint = -1;
+                outcome.DepartureSessionWaypoint = -1;
+                outcome.ArrivalTargetWaypoint = -1;
                 outcome.HistoryAtomBefore = -1;
                 outcome.HistoryAtomAfter = -1;
                 outcome.FrontCurvePosition = new float4(float.NaN);

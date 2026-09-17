@@ -180,6 +180,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private ulong m_ProjectionExactNavigation;
         private ulong m_ProjectionExactPathTail;
         private ulong m_ProjectionExactIndependentBoarding;
+        private ulong m_ProjectionExactDepartureSession;
+        private ulong m_ProjectionExactArrivalTarget;
         private ulong m_ProjectionCurrentLaneUnavailable;
         private ulong m_ProjectionNoCandidates;
         private ulong m_ProjectionAllExcluded;
@@ -651,6 +653,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 case ProjectionMatchBasis.Navigation: m_ProjectionExactNavigation++; break;
                 case ProjectionMatchBasis.PathTail: m_ProjectionExactPathTail++; break;
                 case ProjectionMatchBasis.IndependentBoarding: m_ProjectionExactIndependentBoarding++; break;
+                case ProjectionMatchBasis.DepartureSession: m_ProjectionExactDepartureSession++; break;
+                case ProjectionMatchBasis.ArrivalTarget: m_ProjectionExactArrivalTarget++; break;
             }
         }
 
@@ -857,6 +861,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_ProjectionExactNavigation = 0;
             m_ProjectionExactPathTail = 0;
             m_ProjectionExactIndependentBoarding = 0;
+            m_ProjectionExactDepartureSession = 0;
+            m_ProjectionExactArrivalTarget = 0;
             m_ProjectionCurrentLaneUnavailable = 0;
             m_ProjectionNoCandidates = 0;
             m_ProjectionAllExcluded = 0;
@@ -909,10 +915,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " cache=request/hitOk/hitFail/calc:"
                 + m_ProjectionCacheRequests + "/" + m_ProjectionCacheSuccessHits + "/"
                 + m_ProjectionCacheFailureHits + "/" + m_ProjectionCalculations
-                + " exact=initial/direction/navigation/path/independentBoarding:"
+                + " exact=initial/direction/navigation/path/independentBoarding/departureSession/arrivalTarget:"
                 + m_ProjectionExactInitial + "/" + m_ProjectionExactDirection + "/"
                 + m_ProjectionExactNavigation + "/" + m_ProjectionExactPathTail + "/"
-                + m_ProjectionExactIndependentBoarding
+                + m_ProjectionExactIndependentBoarding + "/" + m_ProjectionExactDepartureSession + "/"
+                + m_ProjectionExactArrivalTarget
                 + " exactFail=current/noCandidate/allExcluded/ambiguous/zeroSpan/progress/laneMissing/paramOutside/invalidParam/indexMismatch:"
                 + m_ProjectionCurrentLaneUnavailable + "/" + m_ProjectionNoCandidates + "/"
                 + m_ProjectionAllExcluded + "/" + m_ProjectionAmbiguous + "/"
@@ -1005,6 +1012,12 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " cachedWp=" + (outcome.CachedWaypointUsed ? outcome.CachedWaypoint.ToString() : "no")
                 + " independentBoardingWp=" + (outcome.IndependentBoardingWaypoint >= 0
                     ? outcome.IndependentBoardingWaypoint.ToString()
+                    : "no")
+                + " departureSessionWp=" + (outcome.DepartureSessionWaypoint >= 0
+                    ? outcome.DepartureSessionWaypoint.ToString()
+                    : "no")
+                + " arrivalTargetWp=" + (outcome.ArrivalTargetWaypoint >= 0
+                    ? outcome.ArrivalTargetWaypoint.ToString()
                     : "no")
                 + " anchorWp=" + (outcome.StationAnchorUsed ? outcome.StationAnchorWaypoint.ToString() : "no")
                 + " historyAtom=" + outcome.HistoryAtomBefore + ">" + outcome.HistoryAtomAfter
