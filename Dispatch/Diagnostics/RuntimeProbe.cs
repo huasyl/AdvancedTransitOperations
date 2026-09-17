@@ -23,6 +23,9 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private readonly string m_RequestDir;
         private readonly string m_ResponseDir;
         private readonly string m_TraceDir;
+        private readonly Dictionary<Type, MethodInfo> m_ComponentReadMethods = new Dictionary<Type, MethodInfo>();
+        private readonly Dictionary<Type, BufferReader> m_BufferReaders = new Dictionary<Type, BufferReader>();
+        private static readonly Dictionary<Type, List<FieldInfo>> s_Fields = new Dictionary<Type, List<FieldInfo>>();
         private uint m_NextPollFrame;
         private uint m_LastFrame;
         private bool m_HasLastFrame;
@@ -260,15 +263,20 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         private object GetComponent(Entity entity, Type type)
         {
-            MethodInfo method = typeof(EntityManager).GetMethod(
-                "GetComponentData",
-                new[] { typeof(Entity) });
-            if (method == null)
-                throw new ProbeError("未找到 ECS 普通组件读取接口。");
+            if (!m_ComponentReadMethods.TryGetValue(type, out MethodInfo method))
+            {
+                MethodInfo definition = typeof(EntityManager).GetMethod(
+                    "GetComponentData",
+                    new[] { typeof(Entity) });
+                if (definition == null)
+                    throw new ProbeError("未找到 ECS 普通组件读取接口。");
+                method = definition.MakeGenericMethod(type);
+                m_ComponentReadMethods.Add(type, method);
+            }
 
             try
             {
-                return method.MakeGenericMethod(type).Invoke(m_Runtime.EntityManager, new object[] { entity });
+                return method.Invoke(m_Runtime.EntityManager, new object[] { entity });
             }
             catch (TargetInvocationException ex)
             {
@@ -611,16 +619,26 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         private object ReadBuffer(Entity entity, Type type, out int total, out PropertyInfo item)
         {
-            MethodInfo method = typeof(EntityManager).GetMethod(
-                "GetBuffer",
-                new[] { typeof(Entity), typeof(bool) });
-            if (method == null)
-                throw new ProbeError("未找到 ECS 动态缓冲区读取接口。");
+            if (!m_BufferReaders.TryGetValue(type, out BufferReader reader))
+            {
+                MethodInfo definition = typeof(EntityManager).GetMethod(
+                    "GetBuffer",
+                    new[] { typeof(Entity), typeof(bool) });
+                if (definition == null)
+                    throw new ProbeError("未找到 ECS 动态缓冲区读取接口。");
+
+                Type bufferType = typeof(DynamicBuffer<>).MakeGenericType(type);
+                reader = new BufferReader(
+                    definition.MakeGenericMethod(type),
+                    bufferType.GetProperty("Length"),
+                    bufferType.GetProperty("Item"));
+                m_BufferReaders.Add(type, reader);
+            }
 
             object buffer;
             try
             {
-                buffer = method.MakeGenericMethod(type).Invoke(
+                buffer = reader.Method.Invoke(
                     m_Runtime.EntityManager,
                     new object[] { entity, true });
             }
@@ -629,9 +647,8 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 throw new ProbeError("读取动态缓冲区失败: " + (ex.InnerException?.Message ?? ex.Message));
             }
 
-            Type bufferType = buffer.GetType();
-            total = (int)bufferType.GetProperty("Length").GetValue(buffer, null);
-            item = bufferType.GetProperty("Item");
+            total = (int)reader.Length.GetValue(buffer, null);
+            item = reader.Item;
             return buffer;
         }
 
@@ -921,6 +938,9 @@ namespace RapidTransitMod.Dispatch.Diagnostics
 
         private static List<FieldInfo> Fields(Type type)
         {
+            if (s_Fields.TryGetValue(type, out List<FieldInfo> cached))
+                return cached;
+
             List<FieldInfo> fields = new List<FieldInfo>();
             BindingFlags flags = BindingFlags.Instance
                 | BindingFlags.Public
@@ -935,6 +955,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                         fields.Add(declared[i]);
                 }
             }
+            s_Fields.Add(type, fields);
             return fields;
         }
 
@@ -993,6 +1014,20 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         {
             internal ProbeError(string message) : base(message)
             {
+            }
+        }
+
+        private sealed class BufferReader
+        {
+            internal readonly MethodInfo Method;
+            internal readonly PropertyInfo Length;
+            internal readonly PropertyInfo Item;
+
+            internal BufferReader(MethodInfo method, PropertyInfo length, PropertyInfo item)
+            {
+                Method = method;
+                Length = length;
+                Item = item;
             }
         }
 
