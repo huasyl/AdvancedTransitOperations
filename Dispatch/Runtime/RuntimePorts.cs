@@ -23,6 +23,11 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             return m_Runtime.GetBufferLookup<T>(readOnly);
         }
+
+        public ComponentLookup<T> GetComponent<T>(bool readOnly) where T : unmanaged, IComponentData
+        {
+            return m_Runtime.GetComponentLookup<T>(readOnly);
+        }
     }
 
     internal static class RuntimePorts
@@ -272,7 +277,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Buffers(runtime),
                 runtime.m_RouteProgress,
                 runtime.m_VehicleView,
-                runtime.IsVehicleBoarding,
+                runtime.m_WaypointIndex,
                 runtime.m_RailEventSource,
                 runtime.m_RuntimeHotPathProbe,
                 runtime.m_LineStructureInvalidator.IsLinePending);

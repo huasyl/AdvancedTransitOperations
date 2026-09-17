@@ -179,6 +179,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private ulong m_ProjectionExactDirection;
         private ulong m_ProjectionExactNavigation;
         private ulong m_ProjectionExactPathTail;
+        private ulong m_ProjectionExactIndependentBoarding;
         private ulong m_ProjectionCurrentLaneUnavailable;
         private ulong m_ProjectionNoCandidates;
         private ulong m_ProjectionAllExcluded;
@@ -649,6 +650,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 case ProjectionMatchBasis.Direction: m_ProjectionExactDirection++; break;
                 case ProjectionMatchBasis.Navigation: m_ProjectionExactNavigation++; break;
                 case ProjectionMatchBasis.PathTail: m_ProjectionExactPathTail++; break;
+                case ProjectionMatchBasis.IndependentBoarding: m_ProjectionExactIndependentBoarding++; break;
             }
         }
 
@@ -854,6 +856,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             m_ProjectionExactDirection = 0;
             m_ProjectionExactNavigation = 0;
             m_ProjectionExactPathTail = 0;
+            m_ProjectionExactIndependentBoarding = 0;
             m_ProjectionCurrentLaneUnavailable = 0;
             m_ProjectionNoCandidates = 0;
             m_ProjectionAllExcluded = 0;
@@ -906,9 +909,10 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " cache=request/hitOk/hitFail/calc:"
                 + m_ProjectionCacheRequests + "/" + m_ProjectionCacheSuccessHits + "/"
                 + m_ProjectionCacheFailureHits + "/" + m_ProjectionCalculations
-                + " exact=initial/direction/navigation/path:"
+                + " exact=initial/direction/navigation/path/independentBoarding:"
                 + m_ProjectionExactInitial + "/" + m_ProjectionExactDirection + "/"
-                + m_ProjectionExactNavigation + "/" + m_ProjectionExactPathTail
+                + m_ProjectionExactNavigation + "/" + m_ProjectionExactPathTail + "/"
+                + m_ProjectionExactIndependentBoarding
                 + " exactFail=current/noCandidate/allExcluded/ambiguous/zeroSpan/progress/laneMissing/paramOutside/invalidParam/indexMismatch:"
                 + m_ProjectionCurrentLaneUnavailable + "/" + m_ProjectionNoCandidates + "/"
                 + m_ProjectionAllExcluded + "/" + m_ProjectionAmbiguous + "/"
@@ -940,7 +944,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             }
 
             for (int i = 0; i < m_ProjectionIssueSampleCount; i++)
-                m_Log.Info("[TrackProjectionProbeCase] kind=issue " + FormatProjectionOutcome(m_ProjectionIssueSamples[i]));
+                m_Log.Info("[TrackProjectionProbeCase] kind=issue " + FormatProjectionOutcome(m_ProjectionIssueSamples[i], true));
             if (m_HasProjectionSuccessSample)
                 m_Log.Info("[TrackProjectionProbeCase] kind=success " + FormatProjectionOutcome(m_ProjectionSuccessSample));
 
@@ -966,9 +970,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             return (ticks * tickMs).ToString("F3", CultureInfo.InvariantCulture);
         }
 
-        private static string FormatProjectionOutcome(ProjectionOutcome outcome)
+        private static string FormatProjectionOutcome(ProjectionOutcome outcome, bool includeMismatches = false)
         {
-            ProjectionMatchEvidence evidence = outcome.Evidence;
+            ProjectionMatchEvidence evidence = includeMismatches && outcome.Mismatches.First.Available
+                ? outcome.Mismatches.First
+                : outcome.Evidence;
             return "frame=" + outcome.Frame
                 + " caller=" + outcome.RequestSource
                 + " vehicle=" + FormatEntity(outcome.Vehicle)
@@ -997,6 +1003,9 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " fallback=rawWp/proportion:" + (outcome.RouteProgressKnown ? outcome.RouteProgressWaypoint.ToString() : "unknown")
                 + "/" + outcome.RouteProgressProportion.ToString("G9", CultureInfo.InvariantCulture)
                 + " cachedWp=" + (outcome.CachedWaypointUsed ? outcome.CachedWaypoint.ToString() : "no")
+                + " independentBoardingWp=" + (outcome.IndependentBoardingWaypoint >= 0
+                    ? outcome.IndependentBoardingWaypoint.ToString()
+                    : "no")
                 + " anchorWp=" + (outcome.StationAnchorUsed ? outcome.StationAnchorWaypoint.ToString() : "no")
                 + " historyAtom=" + outcome.HistoryAtomBefore + ">" + outcome.HistoryAtomAfter
                 + " fallbackFailure=" + outcome.FallbackFailure
@@ -1008,10 +1017,20 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 + " final=atom/proportion/source:" + outcome.FinalAtomIndex + "/"
                 + outcome.FinalAtomPosition01.ToString("F4", CultureInfo.InvariantCulture)
                 + "/" + outcome.FinalSource
-                + " evidence=" + evidence.Kind + "/" + evidence.Reason + "/" + evidence.Stage
-                + "/atom:" + evidence.CandidateAtomIndex + "/queue:" + evidence.QueueIndex
+                + " evidence=" + FormatProjectionEvidence(evidence)
+                + (includeMismatches && outcome.Mismatches.Second.Available
+                    ? " mismatch2=" + FormatProjectionEvidence(outcome.Mismatches.Second)
+                    : string.Empty);
+        }
+
+        private static string FormatProjectionEvidence(ProjectionMatchEvidence evidence)
+        {
+            return evidence.Kind + "/" + evidence.Reason + "/" + evidence.Stage
+                + "/candidate:" + evidence.InitialAtomIndex + "/atom:" + evidence.CandidateAtomIndex
+                + "/queue:" + evidence.QueueIndex
                 + "/expected:" + FormatEntity(evidence.ExpectedLane) + ":" + FormatFloat2(evidence.ExpectedParameters)
-                + "/actual:" + FormatEntity(evidence.ActualLane) + ":" + FormatFloat4(evidence.ActualParameters);
+                + "/actual:" + FormatEntity(evidence.ActualLane) + ":" + FormatFloat4(evidence.ActualParameters)
+                + "/flags:" + ((uint)evidence.ActualFlags).ToString(CultureInfo.InvariantCulture);
         }
 
         private static string FormatWaypointStationOutcome(WaypointStationOutcome outcome)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Game.Net;
 using Game.Pathfind;
+using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.Dispatch.Diagnostics;
 using RapidTransitMod.Dispatch.Lines;
@@ -23,7 +24,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly TrackModelContext.IBuffers m_Buffers;
         private readonly RouteProgress m_RouteProgress;
         private readonly VehicleView m_VehicleView;
-        private readonly Func<Entity, bool> m_IsVehicleBoarding;
+        private readonly WaypointIndex m_WaypointIndex;
         private readonly RailEventSource m_RailSource;
         private readonly RuntimeHotPathProbe m_HotPathProbe;
         private readonly Func<Entity, bool> m_IsLinePending;
@@ -37,7 +38,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             TrackModelContext.IBuffers buffers,
             RouteProgress routeProgress,
             VehicleView vehicleView,
-            Func<Entity, bool> isVehicleBoarding,
+            WaypointIndex waypointIndex,
             RailEventSource railSource,
             RuntimeHotPathProbe hotPathProbe,
             Func<Entity, bool> isLinePending)
@@ -50,7 +51,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Buffers = buffers;
             m_RouteProgress = routeProgress;
             m_VehicleView = vehicleView;
-            m_IsVehicleBoarding = isVehicleBoarding;
+            m_WaypointIndex = waypointIndex;
             m_RailSource = railSource;
             m_HotPathProbe = hotPathProbe;
             m_IsLinePending = isLinePending;
@@ -163,7 +164,28 @@ namespace RapidTransitMod.Dispatch.Runtime
             return m_VehicleView.TryGetState(vehicle, out state);
         }
 
-        bool ITrackProjectionRuntimeContext.IsVehicleBoarding(Entity vehicle) => m_IsVehicleBoarding(vehicle);
+        bool ITrackProjectionRuntimeContext.IsVehicleBoarding(Entity vehicle)
+        {
+            return m_RailSource.TryReadPublicTransportForWrite(vehicle, out PublicTransport publicTransport)
+                && (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
+        }
+
+        bool ITrackProjectionRuntimeContext.TryConfirmProjectionBoardingWaypoint(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            TrainCurrentLane currentLane,
+            out int waypointIndex)
+        {
+            return m_WaypointIndex.TryConfirmCurrentBoardingWaypoint(
+                vehicle,
+                line,
+                waypoints,
+                true,
+                currentLane,
+                out _,
+                out waypointIndex);
+        }
 
         bool ITrackProjectionRuntimeContext.TryReadProjectionRuntimeContext(Entity vehicle, out ProjectionRuntimeContext context)
         {

@@ -5,6 +5,7 @@ using Game.Common;
 using Game.Net;
 using Game.Pathfind;
 using Game.Routes;
+using Game.Vehicles;
 using RapidTransitMod.Bypass;
 using RapidTransitMod.Dispatch.Lines;
 using Unity.Entities;
@@ -23,6 +24,51 @@ namespace RapidTransitMod.TrackModel
         private readonly Action<Entity, LineTrackChain> m_PublishTraversal;
         private readonly Action<Entity> m_InvalidateLine;
         private readonly Action<Entity> m_ClearStaticCachesForLine;
+        private readonly struct TrackStationBoundaryInput
+        {
+            internal readonly TrackAtom Incoming;
+            internal readonly TrackAtom Outgoing;
+            internal readonly bool IsValid;
+            internal readonly bool HasTurnback;
+
+            internal TrackStationBoundaryInput(
+                TrackAtom incoming,
+                TrackAtom outgoing,
+                bool isValid,
+                bool hasTurnback)
+            {
+                Incoming = incoming;
+                Outgoing = outgoing;
+                IsValid = isValid;
+                HasTurnback = hasTurnback;
+            }
+        }
+        private sealed class TrackBuildInputs
+        {
+            internal ComponentLookup<Lane> Lanes;
+            internal ComponentLookup<EdgeLane> EdgeLanes;
+            internal ComponentLookup<Owner> Owners;
+            internal ComponentLookup<Game.Net.Edge> Edges;
+            internal BufferLookup<ConnectedEdge> ConnectedEdges;
+            internal BufferLookup<SubLane> SubLanes;
+
+            internal TrackBuildInputs(TrackSupport support)
+            {
+                EntityManager entityManager = support.EntityManager;
+                entityManager.CompleteDependencyBeforeRO<Lane>();
+                entityManager.CompleteDependencyBeforeRO<EdgeLane>();
+                entityManager.CompleteDependencyBeforeRO<Owner>();
+                entityManager.CompleteDependencyBeforeRO<Game.Net.Edge>();
+                entityManager.CompleteDependencyBeforeRO<ConnectedEdge>();
+                entityManager.CompleteDependencyBeforeRO<SubLane>();
+                Lanes = support.GetComponentLookup<Lane>(true);
+                EdgeLanes = support.GetComponentLookup<EdgeLane>(true);
+                Owners = support.GetComponentLookup<Owner>(true);
+                Edges = support.GetComponentLookup<Game.Net.Edge>(true);
+                ConnectedEdges = support.GetBufferLookup<ConnectedEdge>(true);
+                SubLanes = support.GetBufferLookup<SubLane>(true);
+            }
+        }
         private readonly struct TrackChainScan
         {
             internal readonly List<TrackAtom> Atoms;
@@ -256,21 +302,36 @@ namespace RapidTransitMod.TrackModel
             if (chainComplete
                 && TransportModeProfile.GetProfile(mode).Lifecycle == LifecycleKind.Rail)
             {
+                TrackBuildInputs buildInputs = mode == TransitMode.Tram
+                    ? null
+                    : new TrackBuildInputs(m_Support);
+                TrackStationBoundaryInput[] stationBoundaries = mode == TransitMode.Tram
+                    ? Array.Empty<TrackStationBoundaryInput>()
+                    : BuildStationBoundaries(refreshedSegmentInputs, refreshedAtoms, refreshedRanges);
+                bool[] pathTurnbacks = mode == TransitMode.Tram
+                    ? Array.Empty<bool>()
+                    : new bool[refreshedSegmentInputs.Length];
                 int rawAtomCount = refreshedAtoms.Count;
                 bool pathTurnbackExtensions = mode != TransitMode.Tram
                     && AppendPathTurnbacks(
+                    mode,
                     refreshedSegmentInputs,
                     refreshedAtoms,
                     refreshedRanges,
                     refreshedExtensionRanges,
-                    extensionNotes);
+                    extensionNotes,
+                    buildInputs,
+                    pathTurnbacks);
                 bool stationExtensions = AppendStationTrackAtoms(
                     mode,
                     waypoints,
+                    stationBoundaries,
                     refreshedAtoms,
                     refreshedRanges,
                     refreshedExtensionRanges,
-                    extensionNotes);
+                    extensionNotes,
+                    buildInputs,
+                    pathTurnbacks);
                 hasStationTrackExtensions = pathTurnbackExtensions || stationExtensions;
                 if (hasStationTrackExtensions)
                 {
@@ -700,13 +761,70 @@ namespace RapidTransitMod.TrackModel
             return true;
         }
 
+        private TrackStationBoundaryInput[] BuildStationBoundaries(
+            TrackSegmentInputBaseline[] segments,
+            List<TrackAtom> atoms,
+            List<TrackSegmentRange> ranges)
+        {
+            var boundaries = new TrackStationBoundaryInput[segments.Length];
+            for (int waypointIndex = 0; waypointIndex < segments.Length; waypointIndex++)
+            {
+                int incomingSegment = waypointIndex == 0 ? segments.Length - 1 : waypointIndex - 1;
+                bool hasIncoming = TryGetIncomingSuffix(
+                    segments[incomingSegment],
+                    atoms,
+                    ranges[incomingSegment],
+                    out TrackAtom incoming);
+                bool hasOutgoing = TryGetOutgoingPrefix(
+                    segments[waypointIndex],
+                    atoms,
+                    ranges[waypointIndex],
+                    out TrackAtom outgoing,
+                    out _);
+                boundaries[waypointIndex] = new TrackStationBoundaryInput(
+                    incoming,
+                    outgoing,
+                    hasIncoming && hasOutgoing,
+                    hasIncoming && hasOutgoing && HasWaypointTurnback(segments, waypointIndex));
+            }
+            return boundaries;
+        }
+
+        private static bool TryFindCurrentBoundaryAtom(
+            List<TrackAtom> atoms,
+            TrackSegmentRange range,
+            TrackAtom source,
+            out int atomIndex)
+        {
+            atomIndex = -1;
+            for (int index = range.StartAtomIndex;
+                index < range.EndAtomIndexExclusive && index < atoms.Count;
+                index++)
+            {
+                TrackAtom candidate = atoms[index];
+                if (candidate.Key.Equals(source.Key)
+                    && candidate.SourceTarget == source.SourceTarget
+                    && candidate.TargetDelta.Equals(source.TargetDelta)
+                    && candidate.SourceFlags == source.SourceFlags
+                    && candidate.AtomClass == source.AtomClass)
+                {
+                    atomIndex = index;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private bool AppendStationTrackAtoms(
             TransitMode mode,
             DynamicBuffer<RouteWaypoint> waypoints,
+            TrackStationBoundaryInput[] stationBoundaries,
             List<TrackAtom> atoms,
             List<TrackSegmentRange> ranges,
             List<TrackExtensionRange> extensionRanges,
-            List<string> extensionNotes)
+            List<string> extensionNotes,
+            TrackBuildInputs buildInputs,
+            bool[] pathTurnbacks)
         {
             if (waypoints.Length == 0 || atoms.Count == 0 || ranges.Count != waypoints.Length)
                 return false;
@@ -737,36 +855,36 @@ namespace RapidTransitMod.TrackModel
                 }
                 if (building == Entity.Null || !EntityManager.HasComponent<RouteLane>(waypoint))
                     continue;
-
-                int incomingSegment = waypointIndex == 0 ? ranges.Count - 1 : waypointIndex - 1;
-                int incomingEnd = ranges[incomingSegment].EndAtomIndexExclusive;
-                int insertIndex = ranges[waypointIndex].StartAtomIndex;
-                if (incomingEnd <= ranges[incomingSegment].StartAtomIndex
-                    || incomingEnd > atoms.Count
-                    || insertIndex < 0
-                    || insertIndex > atoms.Count)
+                if (waypointIndex < pathTurnbacks.Length && pathTurnbacks[waypointIndex])
                     continue;
 
-                TrackAtom incoming = atoms[incomingEnd - 1];
-                if (incoming.AtomClass != TrackAtomClass.PrimaryLane
-                    || !TryGetStationAtomDirection(atoms, ranges[incomingSegment], incomingEnd - 1, false, out bool forward))
+                if (waypointIndex >= stationBoundaries.Length)
+                    continue;
+                TrackStationBoundaryInput boundary = stationBoundaries[waypointIndex];
+                if (!boundary.IsValid
+                    || !TryFindCurrentBoundaryAtom(
+                        atoms,
+                        ranges[waypointIndex],
+                        boundary.Outgoing,
+                        out int insertIndex))
                     continue;
 
-                RouteLane routeLane = EntityManager.GetComponentData<RouteLane>(waypoint);
-                Entity incomingLane = incoming.Key.PhysicalLaneKey != Entity.Null
-                    ? incoming.Key.PhysicalLaneKey
-                    : incoming.SourceTarget;
-                if (m_Support.ResolvePassingStationBuilding(incomingLane) != building)
+                Entity incomingLane = AtomLane(boundary.Incoming);
+                if (m_Support.ResolvePassingStationBuilding(incomingLane) != building
+                    || !TryGetAtomDirection(boundary.Incoming, out bool incomingForward)
+                    || !TryGetAtomDirection(boundary.Outgoing, out bool outgoingForward))
                     continue;
 
                 var stationPath = new List<TrackAtom>();
                 bool hasStationPath = TryBuildStationPath(
-                    incoming,
+                    boundary.Incoming,
                     incomingLane,
-                    forward,
+                    incomingForward,
                     building,
+                    float.PositiveInfinity,
                     stationPath,
-                    out bool reachedBoundary);
+                    out bool reachedBoundary,
+                    buildInputs);
                 if (!hasStationPath)
                 {
                     if (!reachedBoundary)
@@ -777,82 +895,153 @@ namespace RapidTransitMod.TrackModel
                 var additions = new List<TrackAtom>();
                 int turnbackForwardCount = -1;
                 bool outgoingConnected = false;
-                if (TryGetOutgoingPrefix(atoms, ranges, waypointIndex, out TrackAtom outgoing, out bool outgoingForward))
-                {
-                    if (reachedBoundary
-                        && routeLane.m_EndLane == outgoing.Key.PhysicalLaneKey
-                        && m_Support.ResolvePassingStationBuilding(routeLane.m_EndLane) == building)
-                    {
-                        outgoingConnected = AppendStationPathToOutgoing(
-                            stationPath,
-                            outgoing,
-                            outgoingForward,
-                            additions);
-                        if (!outgoingConnected)
-                        {
-                            additions.Clear();
-                            outgoingConnected = AppendTurnbackStationPath(
-                                    stationPath,
-                                    outgoing,
-                                    outgoingForward,
-                                    additions,
-                                    out int forwardCount);
-                            if (!outgoingConnected)
-                                additions.Clear();
-                            else
-                                turnbackForwardCount = forwardCount;
-                        }
-                    }
-                    else
-                    {
-                        outgoingConnected = AppendStationPathToOutgoing(
-                            stationPath,
-                            outgoing,
-                            outgoingForward,
-                            additions);
-                        if (!outgoingConnected)
-                            additions.Clear();
-                    }
-                }
+                outgoingConnected = TryAppendStationPath(
+                    stationPath,
+                    boundary.Outgoing,
+                    outgoingForward,
+                    boundary.HasTurnback,
+                    additions,
+                    out turnbackForwardCount,
+                    buildInputs);
 
-                if (additions.Count == 0)
+                if (!outgoingConnected || additions.Count == 0)
                 {
                     if (!outgoingConnected)
                         AppendExtensionNote(extensionNotes, "station:wp" + waypointIndex + ":exit-unconfirmed");
                     continue;
                 }
 
-                atoms.InsertRange(insertIndex, additions);
-                ShiftRangesAfterInsert(ranges, waypointIndex, additions.Count);
-                ShiftExtensionRangesAfterInsert(extensionRanges, insertIndex, additions.Count);
-                if (turnbackForwardCount >= 0)
-                {
-                    extensionRanges.Add(new TrackExtensionRange(
-                        insertIndex,
-                        insertIndex + turnbackForwardCount,
-                        insertIndex + additions.Count));
-                }
+                InsertExtension(atoms, ranges, extensionRanges, waypointIndex, insertIndex, additions, turnbackForwardCount);
                 changed = true;
             }
             return changed;
         }
 
+        private static bool IsNonZero(TrackPathElementBaseline element)
+        {
+            return math.asfloat(element.TargetDeltaXBits) != math.asfloat(element.TargetDeltaYBits);
+        }
+
+        private bool TryGetIncomingSuffix(
+            TrackSegmentInputBaseline segment,
+            List<TrackAtom> atoms,
+            TrackSegmentRange range,
+            out TrackAtom incoming)
+        {
+            incoming = default;
+            int atomIndex = range.StartAtomIndex;
+            for (int index = 0; index < segment.Elements.Length; index++)
+            {
+                TrackPathElementBaseline element = segment.Elements[index];
+                int currentAtomIndex = element.HasAtomContribution ? atomIndex++ : -1;
+                if (!IsNonZero(element)
+                    || currentAtomIndex < 0
+                    || currentAtomIndex >= atoms.Count
+                    || element.AtomClass != TrackAtomClass.PrimaryLane)
+                {
+                    continue;
+                }
+
+                TrackAtom candidate = atoms[currentAtomIndex];
+                if (TryGetAtomDirection(candidate, out _))
+                {
+                    incoming = candidate;
+                }
+            }
+            return incoming.SourceTarget != Entity.Null;
+        }
+
+        private bool TryGetOutgoingPrefix(
+            TrackSegmentInputBaseline segment,
+            List<TrackAtom> atoms,
+            TrackSegmentRange range,
+            out TrackAtom outgoing,
+            out int atomIndex)
+        {
+            outgoing = default;
+            atomIndex = range.StartAtomIndex;
+            for (int index = 0; index < segment.Elements.Length; index++)
+            {
+                TrackPathElementBaseline element = segment.Elements[index];
+                int currentAtomIndex = element.HasAtomContribution ? atomIndex++ : -1;
+                if (!IsNonZero(element)
+                    || currentAtomIndex < 0
+                    || currentAtomIndex >= atoms.Count
+                    || element.AtomClass != TrackAtomClass.PrimaryLane)
+                {
+                    continue;
+                }
+
+                outgoing = atoms[currentAtomIndex];
+                atomIndex = currentAtomIndex;
+                return TryGetAtomDirection(outgoing, out _);
+            }
+            return false;
+        }
+
+        private bool HasWaypointTurnback(TrackSegmentInputBaseline[] segments, int waypointIndex)
+        {
+            int incomingSegment = waypointIndex == 0 ? segments.Length - 1 : waypointIndex - 1;
+            TrackPathElementBaseline previous = default;
+            bool hasPrevious = false;
+            TrackPathElementBaseline[] incoming = segments[incomingSegment].Elements;
+            for (int index = 0; index < incoming.Length; index++)
+            {
+                TrackPathElementBaseline current = incoming[index];
+                if (!IsNonZero(current))
+                {
+                    if ((current.Flags & PathElementFlags.Return) != 0)
+                        hasPrevious = false;
+                    continue;
+                }
+                previous = current;
+                hasPrevious = (current.Flags & PathElementFlags.Return) == 0;
+            }
+
+            TrackPathElementBaseline[] outgoing = segments[waypointIndex].Elements;
+            for (int index = 0; index < outgoing.Length; index++)
+            {
+                TrackPathElementBaseline current = outgoing[index];
+                if (!IsNonZero(current))
+                {
+                    if ((current.Flags & PathElementFlags.Return) != 0)
+                        hasPrevious = false;
+                    continue;
+                }
+                return hasPrevious && IsPathTurnbackPair(previous, current);
+            }
+            return false;
+        }
+
         private bool AppendPathTurnbacks(
+            TransitMode mode,
             TrackSegmentInputBaseline[] segmentInputs,
             List<TrackAtom> atoms,
             List<TrackSegmentRange> ranges,
             List<TrackExtensionRange> extensionRanges,
-            List<string> extensionNotes)
+            List<string> extensionNotes,
+            TrackBuildInputs buildInputs,
+            bool[] pathTurnbacks)
         {
             bool changed = false;
+            int previousAtomIndex = -1;
+            TrackPathElementBaseline previous = default;
+            bool hasPrevious = false;
+            int previousSegmentIndex = segmentInputs.Length - 1;
+            if (segmentInputs.Length > 0)
+            {
+                TryGetTailPathContext(
+                    segmentInputs[segmentInputs.Length - 1],
+                    ranges[ranges.Count - 1],
+                    out previous,
+                    out previousAtomIndex,
+                    out hasPrevious);
+            }
             for (int segmentIndex = 0; segmentIndex < segmentInputs.Length; segmentIndex++)
             {
                 TrackSegmentRange range = ranges[segmentIndex];
                 TrackPathElementBaseline[] elements = segmentInputs[segmentIndex].Elements;
                 int nextAtomIndex = range.StartAtomIndex;
-                int previousAtomIndex = -1;
-                TrackPathElementBaseline previous = default;
-                bool hasPrevious = false;
                 for (int pathIndex = 0; pathIndex < elements.Length; pathIndex++)
                 {
                     TrackPathElementBaseline current = elements[pathIndex];
@@ -872,53 +1061,86 @@ namespace RapidTransitMod.TrackModel
                             hasPrevious = false;
                         continue;
                     }
-                    if (!hasAtom)
-                    {
-                        hasPrevious = false;
-                        continue;
-                    }
-
-                    bool pathTurnbackPair = hasPrevious && IsPathTurnbackPair(previous, current);
+                    bool pathTurnbackPair = hasPrevious
+                        && previousAtomIndex >= 0
+                        && currentAtomIndex >= 0
+                        && IsPathTurnbackPair(previous, current);
+                    int insertIndex = currentAtomIndex;
                     if (pathTurnbackPair
                         && TryAppendPathTurnback(
+                            mode,
                             atoms,
                             ranges,
                             extensionRanges,
                             segmentIndex,
                             previousAtomIndex,
                             currentAtomIndex,
-                            out int insertedCount))
+                            out int insertedCount,
+                            buildInputs))
                     {
+                        if (previousAtomIndex >= insertIndex)
+                            previousAtomIndex += insertedCount;
                         currentAtomIndex += insertedCount;
                         nextAtomIndex += insertedCount;
                         range = ranges[segmentIndex];
                         changed = true;
+                        if (previousSegmentIndex != segmentIndex)
+                            pathTurnbacks[segmentIndex] = true;
                     }
                     else if (pathTurnbackPair)
                     {
-                        AppendExtensionNote(extensionNotes, "path:seg" + segmentIndex + ":station-exit-unconfirmed");
+                        AppendExtensionNote(extensionNotes, "path:seg" + segmentIndex + ":extension-unconfirmed");
                     }
 
                     previous = current;
                     previousAtomIndex = currentAtomIndex;
                     hasPrevious = (current.Flags & PathElementFlags.Return) == 0;
+                    previousSegmentIndex = segmentIndex;
                 }
             }
             return changed;
         }
 
+        private static void TryGetTailPathContext(
+            TrackSegmentInputBaseline segment,
+            TrackSegmentRange range,
+            out TrackPathElementBaseline previous,
+            out int previousAtomIndex,
+            out bool hasPrevious)
+        {
+            previous = default;
+            previousAtomIndex = -1;
+            hasPrevious = false;
+            int atomIndex = range.StartAtomIndex;
+            for (int index = 0; index < segment.Elements.Length; index++)
+            {
+                TrackPathElementBaseline current = segment.Elements[index];
+                int currentAtomIndex = current.HasAtomContribution ? atomIndex++ : -1;
+                if (!IsNonZero(current))
+                {
+                    if ((current.Flags & PathElementFlags.Return) != 0)
+                        hasPrevious = false;
+                    continue;
+                }
+                previous = current;
+                previousAtomIndex = currentAtomIndex;
+                hasPrevious = (current.Flags & PathElementFlags.Return) == 0;
+            }
+        }
+
         private bool TryAppendPathTurnback(
+            TransitMode mode,
             List<TrackAtom> atoms,
             List<TrackSegmentRange> ranges,
             List<TrackExtensionRange> extensionRanges,
             int segmentIndex,
             int incomingAtomIndex,
             int outgoingAtomIndex,
-            out int insertedCount)
+            out int insertedCount,
+            TrackBuildInputs buildInputs)
         {
             insertedCount = 0;
             if (incomingAtomIndex < 0
-                || outgoingAtomIndex <= incomingAtomIndex
                 || outgoingAtomIndex >= atoms.Count)
             {
                 return false;
@@ -928,9 +1150,12 @@ namespace RapidTransitMod.TrackModel
             TrackAtom outgoing = atoms[outgoingAtomIndex];
             Entity incomingLane = AtomLane(incoming);
             Entity building = m_Support.ResolvePassingStationBuilding(incomingLane);
+            float maxDistance = building == Entity.Null
+                ? GetPathTurnbackMaxDistance(mode)
+                : float.PositiveInfinity;
             if (incoming.AtomClass != TrackAtomClass.PrimaryLane
                 || outgoing.AtomClass != TrackAtomClass.PrimaryLane
-                || building == Entity.Null
+                || maxDistance <= 0f
                 || !TryGetAtomDirection(incoming, out bool incomingForward)
                 || !TryGetAtomDirection(outgoing, out bool outgoingForward))
             {
@@ -943,34 +1168,41 @@ namespace RapidTransitMod.TrackModel
                     incomingLane,
                     incomingForward,
                     building,
+                    maxDistance,
                     stationPath,
-                    out _))
+                    out _,
+                    buildInputs))
             {
                 return false;
             }
 
             var additions = new List<TrackAtom>();
-            if (!AppendTurnbackStationPath(
+            if (!TryAppendStationPath(
                     stationPath,
                     outgoing,
                     outgoingForward,
+                    true,
                     additions,
-                    out int forwardCount)
+                    out int forwardCount,
+                    buildInputs)
                 || forwardCount == 0
                 || additions.Count <= forwardCount)
             {
                 return false;
             }
 
-            atoms.InsertRange(outgoingAtomIndex, additions);
-            ShiftRangesAfterInsert(ranges, segmentIndex, additions.Count);
-            ShiftExtensionRangesAfterInsert(extensionRanges, outgoingAtomIndex, additions.Count);
-            extensionRanges.Add(new TrackExtensionRange(
-                outgoingAtomIndex,
-                outgoingAtomIndex + forwardCount,
-                outgoingAtomIndex + additions.Count));
+            InsertExtension(atoms, ranges, extensionRanges, segmentIndex, outgoingAtomIndex, additions, forwardCount);
             insertedCount = additions.Count;
             return true;
+        }
+
+        private static float GetPathTurnbackMaxDistance(TransitMode mode)
+        {
+            if (mode == TransitMode.Train)
+                return VehicleUtils.MAX_TRAIN_LENGTH;
+            if (mode == TransitMode.Subway)
+                return VehicleUtils.MAX_SUBWAY_LENGTH;
+            return 0f;
         }
 
         private bool IsPathTurnbackPair(
@@ -1116,14 +1348,14 @@ namespace RapidTransitMod.TrackModel
             if (forwardCount == 0 || additions.Count == forwardCount)
                 return false;
 
-            int insertIndex = outgoingRange.StartAtomIndex;
-            atoms.InsertRange(insertIndex, additions);
-            ShiftRangesAfterInsert(ranges, waypointIndex, additions.Count);
-            ShiftExtensionRangesAfterInsert(extensionRanges, insertIndex, additions.Count);
-            extensionRanges.Add(new TrackExtensionRange(
-                insertIndex,
-                insertIndex + forwardCount,
-                insertIndex + additions.Count));
+            InsertExtension(
+                atoms,
+                ranges,
+                extensionRanges,
+                waypointIndex,
+                outgoingRange.StartAtomIndex,
+                additions,
+                forwardCount);
             return true;
         }
 
@@ -1132,15 +1364,37 @@ namespace RapidTransitMod.TrackModel
             Entity lane,
             bool forward,
             Entity building,
+            float maxDistance,
             List<TrackAtom> stationPath,
-            out bool reachedBoundary)
+            out bool reachedBoundary,
+            TrackBuildInputs buildInputs)
         {
             reachedBoundary = false;
-            if (lane == Entity.Null || m_Support.ResolvePassingStationBuilding(lane) != building)
+            if (lane == Entity.Null
+                || !EntityManager.HasComponent<TrackLane>(lane)
+                || !EntityManager.HasComponent<Lane>(lane)
+                || (building != Entity.Null && m_Support.ResolvePassingStationBuilding(lane) != building))
                 return false;
 
             float endpoint = forward ? 1f : 0f;
-            AppendStationAtom(stationPath, lane, incoming.TargetDelta.y, endpoint, Entity.Null, Entity.Null);
+            float remainingDistance = maxDistance;
+            if (!TryAppendBoundedStationAtom(
+                    stationPath,
+                    lane,
+                    incoming.TargetDelta.y,
+                    endpoint,
+                    Entity.Null,
+                    Entity.Null,
+                    ref remainingDistance,
+                    out bool limitReached))
+            {
+                return false;
+            }
+            if (limitReached)
+            {
+                reachedBoundary = true;
+                return stationPath.Count > 0;
+            }
             var visited = new List<Entity> { lane };
             Entity currentLane = lane;
             bool currentForward = forward;
@@ -1150,47 +1404,89 @@ namespace RapidTransitMod.TrackModel
                     currentLane,
                     currentForward,
                     out Entity nextLane,
-                    out bool nextForward))
+                    out bool nextForward,
+                    buildInputs))
                 {
                     reachedBoundary = true;
                     return stationPath.Count > 0;
                 }
                 if (visited.Contains(nextLane))
                     return false;
-                if (m_Support.ResolvePassingStationBuilding(nextLane) != building)
+                if (building != Entity.Null
+                    && m_Support.ResolvePassingStationBuilding(nextLane) != building)
                 {
                     reachedBoundary = true;
                     return stationPath.Count > 0;
                 }
-                AppendStationAtom(stationPath, nextLane, nextForward ? 0f : 1f, nextForward ? 1f : 0f, currentLane, Entity.Null);
+                if (!EntityManager.HasComponent<TrackLane>(nextLane)
+                    || !EntityManager.HasComponent<Lane>(nextLane))
+                {
+                    return false;
+                }
+                if (!TryAppendBoundedStationAtom(
+                        stationPath,
+                        nextLane,
+                        nextForward ? 0f : 1f,
+                        nextForward ? 1f : 0f,
+                        currentLane,
+                        Entity.Null,
+                        ref remainingDistance,
+                        out limitReached))
+                {
+                    return false;
+                }
                 visited.Add(nextLane);
+                if (limitReached)
+                {
+                    reachedBoundary = true;
+                    return stationPath.Count > 0;
+                }
                 currentLane = nextLane;
                 currentForward = nextForward;
             }
         }
 
+        private bool TryAppendBoundedStationAtom(
+            List<TrackAtom> atoms,
+            Entity lane,
+            float start,
+            float end,
+            Entity previousLane,
+            Entity nextLane,
+            ref float remainingDistance,
+            out bool limitReached)
+        {
+            limitReached = false;
+            if (start == end)
+                return true;
+            if (math.isfinite(remainingDistance))
+            {
+                if (!EntityManager.HasComponent<Curve>(lane))
+                    return false;
+                float length = EntityManager.GetComponentData<Curve>(lane).m_Length
+                    * math.abs(end - start);
+                if (!math.isfinite(length) || length < 0f || remainingDistance <= 0f)
+                    return false;
+                if (length >= remainingDistance)
+                {
+                    end = math.lerp(start, end, remainingDistance / length);
+                    remainingDistance = 0f;
+                    limitReached = true;
+                }
+                else
+                {
+                    remainingDistance -= length;
+                }
+            }
+            AppendStationAtom(atoms, lane, start, end, previousLane, nextLane);
+            return true;
+        }
+
         private static bool TryGetAtomDirection(TrackAtom atom, out bool forward)
         {
             float delta = atom.TargetDelta.y - atom.TargetDelta.x;
-            if (delta != 0f)
-            {
-                forward = delta > 0f;
-                return true;
-            }
-
-            if (atom.TargetDelta.x == 0f)
-            {
-                forward = true;
-                return true;
-            }
-            if (atom.TargetDelta.x == 1f)
-            {
-                forward = false;
-                return true;
-            }
-
-            forward = false;
-            return false;
+            forward = delta > 0f;
+            return delta != 0f;
         }
 
         private static Entity AtomLane(TrackAtom atom)
@@ -1200,77 +1496,19 @@ namespace RapidTransitMod.TrackModel
                 : atom.SourceTarget;
         }
 
-        private static bool TryGetStationAtomDirection(
-            List<TrackAtom> atoms,
-            TrackSegmentRange range,
-            int atomIndex,
-            bool searchForward,
-            out bool forward)
-        {
-            forward = false;
-            if (atomIndex < range.StartAtomIndex || atomIndex >= range.EndAtomIndexExclusive
-                || atomIndex < 0 || atomIndex >= atoms.Count)
-                return false;
-            float delta = atoms[atomIndex].TargetDelta.y - atoms[atomIndex].TargetDelta.x;
-            if (delta != 0f)
-            {
-                forward = delta > 0f;
-                return true;
-            }
-            Entity lane = atoms[atomIndex].Key.PhysicalLaneKey;
-            int step = searchForward ? 1 : -1;
-            for (int index = atomIndex + step;
-                index >= range.StartAtomIndex && index < range.EndAtomIndexExclusive;
-                index += step)
-            {
-                TrackAtom neighbor = atoms[index];
-                if (neighbor.Key.PhysicalLaneKey != lane)
-                    break;
-                float neighborDelta = neighbor.TargetDelta.y - neighbor.TargetDelta.x;
-                if (neighborDelta != 0f)
-                {
-                    forward = neighborDelta > 0f;
-                    return true;
-                }
-            }
-            if (atoms[atomIndex].TargetDelta.x == 0f)
-            {
-                forward = true;
-                return true;
-            }
-            if (atoms[atomIndex].TargetDelta.x == 1f)
-            {
-                forward = false;
-                return true;
-            }
-            return false;
-        }
-
-        private static bool TryGetOutgoingPrefix(
-            List<TrackAtom> atoms,
-            List<TrackSegmentRange> ranges,
-            int waypointIndex,
-            out TrackAtom outgoing,
-            out bool forward)
-        {
-            outgoing = default;
-            forward = false;
-            TrackSegmentRange range = ranges[waypointIndex];
-            if (range.StartAtomIndex >= range.EndAtomIndexExclusive
-                || range.StartAtomIndex < 0
-                || range.StartAtomIndex >= atoms.Count)
-                return false;
-            outgoing = atoms[range.StartAtomIndex];
-            return outgoing.AtomClass == TrackAtomClass.PrimaryLane
-                && TryGetStationAtomDirection(atoms, range, range.StartAtomIndex, true, out forward);
-        }
-
-        private bool AppendStationPathToOutgoing(
+        private bool TryAppendStationPath(
             List<TrackAtom> stationPath,
             TrackAtom outgoing,
-            bool forward,
-            List<TrackAtom> additions)
+            bool outgoingForward,
+            bool turnback,
+            List<TrackAtom> additions,
+            out int forwardCount,
+            TrackBuildInputs buildInputs)
         {
+            forwardCount = -1;
+            if (stationPath == null || stationPath.Count == 0)
+                return false;
+
             for (int index = 0; index < stationPath.Count; index++)
             {
                 TrackAtom stationAtom = stationPath[index];
@@ -1281,41 +1519,36 @@ namespace RapidTransitMod.TrackModel
                 }
 
                 if (TryGetAtomDirection(stationAtom, out bool stationForward)
-                    && stationForward == forward
+                    && stationForward == outgoingForward
                     && (IsForwardGap(stationAtom.TargetDelta.x, outgoing.TargetDelta.x, stationForward)
                         || stationAtom.TargetDelta.x == outgoing.TargetDelta.x))
                 {
                     AppendStationAtom(additions, stationAtom.Key.PhysicalLaneKey, stationAtom.TargetDelta.x, outgoing.TargetDelta.x, stationAtom.Key.PreviousTarget, Entity.Null);
                     return true;
                 }
-                return false;
+                additions.Clear();
+                break;
             }
-            if (stationPath.Count == 0)
-                return false;
-            TrackAtom last = stationPath[stationPath.Count - 1];
-            if (!TryGetAtomDirection(last, out bool lastForward)
-                || !TryFindConnectedStationLane(
-                    last.Key.PhysicalLaneKey,
-                    lastForward,
-                    out Entity connectedLane,
-                    out bool connectedForward)
-                || connectedLane != outgoing.Key.PhysicalLaneKey
-                || connectedForward != forward)
-            {
-                return false;
-            }
-            return true;
-        }
 
-        private bool AppendTurnbackStationPath(
-            List<TrackAtom> stationPath,
-            TrackAtom outgoing,
-            bool outgoingForward,
-            List<TrackAtom> additions,
-            out int forwardCount)
-        {
-            forwardCount = 0;
-            if (stationPath == null || stationPath.Count == 0)
+            if (additions.Count == stationPath.Count)
+            {
+                TrackAtom last = stationPath[stationPath.Count - 1];
+                if (TryGetAtomDirection(last, out bool lastForward)
+                    && TryFindConnectedStationLane(
+                        last.Key.PhysicalLaneKey,
+                        lastForward,
+                        out Entity directLane,
+                        out bool directForward,
+                        buildInputs)
+                    && directLane == outgoing.Key.PhysicalLaneKey
+                    && directForward == outgoingForward)
+                {
+                    return true;
+                }
+                additions.Clear();
+            }
+
+            if (!turnback)
                 return false;
 
             additions.AddRange(stationPath);
@@ -1337,6 +1570,8 @@ namespace RapidTransitMod.TrackModel
                     AppendStationAtom(additions, stationAtom.Key.PhysicalLaneKey, stationAtom.TargetDelta.y, outgoing.TargetDelta.x, Entity.Null, stationAtom.Key.NextTarget);
                     return true;
                 }
+                additions.Clear();
+                forwardCount = -1;
                 return false;
             }
 
@@ -1346,12 +1581,13 @@ namespace RapidTransitMod.TrackModel
                     reverseLast.Key.PhysicalLaneKey,
                     reverseForward,
                     out Entity connectedLane,
-                    out bool connectedForward)
+                    out bool connectedForward,
+                    buildInputs)
                 || connectedLane != outgoing.Key.PhysicalLaneKey
                 || connectedForward != outgoingForward)
             {
                 additions.Clear();
-                forwardCount = 0;
+                forwardCount = -1;
                 return false;
             }
             return true;
@@ -1412,6 +1648,27 @@ namespace RapidTransitMod.TrackModel
                 && math.abs(left - right) <= 1e-5f;
         }
 
+        private static void InsertExtension(
+            List<TrackAtom> atoms,
+            List<TrackSegmentRange> ranges,
+            List<TrackExtensionRange> extensionRanges,
+            int segmentIndex,
+            int insertIndex,
+            List<TrackAtom> additions,
+            int forwardCount)
+        {
+            atoms.InsertRange(insertIndex, additions);
+            ShiftRangesAfterInsert(ranges, segmentIndex, additions.Count);
+            ShiftExtensionRangesAfterInsert(extensionRanges, insertIndex, additions.Count);
+            if (forwardCount >= 0)
+            {
+                extensionRanges.Add(new TrackExtensionRange(
+                    insertIndex,
+                    insertIndex + forwardCount,
+                    insertIndex + additions.Count));
+            }
+        }
+
         private static void ShiftRangesAfterInsert(
             List<TrackSegmentRange> ranges,
             int segmentIndex,
@@ -1459,7 +1716,8 @@ namespace RapidTransitMod.TrackModel
             Entity lane,
             bool forward,
             out Entity nextLane,
-            out bool nextForward)
+            out bool nextForward,
+            TrackBuildInputs buildInputs)
         {
             nextLane = Entity.Null;
             nextForward = false;
@@ -1470,87 +1728,24 @@ namespace RapidTransitMod.TrackModel
                 return false;
             }
 
-            Lane source = EntityManager.GetComponentData<Lane>(lane);
-            PathNode connection = forward ? source.m_EndNode : source.m_StartNode;
-            Entity owner = EntityManager.GetComponentData<Owner>(lane).m_Owner;
-            Entity originalOwner = owner;
-            if (EntityManager.HasComponent<EdgeLane>(lane)
-                && owner != Entity.Null
-                && EntityManager.HasComponent<Game.Net.Edge>(owner))
+            Entity candidate = lane;
+            bool candidateForward = forward;
+            if (!NetUtils.FindConnectedLane(
+                    ref candidate,
+                    ref candidateForward,
+                    ref buildInputs.Lanes,
+                    ref buildInputs.EdgeLanes,
+                    ref buildInputs.Owners,
+                    ref buildInputs.Edges,
+                    ref buildInputs.ConnectedEdges,
+                    ref buildInputs.SubLanes))
             {
-                EdgeLane edgeLane = EntityManager.GetComponentData<EdgeLane>(lane);
-                float edgeEnd = forward ? edgeLane.m_EdgeDelta.y : edgeLane.m_EdgeDelta.x;
-                Game.Net.Edge edge = EntityManager.GetComponentData<Game.Net.Edge>(owner);
-                if (edgeEnd == 0f)
-                    owner = edge.m_Start;
-                else if (edgeEnd == 1f)
-                    owner = edge.m_End;
-                if (TryFindConnectedStationSubLane(owner, lane, connection, out nextLane, out nextForward))
-                    return true;
-                if (owner == originalOwner || !connection.OwnerEquals(new PathNode(owner, 0)))
-                    return false;
-            }
-
-            if (owner != Entity.Null && EntityManager.HasBuffer<ConnectedEdge>(owner))
-            {
-                DynamicBuffer<ConnectedEdge> edges = EntityManager.GetBuffer<ConnectedEdge>(owner, true);
-                for (int edgeIndex = 0; edgeIndex < edges.Length; edgeIndex++)
-                {
-                    Entity connectedOwner = edges[edgeIndex].m_Edge;
-                    if (connectedOwner == originalOwner)
-                        continue;
-                    if (TryFindConnectedStationSubLane(
-                            connectedOwner,
-                            lane,
-                            connection,
-                            out nextLane,
-                            out nextForward))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        private bool TryFindConnectedStationSubLane(
-            Entity owner,
-            Entity currentLane,
-            PathNode connection,
-            out Entity nextLane,
-            out bool nextForward)
-        {
-            nextLane = Entity.Null;
-            nextForward = false;
-            if (owner == Entity.Null || !EntityManager.HasBuffer<SubLane>(owner))
                 return false;
-
-            DynamicBuffer<SubLane> lanes = EntityManager.GetBuffer<SubLane>(owner, true);
-            for (int laneIndex = 0; laneIndex < lanes.Length; laneIndex++)
-            {
-                Entity candidate = lanes[laneIndex].m_SubLane;
-                if (candidate == currentLane
-                    || !EntityManager.HasComponent<TrackLane>(candidate)
-                    || !EntityManager.HasComponent<Lane>(candidate))
-                {
-                    continue;
-                }
-
-                Lane candidateData = EntityManager.GetComponentData<Lane>(candidate);
-                bool candidateForward;
-                if (candidateData.m_StartNode.Equals(connection))
-                    candidateForward = true;
-                else if (candidateData.m_EndNode.Equals(connection))
-                    candidateForward = false;
-                else
-                    continue;
-
-                nextLane = candidate;
-                nextForward = candidateForward;
-                return true;
             }
-            return false;
+
+            nextLane = candidate;
+            nextForward = candidateForward;
+            return true;
         }
         internal TrackAtomClass ClassifyPathElementTarget(PathElement element)
         {

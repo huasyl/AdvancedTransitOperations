@@ -53,6 +53,7 @@ namespace RapidTransitMod.TrackProjection
         Direction = 2,
         Navigation = 3,
         PathTail = 4,
+        IndependentBoarding = 5,
     }
 
     internal enum ProjectionExactFailure : byte
@@ -121,11 +122,13 @@ namespace RapidTransitMod.TrackProjection
         internal ProjectionEvidenceReason Reason;
         internal ProjectionEvidenceStage Stage;
         internal int CandidateAtomIndex;
+        internal int InitialAtomIndex;
         internal int QueueIndex;
         internal Entity ExpectedLane;
         internal float2 ExpectedParameters;
         internal Entity ActualLane;
         internal float4 ActualParameters;
+        internal TrainLaneFlags ActualFlags;
 
         internal bool Available => Kind != ProjectionEvidenceKind.None;
 
@@ -152,6 +155,25 @@ namespace RapidTransitMod.TrackProjection
         }
     }
 
+    internal struct ProjectionMismatchSamples
+    {
+        internal ProjectionMatchEvidence First;
+        internal ProjectionMatchEvidence Second;
+
+        internal void Add(ProjectionMatchEvidence evidence)
+        {
+            if (evidence.Kind != ProjectionEvidenceKind.Mismatch)
+                return;
+            if (!First.Available)
+            {
+                First = evidence;
+                return;
+            }
+            if (First.InitialAtomIndex != evidence.InitialAtomIndex && !Second.Available)
+                Second = evidence;
+        }
+    }
+
     internal struct CurrentLaneMatchDiagnostic
     {
         internal int InitialCandidates;
@@ -165,7 +187,9 @@ namespace RapidTransitMod.TrackProjection
         internal int FutureCandidates;
         internal Entity OverlapLane;
         internal ProjectionMatchBasis Basis;
+        internal int IndependentBoardingWaypoint;
         internal ProjectionMatchEvidence Evidence;
+        internal ProjectionMismatchSamples Mismatches;
         internal bool ExtensionReturnMatched;
         internal int ExtensionStartAtomIndex;
         internal int ExtensionForwardEndAtomIndexExclusive;
@@ -199,9 +223,11 @@ namespace RapidTransitMod.TrackProjection
         internal int PathCandidates;
         internal Entity OverlapLane;
         internal ProjectionMatchBasis ExactBasis;
+        internal int IndependentBoardingWaypoint;
         internal ProjectionExactFailure ExactFailure;
         internal ProjectionReadStop ReadStop;
         internal ProjectionMatchEvidence Evidence;
+        internal ProjectionMismatchSamples Mismatches;
         internal bool ExtensionReturnMatched;
         internal int ExtensionStartAtomIndex;
         internal int ExtensionForwardEndAtomIndexExclusive;

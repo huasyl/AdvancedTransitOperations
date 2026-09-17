@@ -45,6 +45,8 @@ namespace RapidTransitMod.TrackProjection
             }
 
             CollectCandidates(chain, current, overlapLanes, candidates, captureDiagnostic, ref diagnostic);
+            if (candidates.Count > 1)
+                MergeAdjacentSeams(chain, current.m_Front.m_CurvePosition.y, candidates);
             if (captureDiagnostic)
                 diagnostic.InitialCandidates = candidates.Count;
             if (candidates.Count == 0)
@@ -89,6 +91,7 @@ namespace RapidTransitMod.TrackProjection
             IList<Entity> overlapLanes,
             IList<TrainNavigationLane> navigation,
             IList<PathElement> pathTail,
+            bool pathTailComplete,
             List<int> candidates,
             ProjectionEvidenceStage evidenceStage,
             bool captureDiagnostic,
@@ -112,6 +115,7 @@ namespace RapidTransitMod.TrackProjection
                     overlapLanes,
                     navigation,
                     pathTail,
+                    pathTailComplete,
                     candidates,
                     evidenceStage,
                     captureDiagnostic,
@@ -131,6 +135,77 @@ namespace RapidTransitMod.TrackProjection
                     : ProjectionMatchBasis.Navigation;
             }
             return StateForSingleCandidate(chain, candidates[0], out atomIndex);
+        }
+
+        internal static CurrentLaneMatchState SelectIndependentBoardingWaypoint(
+            LineTrackChain chain,
+            int waypointIndex,
+            List<int> candidates,
+            bool captureDiagnostic,
+            out int atomIndex,
+            out CurrentLaneMatchDiagnostic diagnostic)
+        {
+            atomIndex = -1;
+            diagnostic = default;
+            if (chain == null
+                || chain.TraversalProfile == null
+                || chain.TraversalProfile.Events == null
+                || waypointIndex < 0
+                || candidates == null)
+            {
+                return CurrentLaneMatchState.Ambiguous;
+            }
+
+            if (captureDiagnostic)
+                diagnostic.FutureCandidates = candidates.Count;
+
+            int matched = -1;
+            int matchCount = 0;
+            for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
+            {
+                int candidate = candidates[candidateIndex];
+                if (!IsInWaypointWindow(chain, waypointIndex, candidate))
+                    continue;
+
+                matched = candidate;
+                matchCount++;
+                if (matchCount > 1)
+                    return CurrentLaneMatchState.Ambiguous;
+            }
+
+            if (matchCount != 1)
+                return CurrentLaneMatchState.Ambiguous;
+
+            candidates.Clear();
+            candidates.Add(matched);
+            if (captureDiagnostic)
+            {
+                diagnostic.FutureCandidates = 1;
+                diagnostic.Basis = ProjectionMatchBasis.IndependentBoarding;
+                diagnostic.IndependentBoardingWaypoint = waypointIndex;
+            }
+            return StateForSingleCandidate(chain, matched, out atomIndex);
+        }
+
+        private static bool IsInWaypointWindow(LineTrackChain chain, int waypointIndex, int atomIndex)
+        {
+            for (int eventIndex = 0; eventIndex < chain.TraversalProfile.Events.Count; eventIndex++)
+            {
+                TraversalEvent traversalEvent = chain.TraversalProfile.Events[eventIndex];
+                if (traversalEvent.WaypointIndex != waypointIndex
+                    || (traversalEvent.Kind != TraversalEventKind.Stop
+                        && traversalEvent.Kind != TraversalEventKind.Pass))
+                {
+                    continue;
+                }
+
+                int start = traversalEvent.StartAtomIndex;
+                int endExclusive = math.max(start + 1, traversalEvent.EndAtomIndexExclusive);
+                if (atomIndex >= start && atomIndex < endExclusive)
+                    return true;
+            }
+
+            return false;
         }
 
         private static CurrentLaneMatchState StateForSingleCandidate(
@@ -269,6 +344,29 @@ namespace RapidTransitMod.TrackProjection
             }
         }
 
+        private static void MergeAdjacentSeams(LineTrackChain chain, float curveY, List<int> candidates)
+        {
+            for (int i = candidates.Count - 1; i >= 0; i--)
+            {
+                int index = candidates[i];
+                if (index + 1 >= chain.TrackAtoms.Count || !Contains(candidates, index + 1))
+                    continue;
+
+                TrackAtom atom = chain.TrackAtoms[index];
+                TrackAtom next = chain.TrackAtoms[index + 1];
+                // 只合并实际命中的同一接缝，不把容差内的短片段端点合并。
+                if (HasUsableParameterSpan(atom)
+                    && HasUsableParameterSpan(next)
+                    && AtomLane(atom) == AtomLane(next)
+                    && SameDirection(atom.TargetDelta.y - atom.TargetDelta.x, next.TargetDelta.y - next.TargetDelta.x)
+                    && atom.TargetDelta.y == next.TargetDelta.x
+                    && curveY == atom.TargetDelta.y)
+                {
+                    candidates.RemoveAt(i);
+                }
+            }
+        }
+
         private static void FilterOppositeDirection(
             LineTrackChain chain,
             TrainCurrentLane current,
@@ -277,7 +375,7 @@ namespace RapidTransitMod.TrackProjection
             ref CurrentLaneMatchDiagnostic diagnostic)
         {
             float direction = current.m_Front.m_CurvePosition.w - current.m_Front.m_CurvePosition.x;
-            if (!math.isfinite(direction) || math.abs(direction) <= EndpointTolerance)
+            if (!math.isfinite(direction) || direction == 0f)
                 return;
 
             for (int i = candidates.Count - 1; i >= 0; i--)
@@ -285,7 +383,7 @@ namespace RapidTransitMod.TrackProjection
                 TrackAtom atom = chain.TrackAtoms[candidates[i]];
                 float atomDirection = atom.TargetDelta.y - atom.TargetDelta.x;
                 if (math.isfinite(atomDirection)
-                    && math.abs(atomDirection) > EndpointTolerance
+                    && atomDirection != 0f
                     && math.sign(direction) != math.sign(atomDirection))
                 {
                     if (captureDiagnostic && !diagnostic.Evidence.Available)
@@ -296,11 +394,13 @@ namespace RapidTransitMod.TrackProjection
                             Reason = ProjectionEvidenceReason.OppositeDirection,
                             Stage = ProjectionEvidenceStage.Direction,
                             CandidateAtomIndex = candidates[i],
+                            InitialAtomIndex = candidates[i],
                             QueueIndex = -1,
                             ExpectedLane = AtomLane(atom),
                             ExpectedParameters = atom.TargetDelta,
                             ActualLane = current.m_Front.m_Lane,
                             ActualParameters = current.m_Front.m_CurvePosition,
+                            ActualFlags = current.m_Front.m_LaneFlags,
                         };
                     }
                     candidates.RemoveAt(i);
@@ -314,6 +414,7 @@ namespace RapidTransitMod.TrackProjection
             IList<Entity> overlapLanes,
             IList<TrainNavigationLane> navigation,
             IList<PathElement> pathTail,
+            bool pathTailComplete,
             List<int> candidates,
             ProjectionEvidenceStage evidenceStage,
             bool captureDiagnostic,
@@ -348,10 +449,13 @@ namespace RapidTransitMod.TrackProjection
                     overlapLanes,
                     navigation,
                     pathTail,
+                    pathTailComplete,
                     evidenceStage,
                     captureDiagnostic,
                     out ProjectionMatchEvidence evidence,
                     out ExtensionReturnMatch extensionMatch);
+                if (captureDiagnostic && evidence.Available)
+                    evidence.InitialAtomIndex = candidateAtomIndex;
                 if (captureDiagnostic
                     && diagnostic.Evidence.ShouldReplaceWith(evidence))
                 {
@@ -359,6 +463,8 @@ namespace RapidTransitMod.TrackProjection
                 }
                 if (comparison == FutureMatch.Mismatch)
                 {
+                    if (captureDiagnostic)
+                        diagnostic.Mismatches.Add(evidence);
                     candidates.RemoveAt(i);
                     if (captureDiagnostic && candidates.Count == 0 && evidence.Available)
                         diagnostic.Evidence = evidence;
@@ -396,6 +502,7 @@ namespace RapidTransitMod.TrackProjection
             IList<Entity> overlapLanes,
             IList<TrainNavigationLane> navigation,
             IList<PathElement> pathTail,
+            bool pathTailComplete,
             ProjectionEvidenceStage evidenceStage,
             bool captureDiagnostic,
             out ProjectionMatchEvidence evidence,
@@ -408,6 +515,7 @@ namespace RapidTransitMod.TrackProjection
                 atomIndex,
                 current,
                 overlapLanes,
+                out float? modelPosition,
                 out ExtensionReturnMatch currentReturnMatch);
             if (modelIndex < 0)
             {
@@ -435,6 +543,7 @@ namespace RapidTransitMod.TrackProjection
                     FutureMatch result = CompareLane(
                         chain,
                         ref modelIndex,
+                        ref modelPosition,
                         lane,
                         ProjectionEvidenceStage.Navigation,
                         i,
@@ -499,13 +608,16 @@ namespace RapidTransitMod.TrackProjection
                     {
                         m_Lane = element.m_Target,
                         m_CurvePosition = element.m_TargetDelta,
-                        m_Flags = (element.m_Flags & PathElementFlags.Return) != 0
-                            ? TrainLaneFlags.Return
-                            : 0
+                        m_Flags = pathTailComplete && i == pathTail.Count - 1
+                            ? TrainLaneFlags.EndOfPath
+                            : (element.m_Flags & PathElementFlags.Return) != 0
+                                ? TrainLaneFlags.Return
+                                : 0
                     };
                     FutureMatch result = CompareLane(
                         chain,
                         ref modelIndex,
+                        ref modelPosition,
                         lane,
                         ProjectionEvidenceStage.PathTail,
                         i,
@@ -522,9 +634,9 @@ namespace RapidTransitMod.TrackProjection
                     compared |= result == FutureMatch.Match;
                     if (laneExtension.Matched)
                         extensionMatch = laneExtension;
-                    if ((lane.m_Flags & TrainLaneFlags.Return) != 0)
+                    if ((lane.m_Flags & (TrainLaneFlags.EndOfPath | TrainLaneFlags.Return)) != 0)
                     {
-                        if (resumedAtReturn)
+                        if ((lane.m_Flags & TrainLaneFlags.EndOfPath) == 0 && resumedAtReturn)
                             continue;
                         if (captureDiagnostic)
                         {
@@ -562,8 +674,10 @@ namespace RapidTransitMod.TrackProjection
             int atomIndex,
             TrainCurrentLane current,
             IList<Entity> overlapLanes,
+            out float? modelPosition,
             out ExtensionReturnMatch returnMatch)
         {
+            modelPosition = null;
             returnMatch = default;
             Entity lane = current.m_Front.m_Lane;
             float currentPosition = current.m_Front.m_CurvePosition.y;
@@ -572,7 +686,7 @@ namespace RapidTransitMod.TrackProjection
             if (lane == Entity.Null
                 || !math.isfinite(currentPosition)
                 || !math.isfinite(currentEnd)
-                || math.abs(direction) <= EndpointTolerance)
+                || direction == 0f)
             {
                 return -1;
             }
@@ -613,8 +727,14 @@ namespace RapidTransitMod.TrackProjection
                     return -1;
                 }
 
-                if (Approximately(atom.TargetDelta.y, currentEnd))
-                    return NextAtomIndex(chain, index);
+                if (ContainsParameter(atom.TargetDelta.x, atom.TargetDelta.y, currentEnd))
+                {
+                    if (atom.TargetDelta.y == currentEnd)
+                        return NextAtomIndex(chain, index);
+
+                    modelPosition = currentEnd;
+                    return index;
+                }
                 if (Passed(currentPosition, atom.TargetDelta.y, currentEnd, direction))
                     return -1;
 
@@ -628,6 +748,7 @@ namespace RapidTransitMod.TrackProjection
         private static FutureMatch CompareLane(
             LineTrackChain chain,
             ref int modelIndex,
+            ref float? modelPosition,
             TrainNavigationLane lane,
             ProjectionEvidenceStage stage,
             int queueIndex,
@@ -678,9 +799,18 @@ namespace RapidTransitMod.TrackProjection
                 return filtered ? FutureMatch.Indeterminate : FutureMatch.Stop;
             }
 
+            // 当前段停在片段内部时，由后续项决定原轨续接或进入紧邻后继。
+            if (modelPosition.HasValue
+                && !MatchesPhysicalLane(chain.TrackAtoms[modelIndex], lane.m_Lane))
+            {
+                modelIndex = NextAtomIndex(chain, modelIndex);
+                modelPosition = null;
+            }
+
             if (TryConsumeLaneRange(
                     chain,
                     ref modelIndex,
+                    ref modelPosition,
                     lane,
                     out resumedAtReturn,
                     out TrackExtensionRange extensionRange,
@@ -709,6 +839,8 @@ namespace RapidTransitMod.TrackProjection
                     queueIndex,
                     ProjectionEvidenceKind.Mismatch,
                     mismatchReason);
+                if (modelPosition.HasValue)
+                    evidence.ExpectedParameters.x = modelPosition.Value;
             }
             return FutureMatch.Mismatch;
         }
@@ -716,6 +848,7 @@ namespace RapidTransitMod.TrackProjection
         private static bool TryConsumeLaneRange(
             LineTrackChain chain,
             ref int modelIndex,
+            ref float? modelPosition,
             TrainNavigationLane lane,
             out bool resumedAtReturn,
             out TrackExtensionRange extensionRange,
@@ -740,6 +873,7 @@ namespace RapidTransitMod.TrackProjection
             while (count++ < chain.TrackAtoms.Count)
             {
                 TrackAtom atom = chain.TrackAtoms[modelIndex];
+                float modelStart = modelPosition ?? atom.TargetDelta.x;
                 mismatchIndex = modelIndex;
                 if (!MatchesPhysicalLane(atom, lane.m_Lane))
                 {
@@ -751,7 +885,7 @@ namespace RapidTransitMod.TrackProjection
                     mismatchReason = ProjectionEvidenceReason.DirectionMismatch;
                     return false;
                 }
-                if (!Approximately(atom.TargetDelta.x, expectedStart))
+                if (!Approximately(modelStart, expectedStart))
                 {
                     mismatchReason = ProjectionEvidenceReason.ParameterStartMismatch;
                     return false;
@@ -759,15 +893,16 @@ namespace RapidTransitMod.TrackProjection
 
                 bool endOfPath = (lane.m_Flags & TrainLaneFlags.EndOfPath) != 0;
                 bool returns = (lane.m_Flags & TrainLaneFlags.Return) != 0;
-                if ((endOfPath || returns)
-                    && TryGetForwardExtensionRange(chain, modelIndex, out TrackExtensionRange matchedRange)
-                    && ContainsParameter(atom.TargetDelta.x, atom.TargetDelta.y, expectedEnd))
-                {
-                    if (endOfPath)
-                        return true;
+                if (endOfPath && ContainsParameter(modelStart, atom.TargetDelta.y, expectedEnd))
+                    return true;
 
+                if (returns
+                    && TryGetForwardExtensionRange(chain, modelIndex, out TrackExtensionRange matchedRange)
+                    && ContainsParameter(modelStart, atom.TargetDelta.y, expectedEnd))
+                {
                     extensionRange = matchedRange;
                     modelIndex = matchedRange.ResumeAtomIndex;
+                    modelPosition = null;
                     resumedAtReturn = true;
                     return true;
                 }
@@ -775,6 +910,7 @@ namespace RapidTransitMod.TrackProjection
                 if (Approximately(atom.TargetDelta.y, expectedEnd))
                 {
                     modelIndex = NextAtomIndex(chain, modelIndex);
+                    modelPosition = null;
                     return true;
                 }
 
@@ -786,6 +922,7 @@ namespace RapidTransitMod.TrackProjection
 
                 expectedStart = atom.TargetDelta.y;
                 modelIndex = NextAtomIndex(chain, modelIndex);
+                modelPosition = null;
             }
 
             mismatchReason = ProjectionEvidenceReason.ModelExhausted;
@@ -816,10 +953,12 @@ namespace RapidTransitMod.TrackProjection
                 Reason = reason,
                 Stage = stage,
                 CandidateAtomIndex = atomIndex,
+                InitialAtomIndex = atomIndex,
                 QueueIndex = queueIndex,
                 ExpectedLane = expectedLane,
                 ExpectedParameters = expectedParameters,
                 ActualLane = actual.m_Lane,
+                ActualFlags = actual.m_Flags,
                 ActualParameters = new float4(
                     actual.m_CurvePosition.x,
                     actual.m_CurvePosition.y,
@@ -851,11 +990,13 @@ namespace RapidTransitMod.TrackProjection
                 Reason = reason,
                 Stage = stage,
                 CandidateAtomIndex = atomIndex,
+                InitialAtomIndex = atomIndex,
                 QueueIndex = -1,
                 ExpectedLane = expectedLane,
                 ExpectedParameters = expectedParameters,
                 ActualLane = current.m_Front.m_Lane,
                 ActualParameters = current.m_Front.m_CurvePosition,
+                ActualFlags = current.m_Front.m_LaneFlags,
             };
         }
 
@@ -978,7 +1119,7 @@ namespace RapidTransitMod.TrackProjection
         {
             if (!math.isfinite(start) || !math.isfinite(end))
                 return false;
-            if (math.abs(end - start) <= EndpointTolerance)
+            if (end == start)
                 return math.abs(value - start) <= EndpointTolerance;
             return value >= math.min(start, end) - EndpointTolerance
                 && value <= math.max(start, end) + EndpointTolerance;
@@ -988,13 +1129,13 @@ namespace RapidTransitMod.TrackProjection
         {
             return math.isfinite(atom.TargetDelta.x)
                 && math.isfinite(atom.TargetDelta.y)
-                && math.abs(atom.TargetDelta.y - atom.TargetDelta.x) > EndpointTolerance;
+                && atom.TargetDelta.y != atom.TargetDelta.x;
         }
 
         private static bool SameDirection(float left, float right)
         {
-            return math.abs(left) <= EndpointTolerance
-                || math.abs(right) <= EndpointTolerance
+            return left == 0f
+                || right == 0f
                 || math.sign(left) == math.sign(right);
         }
 

@@ -25,6 +25,7 @@ namespace RapidTransitMod.TrackModel
 
         internal NativeArray<Entity> GetLineEntities(Allocator allocator) => m_Runtime.GetLineEntities(allocator);
         internal BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData => m_Runtime.GetBufferLookup<T>(isReadOnly);
+        internal ComponentLookup<T> GetComponentLookup<T>(bool isReadOnly) where T : unmanaged, IComponentData => m_Runtime.GetComponentLookup<T>(isReadOnly);
         internal bool IsBypassStation(Entity building) => m_Runtime.IsBypassStation(building);
         internal bool TryGetRenderedLabelName(Entity entity, out string name) => m_Runtime.TryGetRenderedLabelName(entity, out name);
         internal bool TryGetCustomLineName(Entity line, out string customName) => m_Runtime.TryGetCustomLineName(line, out customName);
