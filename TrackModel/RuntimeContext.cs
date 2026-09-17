@@ -19,6 +19,7 @@ namespace RapidTransitMod.TrackModel
 
         NativeArray<Entity> GetLineEntities(Allocator allocator);
         BufferLookup<T> GetBufferLookup<T>(bool isReadOnly) where T : unmanaged, IBufferElementData;
+        ComponentLookup<T> GetComponentLookup<T>(bool isReadOnly) where T : unmanaged, IComponentData;
     }
 
     internal interface ITrackNames

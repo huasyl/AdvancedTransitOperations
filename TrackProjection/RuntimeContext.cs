@@ -1,4 +1,5 @@
 using Game.Pathfind;
+using Game.Routes;
 using Game.Vehicles;
 using RapidTransitMod.TrackModel;
 using System.Collections.Generic;
@@ -30,6 +31,7 @@ namespace RapidTransitMod.TrackProjection
         bool TryRouteProgress(Entity vehicle, out int nextWaypointIndex, out float segmentPosition);
         bool TryGetVehicleRuntimeState(Entity vehicle, out VehicleState state);
         bool IsVehicleBoarding(Entity vehicle);
+        bool TryConfirmProjectionBoardingWaypoint(Entity vehicle, Entity line, DynamicBuffer<RouteWaypoint> waypoints, TrainCurrentLane currentLane, out int waypointIndex);
         bool TryReadProjectionRuntimeContext(Entity vehicle, out ProjectionRuntimeContext context);
     }
 }

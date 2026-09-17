@@ -398,6 +398,7 @@ namespace RapidTransitMod.TrackProjection
         private bool TryResolveTrainCurrentLaneCursor(
             Entity vehicle,
             Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
             LineTrackChain chain,
             bool captureDiagnostic,
             ref ProjectionOutcome outcome,
@@ -434,6 +435,7 @@ namespace RapidTransitMod.TrackProjection
                 ref matcherTicks);
             ProjectionMatchEvidence evidence = first.Evidence;
             int finalCandidates = first.FutureCandidates;
+            bool independentBoardingUsed = false;
             if (captureDiagnostic)
             {
                 outcome.InitialCandidates = first.InitialCandidates;
@@ -445,6 +447,33 @@ namespace RapidTransitMod.TrackProjection
                 outcome.LastCandidateRange = first.LastCandidateRange;
                 outcome.DirectionCandidates = first.DirectionCandidates;
                 outcome.OverlapLane = first.OverlapLane;
+            }
+
+            if (state == CurrentLaneMatchState.Ambiguous
+                && !m_Runtime.HasProjectionPathWrite(vehicle)
+                && m_Runtime.IsVehicleBoarding(vehicle)
+                && m_Runtime.TryConfirmProjectionBoardingWaypoint(
+                    vehicle,
+                    line,
+                    waypoints,
+                    current,
+                    out int boardingWaypointIndex))
+            {
+                CurrentLaneMatchDiagnostic independentBoarding = default;
+                state = CurrentLaneMatcher.SelectIndependentBoardingWaypoint(
+                    chain,
+                    boardingWaypointIndex,
+                    m_CurrentLaneCandidates,
+                    captureDiagnostic,
+                    out atomIndex,
+                    out independentBoarding);
+                independentBoardingUsed = state == CurrentLaneMatchState.Unique;
+                if (captureDiagnostic && independentBoardingUsed)
+                {
+                    outcome.IndependentBoardingWaypoint = boardingWaypointIndex;
+                    MergeProjectionEvidence(ref evidence, independentBoarding.Evidence);
+                }
+                finalCandidates = independentBoarding.FutureCandidates;
             }
 
             if (state == CurrentLaneMatchState.Ambiguous
@@ -460,6 +489,7 @@ namespace RapidTransitMod.TrackProjection
                     current,
                     m_NavigationScratch,
                     null,
+                    false,
                     ProjectionEvidenceStage.Navigation,
                     captureDiagnostic,
                     out atomIndex,
@@ -471,6 +501,8 @@ namespace RapidTransitMod.TrackProjection
                     if (navigation.OverlapLane != Entity.Null)
                         outcome.OverlapLane = navigation.OverlapLane;
                     CopyExtensionReturn(ref outcome, navigation);
+                    outcome.Mismatches.Add(navigation.Mismatches.First);
+                    outcome.Mismatches.Add(navigation.Mismatches.Second);
                     MergeProjectionEvidence(ref evidence, navigation.Evidence);
                 }
                 finalCandidates = navigation.FutureCandidates;
@@ -486,6 +518,7 @@ namespace RapidTransitMod.TrackProjection
                         current,
                         m_NavigationScratch,
                         m_PathTailScratch,
+                        pathStop == ProjectionReadStop.None,
                         ProjectionEvidenceStage.PathTail,
                         captureDiagnostic,
                         out atomIndex,
@@ -497,6 +530,8 @@ namespace RapidTransitMod.TrackProjection
                         if (path.OverlapLane != Entity.Null)
                             outcome.OverlapLane = path.OverlapLane;
                         CopyExtensionReturn(ref outcome, path);
+                        outcome.Mismatches.Add(path.Mismatches.First);
+                        outcome.Mismatches.Add(path.Mismatches.Second);
                         MergeProjectionEvidence(ref evidence, path.Evidence);
                     }
                     finalCandidates = path.FutureCandidates;
@@ -539,7 +574,9 @@ namespace RapidTransitMod.TrackProjection
                 outcome.MatcherTicks = matcherTicks;
                 outcome.Evidence = evidence;
                 outcome.ExactBasis = state == CurrentLaneMatchState.Unique
-                    ? ResolveMatchBasis(first, outcome.NavigationCandidates, outcome.PathCandidates)
+                    ? independentBoardingUsed
+                        ? ProjectionMatchBasis.IndependentBoarding
+                        : ResolveMatchBasis(first, outcome.NavigationCandidates, outcome.PathCandidates)
                     : ProjectionMatchBasis.None;
             }
 
@@ -588,6 +625,7 @@ namespace RapidTransitMod.TrackProjection
             TrainCurrentLane current,
             IList<TrainNavigationLane> navigation,
             IList<PathElement> pathTail,
+            bool pathTailComplete,
             ProjectionEvidenceStage evidenceStage,
             bool captureDiagnostic,
             out int atomIndex,
@@ -601,6 +639,7 @@ namespace RapidTransitMod.TrackProjection
                 m_CurrentLaneOverlapCandidates,
                 navigation,
                 pathTail,
+                pathTailComplete,
                 m_CurrentLaneCandidates,
                 evidenceStage,
                 captureDiagnostic,
@@ -943,6 +982,7 @@ namespace RapidTransitMod.TrackProjection
                 outcome.RouteProgressWaypoint = -1;
                 outcome.CachedWaypoint = -1;
                 outcome.StationAnchorWaypoint = -1;
+                outcome.IndependentBoardingWaypoint = -1;
                 outcome.HistoryAtomBefore = -1;
                 outcome.HistoryAtomAfter = -1;
                 outcome.FrontCurvePosition = new float4(float.NaN);
@@ -964,6 +1004,7 @@ namespace RapidTransitMod.TrackProjection
             if (tryExact && TryResolveTrainCurrentLaneCursor(
                     vehicle,
                     line,
+                    waypoints,
                     chain,
                     captureDiagnostic,
                     ref outcome,

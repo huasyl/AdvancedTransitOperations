@@ -17,6 +17,7 @@ namespace RapidTransitMod
         internal interface IBuffers
         {
             BufferLookup<T> Get<T>(bool readOnly) where T : unmanaged, IBufferElementData;
+            ComponentLookup<T> GetComponent<T>(bool readOnly) where T : unmanaged, IComponentData;
         }
 
         internal delegate bool LineProfile(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineTimeProfileHeader profile);
@@ -84,6 +85,7 @@ namespace RapidTransitMod
 
         public NativeArray<Entity> GetLineEntities(Allocator allocator) => m_Args.LineQuery.ToEntityArray(allocator);
         public BufferLookup<T> GetBufferLookup<T>(bool readOnly) where T : unmanaged, IBufferElementData => m_Args.Buffers.Get<T>(readOnly);
+        public ComponentLookup<T> GetComponentLookup<T>(bool readOnly) where T : unmanaged, IComponentData => m_Args.Buffers.GetComponent<T>(readOnly);
         public bool IsBypassStation(Entity building) => m_Args.IsBypassStation != null && m_Args.IsBypassStation(building);
 
         public bool TryGetRenderedLabelName(Entity entity, out string name)
