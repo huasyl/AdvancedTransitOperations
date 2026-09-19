@@ -70,6 +70,7 @@ namespace RapidTransitMod
             Options = new AtoGameOptions(this);
 #if RT_DEBUG_TOOLS
             TryEnableCohtmlDebugger();
+            updateSystem.UpdateAfter<Dispatch.Diagnostics.RuntimeProbeSystem>(SystemUpdatePhase.MainLoop);
             updateSystem.UpdateBefore<TramTrain.AssetSystem, Game.Prefabs.PrefabInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
             updateSystem.UpdateAfter<TramTrain.ScopedPatchSystem, Game.Prefabs.NetInitializeSystem>(SystemUpdatePhase.PrefabUpdate);
 #endif
