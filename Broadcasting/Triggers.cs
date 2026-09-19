@@ -1114,6 +1114,7 @@ namespace RapidTransitMod.Broadcasting
             new List<ActiveStopSession>();
         private readonly HashSet<string> m_CheckedLineIds =
             new HashSet<string>(StringComparer.Ordinal);
+        private uint? m_EarliestStopAnnouncementFrame;
         internal Platforms(BroadcastAccess access, Config config, Stations stations, Playback playback, Diagnostics diagnostics)
         {
             m_Access = access ?? throw new ArgumentNullException(nameof(access));
@@ -1290,6 +1291,7 @@ namespace RapidTransitMod.Broadcasting
             m_CheckedLineIds.Clear();
             m_ApproachStateByVehicle.Clear();
             m_StopStateByVehicle.Clear();
+            m_EarliestStopAnnouncementFrame = null;
         }
 
         internal void ClearLineChecks()
@@ -1314,6 +1316,7 @@ namespace RapidTransitMod.Broadcasting
         {
             m_ApproachStateByVehicle.Clear();
             m_StopStateByVehicle.Clear();
+            m_EarliestStopAnnouncementFrame = null;
             m_Diagnostics.ClearPlatformApproach();
         }
 
@@ -1377,6 +1380,12 @@ namespace RapidTransitMod.Broadcasting
             foreach (KeyValuePair<string, Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto>> lineEntry in m_Config.PlatformsByLine)
             {
                 string lineId = lineEntry.Key;
+                Config.LineFlags flags = m_Config.Flags(lineId);
+                if (!flags.HasApproach)
+                {
+                    continue;
+                }
+
                 if (!LineKey.TryParse(lineId, out LineKey lineKey)
                     || !m_Access.TryLineEntity(lineKey, out Entity line)
                     || line == Entity.Null
@@ -1391,11 +1400,6 @@ namespace RapidTransitMod.Broadcasting
                 Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements = lineEntry.Value;
                 DynamicBuffer<RouteWaypoint> waypoints = m_Access.EntityManager.GetBuffer<RouteWaypoint>(line, true);
                 EnsureBroadcastRuntimeLineState(lineId, line);
-                Config.LineFlags flags = m_Config.Flags(lineId);
-                if (!flags.HasApproach)
-                {
-                    continue;
-                }
 
                 Dictionary<string, Dictionary<int, Entity>> approachCandidatesByStation = null;
                 foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> entry in lineAnnouncements)
@@ -1413,11 +1417,6 @@ namespace RapidTransitMod.Broadcasting
 
                     if (string.Equals(announcement.triggerId, TriggerConstants.PlatformApproachTriggerId, StringComparison.Ordinal))
                     {
-                        if (!flags.HasApproach)
-                        {
-                            continue;
-                        }
-
                         if (approachCandidatesByStation == null)
                         {
                             approachCandidatesByStation = ApproachCandidatesByStation(lineId, nowFrame);
@@ -1504,6 +1503,16 @@ namespace RapidTransitMod.Broadcasting
             state.TriggerFrame = basisFrame > TriggerConstants.PlatformDepartureSoonLeadFrames
                 ? basisFrame - TriggerConstants.PlatformDepartureSoonLeadFrames
                 : nowFrame;
+            MergeStopAnnouncementFrame(state.TriggerFrame.Value);
+        }
+
+        private void MergeStopAnnouncementFrame(uint triggerFrame)
+        {
+            if (!m_EarliestStopAnnouncementFrame.HasValue
+                || triggerFrame < m_EarliestStopAnnouncementFrame.Value)
+            {
+                m_EarliestStopAnnouncementFrame = triggerFrame;
+            }
         }
 
         private void RefreshActiveStops(Entity lineFilter)
@@ -1539,8 +1548,11 @@ namespace RapidTransitMod.Broadcasting
 
         private void TickStopAnnouncements(uint nowFrame)
         {
-            if (m_StopStateByVehicle.Count == 0)
+            if (!m_EarliestStopAnnouncementFrame.HasValue
+                || nowFrame < m_EarliestStopAnnouncementFrame.Value)
                 return;
+
+            m_EarliestStopAnnouncementFrame = null;
 
             foreach (KeyValuePair<Entity, PlatformStopState> entry in m_StopStateByVehicle)
             {
@@ -1548,10 +1560,20 @@ namespace RapidTransitMod.Broadcasting
                 PlatformStopState state = entry.Value;
                 if (state.DeparturePlayed
                     || state.DepartureRule == null
-                    || !state.TriggerFrame.HasValue
-                    || nowFrame < state.TriggerFrame.Value
-                    || m_Playback.PlatformActive(state.ArrivalSequence))
+                    || !state.TriggerFrame.HasValue)
                 {
+                    continue;
+                }
+
+                if (nowFrame < state.TriggerFrame.Value)
+                {
+                    MergeStopAnnouncementFrame(state.TriggerFrame.Value);
+                    continue;
+                }
+
+                if (m_Playback.PlatformActive(state.ArrivalSequence))
+                {
+                    MergeStopAnnouncementFrame(state.TriggerFrame.Value);
                     continue;
                 }
 

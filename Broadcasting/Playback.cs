@@ -87,6 +87,7 @@ namespace RapidTransitMod.Broadcasting
         public Task<AudioClip> PendingClipLoadTask;
         public AudioSource ActiveAudioSource;
         public string ActiveAudioAssetName = string.Empty;
+        public double AudioEndTime;
     }
 
     internal sealed class Sequences
@@ -154,7 +155,7 @@ namespace RapidTransitMod.Broadcasting
             m_ByVehicle[vehicle] = state;
             m_LastEventTextByVehicle[vehicle] = BuildEventText(triggerId, context);
             m_Access.InvalidatePanel();
-            Advance(state, nowFrame);
+            Advance(state, nowFrame, AudioSettings.dspTime);
             return true;
         }
 
@@ -209,7 +210,7 @@ namespace RapidTransitMod.Broadcasting
                 ResumeRealtime = 0f
             };
             m_ByPlatformKey[sequenceKey] = state;
-            return Advance(state, nowFrame) ? state : null;
+            return Advance(state, nowFrame, AudioSettings.dspTime) ? state : null;
         }
 
         internal bool ActiveForTrigger(Entity vehicle, string triggerId)
@@ -236,19 +237,13 @@ namespace RapidTransitMod.Broadcasting
                 return;
             }
 
+            double dspTime = AudioSettings.dspTime;
             List<Entity> completedVehicles = null;
             foreach (KeyValuePair<Entity, Sequence> entry in m_ByVehicle)
             {
                 Sequence state = entry.Value;
-                if (state == null || state.Vehicle == Entity.Null || !m_Access.EntityManager.Exists(state.Vehicle))
-                {
-                    completedVehicles ??= new List<Entity>();
-                    completedVehicles.Add(entry.Key);
-                    continue;
-                }
-
                 m_Audio.Move(state);
-                if (Advance(state, nowFrame))
+                if (Advance(state, nowFrame, dspTime))
                 {
                     continue;
                 }
@@ -268,7 +263,7 @@ namespace RapidTransitMod.Broadcasting
                     continue;
                 }
 
-                if (Advance(state, nowFrame))
+                if (Advance(state, nowFrame, dspTime))
                 {
                     continue;
                 }
@@ -301,7 +296,7 @@ namespace RapidTransitMod.Broadcasting
             m_Clips.Prune(nowFrame);
         }
 
-        private bool Advance(Sequence state, uint nowFrame)
+        private bool Advance(Sequence state, uint nowFrame, double dspTime)
         {
             if (state == null)
             {
@@ -310,12 +305,17 @@ namespace RapidTransitMod.Broadcasting
 
             if (state.ActiveAudioSource != null)
             {
+                if (dspTime < state.AudioEndTime)
+                {
+                    return true;
+                }
+
                 if (state.ActiveAudioSource.isPlaying)
                 {
                     return true;
                 }
 
-                m_Audio.Release(state);
+                ReleaseAudio(state);
             }
 
             if (state.PendingClipLoadTask != null)
@@ -346,7 +346,7 @@ namespace RapidTransitMod.Broadcasting
                 if (loadedClip == null)
                 {
                     state.NodeIndex++;
-                    return Advance(state, nowFrame);
+                    return Advance(state, nowFrame, dspTime);
                 }
 
                 m_Clips.Cache(pendingCacheKey, loadedClip, nowFrame);
@@ -357,7 +357,7 @@ namespace RapidTransitMod.Broadcasting
                 }
 
                 state.NodeIndex++;
-                return Advance(state, nowFrame);
+                return Advance(state, nowFrame, dspTime);
             }
 
             if (nowFrame < state.ResumeFrame
@@ -445,7 +445,7 @@ namespace RapidTransitMod.Broadcasting
                 return;
             }
 
-            m_Audio.Release(state);
+            ReleaseAudio(state);
             state.PendingClipLoadTask = null;
             state.PendingAssetName = string.Empty;
             m_ByVehicle.Remove(vehicle);
@@ -459,7 +459,7 @@ namespace RapidTransitMod.Broadcasting
                 return;
             }
 
-            m_Audio.Release(state);
+            ReleaseAudio(state);
             state.PendingClipLoadTask = null;
             state.PendingAssetName = string.Empty;
             m_ByPlatformKey.Remove(sequenceKey);
@@ -475,12 +475,12 @@ namespace RapidTransitMod.Broadcasting
         {
             foreach (KeyValuePair<Entity, Sequence> entry in m_ByVehicle)
             {
-                m_Audio.Release(entry.Value);
+                ReleaseAudio(entry.Value);
             }
 
             foreach (KeyValuePair<string, Sequence> entry in m_ByPlatformKey)
             {
-                m_Audio.Release(entry.Value);
+                ReleaseAudio(entry.Value);
             }
 
             m_ByVehicle.Clear();
@@ -581,6 +581,14 @@ namespace RapidTransitMod.Broadcasting
         }
 
         internal void ApplyVolume() => m_Audio.ApplyVolume(m_ByVehicle.Values, m_ByPlatformKey.Values);
+
+        private void ReleaseAudio(Sequence state)
+        {
+            if (m_Audio.Release(state))
+            {
+                m_Clips.RequestPrune();
+            }
+        }
 
         private static bool MatchesRuntimeScope(ModeScope scope, string lineId)
         {
@@ -720,6 +728,7 @@ namespace RapidTransitMod.Broadcasting
             AudioManager.AudioSourcePool.Play(audioSource);
             state.ActiveAudioSource = audioSource;
             state.ActiveAudioAssetName = assetName ?? string.Empty;
+            state.AudioEndTime = AudioSettings.dspTime + (double)clip.samples / clip.frequency;
             if (RtLog.VerboseEnabled
                 && state.Vehicle != Entity.Null
                 && (string.Equals(state.TriggerId, "stop_and_open", StringComparison.Ordinal)
@@ -735,17 +744,24 @@ namespace RapidTransitMod.Broadcasting
             return true;
         }
 
-        internal void Release(Sequence state)
+        internal bool Release(Sequence state)
         {
-            if (state?.ActiveAudioSource == null)
+            if (state == null)
             {
-                return;
+                return false;
+            }
+
+            state.AudioEndTime = 0d;
+            if (state.ActiveAudioSource == null)
+            {
+                return false;
             }
 
             AudioSource audioSource = state.ActiveAudioSource;
             state.ActiveAudioSource = null;
             state.ActiveAudioAssetName = string.Empty;
             AudioManager.AudioSourcePool.Release(audioSource);
+            return true;
         }
 
         internal void Move(Sequence state)
@@ -820,6 +836,7 @@ namespace RapidTransitMod.Broadcasting
         private readonly Dictionary<string, ClipEntry> m_Cache = new Dictionary<string, ClipEntry>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Task<AudioClip>> m_LoadTasks = new Dictionary<string, Task<AudioClip>>(StringComparer.OrdinalIgnoreCase);
         private Sequences m_Sequences;
+        private bool m_PrunePending;
 
         internal Clips(
             Config config,
@@ -864,7 +881,10 @@ namespace RapidTransitMod.Broadcasting
                 Clip = clip,
                 LastAccessFrame = nowFrame
             };
+            m_PrunePending = true;
         }
+
+        internal void RequestPrune() => m_PrunePending = true;
 
         internal Task<AudioClip> BeginLoad(string lineId, string assetName)
         {
@@ -952,6 +972,12 @@ namespace RapidTransitMod.Broadcasting
 
         internal void Prune(uint nowFrame)
         {
+            if (!m_PrunePending)
+            {
+                return;
+            }
+
+            m_PrunePending = false;
             if (m_Cache.Count <= Limit)
             {
                 return;
@@ -1155,6 +1181,7 @@ namespace RapidTransitMod.Broadcasting
 
         internal void Clear()
         {
+            m_PrunePending = false;
             m_LoadTasks.Clear();
             foreach (ClipEntry entry in m_Cache.Values)
             {
