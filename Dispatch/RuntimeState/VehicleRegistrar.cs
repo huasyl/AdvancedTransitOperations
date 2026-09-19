@@ -1101,6 +1101,8 @@ namespace RapidTransitMod
 
         private void ClearRebindRuntime(Entity vehicle, LifecycleKind lifecycle)
         {
+            if (lifecycle == LifecycleKind.Road)
+                m_Runtime.m_CommandApplier.RemoveRetireHandoff(vehicle);
             if (lifecycle == LifecycleKind.Rail)
             {
                 m_Runtime.m_TrackProjection.ClearVehicle(vehicle);
