@@ -17,6 +17,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
     {
         private const int DefaultTraceMaxMegabytes = 32;
         private const int DefaultTraceIntervalFrames = 16;
+        private const string TraceBaselinePoint = "trace start 请求所在的游戏主循环";
         private const string TraceSamplePoint = "宿主 OnUpdate 末尾，EndFrameBarrier 回放之前";
         private static readonly Dictionary<Type, TraceValueInfo> s_TraceValueInfos
             = new Dictionary<Type, TraceValueInfo>();
@@ -87,6 +88,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 ["consist"] = session.FollowConsist,
                 ["intervalFrames"] = session.IntervalFrames,
                 ["baselineFrame"] = session.StartFrame,
+                ["baselineSamplePoint"] = TraceBaselinePoint,
                 ["samplePoint"] = TraceSamplePoint,
                 ["sampleCount"] = session.SampleFrames.Count,
                 ["recordCount"] = session.Records.Count,
@@ -1063,6 +1065,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                         ["root"] = EntityNode(session.Root),
                         ["consist"] = session.FollowConsist,
                         ["intervalFrames"] = session.IntervalFrames,
+                        ["baselineSamplePoint"] = TraceBaselinePoint,
                         ["samplePoint"] = TraceSamplePoint,
                         ["baselineFrame"] = session.StartFrame,
                         ["lastCaptureFrame"] = session.LastCaptureFrame.HasValue

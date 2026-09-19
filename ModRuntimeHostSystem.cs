@@ -928,9 +928,16 @@ namespace RapidTransitMod
             m_Bypass.FlushProbeLogs(nowFrame);
             m_RuntimeHotPathProbe.FlushIfDue(nowFrame);
 #if RT_DEBUG_TOOLS
-            m_RuntimeProbe.Tick(nowFrame);
+            m_RuntimeProbe.CaptureFrame(nowFrame);
 #endif
         }
+
+#if RT_DEBUG_TOOLS
+        internal void PollProbeRequests()
+        {
+            m_RuntimeProbe?.PollRequests();
+        }
+#endif
 
         private void ApplyUiCommands(EntityCommandBuffer commandBuffer, ClockSnapshot clockSnapshot)
         {

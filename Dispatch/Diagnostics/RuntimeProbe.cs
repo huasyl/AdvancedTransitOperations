@@ -17,7 +17,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
     // 仅调试构建启用：文件请求只读取当前运行时与 ECS，不参与调度阶段。
     internal sealed partial class RuntimeProbe
     {
-        private const uint PollIntervalFrames = 15;
+        private const float PollIntervalSeconds = 0.1f;
         private const int DefaultLimit = 50;
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly string m_RequestDir;
@@ -26,9 +26,7 @@ namespace RapidTransitMod.Dispatch.Diagnostics
         private readonly Dictionary<Type, MethodInfo> m_ComponentReadMethods = new Dictionary<Type, MethodInfo>();
         private readonly Dictionary<Type, BufferReader> m_BufferReaders = new Dictionary<Type, BufferReader>();
         private static readonly Dictionary<Type, List<FieldInfo>> s_Fields = new Dictionary<Type, List<FieldInfo>>();
-        private uint m_NextPollFrame;
-        private uint m_LastFrame;
-        private bool m_HasLastFrame;
+        private float m_NextPollTime;
         private bool m_FileErrorLogged;
 
         internal RuntimeProbe(ModRuntimeHostSystem runtime)
@@ -42,19 +40,13 @@ namespace RapidTransitMod.Dispatch.Diagnostics
             Directory.CreateDirectory(m_ResponseDir);
         }
 
-        internal void Tick(uint frame)
+        internal void PollRequests()
         {
-            if (m_HasLastFrame && frame < m_LastFrame)
-                m_NextPollFrame = frame;
-            m_LastFrame = frame;
-            m_HasLastFrame = true;
-
-            CaptureTrace(frame);
-
-            if (frame < m_NextPollFrame)
+            float now = Time.realtimeSinceStartup;
+            if (now < m_NextPollTime)
                 return;
 
-            m_NextPollFrame = frame + PollIntervalFrames;
+            m_NextPollTime = now + PollIntervalSeconds;
             try
             {
                 string[] requests = Directory.GetFiles(m_RequestDir, "*.json");
@@ -72,6 +64,11 @@ namespace RapidTransitMod.Dispatch.Diagnostics
                 m_FileErrorLogged = true;
                 m_Runtime.log.Info("[RuntimeProbe] 文件通信失败: " + ex.GetType().Name + ": " + ex.Message);
             }
+        }
+
+        internal void CaptureFrame(uint frame)
+        {
+            CaptureTrace(frame);
         }
 
         private void Process(string requestPath)
