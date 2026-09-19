@@ -353,6 +353,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     DynamicBuffer<Game.Routes.RouteWaypoint> waypoints =
                         EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
                     if (!m_Announcements.Stations.TryCache(line, waypoints, out LineCache cache)
+                        || !m_Announcements.Stations.RefreshTurnbackStations(line, waypoints, cache)
                         || cache?.TurnbackStations == null
                         || cache.TurnbackStations.Length == 0)
                     {
@@ -386,6 +387,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                     DynamicBuffer<Game.Routes.RouteWaypoint> waypoints =
                         EntityManager.GetBuffer<Game.Routes.RouteWaypoint>(line, true);
                     if (!m_Announcements.Stations.TryCache(line, waypoints, out LineCache cache)
+                        || !m_Announcements.Stations.RefreshTurnbackStations(line, waypoints, cache)
                         || cache?.TurnbackStations == null)
                     {
                         return Array.Empty<BroadcastWorkbenchTurnbackPointDto>();

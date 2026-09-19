@@ -71,6 +71,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     oldClockSnapshot,
                     newClockSnapshot);
                 runtime.m_VehicleRegistry.ReprojectIdle(newClockSnapshot);
+                runtime.m_RuntimeEngine?.QueueOriginHoldReproject();
             };
             runtime.m_RuntimeEngine = new DispatchEngine(runtime.m_VehicleRegistry, runtime, runtime.PublishStopFact);
             runtime.m_LineSpawnControl = new LineSpawnControl(runtime);
@@ -96,8 +97,16 @@ namespace RapidTransitMod.Dispatch.Runtime
                 line => runtime.m_SchedulerApply.MarkPendingDirty(line.ToString()),
                 () => runtime.m_SchedulerApply.MarkPendingAllDirty());
             runtime.m_WorkbenchBridge.LineStore.SetDirtyCallbacks(
-                line => runtime.m_SchedulerApply.MarkPendingDirty(line.ToString()),
-                () => runtime.m_SchedulerApply.MarkPendingAllDirty());
+                line =>
+                {
+                    runtime.m_SchedulerApply.MarkPendingDirty(line.ToString());
+                    runtime.m_Announcements.RefreshLineRules(line);
+                },
+                () =>
+                {
+                    runtime.m_SchedulerApply.MarkPendingAllDirty();
+                    runtime.m_Announcements.RefreshLineRules();
+                });
             runtime.m_WorkbenchCatalogCache = runtime.m_WorkbenchBridge.CatalogCache();
             runtime.m_WorkbenchCatalogDirty = new CatalogDirty(
                 runtime.EntityManager,
@@ -127,6 +136,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 () => runtime.m_Bypass.RuntimeEnabled(),
                 () => runtime.m_Bypass.ClearAll(),
                 () => runtime.m_AnnouncementWorkbench.StopPreview(),
+                () => runtime.m_Announcements.RefreshLineRules(),
                 () => runtime.m_SchedulerApply.MarkPendingAllDirty());
             runtime.m_OverviewFeatureSettingsPersist = new RapidTransitMod.Overview.FeatureSettingsPersist(
                 runtime.EntityManager,
@@ -519,6 +529,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 runtime.m_StopRuntime.ReprojectDwell();
                 runtime.m_StopRuntime.ReprojectTimedStops(oldClockSnapshot, newClockSnapshot);
+                runtime.m_Announcements.RefreshLineRules();
             };
             runtime.m_BoardingFirstFrameGuardState = new NativeHashMap<Entity, byte>(1024, Allocator.Persistent);
             runtime.m_CachedWpIdx = new NativeHashMap<Entity, int>(1024, Allocator.Persistent);

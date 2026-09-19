@@ -12,6 +12,7 @@ using Game.UI.InGame;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Runtime;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
@@ -33,6 +34,11 @@ namespace RapidTransitMod.Broadcasting
             internal abstract SelectPanel SelectionPanel { get; }
             internal abstract NativeHashMap<Entity, int> CachedWaypointIndex { get; }
             internal abstract ClockSnapshot ClockSnapshot { get; }
+            internal abstract bool TryStopArrivalFrame(Entity vehicle, out uint arrivalFrame);
+            internal abstract uint? ReadDepartureFrame(Entity vehicle);
+            internal abstract bool IsTimedStop(Entity vehicle);
+            internal abstract void AppendOpenStopSessions(List<ActiveStopSession> sessions, Entity line);
+            internal abstract int LineDwellMinutes(Entity line);
             internal abstract bool TryViewerPosition(out float3 position);
             internal abstract bool TryEntityPosition(Entity entity, out float3 position);
 
@@ -55,7 +61,6 @@ namespace RapidTransitMod.Broadcasting
             internal abstract string StationName(Entity stopEntity);
             internal abstract string Name(Entity entity);
             internal abstract ulong Signature(DynamicBuffer<RouteWaypoint> waypoints);
-            internal abstract bool TryTurnbacks(LineTrackChain chain, List<TrackTurnbackStationBoundary> stationBoundaries);
             internal abstract bool TryWaypointIndex(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineWaypointIndexLookup lookup);
             internal abstract string DraftKey(string lineId);
             internal abstract string LineId(Entity line);
@@ -80,6 +85,14 @@ namespace RapidTransitMod.Broadcasting
         internal SelectPanel SelectionPanel => m_Host.SelectionPanel;
         internal NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.CachedWaypointIndex;
         internal ClockSnapshot ClockSnapshot => m_Host.ClockSnapshot;
+        internal bool TryStopArrivalFrame(Entity vehicle, out uint arrivalFrame)
+            => m_Host.TryStopArrivalFrame(vehicle, out arrivalFrame);
+        internal uint? ReadDepartureFrame(Entity vehicle) => m_Host.ReadDepartureFrame(vehicle);
+        internal bool IsTimedStop(Entity vehicle) => m_Host.IsTimedStop(vehicle);
+        internal void AppendOpenStopSessions(List<ActiveStopSession> sessions, Entity line)
+            => m_Host.AppendOpenStopSessions(sessions, line);
+
+        internal int LineDwellMinutes(Entity line) => m_Host.LineDwellMinutes(line);
         internal bool TryViewerPosition(out float3 position)
             => m_Host.TryViewerPosition(out position);
 
@@ -188,7 +201,6 @@ namespace RapidTransitMod.Broadcasting
         internal string StationName(Entity stopEntity) => m_Host.StationName(stopEntity);
         internal string Name(Entity entity) => m_Host.Name(entity);
         internal ulong Signature(DynamicBuffer<RouteWaypoint> waypoints) => m_Host.Signature(waypoints);
-        internal bool TryTurnbacks(LineTrackChain chain, List<TrackTurnbackStationBoundary> stationBoundaries) => m_Host.TryTurnbacks(chain, stationBoundaries);
         internal bool TryWaypointIndex(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineWaypointIndexLookup lookup) => m_Host.TryWaypointIndex(line, waypoints, out lookup);
         internal string DraftKey(string lineId) => m_Host.DraftKey(lineId);
         internal string LineId(Entity line) => m_Host.LineId(line);

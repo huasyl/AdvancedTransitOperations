@@ -624,6 +624,8 @@ export const nativeScheduleTranslationsEnUs = {
   "broadcast.delay.20": "2 s",
   "broadcast.delay.label": "Pause",
   "broadcast.trigger.approachStation": "Approaching Station",
+  "broadcast.trigger.arrivalStation": "Vehicle Arrived",
+  "broadcast.trigger.departureSoon": "Departing Soon",
   "broadcast.trigger.stopAndOpen": "Start Boarding",
   "broadcast.trigger.leaveStation": "Leaving Station",
   "broadcast.trigger.midRoute": "En Route Trigger",

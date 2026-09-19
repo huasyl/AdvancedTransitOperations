@@ -1,5 +1,6 @@
 using System;
 using Game.Routes;
+using RapidTransitMod.Core;
 using Unity.Entities;
 using Unity.Mathematics;
 using WorkbenchBackendService = RapidTransitMod.Broadcasting.WorkbenchBackend.Workbench;
@@ -40,9 +41,31 @@ namespace RapidTransitMod.Broadcasting
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> waypoints,
-            int currentWaypointIndex)
+            int currentWaypointIndex,
+            uint arrivalFrame)
         {
             m_Vehicles.StopOpened(vehicle, line, waypoints, currentWaypointIndex);
+            if (!m_Config.Enabled
+                || TransportModeProfile.GetProfile(
+                    TransportModeResolver.Resolve(m_Access.EntityManager, line)).Lifecycle != LifecycleKind.Rail)
+                return;
+
+            m_Platforms.StopOpened(
+                vehicle,
+                line,
+                waypoints,
+                currentWaypointIndex,
+                arrivalFrame);
+        }
+
+        internal void StopRestored(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentWaypointIndex)
+        {
+            if (m_Config.Enabled)
+                m_Platforms.StopRestored(vehicle, line, waypoints, currentWaypointIndex);
         }
 
         internal void ServiceEnded(
@@ -52,7 +75,16 @@ namespace RapidTransitMod.Broadcasting
             int previousWaypointIndex)
         {
             m_Vehicles.ServiceEnded(vehicle, line, waypoints, previousWaypointIndex);
+            EndStop(vehicle);
         }
+
+        internal void EndStop(Entity vehicle) => m_Platforms.EndStop(vehicle);
+
+        internal void DepartureChanged(Entity vehicle, uint departureFrame, uint nowFrame)
+            => m_Platforms.DepartureChanged(vehicle, departureFrame, nowFrame);
+
+        internal void TargetChanged(Entity vehicle, int targetMinute)
+            => m_Platforms.TargetChanged(vehicle, targetMinute);
 
         internal void BusDeparted(
             Entity vehicle,
@@ -194,6 +226,10 @@ namespace RapidTransitMod.Broadcasting
         {
             m_Platforms.ClearLineChecks();
         }
+
+        internal void RefreshLineRules() => m_Platforms.RefreshLineRules();
+
+        internal void RefreshLineRules(LineKey line) => m_Platforms.RefreshLineRules(line);
 
         internal void RemoveAsset(string assetName)
         {

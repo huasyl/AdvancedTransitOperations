@@ -138,7 +138,18 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
 
                 IncrementWorkbenchSnapshotVersion();
                 SaveWorkbench();
-                m_Announcements.ClearLineChecks();
+                foreach (string lineId in preparedCommits.Keys)
+                {
+                    if (LineKey.TryParse(lineId, out LineKey line))
+                    {
+                        m_Announcements.RefreshLineRules(line);
+                    }
+                    else
+                    {
+                        m_Announcements.ClearLineChecks();
+                        break;
+                    }
+                }
 
                 return new ApplyResult
                 {
@@ -199,7 +210,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         out BroadcastWorkbenchPlatformAnnouncementDto normalized))
                 {
                     throw new InvalidOperationException(
-                        "Only approach_station platform announcements are supported.");
+                        "Unsupported platform announcement trigger.");
                 }
                 ValidateRuleAssetNodes(normalized.nodes);
                 platforms[Platforms.Key(normalized.stationId, normalized.uiTriggerId)] = normalized;

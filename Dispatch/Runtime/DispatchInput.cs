@@ -30,6 +30,8 @@ namespace RapidTransitMod.Dispatch.Runtime
         public readonly float ObservedLapDistance;
         public readonly bool HadStopSession;
         public readonly bool BoardingChanged;
+        public readonly bool OriginDeparturePending;
+        public readonly bool OriginDepartureConfirmed;
         public readonly BypassControlResult BypassControl;
 
         public DispatchInput(
@@ -58,6 +60,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             float observedLapDistance,
             bool hadStopSession,
             bool boardingChanged,
+            bool originDeparturePending,
+            bool originDepartureConfirmed,
             BypassControlResult bypassControl)
         {
             Vehicle = vehicle;
@@ -85,6 +89,8 @@ namespace RapidTransitMod.Dispatch.Runtime
             ObservedLapDistance = observedLapDistance;
             HadStopSession = hadStopSession;
             BoardingChanged = boardingChanged;
+            OriginDeparturePending = originDeparturePending;
+            OriginDepartureConfirmed = originDepartureConfirmed;
             BypassControl = bypassControl;
         }
     }

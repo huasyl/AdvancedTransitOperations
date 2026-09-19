@@ -47,12 +47,6 @@ namespace RapidTransitMod
             m_RoadRetireHandoff = new RoadRetireHandoff(runtime, m_RetireHost, m_RoadCommandHost);
         }
 
-        internal void CommitAssignedSlotHold(Entity vehicle, int slot, EntityCommandBuffer ecb)
-        {
-            if (TryGetDispatchActions(vehicle, out DispatchActions actions, out _))
-                actions.CommitAssignedSlotHold(vehicle, slot, ecb);
-        }
-
         internal void HoldDeparture(
             Entity vehicle,
             ref Game.Vehicles.PublicTransport publicTransport,

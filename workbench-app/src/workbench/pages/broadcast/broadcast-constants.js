@@ -101,6 +101,8 @@ const TRIGGER_OPTIONS = [
 
 const PLATFORM_TRIGGER_OPTIONS = [
   { id: "approach_station", labelKey: "broadcast.trigger.approachStation" },
+  { id: "arrival_station", labelKey: "broadcast.trigger.arrivalStation" },
+  { id: "departure_soon", labelKey: "broadcast.trigger.departureSoon" },
 ];
 
 const RELEASE_HIDDEN_VEHICLE_TRIGGER_IDS = ["bypass_waiting"];
@@ -112,13 +114,32 @@ function resolvePlatformUiTriggerId(triggerId) {
   ) {
     return "approach_station";
   }
+  if (
+    triggerId === "arrival_station" ||
+    triggerId === "platform_arrival_station"
+  ) {
+    return "arrival_station";
+  }
+  if (
+    triggerId === "departure_soon" ||
+    triggerId === "platform_departure_soon"
+  ) {
+    return "departure_soon";
+  }
   return "";
 }
 
 function resolvePlatformRuntimeTriggerId(triggerId) {
-  return resolvePlatformUiTriggerId(triggerId) === "approach_station"
-    ? "platform_approach_station"
-    : "";
+  switch (resolvePlatformUiTriggerId(triggerId)) {
+    case "approach_station":
+      return "platform_approach_station";
+    case "arrival_station":
+      return "platform_arrival_station";
+    case "departure_soon":
+      return "platform_departure_soon";
+    default:
+      return "";
+  }
 }
 
 const LINE_OPTIONS = [

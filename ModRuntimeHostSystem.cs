@@ -619,6 +619,7 @@ namespace RapidTransitMod
             m_RoadEventSource.BeginFrame();
             bool railSourceFrame = false;
             m_RuntimeFramePlan.BeginFrame();
+            m_RuntimeEngine.ApplyOriginHoldReproject();
             ClearFrameBuffers();
             m_SchedulerApply.BeginFrame();
             EntityCommandBuffer commandBuffer = m_EndFrameBarrier.CreateCommandBuffer();
@@ -889,6 +890,11 @@ namespace RapidTransitMod
             m_Observation.TickMonitor(clockSnapshot.NowDate);
             m_WorkbenchBridge.FlushMonitorChanges();
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Events);
+            m_RailEventSource.ConsumeDepartureFrameWrites(
+                (vehicle, departureFrame) => m_Announcements.DepartureChanged(
+                    vehicle,
+                    departureFrame,
+                    simulationFrame));
             m_Announcements.Tick(simulationFrame, railSourceFrame);
             m_RuntimeHotPathProbe.MarkCost(ref runtimeCost, RuntimeCostPhase.Announcements);
 
@@ -2009,20 +2015,31 @@ namespace RapidTransitMod
             if (fact.Kind == StopFactKind.Restored
                 || fact.Kind == StopFactKind.Recovered)
             {
-                if (RuntimePorts.TryResolveVehicleLifecycle(this, fact.Vehicle, out LifecycleKind restoredLifecycle)
-                    && (restoredLifecycle == LifecycleKind.Rail || restoredLifecycle == LifecycleKind.Road))
+                if (!RuntimePorts.TryResolveVehicleLifecycle(this, fact.Vehicle, out LifecycleKind restoredLifecycle))
+                    return;
+
+                if (restoredLifecycle == LifecycleKind.Rail
+                    && fact.Line != Entity.Null
+                    && EntityManager.Exists(fact.Line)
+                    && EntityManager.HasBuffer<RouteWaypoint>(fact.Line))
                 {
-                    PassengerFlow.Runtime.Current?.RestoreStop(
+                    m_Announcements.StopRestored(
                         fact.Vehicle,
                         fact.Line,
-                        fact.WaypointIndex,
-                        fact.Frame);
+                        EntityManager.GetBuffer<RouteWaypoint>(fact.Line, true),
+                        fact.WaypointIndex);
                 }
+                PassengerFlow.Runtime.Current?.RestoreStop(
+                    fact.Vehicle,
+                    fact.Line,
+                    fact.WaypointIndex,
+                    fact.Frame);
                 return;
             }
 
             if (fact.Kind == StopFactKind.Cancelled)
             {
+                m_Announcements.EndStop(fact.Vehicle);
                 m_Observation.CancelBusSeg(fact.Vehicle);
                 if (RuntimePorts.TryResolveVehicleLifecycle(this, fact.Vehicle, out LifecycleKind cancelledLifecycle)
                     && (cancelledLifecycle == LifecycleKind.Rail || cancelledLifecycle == LifecycleKind.Road))
@@ -2089,7 +2106,12 @@ namespace RapidTransitMod
                 true,
                 fact.WaypointIndex,
                 fact.PreviousWaypointIndex);
-            m_Announcements.StopOpened(fact.Vehicle, fact.Line, waypoints, fact.WaypointIndex);
+            m_Announcements.StopOpened(
+                fact.Vehicle,
+                fact.Line,
+                waypoints,
+                fact.WaypointIndex,
+                fact.Frame);
             if (RuntimePorts.TryResolveVehicleLifecycle(this, fact.Vehicle, out openedLifecycle)
                 && (openedLifecycle == LifecycleKind.Rail || openedLifecycle == LifecycleKind.Road))
             {
@@ -2155,22 +2177,29 @@ namespace RapidTransitMod
 
         private void ConsumeDispatchEvent(DispatchEvent dispatchEvent)
         {
-            if (dispatchEvent.Kind == DispatchFactKind.Target
-                && dispatchEvent.CurrentValue >= 0
-                && dispatchEvent.Line != Entity.Null)
+            if (dispatchEvent.Kind == DispatchFactKind.Target)
             {
-                m_Observation.BindTarget(
-                    dispatchEvent.Line,
+                m_Announcements.TargetChanged(
                     dispatchEvent.Vehicle,
-                    dispatchEvent.CurrentValue,
-                    dispatchEvent.Frame,
-                    "dispatch-target");
+                    dispatchEvent.CurrentValue);
+
+                if (dispatchEvent.CurrentValue >= 0
+                    && dispatchEvent.Line != Entity.Null)
+                {
+                    m_Observation.BindTarget(
+                        dispatchEvent.Line,
+                        dispatchEvent.Vehicle,
+                        dispatchEvent.CurrentValue,
+                        dispatchEvent.Frame,
+                        "dispatch-target");
+                }
                 return;
             }
 
             if (dispatchEvent.Kind == DispatchFactKind.LaunchConfirmed)
             {
                 DispatchBusinessFact fact = dispatchEvent.Fact;
+                m_Announcements.EndStop(dispatchEvent.Vehicle);
                 bool hasLaunchRows = m_LineView.TryLaunchRows(
                         dispatchEvent.Line,
                         fact.SlotMinute,

@@ -150,11 +150,22 @@ namespace RapidTransitMod
                 if (claim.Vehicle == Entity.Null || !EntityManager.Exists(claim.Vehicle))
                     continue;
 
+                bool holding = m_Runtime.m_VehicleView.TryGetState(
+                    claim.Vehicle,
+                    out VehicleState state)
+                    && state == VehicleState.Holding;
                 m_Runtime.m_VehicleRegistry.SetTarget(claim.Vehicle, claim.Target);
                 if (claim.ClearIdle)
                     m_Runtime.m_VehicleRegistry.ClearIdle(claim.Vehicle);
-                if (claim.CommitHold)
-                    m_Runtime.m_CommandApplier.CommitAssignedSlotHold(claim.Vehicle, claim.Target, ecb);
+                if (claim.CommitHold && holding)
+                    m_Runtime.m_CommandApplier.HoldUntil(
+                        claim.Vehicle,
+                        m_Runtime.m_RuntimeEngine.OriginReleaseFrame(
+                            claim.Vehicle,
+                            claim.Target,
+                            m_Runtime.m_SimulationSystem.frameIndex,
+                            clockSnapshot),
+                        ecb);
             }
         }
 
