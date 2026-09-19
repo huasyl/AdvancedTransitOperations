@@ -12,13 +12,9 @@ Advanced Transit Operations (ATO) is a public transit dispatch mod for Cities: S
 
 The current version supports Train, Subway, Tram, and Bus. Supported languages: English, Simplified Chinese, and Japanese.
 
-## What's New in 0.4.1
+## What's New in 0.4.2
 
-This update adds signal priority for buses and trams, while also improving the timetable editing workflow.
-
-Buses and trams can now request priority before reaching intersections. When used together with dedicated bus or tram lanes, this can significantly improve transit efficiency. In response to community feedback, ATO also adds Quick Add and the ability to copy departure times from other lines, making it easier to set up origin departures.
-
-This update also includes further performance optimizations and multiple bug fixes. In testing, mod CPU overhead was reduced by approximately 30% compared with the previous version.
+This update brings several completed new features and improvements, while also prioritizing fixes for a few issues that had a noticeable impact on gameplay. Some previously planned and announced features are not included in this version yet, but they are still in development and will be added in an upcoming update soon.
 
 ## Core Gameplay
 
@@ -72,11 +68,9 @@ This mod does not use Harmony.
 
 Other mods that automatically adjust vehicle count, departure intervals, boarding speed, the game’s time flow, or the public transport vehicle lifecycle may also cause conflicts. Please refer to GitHub for complete compatibility details.
 
-ATO writes only its own configuration and runtime data into the save file and does not permanently modify vanilla line, station, or vehicle assets. If the mod is disabled or removed, vanilla public transport will continue to run according to the game’s own logic. Backing up important saves is still recommended.
+ATO only stores its own data and does not permanently modify vanilla assets. Disabling or removing it should not damage saves or leave persistent simulation issues, and public transport will return to vanilla behavior. ATO is still in beta, so backing up important saves is recommended. Development, testing, validation, and release decisions remain under developer control, with AI tools used only to assist parts of the workflow.
 
-ATO is still in beta. If you encounter an issue, or have any feedback or suggestions, you are welcome to report it on the forum or GitHub:
-
-GitHub: https://github.com/huasyl/AdvancedTransitOperations
+If you encounter an issue, or have any feedback or suggestions, you are welcome to report it on the forum or GitHub: GitHub: https://github.com/huasyl/AdvancedTransitOperations
 
 If you find ATO fun or helpful for operating your public transport network, please consider giving the mod a like. Thank you for playing and supporting ATO!
 
@@ -85,17 +79,11 @@ If you find ATO fun or helpful for operating your public transport network, plea
 
 Advanced Transit Operations（ATO）是面向《城市：天际线 2》公共交通运营的调度 Mod。
 
-如果您已经厌倦了只靠车辆数量和间隔滑块控制公共交通，或者希望更精确地安排线路发车时间、设计快慢车运营方案、制作车辆和站台广播，ATO 可以为您的公共交通系统提供更多运营可能。
-
 当前支持火车、地铁、有轨电车和公交。支持语言：英语、简体中文、日语。
 
-## v0.4.1 更新内容
+## v0.4.2 更新内容
 
-本次更新为公交和有轨电车加入了信号优先功能，并优化了时刻表的编辑流程。
-
-公交和有轨电车现在可以在经过路口前申请优先通行，配合公交专用道或有轨电车专用道使用，可极大提升公共交通的运行效率。此外，响应社区的意见，模组新增了快速添加和复制始发时刻功能，进一步简化始发时刻的添加流程。
-
-本次更新还进一步降低了性能开销，并修复了多项问题。经测试，本次更新相比上一版本可降低约 30% 的模组 CPU 开销
+本次更新先带来了几项已经完成的新功能和改进，并优先修复了一些较为影响游戏体验的问题。部分此前计划并向社区提到的功能尚未包含在本版本中，目前仍在开发，将会很快在后续更新中推出。
 
 ## 核心玩法
 
@@ -149,11 +137,9 @@ ATO 有两个界面。左键单击游戏右上角的 Mod 按钮打开工作台�
 
 自动调整车辆数、发车间隔、上客速度、游戏时间流速或车辆运行流程的其他 Mod 也可能产生冲突。完整兼容说明请参阅 GitHub。
 
-ATO 只向存档写入自身的配置和运行数据，不会永久修改原版线路、车站或车辆资产。关闭或移除后，公共交通仍会按照游戏自身的逻辑运行。重要存档仍建议提前备份。
+ATO 只向存档写入自身的配置和运行数据，不会永久修改原版线路、车站或车辆资产。关闭或移除后，不应损坏存档或留下持续性的模拟异常，公共交通将恢复按照游戏自身逻辑运行。ATO 目前仍处于 Beta 阶段，因此重要存档仍建议提前备份。模组的开发、测试、验证和版本发布均由开发者主导和把控，AI 工具仅用于辅助部分开发流程。
 
-ATO 目前仍处于 Beta 阶段。如果您遇到问题，或有任何意见和建议，欢迎通过论坛或 GitHub 反馈：
-
-GitHub：https://github.com/huasyl/AdvancedTransitOperations
+如果您遇到问题，或有任何意见和建议，欢迎通过论坛或 GitHub 反馈： GitHub：https://github.com/huasyl/AdvancedTransitOperations
 
 如果您觉得 ATO 好玩，或者它对您的公共交通运营有所帮助，欢迎为本 Mod 点个赞。感谢您的游玩与支持！
 </LongDescription>
@@ -176,7 +162,7 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.4.1" />
+  <ModVersion Value="0.4.2" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -187,29 +173,18 @@ GitHub：https://github.com/huasyl/AdvancedTransitOperations
   <ChangeLog>
 ## New Features
 
-- Added signal priority for buses and trams.
-- Added Quick Add, allowing trips to be added quickly by setting the trip count for each time period with fewer repetitive steps.
-- Added the ability to copy departure times from other lines.
-
-## Performance
-
-- Reduced the update frequency for buses to match the vanilla game's update interval.
-- Reduced track path scanning. Cached track paths are now rescanned only when the route or pathfinding changes.
-- Platform broadcasts now check for vehicles based on camera distance. Platforms outside the audible range no longer perform unnecessary scans.
+- Added two new trigger conditions for platform announcements: Before Departure and On Arrival.
 
 ## Improvements
 
-- Selection panels can now open automatically. This behavior can still be disabled in Settings.
-- Buses and trams no longer display the "Local" badge.
+- Improved line sorting in dropdown menus.
+- Improved the accuracy of track positioning.
 
 ## Bug Fixes
 
-- Fixed an issue where bus lines could incorrectly enter the track path building process.
-- Fixed an issue where manually clicking Depart in the Selection Panel did not properly end the dwell state when a per-stop timetable was active.
-- Fixed an issue where detailed timetables could not be saved after reloading a save because previously calculated theoretical results had become invalid.
-- Fixed an issue where ATO dispatching did not fully pause after a line was disabled.
-- Fixed delayed cleanup of deleted bus lines and an issue where vehicles assigned to a new line could remain bound to their previous line.
-- Fixed an issue where vehicles queueing before the origin stop could be incorrectly marked as having arrived at the origin, causing subsequent departures to occur without proper departure control.
+- Fixed an issue where buses could wait too long at the first stop after being idle.
+- Fixed an issue where rail vehicles could sometimes start boarding passengers at the wrong station.
+- Fixed a rare issue where rail vehicles could incorrectly start boarding when congested before reaching the first stop.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />
