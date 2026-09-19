@@ -3,7 +3,8 @@ import WorkbenchDropdown from "../../../shared/WorkbenchDropdown";
 import {
   getLocalizedDepotLabel,
   getLocalizedLineName,
-  getLocalizedOriginLabel
+  getLocalizedOriginLabel,
+  sortLineOptions
 } from "../schedule-catalog";
 import { DemoDisplayField, DemoTextField } from "./ScheduleFields";
 
@@ -15,7 +16,7 @@ export default function ScheduleTopbar({ topbar, refs, actions }) {
       <WorkbenchDropdown
         label={t("nativeSchedule.topbar.line")}
         value={getLocalizedLineName(topbar.selectedLine, t)}
-        options={topbar.lineOptions.map((line) => ({
+        options={sortLineOptions(topbar.lineOptions, t).map((line) => ({
           value: line?.id || "",
           label: getLocalizedLineName(line, t),
           active: line?.id === topbar.selectedLineId
