@@ -280,6 +280,37 @@ export function getLocalizedLineName(line, t) {
   return line?.nameKey ? t(line.nameKey) : "";
 }
 
+export function sortLineOptions(lineOptions, t) {
+  return lineOptions
+    .map((line) => ({
+      line,
+      parts: getLocalizedLineName(line, t).toLowerCase().match(/[0-9]+|[^0-9]+/g) || []
+    }))
+    .sort((left, right) => {
+      for (let index = 0; index < Math.min(left.parts.length, right.parts.length); index += 1) {
+        const leftPart = left.parts[index];
+        const rightPart = right.parts[index];
+        let result;
+        if (/^[0-9]/.test(leftPart) && /^[0-9]/.test(rightPart)) {
+          const leftNumber = leftPart.replace(/^0+/, "") || "0";
+          const rightNumber = rightPart.replace(/^0+/, "") || "0";
+          result = leftNumber.length - rightNumber.length
+            || (leftNumber < rightNumber ? -1 : leftNumber > rightNumber ? 1 : 0);
+        } else {
+          result = leftPart.localeCompare(rightPart);
+        }
+        if (result !== 0) return result;
+      }
+
+      const result = left.parts.length - right.parts.length;
+      if (result !== 0) return result;
+      const leftId = left.line?.id || "";
+      const rightId = right.line?.id || "";
+      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    })
+    .map(({ line }) => line);
+}
+
 export function directionFromOffsetMode(offsetMode) {
   return offsetMode === "before" ? "early" : "late";
 }
