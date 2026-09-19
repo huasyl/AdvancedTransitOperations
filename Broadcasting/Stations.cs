@@ -85,8 +85,6 @@ namespace RapidTransitMod.Broadcasting
         public readonly string NextStationName;
         public readonly string TerminalStationId;
         public readonly string TerminalStationName;
-        public readonly string TurnbackStationId;
-        public readonly string TurnbackStationName;
 
         public VehicleStation(
             string lineId,
@@ -98,9 +96,7 @@ namespace RapidTransitMod.Broadcasting
             string nextStationId,
             string nextStationName,
             string terminalStationId,
-            string terminalStationName,
-            string turnbackStationId,
-            string turnbackStationName)
+            string terminalStationName)
         {
             LineId = lineId;
             CurrentStopEntity = currentStopEntity;
@@ -112,8 +108,6 @@ namespace RapidTransitMod.Broadcasting
             NextStationName = nextStationName ?? string.Empty;
             TerminalStationId = terminalStationId ?? string.Empty;
             TerminalStationName = terminalStationName ?? string.Empty;
-            TurnbackStationId = turnbackStationId ?? string.Empty;
-            TurnbackStationName = turnbackStationName ?? string.Empty;
         }
     }
 
@@ -129,6 +123,9 @@ namespace RapidTransitMod.Broadcasting
         public int[] NextDistinctStationWaypointByWaypoint = Array.Empty<int>();
         public int TerminalStationWaypointIndex = -1;
         public ResolvedStation[] TurnbackStations = Array.Empty<ResolvedStation>();
+        public ulong? TurnbackChainSignature;
+        public readonly Dictionary<int, ResolvedStation> TurnbackByCursor =
+            new Dictionary<int, ResolvedStation>();
     }
 
     internal sealed class Stations
@@ -176,97 +173,53 @@ namespace RapidTransitMod.Broadcasting
         }
 
         internal bool TryTriggerContext(
-        Entity vehicle,
-        Entity line,
-        DynamicBuffer<RouteWaypoint> waypoints,
-        int currentStopWaypointIndex,
-        out TriggerContext context)
-    {
-            return TryTriggerContext(
-            vehicle,
-            line,
-            waypoints,
-            currentStopWaypointIndex,
-            out context,
-            out _);
-    }
-
-        internal bool TryTriggerContext(
-        Entity vehicle,
-        Entity line,
-        DynamicBuffer<RouteWaypoint> waypoints,
-        int currentStopWaypointIndex,
-        out TriggerContext context,
-        out VehicleStation stationContext)
-    {
-        context = default;
-        stationContext = default;
-        if (!m_Config.Enabled)
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int currentStopWaypointIndex,
+            out TriggerContext context,
+            out VehicleStation stationContext)
         {
-            return false;
+            context = default;
+            stationContext = default;
+            if (!m_Config.Enabled
+                || !TryVehicle(
+                    vehicle,
+                    line,
+                    waypoints,
+                    currentStopWaypointIndex,
+                    out stationContext))
+            {
+                return false;
+            }
+
+            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
+                m_Config.Bindings(stationContext.LineId);
+            List<BroadcastWorkbenchStationBindingDto> currentBindings = Bindings(lineBindings, stationContext.CurrentStationId);
+            List<BroadcastWorkbenchStationBindingDto> nextBindings = Bindings(lineBindings, stationContext.NextStationId);
+            List<BroadcastWorkbenchStationBindingDto> terminalBindings = Bindings(lineBindings, stationContext.TerminalStationId);
+            ResolvedStation turnbackStation = null;
+            if (TransportModeResolver.Resolve(m_Access.EntityManager, line) != TransitMode.Bus
+                && TryCache(line, waypoints, out LineCache cache))
+                TryTurnback(vehicle, line, waypoints, cache, out turnbackStation);
+            List<BroadcastWorkbenchStationBindingDto> turnbackBindings = Bindings(lineBindings, turnbackStation?.StationId);
+            context = new TriggerContext(
+                stationContext.LineId,
+                stationContext.CurrentStopEntity,
+                stationContext.CurrentStationName,
+                stationContext.NextStationName,
+                stationContext.TerminalStationName,
+                turnbackStation?.Name ?? string.Empty,
+                AssetName(currentBindings, 1),
+                AssetName(nextBindings, 1),
+                AssetName(terminalBindings, 1),
+                AssetName(turnbackBindings, 1),
+                currentBindings,
+                nextBindings,
+                terminalBindings,
+                turnbackBindings);
+            return true;
         }
-            if (!TryVehicle(
-                vehicle,
-                line,
-                waypoints,
-                currentStopWaypointIndex,
-                out stationContext))
-        {
-            return false;
-        }
-
-            return TryTriggerContext(stationContext, out context);
-    }
-
-        internal bool TryTriggerContext(
-        VehicleStation stationContext,
-        out TriggerContext context)
-    {
-            return TryTriggerContext(
-            stationContext,
-            string.Empty,
-            null,
-            out context);
-    }
-
-        internal bool TryTriggerContext(
-        VehicleStation stationContext,
-        string overrideTurnbackStationName,
-        List<BroadcastWorkbenchStationBindingDto> overrideTurnbackStationBindings,
-        out TriggerContext context)
-    {
-        context = default;
-        Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
-            m_Config.Bindings(stationContext.LineId);
-        List<BroadcastWorkbenchStationBindingDto> currentStationBindings =
-            Bindings(lineBindings, stationContext.CurrentStationId);
-        List<BroadcastWorkbenchStationBindingDto> nextStationBindings =
-            Bindings(lineBindings, stationContext.NextStationId);
-        List<BroadcastWorkbenchStationBindingDto> terminalStationBindings =
-            Bindings(lineBindings, stationContext.TerminalStationId);
-        List<BroadcastWorkbenchStationBindingDto> turnbackStationBindings =
-            overrideTurnbackStationBindings ?? Bindings(lineBindings, stationContext.TurnbackStationId);
-        string turnbackStationName = !string.IsNullOrEmpty(overrideTurnbackStationName)
-            ? overrideTurnbackStationName
-            : stationContext.TurnbackStationName;
-
-        context = new TriggerContext(
-            stationContext.LineId,
-            stationContext.CurrentStopEntity,
-            stationContext.CurrentStationName,
-            stationContext.NextStationName,
-            stationContext.TerminalStationName,
-            turnbackStationName,
-            AssetName(currentStationBindings, 1),
-            AssetName(nextStationBindings, 1),
-            AssetName(terminalStationBindings, 1),
-            AssetName(turnbackStationBindings, 1),
-            currentStationBindings,
-            nextStationBindings,
-            terminalStationBindings,
-            turnbackStationBindings);
-        return true;
-    }
 
         internal bool TryStation(
         Entity line,
@@ -330,6 +283,114 @@ namespace RapidTransitMod.Broadcasting
             null);
         return true;
     }
+
+        internal bool TryStopStation(
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            out ResolvedStation station)
+        {
+            station = null;
+            return TryCache(line, waypoints, out LineCache cache)
+                && TryStationByWaypoint(cache, waypointIndex, out station);
+        }
+
+        internal bool TryPlatformContext(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            BroadcastWorkbenchPlatformAnnouncementDto announcement,
+            out TriggerContext context,
+            out ResolvedStation currentStation,
+            int nextWaypointIndex = -1)
+        {
+            context = default;
+            currentStation = null;
+            if (!TryCache(line, waypoints, out LineCache cache)
+                || !TryStationByWaypoint(cache, waypointIndex, out currentStation))
+            {
+                return false;
+            }
+
+            bool current = false;
+            bool next = false;
+            bool terminal = false;
+            bool turnback = false;
+            foreach (BroadcastWorkbenchRuleNodeDto node in announcement.nodes)
+            {
+                if (node == null || !string.Equals(node.type, "variable", StringComparison.Ordinal))
+                    continue;
+
+                switch (node.nameKey)
+                {
+                    case "broadcast.variable.current":
+                        current = true;
+                        break;
+                    case "broadcast.variable.next":
+                        next = true;
+                        break;
+                    case "broadcast.variable.terminal":
+                        terminal = true;
+                        break;
+                    case "broadcast.variable.turnback":
+                        turnback = true;
+                        break;
+                }
+            }
+
+            ResolvedStation nextStation = null;
+            ResolvedStation terminalStation = null;
+            ResolvedStation turnbackStation = null;
+            if (next)
+            {
+                if (nextWaypointIndex >= 0)
+                    TryStationByWaypoint(cache, nextWaypointIndex, out nextStation);
+                else
+                    TryNextStationAfterWaypoint(cache, waypointIndex, out nextStation);
+            }
+            if (terminal)
+                terminalStation = cache.Stations[0];
+            if (turnback)
+            {
+                if (nextWaypointIndex == waypointIndex)
+                {
+                    if (RefreshTurnbackStations(line, waypoints, cache))
+                        turnbackStation = TurnbackAfterWaypoint(cache, currentStation);
+                }
+                else
+                    TryTurnback(vehicle, line, waypoints, cache, out turnbackStation);
+            }
+
+            // 出库接近始发站时尚无本站，下一站与终点仍是始发站。
+            current &= nextWaypointIndex != waypointIndex;
+            string lineId = m_Access.DraftKey(m_Access.LineId(line));
+            Dictionary<string, List<BroadcastWorkbenchStationBindingDto>> lineBindings =
+                current || next || terminal || turnback ? m_Config.Bindings(lineId) : null;
+            List<BroadcastWorkbenchStationBindingDto> currentBindings = current
+                ? Bindings(lineBindings, currentStation.StationId)
+                : null;
+            List<BroadcastWorkbenchStationBindingDto> nextBindings = Bindings(lineBindings, nextStation?.StationId);
+            List<BroadcastWorkbenchStationBindingDto> terminalBindings = Bindings(lineBindings, terminalStation?.StationId);
+            List<BroadcastWorkbenchStationBindingDto> turnbackBindings = Bindings(lineBindings, turnbackStation?.StationId);
+
+            context = new TriggerContext(
+                lineId,
+                currentStation.StopEntity,
+                current ? currentStation.Name : string.Empty,
+                nextStation?.Name ?? string.Empty,
+                terminalStation?.Name ?? string.Empty,
+                turnbackStation?.Name ?? string.Empty,
+                AssetName(currentBindings, 1),
+                AssetName(nextBindings, 1),
+                AssetName(terminalBindings, 1),
+                AssetName(turnbackBindings, 1),
+                currentBindings,
+                nextBindings,
+                terminalBindings,
+                turnbackBindings);
+            return true;
+        }
 
         internal static ResolvedStation TurnbackAfterWaypoint(
         LineCache cache,
@@ -567,49 +628,34 @@ namespace RapidTransitMod.Broadcasting
                 ? stationArray[0].WaypointIndex
                 : -1
         };
-        cache.TurnbackStations = lifecycle == LifecycleKind.Rail
-            ? ResolveTurnbackStations(line, waypoints, cache)
-            : Array.Empty<ResolvedStation>();
+        cache.TurnbackStations = Array.Empty<ResolvedStation>();
         m_LineCaches[line] = cache;
         return stationArray.Length > 0;
     }
 
-        internal string NormalizeRepresentativeStationId(
-        Entity line,
-        DynamicBuffer<RouteWaypoint> waypoints,
-        string stationId)
-    {
-        return stationId ?? string.Empty;
-    }
-
-    private ResolvedStation[] ResolveTurnbackStations(
+    internal bool RefreshTurnbackStations(
         Entity line,
         DynamicBuffer<RouteWaypoint> waypoints,
         LineCache cache)
     {
-        if (line == Entity.Null
-            || waypoints.Length == 0
-            || cache == null
-            || !m_Access.TryChain(line, waypoints, out LineTrackChain chain)
-            || chain == null)
-        {
-            return Array.Empty<ResolvedStation>();
-        }
+        if (!m_Access.TryChain(line, waypoints, out LineTrackChain chain) || chain == null)
+            return false;
 
-        List<TrackTurnbackStationBoundary> stationBoundaries = new List<TrackTurnbackStationBoundary>();
-        if (!m_Access.TryTurnbacks(chain, stationBoundaries))
+        RefreshTurnbackCache(cache, chain);
+        if (cache.TurnbackStations == null)
         {
-            return Array.Empty<ResolvedStation>();
+            List<ResolvedStation> stations = new List<ResolvedStation>();
+            foreach (TurnbackBoundary boundary in chain.TurnbackBoundaries)
+            {
+                if (m_Access.TryTurnback(chain, boundary, out TrackTurnbackStationBoundary stationBoundary))
+                {
+                    TryTurnbackFromBoundary(cache, stationBoundary, out ResolvedStation station);
+                    stations.Add(station);
+                }
+            }
+            cache.TurnbackStations = stations.ToArray();
         }
-
-        List<ResolvedStation> stations = new List<ResolvedStation>();
-        for (int i = 0; i < stationBoundaries.Count; i++)
-        {
-            TryTurnbackFromBoundary(cache, stationBoundaries[i], out ResolvedStation station);
-            stations.Add(station);
-        }
-
-        return stations.ToArray();
+        return cache.TurnbackStations.Length > 0;
     }
 
     private static bool IsSameStation(ResolvedStation left, ResolvedStation right)
@@ -889,16 +935,6 @@ namespace RapidTransitMod.Broadcasting
         }
 
         ResolvedStation terminalStation = cache.Stations[0];
-        ResolvedStation turnbackStation = IsBus(line)
-            ? null
-            : (TryTurnback(
-                vehicle,
-                line,
-                waypoints,
-                cache,
-                out ResolvedStation resolvedTurnbackStation)
-                ? resolvedTurnbackStation
-                : null);
         string lineId = m_Access.DraftKey(m_Access.LineId(line));
         context = new VehicleStation(
             lineId,
@@ -910,9 +946,7 @@ namespace RapidTransitMod.Broadcasting
             nextStation?.StationId ?? string.Empty,
             nextStation?.Name ?? string.Empty,
             terminalStation?.StationId ?? string.Empty,
-            terminalStation?.Name ?? string.Empty,
-            turnbackStation?.StationId ?? string.Empty,
-            turnbackStation?.Name ?? string.Empty);
+            terminalStation?.Name ?? string.Empty);
 
         if (vehicle != Entity.Null)
         {
@@ -931,13 +965,6 @@ namespace RapidTransitMod.Broadcasting
         }
 
         return true;
-    }
-
-    private bool IsBus(Entity line)
-    {
-        return line != Entity.Null
-            && m_Access.EntityManager.Exists(line)
-            && TransportModeResolver.Resolve(m_Access.EntityManager, line) == TransitMode.Bus;
     }
 
     private bool TryTurnback(
@@ -964,6 +991,10 @@ namespace RapidTransitMod.Broadcasting
             atomCursorIndex = cursor.AtomCursorIndex;
         }
 
+        RefreshTurnbackCache(cache, chain);
+        if (cache.TurnbackByCursor.TryGetValue(atomCursorIndex, out station))
+            return station != null;
+
         ResolvedStation terminalStation =
             cache.Stations != null && cache.Stations.Length > 0 ? cache.Stations[0] : null;
         if (!TryTurnbackBoundaryWithWrap(
@@ -971,6 +1002,7 @@ namespace RapidTransitMod.Broadcasting
                 atomCursorIndex,
                 out TrackTurnbackStationBoundary stationBoundary))
         {
+            cache.TurnbackByCursor[atomCursorIndex] = null;
             return false;
         }
 
@@ -982,9 +1014,9 @@ namespace RapidTransitMod.Broadcasting
             && !IsSameStation(station, terminalStation))
         {
             station = terminalStation;
-            return true;
         }
 
+        cache.TurnbackByCursor[atomCursorIndex] = station;
         return resolved;
     }
 
@@ -1032,6 +1064,17 @@ namespace RapidTransitMod.Broadcasting
         }
 
         return false;
+    }
+
+    // 广播暂时代行折返功能，超出广播职责，后续统一收归轨道模型。
+    private static void RefreshTurnbackCache(LineCache cache, LineTrackChain chain)
+    {
+        if (cache.TurnbackChainSignature == chain.Signature)
+            return;
+
+        cache.TurnbackChainSignature = chain.Signature;
+        cache.TurnbackByCursor.Clear();
+        cache.TurnbackStations = null;
     }
 
     internal static string AssetName(

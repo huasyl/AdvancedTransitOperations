@@ -624,6 +624,8 @@ export const nativeScheduleTranslationsZhCn = {
   "broadcast.delay.20": "2 秒",
   "broadcast.delay.label": "延迟",
   "broadcast.trigger.approachStation": "车辆减速进站",
+  "broadcast.trigger.arrivalStation": "车辆到站",
+  "broadcast.trigger.departureSoon": "即将发车",
   "broadcast.trigger.stopAndOpen": "列车停站上下客",
   "broadcast.trigger.leaveStation": "列车离站",
   "broadcast.trigger.midRoute": "列车运行中途(按区间距离触发)",

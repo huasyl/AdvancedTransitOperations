@@ -8,6 +8,7 @@ using Game.Net;
 using Game.Rendering;
 using Game.Routes;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Entities;
@@ -21,6 +22,9 @@ namespace RapidTransitMod.Broadcasting
         internal const uint AnchorDiagnosticCooldownFrames = 30u;
         internal const int IdleRouteCooldownAfterLeaveSeconds = 3;
         internal const string PlatformApproachTriggerId = "platform_approach_station";
+        internal const string PlatformArrivalTriggerId = "platform_arrival_station";
+        internal const string PlatformDepartureSoonTriggerId = "platform_departure_soon";
+        internal const uint PlatformDepartureSoonLeadFrames = 360u;
         internal const float LeaveAnchorDistanceMeters = 100f;
         internal const float ApproachAnchorDistanceMeters = 200f;
         internal const float PlatformApproachAnchorDistanceMeters = 600f;
@@ -28,6 +32,42 @@ namespace RapidTransitMod.Broadcasting
         internal const float PlatformVehicleCullDistanceSquared = PlatformVehicleCullDistanceMeters * PlatformVehicleCullDistanceMeters;
         internal const float PlatformPreparingApproachLeadMinutes = 10f;
         internal const int PlatformPreparingApproachPhaseIndex = 999999;
+
+        internal static bool IsPlatformTrigger(string triggerId)
+        {
+            return string.Equals(triggerId, PlatformApproachTriggerId, StringComparison.Ordinal)
+                || string.Equals(triggerId, PlatformArrivalTriggerId, StringComparison.Ordinal)
+                || string.Equals(triggerId, PlatformDepartureSoonTriggerId, StringComparison.Ordinal);
+        }
+
+        internal static bool TryNormalizePlatformTrigger(
+            string triggerId,
+            out string uiTriggerId,
+            out string runtimeTriggerId)
+        {
+            switch ((triggerId ?? string.Empty).Trim())
+            {
+                case "approach_station":
+                case PlatformApproachTriggerId:
+                    uiTriggerId = "approach_station";
+                    runtimeTriggerId = PlatformApproachTriggerId;
+                    return true;
+                case "arrival_station":
+                case PlatformArrivalTriggerId:
+                    uiTriggerId = "arrival_station";
+                    runtimeTriggerId = PlatformArrivalTriggerId;
+                    return true;
+                case "departure_soon":
+                case PlatformDepartureSoonTriggerId:
+                    uiTriggerId = "departure_soon";
+                    runtimeTriggerId = PlatformDepartureSoonTriggerId;
+                    return true;
+                default:
+                    uiTriggerId = string.Empty;
+                    runtimeTriggerId = string.Empty;
+                    return false;
+            }
+        }
     }
 
         internal struct ProgressState
@@ -135,6 +175,17 @@ namespace RapidTransitMod.Broadcasting
                 traversalPhaseIndex);
             return true;
         }
+    }
+
+    internal sealed class PlatformStopState
+    {
+        public Entity Line;
+        public int WaypointIndex;
+        public BroadcastWorkbenchPlatformAnnouncementDto DepartureRule;
+        public uint? LimitFrame;
+        public uint? TriggerFrame;
+        public Sequence ArrivalSequence;
+        public bool DeparturePlayed;
     }
 
     internal sealed class Diagnostics
@@ -512,12 +563,11 @@ namespace RapidTransitMod.Broadcasting
             int previousWaypointIndex)
         {
             if (!ShouldPlayForTracked(vehicle)
-                || !m_Stations.TryTriggerContext(
+                || !m_Stations.TryVehicle(
                     vehicle,
                     line,
                     waypoints,
                     previousWaypointIndex,
-                    out _,
                     out VehicleStation stationContext))
             {
                 return;
@@ -846,7 +896,13 @@ namespace RapidTransitMod.Broadcasting
                 && (string.Equals(triggerId, "stop_and_open", StringComparison.Ordinal)
                     || string.Equals(triggerId, "leave_station", StringComparison.Ordinal))
                 && TransportModeResolver.Resolve(m_Access.EntityManager, line) == TransitMode.Bus;
-            if (!m_Stations.TryTriggerContext(vehicle, line, waypoints, waypointIndex, out context, out stationContext))
+            if (!m_Stations.TryTriggerContext(
+                    vehicle,
+                    line,
+                    waypoints,
+                    waypointIndex,
+                    out context,
+                    out stationContext))
             {
                 if (isBus)
                     LogBusTrigger(vehicle, line, waypointIndex, triggerId, string.Empty, "context_missing");
@@ -1052,6 +1108,10 @@ namespace RapidTransitMod.Broadcasting
         private readonly Diagnostics m_Diagnostics;
         private readonly Dictionary<Entity, ApproachState> m_ApproachStateByVehicle =
             new Dictionary<Entity, ApproachState>();
+        private readonly Dictionary<Entity, PlatformStopState> m_StopStateByVehicle =
+            new Dictionary<Entity, PlatformStopState>();
+        private readonly List<ActiveStopSession> m_ActiveStops =
+            new List<ActiveStopSession>();
         private readonly HashSet<string> m_CheckedLineIds =
             new HashSet<string>(StringComparer.Ordinal);
         internal Platforms(BroadcastAccess access, Config config, Stations stations, Playback playback, Diagnostics diagnostics)
@@ -1063,7 +1123,7 @@ namespace RapidTransitMod.Broadcasting
             m_Diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
         }
 
-        internal bool HasState => m_ApproachStateByVehicle.Count > 0;
+        internal bool HasState => m_ApproachStateByVehicle.Count > 0 || m_StopStateByVehicle.Count > 0;
 
         internal void Running(
             Entity vehicle,
@@ -1114,17 +1174,122 @@ namespace RapidTransitMod.Broadcasting
             {
                 m_ApproachStateByVehicle.Remove(vehicle);
             }
+
+            if (currentState == VehicleState.Retiring)
+                EndStop(vehicle);
+        }
+
+        internal void StopOpened(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex,
+            uint arrivalFrame)
+        {
+            if (!m_Stations.TryStopStation(
+                    line,
+                    waypoints,
+                    waypointIndex,
+                    out ResolvedStation station))
+            {
+                EndStop(vehicle);
+                return;
+            }
+
+            string lineId = m_Access.DraftKey(m_Access.LineId(line));
+            bool hasArrivalRule = TryPlatformAnnouncement(
+                line,
+                lineId,
+                station.StationId,
+                TriggerConstants.PlatformArrivalTriggerId,
+                out BroadcastWorkbenchPlatformAnnouncementDto arrivalRule);
+            EndStop(vehicle);
+            PlatformStopState state = BindDeparture(
+                vehicle, line, waypointIndex, arrivalFrame, station.StationId);
+            uint nowFrame = m_Access.SimulationSystem != null
+                ? m_Access.SimulationSystem.frameIndex
+                : 0u;
+
+            if (hasArrivalRule
+                && m_Stations.TryPlatformContext(
+                    vehicle,
+                    line,
+                    waypoints,
+                    waypointIndex,
+                    arrivalRule,
+                    out TriggerContext arrivalContext,
+                    out ResolvedStation arrivalStation))
+            {
+                string sequenceKey = PlatformSequenceKey(
+                    TriggerConstants.PlatformArrivalTriggerId,
+                    lineId,
+                    station.StationId,
+                    vehicle,
+                    waypointIndex,
+                    nowFrame);
+                state.ArrivalSequence = m_Playback.StartPlatform(
+                        sequenceKey,
+                        arrivalStation.StopEntity,
+                        arrivalContext,
+                        arrivalRule,
+                        TriggerConstants.PlatformArrivalTriggerId,
+                        TriggerLabel);
+                if (state.ArrivalSequence != null)
+                    m_StopStateByVehicle[vehicle] = state;
+            }
+        }
+
+        internal void StopRestored(
+            Entity vehicle,
+            Entity line,
+            DynamicBuffer<RouteWaypoint> waypoints,
+            int waypointIndex)
+        {
+            if (!m_Access.TryStopArrivalFrame(vehicle, out uint arrivalFrame)
+                || !m_Stations.TryStopStation(line, waypoints, waypointIndex, out ResolvedStation station))
+            {
+                EndStop(vehicle);
+                return;
+            }
+
+            BindDeparture(vehicle, line, waypointIndex, arrivalFrame, station.StationId);
+        }
+
+        internal void DepartureChanged(Entity vehicle, uint departureFrame, uint nowFrame)
+        {
+            if (!m_StopStateByVehicle.TryGetValue(vehicle, out PlatformStopState state)
+                || state.DepartureRule == null
+                || state.DeparturePlayed)
+            {
+                return;
+            }
+
+            RefreshTrigger(vehicle, state, departureFrame, nowFrame);
+        }
+
+        internal void TargetChanged(Entity vehicle, int targetMinute)
+        {
+            if (targetMinute >= 0
+                || !m_StopStateByVehicle.TryGetValue(vehicle, out PlatformStopState state)
+                || state.WaypointIndex != 0)
+            {
+                return;
+            }
+
+            state.TriggerFrame = null;
         }
 
         internal void Remove(Entity vehicle)
         {
             m_ApproachStateByVehicle.Remove(vehicle);
+            EndStop(vehicle);
         }
 
         internal void Clear()
         {
             m_CheckedLineIds.Clear();
             m_ApproachStateByVehicle.Clear();
+            m_StopStateByVehicle.Clear();
         }
 
         internal void ClearLineChecks()
@@ -1132,12 +1297,23 @@ namespace RapidTransitMod.Broadcasting
             m_CheckedLineIds.Clear();
             m_Config.ClearFlags();
             m_ApproachStateByVehicle.Clear();
+            RefreshActiveStops(Entity.Null);
             m_Diagnostics.ClearPlatformApproach();
+        }
+
+        internal void RefreshLineRules() => RefreshActiveStops(Entity.Null);
+
+        internal void RefreshLineRules(LineKey line)
+        {
+            m_Config.ClearFlags(line.ToString());
+            if (m_Access.TryLineEntity(line, out Entity lineEntity))
+                RefreshActiveStops(lineEntity);
         }
 
         internal void ClearAssetState()
         {
             m_ApproachStateByVehicle.Clear();
+            m_StopStateByVehicle.Clear();
             m_Diagnostics.ClearPlatformApproach();
         }
 
@@ -1149,6 +1325,16 @@ namespace RapidTransitMod.Broadcasting
                 .ToArray())
             {
                 m_ApproachStateByVehicle.Remove(vehicle);
+            }
+
+            foreach (Entity vehicle in m_StopStateByVehicle
+                .Where(entry => MatchesRuntimeScope(
+                    scope,
+                    m_Access.DraftKey(m_Access.LineId(entry.Value.Line))))
+                .Select(entry => entry.Key)
+                .ToArray())
+            {
+                EndStop(vehicle);
             }
 
             m_Diagnostics.ClearPlatformApproach();
@@ -1180,6 +1366,7 @@ namespace RapidTransitMod.Broadcasting
 
         internal void Tick(uint nowFrame, bool sourceSweep)
         {
+            TickStopAnnouncements(nowFrame);
             if (!sourceSweep || m_Config.PlatformsByLine.Count == 0)
             {
                 return;
@@ -1247,6 +1434,202 @@ namespace RapidTransitMod.Broadcasting
                     }
                 }
             }
+        }
+
+        private PlatformStopState BindDeparture(
+            Entity vehicle,
+            Entity line,
+            int waypointIndex,
+            uint arrivalFrame,
+            string stationId)
+        {
+            if (!m_StopStateByVehicle.TryGetValue(vehicle, out PlatformStopState state))
+            {
+                state = new PlatformStopState();
+            }
+
+            state.Line = line;
+            state.WaypointIndex = waypointIndex;
+            if (!TryPlatformAnnouncement(
+                line,
+                m_Access.DraftKey(m_Access.LineId(line)),
+                stationId,
+                TriggerConstants.PlatformDepartureSoonTriggerId,
+                out state.DepartureRule))
+            {
+                state.DepartureRule = null;
+            }
+            state.LimitFrame = null;
+            state.TriggerFrame = null;
+            if (state.DepartureRule == null || state.DeparturePlayed)
+                return state;
+
+            m_StopStateByVehicle[vehicle] = state;
+            if (waypointIndex > 0 && !m_Access.IsTimedStop(vehicle))
+            {
+                int dwellMinutes = m_Access.LineDwellMinutes(line);
+                if (dwellMinutes > 0)
+                    state.LimitFrame = unchecked(arrivalFrame + m_Access.ClockSnapshot.ToFramesCeil(dwellMinutes));
+            }
+
+            uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
+            RefreshTrigger(vehicle, state, m_Access.ReadDepartureFrame(vehicle), nowFrame);
+            return state;
+        }
+
+        private void RefreshTrigger(
+            Entity vehicle,
+            PlatformStopState state,
+            uint? departureFrame,
+            uint nowFrame)
+        {
+            state.TriggerFrame = null;
+            if (!departureFrame.HasValue || departureFrame.Value == 0u)
+            {
+                return;
+            }
+
+            if (state.WaypointIndex == 0
+                && (!m_Access.VehicleView.TryGetState(vehicle, out VehicleState vehicleState)
+                    || vehicleState != VehicleState.Holding
+                    || !m_Access.VehicleView.TryGetTarget(vehicle, out int targetMinute)
+                    || targetMinute < 0))
+            {
+                return;
+            }
+
+            uint basisFrame = state.LimitFrame.HasValue
+                ? Math.Min(departureFrame.Value, state.LimitFrame.Value)
+                : departureFrame.Value;
+            state.TriggerFrame = basisFrame > TriggerConstants.PlatformDepartureSoonLeadFrames
+                ? basisFrame - TriggerConstants.PlatformDepartureSoonLeadFrames
+                : nowFrame;
+        }
+
+        private void RefreshActiveStops(Entity lineFilter)
+        {
+            if (!m_Config.Enabled)
+                return;
+
+            m_ActiveStops.Clear();
+            m_Access.AppendOpenStopSessions(m_ActiveStops, lineFilter);
+            for (int i = 0; i < m_ActiveStops.Count; i++)
+            {
+                ActiveStopSession session = m_ActiveStops[i];
+                if (TransportModeProfile.GetProfile(
+                        TransportModeResolver.Resolve(m_Access.EntityManager, session.Line)).Lifecycle != LifecycleKind.Rail)
+                    continue;
+
+                DynamicBuffer<RouteWaypoint> waypoints =
+                    m_Access.EntityManager.GetBuffer<RouteWaypoint>(session.Line, true);
+                if (!m_Stations.TryStopStation(
+                        session.Line,
+                        waypoints,
+                        session.WaypointIndex,
+                        out ResolvedStation station))
+                {
+                    EndStop(session.Vehicle);
+                    continue;
+                }
+
+                BindDeparture(session.Vehicle, session.Line, session.WaypointIndex, session.ArrivalFrame, station.StationId);
+            }
+            m_ActiveStops.Clear();
+        }
+
+        private void TickStopAnnouncements(uint nowFrame)
+        {
+            if (m_StopStateByVehicle.Count == 0)
+                return;
+
+            foreach (KeyValuePair<Entity, PlatformStopState> entry in m_StopStateByVehicle)
+            {
+                Entity vehicle = entry.Key;
+                PlatformStopState state = entry.Value;
+                if (state.DeparturePlayed
+                    || state.DepartureRule == null
+                    || !state.TriggerFrame.HasValue
+                    || nowFrame < state.TriggerFrame.Value
+                    || m_Playback.PlatformActive(state.ArrivalSequence))
+                {
+                    continue;
+                }
+
+                if (state.Line == Entity.Null
+                    || !m_Access.EntityManager.Exists(state.Line)
+                    || !m_Access.EntityManager.HasBuffer<RouteWaypoint>(state.Line)
+                    || !m_Stations.TryPlatformContext(
+                        vehicle,
+                        state.Line,
+                        m_Access.EntityManager.GetBuffer<RouteWaypoint>(state.Line, true),
+                        state.WaypointIndex,
+                        state.DepartureRule,
+                        out TriggerContext context,
+                        out ResolvedStation station))
+                {
+                    state.TriggerFrame = null;
+                    continue;
+                }
+
+                string sequenceKey = PlatformSequenceKey(
+                    TriggerConstants.PlatformDepartureSoonTriggerId,
+                    state.DepartureRule.lineId,
+                    state.DepartureRule.stationId,
+                    vehicle,
+                    state.WaypointIndex,
+                    state.TriggerFrame.Value);
+                if (m_Playback.StartPlatform(
+                        sequenceKey,
+                        station.StopEntity,
+                        context,
+                        state.DepartureRule,
+                        TriggerConstants.PlatformDepartureSoonTriggerId,
+                        TriggerLabel) != null)
+                {
+                    state.DeparturePlayed = true;
+                }
+                else
+                {
+                    state.TriggerFrame = null;
+                }
+            }
+        }
+
+        private bool TryPlatformAnnouncement(
+            Entity line,
+            string lineId,
+            string stationId,
+            string triggerId,
+            out BroadcastWorkbenchPlatformAnnouncementDto announcement)
+        {
+            announcement = null;
+            EnsureBroadcastRuntimeLineState(lineId, line);
+            if (!TriggerConstants.TryNormalizePlatformTrigger(triggerId, out string uiTriggerId, out _)
+                || string.IsNullOrWhiteSpace(lineId)
+                || string.IsNullOrWhiteSpace(stationId)
+                || !m_Config.PlatformsByLine.TryGetValue(
+                    lineId,
+                    out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
+                || lineAnnouncements == null)
+            {
+                return false;
+            }
+
+            return lineAnnouncements.TryGetValue(
+                    RapidTransitMod.Broadcasting.WorkbenchBackend.Platforms.Key(
+                        stationId,
+                        uiTriggerId),
+                    out announcement)
+                && announcement != null
+                && announcement.enabled
+                && announcement.nodes != null
+                && announcement.nodes.Length > 0;
+        }
+
+        internal void EndStop(Entity vehicle)
+        {
+            if (vehicle != Entity.Null)
+                m_StopStateByVehicle.Remove(vehicle);
         }
 
 
@@ -1326,9 +1709,15 @@ namespace RapidTransitMod.Broadcasting
                     continue;
                 }
 
-                if (!m_Stations.TryTriggerContext(
-                        state.StationContext,
-                        out TriggerContext vehicleContext))
+                if (!m_Stations.TryPlatformContext(
+                        vehicle,
+                        line,
+                        waypoints,
+                        state.CurrentStopWaypointIndex,
+                        announcement,
+                        out TriggerContext vehicleContext,
+                        out _,
+                        state.NextStopWaypointIndex))
                 {
                     continue;
                 }
@@ -1345,7 +1734,7 @@ namespace RapidTransitMod.Broadcasting
                         vehicleContext,
                         announcement,
                         TriggerConstants.PlatformApproachTriggerId,
-                        TriggerLabel))
+                        TriggerLabel) != null)
                 {
                     state.Triggered = true;
                     m_ApproachStateByVehicle[vehicle] = state;
@@ -1417,40 +1806,6 @@ namespace RapidTransitMod.Broadcasting
         }
 
 
-        private bool TryGetEnabledBroadcastPlatformApproachAnnouncement(
-            Entity line,
-            string lineId,
-            string stationId,
-            out BroadcastWorkbenchPlatformAnnouncementDto announcement)
-        {
-            announcement = null;
-            EnsureBroadcastRuntimeLineState(lineId, line);
-            if (string.IsNullOrWhiteSpace(lineId)
-                || string.IsNullOrWhiteSpace(stationId)
-                || !m_Config.PlatformsByLine.TryGetValue(lineId, out Dictionary<string, BroadcastWorkbenchPlatformAnnouncementDto> lineAnnouncements)
-                || lineAnnouncements == null)
-            {
-                return false;
-            }
-
-            foreach (BroadcastWorkbenchPlatformAnnouncementDto candidate in lineAnnouncements.Values)
-            {
-                if (candidate != null
-                    && string.Equals(candidate.stationId, stationId, StringComparison.Ordinal)
-                    && candidate.enabled
-                    && candidate.nodes != null
-                    && candidate.nodes.Length > 0
-                    && string.Equals(candidate.triggerId, TriggerConstants.PlatformApproachTriggerId, StringComparison.Ordinal))
-                {
-                    announcement = candidate;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-
         private Config.LineFlags PlatformFlags(Entity line)
         {
             if (!m_Config.Enabled || line == Entity.Null)
@@ -1479,19 +1834,17 @@ namespace RapidTransitMod.Broadcasting
             }
 
             VehicleStation stationContext = runtimeContext.StationContext;
-            string representativeNextStationId = m_Stations.NormalizeRepresentativeStationId(
-                line,
-                waypoints,
-                stationContext.NextStationId);
+            string representativeNextStationId = stationContext.NextStationId;
             uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
             if (string.IsNullOrWhiteSpace(stationContext.LineId)
                 || string.IsNullOrWhiteSpace(representativeNextStationId)
                 || string.Equals(stationContext.CurrentStationId, stationContext.NextStationId, StringComparison.Ordinal)
                 || IsBroadcastPlatformApproachSuppressedForOriginReturn(vehicle, stationContext)
-                || !TryGetEnabledBroadcastPlatformApproachAnnouncement(
+                || !TryPlatformAnnouncement(
                     line,
                     stationContext.LineId,
                     representativeNextStationId,
+                    TriggerConstants.PlatformApproachTriggerId,
                     out _)
                 || !Anchors.TryResolvePlatformApproachAtom(m_Access, 
                     runtimeContext.Chain,
@@ -1574,25 +1927,21 @@ namespace RapidTransitMod.Broadcasting
             }
 
             string lineId = m_Access.DraftKey(m_Access.LineId(line));
-            string representativeOriginStationId = m_Stations.NormalizeRepresentativeStationId(
-                line,
-                waypoints,
-                originStation.StationId);
+            string representativeOriginStationId = originStation.StationId;
             if (originStation.StopEntity == Entity.Null
                 || string.IsNullOrWhiteSpace(lineId)
                 || string.IsNullOrWhiteSpace(representativeOriginStationId)
-                || !TryGetEnabledBroadcastPlatformApproachAnnouncement(
+                || !TryPlatformAnnouncement(
                     line,
                     lineId,
                     representativeOriginStationId,
+                    TriggerConstants.PlatformApproachTriggerId,
                     out _))
             {
                 m_ApproachStateByVehicle.Remove(vehicle);
                 return;
             }
 
-            ResolvedStation turnbackStation =
-                Stations.TurnbackAfterWaypoint(cache, originStation);
             VehicleStation stationContext = new VehicleStation(
                 lineId,
                 originStation.StopEntity,
@@ -1603,9 +1952,7 @@ namespace RapidTransitMod.Broadcasting
                 originStation.StationId,
                 originStation.Name,
                 originStation.StationId,
-                originStation.Name,
-                turnbackStation?.StationId ?? string.Empty,
-                turnbackStation?.Name ?? string.Empty);
+                originStation.Name);
             uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
             bool resetState =
                 !m_ApproachStateByVehicle.TryGetValue(vehicle, out ApproachState state)
@@ -1683,9 +2030,29 @@ namespace RapidTransitMod.Broadcasting
                 + "|" + nextStopWaypointIndex;
         }
 
+        private static string PlatformSequenceKey(
+            string triggerId,
+            string lineId,
+            string stationId,
+            Entity vehicle,
+            int waypointIndex,
+            uint arrivalFrame)
+        {
+            return (triggerId ?? string.Empty)
+                + "|" + (lineId ?? string.Empty)
+                + "|" + (stationId ?? string.Empty)
+                + "|" + vehicle.Index
+                + "|" + waypointIndex
+                + "|" + arrivalFrame;
+        }
+
 
         private static string TriggerLabel(string triggerId)
         {
+            if (string.Equals(triggerId, TriggerConstants.PlatformArrivalTriggerId, StringComparison.Ordinal))
+                return "车辆到站";
+            if (string.Equals(triggerId, TriggerConstants.PlatformDepartureSoonTriggerId, StringComparison.Ordinal))
+                return "即将发车";
             return "即将进站";
         }
 

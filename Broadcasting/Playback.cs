@@ -40,7 +40,7 @@ namespace RapidTransitMod.Broadcasting
         internal bool Start(Entity vehicle, TriggerContext context, string triggerId)
             => m_Sequences.Start(vehicle, context, triggerId);
 
-        internal bool StartPlatform(
+        internal Sequence StartPlatform(
             string sequenceKey,
             Entity audioPositionEntity,
             TriggerContext context,
@@ -53,6 +53,9 @@ namespace RapidTransitMod.Broadcasting
 
         internal bool ActiveForTrigger(Entity vehicle, string triggerId)
             => m_Sequences.ActiveForTrigger(vehicle, triggerId);
+
+        internal bool PlatformActive(Sequence sequence)
+            => m_Sequences.PlatformActive(sequence);
 
         internal void Tick(uint nowFrame) => m_Sequences.Tick(nowFrame);
         internal void RemoveVehicle(Entity vehicle) => m_Sequences.RemoveVehicle(vehicle);
@@ -155,7 +158,7 @@ namespace RapidTransitMod.Broadcasting
             return true;
         }
 
-        internal bool StartPlatform(
+        internal Sequence StartPlatform(
             string sequenceKey,
             Entity audioPositionEntity,
             TriggerContext context,
@@ -170,7 +173,7 @@ namespace RapidTransitMod.Broadcasting
                 || announcement.nodes == null
                 || announcement.nodes.Length == 0)
             {
-                return false;
+                return null;
             }
 
             string triggerId = string.IsNullOrWhiteSpace(announcement.triggerId)
@@ -189,7 +192,7 @@ namespace RapidTransitMod.Broadcasting
             };
             if (rule.nodes.Length == 0)
             {
-                return false;
+                return null;
             }
 
             uint nowFrame = m_Access.SimulationSystem != null ? m_Access.SimulationSystem.frameIndex : 0u;
@@ -206,7 +209,7 @@ namespace RapidTransitMod.Broadcasting
                 ResumeRealtime = 0f
             };
             m_ByPlatformKey[sequenceKey] = state;
-            return Advance(state, nowFrame);
+            return Advance(state, nowFrame) ? state : null;
         }
 
         internal bool ActiveForTrigger(Entity vehicle, string triggerId)
@@ -216,6 +219,13 @@ namespace RapidTransitMod.Broadcasting
                 && m_ByVehicle.TryGetValue(vehicle, out Sequence state)
                 && state != null
                 && string.Equals(state.TriggerId, triggerId, StringComparison.Ordinal);
+        }
+
+        internal bool PlatformActive(Sequence sequence)
+        {
+            return sequence != null
+                && m_ByPlatformKey.TryGetValue(sequence.Rules[0].id, out Sequence active)
+                && active == sequence;
         }
 
         internal void Tick(uint nowFrame)

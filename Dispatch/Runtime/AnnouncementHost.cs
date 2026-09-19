@@ -9,6 +9,7 @@ using Game.Simulation;
 using Game.UI.InGame;
 using RapidTransitMod.Broadcasting;
 using RapidTransitMod.Core;
+using RapidTransitMod.Dispatch.Runtime;
 using RapidTransitMod.TrackModel;
 using RapidTransitMod.TrackProjection;
 using Unity.Collections;
@@ -76,6 +77,21 @@ namespace RapidTransitMod
             internal override SelectPanel SelectionPanel => m_Host.m_SelectPanel;
             internal override NativeHashMap<Entity, int> CachedWaypointIndex => m_Host.m_CachedWpIdx;
             internal override ClockSnapshot ClockSnapshot => m_Host.m_SimClock.Snapshot;
+
+            internal override bool TryStopArrivalFrame(Entity vehicle, out uint arrivalFrame)
+                => m_Host.m_StopRuntime.TryGetSessionArrivalFrame(vehicle, out arrivalFrame);
+
+            internal override uint? ReadDepartureFrame(Entity vehicle)
+                => m_Host.m_RailEventSource.TryReadDepartureFrame(vehicle, out uint frame)
+                    ? frame : (uint?)null;
+
+            internal override bool IsTimedStop(Entity vehicle)
+                => m_Host.m_StopRuntime.IsTimedStopActive(vehicle);
+
+            internal override void AppendOpenStopSessions(List<ActiveStopSession> sessions, Entity line)
+                => m_Host.m_StopRuntime.AppendOpenStopSessions(sessions, line);
+
+            internal override int LineDwellMinutes(Entity line) => m_Host.m_LineView.Dwell(line);
 
             internal override bool TryViewerPosition(out float3 position)
             {
@@ -241,7 +257,6 @@ namespace RapidTransitMod
             internal override string StationName(Entity stopEntity) => m_Host.m_Resolve.StationName(stopEntity);
             internal override string Name(Entity entity) => m_Host.EntityName(entity);
             internal override ulong Signature(DynamicBuffer<RouteWaypoint> waypoints) => m_Host.m_LineProfile.ComputeWaypointSignature(waypoints);
-            internal override bool TryTurnbacks(LineTrackChain chain, List<TrackTurnbackStationBoundary> stationBoundaries) => Turnbacks.TryCollectTurnbackStationBoundaries(chain, stationBoundaries);
             internal override bool TryWaypointIndex(Entity line, DynamicBuffer<RouteWaypoint> waypoints, out LineWaypointIndexLookup lookup) => m_Host.m_WaypointIndex.TryLookup(line, waypoints, out lookup);
             internal override string DraftKey(string lineId) => RapidTransitMod.Dispatch.Workbench.Drafts.Key(lineId);
             internal override string LineId(Entity line) => m_Host.LineStableId(line);

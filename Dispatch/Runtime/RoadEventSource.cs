@@ -519,6 +519,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 observedLapDistance,
                 stop.HadStopSession,
                 stop.BoardingChanged,
+                m_Runtime.m_StopRuntime.IsDeparturePending(row.Vehicle),
+                m_Runtime.m_StopRuntime.IsOriginDepartureConfirmed(row.Vehicle, row.RegisteredLine),
                 bypass);
             return true;
         }

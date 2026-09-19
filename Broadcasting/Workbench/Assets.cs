@@ -918,10 +918,7 @@ namespace RapidTransitMod.Broadcasting.WorkbenchBackend
                         foreach (KeyValuePair<string, BroadcastWorkbenchPlatformAnnouncementDto> stationEntry in announcements)
                         {
                             if (stationEntry.Value != null
-                                && string.Equals(
-                                    stationEntry.Value.triggerId,
-                                    TriggerConstants.PlatformApproachTriggerId,
-                                    StringComparison.Ordinal)
+                                && TriggerConstants.IsPlatformTrigger(stationEntry.Value.triggerId)
                                 && HasAssetNode(stationEntry.Value.nodes, assetName))
                             {
                                 return true;

@@ -624,6 +624,8 @@ export const nativeScheduleTranslationsJaJp = {
   "broadcast.delay.20": "2 秒",
   "broadcast.delay.label": "ポーズ",
   "broadcast.trigger.approachStation": "駅進入時",
+  "broadcast.trigger.arrivalStation": "車両到着時",
+  "broadcast.trigger.departureSoon": "まもなく発車",
   "broadcast.trigger.stopAndOpen": "乗降開始",
   "broadcast.trigger.leaveStation": "駅発車時",
   "broadcast.trigger.midRoute": "区間走行中トリガー",

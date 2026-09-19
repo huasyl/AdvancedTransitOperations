@@ -8,12 +8,14 @@ namespace RapidTransitMod.Core
     {
         public ClockSnapshot(
             int nowMinute,
+            double nowMinuteExact,
             DateTime nowDate,
             int ticksPerDay,
             double framesPerMinute,
             long clockEpoch)
         {
             NowMinute = nowMinute;
+            NowMinuteExact = nowMinuteExact;
             NowDate = nowDate;
             TicksPerDay = ticksPerDay;
             FramesPerMinute = framesPerMinute;
@@ -21,6 +23,8 @@ namespace RapidTransitMod.Core
         }
 
         public int NowMinute { get; }
+
+        public double NowMinuteExact { get; }
 
         public DateTime NowDate { get; }
 
@@ -48,6 +52,17 @@ namespace RapidTransitMod.Core
         public double DayFractionToFrames(double dayFraction)
         {
             return dayFraction * TicksPerDay;
+        }
+
+        public uint FramesUntilMinute(int targetMinute)
+        {
+            if (targetMinute < 0 || targetMinute >= 1440)
+                return 0u;
+
+            double remainingMinutes = targetMinute - NowMinuteExact;
+            if (remainingMinutes <= 0d)
+                remainingMinutes += 1440d;
+            return ToFramesCeil(remainingMinutes);
         }
 
         private static uint ClampFrames(double simulationFrames)
@@ -95,12 +110,22 @@ namespace RapidTransitMod.Core
         {
             get
             {
+                int rawMinute = (int)Math.Floor(NowMinuteExact);
+                return ((rawMinute % 1440) + 1440) % 1440;
+            }
+        }
+
+        public double NowMinuteExact
+        {
+            get
+            {
                 float normalizedDay = m_GameClockSystem.normalizedTime;
                 if (float.IsNaN(normalizedDay) || float.IsInfinity(normalizedDay))
-                    return 0;
+                    return 0d;
 
-                int rawMinute = (int)Math.Floor(normalizedDay * 1440d);
-                return ((rawMinute % 1440) + 1440) % 1440;
+                double rawMinute = normalizedDay * 1440d;
+                rawMinute %= 1440d;
+                return rawMinute < 0d ? rawMinute + 1440d : rawMinute;
             }
         }
 
@@ -171,6 +196,7 @@ namespace RapidTransitMod.Core
             DateTime nowDate = NowDate;
             ClockSnapshot oldSnapshot = new ClockSnapshot(
                 nowMinute,
+                NowMinuteExact,
                 nowDate,
                 TicksPerDay,
                 FramesPerMinute,
@@ -182,6 +208,7 @@ namespace RapidTransitMod.Core
 
             ClockSnapshot newSnapshot = new ClockSnapshot(
                 nowMinute,
+                NowMinuteExact,
                 nowDate,
                 TicksPerDay,
                 FramesPerMinute,
@@ -197,7 +224,14 @@ namespace RapidTransitMod.Core
 
         private ClockSnapshot CreateSnapshot()
         {
-            return new ClockSnapshot(NowMinute, NowDate, TicksPerDay, FramesPerMinute, ClockEpoch);
+            double nowMinuteExact = NowMinuteExact;
+            return new ClockSnapshot(
+                (int)Math.Floor(nowMinuteExact),
+                nowMinuteExact,
+                NowDate,
+                TicksPerDay,
+                FramesPerMinute,
+                ClockEpoch);
         }
 
         private void ResolveProviderReflection()

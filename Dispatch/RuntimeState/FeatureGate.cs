@@ -8,6 +8,7 @@ namespace RapidTransitMod
         private readonly Func<bool> m_BypassRunOn;
         private readonly Action m_ClearBypass;
         private readonly Action m_StopBroadcast;
+        private readonly Action m_StartBroadcast;
         private readonly Action m_DispatchChanged;
         private ulong m_DispatchGeneration;
 
@@ -16,12 +17,14 @@ namespace RapidTransitMod
             Func<bool> bypassRunOn,
             Action clearBypass,
             Action stopBroadcast,
+            Action startBroadcast,
             Action dispatchChanged)
         {
             m_Store = store ?? throw new ArgumentNullException(nameof(store));
             m_BypassRunOn = bypassRunOn ?? throw new ArgumentNullException(nameof(bypassRunOn));
             m_ClearBypass = clearBypass ?? throw new ArgumentNullException(nameof(clearBypass));
             m_StopBroadcast = stopBroadcast ?? throw new ArgumentNullException(nameof(stopBroadcast));
+            m_StartBroadcast = startBroadcast ?? throw new ArgumentNullException(nameof(startBroadcast));
             m_DispatchChanged = dispatchChanged ?? throw new ArgumentNullException(nameof(dispatchChanged));
         }
 
@@ -62,6 +65,10 @@ namespace RapidTransitMod
             if (previous.BroadcastEnabled && !next.BroadcastEnabled)
             {
                 m_StopBroadcast();
+            }
+            else if (!previous.BroadcastEnabled && next.BroadcastEnabled)
+            {
+                m_StartBroadcast();
             }
         }
 

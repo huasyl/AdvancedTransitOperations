@@ -286,6 +286,22 @@ namespace RapidTransitMod.Dispatch.Runtime
         }
     }
 
+    internal readonly struct ActiveStopSession
+    {
+        internal readonly Entity Vehicle;
+        internal readonly Entity Line;
+        internal readonly int WaypointIndex;
+        internal readonly uint ArrivalFrame;
+
+        internal ActiveStopSession(Entity vehicle, Entity line, int waypointIndex, uint arrivalFrame)
+        {
+            Vehicle = vehicle;
+            Line = line;
+            WaypointIndex = waypointIndex;
+            ArrivalFrame = arrivalFrame;
+        }
+    }
+
     internal sealed class StopRuntime : IDisposable
     {
         private readonly StopRuntimeState m_State;
@@ -685,6 +701,22 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         internal bool IsDepartureCandidate(Entity vehicle) => m_DepartureCandidateSet.Contains(vehicle);
 
+        internal bool IsOriginDepartureConfirmed(Entity vehicle, Entity line)
+        {
+            for (int i = 0; i < m_ResolvedDepartures.Count; i++)
+            {
+                StopFact fact = m_ResolvedDepartures[i].Fact;
+                if (fact.Vehicle == vehicle
+                    && fact.Line == line
+                    && fact.WaypointIndex == 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         internal void RejectDepartureCandidate(Entity vehicle)
         {
             m_DepartureCandidateSet.Remove(vehicle);
@@ -942,6 +974,35 @@ namespace RapidTransitMod.Dispatch.Runtime
                 && m_State.StopSessionWaypointIndex.TryGetValue(vehicle, out waypoint)
                 && waypoint >= 0
                 && m_State.StopSessionArrivalFrame.TryGetValue(vehicle, out arrivalFrame);
+        }
+
+        internal void AppendOpenStopSessions(
+            List<ActiveStopSession> sessions,
+            Entity lineFilter)
+        {
+            NativeArray<Entity> activeVehicles = m_State.StopSessionLine.GetKeyArray(Allocator.Temp);
+            try
+            {
+                for (int i = 0; i < activeVehicles.Length; i++)
+                {
+                    Entity vehicle = activeVehicles[i];
+                    if (!TryGetSession(
+                            vehicle,
+                            out Entity line,
+                            out int waypointIndex,
+                            out uint arrivalFrame)
+                        || (lineFilter != Entity.Null && line != lineFilter))
+                    {
+                        continue;
+                    }
+
+                    sessions.Add(new ActiveStopSession(vehicle, line, waypointIndex, arrivalFrame));
+                }
+            }
+            finally
+            {
+                activeVehicles.Dispose();
+            }
         }
 
         internal bool IsDeparturePending(Entity vehicle) => m_State.DeparturePendingSinceFrame.ContainsKey(vehicle);

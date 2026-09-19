@@ -67,6 +67,7 @@ namespace RapidTransitMod
         private readonly List<LaunchCommit> m_LaunchCommits = new List<LaunchCommit>();
         private readonly List<RunningCommit> m_RunningCommits = new List<RunningCommit>();
         private readonly List<WaypointCommit> m_WaypointCommits = new List<WaypointCommit>();
+        private bool m_OriginHoldReprojectPending;
 
         private readonly struct AssistLaunchPendingRecord
         {
@@ -433,6 +434,55 @@ namespace RapidTransitMod
             m_Vehicles.ClearIdle(vehicle);
         }
 
+        internal uint OriginReleaseFrame(
+            Entity vehicle,
+            int targetMinute,
+            uint nowFrame,
+            ClockSnapshot clockSnapshot)
+        {
+            uint scheduledFrame = nowFrame;
+            if (targetMinute >= 0
+                && !ScheduleClock.Reached(clockSnapshot.NowMinute, targetMinute)
+                && !ScheduleClock.CanLate(clockSnapshot.NowMinute, targetMinute))
+            {
+                scheduledFrame = unchecked(nowFrame + clockSnapshot.FramesUntilMinute(targetMinute));
+            }
+
+            uint readyFrame = m_Runtime.m_VehicleView.TryGetReady(vehicle, out uint currentReadyFrame)
+                && currentReadyFrame > nowFrame
+                    ? currentReadyFrame
+                    : nowFrame;
+            return scheduledFrame >= readyFrame ? scheduledFrame : readyFrame;
+        }
+
+        private void HoldAssignedDeparture(
+            Entity vehicle,
+            int targetMinute,
+            uint nowFrame,
+            ClockSnapshot clockSnapshot,
+            EntityCommandBuffer ecb)
+        {
+            m_Runtime.m_CommandApplier.HoldUntil(
+                vehicle,
+                OriginReleaseFrame(vehicle, targetMinute, nowFrame, clockSnapshot),
+                ecb);
+        }
+
+        internal void QueueOriginHoldReproject()
+        {
+            m_OriginHoldReprojectPending = true;
+        }
+
+        internal void ApplyOriginHoldReproject()
+        {
+            if (!m_OriginHoldReprojectPending)
+                return;
+
+            m_OriginHoldReprojectPending = false;
+            foreach (Entity vehicle in m_Runtime.m_VehicleWorksets.State(VehicleState.Holding))
+                m_Runtime.m_RuntimeFramePlan.AddStage(vehicle, RuntimeStageMask.Dispatch);
+        }
+
         public void ProcessFrame(
             EntityCommandBuffer ecb,
             ClockSnapshot clockSnapshot,
@@ -568,7 +618,10 @@ namespace RapidTransitMod
                                 }
                                 this.Hold(v, nowFrame, clockSnapshot);
                                 m_Runtime.m_SelectPanel.RecordLineHoldingSummary(lineEnt, nowMinute, v, targetMinute);
-                                m_Runtime.m_CommandApplier.HoldDeparture(v, nowFrame, ecb);
+                                if (targetMinute >= 0)
+                                    HoldAssignedDeparture(v, targetMinute, nowFrame, clockSnapshot, ecb);
+                                else
+                                    m_Runtime.m_CommandApplier.HoldDeparture(v, nowFrame, ecb);
                                 if (targetMinute >= 0)
                                 {
                                     if (RtLog.VerboseEnabled)
@@ -586,6 +639,35 @@ namespace RapidTransitMod
                             break;
 
                         case VehicleState.Holding:
+                            if (input.OriginDepartureConfirmed
+                                && targetMinute >= 0
+                                && (ScheduleClock.Reached(nowMinute, targetMinute)
+                                    || ScheduleClock.CanLate(nowMinute, targetMinute))
+                                && !m_Runtime.m_Observation.IsWaitingOriginDwell(v, nowFrame)
+                                && !m_Runtime.m_DispatchScheduler.Policy.IsOccupied(routeEnt, v, targetMinute))
+                            {
+                                bool isLateNaturalLaunch = ScheduleClock.CanLate(nowMinute, targetMinute);
+                                this.Launch(v, targetMinute, nowFrame, nowFrame + LAUNCH_COOLDOWN_FRAMES);
+                                m_Runtime.m_JustLaunched.Add(v);
+                                ClearAssistLaunchPending(v);
+                                ClearBoardingGrace(v);
+                                ConfirmLaunch(
+                                    events,
+                                    v,
+                                    lineEnt,
+                                    targetMinute,
+                                    curWpIdx,
+                                    nowMinute,
+                                    nowFrame,
+                                    isLateNaturalLaunch,
+                                    "natural-launch");
+                                if (RtLog.VerboseEnabled)
+                                {
+                                    log.Info("[NaturalLaunchConfirm] " + LineTag() + " 车辆" + v.Index
+                                        + " 原版自然离开始发站，确认班次" + ModRuntimeHostSystem.SlotStr(targetMinute));
+                                }
+                                break;
+                            }
                             if (!atA)
                             {
                                 if (TryGetAssistLaunchPending(v, routeEnt, targetMinute, out AssistLaunchPendingRecord assistPending))
@@ -617,7 +699,7 @@ namespace RapidTransitMod
                                 }
                                 if (m_Runtime.m_Observation.IsWaitingOriginDwell(v, nowFrame))
                                 {
-                                    m_Runtime.m_CommandApplier.HoldDeparture(v, nowFrame, ecb);
+                                    HoldAssignedDeparture(v, targetMinute, nowFrame, clockSnapshot, ecb);
                                     break;
                                 }
                                 this.Run(v);
@@ -711,7 +793,12 @@ namespace RapidTransitMod
 
                                 if (m_Runtime.m_Observation.IsWaitingOriginDwell(v, nowFrame))
                                 {
-                                    m_Runtime.m_CommandApplier.HoldDeparture(v, nowFrame, ecb);
+                                    HoldAssignedDeparture(v, targetMinute, nowFrame, clockSnapshot, ecb);
+                                    break;
+                                }
+                                if (input.OriginDeparturePending && !boarding)
+                                {
+                                    HoldAssignedDeparture(v, targetMinute, nowFrame, clockSnapshot, ecb);
                                     break;
                                 }
                                 if (boarding)
@@ -806,7 +893,7 @@ namespace RapidTransitMod
                             }
                             else
                             {
-                                m_Runtime.m_CommandApplier.HoldDeparture(v, nowFrame, ecb);
+                                HoldAssignedDeparture(v, targetMinute, nowFrame, clockSnapshot, ecb);
                             }
                             break;
 
@@ -1054,7 +1141,7 @@ namespace RapidTransitMod
                                     break;
                                 }
                                 this.HoldFromIdle(v);
-                                m_Runtime.m_CommandApplier.KeepDepartureHeld(v, nowFrame, ecb);
+                                HoldAssignedDeparture(v, targetMinute, nowFrame, clockSnapshot, ecb);
                                 bool isLateTarget = ScheduleClock.CanLate(nowMinute, targetMinute);
                                 if (RtLog.VerboseEnabled)
                                 {

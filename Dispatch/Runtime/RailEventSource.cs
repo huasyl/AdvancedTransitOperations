@@ -75,6 +75,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             public bool HasTrainCurrentLane;
             public TrainCurrentLane TrainCurrentLane;
             public bool LaunchNavigationCleared;
+            public bool DepartureFrameWritten;
             public RailFrameWriteMask Writes;
         }
 
@@ -751,12 +752,25 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (rowIndex < 0)
                 return;
             RailFrameRow row = m_FrameRows[rowIndex];
+            bool departureChanged = !row.HasPublicTransport
+                || row.PublicTransport.m_DepartureFrame != value.m_DepartureFrame;
             row.PublicTransport = value;
             row.HasPublicTransport = true;
+            row.DepartureFrameWritten |= departureChanged;
             row.Writes |= RailFrameWriteMask.PublicTransport;
             m_FrameRows[rowIndex] = row;
             if ((frame & 15u) != 3u || CollectedThisFrame(frame))
                 UpdateBaseline(row);
+        }
+
+        public void ConsumeDepartureFrameWrites(Action<Entity, uint> consumer)
+        {
+            for (int i = 0; i < m_FrameRows.Count; i++)
+            {
+                RailFrameRow row = m_FrameRows[i];
+                if (row.DepartureFrameWritten)
+                    consumer(row.Vehicle, row.PublicTransport.m_DepartureFrame);
+            }
         }
 
         public void AppendTargetWrite(Entity vehicle, Target value, uint frame)
@@ -875,6 +889,16 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
             value = default;
             return false;
+        }
+
+        public bool TryReadDepartureFrame(Entity vehicle, out uint departureFrame)
+        {
+            departureFrame = 0u;
+            if (!TryReadPublicTransportForWrite(vehicle, out PublicTransport publicTransport))
+                return false;
+
+            departureFrame = publicTransport.m_DepartureFrame;
+            return true;
         }
 
         public bool TryReadTargetForWrite(Entity vehicle, out Target value)
@@ -1236,7 +1260,9 @@ namespace RapidTransitMod.Dispatch.Runtime
                 atOrigin, targetAtOrigin, preparingAtOrigin, originBusy, preparingRouteNeedsRepair, shouldEvaluateOriginSettle,
                 false, false,
                 settledAtOrigin, forcedAtOrigin, brokenRecoveredRun, row.Moving,
-                runDistanceReady, travelledDistance, observedLapDistance, stop.HadStopSession, stop.BoardingChanged, bypass);
+                runDistanceReady, travelledDistance, observedLapDistance, stop.HadStopSession, stop.BoardingChanged,
+                m_Runtime.m_StopRuntime.IsDeparturePending(row.Vehicle),
+                m_Runtime.m_StopRuntime.IsOriginDepartureConfirmed(row.Vehicle, row.RegisteredLine), bypass);
             return true;
         }
 
@@ -1322,6 +1348,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             RailBaseline previous = m_Baselines.TryGetValue(row.Vehicle, out RailBaseline baseline) ? baseline : default;
             RailFrameWriteMask writes = row.Writes;
             RailFrameRow fresh = new RailFrameRow { Vehicle = row.Vehicle, CachedWaypoint = row.CachedWaypoint };
+            fresh.DepartureFrameWritten = row.DepartureFrameWritten;
             ReadNarrow(ref fresh, true);
             fresh.RegisteredLine = m_Runtime.m_VehicleView.TryGetLine(row.Vehicle, out Entity line) ? line : Entity.Null;
             fresh.RegistryState = m_Runtime.m_VehicleView.TryGetState(row.Vehicle, out VehicleState state) ? state : default;

@@ -20,13 +20,6 @@ namespace RapidTransitMod.Dispatch.Commands
             m_Host = host;
         }
 
-        public void CommitAssignedSlotHold(Entity vehicle, int slot, EntityCommandBuffer ecb)
-        {
-            PublicTransport publicTransport = m_Host.ReadPublicTransport(vehicle);
-            publicTransport.m_DepartureFrame = m_Host.Frame + 9999;
-            CommitPublicTransport(vehicle, publicTransport, ecb);
-        }
-
         public void CommitPublicTransport(
             Entity vehicle,
             PublicTransport publicTransport,

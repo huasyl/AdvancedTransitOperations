@@ -117,5 +117,11 @@ namespace RapidTransitMod.Broadcasting
         }
 
         internal void ClearFlags() => m_LineFlags.Clear();
+
+        internal void ClearFlags(string lineId)
+        {
+            if (!string.IsNullOrWhiteSpace(lineId))
+                m_LineFlags.Remove(lineId);
+        }
     }
 }
