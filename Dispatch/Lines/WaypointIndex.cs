@@ -23,12 +23,13 @@ namespace RapidTransitMod.Dispatch.Lines
 {
     internal sealed class WaypointIndex
     {
+        [System.Flags]
         private enum WaypointIndexStage : byte
         {
             None = 0,
             IndependentFailed = 1,
             IndependentConfirmed = 2,
-            Computed = 3,
+            Computed = 4,
         }
 
         private readonly ModRuntimeHostSystem m_Runtime;
@@ -41,7 +42,7 @@ namespace RapidTransitMod.Dispatch.Lines
             public bool Boarding;
             public WaypointIndexStage Stage;
             public int WaypointIndex;
-            public WaypointStationOutcome StationOutcome;
+            public int TargetWaypointIndex;
 
             public WaypointIndexFrameSnapshot(uint frame, Entity route, bool boarding)
             {
@@ -50,7 +51,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 Boarding = boarding;
                 Stage = WaypointIndexStage.None;
                 WaypointIndex = -1;
-                StationOutcome = default;
+                TargetWaypointIndex = -1;
             }
         }
 
@@ -64,16 +65,17 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity route = m_Runtime.m_Resolve.Line(vehicle);
             bool boarding = Boarding(vehicle);
             if (TryCurrentSnapshot(vehicle, route, boarding, out WaypointIndexFrameSnapshot snapshot)
-                && snapshot.Stage == WaypointIndexStage.Computed)
+                && (snapshot.Stage & WaypointIndexStage.Computed) != 0)
             {
                 return snapshot.WaypointIndex;
             }
 
-            int computedWaypointIndex = ComputeUncached(vehicle, route, boarding, ways);
+            int computedWaypointIndex = ComputeUncached(vehicle, route, boarding, ways, out int targetWaypointIndex);
             if (!TryCurrentSnapshot(vehicle, route, boarding, out snapshot))
                 snapshot = new WaypointIndexFrameSnapshot(m_Runtime.m_SimulationSystem.frameIndex, route, boarding);
-            snapshot.Stage = WaypointIndexStage.Computed;
+            snapshot.Stage |= WaypointIndexStage.Computed;
             snapshot.WaypointIndex = computedWaypointIndex;
+            snapshot.TargetWaypointIndex = targetWaypointIndex;
             m_FrameSnapshots[vehicle] = snapshot;
 
             return computedWaypointIndex;
@@ -98,8 +100,7 @@ namespace RapidTransitMod.Dispatch.Lines
             out int waypointIndex)
         {
             waypointIndex = -1;
-            WaypointStationOutcome outcome = CreateStationOutcome(vehicle);
-            return TryResolveTargetWaypoint(vehicle, ways, ref outcome, out waypointIndex, out _);
+            return TryResolveTargetWaypoint(vehicle, ways, out waypointIndex, out _);
         }
 
         public bool TryWindow(
@@ -195,7 +196,7 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity route = m_Runtime.m_Resolve.Line(vehicle);
             bool boarding = Boarding(vehicle);
             if (!TryCurrentSnapshot(vehicle, route, boarding, out WaypointIndexFrameSnapshot snapshot)
-                || snapshot.Stage != WaypointIndexStage.Computed)
+                || (snapshot.Stage & WaypointIndexStage.Computed) == 0)
                 return false;
 
             waypointIndex = snapshot.WaypointIndex;
@@ -208,10 +209,8 @@ namespace RapidTransitMod.Dispatch.Lines
             DynamicBuffer<RouteWaypoint> ways,
             bool hasHeadCurrentLane,
             TrainCurrentLane headCurrentLane,
-            out WaypointStationOutcome outcome,
             out int waypointIndex)
         {
-            outcome = CreateStationOutcome(vehicle);
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || m_Runtime.m_Resolve.Line(vehicle) != line
@@ -227,7 +226,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 ways,
                 hasHeadCurrentLane,
                 headCurrentLane,
-                ref outcome,
+                out _,
                 out waypointIndex);
         }
 
@@ -235,7 +234,8 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity vehicle,
             Entity line,
             bool boarding,
-            DynamicBuffer<RouteWaypoint> ways)
+            DynamicBuffer<RouteWaypoint> ways,
+            out int targetWaypointIndex)
         {
             bool allowTrackWaypointAnchoring = m_Runtime.m_VehicleView.TryGetState(
                 vehicle,
@@ -244,8 +244,7 @@ namespace RapidTransitMod.Dispatch.Lines
             bool captureStationOutcome = boarding
                 && allowTrackWaypointAnchoring
                 && RuntimeHotPathProbe.Enabled();
-            WaypointStationOutcome outcome = CreateStationOutcome(vehicle);
-            int targetWaypointIndex;
+            targetWaypointIndex = -1;
             int confirmedWaypointIndex = -1;
             bool hasBoardingConfirmation;
             if (boarding)
@@ -256,25 +255,22 @@ namespace RapidTransitMod.Dispatch.Lines
                     ways,
                     false,
                     default,
-                    ref outcome,
+                    out targetWaypointIndex,
                     out confirmedWaypointIndex);
-                targetWaypointIndex = outcome.TargetWaypointIndex;
             }
             else
             {
                 TryResolveTargetWaypoint(
                     vehicle,
                     ways,
-                    ref outcome,
                     out targetWaypointIndex,
                     out _);
                 hasBoardingConfirmation = false;
             }
             if (hasBoardingConfirmation)
             {
-                outcome.WaypointIndex = confirmedWaypointIndex;
                 if (captureStationOutcome)
-                    RecordStationOutcome(outcome);
+                    m_Runtime.m_RuntimeHotPathProbe.RecordWaypointStationOutcome(true);
                 return confirmedWaypointIndex;
             }
 
@@ -287,15 +283,13 @@ namespace RapidTransitMod.Dispatch.Lines
                     targetWaypointIndex,
                     out int currentWaypointIndex))
             {
-                outcome.WaypointIndex = currentWaypointIndex;
-                outcome.Evidence = WaypointStationEvidence.CurrentLaneWindow;
                 if (captureStationOutcome)
-                    RecordStationOutcome(outcome);
+                    m_Runtime.m_RuntimeHotPathProbe.RecordWaypointStationOutcome(true);
                 return currentWaypointIndex;
             }
 
             if (captureStationOutcome)
-                RecordStationOutcome(outcome);
+                m_Runtime.m_RuntimeHotPathProbe.RecordWaypointStationOutcome(false);
             return -1;
         }
 
@@ -305,27 +299,28 @@ namespace RapidTransitMod.Dispatch.Lines
             DynamicBuffer<RouteWaypoint> ways,
             bool hasHeadCurrentLane,
             TrainCurrentLane headCurrentLane,
-            ref WaypointStationOutcome outcome,
+            out int targetWaypointIndex,
             out int waypointIndex)
         {
+            targetWaypointIndex = -1;
             waypointIndex = -1;
             if (TryCurrentSnapshot(vehicle, line, true, out WaypointIndexFrameSnapshot snapshot)
-                && snapshot.Stage != WaypointIndexStage.None)
+                && (snapshot.Stage & (WaypointIndexStage.IndependentFailed | WaypointIndexStage.IndependentConfirmed)) != 0)
             {
-                outcome = snapshot.StationOutcome;
-                waypointIndex = snapshot.Stage == WaypointIndexStage.IndependentConfirmed
-                    || (snapshot.Stage == WaypointIndexStage.Computed
-                        && (outcome.Evidence == WaypointStationEvidence.Confirmed
-                            || outcome.Evidence == WaypointStationEvidence.OutsideConfirmed))
-                    ? snapshot.WaypointIndex
-                    : -1;
-                return waypointIndex >= 0;
+                targetWaypointIndex = snapshot.TargetWaypointIndex;
+                if ((snapshot.Stage & WaypointIndexStage.IndependentConfirmed) != 0)
+                {
+                    waypointIndex = snapshot.WaypointIndex;
+                    return waypointIndex >= 0;
+                }
+
+                return false;
             }
 
             if (!TryResolveTargetWaypoint(
-                    vehicle, ways, ref outcome, out int targetWaypointIndex, out Entity targetWaypoint))
+                    vehicle, ways, out targetWaypointIndex, out Entity targetWaypoint))
             {
-                StoreIndependentResult(vehicle, line, false, -1, outcome);
+                StoreIndependentResult(vehicle, line, false, targetWaypointIndex, -1);
                 return false;
             }
 
@@ -334,20 +329,17 @@ namespace RapidTransitMod.Dispatch.Lines
                 || !TryResolveBoardingTarget(
                     vehicle,
                     targetWaypoint,
-                    ref outcome,
                     out Entity targetBuilding,
                     out bool outsideConfirmed))
             {
-                StoreIndependentResult(vehicle, line, false, -1, outcome);
+                StoreIndependentResult(vehicle, line, false, targetWaypointIndex, -1);
                 return false;
             }
 
             if (outsideConfirmed)
             {
                 waypointIndex = targetWaypointIndex;
-                outcome.WaypointIndex = waypointIndex;
-                outcome.Evidence = WaypointStationEvidence.OutsideConfirmed;
-                StoreIndependentResult(vehicle, line, true, waypointIndex, outcome);
+                StoreIndependentResult(vehicle, line, true, targetWaypointIndex, waypointIndex);
                 return true;
             }
 
@@ -357,17 +349,14 @@ namespace RapidTransitMod.Dispatch.Lines
                     targetWaypoint,
                     targetBuilding,
                     hasHeadCurrentLane,
-                    headCurrentLane,
-                    ref outcome))
+                    headCurrentLane))
             {
-                StoreIndependentResult(vehicle, line, false, -1, outcome);
+                StoreIndependentResult(vehicle, line, false, targetWaypointIndex, -1);
                 return false;
             }
 
             waypointIndex = targetWaypointIndex;
-            outcome.WaypointIndex = waypointIndex;
-            outcome.Evidence = WaypointStationEvidence.Confirmed;
-            StoreIndependentResult(vehicle, line, true, waypointIndex, outcome);
+            StoreIndependentResult(vehicle, line, true, targetWaypointIndex, waypointIndex);
             return true;
         }
 
@@ -375,8 +364,8 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity vehicle,
             Entity line,
             bool confirmed,
-            int waypointIndex,
-            WaypointStationOutcome outcome)
+            int targetWaypointIndex,
+            int waypointIndex)
         {
             WaypointIndexFrameSnapshot snapshot = new WaypointIndexFrameSnapshot(
                 m_Runtime.m_SimulationSystem.frameIndex,
@@ -386,39 +375,13 @@ namespace RapidTransitMod.Dispatch.Lines
                 ? WaypointIndexStage.IndependentConfirmed
                 : WaypointIndexStage.IndependentFailed;
             snapshot.WaypointIndex = waypointIndex;
-            snapshot.StationOutcome = outcome;
+            snapshot.TargetWaypointIndex = targetWaypointIndex;
             m_FrameSnapshots[vehicle] = snapshot;
-        }
-
-        private WaypointStationOutcome CreateStationOutcome(Entity vehicle)
-        {
-            WaypointStationOutcome outcome = new WaypointStationOutcome
-            {
-                Frame = m_Runtime.m_SimulationSystem.frameIndex,
-                Vehicle = vehicle,
-                TargetWaypointIndex = -1,
-                CachedWaypointIndex = -1,
-                WaypointIndex = -1,
-                Evidence = WaypointStationEvidence.CurrentLaneUnavailable
-            };
-            if (RuntimeHotPathProbe.Enabled()
-                && m_Runtime.m_CachedWpIdx.TryGetValue(vehicle, out int cachedWaypoint))
-            {
-                outcome.CachedWaypointIndex = cachedWaypoint;
-            }
-
-            return outcome;
-        }
-
-        private void RecordStationOutcome(WaypointStationOutcome outcome)
-        {
-            m_Runtime.m_RuntimeHotPathProbe.RecordWaypointStationOutcome(outcome);
         }
 
         private bool TryResolveTargetWaypoint(
             Entity vehicle,
             DynamicBuffer<RouteWaypoint> ways,
-            ref WaypointStationOutcome outcome,
             out int targetWaypointIndex,
             out Entity targetWaypoint)
         {
@@ -426,27 +389,22 @@ namespace RapidTransitMod.Dispatch.Lines
             targetWaypoint = Entity.Null;
             if (!m_Runtime.m_RailEventSource.TryReadTargetForWrite(vehicle, out Target target))
             {
-                outcome.Evidence = WaypointStationEvidence.TargetUnavailable;
                 return false;
             }
 
             targetWaypoint = target.m_Target;
-            outcome.Target = targetWaypoint;
             if (targetWaypoint == Entity.Null
                 || !m_Runtime.EntityManager.Exists(targetWaypoint)
                 || !m_Runtime.EntityManager.HasComponent<Waypoint>(targetWaypoint))
             {
-                outcome.Evidence = WaypointStationEvidence.TargetUnavailable;
                 return false;
             }
 
             targetWaypointIndex = m_Runtime.EntityManager.GetComponentData<Waypoint>(targetWaypoint).m_Index;
-            outcome.TargetWaypointIndex = targetWaypointIndex;
             if (targetWaypointIndex < 0
                 || targetWaypointIndex >= ways.Length
                 || ways[targetWaypointIndex].m_Waypoint != targetWaypoint)
             {
-                outcome.Evidence = WaypointStationEvidence.TargetNotOnLine;
                 return false;
             }
 
@@ -456,7 +414,6 @@ namespace RapidTransitMod.Dispatch.Lines
         private bool TryResolveBoardingTarget(
             Entity vehicle,
             Entity targetWaypoint,
-            ref WaypointStationOutcome outcome,
             out Entity targetBuilding,
             out bool outsideConfirmed)
         {
@@ -464,30 +421,24 @@ namespace RapidTransitMod.Dispatch.Lines
             outsideConfirmed = false;
             if (!m_Runtime.EntityManager.HasComponent<Connected>(targetWaypoint))
             {
-                outcome.Evidence = WaypointStationEvidence.StopUnavailable;
                 return false;
             }
 
             Entity targetStop = m_Runtime.EntityManager.GetComponentData<Connected>(targetWaypoint).m_Connected;
-            outcome.BoardingStop = targetStop;
             if (targetStop == Entity.Null
                 || !m_Runtime.EntityManager.Exists(targetStop)
                 || !m_Runtime.EntityManager.HasComponent<BoardingVehicle>(targetStop))
             {
-                outcome.Evidence = WaypointStationEvidence.StopUnavailable;
                 return false;
             }
 
             Entity boardingVehicle = m_Runtime.EntityManager.GetComponentData<BoardingVehicle>(targetStop).m_Vehicle;
-            outcome.BoardingVehicle = boardingVehicle;
             if (boardingVehicle != vehicle)
             {
-                outcome.Evidence = WaypointStationEvidence.BoardingVehicleMismatch;
                 return false;
             }
 
             targetBuilding = m_Runtime.m_Resolve.PassingStation(targetStop);
-            outcome.TargetBuilding = targetBuilding;
             if (m_Runtime.EntityManager.HasComponent<Game.Objects.OutsideConnection>(targetStop))
             {
                 outsideConfirmed = true;
@@ -609,14 +560,12 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity targetWaypoint,
             Entity targetBuilding,
             bool hasHeadCurrentLane,
-            TrainCurrentLane headCurrentLane,
-            ref WaypointStationOutcome outcome)
+            TrainCurrentLane headCurrentLane)
         {
             bool tramStop = targetBuilding == Entity.Null
                 && TransportModeResolver.Resolve(m_Runtime.EntityManager, line) == TransitMode.Tram;
             if (targetBuilding == Entity.Null && !tramStop)
             {
-                outcome.Evidence = WaypointStationEvidence.TrackStationUnavailable;
                 return false;
             }
 
@@ -626,7 +575,6 @@ namespace RapidTransitMod.Dispatch.Lines
             {
                 if (!m_Runtime.EntityManager.HasComponent<RouteLane>(targetWaypoint))
                 {
-                    outcome.Evidence = WaypointStationEvidence.TrackLaneUnavailable;
                     return false;
                 }
 
@@ -648,8 +596,7 @@ namespace RapidTransitMod.Dispatch.Lines
                     tramStartLane,
                     tramEndLane,
                     hasHeadCurrentLane,
-                    headCurrentLane,
-                    ref outcome))
+                    headCurrentLane))
                 return true;
             if (head != vehicle
                 && TryMatchCarriageTrack(
@@ -659,22 +606,19 @@ namespace RapidTransitMod.Dispatch.Lines
                     tramStartLane,
                     tramEndLane,
                     false,
-                    default,
-                    ref outcome))
+                    default))
             {
                 return true;
             }
 
             if (!m_Runtime.EntityManager.HasBuffer<LayoutElement>(vehicle))
             {
-                SetTrackFailure(targetBuilding, ref outcome);
                 return false;
             }
 
             DynamicBuffer<LayoutElement> layout = m_Runtime.EntityManager.GetBuffer<LayoutElement>(vehicle, true);
             if (layout.Length == 0)
             {
-                SetTrackFailure(targetBuilding, ref outcome);
                 return false;
             }
 
@@ -689,28 +633,12 @@ namespace RapidTransitMod.Dispatch.Lines
                     tramStartLane,
                     tramEndLane,
                     false,
-                    default,
-                    ref outcome))
+                    default))
             {
                 return true;
             }
 
-            SetTrackFailure(targetBuilding, ref outcome);
             return false;
-        }
-
-        private static void SetTrackFailure(
-            Entity targetBuilding,
-            ref WaypointStationOutcome outcome)
-        {
-            if (outcome.TrackLane == Entity.Null)
-                outcome.Evidence = WaypointStationEvidence.TrackLaneUnavailable;
-            else if (targetBuilding != Entity.Null && outcome.TrackBuilding == Entity.Null)
-                outcome.Evidence = WaypointStationEvidence.TrackStationUnavailable;
-            else
-                outcome.Evidence = targetBuilding == Entity.Null
-                    ? WaypointStationEvidence.TrackLaneMismatch
-                    : WaypointStationEvidence.TrackStationMismatch;
         }
 
         private Entity ResolveHead(Entity vehicle)
@@ -729,8 +657,7 @@ namespace RapidTransitMod.Dispatch.Lines
             Entity tramStartLane,
             Entity tramEndLane,
             bool hasKnownCurrentLane,
-            TrainCurrentLane knownCurrentLane,
-            ref WaypointStationOutcome outcome)
+            TrainCurrentLane knownCurrentLane)
         {
             if (carriage == Entity.Null || !m_Runtime.EntityManager.Exists(carriage))
                 return false;
@@ -746,31 +673,23 @@ namespace RapidTransitMod.Dispatch.Lines
                     return false;
                 currentLane = m_Runtime.EntityManager.GetComponentData<TrainCurrentLane>(carriage);
             }
-            outcome.Carriage = carriage;
-            if (TryMatchLane(currentLane.m_Front.m_Lane, false, targetBuilding, tramStop, tramStartLane, tramEndLane, ref outcome))
+            if (TryMatchLane(currentLane.m_Front.m_Lane, targetBuilding, tramStop, tramStartLane, tramEndLane))
                 return true;
-            return TryMatchLane(currentLane.m_Rear.m_Lane, true, targetBuilding, tramStop, tramStartLane, tramEndLane, ref outcome);
+            return TryMatchLane(currentLane.m_Rear.m_Lane, targetBuilding, tramStop, tramStartLane, tramEndLane);
         }
 
         private bool TryMatchLane(
             Entity lane,
-            bool rear,
             Entity targetBuilding,
             bool tramStop,
             Entity tramStartLane,
-            Entity tramEndLane,
-            ref WaypointStationOutcome outcome)
+            Entity tramEndLane)
         {
-            outcome.TrackLane = lane;
-            outcome.TrackLaneRear = rear;
-            outcome.TrackBuilding = Entity.Null;
-            outcome.LaneOwner = Entity.Null;
             if (lane == Entity.Null || !m_Runtime.EntityManager.Exists(lane))
                 return false;
             if (targetBuilding != Entity.Null)
             {
                 Entity trackBuilding = m_Runtime.m_Resolve.PassingStation(lane);
-                outcome.TrackBuilding = trackBuilding;
                 return trackBuilding != Entity.Null && trackBuilding == targetBuilding;
             }
             return tramStop && (lane == tramStartLane || lane == tramEndLane);

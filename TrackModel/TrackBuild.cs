@@ -76,7 +76,6 @@ namespace RapidTransitMod.TrackModel
             internal readonly TrackWaypointInputBaseline[] WaypointInputs;
             internal readonly TrackSegmentInputBaseline[] SegmentInputs;
             internal readonly List<TrackExtensionRange> ExtensionRanges;
-            internal readonly string ExtensionBuildNote;
             internal readonly bool ChainComplete;
             internal readonly bool HasStationTrackExtensions;
             internal bool HasData => Atoms != null
@@ -89,7 +88,6 @@ namespace RapidTransitMod.TrackModel
                 TrackWaypointInputBaseline[] waypointInputs,
                 TrackSegmentInputBaseline[] segmentInputs,
                 List<TrackExtensionRange> extensionRanges,
-                string extensionBuildNote,
                 bool chainComplete,
                 bool hasStationTrackExtensions)
             {
@@ -98,7 +96,6 @@ namespace RapidTransitMod.TrackModel
                 WaypointInputs = waypointInputs;
                 SegmentInputs = segmentInputs;
                 ExtensionRanges = extensionRanges;
-                ExtensionBuildNote = extensionBuildNote ?? string.Empty;
                 ChainComplete = chainComplete;
                 HasStationTrackExtensions = hasStationTrackExtensions;
             }
@@ -145,7 +142,6 @@ namespace RapidTransitMod.TrackModel
             out TrackWaypointInputBaseline[] refreshedWaypointInputs,
             out TrackSegmentInputBaseline[] refreshedSegmentInputs,
             out List<TrackExtensionRange> refreshedExtensionRanges,
-            out string extensionBuildNote,
             out bool scanComplete,
             out bool scanUnchanged,
             out bool hasStationTrackExtensions)
@@ -171,10 +167,6 @@ namespace RapidTransitMod.TrackModel
             refreshedWaypointInputs = new TrackWaypointInputBaseline[waypoints.Length];
             refreshedSegmentInputs = new TrackSegmentInputBaseline[segments.Length];
             refreshedExtensionRanges = new List<TrackExtensionRange>();
-            extensionBuildNote = string.Empty;
-            List<string> extensionNotes = RtLog.CacheInvalidationDiagnosticsEnabled
-                ? new List<string>(3)
-                : null;
             scanComplete = false;
             scanUnchanged = false;
             hasStationTrackExtensions = false;
@@ -319,7 +311,6 @@ namespace RapidTransitMod.TrackModel
                     refreshedAtoms,
                     refreshedRanges,
                     refreshedExtensionRanges,
-                    extensionNotes,
                     buildInputs,
                     pathTurnbacks);
                 bool stationExtensions = AppendStationTrackAtoms(
@@ -329,7 +320,6 @@ namespace RapidTransitMod.TrackModel
                     refreshedAtoms,
                     refreshedRanges,
                     refreshedExtensionRanges,
-                    extensionNotes,
                     buildInputs,
                     pathTurnbacks);
                 hasStationTrackExtensions = pathTurnbackExtensions || stationExtensions;
@@ -363,8 +353,6 @@ namespace RapidTransitMod.TrackModel
                     }
                 }
             }
-            if (extensionNotes != null && extensionNotes.Count > 0)
-                extensionBuildNote = string.Join(";", extensionNotes);
             hash = MixLineTrackChainSignature(hash, chainComplete ? 1 : 0);
             signature = hash;
             scanComplete = chainComplete
@@ -508,7 +496,6 @@ namespace RapidTransitMod.TrackModel
             TrackWaypointInputBaseline[] refreshedWaypointInputs = null;
             TrackSegmentInputBaseline[] refreshedSegmentInputs = null;
             List<TrackExtensionRange> refreshedExtensionRanges = null;
-            string extensionBuildNote = string.Empty;
             bool scanComplete = false;
             bool scanUnchanged = false;
             equivalentRefresh = TryScanDirtyChain(
@@ -522,7 +509,6 @@ namespace RapidTransitMod.TrackModel
                 out refreshedWaypointInputs,
                 out refreshedSegmentInputs,
                 out refreshedExtensionRanges,
-                out extensionBuildNote,
                 out scanComplete,
                 out scanUnchanged,
                 out bool hasStationTrackExtensions);
@@ -598,7 +584,6 @@ namespace RapidTransitMod.TrackModel
                 refreshedWaypointInputs,
                 refreshedSegmentInputs,
                 refreshedExtensionRanges,
-                extensionBuildNote,
                 scanComplete,
                 hasStationTrackExtensions);
             chain = BuildLineTrackChain(line, waypoints, segments, signature, scan);
@@ -617,8 +602,6 @@ namespace RapidTransitMod.TrackModel
                     + " oldAtoms=" + previousAtomCount
                     + " newAtoms=" + chain.TrackAtoms.Count
                     + " extensions=" + chain.TrackExtensionRanges.Count
-                    + " extensionRanges=" + FormatExtensionRanges(chain.TrackExtensionRanges)
-                    + " extensionNote=" + (string.IsNullOrEmpty(scan.ExtensionBuildNote) ? "-" : scan.ExtensionBuildNote)
                     + " frame=" + nowFrame);
             }
             if (previousChain != null)
@@ -822,7 +805,6 @@ namespace RapidTransitMod.TrackModel
             List<TrackAtom> atoms,
             List<TrackSegmentRange> ranges,
             List<TrackExtensionRange> extensionRanges,
-            List<string> extensionNotes,
             TrackBuildInputs buildInputs,
             bool[] pathTurnbacks)
         {
@@ -842,14 +824,9 @@ namespace RapidTransitMod.TrackModel
                             ranges,
                             extensionRanges,
                             waypointIndex,
-                            building,
-                            out bool tramTurnbackCandidate))
+                            building))
                     {
                         changed = true;
-                    }
-                    else if (tramTurnbackCandidate)
-                    {
-                        AppendExtensionNote(extensionNotes, "tram:wp" + waypointIndex + ":lane-or-exit-unconfirmed");
                     }
                     continue;
                 }
@@ -883,12 +860,9 @@ namespace RapidTransitMod.TrackModel
                     building,
                     float.PositiveInfinity,
                     stationPath,
-                    out bool reachedBoundary,
                     buildInputs);
                 if (!hasStationPath)
                 {
-                    if (!reachedBoundary)
-                        AppendExtensionNote(extensionNotes, "station:wp" + waypointIndex + ":path-unconfirmed");
                     continue;
                 }
 
@@ -906,8 +880,6 @@ namespace RapidTransitMod.TrackModel
 
                 if (!outgoingConnected || additions.Count == 0)
                 {
-                    if (!outgoingConnected)
-                        AppendExtensionNote(extensionNotes, "station:wp" + waypointIndex + ":exit-unconfirmed");
                     continue;
                 }
 
@@ -1019,7 +991,6 @@ namespace RapidTransitMod.TrackModel
             List<TrackAtom> atoms,
             List<TrackSegmentRange> ranges,
             List<TrackExtensionRange> extensionRanges,
-            List<string> extensionNotes,
             TrackBuildInputs buildInputs,
             bool[] pathTurnbacks)
         {
@@ -1086,10 +1057,6 @@ namespace RapidTransitMod.TrackModel
                         changed = true;
                         if (previousSegmentIndex != segmentIndex)
                             pathTurnbacks[segmentIndex] = true;
-                    }
-                    else if (pathTurnbackPair)
-                    {
-                        AppendExtensionNote(extensionNotes, "path:seg" + segmentIndex + ":extension-unconfirmed");
                     }
 
                     previous = current;
@@ -1170,7 +1137,6 @@ namespace RapidTransitMod.TrackModel
                     building,
                     maxDistance,
                     stationPath,
-                    out _,
                     buildInputs))
             {
                 return false;
@@ -1243,41 +1209,14 @@ namespace RapidTransitMod.TrackModel
             return math.dot(incomingTangent, outgoingTangent) * tangentDirection < 0f;
         }
 
-        private static void AppendExtensionNote(List<string> notes, string note)
-        {
-            if (notes != null && notes.Count < 3)
-                notes.Add(note);
-        }
-
-        private static string FormatExtensionRanges(List<TrackExtensionRange> ranges)
-        {
-            if (ranges == null || ranges.Count == 0)
-                return "-";
-
-            int count = math.min(3, ranges.Count);
-            string value = string.Empty;
-            for (int index = 0; index < count; index++)
-            {
-                TrackExtensionRange range = ranges[index];
-                if (index > 0)
-                    value += ";";
-                value += range.StartAtomIndex + ">"
-                    + range.ForwardEndAtomIndexExclusive + ">"
-                    + range.ResumeAtomIndex;
-            }
-            return ranges.Count > count ? value + ";..." : value;
-        }
-
         private bool TryAppendTramStopTurnback(
             DynamicBuffer<RouteWaypoint> waypoints,
             List<TrackAtom> atoms,
             List<TrackSegmentRange> ranges,
             List<TrackExtensionRange> extensionRanges,
             int waypointIndex,
-            Entity building,
-            out bool candidate)
+            Entity building)
         {
-            candidate = false;
             Entity waypoint = waypoints[waypointIndex].m_Waypoint;
             if (waypoint == Entity.Null
                 || building != Entity.Null
@@ -1297,7 +1236,6 @@ namespace RapidTransitMod.TrackModel
             {
                 return false;
             }
-            candidate = true;
 
             int incomingSegment = waypointIndex == 0 ? ranges.Count - 1 : waypointIndex - 1;
             TrackSegmentRange incomingRange = ranges[incomingSegment];
@@ -1366,10 +1304,8 @@ namespace RapidTransitMod.TrackModel
             Entity building,
             float maxDistance,
             List<TrackAtom> stationPath,
-            out bool reachedBoundary,
             TrackBuildInputs buildInputs)
         {
-            reachedBoundary = false;
             if (lane == Entity.Null
                 || !EntityManager.HasComponent<TrackLane>(lane)
                 || !EntityManager.HasComponent<Lane>(lane)
@@ -1392,7 +1328,6 @@ namespace RapidTransitMod.TrackModel
             }
             if (limitReached)
             {
-                reachedBoundary = true;
                 return stationPath.Count > 0;
             }
             var visited = new List<Entity> { lane };
@@ -1407,7 +1342,6 @@ namespace RapidTransitMod.TrackModel
                     out bool nextForward,
                     buildInputs))
                 {
-                    reachedBoundary = true;
                     return stationPath.Count > 0;
                 }
                 if (visited.Contains(nextLane))
@@ -1415,7 +1349,6 @@ namespace RapidTransitMod.TrackModel
                 if (building != Entity.Null
                     && m_Support.ResolvePassingStationBuilding(nextLane) != building)
                 {
-                    reachedBoundary = true;
                     return stationPath.Count > 0;
                 }
                 if (!EntityManager.HasComponent<TrackLane>(nextLane)
@@ -1438,7 +1371,6 @@ namespace RapidTransitMod.TrackModel
                 visited.Add(nextLane);
                 if (limitReached)
                 {
-                    reachedBoundary = true;
                     return stationPath.Count > 0;
                 }
                 currentLane = nextLane;
