@@ -78,30 +78,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             public RailFrameWriteMask Writes;
         }
 
-        private struct BoardingTraceState
-        {
-            public bool TargetKnown;
-            public Entity Target;
-            public bool HasSession;
-            public int SessionWaypoint;
-            public Entity SessionWaypointEntity;
-            public Entity NextWaypointEntity;
-            public Entity Station;
-            public bool StationBoardingKnown;
-            public bool StationBoardingSelf;
-            public bool HasControllerPath;
-            public PathOwner ControllerPath;
-            public int PathElementCount;
-            public bool HeadKnown;
-            public Entity Head;
-            public bool EndOfPath;
-            public bool EndReached;
-            public bool MovingKnown;
-            public bool Moving;
-            public bool TargetIsOwner;
-            public bool InvalidTarget;
-        }
-
         private readonly ModRuntimeHostSystem m_Runtime;
         private readonly Dictionary<Entity, RailBaseline> m_Baselines = new Dictionary<Entity, RailBaseline>();
         private readonly Dictionary<Entity, RuntimeDemandMask> m_Demands = new Dictionary<Entity, RuntimeDemandMask>();
@@ -775,23 +751,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (rowIndex < 0)
                 return;
             RailFrameRow row = m_FrameRows[rowIndex];
-            bool boardingBefore = OfficialBoarding(row);
-            bool boardingAfter = (value.m_State & PublicTransportFlags.Boarding) != 0;
-            uint departureBefore = row.HasPublicTransport ? row.PublicTransport.m_DepartureFrame : 0u;
             row.PublicTransport = value;
             row.HasPublicTransport = true;
             row.Writes |= RailFrameWriteMask.PublicTransport;
             m_FrameRows[rowIndex] = row;
-            if (boardingBefore != boardingAfter)
-            {
-                LogDirectBoardingWrite(
-                    vehicle,
-                    frame,
-                    boardingBefore,
-                    departureBefore,
-                    value.m_DepartureFrame,
-                    row);
-            }
             if ((frame & 15u) != 3u || CollectedThisFrame(frame))
                 UpdateBaseline(row);
         }
@@ -803,8 +766,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return;
             RailFrameRow row = m_FrameRows[rowIndex];
             bool changed = !row.HasTarget || row.Target.m_Target != value.m_Target;
-            Target before = row.Target;
-            bool hadTarget = row.HasTarget;
             row.Target = value;
             row.HasTarget = true;
             row.Writes |= RailFrameWriteMask.Target;
@@ -815,7 +776,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 m_Runtime.m_TrackProjection.Cursors.Remove(vehicle, keepCursor: true);
                 m_Runtime.m_TrackProjection.ClearFacts(vehicle);
                 m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots(row.RegisteredLine);
-                LogTargetWrite(vehicle, frame, before, hadTarget, value, row);
             }
             if ((frame & 15u) != 3u || CollectedThisFrame(frame))
                 UpdateBaseline(row);
@@ -844,20 +804,12 @@ namespace RapidTransitMod.Dispatch.Runtime
             if (rowIndex < 0)
                 return;
             RailFrameRow row = m_FrameRows[rowIndex];
-            bool changed = !row.HasPath
-                || row.Path.m_State != value.m_State
-                || row.PathElementCount != pathElementCount;
-            PathOwner before = row.Path;
-            bool hadPath = row.HasPath;
-            int countBefore = row.PathElementCount;
             row.Path = value;
             row.HasPath = true;
             row.HasPathBuffer = hasPathElements;
             row.PathElementCount = pathElementCount;
             row.Writes |= RailFrameWriteMask.Path;
             m_FrameRows[rowIndex] = row;
-            if (changed)
-                LogPathWrite(vehicle, frame, before, hadPath, countBefore, value, pathElementCount, row);
             if ((frame & 15u) != 3u || CollectedThisFrame(frame))
                 UpdateBaseline(row);
         }
@@ -1288,358 +1240,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             return true;
         }
 
-        private void LogSourceBoardingEdge(
-            Entity vehicle,
-            uint frame,
-            PublicTransport before,
-            PublicTransport after,
-            RailFrameRow row)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-
-            BoardingTraceState state = CollectTraceState(vehicle, row);
-            bool opened = (after.m_State & PublicTransportFlags.Boarding) != 0;
-            ClassifySourceEdge(
-                opened,
-                before.m_DepartureFrame,
-                after.m_DepartureFrame,
-                state,
-                out string classification,
-                out string confidence);
-            LogBoardingTrace(
-                vehicle,
-                frame,
-                "live/non-mod",
-                "boarding-edge",
-                opened ? "open" : "close",
-                classification,
-                confidence,
-                before.m_DepartureFrame,
-                after.m_DepartureFrame,
-                state,
-                string.Empty);
-        }
-
-        private void LogDirectBoardingWrite(
-            Entity vehicle,
-            uint frame,
-            bool before,
-            uint departureBefore,
-            uint departureAfter,
-            RailFrameRow row)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-
-            BoardingTraceState state = CollectTraceState(vehicle, row);
-            LogBoardingTrace(
-                vehicle,
-                frame,
-                "mod/direct",
-                "boarding-write",
-                before ? "close" : "open",
-                "mod-direct-boarding",
-                "definite",
-                departureBefore,
-                departureAfter,
-                state,
-                string.Empty);
-        }
-
-        private void LogTargetWrite(
-            Entity vehicle,
-            uint frame,
-            Target before,
-            bool hadBefore,
-            Target after,
-            RailFrameRow row)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-            if (!m_Runtime.m_StopRuntime.TryGetSessionWaypoint(vehicle, out _))
-                return;
-
-            BoardingTraceState state = CollectTraceState(vehicle, row);
-            if (!state.HasSession)
-                return;
-
-            string beforeTarget = hadBefore ? TraceEntity(before.m_Target) : "missing";
-            string beforeRelation = hadBefore ? TraceRelation(before.m_Target, state) : "missing";
-            LogBoardingTrace(
-                vehicle,
-                frame,
-                "mod/direct",
-                "target-write",
-                "none",
-                "mod-target-link",
-                "clue",
-                0u,
-                0u,
-                state,
-                " targetBefore=" + beforeTarget
-                    + " targetAfter=" + TraceEntity(after.m_Target)
-                    + " targetBeforeRelation=" + beforeRelation
-                    + " targetAfterRelation=" + TraceRelation(after.m_Target, state));
-        }
-
-        private void LogPathWrite(
-            Entity vehicle,
-            uint frame,
-            PathOwner before,
-            bool hadBefore,
-            int countBefore,
-            PathOwner after,
-            int countAfter,
-            RailFrameRow row)
-        {
-            if (!RtLog.VerboseEnabled)
-                return;
-            if (!m_Runtime.m_StopRuntime.TryGetSessionWaypoint(vehicle, out _))
-                return;
-
-            BoardingTraceState state = CollectTraceState(vehicle, row);
-            if (!state.HasSession)
-                return;
-
-            LogBoardingTrace(
-                vehicle,
-                frame,
-                "mod/direct",
-                "path-write",
-                "none",
-                "mod-path-link",
-                "clue",
-                0u,
-                0u,
-                state,
-                " pathBefore=" + TracePath(before, hadBefore)
-                    + " pathBeforeCount=" + (hadBefore ? countBefore.ToString() : "missing")
-                    + " pathAfter=" + TracePath(after, true)
-                    + " pathAfterCount=" + countAfter);
-        }
-
-        private BoardingTraceState CollectTraceState(Entity vehicle, RailFrameRow row)
-        {
-            BoardingTraceState state = new BoardingTraceState
-            {
-                SessionWaypoint = -1,
-                PathElementCount = -1,
-                Head = Entity.Null,
-                Station = Entity.Null
-            };
-            EntityManager entityManager = m_Runtime.EntityManager;
-            if (row.TargetLoaded)
-            {
-                state.TargetKnown = row.HasTarget;
-                state.Target = row.Target.m_Target;
-            }
-            else
-            {
-                state.TargetKnown = entityManager.HasComponent<Target>(vehicle);
-                if (state.TargetKnown)
-                    state.Target = entityManager.GetComponentData<Target>(vehicle).m_Target;
-            }
-
-            Entity route = entityManager.HasComponent<CurrentRoute>(vehicle)
-                ? entityManager.GetComponentData<CurrentRoute>(vehicle).m_Route
-                : row.CurrentRoute;
-            state.HasSession = m_Runtime.m_StopRuntime.TryGetSessionWaypoint(vehicle, out state.SessionWaypoint);
-            if (state.HasSession
-                && TryGetWaypointsForRoute(route, out _, out DynamicBuffer<RouteWaypoint> waypoints)
-                && state.SessionWaypoint >= 0
-                && state.SessionWaypoint < waypoints.Length)
-            {
-                state.SessionWaypointEntity = waypoints[state.SessionWaypoint].m_Waypoint;
-                int nextWaypoint = state.SessionWaypoint + 1;
-                if (nextWaypoint >= waypoints.Length)
-                    nextWaypoint = 0;
-                state.NextWaypointEntity = waypoints[nextWaypoint].m_Waypoint;
-                if (state.SessionWaypointEntity != Entity.Null
-                    && entityManager.HasComponent<Connected>(state.SessionWaypointEntity))
-                {
-                    state.Station = entityManager.GetComponentData<Connected>(state.SessionWaypointEntity).m_Connected;
-                    if (state.Station != Entity.Null
-                        && entityManager.HasComponent<BoardingVehicle>(state.Station))
-                    {
-                        state.StationBoardingKnown = true;
-                        state.StationBoardingSelf = entityManager
-                            .GetComponentData<BoardingVehicle>(state.Station).m_Vehicle == vehicle;
-                    }
-                }
-            }
-
-            if (row.PathLoaded)
-            {
-                state.HasControllerPath = row.HasPath;
-                state.ControllerPath = row.Path;
-                state.PathElementCount = row.HasPath ? row.PathElementCount : -1;
-            }
-            else
-            {
-                state.HasControllerPath = entityManager.HasComponent<PathOwner>(vehicle);
-                if (state.HasControllerPath)
-                    state.ControllerPath = entityManager.GetComponentData<PathOwner>(vehicle);
-                state.PathElementCount = entityManager.HasBuffer<PathElement>(vehicle)
-                    ? entityManager.GetBuffer<PathElement>(vehicle, true).Length
-                    : -1;
-            }
-
-            if (entityManager.HasBuffer<LayoutElement>(vehicle))
-            {
-                DynamicBuffer<LayoutElement> layout = entityManager.GetBuffer<LayoutElement>(vehicle, true);
-                state.Head = layout.Length == 0 ? vehicle : layout[0].m_Vehicle;
-                if (state.Head != Entity.Null
-                    && entityManager.Exists(state.Head)
-                    && entityManager.HasComponent<TrainCurrentLane>(state.Head))
-                {
-                    TrainCurrentLane currentLane = entityManager.GetComponentData<TrainCurrentLane>(state.Head);
-                    state.HeadKnown = true;
-                    state.EndOfPath = (currentLane.m_Front.m_LaneFlags & TrainLaneFlags.EndOfPath) != 0;
-                    state.EndReached = (currentLane.m_Front.m_LaneFlags & TrainLaneFlags.EndReached) != 0;
-                }
-            }
-
-            if (row.MovingKnown)
-            {
-                state.MovingKnown = true;
-                state.Moving = row.Moving;
-            }
-            else if (entityManager.HasComponent<Moving>(vehicle))
-            {
-                state.MovingKnown = true;
-                state.Moving = math.lengthsq(entityManager.GetComponentData<Moving>(vehicle).m_Velocity) > DepartureMovingSpeedSq;
-            }
-
-            state.InvalidTarget = !state.TargetKnown
-                || state.Target == Entity.Null
-                || !entityManager.Exists(state.Target);
-            state.TargetIsOwner = state.TargetKnown
-                && state.Target != Entity.Null
-                && entityManager.HasComponent<Owner>(vehicle)
-                && entityManager.GetComponentData<Owner>(vehicle).m_Owner == state.Target;
-            return state;
-        }
-
-        private static void ClassifySourceEdge(
-            bool opened,
-            uint departureBefore,
-            uint departureAfter,
-            BoardingTraceState state,
-            out string classification,
-            out string confidence)
-        {
-            string relation = TraceRelation(state.Target, state);
-            bool pathEndReached = state.HeadKnown && state.EndOfPath && state.EndReached;
-            if (opened
-                && state.HasSession
-                && relation == "session"
-                && state.StationBoardingKnown
-                && state.StationBoardingSelf
-                && departureBefore != departureAfter)
-            {
-                classification = "vanilla-begin-boarding";
-                confidence = "definite";
-                return;
-            }
-
-            if (!opened && relation == "next")
-            {
-                classification = "vanilla-normal-end-boarding";
-                confidence = "high";
-                return;
-            }
-
-            if (!opened
-                && state.HasSession
-                && relation == "session"
-                && state.HeadKnown
-                && !pathEndReached)
-            {
-                classification = "vanilla-forced-midstop-close";
-                confidence = "high";
-                return;
-            }
-
-            bool invalidPath = state.HasControllerPath
-                && (state.ControllerPath.m_State & (PathFlags.Failed | PathFlags.Stuck | PathFlags.Obsolete)) != 0;
-            if (!opened && (state.InvalidTarget || state.TargetIsOwner || invalidPath))
-            {
-                classification = "vanilla-invalid-return-close";
-                confidence = "high";
-                return;
-            }
-
-            classification = "unclassified";
-            confidence = "low";
-        }
-
-        private void LogBoardingTrace(
-            Entity vehicle,
-            uint frame,
-            string source,
-            string eventName,
-            string transition,
-            string classification,
-            string confidence,
-            uint departureBefore,
-            uint departureAfter,
-            BoardingTraceState state,
-            string extra)
-        {
-            string pathEndReached = state.HeadKnown
-                ? (state.EndOfPath && state.EndReached ? "true" : "false")
-                : "unknown";
-            m_Runtime.log.Info(
-                "[BoardingTrace] frame=" + frame
-                + " vehicle=" + TraceEntity(vehicle)
-                + " source=" + source
-                + " event=" + eventName
-                + " transition=" + transition
-                + " class=" + classification
-                + " confidence=" + confidence
-                + " depOld=" + departureBefore
-                + " depNew=" + departureAfter
-                + " target=" + TraceEntity(state.Target)
-                + " sessionWp=" + (state.HasSession ? state.SessionWaypoint.ToString() : "missing")
-                + " sessionEntity=" + TraceEntity(state.SessionWaypointEntity)
-                + " nextEntity=" + TraceEntity(state.NextWaypointEntity)
-                + " targetRelation=" + TraceRelation(state.Target, state)
-                + " station=" + TraceEntity(state.Station)
-                + " stationBoarding=" + TraceStation(state)
-                + " controllerPath=" + TracePath(state.ControllerPath, state.HasControllerPath)
-                + " pathCount=" + state.PathElementCount
-                + " head=" + TraceEntity(state.Head)
-                + " endOfPath=" + TraceFlag(state.HeadKnown, state.EndOfPath)
-                + " endReached=" + TraceFlag(state.HeadKnown, state.EndReached)
-                + " pathEndReached=" + pathEndReached
-                + " moving=" + TraceFlag(state.MovingKnown, state.Moving)
-                + extra);
-        }
-
-        private static string TraceEntity(Entity entity)
-            => entity == Entity.Null ? "missing" : entity.Index + ":" + entity.Version;
-
-        private static string TraceRelation(Entity target, BoardingTraceState state)
-        {
-            if (!state.TargetKnown || target == Entity.Null)
-                return "missing";
-            if (state.HasSession && target == state.SessionWaypointEntity)
-                return "session";
-            if (state.HasSession && target == state.NextWaypointEntity)
-                return "next";
-            return "other";
-        }
-
-        private static string TraceStation(BoardingTraceState state)
-            => !state.StationBoardingKnown ? "missing" : state.StationBoardingSelf ? "self" : "other";
-
-        private static string TracePath(PathOwner pathOwner, bool hasPath)
-            => hasPath ? ((ushort)pathOwner.m_State).ToString() : "missing";
-
-        private static string TraceFlag(bool known, bool value)
-            => known ? (value ? "true" : "false") : "unknown";
-
         public void ResetTracking()
         {
             m_Baselines.Clear();
@@ -1723,7 +1323,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             RailFrameWriteMask writes = row.Writes;
             RailFrameRow fresh = new RailFrameRow { Vehicle = row.Vehicle, CachedWaypoint = row.CachedWaypoint };
             ReadNarrow(ref fresh, true);
-            RailFrameRow live = fresh;
             fresh.RegisteredLine = m_Runtime.m_VehicleView.TryGetLine(row.Vehicle, out Entity line) ? line : Entity.Null;
             fresh.RegistryState = m_Runtime.m_VehicleView.TryGetState(row.Vehicle, out VehicleState state) ? state : default;
             fresh.Demands = ReadDemand(row.Vehicle);
@@ -1733,24 +1332,10 @@ namespace RapidTransitMod.Dispatch.Runtime
             if ((writes & RailFrameWriteMask.PublicTransport) != 0) { fresh.PublicTransport = row.PublicTransport; fresh.HasPublicTransport = row.HasPublicTransport; fresh.PublicTransportLoaded = row.PublicTransportLoaded; }
             if ((writes & RailFrameWriteMask.Target) != 0) { fresh.Target = row.Target; fresh.HasTarget = row.HasTarget; fresh.TargetLoaded = row.TargetLoaded; }
             if ((writes & RailFrameWriteMask.Path) != 0) { fresh.Path = row.Path; fresh.HasPath = row.HasPath; fresh.HasPathBuffer = row.HasPathBuffer; fresh.PathElementCount = row.PathElementCount; fresh.PathLoaded = row.PathLoaded; }
-            bool liveBoardingChanged = previous.InputValid
-                && previous.HasPublicTransport
-                && live.HasPublicTransport
-                && ((previous.PublicTransport.m_State & PublicTransportFlags.Boarding)
-                    != (live.PublicTransport.m_State & PublicTransportFlags.Boarding));
             fresh.Changes = (previous.HasPublicTransport && previous.HasPublicTransport == fresh.HasPublicTransport
                 && ((previous.PublicTransport.m_State & PublicTransportFlags.Boarding) != (fresh.PublicTransport.m_State & PublicTransportFlags.Boarding))
                     ? RailChangeMask.OfficialBoardingChanged : RailChangeMask.None)
                 | (previous.MovingKnown && previous.Moving != fresh.Moving ? RailChangeMask.MovingChanged : RailChangeMask.None);
-            if (liveBoardingChanged)
-            {
-                LogSourceBoardingEdge(
-                    row.Vehicle,
-                    frame,
-                    previous.PublicTransport,
-                    live.PublicTransport,
-                    live);
-            }
             if ((fresh.Changes & RailChangeMask.OfficialBoardingChanged) != 0)
                 m_Runtime.m_RuntimeHotPathProbe.CountOfficialBoardingChanged();
             if ((fresh.Changes & RailChangeMask.MovingChanged) != 0)
@@ -1874,17 +1459,12 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             context = default;
             context.VehicleStateKnown = m_Runtime.m_VehicleView.TryGetState(vehicle, out context.VehicleState);
-            context.StopSessionKnown = m_Runtime.m_StopRuntime.TryGetSession(
-                vehicle,
-                out context.StopSessionLine,
-                out context.StopSessionWaypoint,
-                out context.StopSessionArrivalFrame);
             if (TryGetRow(vehicle, out RailFrameRow row))
             {
                 context.PublicTransportKnown = row.PublicTransportLoaded || row.HasPublicTransport;
                 context.OfficialBoarding = OfficialBoarding(row);
             }
-            return context.VehicleStateKnown || context.StopSessionKnown || context.PublicTransportKnown;
+            return context.VehicleStateKnown || context.PublicTransportKnown;
         }
 
         private bool TryGetRow(FramePlanEntry entry, out RailFrameRow row)

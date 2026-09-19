@@ -65,9 +65,7 @@ namespace RapidTransitMod.TrackProjection
                     true,
                     exactKnown,
                     exactAvailable,
-                    exactCursor,
-                    exactKnown && existing.HasExactOutcome,
-                    exactKnown ? existing.ExactOutcome : default);
+                    exactCursor);
             }
             else
             {
@@ -80,9 +78,7 @@ namespace RapidTransitMod.TrackProjection
                     true,
                     exactKnown,
                     exactAvailable,
-                    exactCursor,
-                    exactKnown && existing.HasExactOutcome,
-                    exactKnown ? existing.ExactOutcome : default);
+                    exactCursor);
             }
         }
 
@@ -106,32 +102,13 @@ namespace RapidTransitMod.TrackProjection
             return true;
         }
 
-        public bool TryGetFrameExactOutcome(
-            Entity vehicle,
-            Entity line,
-            ulong chainSignature,
-            uint frame,
-            out ProjectionOutcome outcome)
-        {
-            outcome = default;
-            if (!TryFrameSnapshot(vehicle, line, chainSignature, frame, out VehicleTrackCursorFrameSnapshot snapshot)
-                || !snapshot.HasExactOutcome)
-            {
-                return false;
-            }
-
-            outcome = snapshot.ExactOutcome;
-            return true;
-        }
-
         public void StoreFrameExact(
             Entity vehicle,
             Entity line,
             ulong chainSignature,
             uint frame,
             bool available,
-            VehicleTrackCursor cursor,
-            ProjectionOutcome outcome)
+            VehicleTrackCursor cursor)
         {
             if (vehicle == Entity.Null || line == Entity.Null)
                 return;
@@ -148,9 +125,7 @@ namespace RapidTransitMod.TrackProjection
                 finalKnown,
                 true,
                 available,
-                available ? cursor : default,
-                true,
-                outcome);
+                available ? cursor : default);
         }
 
         public bool TrySnapshot(

@@ -145,8 +145,6 @@ namespace RapidTransitMod.TrackProjection
         public readonly bool ExactKnown;
         public readonly bool ExactAvailable;
         public readonly VehicleTrackCursor ExactCursor;
-        public readonly bool HasExactOutcome;
-        public readonly ProjectionOutcome ExactOutcome;
 
         public VehicleTrackCursorFrameSnapshot(
             Entity lineEntity,
@@ -157,9 +155,7 @@ namespace RapidTransitMod.TrackProjection
             bool finalKnown = false,
             bool exactKnown = false,
             bool exactAvailable = false,
-            VehicleTrackCursor exactCursor = default,
-            bool hasExactOutcome = false,
-            ProjectionOutcome exactOutcome = default)
+            VehicleTrackCursor exactCursor = default)
         {
             LineEntity = lineEntity;
             ChainSignature = chainSignature;
@@ -170,8 +166,6 @@ namespace RapidTransitMod.TrackProjection
             ExactKnown = exactKnown;
             ExactAvailable = exactAvailable;
             ExactCursor = exactCursor;
-            HasExactOutcome = hasExactOutcome;
-            ExactOutcome = exactOutcome;
         }
     }
 

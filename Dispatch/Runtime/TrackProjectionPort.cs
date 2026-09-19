@@ -209,7 +209,6 @@ namespace RapidTransitMod.Dispatch.Runtime
                 waypoints,
                 true,
                 currentLane,
-                out _,
                 out waypointIndex);
         }
 
