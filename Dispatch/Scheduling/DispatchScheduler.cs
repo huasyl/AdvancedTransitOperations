@@ -450,6 +450,7 @@ namespace RapidTransitMod
                                 continue;
                             }
 
+                            bool hasPreparingVehicle = false;
                             int canMakeItCount = 0;
                             for (int i = 0; i < runtimeVehicles.Count; i++)
                             {
@@ -458,6 +459,8 @@ namespace RapidTransitMod
                                     continue;
                                 if (state != VehicleState.Preparing && state != VehicleState.Running)
                                     continue;
+                                if (state == VehicleState.Preparing)
+                                    hasPreparingVehicle = true;
                                 if (m_Runtime.m_VehicleView.TryGetTarget(vehicle, out int targetMinute) && targetMinute >= 0)
                                     continue;
 
@@ -473,6 +476,13 @@ namespace RapidTransitMod
 
                             if (canMakeItCount == 0 && !m_Runtime.m_SpawningLines.ContainsKey(line))
                             {
+                                // 准备车是否预分配其他班次，不改变等待首个出库样本的策略。
+                                if (hasPreparingVehicle && m_Policy.ShouldWaitForPreparing(line))
+                                {
+                                    slotMinute = (slotMinute + ModRuntimeHostSystem.SLOT_INTERVAL_MINUTES) % 1440;
+                                    continue;
+                                }
+
                                 if (RtLog.VerboseEnabled && pick.NearVehicle != Entity.Null)
                                 {
                                     string etaText = pick.NearestEtaFrames == float.MaxValue

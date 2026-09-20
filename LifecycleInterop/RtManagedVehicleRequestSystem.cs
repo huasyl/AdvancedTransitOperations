@@ -557,12 +557,10 @@ namespace RapidTransitMod
         private void ParkUnstableLineRequest(Entity line, ref TransportLine transportLine)
         {
             Entity request = transportLine.m_VehicleRequest;
-            bool owned = false;
             if (IsLiveRequest(request) && EntityManager.HasComponent<RtVehicleRequestSentinel>(request))
             {
                 if (!IsParkedSentinelNormalized(request, line))
                     NormalizeParkedSentinel(request, line);
-                owned = true;
             }
             else if (IsLiveRequest(request) && EntityManager.HasComponent<RtSpawnPermitRequest>(request))
             {
@@ -578,10 +576,22 @@ namespace RapidTransitMod
                         EntityManager.AddComponent<RtVehicleRequestSentinel>(request);
                     NormalizeParkedSentinel(request, line);
                 }
-                owned = true;
             }
-            if (!owned)
-                return;
+            else
+            {
+                // 已应用线路等待稳定时也占住产车入口，已推进的原版请求继续完成。
+                if (IsLiveRequest(request))
+                {
+                    if (!ShouldReplaceUnauthorizedPendingRequest(request, line))
+                        return;
+
+                    EntityManager.DestroyEntity(request);
+                    transportLine.m_VehicleRequest = Entity.Null;
+                    EntityManager.SetComponentData(line, transportLine);
+                }
+
+                transportLine.m_VehicleRequest = InstallParkedSentinel(line);
+            }
             if ((transportLine.m_Flags & TransportLineFlags.RequireVehicles) != 0)
             {
                 transportLine.m_Flags &= ~TransportLineFlags.RequireVehicles;

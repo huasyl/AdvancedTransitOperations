@@ -97,6 +97,13 @@ namespace RapidTransitMod.Dispatch.Scheduling
             return false;
         }
 
+        public bool ShouldWaitForPreparing(Entity line)
+        {
+            LifecycleKind lifecycle = TransportModeProfile.GetProfile(
+                TransportModeResolver.Resolve(m_Runtime.EntityManager, line)).Lifecycle;
+            return lifecycle == LifecycleKind.Road && m_ReadDispatchCache(line) <= 0f;
+        }
+
         public float SpawnLead(Entity line, float lineDurationFrames)
         {
             TransitMode mode = TransportModeResolver.Resolve(m_Runtime.EntityManager, line);
