@@ -1194,7 +1194,8 @@ namespace RapidTransitMod
                 waypointKnown,
                 waypointIndex,
                 boarding,
-                adoptExistingVehicles);
+                adoptExistingVehicles,
+                publicTransport.m_State);
             uint? dispatchFrame = null;
             if (!adoptExistingVehicles
                 && m_Runtime.m_LineSpawnRequestFrame.TryGetValue(line, out uint spawnRequestFrame))
@@ -1288,11 +1289,16 @@ namespace RapidTransitMod
             bool waypointKnown,
             int waypointIndex,
             bool boarding,
-            bool adoptExistingVehicles)
+            bool adoptExistingVehicles,
+            PublicTransportFlags transportState)
         {
             if (boarding && waypointKnown && waypointIndex == 0)
                 return VehicleState.Holding;
             if (!adoptExistingVehicles)
+                return VehicleState.Preparing;
+            // 目标是中途路点，不代表尚在入线途中的车辆已经运营。
+            if (!boarding
+                && (transportState & (PublicTransportFlags.EnRoute | PublicTransportFlags.RouteSource)) == PublicTransportFlags.EnRoute)
                 return VehicleState.Preparing;
             if (waypointKnown && waypointIndex > 0)
                 return VehicleState.Running;
@@ -1538,7 +1544,8 @@ namespace RapidTransitMod
                 return VehicleState.Retiring;
             }
 
-            if (m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition))
+            bool hasRouteProgress = m_Runtime.m_RouteProgress.Try(vehicle, out int nextWaypointIndex, out float segmentPosition);
+            if (hasRouteProgress)
             {
                 bool nearOriginProgress = nextWaypointIndex == 0 || (nextWaypointIndex == 1 && segmentPosition <= 0.05f);
                 if (nearOriginProgress
@@ -1548,6 +1555,18 @@ namespace RapidTransitMod
                     reason = "route-progress-origin-fallback wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
                     return VehicleState.Holding;
                 }
+            }
+
+            // 原版出库即设置 EnRoute；首次停站或路点续接前，路径进度不能证明已经运营。
+            if (!boarding
+                && (publicTransport.m_State & (PublicTransportFlags.EnRoute | PublicTransportFlags.RouteSource)) == PublicTransportFlags.EnRoute)
+            {
+                reason = "initial-route-entry";
+                return VehicleState.Preparing;
+            }
+
+            if (hasRouteProgress)
+            {
                 reason = "route-progress wp=" + nextWaypointIndex + " seg=" + segmentPosition.ToString("F2");
                 return (boarding && nextWaypointIndex == 0) ? VehicleState.Holding : VehicleState.Running;
             }

@@ -162,7 +162,7 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <!--Link to the forum post where the mod can be discussed-->
   <ForumLink Value="https://forum.paradoxplaza.com/forum/threads/advanced-transit-operations.1932870/" />
   <!--Version of the mod-->
-  <ModVersion Value="0.4.2" />
+  <ModVersion Value="0.4.2.1" />
   <!--Recommended version of the base game to use the mod-->
   <GameVersion Value="1.6.*" />
   <!--Dependency for the mod, can be set multiple times-->
@@ -171,20 +171,10 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
   <RequiredDLC Value="" />
   <!--Change log for new version. Single line or multi line. Supports minimal markdown subset-->
   <ChangeLog>
-## New Features
-
-- Added two new trigger conditions for platform announcements: Before Departure and On Arrival.
-
-## Improvements
-
-- Improved line sorting in dropdown menus.
-- Improved the accuracy of track positioning.
-
 ## Bug Fixes
 
-- Fixed an issue where buses could wait too long at the first stop after being idle.
-- Fixed an issue where rail vehicles could sometimes start boarding passengers at the wrong station.
-- Fixed a rare issue where rail vehicles could incorrectly start boarding when congested before reaching the first stop.
+- Lines with newly configured departure times now correctly prevent unnecessary vehicle dispatches. Also fixed an issue where vehicles leaving the depot for these lines could be incorrectly marked as “En Route.”
+- Fixed an issue where bus lines without historical depot travel time data could dispatch too many vehicles in quick succession.
   </ChangeLog>
   <!--External link, can be set multiple times. supported types are "discord", "github", "youtube", "twitch", "x", "paypal", "patreon", "buymeacoffee", "kofi", "crowdin", "gitlab", "gofundme"-->
   <ExternalLink Type="github" Url="https://github.com/huasyl/AdvancedTransitOperations" />
