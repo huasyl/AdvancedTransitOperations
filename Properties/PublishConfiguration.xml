@@ -144,7 +144,7 @@ ATO 只向存档写入自身的配置和运行数据，不会永久修改原版�
 如果您觉得 ATO 好玩，或者它对您的公共交通运营有所帮助，欢迎为本 Mod 点个赞。感谢您的游玩与支持！
 </LongDescription>
   <!--Thumbnail-->
-  <Thumbnail Value="Properties/Cover2.jpg" />
+  <Thumbnail Value="Properties/Cover-C-v4.jpg" />
   <!--Screenshot, can be set multiple times-->
   <Screenshot Value="Properties/Screenshots/Screenshot-v0.4.1-signal-priority.png" />
   <Screenshot Value="Properties/Screenshots/Screenshot12.png" />
