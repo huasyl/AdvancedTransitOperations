@@ -1328,9 +1328,18 @@ namespace RapidTransitMod
             bool boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
             if ((publicTransport.m_State & (PublicTransportFlags.Returning | PublicTransportFlags.AbandonRoute)) != 0) return;
 
-            int waypointIndex = !startupSilent && boarding
-                ? m_Runtime.m_WaypointIndex.Compute(vehicle, waypoints)
-                : -1;
+            int waypointIndex = -1;
+            if (!startupSilent && boarding)
+            {
+                m_Runtime.m_WaypointIndex.TryConfirmBoardingWaypoint(
+                    vehicle,
+                    line,
+                    waypoints,
+                    false,
+                    default,
+                    out _,
+                    out waypointIndex);
+            }
             bool atOrigin = waypointIndex == 0;
             VehicleState initialState = InferInitialState(
                 vehicle,

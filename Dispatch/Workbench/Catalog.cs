@@ -347,9 +347,6 @@ namespace RapidTransitMod.Dispatch.Workbench
                 return;
 
             Entity firstWaypoint = waypoints[0].m_Waypoint;
-            if (RouteWaypointEndpointResolver.TryResolveRouteWaypointEndpoint(m_EntityManager, firstWaypoint, out _))
-                return;
-
             Entity stopEntity = Stop(firstWaypoint);
             if (stopEntity == Entity.Null)
                 return;

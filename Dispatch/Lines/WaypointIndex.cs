@@ -67,6 +67,12 @@ namespace RapidTransitMod.Dispatch.Lines
             if (TryCurrentSnapshot(vehicle, route, boarding, out WaypointIndexFrameSnapshot snapshot)
                 && (snapshot.Stage & WaypointIndexStage.Computed) != 0)
             {
+                if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
+                    || state == VehicleState.Retiring)
+                {
+                    return -1;
+                }
+
                 return snapshot.WaypointIndex;
             }
 
@@ -214,7 +220,9 @@ namespace RapidTransitMod.Dispatch.Lines
             if (vehicle == Entity.Null
                 || line == Entity.Null
                 || m_Runtime.m_Resolve.Line(vehicle) != line
-                || !Boarding(vehicle))
+                || !Boarding(vehicle)
+                || !m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
+                || state == VehicleState.Retiring)
             {
                 waypointIndex = -1;
                 return false;
@@ -247,7 +255,7 @@ namespace RapidTransitMod.Dispatch.Lines
             targetWaypointIndex = -1;
             int confirmedWaypointIndex = -1;
             bool hasBoardingConfirmation;
-            if (boarding)
+            if (boarding && allowTrackWaypointAnchoring)
             {
                 hasBoardingConfirmation = TryConfirmBoardingWaypoint(
                     vehicle,
@@ -260,11 +268,14 @@ namespace RapidTransitMod.Dispatch.Lines
             }
             else
             {
-                TryResolveTargetWaypoint(
-                    vehicle,
-                    ways,
-                    out targetWaypointIndex,
-                    out _);
+                if (!boarding)
+                {
+                    TryResolveTargetWaypoint(
+                        vehicle,
+                        ways,
+                        out targetWaypointIndex,
+                        out _);
+                }
                 hasBoardingConfirmation = false;
             }
             if (hasBoardingConfirmation)
@@ -293,7 +304,7 @@ namespace RapidTransitMod.Dispatch.Lines
             return -1;
         }
 
-        private bool TryConfirmBoardingWaypoint(
+        internal bool TryConfirmBoardingWaypoint(
             Entity vehicle,
             Entity line,
             DynamicBuffer<RouteWaypoint> ways,
@@ -324,9 +335,7 @@ namespace RapidTransitMod.Dispatch.Lines
                 return false;
             }
 
-            if (!m_Runtime.m_VehicleView.TryGetState(vehicle, out VehicleState state)
-                || state == VehicleState.Retiring
-                || !TryResolveBoardingTarget(
+            if (!TryResolveBoardingTarget(
                     vehicle,
                     targetWaypoint,
                     out Entity targetBuilding,
