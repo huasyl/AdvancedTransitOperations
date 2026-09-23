@@ -136,16 +136,10 @@ namespace RapidTransitMod
             bool isRoad = TransportModeProfile.GetProfile(
                 TransportModeResolver.Resolve(entityManager, route)).Lifecycle == LifecycleKind.Road;
             Entity firstWaypoint = waypoints[0].m_Waypoint;
-            if (isRoad && IsOutsideRoadOrigin(entityManager, firstWaypoint))
-                return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonOriginOutsideEndpoint);
-
             if (isRoad && !TryGetRoadOrigin(entityManager, waypoints, out _))
             {
                 return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonRoadOriginInvalid);
             }
-
-            if (TryResolveRouteWaypointEndpoint(entityManager, firstWaypoint, out _))
-                return LineDispatchSupport.CreateUnsupported(LineDispatchSupport.ReasonOriginOutsideEndpoint);
 
             Entity firstStop = resolveStop?.Invoke(firstWaypoint) ?? Entity.Null;
 
@@ -349,38 +343,6 @@ namespace RapidTransitMod
                 return false;
 
             return (connectionLane.m_TrackTypes & TrackTypes.Train) != 0;
-        }
-
-        private static bool IsOutsideRoadOrigin(EntityManager entityManager, Entity waypoint)
-        {
-            if (IsConnectedOutsideConnection(entityManager, waypoint))
-                return true;
-
-            if (waypoint == Entity.Null
-                || !entityManager.Exists(waypoint)
-                || !entityManager.HasComponent<RouteLane>(waypoint))
-            {
-                return false;
-            }
-
-            RouteLane routeLane = entityManager.GetComponentData<RouteLane>(waypoint);
-            return IsOutsideRoadConnection(entityManager, routeLane.m_StartLane)
-                || IsOutsideRoadConnection(entityManager, routeLane.m_EndLane);
-        }
-
-        private static bool IsOutsideRoadConnection(EntityManager entityManager, Entity lane)
-        {
-            if (lane == Entity.Null
-                || !entityManager.Exists(lane)
-                || !entityManager.HasComponent<Game.Net.ConnectionLane>(lane))
-            {
-                return false;
-            }
-
-            Game.Net.ConnectionLane connectionLane =
-                entityManager.GetComponentData<Game.Net.ConnectionLane>(lane);
-            return (connectionLane.m_Flags & ConnectionLaneFlags.Outside) != 0
-                && (connectionLane.m_Flags & ConnectionLaneFlags.Road) != 0;
         }
 
         private static bool IsConnectedOutsideConnection(EntityManager entityManager, Entity waypoint)
