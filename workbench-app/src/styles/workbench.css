@@ -1686,15 +1686,28 @@
 }
 
 .dw-demo-tab {
+  position: relative;
   flex: 1 1 auto;
   min-height: 42rem;
   border: 0;
   background: transparent;
-  box-shadow: inset 0 -2px 0 transparent;
   color: #becbd4;
   font-size: 15rem;
   font-weight: 700;
-  transition: background-color 130ms ease, color 130ms ease, box-shadow 130ms ease;
+  transition: background-color 130ms ease, color 130ms ease;
+}
+
+.dw-demo-tab::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: #5ab4c5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 130ms ease;
 }
 
 .dw-demo-tab:hover {
@@ -1703,9 +1716,12 @@
 }
 
 .dw-demo-tab.is-active {
-  box-shadow: inset 0 -2px 0 #5ab4c5;
   background-color: rgba(90, 180, 197, 0.10);
   color: #5ab4c5;
+}
+
+.dw-demo-tab.is-active::after {
+  opacity: 1;
 }
 
 .dw-demo-right-body {

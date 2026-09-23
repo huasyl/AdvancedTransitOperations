@@ -1670,12 +1670,29 @@
 }
 
 .rtw-timetable-monitor-row {
+  position: relative;
   cursor: pointer;
 }
 
+.rtw-timetable-monitor-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: #74c1c1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
 .rtw-timetable-monitor-row.is-expanded {
-  box-shadow: inset 2px 0 0 #74c1c1;
   background: rgba(116, 193, 193, 0.06);
+}
+
+.rtw-timetable-monitor-row.is-expanded::before {
+  opacity: 1;
 }
 
 .rtw-timetable-table-action {
