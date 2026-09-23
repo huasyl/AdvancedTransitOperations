@@ -1647,7 +1647,9 @@ namespace RapidTransitMod
                         reason: "vanilla-blocker-chain-stall"),
                     nowFrame);
                 Game.Vehicles.PublicTransport publicTransport = ReadRailPublicTransport(candidate.Local);
+                m_StopRuntime.ReleaseTimedStop(candidate.Local, nowFrame);
                 m_CommandApplier.ForceDepart(candidate.Local, ref publicTransport, nowFrame, commandBuffer);
+                m_StopRuntime.StartDeparturePending(candidate.Local, nowFrame);
                 if (RtLog.VerboseEnabled)
                 {
                     Entity line = m_Resolve.Line(candidate.Express);
