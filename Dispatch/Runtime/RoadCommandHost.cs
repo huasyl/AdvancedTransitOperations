@@ -45,21 +45,11 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal TimedLogger Log { get; }
         public uint Frame => SimulationSystem.frameIndex;
 
-        public PublicTransport ReadPublicTransport(Entity vehicle)
-        {
-            return m_RoadEvents.TryReadPublicTransportForWrite(vehicle, out PublicTransport value)
-                ? value
-                : EntityManager.GetComponentData<PublicTransport>(vehicle);
-        }
+        public PublicTransport ReadPublicTransport(Entity vehicle) => EntityManager.GetComponentData<PublicTransport>(vehicle);
 
-        public void AppendPublicTransportWrite(Entity vehicle, PublicTransport value)
+        public void SetPublicTransport(Entity vehicle, PublicTransport value)
         {
-            m_RoadEvents.AppendPublicTransportWrite(vehicle, value, Frame);
-        }
-
-        public void CommitPublicTransport(Entity vehicle, PublicTransport value)
-        {
-            m_RoadEvents.AppendPublicTransportWrite(vehicle, value, Frame);
+            m_RoadEvents.RecordPublicTransportWrite(vehicle, value, Frame);
             EntityManager.SetComponentData(vehicle, value);
         }
 
@@ -116,9 +106,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return RoadPreparingResult.Pending;
 
             VehicleUtils.SetTarget(ref pathOwner, ref target, origin);
-            m_RoadEvents.AppendPreparingTargetWrite(vehicle, target);
-            ecb.SetComponent(vehicle, target);
-            ecb.SetComponent(vehicle, pathOwner);
+            EntityManager.SetComponentData(vehicle, target);
+            EntityManager.SetComponentData(vehicle, pathOwner);
             PinOrigin(vehicle, ref publicTransport, ecb);
             return RoadPreparingResult.Retarget;
         }
@@ -148,8 +137,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return RoadOriginGuardResult.Protected;
 
             publicTransport.m_State |= PublicTransportFlags.RequireStop;
-            AppendPublicTransportWrite(vehicle, publicTransport);
-            ecb.SetComponent(vehicle, publicTransport);
+            SetPublicTransport(vehicle, publicTransport);
             return RoadOriginGuardResult.Pin;
         }
 
@@ -189,8 +177,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return RoadOriginGuardResult.Protected;
 
             publicTransport.m_State |= PublicTransportFlags.RequireStop;
-            AppendPublicTransportWrite(vehicle, publicTransport);
-            ecb.SetComponent(vehicle, publicTransport);
+            SetPublicTransport(vehicle, publicTransport);
             return RoadOriginGuardResult.Pin;
         }
 
@@ -203,8 +190,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 return false;
 
             publicTransport.m_State |= PublicTransportFlags.RequireStop;
-            AppendPublicTransportWrite(vehicle, publicTransport);
-            ecb.SetComponent(vehicle, publicTransport);
+            SetPublicTransport(vehicle, publicTransport);
             return true;
         }
     }

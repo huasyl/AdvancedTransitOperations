@@ -184,8 +184,7 @@ namespace RapidTransitMod.Bypass
                 return;
 
             publicTransport.m_DepartureFrame = nowFrame + 9999;
-            m_Runtime.RecordPublicTransportWrite(control.Vehicle, publicTransport);
-            ecb.SetComponent(control.Vehicle, publicTransport);
+            m_Runtime.SetPublicTransport(control.Vehicle, publicTransport);
             Entity holdStation = m_Runtime.ResolveStation(waypoints, control.WaypointIndex);
             if (control.Vehicle != Entity.Null
                 && control.Blocker != Entity.Null

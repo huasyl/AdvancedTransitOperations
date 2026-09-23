@@ -387,7 +387,7 @@ namespace RapidTransitMod.Dispatch.Lines
         {
             targetWaypointIndex = -1;
             targetWaypoint = Entity.Null;
-            if (!m_Runtime.m_RailEventSource.TryReadTargetForWrite(vehicle, out Target target))
+            if (!m_Runtime.m_RailEventSource.TryReadTarget(vehicle, out Target target))
             {
                 return false;
             }
@@ -697,7 +697,7 @@ namespace RapidTransitMod.Dispatch.Lines
 
         private bool Boarding(Entity vehicle)
         {
-            return m_Runtime.m_RailEventSource.TryReadPublicTransportForWrite(
+            return m_Runtime.m_RailEventSource.TryReadPublicTransport(
                 vehicle,
                 out PublicTransport publicTransport)
                 && (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;

@@ -25,20 +25,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             MovingChanged = 1 << 1
         }
 
-        [Flags]
-        private enum RailFrameWriteMask : byte
-        {
-            None = 0,
-            PublicTransport = 1 << 0,
-            Target = 1 << 1,
-            Path = 1 << 2
-        }
-
         private struct RailBaseline
         {
             public bool InputValid;
             public bool HasPublicTransport;
-            public PublicTransport PublicTransport;
+            public bool Boarding;
             public Entity Route;
             public bool MovingKnown;
             public bool Moving;
@@ -57,26 +48,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             public bool IsSource;
             public uint SourceFrame;
             public bool HasPublicTransport;
-            public PublicTransport PublicTransport;
-            public bool HasTarget;
-            public Target Target;
-            public bool HasPath;
-            public PathOwner Path;
-            public bool HasPathBuffer;
-            public int PathElementCount;
+            public bool Boarding;
             public bool MovingKnown;
             public bool Moving;
             public int CachedWaypoint;
             public int WaypointCount;
-            public bool PublicTransportLoaded;
-            public bool TargetLoaded;
-            public bool PathLoaded;
-            public bool TrainCurrentLaneLoaded;
-            public bool HasTrainCurrentLane;
-            public TrainCurrentLane TrainCurrentLane;
-            public bool LaunchNavigationCleared;
+            public bool PathChanged;
             public bool DepartureFrameWritten;
-            public RailFrameWriteMask Writes;
         }
 
         private readonly ModRuntimeHostSystem m_Runtime;
@@ -84,8 +62,6 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Dictionary<Entity, RuntimeDemandMask> m_Demands = new Dictionary<Entity, RuntimeDemandMask>();
         private readonly List<RailFrameRow> m_FrameRows = new List<RailFrameRow>();
         private readonly Dictionary<Entity, int> m_FrameRowIndex = new Dictionary<Entity, int>();
-        private readonly Dictionary<Entity, DynamicBuffer<RouteWaypoint>> m_WaypointBuffers = new Dictionary<Entity, DynamicBuffer<RouteWaypoint>>();
-        private readonly Dictionary<Entity, int> m_WaypointCounts = new Dictionary<Entity, int>();
         private readonly List<int> m_RunningNoticeRows = new List<int>();
         private readonly List<int> m_PreparingNoticeRows = new List<int>();
         private readonly Dictionary<Entity, uint> m_PreparingWaypointLiveFrames = new Dictionary<Entity, uint>();
@@ -106,8 +82,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRowIndex.Clear();
             m_RunningNoticeRows.Clear();
             m_PreparingNoticeRows.Clear();
-            m_WaypointBuffers.Clear();
-            m_WaypointCounts.Clear();
         }
 
         public void CollectIfDue(uint frame)
@@ -147,46 +121,37 @@ namespace RapidTransitMod.Dispatch.Runtime
         internal bool TryReadProjectionCurrentLane(Entity vehicle, out TrainCurrentLane currentLane)
         {
             currentLane = default;
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
-            if (rowIndex < 0)
+            if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
                 return false;
 
-            RailFrameRow row = m_FrameRows[rowIndex];
-            if (!row.TrainCurrentLaneLoaded)
+            bool diagnostics = RuntimeHotPathProbe.Enabled();
+            long started = diagnostics ? Stopwatch.GetTimestamp() : 0;
+            Entity laneVehicle = vehicle;
+            if (m_Runtime.EntityManager.HasBuffer<LayoutElement>(vehicle))
             {
-                bool diagnostics = RuntimeHotPathProbe.Enabled();
-                long started = diagnostics ? Stopwatch.GetTimestamp() : 0;
-                Entity laneVehicle = vehicle;
-                if (m_Runtime.EntityManager.HasBuffer<LayoutElement>(vehicle))
-                {
-                    DynamicBuffer<LayoutElement> layout = m_Runtime.EntityManager.GetBuffer<LayoutElement>(vehicle, true);
-                    if (layout.Length != 0)
-                        laneVehicle = layout[0].m_Vehicle;
-                }
-
-                row.HasTrainCurrentLane = laneVehicle != Entity.Null
-                    && m_Runtime.EntityManager.HasComponent<TrainCurrentLane>(laneVehicle);
-                if (row.HasTrainCurrentLane)
-                    row.TrainCurrentLane = m_Runtime.EntityManager.GetComponentData<TrainCurrentLane>(laneVehicle);
-                row.TrainCurrentLaneLoaded = true;
-                m_Runtime.m_RuntimeHotPathProbe.CountNavigationDetailRead();
-                if (diagnostics)
-                {
-                    m_Runtime.m_RuntimeHotPathProbe.RecordProjectionRead(
-                        ProjectionReadKind.CurrentLane,
-                        Stopwatch.GetTimestamp() - started);
-                }
-                m_FrameRows[rowIndex] = row;
+                DynamicBuffer<LayoutElement> layout = m_Runtime.EntityManager.GetBuffer<LayoutElement>(vehicle, true);
+                if (layout.Length != 0)
+                    laneVehicle = layout[0].m_Vehicle;
             }
 
-            currentLane = row.TrainCurrentLane;
-            return row.HasTrainCurrentLane;
+            bool hasCurrentLane = laneVehicle != Entity.Null
+                && m_Runtime.EntityManager.HasComponent<TrainCurrentLane>(laneVehicle);
+            if (hasCurrentLane)
+                currentLane = m_Runtime.EntityManager.GetComponentData<TrainCurrentLane>(laneVehicle);
+            m_Runtime.m_RuntimeHotPathProbe.CountNavigationDetailRead();
+            if (diagnostics)
+            {
+                m_Runtime.m_RuntimeHotPathProbe.RecordProjectionRead(
+                    ProjectionReadKind.CurrentLane,
+                    Stopwatch.GetTimestamp() - started);
+            }
+            return hasCurrentLane;
         }
 
         internal bool HasProjectionPathWrite(Entity vehicle)
         {
             return TryGetRow(vehicle, out RailFrameRow row)
-                && (row.Writes & RailFrameWriteMask.Path) != 0;
+                && row.PathChanged;
         }
 
         internal bool TryReadProjectionNavigation(
@@ -194,8 +159,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             out DynamicBuffer<TrainNavigationLane> navigation)
         {
             navigation = default;
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
-            if (rowIndex < 0 || m_FrameRows[rowIndex].LaunchNavigationCleared)
+            if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
                 return false;
 
             bool diagnostics = RuntimeHotPathProbe.Enabled();
@@ -223,59 +187,27 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             pathOwner = default;
             pathElements = default;
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
-            if (rowIndex < 0 || HasProjectionPathWrite(vehicle))
+            if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle)
+                || HasProjectionPathWrite(vehicle))
                 return false;
 
             bool diagnostics = RuntimeHotPathProbe.Enabled();
             long started = diagnostics ? Stopwatch.GetTimestamp() : 0;
-            RailFrameRow row = m_FrameRows[rowIndex];
-            bool readPathState = !row.PathLoaded;
-            DynamicBuffer<PathElement> loadedPathElements = default;
-            bool hasLoadedPathElements = false;
-            if (!row.PathLoaded)
+            bool hasPath = m_Runtime.EntityManager.HasComponent<PathOwner>(vehicle)
+                && m_Runtime.EntityManager.HasBuffer<PathElement>(vehicle);
+            if (hasPath)
             {
-                row.HasPath = m_Runtime.EntityManager.HasComponent<PathOwner>(vehicle);
-                if (row.HasPath)
-                    row.Path = m_Runtime.EntityManager.GetComponentData<PathOwner>(vehicle);
-                row.HasPathBuffer = m_Runtime.EntityManager.HasBuffer<PathElement>(vehicle);
-                if (row.HasPathBuffer)
-                {
-                    loadedPathElements = m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true);
-                    hasLoadedPathElements = true;
-                    row.PathElementCount = loadedPathElements.Length;
-                }
-                else
-                {
-                    row.PathElementCount = 0;
-                }
-                row.PathLoaded = true;
-                m_FrameRows[rowIndex] = row;
+                pathOwner = m_Runtime.EntityManager.GetComponentData<PathOwner>(vehicle);
+                pathElements = m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true);
+                m_Runtime.m_RuntimeHotPathProbe.CountNavigationDetailRead();
             }
-
-            if (!row.HasPath || !row.HasPathBuffer)
-            {
-                if (diagnostics && readPathState)
-                {
-                    m_Runtime.m_RuntimeHotPathProbe.RecordProjectionRead(
-                        ProjectionReadKind.Path,
-                        Stopwatch.GetTimestamp() - started);
-                }
-                return false;
-            }
-
-            pathOwner = row.Path;
-            pathElements = hasLoadedPathElements
-                ? loadedPathElements
-                : m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true);
-            m_Runtime.m_RuntimeHotPathProbe.CountNavigationDetailRead();
             if (diagnostics)
             {
                 m_Runtime.m_RuntimeHotPathProbe.RecordProjectionRead(
                     ProjectionReadKind.Path,
                     Stopwatch.GetTimestamp() - started);
             }
-            return true;
+            return hasPath;
         }
 
         internal bool ReadSignalNavigation(
@@ -286,8 +218,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             out byte forwardMask)
         {
             forwardMask = 0;
-            if (TryGetRow(vehicle, out RailFrameRow row) && row.LaunchNavigationCleared)
-                return true;
             if (vehicle == Entity.Null
                 || !m_Runtime.EntityManager.Exists(vehicle)
                 || !m_Runtime.EntityManager.HasBuffer<TrainNavigationLane>(vehicle))
@@ -567,21 +497,17 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void RegisterSource(Entity vehicle, Entity line, PublicTransport publicTransport, int waypoint, int waypointCount)
         {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.PublicTransport);
+            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
             if (rowIndex < 0)
                 return;
 
             RailFrameRow row = m_FrameRows[rowIndex];
             row.RegisteredLine = line;
             row.IsCompilable = true;
-            if ((row.Writes & RailFrameWriteMask.PublicTransport) == 0)
-            {
-                row.PublicTransport = publicTransport;
-                row.HasPublicTransport = true;
-            }
+            row.Boarding = (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
+            row.HasPublicTransport = true;
             row.CachedWaypoint = waypoint;
             row.WaypointCount = waypointCount;
-            row.Writes |= RailFrameWriteMask.PublicTransport;
             m_FrameRows[rowIndex] = row;
             CommitWaypoint(vehicle, waypoint);
             UpdateBaseline(row);
@@ -594,43 +520,21 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         public void RebindSource(Entity vehicle)
         {
-            m_WaypointBuffers.Clear();
-            m_WaypointCounts.Clear();
             m_Baselines.Remove(vehicle);
             if (m_FrameRowIndex.TryGetValue(vehicle, out int rowIndex))
             {
                 RailFrameRow row = m_FrameRows[rowIndex];
-                RailFrameWriteMask writes = row.Writes;
                 row.RegisteredLine = Entity.Null;
                 row.CurrentRoute = Entity.Null;
                 row.RegistryState = default;
                 row.Demands = RuntimeDemandMask.None;
                 row.InputValid = false;
-                if ((writes & RailFrameWriteMask.PublicTransport) == 0)
-                {
-                    row.HasPublicTransport = false;
-                    row.PublicTransport = default;
-                    row.PublicTransportLoaded = false;
-                }
-                if ((writes & RailFrameWriteMask.Target) == 0)
-                {
-                    row.HasTarget = false;
-                    row.Target = default;
-                    row.TargetLoaded = false;
-                }
-                if ((writes & RailFrameWriteMask.Path) == 0)
-                {
-                    row.HasPath = false;
-                    row.Path = default;
-                    row.HasPathBuffer = false;
-                    row.PathElementCount = 0;
-                    row.PathLoaded = false;
-                }
+                row.HasPublicTransport = false;
+                row.Boarding = false;
                 row.MovingKnown = false;
                 row.Moving = false;
                 row.CachedWaypoint = -1;
                 row.WaypointCount = 0;
-                row.Writes = writes;
                 row.IsCompilable = false;
                 row.Changes = RailChangeMask.None;
                 m_FrameRows[rowIndex] = row;
@@ -652,21 +556,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
             RailFrameRow row = m_FrameRows[rowIndex];
             row.CachedWaypoint = waypoint;
-            m_FrameRows[rowIndex] = row;
-        }
-
-        public void RefreshRebindComponents(Entity vehicle)
-        {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
-            if (rowIndex < 0)
-                return;
-
-            RailFrameRow row = m_FrameRows[rowIndex];
-            row.InputValid = m_Runtime.EntityManager.Exists(vehicle);
-            if ((row.Writes & RailFrameWriteMask.Target) == 0)
-                ReadWriteComponent(ref row, RailFrameWriteMask.Target);
-            if ((row.Writes & RailFrameWriteMask.Path) == 0)
-                ReadWriteComponent(ref row, RailFrameWriteMask.Path);
             m_FrameRows[rowIndex] = row;
         }
 
@@ -734,30 +623,17 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_FrameRowIndex.Remove(vehicle);
         }
 
-        public bool InvalidateLine(Entity line)
+        public void RecordPublicTransportWrite(Entity vehicle, PublicTransport value, uint frame)
         {
-            if (line == Entity.Null)
-                return false;
-
-            bool removed = m_WaypointBuffers.Remove(line);
-            removed |= m_WaypointCounts.Remove(line);
-            return removed;
-        }
-
-        public void BeginSliceBufferEpoch() => m_WaypointBuffers.Clear();
-
-        public void AppendPublicTransportWrite(Entity vehicle, PublicTransport value, uint frame)
-        {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.PublicTransport);
+            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
             if (rowIndex < 0)
                 return;
+
             RailFrameRow row = m_FrameRows[rowIndex];
-            bool departureChanged = !row.HasPublicTransport
-                || row.PublicTransport.m_DepartureFrame != value.m_DepartureFrame;
-            row.PublicTransport = value;
+            row.DepartureFrameWritten |= !TryReadDepartureFrame(vehicle, out uint previousDeparture)
+                || previousDeparture != value.m_DepartureFrame;
+            row.Boarding = (value.m_State & PublicTransportFlags.Boarding) != 0;
             row.HasPublicTransport = true;
-            row.DepartureFrameWritten |= departureChanged;
-            row.Writes |= RailFrameWriteMask.PublicTransport;
             m_FrameRows[rowIndex] = row;
             if ((frame & 15u) != 3u || CollectedThisFrame(frame))
                 UpdateBaseline(row);
@@ -768,173 +644,62 @@ namespace RapidTransitMod.Dispatch.Runtime
             for (int i = 0; i < m_FrameRows.Count; i++)
             {
                 RailFrameRow row = m_FrameRows[i];
-                if (row.DepartureFrameWritten)
-                    consumer(row.Vehicle, row.PublicTransport.m_DepartureFrame);
+                if (row.DepartureFrameWritten && TryReadDepartureFrame(row.Vehicle, out uint departureFrame))
+                    consumer(row.Vehicle, departureFrame);
             }
         }
 
-        public void AppendTargetWrite(Entity vehicle, Target value, uint frame)
-        {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.Target);
-            if (rowIndex < 0)
-                return;
-            RailFrameRow row = m_FrameRows[rowIndex];
-            bool changed = !row.HasTarget || row.Target.m_Target != value.m_Target;
-            row.Target = value;
-            row.HasTarget = true;
-            row.Writes |= RailFrameWriteMask.Target;
-            m_FrameRows[rowIndex] = row;
-            if (changed)
-            {
-                m_Runtime.m_WaypointIndex.Remove(vehicle);
-                m_Runtime.m_TrackProjection.Cursors.Remove(vehicle, keepCursor: true);
-                m_Runtime.m_TrackProjection.ClearFacts(vehicle);
-                m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots(row.RegisteredLine);
-            }
-            if ((frame & 15u) != 3u || CollectedThisFrame(frame))
-                UpdateBaseline(row);
-        }
-
-        public void AppendLaunchNavigationWrite(Entity vehicle, TrainCurrentLane headLane)
+        public void RecordPathChange(Entity vehicle)
         {
             int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
             if (rowIndex < 0)
                 return;
 
             RailFrameRow row = m_FrameRows[rowIndex];
-            row.TrainCurrentLane = headLane;
-            row.HasTrainCurrentLane = true;
-            row.TrainCurrentLaneLoaded = true;
-            row.LaunchNavigationCleared = true;
+            // 新路径尚未由原版处理，本帧不能借旧导航或停站会话消歧。
+            row.PathChanged = true;
             m_FrameRows[rowIndex] = row;
+            InvalidateProjection(vehicle);
+        }
+
+        internal void InvalidateProjection(Entity vehicle)
+        {
+            m_Runtime.m_WaypointIndex.Remove(vehicle);
+            m_Runtime.m_RouteProgress.Remove(vehicle);
             m_Runtime.m_TrackProjection.Cursors.Remove(vehicle, keepCursor: true);
             m_Runtime.m_TrackProjection.ClearFacts(vehicle);
-            m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots(row.RegisteredLine);
+            if (m_Runtime.m_VehicleView.TryGetLine(vehicle, out Entity line))
+                m_Runtime.m_TrackProjection.ClearLineRunningVehicleSnapshots(line);
         }
 
-        public void AppendPathWrite(Entity vehicle, PathOwner value, bool hasPathElements, int pathElementCount, uint frame)
+        public bool TryReadPublicTransport(Entity vehicle, out PublicTransport value)
         {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.Path);
-            if (rowIndex < 0)
-                return;
-            RailFrameRow row = m_FrameRows[rowIndex];
-            row.Path = value;
-            row.HasPath = true;
-            row.HasPathBuffer = hasPathElements;
-            row.PathElementCount = pathElementCount;
-            row.Writes |= RailFrameWriteMask.Path;
-            m_FrameRows[rowIndex] = row;
-            if ((frame & 15u) != 3u || CollectedThisFrame(frame))
-                UpdateBaseline(row);
-        }
-
-        public bool TryGetWrittenPublicTransport(Entity vehicle, out PublicTransport value)
-        {
-            if (TryGetRow(vehicle, out RailFrameRow row)
-                && (row.Writes & RailFrameWriteMask.PublicTransport) != 0
-                && row.HasPublicTransport)
-            {
-                value = row.PublicTransport;
-                return true;
-            }
             value = default;
-            return false;
-        }
+            if (vehicle == Entity.Null || !m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle))
+                return false;
 
-        public bool TryGetWrittenTarget(Entity vehicle, out Target value)
-        {
-            if (TryGetRow(vehicle, out RailFrameRow row)
-                && (row.Writes & RailFrameWriteMask.Target) != 0
-                && row.HasTarget)
-            {
-                value = row.Target;
-                return true;
-            }
-            value = default;
-            return false;
-        }
-
-        public bool TryGetWrittenPath(Entity vehicle, out PathOwner value)
-        {
-            if (TryGetRow(vehicle, out RailFrameRow row)
-                && (row.Writes & RailFrameWriteMask.Path) != 0
-                && row.HasPath)
-            {
-                value = row.Path;
-                return true;
-            }
-            value = default;
-            return false;
-        }
-
-        public bool TryGetWrittenPathElementCount(Entity vehicle, out int count)
-        {
-            if (TryGetRow(vehicle, out RailFrameRow row)
-                && (row.Writes & RailFrameWriteMask.Path) != 0)
-            {
-                count = row.PathElementCount;
-                return row.HasPath;
-            }
-            count = 0;
-            return false;
-        }
-
-        public bool TryReadPublicTransportForWrite(Entity vehicle, out PublicTransport value)
-        {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.PublicTransport);
-            if (rowIndex >= 0 && m_FrameRows[rowIndex].HasPublicTransport)
-            {
-                value = m_FrameRows[rowIndex].PublicTransport;
-                return true;
-            }
-            value = default;
-            return false;
+            value = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+            return true;
         }
 
         public bool TryReadDepartureFrame(Entity vehicle, out uint departureFrame)
         {
             departureFrame = 0u;
-            if (!TryReadPublicTransportForWrite(vehicle, out PublicTransport publicTransport))
+            if (!TryReadPublicTransport(vehicle, out PublicTransport publicTransport))
                 return false;
 
             departureFrame = publicTransport.m_DepartureFrame;
             return true;
         }
 
-        public bool TryReadTargetForWrite(Entity vehicle, out Target value)
+        public bool TryReadTarget(Entity vehicle, out Target value)
         {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.Target);
-            if (rowIndex >= 0 && m_FrameRows[rowIndex].HasTarget)
-            {
-                value = m_FrameRows[rowIndex].Target;
-                return true;
-            }
             value = default;
-            return false;
-        }
+            if (vehicle == Entity.Null || !m_Runtime.EntityManager.HasComponent<Target>(vehicle))
+                return false;
 
-        public bool TryReadPathForWrite(Entity vehicle, out PathOwner value)
-        {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.Path);
-            if (rowIndex >= 0 && m_FrameRows[rowIndex].HasPath)
-            {
-                value = m_FrameRows[rowIndex].Path;
-                return true;
-            }
-            value = default;
-            return false;
-        }
-
-        public bool TryReadPathElementCountForWrite(Entity vehicle, out int count)
-        {
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.Path);
-            if (rowIndex >= 0 && m_FrameRows[rowIndex].HasPath)
-            {
-                count = m_FrameRows[rowIndex].PathElementCount;
-                return true;
-            }
-            count = 0;
-            return false;
+            value = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
+            return true;
         }
 
         public bool TryGetBypassInput(Entity vehicle, out Entity route, out DynamicBuffer<RouteWaypoint> waypoints, out PublicTransport publicTransport)
@@ -942,13 +707,13 @@ namespace RapidTransitMod.Dispatch.Runtime
             route = Entity.Null;
             waypoints = default;
             publicTransport = default;
-            int rowIndex = EnsureFrameRow(vehicle, readMoving: false, writeComponent: RailFrameWriteMask.PublicTransport);
+            int rowIndex = EnsureFrameRow(vehicle, readMoving: false);
             if (rowIndex < 0)
                 return false;
             RailFrameRow row = m_FrameRows[rowIndex];
-            if (!row.IsCompilable || !row.HasPublicTransport || !TryGetWaypointsForRoute(row.CurrentRoute, out route, out waypoints))
+            if (!row.IsCompilable || !TryReadPublicTransport(vehicle, out publicTransport)
+                || !TryGetWaypointsForRoute(row.CurrentRoute, out route, out waypoints))
                 return false;
-            publicTransport = row.PublicTransport;
             return true;
         }
 
@@ -982,13 +747,12 @@ namespace RapidTransitMod.Dispatch.Runtime
                     DeadlineKind.ForcedMidStopBoardingGrace,
                     nowFrame))
             {
-                RefreshGracePublicTransport(ref row);
+                RefreshBoarding(ref row);
                 m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
                 UpdateBaseline(row);
             }
-            row.WaypointCount = TryGetWaypointCount(row.CurrentRoute, out int routeWaypointCount)
-                ? routeWaypointCount
-                : 0;
+            bool hasWaypoints = TryGetWaypointBuffer(row.CurrentRoute, out DynamicBuffer<RouteWaypoint> waypoints);
+            row.WaypointCount = hasWaypoints ? waypoints.Length : 0;
             int previousWaypoint = row.CachedWaypoint;
             int currentWaypoint = previousWaypoint;
             bool boarding = OfficialBoarding(row);
@@ -996,7 +760,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 && row.RegistryState != VehicleState.Retiring
                 && !hasOpenStopSession(row.Vehicle)
                 && (row.RegistryState != VehicleState.Idle || hasInvalidatedRecovery(row.Vehicle))
-                && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> waypoints))
+                && row.WaypointCount >= 2)
             {
                 currentWaypoint = m_Runtime.m_WaypointIndex.Compute(row.Vehicle, waypoints);
                 row.WaypointCount = waypoints.Length;
@@ -1012,10 +776,9 @@ namespace RapidTransitMod.Dispatch.Runtime
             bool suppressBoardingGhost = false;
             if (boarding
                 && forcedMidStopGraceActive(row.Vehicle, nowFrame)
-                && TryGetWaypointsForRoute(row.CurrentRoute, out _, out DynamicBuffer<RouteWaypoint> ghostWaypoints))
+                && row.WaypointCount >= 2)
             {
-                ReadWriteComponent(ref row, RailFrameWriteMask.Target);
-                suppressBoardingGhost = SuppressBoardingGhost(row, ghostWaypoints);
+                suppressBoardingGhost = SuppressBoardingGhost(row, waypoints);
             }
             m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
             input = new StopInput(row.Vehicle, row.RegisteredLine, row.SourceFrame == 0 ? nowFrame : row.SourceFrame,
@@ -1031,11 +794,9 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private bool SuppressBoardingGhost(RailFrameRow row, DynamicBuffer<RouteWaypoint> waypoints)
         {
-            if (!row.HasTarget)
-                return false;
-
             Entity vehicle = row.Vehicle;
-            Target target = row.Target;
+            if (!TryReadTarget(vehicle, out Target target))
+                return false;
             if (target.m_Target == Entity.Null
                 || !m_Runtime.EntityManager.HasComponent<Waypoint>(target.m_Target))
             {
@@ -1084,8 +845,7 @@ namespace RapidTransitMod.Dispatch.Runtime
 
                 bool hasWaypoints = TryGetWaypointsForRoute(row.CurrentRoute, out Entity route, out DynamicBuffer<RouteWaypoint> waypoints);
                 int waypointCount = hasWaypoints ? waypoints.Length : 0;
-                ReadWriteComponent(ref row, RailFrameWriteMask.Target);
-                m_FrameRows[m_FrameRowIndex[row.Vehicle]] = row;
+                bool hasTargetComponent = TryReadTarget(row.Vehicle, out Target currentTarget);
                 int previousWaypoint = row.CachedWaypoint;
                 int currentWaypoint = row.CachedWaypoint;
                 bool runningWaypointComputed = false;
@@ -1170,8 +930,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                     }
                 }
 
-                bool hasTargetComponent = row.HasTarget;
-                bool targetPresent = hasTargetComponent && row.Target.m_Target != Entity.Null;
+                bool targetPresent = hasTargetComponent && currentTarget.m_Target != Entity.Null;
                 bool preparingAtOrigin = row.RegistryState == VehicleState.Preparing
                     && hasWaypoints
                     && waypointCount >= 2
@@ -1184,7 +943,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 Entity originStation = hasWaypoints && waypointCount >= 2
                     ? waypoints[0].m_Waypoint
                     : Entity.Null;
-                bool targetAtOrigin = targetPresent && row.Target.m_Target == originStation;
+                bool targetAtOrigin = targetPresent && currentTarget.m_Target == originStation;
                 bool originBusy = row.RegistryState == VehicleState.Idle
                     && hasWaypoints
                     && waypointCount >= 2
@@ -1255,7 +1014,7 @@ namespace RapidTransitMod.Dispatch.Runtime
                 RapidTransitMod.Bypass.BypassControlResult bypass = bypassControls.TryGetValue(row.Vehicle, out RapidTransitMod.Bypass.BypassControlResult control)
                     ? control : new RapidTransitMod.Bypass.BypassControlResult(false, row.Vehicle, route, currentWaypoint, false, false, Entity.Null, true, null);
             input = new DispatchInput(row.Vehicle, row.RegisteredLine, route,
-                row.InputValid && row.HasPublicTransport && row.HasTarget && route == row.RegisteredLine && waypointCount >= 2,
+                row.InputValid && row.HasPublicTransport && hasTargetComponent && route == row.RegisteredLine && waypointCount >= 2,
                 boarding, previousWaypoint, currentWaypoint, waypointCount,
                 atOrigin, targetAtOrigin, preparingAtOrigin, originBusy, preparingRouteNeedsRepair, shouldEvaluateOriginSettle,
                 false, false,
@@ -1272,8 +1031,6 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_Demands.Clear();
             m_FrameRows.Clear();
             m_FrameRowIndex.Clear();
-            m_WaypointBuffers.Clear();
-            m_WaypointCounts.Clear();
             m_PreparingWaypointLiveFrames.Clear();
             m_DemandVehicles.Clear();
             m_StaleVehicles.Clear();
@@ -1284,18 +1041,13 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private int EnsureFrameRow(
             Entity vehicle,
-            bool readMoving,
-            RailFrameWriteMask writeComponent = RailFrameWriteMask.None)
+            bool readMoving)
         {
             if (vehicle == Entity.Null || !m_Runtime.EntityManager.Exists(vehicle))
                 return -1;
             m_Runtime.m_RuntimeHotPathProbe.CountEnsureFrameRow();
             if (m_FrameRowIndex.TryGetValue(vehicle, out int existing))
-            {
-                if (writeComponent != RailFrameWriteMask.None)
-                    UpgradeForWrite(existing, writeComponent);
                 return existing;
-            }
 
             RailFrameRow row = new RailFrameRow
             {
@@ -1305,9 +1057,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             };
             if (m_Baselines.TryGetValue(vehicle, out RailBaseline baseline))
                 ApplyBaseline(ref row, baseline);
-            if (writeComponent != RailFrameWriteMask.None)
-                ReadWriteComponent(ref row, writeComponent);
-            else if (!m_Baselines.ContainsKey(vehicle))
+            else
                 ReadNarrow(ref row, readMoving);
             HydrateOwners(ref row);
             row.IsCompilable = true;
@@ -1346,9 +1096,9 @@ namespace RapidTransitMod.Dispatch.Runtime
         private void RefreshSourceHeader(ref RailFrameRow row, uint frame)
         {
             RailBaseline previous = m_Baselines.TryGetValue(row.Vehicle, out RailBaseline baseline) ? baseline : default;
-            RailFrameWriteMask writes = row.Writes;
             RailFrameRow fresh = new RailFrameRow { Vehicle = row.Vehicle, CachedWaypoint = row.CachedWaypoint };
             fresh.DepartureFrameWritten = row.DepartureFrameWritten;
+            fresh.PathChanged = row.PathChanged;
             ReadNarrow(ref fresh, true);
             fresh.RegisteredLine = m_Runtime.m_VehicleView.TryGetLine(row.Vehicle, out Entity line) ? line : Entity.Null;
             fresh.RegistryState = m_Runtime.m_VehicleView.TryGetState(row.Vehicle, out VehicleState state) ? state : default;
@@ -1356,18 +1106,14 @@ namespace RapidTransitMod.Dispatch.Runtime
             fresh.IsCompilable = true;
             fresh.IsSource = true;
             fresh.SourceFrame = frame;
-            if ((writes & RailFrameWriteMask.PublicTransport) != 0) { fresh.PublicTransport = row.PublicTransport; fresh.HasPublicTransport = row.HasPublicTransport; fresh.PublicTransportLoaded = row.PublicTransportLoaded; }
-            if ((writes & RailFrameWriteMask.Target) != 0) { fresh.Target = row.Target; fresh.HasTarget = row.HasTarget; fresh.TargetLoaded = row.TargetLoaded; }
-            if ((writes & RailFrameWriteMask.Path) != 0) { fresh.Path = row.Path; fresh.HasPath = row.HasPath; fresh.HasPathBuffer = row.HasPathBuffer; fresh.PathElementCount = row.PathElementCount; fresh.PathLoaded = row.PathLoaded; }
             fresh.Changes = (previous.HasPublicTransport && previous.HasPublicTransport == fresh.HasPublicTransport
-                && ((previous.PublicTransport.m_State & PublicTransportFlags.Boarding) != (fresh.PublicTransport.m_State & PublicTransportFlags.Boarding))
+                && previous.Boarding != fresh.Boarding
                     ? RailChangeMask.OfficialBoardingChanged : RailChangeMask.None)
                 | (previous.MovingKnown && previous.Moving != fresh.Moving ? RailChangeMask.MovingChanged : RailChangeMask.None);
             if ((fresh.Changes & RailChangeMask.OfficialBoardingChanged) != 0)
                 m_Runtime.m_RuntimeHotPathProbe.CountOfficialBoardingChanged();
             if ((fresh.Changes & RailChangeMask.MovingChanged) != 0)
                 m_Runtime.m_RuntimeHotPathProbe.CountMovingChanged();
-            fresh.Writes = writes;
             row = fresh;
             UpdateBaseline(row);
         }
@@ -1376,9 +1122,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             Entity vehicle = row.Vehicle;
             row.InputValid = m_Runtime.EntityManager.Exists(vehicle);
-            row.HasPublicTransport = m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle);
-            if (row.HasPublicTransport) row.PublicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-            row.PublicTransportLoaded = true;
+            RefreshBoarding(ref row);
             bool hasRoute = m_Runtime.EntityManager.HasComponent<CurrentRoute>(vehicle);
             row.CurrentRoute = hasRoute ? m_Runtime.EntityManager.GetComponentData<CurrentRoute>(vehicle).m_Route : Entity.Null;
             if (readMoving)
@@ -1392,7 +1136,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             row.InputValid = baseline.InputValid;
             row.HasPublicTransport = baseline.HasPublicTransport;
-            row.PublicTransport = baseline.PublicTransport;
+            row.Boarding = baseline.Boarding;
             row.CurrentRoute = baseline.Route;
             row.MovingKnown = baseline.MovingKnown;
             row.Moving = baseline.Moving;
@@ -1405,57 +1149,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             row.Demands = ReadDemand(row.Vehicle);
         }
 
-        private void UpgradeForWrite(int rowIndex, RailFrameWriteMask writeComponent)
+        private void RefreshBoarding(ref RailFrameRow row)
         {
-            RailFrameRow row = m_FrameRows[rowIndex];
-            ReadWriteComponent(ref row, writeComponent);
-            m_FrameRows[rowIndex] = row;
-        }
-
-        private void ReadWriteComponent(ref RailFrameRow row, RailFrameWriteMask writeComponent)
-        {
-            Entity vehicle = row.Vehicle;
-            switch (writeComponent)
-            {
-                case RailFrameWriteMask.PublicTransport:
-                    if (!row.PublicTransportLoaded)
-                    {
-                        row.HasPublicTransport = m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle);
-                        if (row.HasPublicTransport) row.PublicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-                        row.PublicTransportLoaded = true;
-                    }
-                    break;
-                case RailFrameWriteMask.Target:
-                    if (!row.TargetLoaded)
-                    {
-                        row.HasTarget = m_Runtime.EntityManager.HasComponent<Target>(vehicle);
-                        if (row.HasTarget) row.Target = m_Runtime.EntityManager.GetComponentData<Target>(vehicle);
-                        row.TargetLoaded = true;
-                    }
-                    break;
-                case RailFrameWriteMask.Path:
-                    if (!row.PathLoaded)
-                    {
-                        row.HasPath = m_Runtime.EntityManager.HasComponent<PathOwner>(vehicle);
-                        if (row.HasPath) row.Path = m_Runtime.EntityManager.GetComponentData<PathOwner>(vehicle);
-                        row.HasPathBuffer = m_Runtime.EntityManager.HasBuffer<PathElement>(vehicle);
-                        row.PathElementCount = row.HasPathBuffer ? m_Runtime.EntityManager.GetBuffer<PathElement>(vehicle, true).Length : 0;
-                        row.PathLoaded = true;
-                    }
-                    break;
-            }
-        }
-
-        private void RefreshGracePublicTransport(ref RailFrameRow row)
-        {
-            if ((row.Writes & RailFrameWriteMask.PublicTransport) != 0)
-                return;
-
-            Entity vehicle = row.Vehicle;
-            row.HasPublicTransport = m_Runtime.EntityManager.HasComponent<PublicTransport>(vehicle);
-            if (row.HasPublicTransport)
-                row.PublicTransport = m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
-            row.PublicTransportLoaded = true;
+            row.HasPublicTransport = TryReadPublicTransport(row.Vehicle, out PublicTransport publicTransport);
+            row.Boarding = row.HasPublicTransport
+                && (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
         }
 
         private void UpdateBaseline(RailFrameRow row)
@@ -1464,7 +1162,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             {
                 InputValid = row.InputValid,
                 HasPublicTransport = row.HasPublicTransport,
-                PublicTransport = row.PublicTransport,
+                Boarding = row.Boarding,
                 Route = row.CurrentRoute,
                 MovingKnown = row.MovingKnown,
                 Moving = row.Moving
@@ -1486,11 +1184,9 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             context = default;
             context.VehicleStateKnown = m_Runtime.m_VehicleView.TryGetState(vehicle, out context.VehicleState);
-            if (TryGetRow(vehicle, out RailFrameRow row))
-            {
-                context.PublicTransportKnown = row.PublicTransportLoaded || row.HasPublicTransport;
-                context.OfficialBoarding = OfficialBoarding(row);
-            }
+            context.PublicTransportKnown = TryReadPublicTransport(vehicle, out PublicTransport publicTransport);
+            context.OfficialBoarding = context.PublicTransportKnown
+                && (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
             return context.VehicleStateKnown || context.PublicTransportKnown;
         }
 
@@ -1516,21 +1212,14 @@ namespace RapidTransitMod.Dispatch.Runtime
         {
             route = sourceRoute;
             waypoints = default;
-            if (!TryGetWaypointBuffer(route, out waypoints)
-                || !TryGetWaypointCount(route, out int count))
-                return false;
-            return count >= 2;
+            return TryGetWaypointBuffer(route, out waypoints) && waypoints.Length >= 2;
         }
 
         private bool TryGetWaypointCount(Entity line, out int count)
         {
-            if (line != Entity.Null && m_WaypointCounts.TryGetValue(line, out count))
-                return true;
-
             if (TryGetWaypointBuffer(line, out DynamicBuffer<RouteWaypoint> waypoints))
             {
                 count = waypoints.Length;
-                m_WaypointCounts[line] = count;
                 return true;
             }
 
@@ -1540,9 +1229,6 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         private bool TryGetWaypointBuffer(Entity line, out DynamicBuffer<RouteWaypoint> waypoints)
         {
-            if (line != Entity.Null && m_WaypointBuffers.TryGetValue(line, out waypoints))
-                return true;
-
             if (line == Entity.Null
                 || !m_Runtime.EntityManager.Exists(line)
                 || !m_Runtime.EntityManager.HasBuffer<RouteWaypoint>(line))
@@ -1552,12 +1238,11 @@ namespace RapidTransitMod.Dispatch.Runtime
             }
 
             waypoints = m_Runtime.EntityManager.GetBuffer<RouteWaypoint>(line, true);
-            m_WaypointBuffers.Add(line, waypoints);
             return true;
         }
 
         private RuntimeDemandMask ReadDemand(Entity vehicle) => m_Demands.TryGetValue(vehicle, out RuntimeDemandMask demand) ? demand : RuntimeDemandMask.None;
-        private static bool OfficialBoarding(RailFrameRow row) => row.HasPublicTransport && (row.PublicTransport.m_State & PublicTransportFlags.Boarding) != 0;
+        private static bool OfficialBoarding(RailFrameRow row) => row.HasPublicTransport && row.Boarding;
 
         private void PruneBaselines()
         {

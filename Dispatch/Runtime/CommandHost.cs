@@ -29,26 +29,14 @@ namespace RapidTransitMod.Dispatch.Runtime
         public TimedLogger Log { get; }
         public uint Frame => SimulationSystem.frameIndex;
 
-        public PublicTransport ReadPublicTransport(Entity vehicle)
-        {
-            return m_RailEvents.TryReadPublicTransportForWrite(vehicle, out PublicTransport value)
-                ? value
-                : EntityManager.GetComponentData<PublicTransport>(vehicle);
-        }
-
-        public Target ReadTarget(Entity vehicle) => m_RailEvents.TryReadTargetForWrite(vehicle, out Target value)
-            ? value
-            : EntityManager.GetComponentData<Target>(vehicle);
+        public PublicTransport ReadPublicTransport(Entity vehicle) => EntityManager.GetComponentData<PublicTransport>(vehicle);
+        public Target ReadTarget(Entity vehicle) => EntityManager.GetComponentData<Target>(vehicle);
         public Owner ReadOwner(Entity vehicle) => EntityManager.GetComponentData<Owner>(vehicle);
-        public PathOwner ReadPath(Entity vehicle) => m_RailEvents.TryReadPathForWrite(vehicle, out PathOwner value)
-            ? value
-            : EntityManager.GetComponentData<PathOwner>(vehicle);
+        public PathOwner ReadPath(Entity vehicle) => EntityManager.GetComponentData<PathOwner>(vehicle);
 
-        public int ReadPathElementCount(Entity vehicle) => m_RailEvents.TryReadPathElementCountForWrite(vehicle, out int value)
-            ? value
-            : EntityManager.Exists(vehicle) && EntityManager.HasBuffer<PathElement>(vehicle)
-                ? EntityManager.GetBuffer<PathElement>(vehicle, true).Length
-                : 0;
+        public int ReadPathElementCount(Entity vehicle) => EntityManager.Exists(vehicle) && EntityManager.HasBuffer<PathElement>(vehicle)
+            ? EntityManager.GetBuffer<PathElement>(vehicle, true).Length
+            : 0;
 
         public bool TryGetRouteWaypoints(Entity vehicle, out DynamicBuffer<RouteWaypoint> waypoints)
         {
@@ -64,40 +52,29 @@ namespace RapidTransitMod.Dispatch.Runtime
             return waypoints.Length >= 2;
         }
 
-        public void AppendPublicTransportWrite(Entity vehicle, PublicTransport value)
-        {
-            m_RailEvents.AppendPublicTransportWrite(vehicle, value, SimulationSystem.frameIndex);
-        }
-
         public void SetPublicTransport(Entity vehicle, PublicTransport value)
         {
-            m_RailEvents.AppendPublicTransportWrite(vehicle, value, SimulationSystem.frameIndex);
+            m_RailEvents.RecordPublicTransportWrite(vehicle, value, Frame);
             EntityManager.SetComponentData(vehicle, value);
         }
 
-        public void AppendTargetWrite(Entity vehicle, Target value)
+        public void SetTarget(Entity vehicle, Target value)
         {
-            m_RailEvents.AppendTargetWrite(vehicle, value, SimulationSystem.frameIndex);
+            bool changed = ReadTarget(vehicle).m_Target != value.m_Target;
+            EntityManager.SetComponentData(vehicle, value);
+            if (changed)
+                m_RailEvents.InvalidateProjection(vehicle);
         }
 
-        public void AppendPathWrite(Entity vehicle, PathOwner value, bool hasPathElements, int pathElementCount)
+        public void SetPath(Entity vehicle, PathOwner value)
         {
-            m_RailEvents.AppendPathWrite(vehicle, value, hasPathElements, pathElementCount, SimulationSystem.frameIndex);
-        }
-
-        public void AppendPathWrite(Entity vehicle, PathOwner value, bool hasPathElements, DynamicBuffer<PathElement> path)
-        {
-            m_RailEvents.AppendPathWrite(
-                vehicle,
-                value,
-                hasPathElements,
-                path.Length,
-                SimulationSystem.frameIndex);
+            EntityManager.SetComponentData(vehicle, value);
+            m_RailEvents.RecordPathChange(vehicle);
         }
 
         public void CountPathDetailRead() => m_HotPathProbe.CountPathDetailRead();
 
-        public void ResetLaunchNavigation(Entity vehicle, EntityCommandBuffer ecb)
+        public void ResetLaunchNavigation(Entity vehicle)
         {
             Entity head = vehicle;
             Entity tail = vehicle;
@@ -115,17 +92,17 @@ namespace RapidTransitMod.Dispatch.Runtime
             // 对齐原版寻路准备及非追加导航更新，保留到达位置与其他标志。
             headLane.m_Front.m_LaneFlags &= ~(TrainLaneFlags.EndOfPath | TrainLaneFlags.Return);
             headLane.m_Rear.m_LaneFlags &= ~TrainLaneFlags.EndOfPath;
-            m_RailEvents.AppendLaunchNavigationWrite(vehicle, headLane);
-            ecb.SetComponent(head, headLane);
+            EntityManager.SetComponentData(head, headLane);
             if (tail != head)
             {
                 // 原版消费新路径时可能折返，当前尾部后端随后成为实际头部前端。
                 TrainCurrentLane tailLane = EntityManager.GetComponentData<TrainCurrentLane>(tail);
                 tailLane.m_Rear.m_LaneFlags &= ~TrainLaneFlags.EndOfPath;
-                ecb.SetComponent(tail, tailLane);
+                EntityManager.SetComponentData(tail, tailLane);
             }
 
-            ecb.SetBuffer<TrainNavigationLane>(vehicle).Clear();
+            EntityManager.GetBuffer<TrainNavigationLane>(vehicle).Clear();
+            m_RailEvents.InvalidateProjection(vehicle);
         }
 
         public bool HasConsumedPath(Entity entity)

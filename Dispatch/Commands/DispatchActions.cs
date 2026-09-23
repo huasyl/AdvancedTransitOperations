@@ -6,9 +6,8 @@ namespace RapidTransitMod.Dispatch.Commands
 {
     internal interface IPublicTransportWritePort
     {
-        uint Frame { get; }
         PublicTransport ReadPublicTransport(Entity vehicle);
-        void AppendPublicTransportWrite(Entity vehicle, PublicTransport value);
+        void SetPublicTransport(Entity vehicle, PublicTransport value);
     }
 
     internal sealed class DispatchActions
@@ -25,8 +24,7 @@ namespace RapidTransitMod.Dispatch.Commands
             PublicTransport publicTransport,
             EntityCommandBuffer ecb)
         {
-            m_Host.AppendPublicTransportWrite(vehicle, publicTransport);
-            ecb.SetComponent(vehicle, publicTransport);
+            m_Host.SetPublicTransport(vehicle, publicTransport);
         }
 
         public void HoldDeparture(

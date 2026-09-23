@@ -384,7 +384,8 @@ namespace RapidTransitMod.Dispatch.Runtime
                 (vehicle, route, waypoints, waypointIndex) => { },
                 (vehicle, publicTransport) =>
                 {
-                    runtime.m_RailEventSource.AppendPublicTransportWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);
+                    runtime.m_RailEventSource.RecordPublicTransportWrite(vehicle, publicTransport, runtime.m_SimulationSystem.frameIndex);
+                    runtime.EntityManager.SetComponentData(vehicle, publicTransport);
                 },
                 () => runtime.m_Features.BypassRun(),
                 runtime.m_RuntimeFramePlan.SetDeadline,

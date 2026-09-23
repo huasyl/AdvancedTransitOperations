@@ -20,7 +20,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         private readonly Action<Entity, Entity, uint, string> m_RecordRelease;
         private readonly Action<BypassFact> m_RecordBypassFact;
         private readonly Action<Entity, Entity, DynamicBuffer<RouteWaypoint>, int> m_TriggerWaiting;
-        private readonly Action<Entity, Game.Vehicles.PublicTransport> m_RecordPublicTransportWrite;
+        private readonly Action<Entity, Game.Vehicles.PublicTransport> m_SetPublicTransport;
         private readonly Func<bool> m_RuntimeEnabled;
         private readonly Action<Entity, DeadlineKind, uint> m_SetDeadline;
         private readonly Action<Entity, DeadlineKind> m_ClearDeadline;
@@ -62,7 +62,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             Action<Entity, Entity, uint, string> recordRelease,
             Action<BypassFact> recordBypassFact,
             Action<Entity, Entity, DynamicBuffer<RouteWaypoint>, int> triggerWaiting,
-            Action<Entity, Game.Vehicles.PublicTransport> recordPublicTransportWrite,
+            Action<Entity, Game.Vehicles.PublicTransport> setPublicTransport,
             Func<bool> runtimeEnabled,
             Action<Entity, DeadlineKind, uint> setDeadline,
             Action<Entity, DeadlineKind> clearDeadline,
@@ -104,7 +104,7 @@ namespace RapidTransitMod.Dispatch.Runtime
             m_RecordRelease = recordRelease;
             m_RecordBypassFact = recordBypassFact;
             m_TriggerWaiting = triggerWaiting;
-            m_RecordPublicTransportWrite = recordPublicTransportWrite;
+            m_SetPublicTransport = setPublicTransport;
             m_RuntimeEnabled = runtimeEnabled;
             m_SetDeadline = setDeadline;
             m_ClearDeadline = clearDeadline;
@@ -123,7 +123,7 @@ namespace RapidTransitMod.Dispatch.Runtime
         void IControlContext.RecordRelease(Entity vehicle, Entity blocker, string reason) => m_RecordRelease(vehicle, blocker, FrameGetter(), reason);
         void IControlContext.RecordBypassFact(BypassFact fact) => m_RecordBypassFact(fact);
         void IControlContext.TriggerWaiting(Entity vehicle, Entity route, DynamicBuffer<RouteWaypoint> waypoints, int waypointIndex) => m_TriggerWaiting(vehicle, route, waypoints, waypointIndex);
-        void IControlContext.RecordPublicTransportWrite(Entity vehicle, Game.Vehicles.PublicTransport publicTransport) => m_RecordPublicTransportWrite(vehicle, publicTransport);
+        void IControlContext.SetPublicTransport(Entity vehicle, Game.Vehicles.PublicTransport publicTransport) => m_SetPublicTransport(vehicle, publicTransport);
         bool IRuntimeContext.RuntimeEnabled() => m_RuntimeEnabled();
         public override void SetRuntimeDeadline(Entity vehicle, DeadlineKind kind, uint frame) => m_SetDeadline(vehicle, kind, frame);
         public override void ClearRuntimeDeadline(Entity vehicle, DeadlineKind kind) => m_ClearDeadline(vehicle, kind);

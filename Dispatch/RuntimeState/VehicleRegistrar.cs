@@ -1039,7 +1039,6 @@ namespace RapidTransitMod
                 m_Runtime.m_VehicleRegistry.EndRestore(newLine);
                 if (lifecycle == LifecycleKind.Rail)
                 {
-                    m_Runtime.m_RailEventSource.RefreshRebindComponents(vehicle);
                     m_Runtime.m_RailEventSource.RefreshOwners(vehicle);
                 }
                 if (m_DeferredRestoredStops.TryGetValue(vehicle, out StopFact restoredStop))
@@ -1143,29 +1142,25 @@ namespace RapidTransitMod
 
         private PublicTransport ReadRailPublicTransport(Entity vehicle)
         {
-            return m_Runtime.m_RailEventSource.TryReadPublicTransportForWrite(vehicle, out PublicTransport value)
-                ? value
-                : m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+            return m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
         }
 
         private PublicTransport ReadRoadPublicTransport(Entity vehicle)
         {
-            return m_Runtime.m_RoadEventSource.TryReadPublicTransportForWrite(vehicle, out PublicTransport value)
-                ? value
-                : m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
+            return m_Runtime.EntityManager.GetComponentData<PublicTransport>(vehicle);
         }
 
         private void CommitRailPublicTransport(Entity vehicle, PublicTransport value)
         {
             uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            m_Runtime.m_RailEventSource.AppendPublicTransportWrite(vehicle, value, frame);
+            m_Runtime.m_RailEventSource.RecordPublicTransportWrite(vehicle, value, frame);
             m_Runtime.EntityManager.SetComponentData(vehicle, value);
         }
 
         private void CommitRoadPublicTransport(Entity vehicle, PublicTransport value)
         {
             uint frame = m_Runtime.m_SimulationSystem.frameIndex;
-            m_Runtime.m_RoadEventSource.AppendPublicTransportWrite(vehicle, value, frame);
+            m_Runtime.m_RoadEventSource.RecordPublicTransportWrite(vehicle, value, frame);
             m_Runtime.EntityManager.SetComponentData(vehicle, value);
         }
 

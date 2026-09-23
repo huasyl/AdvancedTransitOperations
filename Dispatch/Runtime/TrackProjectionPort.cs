@@ -172,13 +172,13 @@ namespace RapidTransitMod.Dispatch.Runtime
 
         bool ITrackProjectionRuntimeContext.IsVehicleBoarding(Entity vehicle)
         {
-            return m_RailSource.TryReadPublicTransportForWrite(vehicle, out PublicTransport publicTransport)
+            return m_RailSource.TryReadPublicTransport(vehicle, out PublicTransport publicTransport)
                 && (publicTransport.m_State & PublicTransportFlags.Boarding) != 0;
         }
 
         bool ITrackProjectionRuntimeContext.IsVehicleArriving(Entity vehicle)
         {
-            return m_RailSource.TryReadPublicTransportForWrite(vehicle, out PublicTransport publicTransport)
+            return m_RailSource.TryReadPublicTransport(vehicle, out PublicTransport publicTransport)
                 && (publicTransport.m_State & PublicTransportFlags.Arriving) != 0;
         }
 
